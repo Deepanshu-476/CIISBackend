@@ -9,9 +9,9 @@ app.set('trust proxy', 1);
 connectDB();
 
 app.use(cors({
-  origin: [ 'http://localhost:5173','http://147.93.106.84',],
+  origin: ['https://cds.ciisnetwork.in', 'http://localhost:5173','http://147.93.106.84',],
   credentials: true,
-  methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
+  methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
@@ -36,6 +36,11 @@ app.use("/api/alerts", require("./HR-CDS/routes/alertRoutes"));
 app.use("/api/holidays", require("./HR-CDS/routes/Holiday"));
 
 // 404 fallback
+
+app.get("/api", (req, res) => {
+  res.json({ message: "✅ API is live" });
+});
+
 app.use((req, res) => {
   res.status(404).json({ message: "🔴 Route not found" });
 });
