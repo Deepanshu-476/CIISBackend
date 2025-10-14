@@ -6,7 +6,7 @@ const {
   login,
   forgotPassword,
   resetPassword,
-  changePassword // ✅ Add this controller
+  changePassword // 
 } = require("../controllers/authController");
 
 const { validateRequest } = require("../middleware/validation");
@@ -15,7 +15,7 @@ const {
   loginSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
-  changePasswordSchema // ✅ Add schema if using validation
+  changePasswordSchema // 
 } = require("../validations/authValidation");
 
 // ✅ Rate limiting to prevent brute force attacks

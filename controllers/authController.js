@@ -43,6 +43,7 @@ exports.register = async (req, res) => {
       email: cleanEmail,
       password,
       role: assignedRole,
+      employeeType,
     };
 
     if (assignedRole === 'user') {
