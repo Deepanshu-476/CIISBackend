@@ -14,22 +14,39 @@ const statusSchema = new mongoose.Schema({
 const taskSchema = new mongoose.Schema({
   serialNo: {
     type: Number,
-    required: false, // Ensure it's not required
-    default: null     // Prevent null duplicate key error
+    required: false,
+    default: null
   },
   title: { type: String, required: true },
   description: { type: String },
   dueDate: { type: Date },
   whatsappNumber: { type: String },
   priorityDays: { type: Number, default: 1 },
+  priority: {
+    type: String,
+    enum: ['low', 'medium', 'high'],
+    default: 'medium'
+  },
   assignedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  assignedGroups: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Group' }],
   statusByUser: [statusSchema],
-  files: [String],      // file URLs or paths
+  files: [String],
   voiceNote: { type: String },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
 }, { timestamps: true });
 
 // Ensure no leftover unique index from before
 taskSchema.index({ serialNo: 1 }, { unique: false });
+
+// Virtual for getting all users (direct + group members)
+taskSchema.virtual('allAssignedUsers').get(function() {
+  const directUsers = this.assignedUsers || [];
+  const groupUsers = this.assignedGroups ? 
+    this.assignedGroups.reduce((users, group) => {
+      return users.concat(group.members || []);
+    }, []) : [];
+  
+  return [...new Set([...directUsers, ...groupUsers])];
+});
 
 module.exports = mongoose.model('Task', taskSchema);

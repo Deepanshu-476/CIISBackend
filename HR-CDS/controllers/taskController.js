@@ -1,5 +1,6 @@
 const Task = require('../models/Task');
 const User = require('../../models/User');
+const Group = require('../models/Group');
 const moment = require('moment');
 
 // 🔹 Helper to group tasks by createdAt (latest first) with serial numbers
@@ -71,6 +72,36 @@ const enrichStatusInfo = async (tasks) => {
   });
 };
 
+// 🔹 Get all users including group members for task assignment
+const getAllAssignableUsers = async (req) => {
+  const isPrivileged = ['admin', 'manager', 'hr'].includes(req.user.role);
+
+  if (!isPrivileged) {
+    return [{ _id: req.user._id, name: req.user.name, role: req.user.role, employeeType: req.user.employeeType }];
+  }
+
+  const users = await User.find().select('name _id role employeeType');
+  return users;
+};
+
+// 🔹 Get all groups for task assignment
+const getAllAssignableGroups = async (req) => {
+  const isPrivileged = ['admin', 'manager', 'hr'].includes(req.user.role);
+
+  if (!isPrivileged) {
+    return [];
+  }
+
+  const groups = await Group.find({
+    createdBy: req.user._id,
+    isActive: true
+  })
+  .populate('members', 'name role')
+  .select('name description members');
+
+  return groups;
+};
+
 // ✅ Get Self-Assigned Tasks of a User (For Admin to see tasks assigned to a specific user)
 exports.getUserSelfAssignedTasks = async (req, res) => {
   try {
@@ -78,23 +109,23 @@ exports.getUserSelfAssignedTasks = async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    const { userId } = req.params;  // Get userId from route params
+    const { userId } = req.params;
 
     if (!userId) {
       return res.status(400).json({ error: 'User ID is required' });
     }
 
-    // Find self-assigned tasks for the user
     const tasks = await Task.find({
       createdBy: userId,
       assignedUsers: userId
     })
-    .populate('assignedUsers', 'name role');  // Populate user info (name, role)
+    .populate('assignedUsers', 'name role')
+    .populate('assignedGroups', 'name description');
 
-    const enrichedTasks = await enrichStatusInfo(tasks);  // Enrich tasks with status info
-    const groupedTasks = groupTasksByDate(enrichedTasks, 'createdAt', 'serialNo');  // Group by date
+    const enrichedTasks = await enrichStatusInfo(tasks);
+    const groupedTasks = groupTasksByDate(enrichedTasks, 'createdAt', 'serialNo');
 
-    res.json({ groupedTasks });  // Return the tasks grouped by date
+    res.json({ groupedTasks });
   } catch (error) {
     console.error('❌ Error in getUserSelfAssignedTasks:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -109,9 +140,10 @@ exports.getAssignedTasksWithStatus = async (req, res) => {
     }
 
     const tasks = await Task.find({ createdBy: req.user._id })
-      .populate('assignedUsers', 'name role');  // Populate user info
+      .populate('assignedUsers', 'name role')
+      .populate('assignedGroups', 'name description');
 
-    const enriched = await enrichStatusInfo(tasks);  // Enrich status info
+    const enriched = await enrichStatusInfo(tasks);
     res.json({ tasks: enriched });
   } catch (error) {
     console.error('❌ Error in getAssignedTasksWithStatus:', error);
@@ -122,19 +154,32 @@ exports.getAssignedTasksWithStatus = async (req, res) => {
 // 🔹 Get all tasks: created by or assigned to logged-in user
 exports.getTasks = async (req, res) => {
   const { status } = req.query;
-  const filter = {
-    $or: [
-      { assignedUsers: req.user._id },
-      { createdBy: req.user._id }
-    ]
-  };
-
-  if (status) {
-    filter['statusByUser.status'] = status;
-  }
-
+  
   try {
-    const tasks = await Task.find(filter).populate('assignedUsers', 'name');
+    // Get user's groups to include group-assigned tasks
+    const userGroups = await Group.find({ 
+      members: req.user._id,
+      isActive: true 
+    }).select('_id');
+
+    const groupIds = userGroups.map(group => group._id);
+
+    const filter = {
+      $or: [
+        { assignedUsers: req.user._id },
+        { createdBy: req.user._id },
+        { assignedGroups: { $in: groupIds } }
+      ]
+    };
+
+    if (status) {
+      filter['statusByUser.status'] = status;
+    }
+
+    const tasks = await Task.find(filter)
+      .populate('assignedUsers', 'name')
+      .populate('assignedGroups', 'name description');
+
     const enriched = await enrichStatusInfo(tasks);
     const grouped = groupTasksByDate(enriched, 'createdAt', 'serialNo');
     res.json({ groupedTasks: grouped });
@@ -144,10 +189,28 @@ exports.getTasks = async (req, res) => {
   }
 };
 
-// 🔹 Get only tasks assigned to logged-in user
+// 🔹 Get only tasks assigned to logged-in user (including group assignments)
 exports.getMyTasks = async (req, res) => {
   try {
-    const tasks = await Task.find({ assignedUsers: req.user._id });
+    // Get user's groups to include group-assigned tasks
+    const userGroups = await Group.find({ 
+      members: req.user._id,
+      isActive: true 
+    }).select('_id');
+
+    const groupIds = userGroups.map(group => group._id);
+
+    const filter = {
+      $or: [
+        { assignedUsers: req.user._id },
+        { assignedGroups: { $in: groupIds } }
+      ]
+    };
+
+    const tasks = await Task.find(filter)
+      .populate('assignedUsers', 'name')
+      .populate('assignedGroups', 'name description');
+
     const enriched = await enrichStatusInfo(tasks);
     const grouped = groupTasksByDate(enriched, 'createdAt', 'mySerialNo');
     res.json({ groupedTasks: grouped });
@@ -160,7 +223,10 @@ exports.getMyTasks = async (req, res) => {
 // 🔹 Get only tasks created by logged-in user (e.g., admin)
 exports.getAssignedTasks = async (req, res) => {
   try {
-    const tasks = await Task.find({ createdBy: req.user._id });
+    const tasks = await Task.find({ createdBy: req.user._id })
+      .populate('assignedUsers', 'name role')
+      .populate('assignedGroups', 'name description');
+
     const enriched = await enrichStatusInfo(tasks);
     const grouped = groupTasksByDate(enriched, 'createdAt', 'assignedSerialNo');
     res.json({ groupedTasks: grouped });
@@ -170,30 +236,65 @@ exports.getAssignedTasks = async (req, res) => {
   }
 };
 
-// 🔹 Create task with role-based assignment rules
+// 🔹 Create task with role-based assignment rules (including groups)
 exports.createTask = async (req, res) => {
   try {
     const {
       title, description, dueDate,
-      whatsappNumber, priorityDays,
-      assignedUsers
+      whatsappNumber, priorityDays, priority,
+      assignedUsers, assignedGroups
     } = req.body;
 
     const files = (req.files?.files || []).map(f => f.path);
     const voiceNote = req.files?.voiceNote?.[0]?.path || '';
 
-    const parsedUsers = JSON.parse(assignedUsers);
+    const parsedUsers = assignedUsers ? JSON.parse(assignedUsers) : [];
+    const parsedGroups = assignedGroups ? JSON.parse(assignedGroups) : [];
+    
     const role = req.user.role;
     const isPrivileged = ['admin', 'manager', 'hr'].includes(role);
 
+    // Validate assignments
     if (!isPrivileged) {
       const onlySelfAssigned = parsedUsers.length === 1 && parsedUsers[0] === req.user._id.toString();
-      if (!onlySelfAssigned) {
+      if (!onlySelfAssigned || parsedGroups.length > 0) {
         return res.status(403).json({ error: 'You can only assign tasks to yourself.' });
       }
     }
 
-    const statusByUser = parsedUsers.map(uid => ({
+    // Validate groups exist and user has permission
+    if (parsedGroups.length > 0) {
+      const groups = await Group.find({
+        _id: { $in: parsedGroups },
+        createdBy: req.user._id,
+        isActive: true
+      });
+
+      if (groups.length !== parsedGroups.length) {
+        return res.status(400).json({ error: 'Some groups are invalid or you do not have permission' });
+      }
+    }
+
+    // Get all users to assign (direct users + group members)
+    const allAssignedUsers = [...new Set([...parsedUsers])];
+    
+    // Add group members to assigned users
+    if (parsedGroups.length > 0) {
+      const groupsWithMembers = await Group.find({
+        _id: { $in: parsedGroups }
+      }).populate('members', '_id');
+
+      groupsWithMembers.forEach(group => {
+        group.members.forEach(member => {
+          allAssignedUsers.push(member._id.toString());
+        });
+      });
+    }
+
+    // Remove duplicates
+    const uniqueAssignedUsers = [...new Set(allAssignedUsers)];
+
+    const statusByUser = uniqueAssignedUsers.map(uid => ({
       user: uid,
       status: 'pending'
     }));
@@ -204,12 +305,18 @@ exports.createTask = async (req, res) => {
       dueDate,
       whatsappNumber,
       priorityDays,
+      priority: priority || 'medium',
       assignedUsers: parsedUsers,
+      assignedGroups: parsedGroups,
       statusByUser,
       files,
       voiceNote,
       createdBy: req.user._id
     });
+
+    // Populate for response
+    await task.populate('assignedUsers', 'name role');
+    await task.populate('assignedGroups', 'name description');
 
     res.status(201).json({ success: true, task });
   } catch (error) {
@@ -224,13 +331,26 @@ exports.updateStatus = async (req, res) => {
   const { status } = req.body;
 
   try {
-    const task = await Task.findById(taskId);
+    const task = await Task.findById(taskId)
+      .populate('assignedGroups', 'members');
+
     if (!task) return res.status(404).json({ error: 'Task not found' });
 
-    const assignedUserIds = task.assignedUsers.map(id => id.toString());
+    // Get all users assigned to this task (direct + group members)
+    const allAssignedUsers = [...task.assignedUsers.map(id => id.toString())];
+    
+    // Add group members
+    if (task.assignedGroups && task.assignedGroups.length > 0) {
+      task.assignedGroups.forEach(group => {
+        group.members.forEach(member => {
+          allAssignedUsers.push(member._id.toString());
+        });
+      });
+    }
+
     const currentUserId = req.user._id.toString();
 
-    if (!assignedUserIds.includes(currentUserId)) {
+    if (!allAssignedUsers.includes(currentUserId)) {
       return res.status(403).json({ error: 'You are not assigned to this task.' });
     }
 
@@ -254,22 +374,19 @@ exports.updateStatus = async (req, res) => {
   }
 };
 
-// 🔹 Get assignable users
+// 🔹 Get assignable users and groups
 exports.getAssignableUsers = async (req, res) => {
-  const isPrivileged = ['admin', 'manager', 'hr'].includes(req.user.role);
-
   try {
-    let users;
-    if (isPrivileged) {
-      users = await User.find().select('name _id role employeeType');
-    } else {
-      users = [{ _id: req.user._id, name: req.user.name, role: req.user.role, employeeType: req.user.employeeType }];
-    }
+    const users = await getAllAssignableUsers(req);
+    const groups = await getAllAssignableGroups(req);
 
-    res.json({ users });
+    res.json({ 
+      users,
+      groups 
+    });
   } catch (error) {
-    console.error('❌ Error fetching users:', error);
-    res.status(500).json({ error: 'Failed to fetch users.' });
+    console.error('❌ Error fetching assignable data:', error);
+    res.status(500).json({ error: 'Failed to fetch assignable data.' });
   }
 };
 
