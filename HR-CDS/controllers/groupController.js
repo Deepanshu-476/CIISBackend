@@ -184,6 +184,7 @@ exports.deleteGroup = async (req, res) => {
     const tasksWithGroup = await Task.findOne({
       assignedGroups: groupId,
       createdBy: req.user._id
+      
     });
 
     if (tasksWithGroup) {
