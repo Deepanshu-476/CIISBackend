@@ -9,7 +9,7 @@ app.set('trust proxy', 1);
 connectDB();
 
 app.use(cors({
-  origin: ['https://cds.ciisnetwork.in', 'http://localhost:5173','http://147.93.106.84',],
+  origin: ['https://cds.ciisnetwork.in', 'http://localhost:5173','http://147.93.106.84','http://localhost:8080'],
   credentials: true,
   methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
