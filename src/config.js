@@ -32,6 +32,7 @@ export const config = {
     user: env.SMTP_USER,
     pass: env.SMTP_PASS,
     from: env.FROM_EMAIL,
+    
   },
   security: {
     forgotLimitPerHour: env.FORGOT_LIMIT_PER_HOUR,
