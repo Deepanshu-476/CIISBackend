@@ -236,94 +236,103 @@ exports.getAssignedTasks = async (req, res) => {
   }
 };
 
-// 🔹 Create task with role-based assignment rules (including groups)
+// 🔹 Create task with role-based assignment rules // 🔹 Create task with role-based assignment rules (including groups)
 exports.createTask = async (req, res) => {
   try {
     const {
-      title, description, dueDate,
-      whatsappNumber, priorityDays, priority,
-      assignedUsers, assignedGroups
+      title,
+      description,
+      dueDate,
+      whatsappNumber,
+      priorityDays,
+      priority,
+      assignedUsers,
+      assignedGroups,
     } = req.body;
 
-    const files = (req.files?.files || []).map(f => f.path);
-    const voiceNote = req.files?.voiceNote?.[0]?.path || '';
+    const files = (req.files?.files || []).map((f) => f.path);
+    const voiceNote = req.files?.voiceNote?.[0]?.path || "";
 
     const parsedUsers = assignedUsers ? JSON.parse(assignedUsers) : [];
     const parsedGroups = assignedGroups ? JSON.parse(assignedGroups) : [];
-    
-    const role = req.user.role;
-    const isPrivileged = ['admin', 'manager', 'hr'].includes(role);
 
-    // Validate assignments
+    const role = req.user.role;
+    const isPrivileged = ["admin", "manager", "hr"].includes(role);
+
+    // 🔹 Auto-assign for normal users
+    let finalAssignedUsers = parsedUsers;
+    let finalAssignedGroups = parsedGroups;
+
     if (!isPrivileged) {
-      const onlySelfAssigned = parsedUsers.length === 1 && parsedUsers[0] === req.user._id.toString();
-      if (!onlySelfAssigned || parsedGroups.length > 0) {
-        return res.status(403).json({ error: 'You can only assign tasks to yourself.' });
-      }
+      finalAssignedUsers = [req.user._id.toString()]; // assign to self
+      finalAssignedGroups = []; // not allowed to assign groups
     }
 
-    // Validate groups exist and user has permission
-    if (parsedGroups.length > 0) {
+    // 🔹 Validate groups for privileged users
+    if (finalAssignedGroups.length > 0) {
       const groups = await Group.find({
-        _id: { $in: parsedGroups },
+        _id: { $in: finalAssignedGroups },
         createdBy: req.user._id,
-        isActive: true
+        isActive: true,
       });
 
-      if (groups.length !== parsedGroups.length) {
-        return res.status(400).json({ error: 'Some groups are invalid or you do not have permission' });
+      if (groups.length !== finalAssignedGroups.length) {
+        return res.status(400).json({
+          error: "Some groups are invalid or you do not have permission",
+        });
       }
     }
 
-    // Get all users to assign (direct users + group members)
-    const allAssignedUsers = [...new Set([...parsedUsers])];
-    
-    // Add group members to assigned users
-    if (parsedGroups.length > 0) {
-      const groupsWithMembers = await Group.find({
-        _id: { $in: parsedGroups }
-      }).populate('members', '_id');
+    // 🔹 Collect all assigned users (direct + group members)
+    const allAssignedUsers = [...new Set([...finalAssignedUsers])];
 
-      groupsWithMembers.forEach(group => {
-        group.members.forEach(member => {
+    if (finalAssignedGroups.length > 0) {
+      const groupsWithMembers = await Group.find({
+        _id: { $in: finalAssignedGroups },
+      }).populate("members", "_id");
+
+      groupsWithMembers.forEach((group) => {
+        group.members.forEach((member) => {
           allAssignedUsers.push(member._id.toString());
         });
       });
     }
 
-    // Remove duplicates
+    // 🔹 Remove duplicates
     const uniqueAssignedUsers = [...new Set(allAssignedUsers)];
 
-    const statusByUser = uniqueAssignedUsers.map(uid => ({
+    // 🔹 Create status tracking for each user
+    const statusByUser = uniqueAssignedUsers.map((uid) => ({
       user: uid,
-      status: 'pending'
+      status: "pending",
     }));
 
+    // 🔹 Create the task
     const task = await Task.create({
       title,
       description,
       dueDate,
       whatsappNumber,
       priorityDays,
-      priority: priority || 'medium',
-      assignedUsers: parsedUsers,
-      assignedGroups: parsedGroups,
+      priority: priority || "medium",
+      assignedUsers: finalAssignedUsers,
+      assignedGroups: finalAssignedGroups,
       statusByUser,
       files,
       voiceNote,
-      createdBy: req.user._id
+      createdBy: req.user._id,
     });
 
-    // Populate for response
-    await task.populate('assignedUsers', 'name role');
-    await task.populate('assignedGroups', 'name description');
+    await task.populate("assignedUsers", "name role");
+    await task.populate("assignedGroups", "name description");
 
     res.status(201).json({ success: true, task });
   } catch (error) {
-    console.error('❌ Error creating task:', error);
-    res.status(500).json({ error: error.message || 'Internal Server Error' });
+    console.error("❌ Error creating task:", error);
+    res.status(500).json({ error: error.message || "Internal Server Error" });
   }
 };
+
 
 // 🔄 Update status of task
 exports.updateStatus = async (req, res) => {
