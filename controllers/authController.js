@@ -12,12 +12,31 @@ const errorResponse = (res, status, message) => {
 exports.register = async (req, res) => {
   try {
     const {
-      name, email, password, role,
-      phone, address, gender, maritalStatus, dob, salary,
-      accountNumber, ifsc, bankName, bankHolderName,
-      employeeType, jobRole, properties = [], propertyOwned, additionalDetails,
-      fatherName, motherName,
-      emergencyName, emergencyPhone, emergencyRelation, emergencyAddress,
+      name,
+      email,
+      password,
+      role,
+      phone,
+      address,
+      gender,
+      maritalStatus,
+      dob,
+      salary,
+      accountNumber,
+      ifsc,
+      bankName,
+      bankHolderName,
+      employeeType,
+      jobRole,
+      properties = [],
+      propertyOwned,
+      additionalDetails,
+      fatherName,
+      motherName,
+      emergencyName,
+      emergencyPhone,
+      emergencyRelation,
+      emergencyAddress,
     } = req.body;
 
     const cleanEmail = email?.trim().toLowerCase();
@@ -26,18 +45,22 @@ exports.register = async (req, res) => {
       return errorResponse(res, 400, "Name, email, and password are required");
     }
 
+    // ✅ Email format validation
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
       return errorResponse(res, 400, "Invalid email format");
     }
 
+    // ✅ Check existing user
     const existingUser = await User.findOne({ email: cleanEmail });
     if (existingUser) {
       return errorResponse(res, 409, "Email already in use");
     }
 
+    // ✅ Role validation
     const validRoles = ["admin", "user", "hr", "manager"];
     const assignedRole = validRoles.includes(role) ? role : "user";
 
+    // ✅ Create user data
     const userData = {
       name,
       email: cleanEmail,
@@ -46,32 +69,34 @@ exports.register = async (req, res) => {
       employeeType,
     };
 
-    if (assignedRole === 'user') {
+    // ✅ For user role, include optional details if provided
+    if (assignedRole === "user") {
       Object.assign(userData, {
-        phone,
-        address,
-        gender,
-        maritalStatus,
-        dob,
-        salary,
-        accountNumber,
-        ifsc,
-        bankName,
-        bankHolderName,
-        employeeType,
-        jobRole,
-        properties,
-        propertyOwned,
-        additionalDetails,
-        fatherName,
-        motherName,
-        emergencyName,
-        emergencyPhone,
-        emergencyRelation,
-        emergencyAddress
+        ...(phone && { phone }),
+        ...(address && { address }),
+        ...(gender && { gender }),
+        ...(maritalStatus && { maritalStatus }),
+        ...(dob && { dob }),
+        ...(salary && { salary }),
+        ...(accountNumber && { accountNumber }),
+        ...(ifsc && { ifsc }),
+        ...(bankName && { bankName }),
+        ...(bankHolderName && { bankHolderName }),
+        ...(employeeType && { employeeType }),
+        ...(jobRole && { jobRole }),
+        ...(properties?.length && { properties }),
+        ...(propertyOwned && { propertyOwned }),
+        ...(additionalDetails && { additionalDetails }),
+        ...(fatherName && { fatherName }),
+        ...(motherName && { motherName }),
+        ...(emergencyName && { emergencyName }),
+        ...(emergencyPhone && { emergencyPhone }),
+        ...(emergencyRelation && { emergencyRelation }),
+        ...(emergencyAddress && { emergencyAddress }),
       });
     }
 
+    // ✅ Create new user
     const user = await User.create(userData);
 
     return res.status(201).json({
@@ -90,6 +115,7 @@ exports.register = async (req, res) => {
     return errorResponse(res, 500, "Registration failed");
   }
 };
+
 
 // ✅ Login
 exports.login = async (req, res) => {
