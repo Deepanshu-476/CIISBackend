@@ -2,6 +2,7 @@ const Task = require('../models/Task');
 const User = require('../../models/User');
 const Group = require('../models/Group');
 const moment = require('moment');
+const sendEmail = require('../../utils/sendEmail'); // Add this import
 
 // 🔹 Helper to group tasks by createdAt (latest first) with serial numbers
 const groupTasksByDate = (tasks, dateField = 'createdAt', serialKey = 'serialNo') => {
@@ -40,7 +41,7 @@ const enrichStatusInfo = async (tasks) => {
   });
 
   const uniqueUserIds = [...new Set(userIds)];
-  const users = await User.find({ _id: { $in: uniqueUserIds } }).select('name role');
+  const users = await User.find({ _id: { $in: uniqueUserIds } }).select('name role email');
   const userMap = {};
   users.forEach(u => {
     userMap[u._id.toString()] = u;
@@ -53,6 +54,7 @@ const enrichStatusInfo = async (tasks) => {
         userId: status.user,
         name: userObj?.name || 'Unknown',
         role: userObj?.role || 'N/A',
+        email: userObj?.email || 'N/A',
         status: status.status,
       };
 
@@ -77,10 +79,10 @@ const getAllAssignableUsers = async (req) => {
   const isPrivileged = ['admin', 'manager', 'hr'].includes(req.user.role);
 
   if (!isPrivileged) {
-    return [{ _id: req.user._id, name: req.user.name, role: req.user.role, employeeType: req.user.employeeType }];
+    return [{ _id: req.user._id, name: req.user.name, role: req.user.role, employeeType: req.user.employeeType, email: req.user.email }];
   }
 
-  const users = await User.find().select('name _id role employeeType');
+  const users = await User.find().select('name _id role employeeType email');
   return users;
 };
 
@@ -96,10 +98,145 @@ const getAllAssignableGroups = async (req) => {
     createdBy: req.user._id,
     isActive: true
   })
-  .populate('members', 'name role')
+  .populate('members', 'name role email')
   .select('name description members');
 
   return groups;
+};
+
+// 🔹 Send email notification for task creation
+const sendTaskCreationEmail = async (task, assignedUsers) => {
+  try {
+    for (const user of assignedUsers) {
+      const emailSubject = `🎯 New Task Assigned: ${task.title}`;
+      const emailHtml = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
+          <div style="text-align: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 8px 8px 0 0; color: white;">
+            <h1 style="margin: 0; font-size: 24px;">New Task Assigned</h1>
+          </div>
+          
+          <div style="padding: 20px;">
+            <p>Hello <strong>${user.name}</strong>,</p>
+            <p>You have been assigned a new task. Here are the details:</p>
+            
+            <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 15px 0; border-left: 4px solid #667eea;">
+              <h3 style="margin-top: 0; color: #333;">${task.title}</h3>
+              ${task.description ? `<p style="margin: 10px 0;"><strong>Description:</strong> ${task.description}</p>` : ''}
+              <p style="margin: 5px 0;"><strong>Priority:</strong> <span style="color: ${
+                task.priority === 'high' ? '#dc3545' : 
+                task.priority === 'medium' ? '#ffc107' : '#28a745'
+              };">${task.priority.toUpperCase()}</span></p>
+              ${task.dueDateTime ? `<p style="margin: 5px 0;"><strong>Due Date:</strong> ${moment(task.dueDateTime).format('DD MMM YYYY, hh:mm A')}</p>` : ''}
+              ${task.priorityDays ? `<p style="margin: 5px 0;"><strong>Priority Days:</strong> ${task.priorityDays}</p>` : ''}
+              <p style="margin: 5px 0;"><strong>Assigned By:</strong> ${task.createdBy.name}</p>
+            </div>
+            
+            <div style="background: #e7f3ff; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #1976d2;">
+              <p style="margin: 0; font-weight: bold;">📋 Action Required:</p>
+              <p style="margin: 10px 0 0 0;">Please login to your dashboard to view the complete task details and update the status.</p>
+            </div>
+            
+            <div style="text-align: center; margin: 25px 0;">
+              <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/dashboard" 
+                 style="background: #667eea; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
+                View Task Dashboard
+              </a>
+            </div>
+          </div>
+          
+          <div style="border-top: 1px solid #e0e0e0; padding-top: 15px; text-align: center; color: #666; font-size: 12px;">
+            <p>This is an automated notification. Please do not reply to this email.</p>
+            <p>© ${new Date().getFullYear()} RUNO Task Management System</p>
+          </div>
+        </div>
+      `;
+
+      await sendEmail(user.email, emailSubject, emailHtml);
+      console.log(`✅ Task creation email sent to: ${user.email}`);
+    }
+  } catch (emailError) {
+    console.error('❌ Failed to send task creation email:', emailError);
+    // Don't fail the task creation if email fails
+  }
+};
+
+// 🔹 Send email notification for task status update
+const sendTaskStatusUpdateEmail = async (task, updatedUser, oldStatus, newStatus) => {
+  try {
+    const emailSubject = `🔄 Task Status Updated: ${task.title}`;
+    
+    let statusColor = '#666';
+    let statusEmoji = '📝';
+    
+    switch (newStatus) {
+      case 'completed':
+        statusColor = '#28a745';
+        statusEmoji = '✅';
+        break;
+      case 'in progress':
+        statusColor = '#ffc107';
+        statusEmoji = '🔄';
+        break;
+      case 'pending':
+        statusColor = '#6c757d';
+        statusEmoji = '⏳';
+        break;
+    }
+
+    const emailHtml = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
+        <div style="text-align: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 8px 8px 0 0; color: white;">
+          <h1 style="margin: 0; font-size: 24px;">Task Status Updated</h1>
+        </div>
+        
+        <div style="padding: 20px;">
+          <p>Hello <strong>${task.createdBy.name}</strong>,</p>
+          <p><strong>${updatedUser.name}</strong> has updated the status of the following task:</p>
+          
+          <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 15px 0; border-left: 4px solid ${statusColor};">
+            <h3 style="margin-top: 0; color: #333;">${task.title}</h3>
+            <div style="display: flex; align-items: center; gap: 10px; margin: 10px 0;">
+              <span style="font-size: 20px;">${statusEmoji}</span>
+              <div>
+                <p style="margin: 0; font-weight: bold; color: ${statusColor};">Status: ${newStatus.toUpperCase()}</p>
+                <p style="margin: 5px 0 0 0; font-size: 12px; color: #666;">
+                  Previous: ${oldStatus.toUpperCase()} → New: ${newStatus.toUpperCase()}
+                </p>
+              </div>
+            </div>
+            ${task.description ? `<p style="margin: 10px 0;"><strong>Description:</strong> ${task.description}</p>` : ''}
+            <p style="margin: 5px 0;"><strong>Updated By:</strong> ${updatedUser.name} (${updatedUser.role})</p>
+            <p style="margin: 5px 0;"><strong>Updated At:</strong> ${moment().format('DD MMM YYYY, hh:mm A')}</p>
+          </div>
+
+          ${newStatus === 'completed' ? `
+            <div style="background: #d4edda; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #28a745;">
+              <p style="margin: 0; font-weight: bold; color: #155724;">🎉 Task Completed!</p>
+              <p style="margin: 10px 0 0 0;">Great work! The task has been successfully completed.</p>
+            </div>
+          ` : ''}
+          
+          <div style="text-align: center; margin: 25px 0;">
+            <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/dashboard" 
+               style="background: #667eea; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
+              View Task Dashboard
+            </a>
+          </div>
+        </div>
+        
+        <div style="border-top: 1px solid #e0e0e0; padding-top: 15px; text-align: center; color: #666; font-size: 12px;">
+          <p>This is an automated notification. Please do not reply to this email.</p>
+          <p>© ${new Date().getFullYear()} RUNO Task Management System</p>
+        </div>
+      </div>
+    `;
+
+    await sendEmail(task.createdBy.email, emailSubject, emailHtml);
+    console.log(`✅ Task status update email sent to: ${task.createdBy.email}`);
+  } catch (emailError) {
+    console.error('❌ Failed to send task status update email:', emailError);
+    // Don't fail the status update if email fails
+  }
 };
 
 // ✅ Get Self-Assigned Tasks of a User (For Admin to see tasks assigned to a specific user)
@@ -119,8 +256,9 @@ exports.getUserSelfAssignedTasks = async (req, res) => {
       createdBy: userId,
       assignedUsers: userId
     })
-    .populate('assignedUsers', 'name role')
-    .populate('assignedGroups', 'name description');
+    .populate('assignedUsers', 'name role email')
+    .populate('assignedGroups', 'name description')
+    .populate('createdBy', 'name email');
 
     const enrichedTasks = await enrichStatusInfo(tasks);
     const groupedTasks = groupTasksByDate(enrichedTasks, 'createdAt', 'serialNo');
@@ -140,8 +278,9 @@ exports.getAssignedTasksWithStatus = async (req, res) => {
     }
 
     const tasks = await Task.find({ createdBy: req.user._id })
-      .populate('assignedUsers', 'name role')
-      .populate('assignedGroups', 'name description');
+      .populate('assignedUsers', 'name role email')
+      .populate('assignedGroups', 'name description')
+      .populate('createdBy', 'name email');
 
     const enriched = await enrichStatusInfo(tasks);
     res.json({ tasks: enriched });
@@ -177,8 +316,9 @@ exports.getTasks = async (req, res) => {
     }
 
     const tasks = await Task.find(filter)
-      .populate('assignedUsers', 'name')
-      .populate('assignedGroups', 'name description');
+      .populate('assignedUsers', 'name email')
+      .populate('assignedGroups', 'name description')
+      .populate('createdBy', 'name email');
 
     const enriched = await enrichStatusInfo(tasks);
     const grouped = groupTasksByDate(enriched, 'createdAt', 'serialNo');
@@ -208,8 +348,9 @@ exports.getMyTasks = async (req, res) => {
     };
 
     const tasks = await Task.find(filter)
-      .populate('assignedUsers', 'name')
-      .populate('assignedGroups', 'name description');
+      .populate('assignedUsers', 'name email')
+      .populate('assignedGroups', 'name description')
+      .populate('createdBy', 'name email');
 
     const enriched = await enrichStatusInfo(tasks);
     const grouped = groupTasksByDate(enriched, 'createdAt', 'mySerialNo');
@@ -224,8 +365,9 @@ exports.getMyTasks = async (req, res) => {
 exports.getAssignedTasks = async (req, res) => {
   try {
     const tasks = await Task.find({ createdBy: req.user._id })
-      .populate('assignedUsers', 'name role')
-      .populate('assignedGroups', 'name description');
+      .populate('assignedUsers', 'name role email')
+      .populate('assignedGroups', 'name description')
+      .populate('createdBy', 'name email');
 
     const enriched = await enrichStatusInfo(tasks);
     const grouped = groupTasksByDate(enriched, 'createdAt', 'assignedSerialNo');
@@ -321,7 +463,7 @@ exports.createTask = async (req, res) => {
     if (finalAssignedGroups.length > 0) {
       const groupsWithMembers = await Group.find({
         _id: { $in: finalAssignedGroups },
-      }).populate("members", "_id");
+      }).populate("members", "_id name email");
 
       groupsWithMembers.forEach((group) => {
         group.members.forEach((member) => {
@@ -366,8 +508,15 @@ exports.createTask = async (req, res) => {
       nextOccurrence
     });
 
-    await task.populate("assignedUsers", "name role");
+    // Populate task data for email
+    await task.populate("assignedUsers", "name role email");
     await task.populate("assignedGroups", "name description");
+    await task.populate("createdBy", "name email");
+
+    // 🔹 Send email notifications to all assigned users
+    if (task.assignedUsers && task.assignedUsers.length > 0) {
+      await sendTaskCreationEmail(task, task.assignedUsers);
+    }
 
     res.status(201).json({ 
       success: true, 
@@ -439,7 +588,9 @@ exports.updateStatus = async (req, res) => {
 
   try {
     const task = await Task.findById(taskId)
-      .populate('assignedGroups', 'members');
+      .populate('assignedGroups', 'members')
+      .populate('createdBy', 'name email')
+      .populate('assignedUsers', 'name email role');
 
     if (!task) return res.status(404).json({ error: 'Task not found' });
 
@@ -465,6 +616,8 @@ exports.updateStatus = async (req, res) => {
       s => s.user.toString() === currentUserId
     );
 
+    const oldStatus = statusIndex !== -1 ? task.statusByUser[statusIndex].status : 'pending';
+
     if (statusIndex === -1) {
       task.statusByUser.push({ user: req.user._id, status });
     } else {
@@ -476,6 +629,15 @@ exports.updateStatus = async (req, res) => {
     
     task.markModified('statusByUser');
     await task.save();
+
+    // 🔹 Send email notification for status update
+    if (oldStatus !== status && task.createdBy) {
+      const updatedUser = task.assignedUsers.find(user => 
+        user._id.toString() === currentUserId
+      ) || { name: req.user.name, role: req.user.role };
+      
+      await sendTaskStatusUpdateEmail(task, updatedUser, oldStatus, status);
+    }
 
     res.json({ message: '✅ Status updated successfully' });
   } catch (error) {
@@ -503,7 +665,7 @@ exports.getAssignableUsers = async (req, res) => {
 // 🔹 Get all users
 exports.getAllUsers = async (req, res) => {
   try {
-    const users = await User.find().select('name _id role employeeType');
+    const users = await User.find().select('name _id role employeeType email');
     res.json({ users });
   } catch (error) {
     res.status(500).json({ error: 'Unable to fetch users' });
@@ -517,8 +679,9 @@ exports.getRecurringTasks = async (req, res) => {
       createdBy: req.user._id,
       isRecurring: true
     })
-    .populate('assignedUsers', 'name role')
+    .populate('assignedUsers', 'name role email')
     .populate('assignedGroups', 'name description')
+    .populate('createdBy', 'name email')
     .sort({ nextOccurrence: 1 });
 
     res.json({ tasks });
