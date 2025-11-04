@@ -581,68 +581,104 @@ const calculateNextOccurrence = (dueDateTime, repeatPattern, repeatDays) => {
   return nextDate;
 };
 
-// 🔄 Update status of task
+// 🔄 Update status of task - FIXED VERSION
+// 🎯 SIMPLE & SAFE Update status of task
 exports.updateStatus = async (req, res) => {
-  const { taskId } = req.params;
-  const { status } = req.body;
-
   try {
-    const task = await Task.findById(taskId)
-      .populate('assignedGroups', 'members')
-      .populate('createdBy', 'name email')
-      .populate('assignedUsers', 'name email role');
+    const { taskId } = req.params;
+    const { status } = req.body;
 
-    if (!task) return res.status(404).json({ error: 'Task not found' });
+    console.log(`🎯 Simple updateStatus called for task: ${taskId}`);
 
-    // Get all users assigned to this task (direct + group members)
-    const allAssignedUsers = [...task.assignedUsers.map(id => id.toString())];
-    
-    // Add group members
-    if (task.assignedGroups && task.assignedGroups.length > 0) {
-      task.assignedGroups.forEach(group => {
-        group.members.forEach(member => {
-          allAssignedUsers.push(member._id.toString());
-        });
+    // Basic validation
+    if (!status) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Status is required' 
       });
     }
 
-    const currentUserId = req.user._id.toString();
-
-    if (!allAssignedUsers.includes(currentUserId)) {
-      return res.status(403).json({ error: 'You are not assigned to this task.' });
+    // Find task without population first
+    const task = await Task.findById(taskId);
+    if (!task) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'Task not found' 
+      });
     }
 
-    const statusIndex = task.statusByUser.findIndex(
-      s => s.user.toString() === currentUserId
+    // Simple authorization - check if user is in assignedUsers
+    const isAuthorized = task.assignedUsers.some(userId => 
+      userId.toString() === req.user._id.toString()
+    );
+
+    if (!isAuthorized) {
+      return res.status(403).json({ 
+        success: false,
+        error: 'You are not assigned to this task' 
+      });
+    }
+
+    // Update status
+    const statusIndex = task.statusByUser.findIndex(s => 
+      s.user && s.user.toString() === req.user._id.toString()
     );
 
     const oldStatus = statusIndex !== -1 ? task.statusByUser[statusIndex].status : 'pending';
 
     if (statusIndex === -1) {
-      task.statusByUser.push({ user: req.user._id, status });
+      task.statusByUser.push({
+        user: req.user._id,
+        status: status,
+        updatedAt: new Date()
+      });
     } else {
       task.statusByUser[statusIndex].status = status;
+      task.statusByUser[statusIndex].updatedAt = new Date();
     }
 
-    // Update overall status
-    task.updateOverallStatus();
-    
-    task.markModified('statusByUser');
+    // Simple overall status update
+    if (status === 'completed') {
+      // Check if all assigned users have completed
+      const allUsersCompleted = task.assignedUsers.every(assignedUserId => {
+        const userStatus = task.statusByUser.find(s => 
+          s.user && s.user.toString() === assignedUserId.toString()
+        );
+        return userStatus && userStatus.status === 'completed';
+      });
+      
+      if (allUsersCompleted) {
+        task.overallStatus = 'completed';
+        task.completionDate = new Date();
+      } else {
+        task.overallStatus = 'in-progress';
+      }
+    } else if (status === 'in-progress') {
+      task.overallStatus = 'in-progress';
+    } else {
+      task.overallStatus = 'pending';
+    }
+
+    // Save task
     await task.save();
 
-    // 🔹 Send email notification for status update
-    if (oldStatus !== status && task.createdBy) {
-      const updatedUser = task.assignedUsers.find(user => 
-        user._id.toString() === currentUserId
-      ) || { name: req.user.name, role: req.user.role };
-      
-      await sendTaskStatusUpdateEmail(task, updatedUser, oldStatus, status);
-    }
+    res.json({ 
+      success: true,
+      message: '✅ Status updated successfully',
+      data: {
+        taskId: task._id,
+        newStatus: status,
+        overallStatus: task.overallStatus
+      }
+    });
 
-    res.json({ message: '✅ Status updated successfully' });
   } catch (error) {
-    console.error('❌ Error updating status:', error);
-    res.status(500).json({ error: 'Failed to update task status' });
+    console.error('💥 Error in updateStatus:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Internal server error',
+      ...(process.env.NODE_ENV === 'development' && { details: error.message })
+    });
   }
 };
 
