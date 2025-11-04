@@ -242,7 +242,7 @@ exports.createTask = async (req, res) => {
     const {
       title,
       description,
-      dueDate,
+      dueDateTime,
       whatsappNumber,
       priorityDays,
       priority,
@@ -311,7 +311,7 @@ exports.createTask = async (req, res) => {
     const task = await Task.create({
       title,
       description,
-      dueDate,
+      dueDateTime,
       whatsappNumber,
       priorityDays,
       priority: priority || "medium",

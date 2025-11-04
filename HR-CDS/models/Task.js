@@ -19,7 +19,8 @@ const taskSchema = new mongoose.Schema({
   },
   title: { type: String, required: true },
   description: { type: String },
-  dueDate: { type: Date },
+  // ✅ Store both date and time here
+  dueDateTime: { type: Date, required: false },
   whatsappNumber: { type: String },
   priorityDays: { type: Number, default: 1 },
   priority: {
