@@ -236,36 +236,68 @@ exports.getAssignedTasks = async (req, res) => {
   }
 };
 
-// 🔹 Create task with role-based assignment rules // 🔹 Create task with role-based assignment rules (including groups)
+// 🔹 Create task with role-based assignment rules and repeat functionality
 exports.createTask = async (req, res) => {
   try {
     const {
       title,
       description,
-      dueDate,
+      dueDateTime,
       whatsappNumber,
       priorityDays,
       priority,
       assignedUsers,
       assignedGroups,
+      repeatPattern,
+      repeatDays
     } = req.body;
 
-    const files = (req.files?.files || []).map((f) => f.path);
-    const voiceNote = req.files?.voiceNote?.[0]?.path || "";
+    const files = (req.files?.files || []).map((f) => ({
+      filename: f.filename,
+      originalName: f.originalname,
+      path: f.path
+    }));
+
+    const voiceNote = req.files?.voiceNote?.[0] ? {
+      filename: req.files.voiceNote[0].filename,
+      originalName: req.files.voiceNote[0].originalname,
+      path: req.files.voiceNote[0].path
+    } : null;
 
     const parsedUsers = assignedUsers ? JSON.parse(assignedUsers) : [];
     const parsedGroups = assignedGroups ? JSON.parse(assignedGroups) : [];
+    const parsedRepeatDays = repeatDays ? JSON.parse(repeatDays) : [];
 
     const role = req.user.role;
     const isPrivileged = ["admin", "manager", "hr"].includes(role);
 
+    // Validate due date is not in the past
+    if (dueDateTime) {
+      const dueDate = new Date(dueDateTime);
+      if (dueDate < new Date()) {
+        return res.status(400).json({ error: 'Due date cannot be in the past' });
+      }
+    }
+
     // 🔹 Auto-assign for normal users
     let finalAssignedUsers = parsedUsers;
     let finalAssignedGroups = parsedGroups;
+    let finalRepeatPattern = repeatPattern || 'none';
+    let finalRepeatDays = parsedRepeatDays;
 
     if (!isPrivileged) {
       finalAssignedUsers = [req.user._id.toString()]; // assign to self
       finalAssignedGroups = []; // not allowed to assign groups
+      
+      // For users, only allow current and future dates
+      if (dueDateTime) {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const dueDate = new Date(dueDateTime);
+        if (dueDate < today) {
+          return res.status(400).json({ error: 'You can only create tasks for current and upcoming dates' });
+        }
+      }
     }
 
     // 🔹 Validate groups for privileged users
@@ -307,11 +339,18 @@ exports.createTask = async (req, res) => {
       status: "pending",
     }));
 
+    // Calculate next occurrence for recurring tasks
+    let nextOccurrence = null;
+    if (finalRepeatPattern !== 'none' && dueDateTime) {
+      const dueDate = new Date(dueDateTime);
+      nextOccurrence = calculateNextOccurrence(dueDate, finalRepeatPattern, finalRepeatDays);
+    }
+
     // 🔹 Create the task
     const task = await Task.create({
       title,
       description,
-      dueDate,
+      dueDateTime: dueDateTime ? new Date(dueDateTime) : null,
       whatsappNumber,
       priorityDays,
       priority: priority || "medium",
@@ -321,18 +360,77 @@ exports.createTask = async (req, res) => {
       files,
       voiceNote,
       createdBy: req.user._id,
+      repeatPattern: finalRepeatPattern,
+      repeatDays: finalRepeatDays,
+      isRecurring: finalRepeatPattern !== 'none',
+      nextOccurrence
     });
 
     await task.populate("assignedUsers", "name role");
     await task.populate("assignedGroups", "name description");
 
-    res.status(201).json({ success: true, task });
+    res.status(201).json({ 
+      success: true, 
+      task,
+      message: finalRepeatPattern !== 'none' ? 'Recurring task created successfully' : 'Task created successfully'
+    });
   } catch (error) {
     console.error("❌ Error creating task:", error);
     res.status(500).json({ error: error.message || "Internal Server Error" });
   }
 };
 
+// Helper function to calculate next occurrence
+const calculateNextOccurrence = (dueDateTime, repeatPattern, repeatDays) => {
+  if (!dueDateTime || repeatPattern === 'none') return null;
+
+  let nextDate = new Date(dueDateTime);
+  
+  switch (repeatPattern) {
+    case 'daily':
+      nextDate.setDate(nextDate.getDate() + 1);
+      break;
+    
+    case 'weekly':
+      if (repeatDays && repeatDays.length > 0) {
+        const currentDay = nextDate.getDay();
+        const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+        const currentDayName = dayNames[currentDay];
+        
+        // Find the next scheduled day
+        const currentIndex = repeatDays.indexOf(currentDayName);
+        let nextDayIndex;
+        
+        if (currentIndex === -1 || currentIndex === repeatDays.length - 1) {
+          nextDayIndex = 0;
+        } else {
+          nextDayIndex = currentIndex + 1;
+        }
+        
+        const nextDayName = repeatDays[nextDayIndex];
+        const targetDayIndex = dayNames.indexOf(nextDayName);
+        let daysToAdd = targetDayIndex - currentDay;
+        
+        if (daysToAdd <= 0) {
+          daysToAdd += 7;
+        }
+        
+        nextDate.setDate(nextDate.getDate() + daysToAdd);
+      } else {
+        nextDate.setDate(nextDate.getDate() + 7);
+      }
+      break;
+    
+    case 'monthly':
+      nextDate.setMonth(nextDate.getMonth() + 1);
+      break;
+    
+    default:
+      return null;
+  }
+  
+  return nextDate;
+};
 
 // 🔄 Update status of task
 exports.updateStatus = async (req, res) => {
@@ -373,6 +471,9 @@ exports.updateStatus = async (req, res) => {
       task.statusByUser[statusIndex].status = status;
     }
 
+    // Update overall status
+    task.updateOverallStatus();
+    
     task.markModified('statusByUser');
     await task.save();
 
@@ -406,5 +507,23 @@ exports.getAllUsers = async (req, res) => {
     res.json({ users });
   } catch (error) {
     res.status(500).json({ error: 'Unable to fetch users' });
+  }
+};
+
+// 🔹 Get recurring tasks for a user
+exports.getRecurringTasks = async (req, res) => {
+  try {
+    const tasks = await Task.find({
+      createdBy: req.user._id,
+      isRecurring: true
+    })
+    .populate('assignedUsers', 'name role')
+    .populate('assignedGroups', 'name description')
+    .sort({ nextOccurrence: 1 });
+
+    res.json({ tasks });
+  } catch (error) {
+    console.error('❌ Error fetching recurring tasks:', error);
+    res.status(500).json({ error: 'Failed to fetch recurring tasks' });
   }
 };
