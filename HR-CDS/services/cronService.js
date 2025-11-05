@@ -1,16 +1,29 @@
-// services/cronService.js
 const cron = require('node-cron');
-const recurringTaskService = require('./recurringTaskService');
+const RecurringTaskService = require('./recurringTaskService');
 
 class CronService {
   init() {
-    // Run every day at 2 AM to generate recurring tasks
-    cron.schedule('0 2 * * *', async () => {
-      console.log('Running recurring task generation...');
-      await recurringTaskService.generateRecurringTasks();
+    // Run every day at 6:00 AM
+    cron.schedule('0 6 * * *', async () => {
+      console.log('🕒 Running daily recurring task check...');
+      try {
+        await RecurringTaskService.generateRecurringTasks();
+      } catch (error) {
+        console.error('❌ Error in daily recurring task check:', error);
+      }
     });
 
-    console.log('Cron jobs initialized');
+    // Run every hour for testing (you can remove this in production)
+    cron.schedule('0 * * * *', async () => {
+      console.log('🕒 Running hourly recurring task check...');
+      try {
+        await RecurringTaskService.generateRecurringTasks();
+      } catch (error) {
+        console.error('❌ Error in hourly recurring task check:', error);
+      }
+    });
+
+    console.log('✅ Cron jobs initialized');
   }
 }
 

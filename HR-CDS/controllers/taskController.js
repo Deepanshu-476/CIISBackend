@@ -3,7 +3,7 @@ const User = require('../../models/User');
 const Group = require('../models/Group');
 const moment = require('moment');
 const sendEmail = require('../../utils/sendEmail'); // Add this import
-
+const RecurringTaskService = require('../services/recurringTaskService')
 // 🔹 Helper to group tasks by createdAt (latest first) with serial numbers
 const groupTasksByDate = (tasks, dateField = 'createdAt', serialKey = 'serialNo') => {
   const grouped = {};
@@ -73,7 +73,42 @@ const enrichStatusInfo = async (tasks) => {
     };
   });
 };
+// File ke end mein yeh add karo:
 
+// 🔄 Manually trigger recurring task generation (admin only)
+exports.triggerRecurringTasks = async (req, res) => {
+  try {
+    console.log('🔄 [1] triggerRecurringTasks function called');
+    console.log('🔄 [2] User role:', req.user.role);
+    console.log('🔄 [3] User ID:', req.user._id);
+    
+    if (!['admin', 'manager', 'hr'].includes(req.user.role)) {
+      console.log('❌ [4] Access denied - user role not authorized');
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    console.log('🔄 [5] User authorized, calling RecurringTaskService...');
+    
+    const generatedCount = await RecurringTaskService.generateRecurringTasks();
+    
+    console.log('✅ [6] RecurringTaskService completed, generated count:', generatedCount);
+    
+    res.json({
+      success: true,
+      message: `Successfully generated ${generatedCount} recurring tasks`,
+      generatedCount
+    });
+    
+  } catch (error) {
+    console.error('❌ [7] ERROR in triggerRecurringTasks:', error);
+    console.error('❌ [8] Error message:', error.message);
+    console.error('❌ [9] Error stack:', error.stack);
+    
+    res.status(500).json({ 
+      error: 'Failed to generate recurring tasks: ' + error.message 
+    });
+  }
+};
 // 🔹 Get all users including group members for task assignment
 const getAllAssignableUsers = async (req) => {
   const isPrivileged = ['admin', 'manager', 'hr'].includes(req.user.role);
