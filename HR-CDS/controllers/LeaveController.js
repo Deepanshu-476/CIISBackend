@@ -6,10 +6,7 @@ exports.applyLeave = async (req, res) => {
 
   try {
     const { type, reason, startDate, endDate } = req.body;
-    console.log("📥 Received data:", { type, reason, startDate, endDate });
-
     if (!type?.trim() || !reason?.trim() || !startDate || !endDate) {
-      console.warn("⚠️ Missing required fields");
       return res.status(400).json({ error: 'All fields are required.' });
     }
 
@@ -17,12 +14,10 @@ exports.applyLeave = async (req, res) => {
     const end = new Date(endDate);
 
     if (start > end) {
-      console.warn("⚠️ Invalid date range: startDate is after endDate");
       return res.status(400).json({ error: 'Start date cannot be after end date.' });
     }
 
     const days = Math.floor((end - start) / (1000 * 60 * 60 * 24)) + 1;
-    console.log("📆 Computed days:", days);
 
     const leave = new Leave({
       user: req.user._id,
@@ -31,20 +26,29 @@ exports.applyLeave = async (req, res) => {
       startDate: start,
       endDate: end,
       days,
-      status: 'Pending'
+      status: 'Pending',
+
+      approvedBy: '',
+      remarks: '',
+
+      history: [
+        {
+          action: 'applied',                // ✅ changed from pending to applied
+          by: req.user.name || "Employee",
+          role: "employee",                 // ✅ Employee always stored as employee
+          remarks: ''
+        }
+      ]
     });
 
-    console.log("📤 Saving leave to DB:", leave);
     await leave.save();
-
-    console.log("✅ Leave saved successfully");
     res.status(201).json({ message: 'Leave applied successfully.', leave });
-
   } catch (err) {
     console.error("❌ Error in applyLeave controller:", err.message);
     res.status(500).json({ error: 'Server error' });
   }
 };
+
 
 // 🔹 Get My Leaves (User)
 exports.getMyLeaves = async (req, res) => {
@@ -101,7 +105,7 @@ exports.getMyLeaves = async (req, res) => {
 
 // 🔹 Get All Leaves (Admin only, optional date & status filter)
 exports.getAllLeaves = async (req, res) => {
-  console.log("➡️ getAllLeaves controller called (admin)");
+  console.log(" getAllLeaves controller called (admin)");
 
   try {
     const { date, status } = req.query;
@@ -144,51 +148,61 @@ exports.getAllLeaves = async (req, res) => {
 
 // 🔹 Delete Leave (Admin only)
 exports.deleteLeave = async (req, res) => {
-  console.log("➡️ deleteLeave controller called (admin)");
+  console.log("deleteLeave controller called (admin)");
 
   try {
     const { id } = req.params;
 
     const leave = await Leave.findById(id);
     if (!leave) {
-      console.warn("⚠️ Leave not found");
+      console.warn(" Leave not found");
       return res.status(404).json({ error: 'Leave not found.' });
     }
 
     await leave.deleteOne();
-
-    console.log("🗑️ Leave deleted successfully");
+  console.log(" Leave deleted successfully");
     res.status(200).json({ message: 'Leave deleted successfully.' });
-
   } catch (err) {
     console.error("❌ Error in deleteLeave controller:", err.message);
     res.status(500).json({ error: 'Server error' });
   }
 };
-
 // 🔹 Update Leave Status (Admin only)
+// 🔹 Update Leave Status (Admin/HR Only) with ApprovedBy & Remarks
 exports.updateLeaveStatus = async (req, res) => {
-  console.log("➡️ updateLeaveStatus controller called (admin)");
+  console.log(" updateLeaveStatus controller called (admin/hr)");
 
   try {
     const { id } = req.params;
-    const { status } = req.body;
+    const { status, remarks } = req.body;
 
     const allowedStatuses = ['Pending', 'Approved', 'Rejected'];
     const normalizedStatus = status?.charAt(0).toUpperCase() + status?.slice(1).toLowerCase();
 
     if (!allowedStatuses.includes(normalizedStatus)) {
-      console.warn("⚠️ Invalid status value received");
       return res.status(400).json({ error: 'Invalid status value.' });
     }
 
     const leave = await Leave.findById(id);
-    if (!leave) {
-      console.warn("⚠️ Leave not found");
-      return res.status(404).json({ error: 'Leave not found.' });
-    }
+    if (!leave) return res.status(404).json({ error: 'Leave not found.' });
 
+    // Current user details
+    const userName = req.user.name || "Unknown";
+    const userRole = (req.user.role || "admin").toLowerCase();  // ✅ store in lowercase
+
+    // Update main record (for quick display)
     leave.status = normalizedStatus;
+    leave.approvedBy = userName;
+    leave.remarks = remarks?.trim() || '';
+
+    // ✅ Push to history array
+    leave.history.push({
+      action: normalizedStatus.toLowerCase(),  // approved / rejected / pending
+      by: userName,
+      role: userRole,                          // hr / admin / manager
+      remarks: remarks?.trim() || ''
+    });
+
     await leave.save();
 
     console.log(`✅ Leave status updated to ${normalizedStatus}`);
