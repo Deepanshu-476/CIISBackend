@@ -91,7 +91,13 @@ const clockOut = async (req, res) => {
     record.overTime = now > shiftEnd ? formatDuration(now - shiftEnd) : "00:00:00";
     record.earlyLeave = now < shiftEnd ? formatDuration(shiftEnd - now) : "00:00:00";
 
-    record.status = totalHours >= 4 ? "PRESENT" : (totalHours > 0 ? "HALF DAY" : "ABSENT");
+    // record.status = totalHours >= 8 ? "PRESENT" : (totalHours > 0 ? "HALF DAY" : "ABSENT");
+    record.status = totalHours >= 9 
+  ? "PRESENT" 
+  : (totalHours >= 5 
+      ? "HALF DAY" 
+      : "ABSENT");
+
 
     await record.save();
 

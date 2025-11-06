@@ -57,7 +57,7 @@ exports.register = async (req, res) => {
     }
 
     // ✅ Role validation
-    const validRoles = ["admin", "user", "hr", "manager"];
+    const validRoles = ["admin", "user", "hr", "manager", "SuperAdmin"];
     const assignedRole = validRoles.includes(role) ? role : "user";
 
     // ✅ Create user data

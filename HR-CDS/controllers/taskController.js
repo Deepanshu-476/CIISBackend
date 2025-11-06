@@ -81,8 +81,8 @@ exports.triggerRecurringTasks = async (req, res) => {
     console.log('🔄 [1] triggerRecurringTasks function called');
     console.log('🔄 [2] User role:', req.user.role);
     console.log('🔄 [3] User ID:', req.user._id);
-    
-    if (!['admin', 'manager', 'hr'].includes(req.user.role)) {
+
+    if (!['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role)) {
       console.log('❌ [4] Access denied - user role not authorized');
       return res.status(403).json({ error: 'Access denied' });
     }
@@ -111,7 +111,7 @@ exports.triggerRecurringTasks = async (req, res) => {
 };
 // 🔹 Get all users including group members for task assignment
 const getAllAssignableUsers = async (req) => {
-  const isPrivileged = ['admin', 'manager', 'hr'].includes(req.user.role);
+  const isPrivileged = ['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role);
 
   if (!isPrivileged) {
     return [{ _id: req.user._id, name: req.user.name, role: req.user.role, employeeType: req.user.employeeType, email: req.user.email }];
@@ -123,7 +123,7 @@ const getAllAssignableUsers = async (req) => {
 
 // 🔹 Get all groups for task assignment
 const getAllAssignableGroups = async (req) => {
-  const isPrivileged = ['admin', 'manager', 'hr'].includes(req.user.role);
+  const isPrivileged = ['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role);
 
   if (!isPrivileged) {
     return [];
@@ -277,7 +277,7 @@ const sendTaskStatusUpdateEmail = async (task, updatedUser, oldStatus, newStatus
 // ✅ Get Self-Assigned Tasks of a User (For Admin to see tasks assigned to a specific user)
 exports.getUserSelfAssignedTasks = async (req, res) => {
   try {
-    if (!['admin', 'manager', 'hr'].includes(req.user.role)) {
+    if (!['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role)) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -308,7 +308,7 @@ exports.getUserSelfAssignedTasks = async (req, res) => {
 // 🔹 Get assigned tasks for logged-in user
 exports.getAssignedTasksWithStatus = async (req, res) => {
   try {
-    if (!['admin', 'manager', 'hr'].includes(req.user.role)) {
+    if (!['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role)) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -446,7 +446,7 @@ exports.createTask = async (req, res) => {
     const parsedRepeatDays = repeatDays ? JSON.parse(repeatDays) : [];
 
     const role = req.user.role;
-    const isPrivileged = ["admin", "manager", "hr"].includes(role);
+    const isPrivileged = ["admin", "manager", "hr", "SuperAdmin"].includes(role);
 
     // Validate due date is not in the past
     if (dueDateTime) {
