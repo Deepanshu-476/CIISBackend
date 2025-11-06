@@ -28,7 +28,10 @@ const clockIn = async (req, res) => {
 
     const shiftStart = new Date(now);
     shiftStart.setHours(9, 0, 0, 0);
-    const lateBy = now > shiftStart ? formatDuration(now - shiftStart) : "00:00:00";
+    const lateBy = now > shiftStart
+  ? (formatDuration(now - shiftStart) || "00:00:00")
+  : "00:00:00";
+
 
     const newRecord = new Attendance({
       user: userId,

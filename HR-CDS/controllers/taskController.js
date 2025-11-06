@@ -4,6 +4,7 @@ const Group = require('../models/Group');
 const moment = require('moment');
 const sendEmail = require('../../utils/sendEmail'); // Add this import
 const RecurringTaskService = require('../services/recurringTaskService')
+
 // 🔹 Helper to group tasks by createdAt (latest first) with serial numbers
 const groupTasksByDate = (tasks, dateField = 'createdAt', serialKey = 'serialNo') => {
   const grouped = {};
@@ -73,7 +74,6 @@ const enrichStatusInfo = async (tasks) => {
     };
   });
 };
-// File ke end mein yeh add karo:
 
 // 🔄 Manually trigger recurring task generation (admin only)
 exports.triggerRecurringTasks = async (req, res) => {
@@ -109,6 +109,7 @@ exports.triggerRecurringTasks = async (req, res) => {
     });
   }
 };
+
 // 🔹 Get all users including group members for task assignment
 const getAllAssignableUsers = async (req) => {
   const isPrivileged = ['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role);
@@ -564,7 +565,7 @@ exports.createTask = async (req, res) => {
   }
 };
 
-// Helper function to calculate next occurrence
+// Helper function to calculate next occurrence - IMPROVED VERSION
 const calculateNextOccurrence = (dueDateTime, repeatPattern, repeatDays) => {
   if (!dueDateTime || repeatPattern === 'none') return null;
 
@@ -582,25 +583,31 @@ const calculateNextOccurrence = (dueDateTime, repeatPattern, repeatDays) => {
         const currentDayName = dayNames[currentDay];
         
         // Find the next scheduled day
-        const currentIndex = repeatDays.indexOf(currentDayName);
-        let nextDayIndex;
+        let daysToAdd = 1;
+        let found = false;
         
-        if (currentIndex === -1 || currentIndex === repeatDays.length - 1) {
-          nextDayIndex = 0;
-        } else {
-          nextDayIndex = currentIndex + 1;
+        for (let i = 1; i <= 7; i++) {
+          const checkDate = new Date(nextDate);
+          checkDate.setDate(nextDate.getDate() + i);
+          const checkDayName = dayNames[checkDate.getDay()];
+          
+          if (repeatDays.includes(checkDayName)) {
+            daysToAdd = i;
+            found = true;
+            break;
+          }
         }
         
-        const nextDayName = repeatDays[nextDayIndex];
-        const targetDayIndex = dayNames.indexOf(nextDayName);
-        let daysToAdd = targetDayIndex - currentDay;
-        
-        if (daysToAdd <= 0) {
-          daysToAdd += 7;
+        if (!found) {
+          // If no future day found, go to first repeat day of next week
+          const firstRepeatDay = repeatDays[0];
+          const firstDayIndex = dayNames.indexOf(firstRepeatDay);
+          daysToAdd = (7 - currentDay + firstDayIndex) % 7 || 7;
         }
         
         nextDate.setDate(nextDate.getDate() + daysToAdd);
       } else {
+        // If no specific days, repeat weekly
         nextDate.setDate(nextDate.getDate() + 7);
       }
       break;
@@ -616,14 +623,13 @@ const calculateNextOccurrence = (dueDateTime, repeatPattern, repeatDays) => {
   return nextDate;
 };
 
-// 🔄 Update status of task - FIXED VERSION
-// 🎯 SIMPLE & SAFE Update status of task
+// 🔄 Update status of task - WITH RECURRING TASK SUPPORT
 exports.updateStatus = async (req, res) => {
   try {
     const { taskId } = req.params;
     const { status } = req.body;
 
-    console.log(`🎯 Simple updateStatus called for task: ${taskId}`);
+    console.log(`🎯 updateStatus called for task: ${taskId}`);
 
     // Basic validation
     if (!status) {
@@ -685,6 +691,12 @@ exports.updateStatus = async (req, res) => {
       if (allUsersCompleted) {
         task.overallStatus = 'completed';
         task.completionDate = new Date();
+
+        // ✅ RECURRING TASK HANDLING
+        // ✅ RECURRING TASK HANDLING
+if (task.isRecurring && task.repeatPattern !== 'none' && status === 'completed') {
+  await exports.handleRecurringTaskGeneration(task);
+}
       } else {
         task.overallStatus = 'in-progress';
       }
@@ -761,3 +773,71 @@ exports.getRecurringTasks = async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch recurring tasks' });
   }
 };
+
+// 🔄 Handle recurring task generation when task is completed
+exports.handleRecurringTaskGeneration = async (task) => {
+  try {
+    console.log(`🔄 Handling recurring task generation for: ${task.title}`);
+    
+    if (!task.isRecurring || task.repeatPattern === 'none') {
+      return null;
+    }
+
+    const nextDueDate = calculateNextOccurrence(
+      task.dueDateTime || new Date(),
+      task.repeatPattern,
+      task.repeatDays
+    );
+
+    if (!nextDueDate) {
+      console.log('❌ Could not calculate next occurrence');
+      return null;
+    }
+
+    // Create new recurring task instance
+    const newTaskData = {
+      title: task.title,
+      description: task.description,
+      dueDateTime: nextDueDate,
+      whatsappNumber: task.whatsappNumber,
+      priorityDays: task.priorityDays,
+      priority: task.priority,
+      assignedUsers: task.assignedUsers,
+      assignedGroups: task.assignedGroups,
+      repeatPattern: task.repeatPattern,
+      repeatDays: task.repeatDays,
+      isRecurring: true,
+      nextOccurrence: calculateNextOccurrence(nextDueDate, task.repeatPattern, task.repeatDays),
+      statusByUser: task.assignedUsers.map(userId => ({
+        user: userId,
+        status: 'pending',
+        updatedAt: new Date()
+      })),
+      files: task.files,
+      createdBy: task.createdBy,
+      recurrenceCount: (task.recurrenceCount || 0) + 1
+    };
+
+    const newTask = await Task.create(newTaskData);
+
+    // Populate for email notifications
+    await newTask.populate("assignedUsers", "name role email");
+    await newTask.populate("createdBy", "name email");
+
+    console.log(`✅ New recurring task created: ${newTask._id} for ${nextDueDate}`);
+
+    // Send email notifications for new task
+    if (newTask.assignedUsers && newTask.assignedUsers.length > 0) {
+      await sendTaskCreationEmail(newTask, newTask.assignedUsers);
+    }
+
+    return newTask;
+
+  } catch (error) {
+    console.error('❌ Error in handleRecurringTaskGeneration:', error);
+    return null;
+  }
+};
+
+// Export the calculateNextOccurrence function for use in other methods
+exports.calculateNextOccurrence = calculateNextOccurrence;
