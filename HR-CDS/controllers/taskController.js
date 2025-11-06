@@ -173,7 +173,7 @@ const sendTaskCreationEmail = async (task, assignedUsers) => {
             </div>
             
             <div style="text-align: center; margin: 25px 0;">
-              <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/dashboard" 
+              <a href="https://cds.ciisnetwork.in/login"
                  style="background: #667eea; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
                 View Task Dashboard
               </a>
@@ -182,7 +182,7 @@ const sendTaskCreationEmail = async (task, assignedUsers) => {
           
           <div style="border-top: 1px solid #e0e0e0; padding-top: 15px; text-align: center; color: #666; font-size: 12px;">
             <p>This is an automated notification. Please do not reply to this email.</p>
-            <p>© ${new Date().getFullYear()} RUNO Task Management System</p>
+            <p>© ${new Date().getFullYear()} Ciis Task Management System</p>
           </div>
         </div>
       `;
@@ -253,7 +253,7 @@ const sendTaskStatusUpdateEmail = async (task, updatedUser, oldStatus, newStatus
           ` : ''}
           
           <div style="text-align: center; margin: 25px 0;">
-            <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/dashboard" 
+            <a href="https://cds.ciisnetwork.in/login" 
                style="background: #667eea; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
               View Task Dashboard
             </a>
@@ -262,7 +262,7 @@ const sendTaskStatusUpdateEmail = async (task, updatedUser, oldStatus, newStatus
         
         <div style="border-top: 1px solid #e0e0e0; padding-top: 15px; text-align: center; color: #666; font-size: 12px;">
           <p>This is an automated notification. Please do not reply to this email.</p>
-          <p>© ${new Date().getFullYear()} RUNO Task Management System</p>
+          <p>© ${new Date().getFullYear()} Ciis Task Management System</p>
         </div>
       </div>
     `;
