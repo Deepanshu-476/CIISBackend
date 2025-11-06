@@ -28,7 +28,10 @@ const clockIn = async (req, res) => {
 
     const shiftStart = new Date(now);
     shiftStart.setHours(9, 0, 0, 0);
-    const lateBy = now > shiftStart ? formatDuration(now - shiftStart) : "00:00:00";
+    const lateBy = now > shiftStart
+  ? (formatDuration(now - shiftStart) || "00:00:00")
+  : "00:00:00";
+
 
     const newRecord = new Attendance({
       user: userId,
@@ -91,7 +94,13 @@ const clockOut = async (req, res) => {
     record.overTime = now > shiftEnd ? formatDuration(now - shiftEnd) : "00:00:00";
     record.earlyLeave = now < shiftEnd ? formatDuration(shiftEnd - now) : "00:00:00";
 
-    record.status = totalHours >= 4 ? "PRESENT" : (totalHours > 0 ? "HALF DAY" : "ABSENT");
+    // record.status = totalHours >= 8 ? "PRESENT" : (totalHours > 0 ? "HALF DAY" : "ABSENT");
+    record.status = totalHours >= 9 
+  ? "PRESENT" 
+  : (totalHours >= 5 
+      ? "HALF DAY" 
+      : "ABSENT");
+
 
     await record.save();
 

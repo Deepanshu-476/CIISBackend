@@ -2,6 +2,8 @@ const Task = require('../models/Task');
 const User = require('../../models/User');
 const Group = require('../models/Group');
 const moment = require('moment');
+const sendEmail = require('../../utils/sendEmail'); // Add this import
+const RecurringTaskService = require('../services/recurringTaskService')
 
 // 🔹 Helper to group tasks by createdAt (latest first) with serial numbers
 const groupTasksByDate = (tasks, dateField = 'createdAt', serialKey = 'serialNo') => {
@@ -40,7 +42,7 @@ const enrichStatusInfo = async (tasks) => {
   });
 
   const uniqueUserIds = [...new Set(userIds)];
-  const users = await User.find({ _id: { $in: uniqueUserIds } }).select('name role');
+  const users = await User.find({ _id: { $in: uniqueUserIds } }).select('name role email');
   const userMap = {};
   users.forEach(u => {
     userMap[u._id.toString()] = u;
@@ -53,6 +55,7 @@ const enrichStatusInfo = async (tasks) => {
         userId: status.user,
         name: userObj?.name || 'Unknown',
         role: userObj?.role || 'N/A',
+        email: userObj?.email || 'N/A',
         status: status.status,
       };
 
@@ -72,21 +75,56 @@ const enrichStatusInfo = async (tasks) => {
   });
 };
 
+// 🔄 Manually trigger recurring task generation (admin only)
+exports.triggerRecurringTasks = async (req, res) => {
+  try {
+    console.log('🔄 [1] triggerRecurringTasks function called');
+    console.log('🔄 [2] User role:', req.user.role);
+    console.log('🔄 [3] User ID:', req.user._id);
+
+    if (!['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role)) {
+      console.log('❌ [4] Access denied - user role not authorized');
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    console.log('🔄 [5] User authorized, calling RecurringTaskService...');
+    
+    const generatedCount = await RecurringTaskService.generateRecurringTasks();
+    
+    console.log('✅ [6] RecurringTaskService completed, generated count:', generatedCount);
+    
+    res.json({
+      success: true,
+      message: `Successfully generated ${generatedCount} recurring tasks`,
+      generatedCount
+    });
+    
+  } catch (error) {
+    console.error('❌ [7] ERROR in triggerRecurringTasks:', error);
+    console.error('❌ [8] Error message:', error.message);
+    console.error('❌ [9] Error stack:', error.stack);
+    
+    res.status(500).json({ 
+      error: 'Failed to generate recurring tasks: ' + error.message 
+    });
+  }
+};
+
 // 🔹 Get all users including group members for task assignment
 const getAllAssignableUsers = async (req) => {
-  const isPrivileged = ['admin', 'manager', 'hr'].includes(req.user.role);
+  const isPrivileged = ['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role);
 
   if (!isPrivileged) {
-    return [{ _id: req.user._id, name: req.user.name, role: req.user.role, employeeType: req.user.employeeType }];
+    return [{ _id: req.user._id, name: req.user.name, role: req.user.role, employeeType: req.user.employeeType, email: req.user.email }];
   }
 
-  const users = await User.find().select('name _id role employeeType');
+  const users = await User.find().select('name _id role employeeType email');
   return users;
 };
 
 // 🔹 Get all groups for task assignment
 const getAllAssignableGroups = async (req) => {
-  const isPrivileged = ['admin', 'manager', 'hr'].includes(req.user.role);
+  const isPrivileged = ['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role);
 
   if (!isPrivileged) {
     return [];
@@ -96,16 +134,151 @@ const getAllAssignableGroups = async (req) => {
     createdBy: req.user._id,
     isActive: true
   })
-  .populate('members', 'name role')
+  .populate('members', 'name role email')
   .select('name description members');
 
   return groups;
 };
 
+// 🔹 Send email notification for task creation
+const sendTaskCreationEmail = async (task, assignedUsers) => {
+  try {
+    for (const user of assignedUsers) {
+      const emailSubject = `🎯 New Task Assigned: ${task.title}`;
+      const emailHtml = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
+          <div style="text-align: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 8px 8px 0 0; color: white;">
+            <h1 style="margin: 0; font-size: 24px;">New Task Assigned</h1>
+          </div>
+          
+          <div style="padding: 20px;">
+            <p>Hello <strong>${user.name}</strong>,</p>
+            <p>You have been assigned a new task. Here are the details:</p>
+            
+            <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 15px 0; border-left: 4px solid #667eea;">
+              <h3 style="margin-top: 0; color: #333;">${task.title}</h3>
+              ${task.description ? `<p style="margin: 10px 0;"><strong>Description:</strong> ${task.description}</p>` : ''}
+              <p style="margin: 5px 0;"><strong>Priority:</strong> <span style="color: ${
+                task.priority === 'high' ? '#dc3545' : 
+                task.priority === 'medium' ? '#ffc107' : '#28a745'
+              };">${task.priority.toUpperCase()}</span></p>
+              ${task.dueDateTime ? `<p style="margin: 5px 0;"><strong>Due Date:</strong> ${moment(task.dueDateTime).format('DD MMM YYYY, hh:mm A')}</p>` : ''}
+              ${task.priorityDays ? `<p style="margin: 5px 0;"><strong>Priority Days:</strong> ${task.priorityDays}</p>` : ''}
+              <p style="margin: 5px 0;"><strong>Assigned By:</strong> ${task.createdBy.name}</p>
+            </div>
+            
+            <div style="background: #e7f3ff; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #1976d2;">
+              <p style="margin: 0; font-weight: bold;">📋 Action Required:</p>
+              <p style="margin: 10px 0 0 0;">Please login to your dashboard to view the complete task details and update the status.</p>
+            </div>
+            
+            <div style="text-align: center; margin: 25px 0;">
+              <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/dashboard" 
+                 style="background: #667eea; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
+                View Task Dashboard
+              </a>
+            </div>
+          </div>
+          
+          <div style="border-top: 1px solid #e0e0e0; padding-top: 15px; text-align: center; color: #666; font-size: 12px;">
+            <p>This is an automated notification. Please do not reply to this email.</p>
+            <p>© ${new Date().getFullYear()} RUNO Task Management System</p>
+          </div>
+        </div>
+      `;
+
+      await sendEmail(user.email, emailSubject, emailHtml);
+      console.log(`✅ Task creation email sent to: ${user.email}`);
+    }
+  } catch (emailError) {
+    console.error('❌ Failed to send task creation email:', emailError);
+    // Don't fail the task creation if email fails
+  }
+};
+
+// 🔹 Send email notification for task status update
+const sendTaskStatusUpdateEmail = async (task, updatedUser, oldStatus, newStatus) => {
+  try {
+    const emailSubject = `🔄 Task Status Updated: ${task.title}`;
+    
+    let statusColor = '#666';
+    let statusEmoji = '📝';
+    
+    switch (newStatus) {
+      case 'completed':
+        statusColor = '#28a745';
+        statusEmoji = '✅';
+        break;
+      case 'in progress':
+        statusColor = '#ffc107';
+        statusEmoji = '🔄';
+        break;
+      case 'pending':
+        statusColor = '#6c757d';
+        statusEmoji = '⏳';
+        break;
+    }
+
+    const emailHtml = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
+        <div style="text-align: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 8px 8px 0 0; color: white;">
+          <h1 style="margin: 0; font-size: 24px;">Task Status Updated</h1>
+        </div>
+        
+        <div style="padding: 20px;">
+          <p>Hello <strong>${task.createdBy.name}</strong>,</p>
+          <p><strong>${updatedUser.name}</strong> has updated the status of the following task:</p>
+          
+          <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 15px 0; border-left: 4px solid ${statusColor};">
+            <h3 style="margin-top: 0; color: #333;">${task.title}</h3>
+            <div style="display: flex; align-items: center; gap: 10px; margin: 10px 0;">
+              <span style="font-size: 20px;">${statusEmoji}</span>
+              <div>
+                <p style="margin: 0; font-weight: bold; color: ${statusColor};">Status: ${newStatus.toUpperCase()}</p>
+                <p style="margin: 5px 0 0 0; font-size: 12px; color: #666;">
+                  Previous: ${oldStatus.toUpperCase()} → New: ${newStatus.toUpperCase()}
+                </p>
+              </div>
+            </div>
+            ${task.description ? `<p style="margin: 10px 0;"><strong>Description:</strong> ${task.description}</p>` : ''}
+            <p style="margin: 5px 0;"><strong>Updated By:</strong> ${updatedUser.name} (${updatedUser.role})</p>
+            <p style="margin: 5px 0;"><strong>Updated At:</strong> ${moment().format('DD MMM YYYY, hh:mm A')}</p>
+          </div>
+
+          ${newStatus === 'completed' ? `
+            <div style="background: #d4edda; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #28a745;">
+              <p style="margin: 0; font-weight: bold; color: #155724;">🎉 Task Completed!</p>
+              <p style="margin: 10px 0 0 0;">Great work! The task has been successfully completed.</p>
+            </div>
+          ` : ''}
+          
+          <div style="text-align: center; margin: 25px 0;">
+            <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/dashboard" 
+               style="background: #667eea; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
+              View Task Dashboard
+            </a>
+          </div>
+        </div>
+        
+        <div style="border-top: 1px solid #e0e0e0; padding-top: 15px; text-align: center; color: #666; font-size: 12px;">
+          <p>This is an automated notification. Please do not reply to this email.</p>
+          <p>© ${new Date().getFullYear()} RUNO Task Management System</p>
+        </div>
+      </div>
+    `;
+
+    await sendEmail(task.createdBy.email, emailSubject, emailHtml);
+    console.log(`✅ Task status update email sent to: ${task.createdBy.email}`);
+  } catch (emailError) {
+    console.error('❌ Failed to send task status update email:', emailError);
+    // Don't fail the status update if email fails
+  }
+};
+
 // ✅ Get Self-Assigned Tasks of a User (For Admin to see tasks assigned to a specific user)
 exports.getUserSelfAssignedTasks = async (req, res) => {
   try {
-    if (!['admin', 'manager', 'hr'].includes(req.user.role)) {
+    if (!['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role)) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -119,8 +292,9 @@ exports.getUserSelfAssignedTasks = async (req, res) => {
       createdBy: userId,
       assignedUsers: userId
     })
-    .populate('assignedUsers', 'name role')
-    .populate('assignedGroups', 'name description');
+    .populate('assignedUsers', 'name role email')
+    .populate('assignedGroups', 'name description')
+    .populate('createdBy', 'name email');
 
     const enrichedTasks = await enrichStatusInfo(tasks);
     const groupedTasks = groupTasksByDate(enrichedTasks, 'createdAt', 'serialNo');
@@ -135,13 +309,14 @@ exports.getUserSelfAssignedTasks = async (req, res) => {
 // 🔹 Get assigned tasks for logged-in user
 exports.getAssignedTasksWithStatus = async (req, res) => {
   try {
-    if (!['admin', 'manager', 'hr'].includes(req.user.role)) {
+    if (!['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role)) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
     const tasks = await Task.find({ createdBy: req.user._id })
-      .populate('assignedUsers', 'name role')
-      .populate('assignedGroups', 'name description');
+      .populate('assignedUsers', 'name role email')
+      .populate('assignedGroups', 'name description')
+      .populate('createdBy', 'name email');
 
     const enriched = await enrichStatusInfo(tasks);
     res.json({ tasks: enriched });
@@ -177,8 +352,9 @@ exports.getTasks = async (req, res) => {
     }
 
     const tasks = await Task.find(filter)
-      .populate('assignedUsers', 'name')
-      .populate('assignedGroups', 'name description');
+      .populate('assignedUsers', 'name email')
+      .populate('assignedGroups', 'name description')
+      .populate('createdBy', 'name email');
 
     const enriched = await enrichStatusInfo(tasks);
     const grouped = groupTasksByDate(enriched, 'createdAt', 'serialNo');
@@ -208,8 +384,9 @@ exports.getMyTasks = async (req, res) => {
     };
 
     const tasks = await Task.find(filter)
-      .populate('assignedUsers', 'name')
-      .populate('assignedGroups', 'name description');
+      .populate('assignedUsers', 'name email')
+      .populate('assignedGroups', 'name description')
+      .populate('createdBy', 'name email');
 
     const enriched = await enrichStatusInfo(tasks);
     const grouped = groupTasksByDate(enriched, 'createdAt', 'mySerialNo');
@@ -224,8 +401,9 @@ exports.getMyTasks = async (req, res) => {
 exports.getAssignedTasks = async (req, res) => {
   try {
     const tasks = await Task.find({ createdBy: req.user._id })
-      .populate('assignedUsers', 'name role')
-      .populate('assignedGroups', 'name description');
+      .populate('assignedUsers', 'name role email')
+      .populate('assignedGroups', 'name description')
+      .populate('createdBy', 'name email');
 
     const enriched = await enrichStatusInfo(tasks);
     const grouped = groupTasksByDate(enriched, 'createdAt', 'assignedSerialNo');
@@ -236,7 +414,7 @@ exports.getAssignedTasks = async (req, res) => {
   }
 };
 
-// 🔹 Create task with role-based assignment rules // 🔹 Create task with role-based assignment rules (including groups)
+// 🔹 Create task with role-based assignment rules and repeat functionality
 exports.createTask = async (req, res) => {
   try {
     const {
@@ -248,24 +426,56 @@ exports.createTask = async (req, res) => {
       priority,
       assignedUsers,
       assignedGroups,
+      repeatPattern,
+      repeatDays
     } = req.body;
 
-    const files = (req.files?.files || []).map((f) => f.path);
-    const voiceNote = req.files?.voiceNote?.[0]?.path || "";
+    const files = (req.files?.files || []).map((f) => ({
+      filename: f.filename,
+      originalName: f.originalname,
+      path: f.path
+    }));
+
+    const voiceNote = req.files?.voiceNote?.[0] ? {
+      filename: req.files.voiceNote[0].filename,
+      originalName: req.files.voiceNote[0].originalname,
+      path: req.files.voiceNote[0].path
+    } : null;
 
     const parsedUsers = assignedUsers ? JSON.parse(assignedUsers) : [];
     const parsedGroups = assignedGroups ? JSON.parse(assignedGroups) : [];
+    const parsedRepeatDays = repeatDays ? JSON.parse(repeatDays) : [];
 
     const role = req.user.role;
-    const isPrivileged = ["admin", "manager", "hr"].includes(role);
+    const isPrivileged = ["admin", "manager", "hr", "SuperAdmin"].includes(role);
+
+    // Validate due date is not in the past
+    if (dueDateTime) {
+      const dueDate = new Date(dueDateTime);
+      if (dueDate < new Date()) {
+        return res.status(400).json({ error: 'Due date cannot be in the past' });
+      }
+    }
 
     // 🔹 Auto-assign for normal users
     let finalAssignedUsers = parsedUsers;
     let finalAssignedGroups = parsedGroups;
+    let finalRepeatPattern = repeatPattern || 'none';
+    let finalRepeatDays = parsedRepeatDays;
 
     if (!isPrivileged) {
       finalAssignedUsers = [req.user._id.toString()]; // assign to self
       finalAssignedGroups = []; // not allowed to assign groups
+      
+      // For users, only allow current and future dates
+      if (dueDateTime) {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const dueDate = new Date(dueDateTime);
+        if (dueDate < today) {
+          return res.status(400).json({ error: 'You can only create tasks for current and upcoming dates' });
+        }
+      }
     }
 
     // 🔹 Validate groups for privileged users
@@ -289,7 +499,7 @@ exports.createTask = async (req, res) => {
     if (finalAssignedGroups.length > 0) {
       const groupsWithMembers = await Group.find({
         _id: { $in: finalAssignedGroups },
-      }).populate("members", "_id");
+      }).populate("members", "_id name email");
 
       groupsWithMembers.forEach((group) => {
         group.members.forEach((member) => {
@@ -307,11 +517,18 @@ exports.createTask = async (req, res) => {
       status: "pending",
     }));
 
+    // Calculate next occurrence for recurring tasks
+    let nextOccurrence = null;
+    if (finalRepeatPattern !== 'none' && dueDateTime) {
+      const dueDate = new Date(dueDateTime);
+      nextOccurrence = calculateNextOccurrence(dueDate, finalRepeatPattern, finalRepeatDays);
+    }
+
     // 🔹 Create the task
     const task = await Task.create({
       title,
       description,
-      dueDateTime,
+      dueDateTime: dueDateTime ? new Date(dueDateTime) : null,
       whatsappNumber,
       priorityDays,
       priority: priority || "medium",
@@ -321,65 +538,194 @@ exports.createTask = async (req, res) => {
       files,
       voiceNote,
       createdBy: req.user._id,
+      repeatPattern: finalRepeatPattern,
+      repeatDays: finalRepeatDays,
+      isRecurring: finalRepeatPattern !== 'none',
+      nextOccurrence
     });
 
-    await task.populate("assignedUsers", "name role");
+    // Populate task data for email
+    await task.populate("assignedUsers", "name role email");
     await task.populate("assignedGroups", "name description");
+    await task.populate("createdBy", "name email");
 
-    res.status(201).json({ success: true, task });
+    // 🔹 Send email notifications to all assigned users
+    if (task.assignedUsers && task.assignedUsers.length > 0) {
+      await sendTaskCreationEmail(task, task.assignedUsers);
+    }
+
+    res.status(201).json({ 
+      success: true, 
+      task,
+      message: finalRepeatPattern !== 'none' ? 'Recurring task created successfully' : 'Task created successfully'
+    });
   } catch (error) {
     console.error("❌ Error creating task:", error);
     res.status(500).json({ error: error.message || "Internal Server Error" });
   }
 };
 
+// Helper function to calculate next occurrence - IMPROVED VERSION
+const calculateNextOccurrence = (dueDateTime, repeatPattern, repeatDays) => {
+  if (!dueDateTime || repeatPattern === 'none') return null;
 
-// 🔄 Update status of task
-exports.updateStatus = async (req, res) => {
-  const { taskId } = req.params;
-  const { status } = req.body;
-
-  try {
-    const task = await Task.findById(taskId)
-      .populate('assignedGroups', 'members');
-
-    if (!task) return res.status(404).json({ error: 'Task not found' });
-
-    // Get all users assigned to this task (direct + group members)
-    const allAssignedUsers = [...task.assignedUsers.map(id => id.toString())];
+  let nextDate = new Date(dueDateTime);
+  
+  switch (repeatPattern) {
+    case 'daily':
+      nextDate.setDate(nextDate.getDate() + 1);
+      break;
     
-    // Add group members
-    if (task.assignedGroups && task.assignedGroups.length > 0) {
-      task.assignedGroups.forEach(group => {
-        group.members.forEach(member => {
-          allAssignedUsers.push(member._id.toString());
-        });
+    case 'weekly':
+      if (repeatDays && repeatDays.length > 0) {
+        const currentDay = nextDate.getDay();
+        const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+        const currentDayName = dayNames[currentDay];
+        
+        // Find the next scheduled day
+        let daysToAdd = 1;
+        let found = false;
+        
+        for (let i = 1; i <= 7; i++) {
+          const checkDate = new Date(nextDate);
+          checkDate.setDate(nextDate.getDate() + i);
+          const checkDayName = dayNames[checkDate.getDay()];
+          
+          if (repeatDays.includes(checkDayName)) {
+            daysToAdd = i;
+            found = true;
+            break;
+          }
+        }
+        
+        if (!found) {
+          // If no future day found, go to first repeat day of next week
+          const firstRepeatDay = repeatDays[0];
+          const firstDayIndex = dayNames.indexOf(firstRepeatDay);
+          daysToAdd = (7 - currentDay + firstDayIndex) % 7 || 7;
+        }
+        
+        nextDate.setDate(nextDate.getDate() + daysToAdd);
+      } else {
+        // If no specific days, repeat weekly
+        nextDate.setDate(nextDate.getDate() + 7);
+      }
+      break;
+    
+    case 'monthly':
+      nextDate.setMonth(nextDate.getMonth() + 1);
+      break;
+    
+    default:
+      return null;
+  }
+  
+  return nextDate;
+};
+
+// 🔄 Update status of task - WITH RECURRING TASK SUPPORT
+exports.updateStatus = async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    const { status } = req.body;
+
+    console.log(`🎯 updateStatus called for task: ${taskId}`);
+
+    // Basic validation
+    if (!status) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Status is required' 
       });
     }
 
-    const currentUserId = req.user._id.toString();
-
-    if (!allAssignedUsers.includes(currentUserId)) {
-      return res.status(403).json({ error: 'You are not assigned to this task.' });
+    // Find task without population first
+    const task = await Task.findById(taskId);
+    if (!task) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'Task not found' 
+      });
     }
 
-    const statusIndex = task.statusByUser.findIndex(
-      s => s.user.toString() === currentUserId
+    // Simple authorization - check if user is in assignedUsers
+    const isAuthorized = task.assignedUsers.some(userId => 
+      userId.toString() === req.user._id.toString()
     );
 
-    if (statusIndex === -1) {
-      task.statusByUser.push({ user: req.user._id, status });
-    } else {
-      task.statusByUser[statusIndex].status = status;
+    if (!isAuthorized) {
+      return res.status(403).json({ 
+        success: false,
+        error: 'You are not assigned to this task' 
+      });
     }
 
-    task.markModified('statusByUser');
+    // Update status
+    const statusIndex = task.statusByUser.findIndex(s => 
+      s.user && s.user.toString() === req.user._id.toString()
+    );
+
+    const oldStatus = statusIndex !== -1 ? task.statusByUser[statusIndex].status : 'pending';
+
+    if (statusIndex === -1) {
+      task.statusByUser.push({
+        user: req.user._id,
+        status: status,
+        updatedAt: new Date()
+      });
+    } else {
+      task.statusByUser[statusIndex].status = status;
+      task.statusByUser[statusIndex].updatedAt = new Date();
+    }
+
+    // Simple overall status update
+    if (status === 'completed') {
+      // Check if all assigned users have completed
+      const allUsersCompleted = task.assignedUsers.every(assignedUserId => {
+        const userStatus = task.statusByUser.find(s => 
+          s.user && s.user.toString() === assignedUserId.toString()
+        );
+        return userStatus && userStatus.status === 'completed';
+      });
+      
+      if (allUsersCompleted) {
+        task.overallStatus = 'completed';
+        task.completionDate = new Date();
+
+        // ✅ RECURRING TASK HANDLING
+        // ✅ RECURRING TASK HANDLING
+if (task.isRecurring && task.repeatPattern !== 'none' && status === 'completed') {
+  await exports.handleRecurringTaskGeneration(task);
+}
+      } else {
+        task.overallStatus = 'in-progress';
+      }
+    } else if (status === 'in-progress') {
+      task.overallStatus = 'in-progress';
+    } else {
+      task.overallStatus = 'pending';
+    }
+
+    // Save task
     await task.save();
 
-    res.json({ message: '✅ Status updated successfully' });
+    res.json({ 
+      success: true,
+      message: '✅ Status updated successfully',
+      data: {
+        taskId: task._id,
+        newStatus: status,
+        overallStatus: task.overallStatus
+      }
+    });
+
   } catch (error) {
-    console.error('❌ Error updating status:', error);
-    res.status(500).json({ error: 'Failed to update task status' });
+    console.error('💥 Error in updateStatus:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Internal server error',
+      ...(process.env.NODE_ENV === 'development' && { details: error.message })
+    });
   }
 };
 
@@ -402,9 +748,96 @@ exports.getAssignableUsers = async (req, res) => {
 // 🔹 Get all users
 exports.getAllUsers = async (req, res) => {
   try {
-    const users = await User.find().select('name _id role employeeType');
+    const users = await User.find().select('name _id role employeeType email');
     res.json({ users });
   } catch (error) {
     res.status(500).json({ error: 'Unable to fetch users' });
   }
 };
+
+// 🔹 Get recurring tasks for a user
+exports.getRecurringTasks = async (req, res) => {
+  try {
+    const tasks = await Task.find({
+      createdBy: req.user._id,
+      isRecurring: true
+    })
+    .populate('assignedUsers', 'name role email')
+    .populate('assignedGroups', 'name description')
+    .populate('createdBy', 'name email')
+    .sort({ nextOccurrence: 1 });
+
+    res.json({ tasks });
+  } catch (error) {
+    console.error('❌ Error fetching recurring tasks:', error);
+    res.status(500).json({ error: 'Failed to fetch recurring tasks' });
+  }
+};
+
+// 🔄 Handle recurring task generation when task is completed
+exports.handleRecurringTaskGeneration = async (task) => {
+  try {
+    console.log(`🔄 Handling recurring task generation for: ${task.title}`);
+    
+    if (!task.isRecurring || task.repeatPattern === 'none') {
+      return null;
+    }
+
+    const nextDueDate = calculateNextOccurrence(
+      task.dueDateTime || new Date(),
+      task.repeatPattern,
+      task.repeatDays
+    );
+
+    if (!nextDueDate) {
+      console.log('❌ Could not calculate next occurrence');
+      return null;
+    }
+
+    // Create new recurring task instance
+    const newTaskData = {
+      title: task.title,
+      description: task.description,
+      dueDateTime: nextDueDate,
+      whatsappNumber: task.whatsappNumber,
+      priorityDays: task.priorityDays,
+      priority: task.priority,
+      assignedUsers: task.assignedUsers,
+      assignedGroups: task.assignedGroups,
+      repeatPattern: task.repeatPattern,
+      repeatDays: task.repeatDays,
+      isRecurring: true,
+      nextOccurrence: calculateNextOccurrence(nextDueDate, task.repeatPattern, task.repeatDays),
+      statusByUser: task.assignedUsers.map(userId => ({
+        user: userId,
+        status: 'pending',
+        updatedAt: new Date()
+      })),
+      files: task.files,
+      createdBy: task.createdBy,
+      recurrenceCount: (task.recurrenceCount || 0) + 1
+    };
+
+    const newTask = await Task.create(newTaskData);
+
+    // Populate for email notifications
+    await newTask.populate("assignedUsers", "name role email");
+    await newTask.populate("createdBy", "name email");
+
+    console.log(`✅ New recurring task created: ${newTask._id} for ${nextDueDate}`);
+
+    // Send email notifications for new task
+    if (newTask.assignedUsers && newTask.assignedUsers.length > 0) {
+      await sendTaskCreationEmail(newTask, newTask.assignedUsers);
+    }
+
+    return newTask;
+
+  } catch (error) {
+    console.error('❌ Error in handleRecurringTaskGeneration:', error);
+    return null;
+  }
+};
+
+// Export the calculateNextOccurrence function for use in other methods
+exports.calculateNextOccurrence = calculateNextOccurrence;

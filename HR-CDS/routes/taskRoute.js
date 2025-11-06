@@ -14,12 +14,12 @@ router.get('/my', auth, taskController.getMyTasks);
 router.get('/assigned', auth, taskController.getAssignedTasks);
 router.get('/assigned-tasks-status', auth, taskController.getAssignedTasksWithStatus);
 
-// ➕ Create a task (with groups support)
+// ➕ Create a task (with groups support and repeat functionality)
 router.post(
   '/create',
   auth,
   upload.fields([
-    { name: 'files' },
+    { name: 'files', maxCount: 10 },
     { name: 'voiceNote', maxCount: 1 }
   ]),
   taskController.createTask
@@ -34,6 +34,10 @@ router.get('/assignable-users', auth, taskController.getAssignableUsers);
 // 👥 Get all users – for admin/HR panels
 router.get('/all-users', auth, taskController.getAllUsers);
 
-router.get('/user-self-assigned/:userId', auth, taskController.getUserSelfAssignedTasks);
+// 🔄 Get recurring tasks
+router.get('/recurring', auth, taskController.getRecurringTasks);
 
+router.get('/user-self-assigned/:userId', auth, taskController.getUserSelfAssignedTasks);
+// 🔄 Trigger recurring tasks manually (admin only)
+router.post('/trigger-recurring', auth, taskController.triggerRecurringTasks);
 module.exports = router;

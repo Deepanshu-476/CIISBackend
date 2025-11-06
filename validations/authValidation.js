@@ -5,7 +5,7 @@ const registerSchema = Joi.object({
   name: Joi.string().min(2).max(50).required(),
   email: Joi.string().email().required(),
   password: Joi.string().min(8).required(),
-  role: Joi.string().valid("admin", "hr", "user", "manager").required(),
+  role: Joi.string().valid("admin", "hr", "user", "manager", "SuperAdmin").required(),
 
   // Optional extended fields (for role = 'user')
   phone: Joi.string().allow(""),

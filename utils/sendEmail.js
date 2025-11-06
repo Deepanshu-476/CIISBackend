@@ -10,7 +10,7 @@ const sendEmail = async (to, subject, html) => {
   });
 
   await transporter.sendMail({
-    from: `"RUNO" <${process.env.EMAIL_USER}>`,
+    from: `"CiisNetwork" <${process.env.EMAIL_USER}>`,
     to,
     subject,
     html,
