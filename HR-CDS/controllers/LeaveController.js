@@ -62,7 +62,7 @@ exports.getMyLeaves = async (req, res) => {
 
     if (!leaves.length) {
       console.warn("ℹ️ No leaves found for this user.");
-      return res.status(404).json({ message: 'You Have No Leave Records.' });
+      // return res.status(404).json({ message: 'You Have No Leave Records.' });
     }
 
     console.log(`✅ Found ${leaves.length} leave(s)`);

@@ -5,7 +5,7 @@ const connectDB = require("./config/db");
 const path = require("path");
 dotenv.config();
 const app = express();
-const cronService = require('./HR-CDS/services/cronService');
+
 app.set('trust proxy', 1);
 connectDB();
 
@@ -45,7 +45,7 @@ app.get("/api", (req, res) => {
 app.use((req, res) => {
   res.status(404).json({ message: "🔴 Route not found" });
 });
-cronService.init();
+
 // Start server
 const PORT = process.env.PORT || 6000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
