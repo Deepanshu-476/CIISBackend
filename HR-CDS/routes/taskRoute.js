@@ -84,10 +84,6 @@ router.get('/user-self-assigned/:userId', auth, taskController.getUserSelfAssign
 
 // ==================== RECURRING TASKS ROUTES ====================
 
-// 🔄 Get recurring tasks
-router.get('/recurring', auth, taskController.getRecurringTasks);
 
-// 🔄 Trigger recurring tasks manually (admin only)
-router.post('/trigger-recurring', auth, taskController.triggerRecurringTasks);
 
 module.exports = router;

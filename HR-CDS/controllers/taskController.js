@@ -5,7 +5,6 @@ const Notification = require('../models/Notification');
 const ActivityLog = require('../models/ActivityLog');
 const moment = require('moment');
 const sendEmail = require('../../utils/sendEmail');
-const RecurringTaskService = require('../services/recurringTaskService');
 
 // 🔹 Helper to create notifications
 const createNotification = async (userId, title, message, type, relatedTask = null, metadata = null) => {
@@ -119,55 +118,6 @@ const enrichStatusInfo = async (tasks) => {
       statusInfo: newStatusInfo
     };
   });
-};
-
-// 🔄 Manually trigger recurring task generation (admin only)
-exports.triggerRecurringTasks = async (req, res) => {
-  try {
-    console.log('🔄 [1] triggerRecurringTasks function called');
-    console.log('🔄 [2] User role:', req.user.role);
-    console.log('🔄 [3] User ID:', req.user._id);
-
-    if (!['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role)) {
-      console.log('❌ [4] Access denied - user role not authorized');
-      return res.status(403).json({ error: 'Access denied' });
-    }
-
-    console.log('🔄 [5] User authorized, calling RecurringTaskService...');
-    
-    const generatedCount = await RecurringTaskService.generateRecurringTasks();
-    
-    console.log('✅ [6] RecurringTaskService completed, generated count:', generatedCount);
-    
-    // Create activity log
-    await createActivityLog(
-      req.user, 
-      'system', 
-      null, 
-      `Manually triggered recurring task generation - ${generatedCount} tasks created`
-    );
-    
-    res.json({
-      success: true,
-      message: `Successfully generated ${generatedCount} recurring tasks`,
-      generatedCount
-    });
-    
-  } catch (error) {
-    console.error('❌ [7] ERROR in triggerRecurringTasks:', error);
-    
-    // Create error activity log
-    await createActivityLog(
-      req.user, 
-      'system', 
-      null, 
-      `Failed to trigger recurring tasks: ${error.message}`
-    );
-    
-    res.status(500).json({ 
-      error: 'Failed to generate recurring tasks: ' + error.message 
-    });
-  }
 };
 
 // 🔹 Get all users including group members for task assignment
@@ -561,7 +511,7 @@ exports.getAssignedTasks = async (req, res) => {
   }
 };
 
-// 🔹 Create task with role-based assignment rules and repeat functionality
+// 🔹 Create task with role-based assignment rules - SINGLE TASK ONLY (NO REPEAT)
 exports.createTask = async (req, res) => {
   try {
     const {
@@ -572,9 +522,7 @@ exports.createTask = async (req, res) => {
       priorityDays,
       priority,
       assignedUsers,
-      assignedGroups,
-      repeatPattern,
-      repeatDays
+      assignedGroups
     } = req.body;
 
     const files = (req.files?.files || []).map((f) => ({
@@ -591,9 +539,9 @@ exports.createTask = async (req, res) => {
       uploadedBy: req.user._id
     } : null;
 
-    const parsedUsers = assignedUsers ? JSON.parse(assignedUsers) : [];
-    const parsedGroups = assignedGroups ? JSON.parse(assignedGroups) : [];
-    const parsedRepeatDays = repeatDays ? JSON.parse(repeatDays) : [];
+    // FIXED: Safe JSON parsing with null handling
+    const parsedUsers = assignedUsers && assignedUsers !== 'null' ? JSON.parse(assignedUsers) : [];
+    const parsedGroups = assignedGroups && assignedGroups !== 'null' ? JSON.parse(assignedGroups) : [];
 
     const role = req.user.role;
     const isPrivileged = ["admin", "manager", "hr", "SuperAdmin"].includes(role);
@@ -609,8 +557,6 @@ exports.createTask = async (req, res) => {
     // 🔹 Auto-assign for normal users
     let finalAssignedUsers = parsedUsers;
     let finalAssignedGroups = parsedGroups;
-    let finalRepeatPattern = repeatPattern || 'none';
-    let finalRepeatDays = parsedRepeatDays;
 
     if (!isPrivileged) {
       finalAssignedUsers = [req.user._id.toString()]; // assign to self
@@ -666,14 +612,7 @@ exports.createTask = async (req, res) => {
       status: "pending",
     }));
 
-    // Calculate next occurrence for recurring tasks
-    let nextOccurrence = null;
-    if (finalRepeatPattern !== 'none' && dueDateTime) {
-      const dueDate = new Date(dueDateTime);
-      nextOccurrence = calculateNextOccurrence(dueDate, finalRepeatPattern, finalRepeatDays);
-    }
-
-    // 🔹 Create the task
+    // 🔹 Create the task - SINGLE TASK ONLY
     const task = await Task.create({
       title,
       description,
@@ -687,10 +626,7 @@ exports.createTask = async (req, res) => {
       files,
       voiceNote,
       createdBy: req.user._id,
-      repeatPattern: finalRepeatPattern,
-      repeatDays: finalRepeatDays,
-      isRecurring: finalRepeatPattern !== 'none',
-      nextOccurrence,
+      isRecurring: false, // Always false now
       statusHistory: [{
         status: 'pending',
         changedBy: req.user._id,
@@ -734,7 +670,7 @@ exports.createTask = async (req, res) => {
     res.status(201).json({ 
       success: true, 
       task,
-      message: finalRepeatPattern !== 'none' ? 'Recurring task created successfully' : 'Task created successfully'
+      message: 'Task created successfully'
     });
   } catch (error) {
     console.error("❌ Error creating task:", error);
@@ -742,65 +678,7 @@ exports.createTask = async (req, res) => {
   }
 };
 
-// Helper function to calculate next occurrence
-const calculateNextOccurrence = (dueDateTime, repeatPattern, repeatDays) => {
-  if (!dueDateTime || repeatPattern === 'none') return null;
-
-  let nextDate = new Date(dueDateTime);
-  
-  switch (repeatPattern) {
-    case 'daily':
-      nextDate.setDate(nextDate.getDate() + 1);
-      break;
-    
-    case 'weekly':
-      if (repeatDays && repeatDays.length > 0) {
-        const currentDay = nextDate.getDay();
-        const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-        const currentDayName = dayNames[currentDay];
-        
-        // Find the next scheduled day
-        let daysToAdd = 1;
-        let found = false;
-        
-        for (let i = 1; i <= 7; i++) {
-          const checkDate = new Date(nextDate);
-          checkDate.setDate(nextDate.getDate() + i);
-          const checkDayName = dayNames[checkDate.getDay()];
-          
-          if (repeatDays.includes(checkDayName)) {
-            daysToAdd = i;
-            found = true;
-            break;
-          }
-        }
-        
-        if (!found) {
-          // If no future day found, go to first repeat day of next week
-          const firstRepeatDay = repeatDays[0];
-          const firstDayIndex = dayNames.indexOf(firstRepeatDay);
-          daysToAdd = (7 - currentDay + firstDayIndex) % 7 || 7;
-        }
-        
-        nextDate.setDate(nextDate.getDate() + daysToAdd);
-      } else {
-        // If no specific days, repeat weekly
-        nextDate.setDate(nextDate.getDate() + 7);
-      }
-      break;
-    
-    case 'monthly':
-      nextDate.setMonth(nextDate.getMonth() + 1);
-      break;
-    
-    default:
-      return null;
-  }
-  
-  return nextDate;
-};
-
-// 🔄 Update status of task - WITH RECURRING TASK SUPPORT
+// 🔄 Update status of task - NO RECURRING TASK SUPPORT
 exports.updateStatus = async (req, res) => {
   try {
     const { taskId } = req.params;
@@ -879,11 +757,6 @@ exports.updateStatus = async (req, res) => {
       if (allUsersCompleted) {
         task.overallStatus = 'completed';
         task.completionDate = new Date();
-
-        // ✅ RECURRING TASK HANDLING
-        if (task.isRecurring && task.repeatPattern !== 'none' && status === 'completed') {
-          await exports.handleRecurringTaskGeneration(task);
-        }
       } else {
         task.overallStatus = 'in-progress';
       }
@@ -1222,7 +1095,7 @@ exports.getUserActivityTimeline = async (req, res) => {
   }
 };
 
-// 🔹 Update task (Admin/Manager/HR only)
+// 🔹 Update task (Admin/Manager/HR only) - FIXED: Handle null values properly
 exports.updateTask = async (req, res) => {
   try {
     const { taskId } = req.params;
@@ -1261,13 +1134,42 @@ exports.updateTask = async (req, res) => {
       }
     }
 
-    // Update other fields
+    // FIXED: Safe JSON parsing for assignedUsers and assignedGroups
+    let assignedUsers = [];
+    let assignedGroups = [];
+
+    if (updateData.assignedUsers) {
+      if (typeof updateData.assignedUsers === 'string') {
+        assignedUsers = updateData.assignedUsers !== 'null' ? JSON.parse(updateData.assignedUsers) : [];
+      } else {
+        assignedUsers = updateData.assignedUsers;
+      }
+    }
+
+    if (updateData.assignedGroups) {
+      if (typeof updateData.assignedGroups === 'string') {
+        assignedGroups = updateData.assignedGroups !== 'null' ? JSON.parse(updateData.assignedGroups) : [];
+      } else {
+        assignedGroups = updateData.assignedGroups;
+      }
+    }
+
+    // Update other fields with null checks
     const allowedFields = ['title', 'description', 'dueDateTime', 'whatsappNumber', 'priorityDays', 'priority'];
     allowedFields.forEach(field => {
-      if (updateData[field] !== undefined) {
+      if (updateData[field] !== undefined && updateData[field] !== null && updateData[field] !== 'null') {
         task[field] = updateData[field];
       }
     });
+
+    // Update assigned users and groups if provided
+    if (assignedUsers.length > 0) {
+      task.assignedUsers = assignedUsers;
+    }
+
+    if (assignedGroups.length > 0) {
+      task.assignedGroups = assignedGroups;
+    }
 
     await task.save();
 
@@ -1361,120 +1263,3 @@ exports.getAllUsers = async (req, res) => {
     res.status(500).json({ error: 'Unable to fetch users' });
   }
 };
-
-// 🔹 Get recurring tasks for a user
-exports.getRecurringTasks = async (req, res) => {
-  try {
-    const tasks = await Task.find({
-      createdBy: req.user._id,
-      isRecurring: true
-    })
-    .populate('assignedUsers', 'name role email')
-    .populate('assignedGroups', 'name description')
-    .populate('createdBy', 'name email')
-    .sort({ nextOccurrence: 1 })
-    .lean();
-
-    res.json({ tasks });
-  } catch (error) {
-    console.error('❌ Error fetching recurring tasks:', error);
-    res.status(500).json({ error: 'Failed to fetch recurring tasks' });
-  }
-};
-
-// 🔄 Handle recurring task generation when task is completed
-exports.handleRecurringTaskGeneration = async (task) => {
-  try {
-    console.log(`🔄 Handling recurring task generation for: ${task.title}`);
-    
-    if (!task.isRecurring || task.repeatPattern === 'none') {
-      return null;
-    }
-
-    const nextDueDate = calculateNextOccurrence(
-      task.dueDateTime || new Date(),
-      task.repeatPattern,
-      task.repeatDays
-    );
-
-    if (!nextDueDate) {
-      console.log('❌ Could not calculate next occurrence');
-      return null;
-    }
-
-    // Create new recurring task instance
-    const newTaskData = {
-      title: task.title,
-      description: task.description,
-      dueDateTime: nextDueDate,
-      whatsappNumber: task.whatsappNumber,
-      priorityDays: task.priorityDays,
-      priority: task.priority,
-      assignedUsers: task.assignedUsers,
-      assignedGroups: task.assignedGroups,
-      repeatPattern: task.repeatPattern,
-      repeatDays: task.repeatDays,
-      isRecurring: true,
-      nextOccurrence: calculateNextOccurrence(nextDueDate, task.repeatPattern, task.repeatDays),
-      statusByUser: task.assignedUsers.map(userId => ({
-        user: userId,
-        status: 'pending',
-        updatedAt: new Date()
-      })),
-      files: task.files,
-      createdBy: task.createdBy,
-      recurrenceCount: (task.recurrenceCount || 0) + 1,
-      parentTask: task._id,
-      statusHistory: [{
-        status: 'pending',
-        changedBy: task.createdBy,
-        remarks: 'Recurring task generated automatically'
-      }]
-    };
-
-    const newTask = await Task.create(newTaskData);
-
-    // Populate for email notifications
-    await newTask.populate("assignedUsers", "name role email");
-    await newTask.populate("createdBy", "name email");
-
-    console.log(`✅ New recurring task created: ${newTask._id} for ${nextDueDate}`);
-
-    // Create notifications for assigned users
-    for (const userId of task.assignedUsers) {
-      await createNotification(
-        userId,
-        'New Recurring Task',
-        `A new instance of recurring task "${task.title}" has been assigned to you`,
-        'task_assigned',
-        newTask._id,
-        { priority: task.priority, dueDateTime: nextDueDate, isRecurring: true }
-      );
-    }
-
-    // Create activity log
-    await createActivityLog(
-      task.createdBy,
-      'task_created',
-      newTask._id,
-      `Recurring task generated: ${task.title}`,
-      null,
-      { parentTask: task._id, dueDateTime: nextDueDate },
-      null
-    );
-
-    // Send email notifications for new task
-    if (newTask.assignedUsers && newTask.assignedUsers.length > 0) {
-      await sendTaskCreationEmail(newTask, newTask.assignedUsers);
-    }
-
-    return newTask;
-
-  } catch (error) {
-    console.error('❌ Error in handleRecurringTaskGeneration:', error);
-    return null;
-  }
-};
-
-// Export the calculateNextOccurrence function for use in other methods
-exports.calculateNextOccurrence = calculateNextOccurrence;
