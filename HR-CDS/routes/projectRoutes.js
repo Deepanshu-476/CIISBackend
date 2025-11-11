@@ -1,21 +1,19 @@
 const express = require("express");
 const router = express.Router();
-const ctrl = require("../controllers/projectController");
-const auth = require("../../middleware/authMiddleware"); // ✅ correct import
+const projectController = require("../controllers/projectController");
+const upload = require("../middlewares/uploadMiddleware");
 
-// Protect all routes
-router.use(auth);
+router.get("/", projectController.listProjects);
+router.get("/:id", projectController.getProjectById);
 
-// PROJECTS
-router.get("/", ctrl.listProjects);
-router.post("/", ctrl.createProject);
-router.get("/:id", ctrl.getProjectById);
-router.put("/:id", ctrl.updateProject);
-router.delete("/:id", ctrl.deleteProject);
+router.post("/", upload.single("pdfFile"), projectController.createProject); // ✅ fixed
+router.put("/:id", upload.single("pdfFile"), projectController.updateProject);
 
-// TASKS
-router.post("/:id/tasks", ctrl.addTask);
-router.patch("/:id/tasks/:taskId", ctrl.updateTask);
-router.delete("/:id/tasks/:taskId", ctrl.deleteTask);
+router.delete("/:id", projectController.deleteProject);
+
+// ✅ Task routes
+router.post("/:id/tasks", upload.single("pdfFile"), projectController.addTask);
+router.patch("/:id/tasks/:taskId", upload.single("pdfFile"), projectController.updateTask);
+router.delete("/:id/tasks/:taskId", projectController.deleteTask);
 
 module.exports = router;

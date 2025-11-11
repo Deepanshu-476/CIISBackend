@@ -1,10 +1,10 @@
-import mongoose from "mongoose";
+const mongoose = require("mongoose");
 
 const viewSchema = new mongoose.Schema({
   meetingId: { type: mongoose.Schema.Types.ObjectId, ref: "Meeting" },
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   viewed: { type: Boolean, default: false },
-  viewedAt: Date
+  viewedAt: Date,
 });
 
-export default mongoose.model("MeetingView", viewSchema);
+module.exports = mongoose.model("MeetingView", viewSchema);

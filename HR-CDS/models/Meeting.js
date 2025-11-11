@@ -1,13 +1,13 @@
-import mongoose from "mongoose";
+const mongoose = require("mongoose");
 
 const meetingSchema = new mongoose.Schema({
-  title: String,
+  title: { type: String, required: true },
   description: String,
-  date: Date,
-  time: String,
+  date: { type: Date, required: true },
+  time: { type: String, required: true },
   recurring: { type: String, enum: ["No", "Daily"], default: "No" },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   attendees: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
 });
 
-export default mongoose.model("Meeting", meetingSchema);
+module.exports = mongoose.model("Meeting", meetingSchema);

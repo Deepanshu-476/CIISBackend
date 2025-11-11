@@ -1,34 +1,52 @@
 const mongoose = require("mongoose");
 const { Schema } = mongoose;
 
-const TASK_STATUS = ["Pending", "Active", "Done"];
+/* ENUMS */
+const TASK_STATUS = ["Pending", "In Progress", "Completed", "Rejected"];
 const PROJECT_STATUS = ["Active", "OnHold", "Completed"];
+const PRIORITY_LEVELS = ["Low", "Medium", "High"];
 
+/* TASK SCHEMA */
 const TaskSchema = new Schema(
   {
-    taskName: { type: String, required: true, trim: true },
+    title: { type: String, required: true, trim: true },
+    description: { type: String, trim: true },
     assignedTo: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    dueDate: { type: Date },
+    priority: { type: String, enum: PRIORITY_LEVELS, default: "Medium" },
+    remarks: { type: String, trim: true },
     status: { type: String, enum: TASK_STATUS, default: "Pending" },
+    pdfFile: {
+      filename: String,
+      path: String,
+    },
   },
-  { _id: true, timestamps: true }
+  { timestamps: true }
 );
 
+/* PROJECT SCHEMA */
 const ProjectSchema = new Schema(
   {
-    projectName: { type: String, required: true, index: true, trim: true },
+    projectName: { type: String, required: true, trim: true },
+    description: { type: String, trim: true },
     users: [{ type: Schema.Types.ObjectId, ref: "User" }],
-    status: { type: String, enum: PROJECT_STATUS, default: "Active", index: true },
+    status: { type: String, enum: PROJECT_STATUS, default: "Active" },
     startDate: { type: Date },
     endDate: { type: Date },
-    tasks: { type: [TaskSchema], default: [] },
+    priority: { type: String, enum: PRIORITY_LEVELS, default: "Medium" },
+    pdfFile: {
+      filename: String,
+      path: String,
+    },
+    tasks: [TaskSchema],
     createdBy: { type: Schema.Types.ObjectId, ref: "User" },
   },
   { timestamps: true }
 );
 
-// Text search on projectName
 ProjectSchema.index({ projectName: "text" });
 
 module.exports = mongoose.model("Project", ProjectSchema);
 module.exports.TASK_STATUS = TASK_STATUS;
 module.exports.PROJECT_STATUS = PROJECT_STATUS;
+module.exports.PRIORITY_LEVELS = PRIORITY_LEVELS;

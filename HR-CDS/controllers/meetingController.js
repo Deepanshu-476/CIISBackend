@@ -1,15 +1,19 @@
-import Meeting from "../models/Meeting.js";
-import MeetingView from "../models/MeetingView.js";
-import User from "../models/User.js";
-import sendEmail from "../utils/sendEmail.js"; // 🟢 using your existing mailer
-import cron from "node-cron";
+const Meeting = require("../models/Meeting");
+const MeetingView = require("../models/MeetingView");
+const User = require("../../models/User");
+const sendEmail = require("../../utils/sendEmail");
+const cron = require("node-cron");
 
 /**
  * 📌 Create Meeting (Admin)
  */
-export const createMeeting = async (req, res) => {
+const createMeeting = async (req, res) => {
   try {
     const { title, description, date, time, recurring, attendees, createdBy } = req.body;
+
+    if (!title || !date || !time || !Array.isArray(attendees)) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
 
     const meeting = await Meeting.create({
       title,
@@ -28,18 +32,20 @@ export const createMeeting = async (req, res) => {
       const emp = await User.findById(empId);
       if (emp && emp.email) {
         const html = `
-          <h3>New Meeting Scheduled</h3>
+          <h3>📅 New Meeting Scheduled</h3>
           <p><b>Title:</b> ${title}</p>
-          <p><b>Description:</b> ${description}</p>
+          <p><b>Description:</b> ${description || "-"}</p>
           <p><b>Date:</b> ${new Date(date).toDateString()}</p>
           <p><b>Time:</b> ${time}</p>
         `;
+        // sendEmail should handle failures internally, but we await to throttle
         await sendEmail(emp.email, `📅 Meeting Scheduled: ${title}`, html);
       }
     }
 
     res.json({ success: true, meeting });
   } catch (error) {
+    console.error("Create Meeting Error:", error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -47,11 +53,22 @@ export const createMeeting = async (req, res) => {
 /**
  * 📌 Get Meetings (for specific user)
  */
-export const getUserMeetings = async (req, res) => {
+const getUserMeetings = async (req, res) => {
   try {
     const userMeetings = await Meeting.find({ attendees: req.params.userId }).sort({ date: 1 });
-    res.json(userMeetings);
+    // Optionally, attach viewed status:
+    const views = await MeetingView.find({ userId: req.params.userId });
+    const mapped = userMeetings.map((m) => {
+      const v = views.find((vv) => vv.meetingId.toString() === m._id.toString());
+      return {
+        ...m.toObject(),
+        viewed: v ? v.viewed : false,
+        viewedAt: v ? v.viewedAt : null,
+      };
+    });
+    res.json(mapped);
   } catch (error) {
+    console.error("Get User Meetings Error:", error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -59,15 +76,20 @@ export const getUserMeetings = async (req, res) => {
 /**
  * 📌 Mark as viewed by employee
  */
-export const markAsViewed = async (req, res) => {
+const markAsViewed = async (req, res) => {
   try {
     const { meetingId, userId } = req.body;
-    await MeetingView.updateOne(
+    if (!meetingId || !userId) return res.status(400).json({ error: "meetingId and userId required" });
+
+    const result = await MeetingView.updateOne(
       { meetingId, userId },
-      { viewed: true, viewedAt: new Date() }
+      { viewed: true, viewedAt: new Date() },
+      { upsert: false }
     );
-    res.json({ success: true });
+
+    res.json({ success: true, result });
   } catch (error) {
+    console.error("Mark As Viewed Error:", error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -75,7 +97,7 @@ export const markAsViewed = async (req, res) => {
 /**
  * 📌 Get View Status (for Admin)
  */
-export const getViewStatus = async (req, res) => {
+const getViewStatus = async (req, res) => {
   try {
     const views = await MeetingView.find({ meetingId: req.params.meetingId }).populate(
       "userId",
@@ -83,6 +105,7 @@ export const getViewStatus = async (req, res) => {
     );
     res.json(views);
   } catch (error) {
+    console.error("Get View Status Error:", error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -90,40 +113,60 @@ export const getViewStatus = async (req, res) => {
 /**
  * 🕒 Cron Jobs
  */
-export const setupCronJobs = () => {
-  // Daily recurring meeting
+const setupCronJobs = () => {
+  // Daily recurring meeting (runs at 00:00 server time)
   cron.schedule("0 0 * * *", async () => {
-    const today = new Date();
-    const meetings = await Meeting.find({ recurring: "Daily" });
-    meetings.forEach(async (m) => {
-      const nextDay = new Date(today);
-      nextDay.setDate(today.getDate() + 1);
-      await Meeting.create({
-        title: m.title,
-        description: m.description,
-        date: nextDay,
-        time: m.time,
-        recurring: "Daily",
-        createdBy: m.createdBy,
-        attendees: m.attendees,
-      });
-    });
-  });
-
-  // Reminder (10 minutes before)
-  cron.schedule("*/5 * * * *", async () => {
-    const now = new Date();
-    const tenMin = new Date(now.getTime() + 10 * 60000);
-    const meetings = await Meeting.find({ date: { $gte: now, $lte: tenMin } });
-
-    for (const m of meetings) {
-      const users = await User.find({ _id: { $in: m.attendees } });
-      for (const u of users) {
-        const html = `
-          <p>⏰ Reminder: Your meeting "<b>${m.title}</b>" starts at ${m.time}</p>
-        `;
-        await sendEmail(u.email, `⏰ Reminder: ${m.title}`, html);
+    try {
+      const today = new Date();
+      const meetings = await Meeting.find({ recurring: "Daily" });
+      for (const m of meetings) {
+        const nextDay = new Date(today);
+        nextDay.setDate(today.getDate() + 1);
+        await Meeting.create({
+          title: m.title,
+          description: m.description,
+          date: nextDay,
+          time: m.time,
+          recurring: "Daily",
+          createdBy: m.createdBy,
+          attendees: m.attendees,
+        });
       }
+      console.log("✅ Daily recurring meetings cloned.");
+    } catch (err) {
+      console.error("Cron (daily) error:", err);
     }
   });
+
+  // Reminder (every 5 minutes; notifies meetings starting in next 10 minutes)
+  cron.schedule("*/5 * * * *", async () => {
+    try {
+      const now = new Date();
+      const tenMin = new Date(now.getTime() + 10 * 60000);
+      const meetings = await Meeting.find({ date: { $gte: now, $lte: tenMin } });
+
+      for (const m of meetings) {
+        const users = await User.find({ _id: { $in: m.attendees } });
+        for (const u of users) {
+          if (!u || !u.email) continue;
+          const html = `
+            <p>⏰ Reminder: Your meeting "<b>${m.title}</b>" starts at ${m.time}</p>
+            <p><b>Date:</b> ${new Date(m.date).toDateString()}</p>
+          `;
+          await sendEmail(u.email, `⏰ Reminder: ${m.title}`, html);
+        }
+      }
+      console.log("🔔 Reminders checked/sent if any.");
+    } catch (err) {
+      console.error("Cron (reminder) error:", err);
+    }
+  });
+};
+
+module.exports = {
+  createMeeting,
+  getUserMeetings,
+  markAsViewed,
+  getViewStatus,
+  setupCronJobs,
 };

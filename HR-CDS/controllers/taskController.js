@@ -745,26 +745,50 @@ exports.updateStatus = async (req, res) => {
     });
 
     // Simple overall status update
-    if (status === 'completed') {
-      // Check if all assigned users have completed
-      const allUsersCompleted = task.assignedUsers.every(assignedUserId => {
-        const userStatus = task.statusByUser.find(s => 
-          s.user && s.user.toString() === assignedUserId.toString()
-        );
-        return userStatus && userStatus.status === 'completed';
-      });
-      
-      if (allUsersCompleted) {
-        task.overallStatus = 'completed';
-        task.completionDate = new Date();
-      } else {
-        task.overallStatus = 'in-progress';
-      }
-    } else if (status === 'in-progress') {
-      task.overallStatus = 'in-progress';
-    } else {
-      task.overallStatus = 'pending';
-    }
+  if (status === 'completed') {
+  // ✅ Check if all assigned users have completed
+  const allUsersCompleted = task.assignedUsers.every(assignedUserId => {
+    const userStatus = task.statusByUser.find(s => 
+      s.user && s.user.toString() === assignedUserId.toString()
+    );
+    return userStatus && userStatus.status === 'completed';
+  });
+
+  if (allUsersCompleted) {
+    task.overallStatus = 'completed';
+    task.completionDate = new Date();
+  } else {
+    task.overallStatus = 'in-progress';
+  }
+}
+
+else if (status === 'in-progress') {
+  task.overallStatus = 'in-progress';
+}
+
+else if (status === 'approved') {
+  task.overallStatus = 'approved';
+}
+
+else if (status === 'rejected') {
+  task.overallStatus = 'rejected';
+}
+
+else if (status === 'on-hold') {
+  // 🟡 new condition for paused tasks
+  task.overallStatus = 'on-hold';
+  task.holdDate = new Date(); // optional: track when it went on hold
+}
+
+else if (status === 'reopen') {
+  // 🔄 new condition for reopened tasks
+  task.overallStatus = 'reopen';
+  task.reopenedAt = new Date(); // optional: track reopen time
+}
+
+else {
+  task.overallStatus = 'pending';
+}
 
     // Save task
     await task.save();
@@ -1261,5 +1285,45 @@ exports.getAllUsers = async (req, res) => {
     res.json({ users });
   } catch (error) {
     res.status(500).json({ error: 'Unable to fetch users' });
+  }
+};
+
+
+// 🔹 Upload PDF for Task
+exports.uploadTaskPDF = async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    if (!req.file) return res.status(400).json({ error: "No PDF uploaded" });
+
+    const task = await Task.findById(taskId);
+    if (!task) return res.status(404).json({ error: "Task not found" });
+
+    const pdfData = {
+      filename: req.file.filename,
+      originalName: req.file.originalname,
+      path: req.file.path,
+      uploadedBy: req.user._id,
+    };
+
+    task.pdfFiles.push(pdfData);
+    await task.save();
+
+    res.json({ success: true, message: "PDF uploaded successfully", pdf: pdfData });
+  } catch (err) {
+    console.error("❌ PDF Upload Error:", err);
+    res.status(500).json({ error: "Failed to upload PDF" });
+  }
+};
+
+// 🔹 Get (View) PDFs of a Task
+exports.getTaskPDFs = async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    const task = await Task.findById(taskId).populate("pdfFiles.uploadedBy", "name email");
+    if (!task) return res.status(404).json({ error: "Task not found" });
+    res.json({ success: true, pdfFiles: task.pdfFiles });
+  } catch (err) {
+    console.error("❌ Get PDFs Error:", err);
+    res.status(500).json({ error: "Failed to fetch PDF files" });
   }
 };

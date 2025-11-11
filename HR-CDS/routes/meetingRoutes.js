@@ -1,23 +1,23 @@
-import express from "express";
-import {
+const express = require("express");
+const {
   createMeeting,
   getUserMeetings,
   markAsViewed,
   getViewStatus,
-} from "../controllers/meetingController.js";
+} = require("../controllers/meetingController");
 
 const router = express.Router();
 
-// Admin: Create meeting
+// 🟢 Admin: Create meeting
 router.post("/create", createMeeting);
 
-// Employee: Get own meetings
+// 👨‍💻 Employee: Get own meetings
 router.get("/user/:userId", getUserMeetings);
 
-// Employee: Mark meeting as viewed
+// 👀 Employee: Mark meeting as viewed
 router.post("/mark-viewed", markAsViewed);
 
-// Admin: Get who viewed
+// 📊 Admin: Check who viewed the meeting
 router.get("/view-status/:meetingId", getViewStatus);
 
-export default router;
+module.exports = router;

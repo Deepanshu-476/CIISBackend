@@ -37,6 +37,8 @@ app.use("/api/alerts", require("./HR-CDS/routes/alertRoutes"));
 app.use("/api/holidays", require("./HR-CDS/routes/Holiday"));
 app.use("/api/groups",require("./HR-CDS/routes/groupRoutes"));
 app.use("/api/projects", require("./HR-CDS/routes/projectRoutes"));
+app.use("/api/notifications", require("./HR-CDS/routes/notificationRoutes"));
+
 // 404 fallback
 app.get("/api", (req, res) => {
   res.json({ message: "✅ API is live" });
