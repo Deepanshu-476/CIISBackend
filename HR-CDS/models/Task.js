@@ -487,6 +487,12 @@ taskSchema.methods.generateNextRecurringTask = async function() {
     repeatPattern: this.repeatPattern,
     repeatDays: this.repeatDays,
     isRecurring: true,
+    // Task model mein yeh add karo:
+taskFor: {
+  type: String,
+  enum: ['self', 'others'],
+  default: 'self'
+},
     parentTask: this._id,
     files: this.files.map(file => ({ ...file.toObject() })),
     voiceNote: this.voiceNote ? { ...this.voiceNote.toObject() } : null,
