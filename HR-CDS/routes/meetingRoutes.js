@@ -4,20 +4,24 @@ const {
   getUserMeetings,
   markAsViewed,
   getViewStatus,
+  getAllMeetings,   // ✅ add this line
 } = require("../controllers/meetingController");
 
 const router = express.Router();
 
-// 🟢 Admin: Create meeting
+// 🟢 Create new meeting (Admin)
 router.post("/create", createMeeting);
 
-// 👨‍💻 Employee: Get own meetings
+// 👨‍💻 Get meetings assigned to a specific user (Employee)
 router.get("/user/:userId", getUserMeetings);
 
-// 👀 Employee: Mark meeting as viewed
+// 🟢 Mark meeting as viewed (Employee)
 router.post("/mark-viewed", markAsViewed);
 
-// 📊 Admin: Check who viewed the meeting
+// 🧾 Get who viewed which meeting (Admin)
 router.get("/view-status/:meetingId", getViewStatus);
+
+// 🟢 Get all meetings (Admin dashboard)
+router.get("/", getAllMeetings);  // ✅ new route added here
 
 module.exports = router;

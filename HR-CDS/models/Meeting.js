@@ -5,7 +5,7 @@ const meetingSchema = new mongoose.Schema({
   description: String,
   date: { type: Date, required: true },
   time: { type: String, required: true },
-  recurring: { type: String, enum: ["No", "Daily"], default: "No" },
+  recurring: { type: String, enum: ["No", "Daily", "Weekly"], default: "No" },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   attendees: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
 });

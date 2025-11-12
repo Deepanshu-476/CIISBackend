@@ -88,8 +88,53 @@ router.get("/:taskId/pdfs", auth, taskController.getTaskPDFs);
 // 👤 Get self-assigned tasks for a specific user (Admin view)
 router.get('/user-self-assigned/:userId', auth, taskController.getUserSelfAssignedTasks);
 
-// ==================== RECURRING TASKS ROUTES ====================
+// User-specific task routes
+router.get('/user/:userId/counts', auth, taskController.getUserTaskCounts);
+// GET /api/tasks/user/507f1f77bcf86cd799439011/counts
+// {
+//   "success": true,
+//   "user": {
+//     "_id": "507f1f77bcf86cd799439011",
+//     "name": "John Doe",
+//     "role": "employee",
+//     "email": "john@example.com"
+//   },
+//   "counts": {
+//     "assigned": {
+//       "total": 15,
+//       "completed": 8,
+//       "pending": 4,
+//       "inProgress": 3,
+//       "overdue": 2
+//     },
+//     "created": 10,
+//     "summary": {
+//       "totalTasks": 25,
+//       "completionRate": 53,
+//       "overdueRate": 13
+//     }
+//   }
+// }
+router.get('/user/:userId/tasks', auth, taskController.getUserTasksDetailed);
+// GET /api/tasks/user/507f1f77bcf86cd799439011/tasks?type=assigned&status=completed&page=1
+// {
+//   "success": true,
+//   "user": { ... },
+//   "groupedTasks": { ... },
+//   "total": 8,
+//   "totalPages": 1,
+//   "currentPage": 1,
+//   "limit": 20,
+//   "filters": {
+//     "type": "assigned",
+//     "status": "completed",
+//     "search": null
+//   }
+// }
+router.get('/user/:userId/statistics', auth, taskController.getUserTaskStatistics);
 
-
+// User monthly statistics routes
+router.get('/statistics/monthly', auth, taskController.getUserMonthlyStatistics);
+router.get('/user/:userId/monthly-detail', auth, taskController.getUserMonthlyDetail);
 
 module.exports = router;

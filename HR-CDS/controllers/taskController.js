@@ -1327,3 +1327,758 @@ exports.getTaskPDFs = async (req, res) => {
     res.status(500).json({ error: "Failed to fetch PDF files" });
   }
 };
+// 🔹 Get user task counts (Assigned, Created, Completed, Pending)
+exports.getUserTaskCounts = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+
+    // Check if user exists
+    const user = await User.findById(userId).select('name role email');
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Get user's groups for group-assigned tasks
+    const userGroups = await Group.find({ 
+      members: userId,
+      isActive: true 
+    }).select('_id').lean();
+
+    const groupIds = userGroups.map(group => group._id);
+
+    // Base filter for tasks assigned to user (directly or via groups)
+    const assignedTasksFilter = {
+      $or: [
+        { assignedUsers: userId },
+        { assignedGroups: { $in: groupIds } }
+      ],
+      isActive: true
+    };
+
+    // Tasks created by user
+    const createdTasksFilter = {
+      createdBy: userId,
+      isActive: true
+    };
+
+    // Get all counts in parallel for better performance
+    const [
+      totalAssignedTasks,
+      totalCreatedTasks,
+      completedTasks,
+      pendingTasks,
+      inProgressTasks,
+      overdueTasks
+    ] = await Promise.all([
+      // Total assigned tasks
+      Task.countDocuments(assignedTasksFilter),
+      
+      // Total created tasks
+      Task.countDocuments(createdTasksFilter),
+      
+      // Completed tasks (assigned)
+      Task.countDocuments({
+        ...assignedTasksFilter,
+        'statusByUser': {
+          $elemMatch: {
+            user: userId,
+            status: 'completed'
+          }
+        }
+      }),
+      
+      // Pending tasks (assigned)
+      Task.countDocuments({
+        ...assignedTasksFilter,
+        'statusByUser': {
+          $elemMatch: {
+            user: userId,
+            status: 'pending'
+          }
+        }
+      }),
+      
+      // In Progress tasks (assigned)
+      Task.countDocuments({
+        ...assignedTasksFilter,
+        'statusByUser': {
+          $elemMatch: {
+            user: userId,
+            status: 'in-progress'
+          }
+        }
+      }),
+      
+      // Overdue tasks (assigned)
+      Task.countDocuments({
+        ...assignedTasksFilter,
+        dueDateTime: { $lt: new Date() },
+        'statusByUser': {
+          $elemMatch: {
+            user: userId,
+            status: { $in: ['pending', 'in-progress'] }
+          }
+        }
+      })
+    ]);
+
+    const taskCounts = {
+      user: {
+        _id: user._id,
+        name: user.name,
+        role: user.role,
+        email: user.email
+      },
+      counts: {
+        // Assigned tasks breakdown
+        assigned: {
+          total: totalAssignedTasks,
+          completed: completedTasks,
+          pending: pendingTasks,
+          inProgress: inProgressTasks,
+          overdue: overdueTasks
+        },
+        // Created tasks
+        created: totalCreatedTasks,
+        // Overall summary
+        summary: {
+          totalTasks: totalAssignedTasks + totalCreatedTasks,
+          completionRate: totalAssignedTasks > 0 
+            ? Math.round((completedTasks / totalAssignedTasks) * 100) 
+            : 0,
+          overdueRate: totalAssignedTasks > 0
+            ? Math.round((overdueTasks / totalAssignedTasks) * 100)
+            : 0
+        }
+      }
+    };
+
+    res.json({
+      success: true,
+      ...taskCounts
+    });
+
+  } catch (error) {
+    console.error('❌ Error in getUserTaskCounts:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// 🔹 Get detailed user tasks with filters
+exports.getUserTasksDetailed = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { 
+      type = 'all', // 'assigned', 'created', 'all'
+      status, 
+      page = 1, 
+      limit = 20,
+      search 
+    } = req.query;
+
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+
+    // Check if user exists
+    const user = await User.findById(userId).select('name role email');
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Get user's groups for group-assigned tasks
+    const userGroups = await Group.find({ 
+      members: userId,
+      isActive: true 
+    }).select('_id').lean();
+
+    const groupIds = userGroups.map(group => group._id);
+
+    let filter = { isActive: true };
+
+    // Build filter based on type
+    if (type === 'assigned') {
+      filter.$or = [
+        { assignedUsers: userId },
+        { assignedGroups: { $in: groupIds } }
+      ];
+    } else if (type === 'created') {
+      filter.createdBy = userId;
+    } else { // 'all'
+      filter.$or = [
+        { assignedUsers: userId },
+        { assignedGroups: { $in: groupIds } },
+        { createdBy: userId }
+      ];
+    }
+
+    // Add status filter
+    if (status) {
+      if (status === 'overdue') {
+        filter.dueDateTime = { $lt: new Date() };
+        filter['statusByUser'] = {
+          $elemMatch: {
+            user: userId,
+            status: { $in: ['pending', 'in-progress'] }
+          }
+        };
+      } else {
+        filter['statusByUser'] = {
+          $elemMatch: {
+            user: userId,
+            status: status
+          }
+        };
+      }
+    }
+
+    // Add search functionality
+    if (search) {
+      filter.$and = [
+        filter,
+        {
+          $or: [
+            { title: { $regex: search, $options: 'i' } },
+            { description: { $regex: search, $options: 'i' } }
+          ]
+        }
+      ];
+    }
+
+    const skip = (page - 1) * limit;
+
+    const tasks = await Task.find(filter)
+      .populate('assignedUsers', 'name email')
+      .populate('assignedGroups', 'name description')
+      .populate('createdBy', 'name email')
+      .sort({ dueDateTime: 1, createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .lean();
+
+    const total = await Task.countDocuments(filter);
+
+    // Enrich tasks with user-specific status info
+    const enrichedTasks = await enrichStatusInfo(tasks);
+    
+    // Add user-specific status for each task
+    const tasksWithUserStatus = enrichedTasks.map(task => {
+      const userStatus = task.statusByUser?.find(status => 
+        status.user && status.user.toString() === userId
+      );
+      
+      return {
+        ...task,
+        userStatus: userStatus?.status || 'pending',
+        userRemarks: userStatus?.remarks,
+        userUpdatedAt: userStatus?.updatedAt
+      };
+    });
+
+    const groupedTasks = groupTasksByDate(tasksWithUserStatus, 'createdAt', 'serialNo');
+
+    res.json({ 
+      success: true,
+      user: {
+        _id: user._id,
+        name: user.name,
+        role: user.role,
+        email: user.email
+      },
+      groupedTasks,
+      total,
+      totalPages: Math.ceil(total / limit),
+      currentPage: parseInt(page),
+      limit: parseInt(limit),
+      filters: {
+        type,
+        status,
+        search
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error in getUserTasksDetailed:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// 🔹 Get user task statistics for dashboard
+exports.getUserTaskStatistics = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { period = 'month' } = req.query; // 'week', 'month', 'year'
+
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+
+    // Date range calculation based on period
+    const now = new Date();
+    let startDate;
+
+    switch (period) {
+      case 'week':
+        startDate = new Date(now.setDate(now.getDate() - 7));
+        break;
+      case 'month':
+        startDate = new Date(now.setMonth(now.getMonth() - 1));
+        break;
+      case 'year':
+        startDate = new Date(now.setFullYear(now.getFullYear() - 1));
+        break;
+      default:
+        startDate = new Date(now.setMonth(now.getMonth() - 1));
+    }
+
+    // Get user's groups
+    const userGroups = await Group.find({ 
+      members: userId,
+      isActive: true 
+    }).select('_id').lean();
+
+    const groupIds = userGroups.map(group => group._id);
+
+    const assignedTasksFilter = {
+      $or: [
+        { assignedUsers: userId },
+        { assignedGroups: { $in: groupIds } }
+      ],
+      isActive: true,
+      createdAt: { $gte: startDate }
+    };
+
+    // Get task completion trend
+    const completionTrend = await Task.aggregate([
+      {
+        $match: {
+          ...assignedTasksFilter,
+          'statusByUser': {
+            $elemMatch: {
+              user: userId,
+              status: 'completed'
+            }
+          }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            $dateToString: {
+              format: "%Y-%m-%d",
+              date: "$createdAt"
+            }
+          },
+          completed: { $sum: 1 }
+        }
+      },
+      { $sort: { _id: 1 } }
+    ]);
+
+    // Get tasks by priority
+    const tasksByPriority = await Task.aggregate([
+      {
+        $match: assignedTasksFilter
+      },
+      {
+        $group: {
+          _id: "$priority",
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    // Get tasks by status
+    const tasksByStatus = await Task.aggregate([
+      {
+        $match: assignedTasksFilter
+      },
+      {
+        $unwind: "$statusByUser"
+      },
+      {
+        $match: {
+          "statusByUser.user": userId
+        }
+      },
+      {
+        $group: {
+          _id: "$statusByUser.status",
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    res.json({
+      success: true,
+      statistics: {
+        period,
+        startDate,
+        completionTrend,
+        tasksByPriority,
+        tasksByStatus
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error in getUserTaskStatistics:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// 🔹 Get user-wise monthly task statistics
+exports.getUserMonthlyStatistics = async (req, res) => {
+  try {
+    const { month, year } = req.query;
+    
+    // Default to current month if not provided
+    const currentDate = new Date();
+    const targetMonth = parseInt(month) || currentDate.getMonth() + 1;
+    const targetYear = parseInt(year) || currentDate.getFullYear();
+
+    // Calculate date range for the month
+    const startDate = new Date(targetYear, targetMonth - 1, 1);
+    const endDate = new Date(targetYear, targetMonth, 0, 23, 59, 59);
+
+    console.log(`📅 Fetching statistics for ${targetMonth}-${targetYear}`);
+    console.log(`📆 Date range: ${startDate} to ${endDate}`);
+
+    // Get all active users
+    const users = await User.find({ isActive: true })
+      .select('name role email employeeType department')
+      .lean();
+
+    // Get all tasks for the month
+    const monthlyTasks = await Task.find({
+      createdAt: { $gte: startDate, $lte: endDate },
+      isActive: true
+    })
+    .populate('assignedUsers', 'name')
+    .populate('createdBy', 'name')
+    .populate('assignedGroups', 'members')
+    .lean();
+
+    console.log(`👥 Total users: ${users.length}`);
+    console.log(`📋 Total tasks in month: ${monthlyTasks.length}`);
+
+    // Process statistics for each user
+    const userStatistics = await Promise.all(
+      users.map(async (user) => {
+        const userId = user._id.toString();
+
+        // Get user's groups for group-assigned tasks
+        const userGroups = await Group.find({ 
+          members: userId,
+          isActive: true 
+        }).select('_id').lean();
+        
+        const userGroupIds = userGroups.map(group => group._id.toString());
+
+        // Filter tasks relevant to this user
+        const userTasks = monthlyTasks.filter(task => {
+          const isAssignedDirectly = task.assignedUsers?.some(assignedUser => 
+            assignedUser._id.toString() === userId
+          );
+          
+          const isAssignedViaGroup = task.assignedGroups?.some(group => 
+            userGroupIds.includes(group._id.toString())
+          );
+          
+          const isCreator = task.createdBy?._id.toString() === userId;
+
+          return isAssignedDirectly || isAssignedViaGroup || isCreator;
+        });
+
+        // Calculate counts
+        let assignedTasks = 0;
+        let createdTasks = 0;
+        let completedTasks = 0;
+        let pendingTasks = 0;
+        let inProgressTasks = 0;
+        let overdueTasks = 0;
+
+        userTasks.forEach(task => {
+          // Check if user is creator
+          if (task.createdBy?._id.toString() === userId) {
+            createdTasks++;
+          }
+
+          // Check if user is assigned (directly or via group)
+          const isAssignedDirectly = task.assignedUsers?.some(assignedUser => 
+            assignedUser._id.toString() === userId
+          );
+          
+          const isAssignedViaGroup = task.assignedGroups?.some(group => 
+            userGroupIds.includes(group._id.toString())
+          );
+
+          if (isAssignedDirectly || isAssignedViaGroup) {
+            assignedTasks++;
+
+            // Get user's status from statusByUser array
+            const userStatus = task.statusByUser?.find(status => 
+              status.user && status.user.toString() === userId
+            );
+
+            const status = userStatus?.status || 'pending';
+
+            // Count by status
+            switch (status) {
+              case 'completed':
+                completedTasks++;
+                break;
+              case 'in-progress':
+                inProgressTasks++;
+                break;
+              case 'pending':
+                pendingTasks++;
+                break;
+            }
+
+            // Check if overdue
+            if (task.dueDateTime && new Date(task.dueDateTime) < new Date() && 
+                status !== 'completed') {
+              overdueTasks++;
+            }
+          }
+        });
+
+        const completionRate = assignedTasks > 0 
+          ? Math.round((completedTasks / assignedTasks) * 100) 
+          : 0;
+
+        return {
+          user: {
+            _id: user._id,
+            name: user.name,
+            role: user.role,
+            email: user.email,
+            employeeType: user.employeeType,
+            department: user.department
+          },
+          statistics: {
+            assignedTasks,
+            createdTasks,
+            completedTasks,
+            pendingTasks,
+            inProgressTasks,
+            overdueTasks,
+            completionRate,
+            totalTasks: assignedTasks + createdTasks
+          }
+        };
+      })
+    );
+
+    // Sort by total tasks (descending)
+    userStatistics.sort((a, b) => b.statistics.totalTasks - a.statistics.totalTasks);
+
+    // Calculate overall statistics
+    const overallStats = {
+      totalUsers: users.length,
+      totalTasks: monthlyTasks.length,
+      totalAssigned: userStatistics.reduce((sum, stat) => sum + stat.statistics.assignedTasks, 0),
+      totalCreated: userStatistics.reduce((sum, stat) => sum + stat.statistics.createdTasks, 0),
+      totalCompleted: userStatistics.reduce((sum, stat) => sum + stat.statistics.completedTasks, 0),
+      totalPending: userStatistics.reduce((sum, stat) => sum + stat.statistics.pendingTasks, 0),
+      overallCompletionRate: Math.round(
+        (userStatistics.reduce((sum, stat) => sum + stat.statistics.completedTasks, 0) / 
+         userStatistics.reduce((sum, stat) => sum + stat.statistics.assignedTasks, 1)) * 100
+      )
+    };
+
+    res.json({
+      success: true,
+      period: {
+        month: targetMonth,
+        year: targetYear,
+        monthName: startDate.toLocaleString('default', { month: 'long' }),
+        startDate,
+        endDate
+      },
+      overallStats,
+      userStatistics,
+      summary: {
+        topPerformers: userStatistics
+          .filter(stat => stat.statistics.assignedTasks > 0)
+          .sort((a, b) => b.statistics.completionRate - a.statistics.completionRate)
+          .slice(0, 5),
+        mostActive: userStatistics.slice(0, 5),
+        needAttention: userStatistics
+          .filter(stat => stat.statistics.overdueTasks > 0)
+          .sort((a, b) => b.statistics.overdueTasks - a.statistics.overdueTasks)
+          .slice(0, 5)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error in getUserMonthlyStatistics:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Internal server error',
+      details: error.message 
+    });
+  }
+};
+
+// 🔹 Get user-specific monthly detail report
+exports.getUserMonthlyDetail = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { month, year } = req.query;
+
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+
+    // Default to current month if not provided
+    const currentDate = new Date();
+    const targetMonth = parseInt(month) || currentDate.getMonth() + 1;
+    const targetYear = parseInt(year) || currentDate.getFullYear();
+
+    const startDate = new Date(targetYear, targetMonth - 1, 1);
+    const endDate = new Date(targetYear, targetMonth, 0, 23, 59, 59);
+
+    // Get user details
+    const user = await User.findById(userId)
+      .select('name role email employeeType department')
+      .lean();
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Get user's groups
+    const userGroups = await Group.find({ 
+      members: userId,
+      isActive: true 
+    }).select('_id').lean();
+
+    const userGroupIds = userGroups.map(group => group._id.toString());
+
+    // Get all tasks for the user in this month
+    const tasks = await Task.find({
+      $or: [
+        { assignedUsers: userId },
+        { assignedGroups: { $in: userGroupIds } },
+        { createdBy: userId }
+      ],
+      createdAt: { $gte: startDate, $lte: endDate },
+      isActive: true
+    })
+    .populate('assignedUsers', 'name email')
+    .populate('assignedGroups', 'name description')
+    .populate('createdBy', 'name email')
+    .sort({ createdAt: -1 })
+    .lean();
+
+    // Categorize tasks
+    const assignedTasks = tasks.filter(task => 
+      task.assignedUsers?.some(u => u._id.toString() === userId) ||
+      task.assignedGroups?.some(g => userGroupIds.includes(g._id.toString()))
+    );
+
+    const createdTasks = tasks.filter(task => 
+      task.createdBy?._id.toString() === userId
+    );
+
+    // Status breakdown for assigned tasks
+    const completedTasks = assignedTasks.filter(task => {
+      const userStatus = task.statusByUser?.find(status => 
+        status.user && status.user.toString() === userId
+      );
+      return userStatus?.status === 'completed';
+    });
+
+    const pendingTasks = assignedTasks.filter(task => {
+      const userStatus = task.statusByUser?.find(status => 
+        status.user && status.user.toString() === userId
+      );
+      return userStatus?.status === 'pending';
+    });
+
+    const inProgressTasks = assignedTasks.filter(task => {
+      const userStatus = task.statusByUser?.find(status => 
+        status.user && status.user.toString() === userId
+      );
+      return userStatus?.status === 'in-progress';
+    });
+
+    const overdueTasks = assignedTasks.filter(task => 
+      task.dueDateTime && 
+      new Date(task.dueDateTime) < new Date() &&
+      !completedTasks.some(t => t._id.toString() === task._id.toString())
+    );
+
+    // Daily activity breakdown
+    const dailyActivity = [];
+    for (let day = 1; day <= endDate.getDate(); day++) {
+      const currentDate = new Date(targetYear, targetMonth - 1, day);
+      const nextDate = new Date(targetYear, targetMonth - 1, day + 1);
+      
+      const dayTasks = tasks.filter(task => 
+        task.createdAt >= currentDate && task.createdAt < nextDate
+      );
+
+      const dayCompleted = assignedTasks.filter(task => {
+        const userStatus = task.statusByUser?.find(status => 
+          status.user && status.user.toString() === userId
+        );
+        return userStatus?.status === 'completed' && 
+               userStatus.updatedAt >= currentDate && 
+               userStatus.updatedAt < nextDate;
+      });
+
+      dailyActivity.push({
+        date: currentDate.toISOString().split('T')[0],
+        day: day,
+        tasksCreated: dayTasks.filter(t => t.createdBy._id.toString() === userId).length,
+        tasksCompleted: dayCompleted.length,
+        totalActivity: dayTasks.length + dayCompleted.length
+      });
+    }
+
+    res.json({
+      success: true,
+      user,
+      period: {
+        month: targetMonth,
+        year: targetYear,
+        monthName: startDate.toLocaleString('default', { month: 'long' }),
+        startDate,
+        endDate
+      },
+      summary: {
+        assignedTasks: assignedTasks.length,
+        createdTasks: createdTasks.length,
+        completedTasks: completedTasks.length,
+        pendingTasks: pendingTasks.length,
+        inProgressTasks: inProgressTasks.length,
+        overdueTasks: overdueTasks.length,
+        completionRate: assignedTasks.length > 0 
+          ? Math.round((completedTasks.length / assignedTasks.length) * 100) 
+          : 0,
+        productivityScore: Math.round(
+          (completedTasks.length + (inProgressTasks.length * 0.5)) / 
+          Math.max(assignedTasks.length, 1) * 100
+        )
+      },
+      dailyActivity,
+      tasks: {
+        assigned: assignedTasks,
+        created: createdTasks
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error in getUserMonthlyDetail:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Internal server error' 
+    });
+  }
+};
