@@ -90,12 +90,6 @@ router.get('/assignable-users', auth, taskController.getAssignableUsers);
 // 👥 Get all users – for admin/HR panels
 router.get('/all-users', auth, taskController.getAllUsers);
 
-
-
-// 🧾 PDF Upload/View routes
-router.post("/:taskId/upload-pdf", auth, upload.single("pdfFile"), taskController.uploadTaskPDF);
-router.get("/:taskId/pdfs", auth, taskController.getTaskPDFs);
-
 // 👤 Get self-assigned tasks for a specific user (Admin view)
 router.get('/user-self-assigned/:userId', auth, taskController.getUserSelfAssignedTasks);
 

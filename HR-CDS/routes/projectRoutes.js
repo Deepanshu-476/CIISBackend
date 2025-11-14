@@ -2,18 +2,25 @@ const express = require("express");
 const router = express.Router();
 const projectController = require("../controllers/projectController");
 const upload = require("../middlewares/uploadMiddleware");
+const auth = require("../../middleware/authMiddleware");
 
-router.get("/", projectController.listProjects);
-router.get("/:id", projectController.getProjectById);
+// PROJECT CRUD
+router.get("/", auth, projectController.listProjects);
+router.get("/:id", auth, projectController.getProjectById);
+router.post("/", auth, upload.single("pdfFile"), projectController.createProject);
+router.put("/:id", auth, upload.single("pdfFile"), projectController.updateProject);
+router.delete("/:id", auth, projectController.deleteProject);
 
-router.post("/", upload.single("pdfFile"), projectController.createProject); // ✅ fixed
-router.put("/:id", upload.single("pdfFile"), projectController.updateProject);
+// TASK CRUD
+router.post("/:id/tasks", auth, upload.single("pdfFile"), projectController.addTask);
+router.patch("/:id/tasks/:taskId", auth, upload.single("pdfFile"), projectController.updateTask);
+router.delete("/:id/tasks/:taskId", auth, projectController.deleteTask);
 
-router.delete("/:id", projectController.deleteProject);
-
-// ✅ Task routes
-router.post("/:id/tasks", upload.single("pdfFile"), projectController.addTask);
-router.patch("/:id/tasks/:taskId", upload.single("pdfFile"), projectController.updateTask);
-router.delete("/:id/tasks/:taskId", projectController.deleteTask);
+// ⭐ REMARKS ROUTE (FIXED) ⭐
+router.post(
+  "/:projectId/tasks/:taskId/remarks",
+  auth,
+  projectController.addRemark
+);
 
 module.exports = router;

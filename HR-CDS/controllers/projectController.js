@@ -1,12 +1,11 @@
 const mongoose = require("mongoose");
-const Project = require("../models/Project");
-const { TASK_STATUS, PROJECT_STATUS } = require("../models/Project");
+const { Project, TASK_STATUS, PROJECT_STATUS } = require("../models/Project");
 
-const USER_SELECT = "name email role employeeType";
+const USER_SELECT = "name email role";
 
-// -------------------------------------------------------------------
-// 📦 LIST ALL PROJECTS
-// -------------------------------------------------------------------
+// =====================================================================
+// 📌 LIST ALL PROJECTS
+// =====================================================================
 exports.listProjects = async (req, res) => {
   try {
     const page = parseInt(req.query.page || "1", 10);
@@ -15,12 +14,11 @@ exports.listProjects = async (req, res) => {
 
     const filter = {};
 
-    // If employee, show only assigned projects
     if (req.user?.role === "user") {
       const uid = new mongoose.Types.ObjectId(req.user._id);
       filter.$or = [
         { users: uid },
-        { tasks: { $elemMatch: { assignedTo: uid } } },
+        { tasks: { $elemMatch: { assignedTo: uid } } }
       ];
     }
 
@@ -31,6 +29,7 @@ exports.listProjects = async (req, res) => {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit),
+
       Project.countDocuments(filter),
     ]);
 
@@ -38,8 +37,8 @@ exports.listProjects = async (req, res) => {
       page,
       limit,
       total,
-      items,
       pages: Math.ceil(total / limit),
+      items,
     });
   } catch (err) {
     console.error("listProjects error", err);
@@ -47,9 +46,9 @@ exports.listProjects = async (req, res) => {
   }
 };
 
-// -------------------------------------------------------------------
-// 📦 GET PROJECT BY ID
-// -------------------------------------------------------------------
+// =====================================================================
+// 📌 GET PROJECT BY ID
+// =====================================================================
 exports.getProjectById = async (req, res) => {
   try {
     const project = await Project.findById(req.params.id)
@@ -58,9 +57,9 @@ exports.getProjectById = async (req, res) => {
 
     if (!project) return res.status(404).json({ message: "Project not found" });
 
-    // Employee can access only if part of project
     if (req.user?.role === "user") {
       const uid = String(req.user._id);
+
       const involved =
         project.users.some((u) => String(u._id) === uid) ||
         project.tasks.some((t) => String(t.assignedTo?._id) === uid);
@@ -76,180 +75,228 @@ exports.getProjectById = async (req, res) => {
   }
 };
 
-// -------------------------------------------------------------------
-// 🏗️ CREATE PROJECT
-// -------------------------------------------------------------------
+// =====================================================================
+// 📌 CREATE PROJECT
+// =====================================================================
 exports.createProject = async (req, res) => {
   try {
-    const { projectName, users, status, startDate, endDate } = req.body;
-
-    const project = await Project.create({
+    const {
       projectName,
-      users: Array.isArray(users)
-        ? users.map((id) => new mongoose.Types.ObjectId(id))
-        : [],
+      description,
+      users,
       status,
       startDate,
       endDate,
+      priority,
+    } = req.body;
+
+    let parsedUsers = [];
+    if (Array.isArray(users)) parsedUsers = users;
+    else if (typeof users === "string") parsedUsers = JSON.parse(users);
+
+    let pdfFile = null;
+    if (req.file) {
+      pdfFile = {
+        filename: req.file.filename,
+        path: req.file.path,
+      };
+    }
+
+    const project = await Project.create({
+      projectName,
+      description,
+      users: parsedUsers,
+      status,
+      startDate,
+      endDate,
+      priority,
+      pdfFile,
+      createdBy: req.user?._id,
     });
 
-    res.status(201).json(project);
+    return res.status(201).json(project);
   } catch (error) {
     console.error("Create project error:", error);
-    res.status(500).json({ message: "Server error", error });
+    return res.status(500).json({ message: "Server error", error });
   }
 };
 
-// -------------------------------------------------------------------
-// ✏️ UPDATE PROJECT
-// -------------------------------------------------------------------
+// =====================================================================
+// 📌 UPDATE PROJECT
+// =====================================================================
 exports.updateProject = async (req, res) => {
   try {
-    const up = {};
-    const allowed = ["projectName", "users", "status", "startDate", "endDate"];
+    const allowed = [
+      "projectName",
+      "description",
+      "priority",
+      "status",
+      "users",
+      "startDate",
+      "endDate",
+    ];
 
-    for (const key of allowed) {
-      if (key in req.body) up[key] = req.body[key];
+    const updates = {};
+
+    allowed.forEach((key) => {
+      if (req.body[key] !== undefined) updates[key] = req.body[key];
+    });
+
+    if (updates.users && typeof updates.users === "string") {
+      updates.users = JSON.parse(updates.users);
     }
 
-    if (up.status && !PROJECT_STATUS.includes(up.status)) {
-      return res.status(400).json({ message: "Invalid status" });
+    if (req.file) {
+      updates.pdfFile = {
+        filename: req.file.filename,
+        path: req.file.path,
+      };
     }
 
-    if (up.projectName) up.projectName = String(up.projectName).trim();
-
-    if (up.users && Array.isArray(up.users)) {
-      up.users = up.users.filter((u) => mongoose.isValidObjectId(u));
-    }
-
-    const project = await Project.findByIdAndUpdate(req.params.id, up, {
+    const updated = await Project.findByIdAndUpdate(req.params.id, updates, {
       new: true,
     })
       .populate("users", USER_SELECT)
       .populate("tasks.assignedTo", USER_SELECT);
 
-    if (!project) return res.status(404).json({ message: "Project not found" });
+    if (!updated) return res.status(404).json({ message: "Project not found" });
 
-    res.json(project);
+    res.json(updated);
   } catch (err) {
     console.error("updateProject error", err);
     res.status(500).json({ message: "Failed to update project" });
   }
 };
 
-// -------------------------------------------------------------------
-// 🗑️ DELETE PROJECT
-// -------------------------------------------------------------------
+// =====================================================================
+// 📌 DELETE PROJECT
+// =====================================================================
 exports.deleteProject = async (req, res) => {
   try {
     const project = await Project.findByIdAndDelete(req.params.id);
-    if (!project) return res.status(404).json({ message: "Project not found" });
-    res.json({ message: "Deleted successfully" });
+    if (!project)
+      return res.status(404).json({ message: "Project not found" });
+
+    res.json({ message: "Project deleted successfully" });
   } catch (err) {
     console.error("deleteProject error", err);
     res.status(500).json({ message: "Failed to delete project" });
   }
 };
 
-// -------------------------------------------------------------------
-// ✅ TASK OPERATIONS
-// -------------------------------------------------------------------
-
-// 🟢 Add Task
-// ✅ Add Task Controller (Fixed)
-// 🟢 Add Task
+// =====================================================================
+// 📌 ADD TASK TO PROJECT
+// =====================================================================
 exports.addTask = async (req, res) => {
   try {
-    const projectId = req.params.id;
-    const { title, assignedTo, status } = req.body; // ✅ renamed taskName -> title
+    const {
+      title,
+      description,
+      assignedTo,
+      dueDate,
+      priority,
+      remarks,
+      status,
+    } = req.body;
 
-    if (!title || !assignedTo)
-      return res
-        .status(400)
-        .json({ message: "title and assignedTo are required" });
+    const project = await Project.findById(req.params.id)
+      .populate("users", "name _id");
 
-    const project = await Project.findById(projectId).populate(
-      "users",
-      "name _id"
-    );
-    if (!project) return res.status(404).json({ message: "Project not found" });
+    if (!project)
+      return res.status(404).json({ message: "Project not found" });
 
-    // ✅ Only project members can be assigned
     const isMember = project.users.some(
-      (u) => u._id.toString() === assignedTo.toString()
+      (u) => String(u._id) === String(assignedTo)
     );
-    if (!isMember)
-      return res
-        .status(400)
-        .json({ message: "Assigned user is not part of this project" });
 
-    // ✅ Handle PDF
+    if (!isMember)
+      return res.status(400).json({
+        message: "Assigned user must be part of project.",
+      });
+
     let pdfFile = null;
     if (req.file) {
       pdfFile = {
-        path: req.file.path,
         filename: req.file.filename,
+        path: req.file.path,
       };
     }
 
-    // ✅ Push new task
-    const newTask = {
-      title, // ✅ changed from taskName
+    project.tasks.push({
+      title,
+      description,
       assignedTo,
-      status: status || "Pending",
+      dueDate,
+      priority,
+      remarks,
+      status,
       pdfFile,
-    };
+    });
 
-    project.tasks.push(newTask);
     await project.save();
 
-    const updated = await Project.findById(projectId)
-      .populate("users", "name _id")
-      .populate("tasks.assignedTo", "name");
+    const updated = await Project.findById(project._id)
+      .populate("users", USER_SELECT)
+      .populate("tasks.assignedTo", USER_SELECT);
 
-    return res.status(200).json(updated);
-  } catch (error) {
-    console.error("addTask error:", error);
-    return res.status(500).json({ message: "Server error", error });
+    res.json(updated);
+  } catch (err) {
+    console.error("addTask error", err);
+    res.status(500).json({ message: "Failed to add task" });
   }
 };
 
-
-// 🟢 Update Task (Now includes reassign restriction)
-// 🟢 Update Task (uses "title" instead of "taskName")
+// =====================================================================
+// 📌 UPDATE TASK
+// =====================================================================
 exports.updateTask = async (req, res) => {
   try {
-    const { title, assignedTo, status } = req.body;
-
     const project = await Project.findById(req.params.id);
-    if (!project) return res.status(404).json({ message: "Project not found" });
+    if (!project)
+      return res.status(404).json({ message: "Project not found" });
 
-    const t = project.tasks.id(req.params.taskId);
-    if (!t) return res.status(404).json({ message: "Task not found" });
+    const task = project.tasks.id(req.params.taskId);
+    if (!task)
+      return res.status(404).json({ message: "Task not found" });
 
-    // ✅ Check if reassignment is within project users
-    if (assignedTo) {
+    const fields = [
+      "title",
+      "description",
+      "dueDate",
+      "priority",
+      "remarks",
+      "status",
+      "assignedTo",
+    ];
+
+    fields.forEach((f) => {
+      if (req.body[f] !== undefined) task[f] = req.body[f];
+    });
+
+    if (req.body.assignedTo) {
       const isMember = project.users.some(
-        (u) => String(u._id || u) === String(assignedTo)
+        (u) => String(u._id) === String(req.body.assignedTo)
       );
-      if (!isMember) {
-        return res
-          .status(400)
-          .json({ message: "Assigned user must be part of project" });
-      }
+      if (!isMember)
+        return res.status(400).json({
+          message: "Assigned user must be project member",
+        });
     }
 
-    if (title !== undefined) t.title = title; // ✅ changed field
-    if (assignedTo !== undefined) t.assignedTo = assignedTo;
-    if (status !== undefined) t.status = status;
+    if (req.file) {
+      task.pdfFile = {
+        filename: req.file.filename,
+        path: req.file.path,
+      };
+    }
 
     await project.save();
 
-    const populated = await Project.findById(project._id)
-      .populate("users", "name email")
-      .populate("tasks.assignedTo", "name email");
+    const updated = await Project.findById(project._id)
+      .populate("users", USER_SELECT)
+      .populate("tasks.assignedTo", USER_SELECT);
 
-    res.json(populated);
+    res.json(updated);
   } catch (err) {
     console.error("updateTask error", err);
     res.status(500).json({ message: "Failed to update task" });
@@ -257,20 +304,64 @@ exports.updateTask = async (req, res) => {
 };
 
 
-// 🟢 Delete Task
+// ⭐ ADD REMARK TO TASK ⭐
+exports.addRemark = async (req, res) => {
+  try {
+    const { projectId, taskId } = req.params;
+    const { text } = req.body;
+
+    if (!text || text.trim() === "") {
+      return res.status(400).json({ message: "Remark text required" });
+    }
+
+    const project = await Project.findById(projectId);
+    if (!project) return res.status(404).json({ message: "Project not found" });
+
+    const task = project.tasks.id(taskId);
+    if (!task) return res.status(404).json({ message: "Task not found" });
+
+    // ⭐ FIX: ensure remarks is an array
+    if (!Array.isArray(task.remarks)) {
+      task.remarks = [];
+    }
+
+    task.remarks.push({
+      text,
+      createdBy: req.user._id,
+      createdAt: new Date(),
+    });
+
+    await project.save();
+
+    const updated = await Project.findById(projectId)
+      .populate("users", "name email")
+      .populate("tasks.assignedTo", "name email")
+      .populate("tasks.remarks.createdBy", "name");
+
+    res.json(updated);
+
+  } catch (err) {
+    console.error("addRemark error", err);
+    res.status(500).json({ message: "Failed to add remark" });
+  }
+};
+
+
+
+// =====================================================================
+// 📌 DELETE TASK
+// =====================================================================
 exports.deleteTask = async (req, res) => {
   try {
     const project = await Project.findById(req.params.id);
-    if (!project) return res.status(404).json({ message: "Project not found" });
+    if (!project)
+      return res.status(404).json({ message: "Project not found" });
 
-    const t = project.tasks.id(req.params.taskId);
-    if (!t) return res.status(404).json({ message: "Task not found" });
+    const task = project.tasks.id(req.params.taskId);
+    if (!task)
+      return res.status(404).json({ message: "Task not found" });
 
-    if (req.user?.role === "user") {
-      return res.status(403).json({ message: "Forbidden" });
-    }
-
-    t.deleteOne();
+    task.deleteOne();
     await project.save();
 
     res.json({ message: "Task deleted successfully" });

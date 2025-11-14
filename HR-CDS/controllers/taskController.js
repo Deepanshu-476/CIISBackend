@@ -869,50 +869,26 @@ exports.updateStatus = async (req, res) => {
     });
 
     // Simple overall status update
-  if (status === 'completed') {
-  // ✅ Check if all assigned users have completed
-  const allUsersCompleted = task.assignedUsers.every(assignedUserId => {
-    const userStatus = task.statusByUser.find(s => 
-      s.user && s.user.toString() === assignedUserId.toString()
-    );
-    return userStatus && userStatus.status === 'completed';
-  });
-
-  if (allUsersCompleted) {
-    task.overallStatus = 'completed';
-    task.completionDate = new Date();
-  } else {
-    task.overallStatus = 'in-progress';
-  }
-}
-
-else if (status === 'in-progress') {
-  task.overallStatus = 'in-progress';
-}
-
-else if (status === 'approved') {
-  task.overallStatus = 'approved';
-}
-
-else if (status === 'rejected') {
-  task.overallStatus = 'rejected';
-}
-
-else if (status === 'on-hold') {
-  // 🟡 new condition for paused tasks
-  task.overallStatus = 'on-hold';
-  task.holdDate = new Date(); // optional: track when it went on hold
-}
-
-else if (status === 'reopen') {
-  // 🔄 new condition for reopened tasks
-  task.overallStatus = 'reopen';
-  task.reopenedAt = new Date(); // optional: track reopen time
-}
-
-else {
-  task.overallStatus = 'pending';
-}
+    if (status === 'completed') {
+      // Check if all assigned users have completed
+      const allUsersCompleted = task.assignedUsers.every(assignedUserId => {
+        const userStatus = task.statusByUser.find(s => 
+          s.user && s.user.toString() === assignedUserId.toString()
+        );
+        return userStatus && userStatus.status === 'completed';
+      });
+      
+      if (allUsersCompleted) {
+        task.overallStatus = 'completed';
+        task.completionDate = new Date();
+      } else {
+        task.overallStatus = 'in-progress';
+      }
+    } else if (status === 'in-progress') {
+      task.overallStatus = 'in-progress';
+    } else {
+      task.overallStatus = 'pending';
+    }
 
     // Save task
     await task.save();
@@ -1412,9 +1388,8 @@ exports.getAllUsers = async (req, res) => {
   }
 };
 
-
-// 🔹 Get user task counts (Assigned, Created, Completed, Pending)
-exports.getUserTaskCounts = async (req, res) => {
+// Controller mein yeh add karo
+exports.getAllUsersTaskStats = async (req, res) => {
   try {
     if (!['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role)) {
       return res.status(403).json({ error: 'Access denied' });
