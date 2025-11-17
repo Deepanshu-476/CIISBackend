@@ -80,6 +80,7 @@ router.patch('/notifications/read-all', auth, taskController.markAllNotification
 router.get('/:taskId/activity-logs', auth, taskController.getTaskActivityLogs);
 
 // 📈 Get user activity timeline
+
 router.get('/user-activity/:userId', auth, taskController.getUserActivityTimeline);
 
 // ==================== USER MANAGEMENT ROUTES ====================
