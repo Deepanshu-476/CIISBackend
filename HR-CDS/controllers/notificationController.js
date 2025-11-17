@@ -1,9 +1,51 @@
 const Notification = require("../models/notificationModel");
 
 /**
+ * ✅ Fetch ALL notifications for the logged-in user
+ */
+const getAllNotifications = async (req, res) => {
+  try {
+    const userId = req.user?._id;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized: No user found in token",
+      });
+    }
+
+    // ✅ Fetch ALL notifications for the user
+    const notifications = await Notification.find({
+      user: userId,
+    })
+      .sort({ createdAt: -1 })
+      .limit(100);
+
+    // ✅ Count unread notifications
+    const unreadCount = await Notification.countDocuments({
+      user: userId,
+      isRead: false
+    });
+
+    return res.status(200).json({
+      success: true,
+      count: notifications.length,
+      unreadCount: unreadCount,
+      notifications: notifications,
+    });
+  } catch (error) {
+    console.error("❌ Error fetching all notifications:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error while fetching notifications",
+    });
+  }
+};
+
+/**
  * ✅ Fetch today's notifications for the logged-in user
  */
-exports.getNotifications = async (req, res) => {
+const getNotifications = async (req, res) => {
   try {
     const userId = req.user?._id;
 
@@ -44,7 +86,7 @@ exports.getNotifications = async (req, res) => {
 /**
  * ✅ Mark a specific notification as read
  */
-exports.markAsRead = async (req, res) => {
+const markAsRead = async (req, res) => {
   try {
     const notificationId = req.params.id;
 
@@ -82,7 +124,7 @@ exports.markAsRead = async (req, res) => {
 /**
  * ✅ Mark all unread notifications as read for logged-in user
  */
-exports.markAllAsRead = async (req, res) => {
+const markAllAsRead = async (req, res) => {
   try {
     const userId = req.user?._id;
 
@@ -114,7 +156,7 @@ exports.markAllAsRead = async (req, res) => {
 /**
  * ✅ Create new notification (for manual testing or system triggers)
  */
-exports.createNotification = async (req, res) => {
+const createNotification = async (req, res) => {
   try {
     const { user, title, message, type } = req.body;
 
@@ -150,7 +192,7 @@ exports.createNotification = async (req, res) => {
 /**
  * ✅ Optional: Delete old notifications (maintenance cleanup)
  */
-exports.deleteOldNotifications = async (req, res) => {
+const deleteOldNotifications = async (req, res) => {
   try {
     const days = parseInt(req.query.days) || 30; // default 30 days
     const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
@@ -168,4 +210,14 @@ exports.deleteOldNotifications = async (req, res) => {
       message: "Server error while deleting old notifications",
     });
   }
+};
+
+// ✅ Make sure ALL exports are included
+module.exports = {
+  getAllNotifications,
+  getNotifications,
+  markAsRead,
+  markAllAsRead,
+  createNotification,
+  deleteOldNotifications
 };
