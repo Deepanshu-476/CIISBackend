@@ -1055,7 +1055,7 @@ exports.getNotifications = async (req, res) => {
     const skip = (page - 1) * limit;
 
     const notifications = await Notification.find(filter)
-      .populate('relatedTask', 'title')
+      .populate('title')
       .sort({ createdAt: -1 })
       .limit(parseInt(limit))
       .skip(skip)
