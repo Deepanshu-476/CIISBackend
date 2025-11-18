@@ -1724,3 +1724,137 @@ exports.getAssignedTasksWithStatus = async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 };
+
+
+
+
+
+
+// 🔹 MODELS/SCHEMAS USED:
+// Task - Main task model
+
+// User - User model
+
+// Group - Group model for task assignments
+
+// Notification - Notification system
+
+// ActivityLog - Audit trail system
+
+// 🔹 HELPER FUNCTIONS:
+// 1. Notification System
+// createNotification() - Creates notifications for users
+
+// Handles task assignments, status updates, remarks
+
+// 2. Activity Logging
+// createActivityLog() - Tracks all user activities
+
+// Records IP addresses, user agents, changes
+
+// 3. Task Organization
+// groupTasksByDate() - Groups tasks by date with serial numbers
+
+// enrichStatusInfo() - Adds user details to task status information
+
+// 4. User/Group Management
+// getAllAssignableUsers() - Gets users available for task assignment
+
+// getAllAssignableGroups() - Gets groups available for task assignment
+
+// 5. Email System
+// sendTaskCreationEmail() - Sends email when tasks are assigned
+
+// sendTaskStatusUpdateEmail() - Sends email on status changes
+
+// 🔹 MAIN CONTROLLER FUNCTIONS:
+// ✅ TASK CREATION ROUTES:
+// 1. createTaskForSelf
+// Creates tasks for yourself only
+
+// Goes to "My Tasks" section
+
+// Only assigns to current user
+
+// Sets taskFor: 'self'
+
+// 2. createTaskForOthers
+// Creates tasks for other users only
+
+// Goes to "Assigned Tasks" section
+
+// Cannot assign to yourself
+
+// Requires admin/manager/hr privileges
+
+// Sets taskFor: 'others'
+
+// 📋 TASK RETRIEVAL ROUTES:
+// 3. getTasks
+// Gets ALL tasks: created by user + assigned to user + self tasks
+
+// Includes group assignments
+
+// 4. getMyTasks
+// Gets tasks assigned TO current user + self-created tasks
+
+// User's personal task list
+
+// 5. getAssignedTasks
+// Gets tasks created BY current user FOR OTHERS
+
+// Admin/manager view of tasks they assigned
+
+// 6. getUserSelfAssignedTasks
+// Admin view of specific user's self-assigned tasks
+
+// 🔄 TASK MANAGEMENT ROUTES:
+// 7. updateStatus
+// Update task status (pending → in-progress → completed)
+
+// Sends notifications and emails
+
+// Updates status history
+
+// 8. addRemark & getRemarks
+// Add comments to tasks
+
+// View task remarks
+
+// 9. updateTask & deleteTask
+// Edit and soft-delete tasks (admin only)
+
+// 🔔 NOTIFICATION SYSTEM ROUTES:
+// 10. getNotifications
+// Get user notifications with pagination
+
+// 11. markNotificationAsRead & markAllNotificationsAsRead
+// Mark notifications as read
+
+// 📊 ACTIVITY & ANALYTICS ROUTES:
+// 12. getTaskActivityLogs
+// Get activity history for a specific task
+
+// 13. getUserActivityTimeline
+// Get user's complete activity timeline
+
+// 14. Stats Routes:
+// getAllUsersTaskStats - All users' task statistics (admin)
+
+// getSingleUserTaskStats - Specific user's stats
+
+// getMyStats - Current user's own stats
+
+// 👥 USER MANAGEMENT ROUTES:
+// 15. getAssignableUsers
+// Get users available for task assignment
+
+// 16. getAllUsers
+// Get all users in system
+
+// 🔹 KEY FEATURES IMPLEMENTED:
+// Task Separation:
+// Self Tasks (taskFor: 'self') - Personal todo list
+
+// Others Tasks (taskFor: 'others') - Assigned to team members
+

@@ -84,22 +84,16 @@ router.get('/:taskId/activity-logs', auth, taskController.getTaskActivityLogs);
 router.get('/user-activity/:userId', auth, taskController.getUserActivityTimeline);
 
 // ==================== USER MANAGEMENT ROUTES ====================
-
 // 👤 Get assignable users AND groups
 router.get('/assignable-users', auth, taskController.getAssignableUsers);
-
 // 👥 Get all users – for admin/HR panels
 router.get('/all-users', auth, taskController.getAllUsers);
-
 // 👤 Get self-assigned tasks for a specific user (Admin view)
 router.get('/user-self-assigned/:userId', auth, taskController.getUserSelfAssignedTasks);
-
 // 📊 All user task stats
 router.get('/admin/all-users-stats', auth, taskController.getAllUsersTaskStats);
-
 // 📈 Single User ka Task Count
 router.get('/user-stats/:userId', auth, taskController.getSingleUserTaskStats);
-
-
+// 📈 My Task Stats
 router.get('/my-stats', auth, taskController.getMyStats);
 module.exports = router;
