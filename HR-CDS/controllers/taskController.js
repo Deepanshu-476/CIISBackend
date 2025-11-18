@@ -40,7 +40,7 @@ const createActivityLog = async (user, action, task, description, oldValues = nu
   }
 };
 
-// 🔹 Helper to group tasks by date (latest first) with serial numbers - OPTIMIZED
+// 🔹 Helper to group tasks by date (latest first) with serial numbers
 const groupTasksByDate = (tasks, dateField = 'createdAt', serialKey = 'serialNo') => {
   const grouped = {};
 
@@ -67,7 +67,7 @@ const groupTasksByDate = (tasks, dateField = 'createdAt', serialKey = 'serialNo'
   return sortedGrouped;
 };
 
-// 🔹 Enrich tasks with name/role for status info - OPTIMIZED
+// 🔹 Enrich tasks with name/role for status info
 const enrichStatusInfo = async (tasks) => {
   if (!tasks || tasks.length === 0) return tasks;
 
@@ -283,8 +283,6 @@ const sendTaskStatusUpdateEmail = async (task, updatedUser, oldStatus, newStatus
     console.error('❌ Failed to send task status update email:', emailError);
   }
 };
-
-// ==================== NEW ROUTES ====================
 
 // ✅ CREATE TASK FOR SELF (Khud ke liye task create kare) - ONLY IN MY TASKS
 exports.createTaskForSelf = async (req, res) => {
@@ -559,66 +557,9 @@ exports.createTaskForOthers = async (req, res) => {
   }
 };
 
-// ==================== EXISTING ROUTES (SAME AS BEFORE) ====================
-
-// 🔹 Get assigned tasks for logged-in user
-// 🔹 Get only tasks created by logged-in user (e.g., admin) - WITH PAGINATION - FIXED
-exports.getAssignedTasks = async (req, res) => {
-  try {
-    const { page = 1, limit = 20, search, status } = req.query;
-
-    // 🔹 CRITICAL FIX: Only show tasks created for others by current user
-    const filter = { 
-      createdBy: req.user._id,
-      taskFor: 'others' // 🔹 ONLY SHOW TASKS CREATED FOR OTHERS
-    };
-
-    // Add status filter
-    if (status) {
-      filter['statusByUser.status'] = status;
-    }
-
-    // Add search functionality
-    if (search) {
-      filter.$or = [
-        { title: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } }
-      ];
-    }
-
-    const skip = (page - 1) * limit;
-
-    const tasks = await Task.find(filter)
-      .populate('assignedUsers', 'name role email')
-      .populate('assignedGroups', 'name description')
-      .populate('createdBy', 'name email')
-      .sort({ dueDateTime: 1, createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit))
-      .lean();
-
-    const total = await Task.countDocuments(filter);
-
-    const enriched = await enrichStatusInfo(tasks);
-    const grouped = groupTasksByDate(enriched, 'createdAt', 'assignedSerialNo');
-    
-    res.json({ 
-      groupedTasks: grouped,
-      total,
-      totalPages: Math.ceil(total / limit),
-      currentPage: parseInt(page),
-      limit: parseInt(limit)
-    });
-  } catch (error) {
-    console.error('❌ Error fetching assigned tasks:', error);
-    res.status(500).json({ error: 'Failed to get assigned tasks' });
-  }
-};
-
-// 🔹 Get all tasks: created by or assigned to logged-in user - WITH PAGINATION
-// 🔹 Get all tasks: created by or assigned to logged-in user - WITH PAGINATION - UPDATED
+// 🔹 Get all tasks: created by or assigned to logged-in user
 exports.getTasks = async (req, res) => {
-  const { status, page = 1, limit = 20, search } = req.query;
+  const { status, search } = req.query;
   
   try {
     // Get user's groups to include group-assigned tasks
@@ -654,28 +595,18 @@ exports.getTasks = async (req, res) => {
       ];
     }
 
-    const skip = (page - 1) * limit;
-
     const tasks = await Task.find(filter)
       .populate('assignedUsers', 'name email')
       .populate('assignedGroups', 'name description')
       .populate('createdBy', 'name email')
       .sort({ dueDateTime: 1, createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit))
       .lean();
-
-    const total = await Task.countDocuments(filter);
 
     const enriched = await enrichStatusInfo(tasks);
     const grouped = groupTasksByDate(enriched, 'createdAt', 'serialNo');
     
     res.json({ 
-      groupedTasks: grouped,
-      total,
-      totalPages: Math.ceil(total / limit),
-      currentPage: parseInt(page),
-      limit: parseInt(limit)
+      groupedTasks: grouped
     });
   } catch (error) {
     console.error('❌ Error fetching tasks:', error);
@@ -683,10 +614,10 @@ exports.getTasks = async (req, res) => {
   }
 };
 
-// 🔹 Get only tasks assigned to logged-in user (including group assignments) - WITH PAGINATION
+// 🔹 Get only tasks assigned to logged-in user (including group assignments)
 exports.getMyTasks = async (req, res) => {
   try {
-    const { page = 1, limit = 20, search, status } = req.query;
+    const { search, status } = req.query;
 
     // Get user's groups to include group-assigned tasks
     const userGroups = await Group.find({ 
@@ -722,39 +653,29 @@ exports.getMyTasks = async (req, res) => {
       ];
     }
 
-    const skip = (page - 1) * limit;
-
     const tasks = await Task.find(filter)
       .populate('assignedUsers', 'name email')
       .populate('assignedGroups', 'name description')
       .populate('createdBy', 'name email')
       .sort({ dueDateTime: 1, createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit))
       .lean();
-
-    const total = await Task.countDocuments(filter);
 
     const enriched = await enrichStatusInfo(tasks);
     const grouped = groupTasksByDate(enriched, 'createdAt', 'mySerialNo');
     
     res.json({ 
-      groupedTasks: grouped,
-      total,
-      totalPages: Math.ceil(total / limit),
-      currentPage: parseInt(page),
-      limit: parseInt(limit)
+      groupedTasks: grouped
     });
   } catch (error) {
     console.error('❌ Error fetching my tasks:', error);
     res.status(500).json({ error: 'Failed to get your tasks' });
   }
 };
-// 🔹 Get only tasks created by logged-in user (e.g., admin) - WITH PAGINATION
 
+// 🔹 Get only tasks created by logged-in user (e.g., admin)
 exports.getAssignedTasks = async (req, res) => {
   try {
-    const { page = 1, limit = 20, search, status } = req.query;
+    const { search, status } = req.query;
 
     // 🔹 CRITICAL FIX: Only show tasks created for others by current user
     const filter = { 
@@ -775,28 +696,18 @@ exports.getAssignedTasks = async (req, res) => {
       ];
     }
 
-    const skip = (page - 1) * limit;
-
     const tasks = await Task.find(filter)
       .populate('assignedUsers', 'name role email')
       .populate('assignedGroups', 'name description')
       .populate('createdBy', 'name email')
       .sort({ dueDateTime: 1, createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit))
       .lean();
-
-    const total = await Task.countDocuments(filter);
 
     const enriched = await enrichStatusInfo(tasks);
     const grouped = groupTasksByDate(enriched, 'createdAt', 'assignedSerialNo');
     
     res.json({ 
-      groupedTasks: grouped,
-      total,
-      totalPages: Math.ceil(total / limit),
-      currentPage: parseInt(page),
-      limit: parseInt(limit)
+      groupedTasks: grouped
     });
   } catch (error) {
     console.error('❌ Error fetching assigned tasks:', error);
@@ -1042,26 +953,21 @@ exports.getRemarks = async (req, res) => {
   }
 };
 
-// 🔹 Get user notifications - WITH PAGINATION
+// 🔹 Get user notifications
 exports.getNotifications = async (req, res) => {
   try {
-    const { page = 1, limit = 20, unreadOnly = false } = req.query;
+    const { unreadOnly = false } = req.query;
 
     const filter = { user: req.user._id };
     if (unreadOnly === 'true') {
       filter.isRead = false;
     }
 
-    const skip = (page - 1) * limit;
-
     const notifications = await Notification.find(filter)
       .populate('title')
       .sort({ createdAt: -1 })
-      .limit(parseInt(limit))
-      .skip(skip)
       .lean();
 
-    const total = await Notification.countDocuments(filter);
     const unreadCount = await Notification.countDocuments({ 
       user: req.user._id, 
       isRead: false 
@@ -1070,9 +976,6 @@ exports.getNotifications = async (req, res) => {
     res.json({
       success: true,
       notifications,
-      totalPages: Math.ceil(total / limit),
-      currentPage: parseInt(page),
-      total,
       unreadCount
     });
 
@@ -1134,11 +1037,10 @@ exports.markAllNotificationsAsRead = async (req, res) => {
   }
 };
 
-// 🔹 Get activity logs for a task - WITH PAGINATION
+// 🔹 Get activity logs for a task
 exports.getTaskActivityLogs = async (req, res) => {
   try {
     const { taskId } = req.params;
-    const { page = 1, limit = 50 } = req.query;
 
     const task = await Task.findById(taskId);
     if (!task) {
@@ -1154,23 +1056,14 @@ exports.getTaskActivityLogs = async (req, res) => {
       return res.status(403).json({ error: 'Not authorized to view activity logs for this task' });
     }
 
-    const skip = (page - 1) * limit;
-
     const logs = await ActivityLog.find({ task: taskId })
       .populate('user', 'name role email')
       .sort({ createdAt: -1 })
-      .limit(parseInt(limit))
-      .skip(skip)
       .lean();
-
-    const total = await ActivityLog.countDocuments({ task: taskId });
 
     res.json({
       success: true,
-      logs,
-      totalPages: Math.ceil(total / limit),
-      currentPage: parseInt(page),
-      total
+      logs
     });
 
   } catch (error) {
@@ -1179,11 +1072,10 @@ exports.getTaskActivityLogs = async (req, res) => {
   }
 };
 
-// 🔹 Get user activity timeline - WITH PAGINATION
+// 🔹 Get user activity timeline
 exports.getUserActivityTimeline = async (req, res) => {
   try {
     const { userId } = req.params;
-    const { page = 1, limit = 50 } = req.query;
 
     // Check if user is authorized (own timeline or admin/manager/hr)
     const isAuthorized = userId === req.user._id.toString() || 
@@ -1193,24 +1085,15 @@ exports.getUserActivityTimeline = async (req, res) => {
       return res.status(403).json({ error: 'Not authorized to view this activity timeline' });
     }
 
-    const skip = (page - 1) * limit;
-
     const logs = await ActivityLog.find({ user: userId })
       .populate('task', 'title')
       .populate('user', 'name role email')
       .sort({ createdAt: -1 })
-      .limit(parseInt(limit))
-      .skip(skip)
       .lean();
-
-    const total = await ActivityLog.countDocuments({ user: userId });
 
     res.json({
       success: true,
-      logs,
-      totalPages: Math.ceil(total / limit),
-      currentPage: parseInt(page),
-      total
+      logs
     });
 
   } catch (error) {
@@ -1667,6 +1550,7 @@ exports.getMyStats = async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch my task stats' });
   }
 };
+
 // ✅ Get Self-Assigned Tasks of a User (For Admin to see tasks assigned to a specific user)
 exports.getUserSelfAssignedTasks = async (req, res) => {
   try {
@@ -1700,6 +1584,7 @@ exports.getUserSelfAssignedTasks = async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 };
+
 // 🔹 Get assigned tasks for logged-in user - UPDATED
 exports.getAssignedTasksWithStatus = async (req, res) => {
   try {
@@ -1724,137 +1609,3 @@ exports.getAssignedTasksWithStatus = async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 };
-
-
-
-
-
-
-// 🔹 MODELS/SCHEMAS USED:
-// Task - Main task model
-
-// User - User model
-
-// Group - Group model for task assignments
-
-// Notification - Notification system
-
-// ActivityLog - Audit trail system
-
-// 🔹 HELPER FUNCTIONS:
-// 1. Notification System
-// createNotification() - Creates notifications for users
-
-// Handles task assignments, status updates, remarks
-
-// 2. Activity Logging
-// createActivityLog() - Tracks all user activities
-
-// Records IP addresses, user agents, changes
-
-// 3. Task Organization
-// groupTasksByDate() - Groups tasks by date with serial numbers
-
-// enrichStatusInfo() - Adds user details to task status information
-
-// 4. User/Group Management
-// getAllAssignableUsers() - Gets users available for task assignment
-
-// getAllAssignableGroups() - Gets groups available for task assignment
-
-// 5. Email System
-// sendTaskCreationEmail() - Sends email when tasks are assigned
-
-// sendTaskStatusUpdateEmail() - Sends email on status changes
-
-// 🔹 MAIN CONTROLLER FUNCTIONS:
-// ✅ TASK CREATION ROUTES:
-// 1. createTaskForSelf
-// Creates tasks for yourself only
-
-// Goes to "My Tasks" section
-
-// Only assigns to current user
-
-// Sets taskFor: 'self'
-
-// 2. createTaskForOthers
-// Creates tasks for other users only
-
-// Goes to "Assigned Tasks" section
-
-// Cannot assign to yourself
-
-// Requires admin/manager/hr privileges
-
-// Sets taskFor: 'others'
-
-// 📋 TASK RETRIEVAL ROUTES:
-// 3. getTasks
-// Gets ALL tasks: created by user + assigned to user + self tasks
-
-// Includes group assignments
-
-// 4. getMyTasks
-// Gets tasks assigned TO current user + self-created tasks
-
-// User's personal task list
-
-// 5. getAssignedTasks
-// Gets tasks created BY current user FOR OTHERS
-
-// Admin/manager view of tasks they assigned
-
-// 6. getUserSelfAssignedTasks
-// Admin view of specific user's self-assigned tasks
-
-// 🔄 TASK MANAGEMENT ROUTES:
-// 7. updateStatus
-// Update task status (pending → in-progress → completed)
-
-// Sends notifications and emails
-
-// Updates status history
-
-// 8. addRemark & getRemarks
-// Add comments to tasks
-
-// View task remarks
-
-// 9. updateTask & deleteTask
-// Edit and soft-delete tasks (admin only)
-
-// 🔔 NOTIFICATION SYSTEM ROUTES:
-// 10. getNotifications
-// Get user notifications with pagination
-
-// 11. markNotificationAsRead & markAllNotificationsAsRead
-// Mark notifications as read
-
-// 📊 ACTIVITY & ANALYTICS ROUTES:
-// 12. getTaskActivityLogs
-// Get activity history for a specific task
-
-// 13. getUserActivityTimeline
-// Get user's complete activity timeline
-
-// 14. Stats Routes:
-// getAllUsersTaskStats - All users' task statistics (admin)
-
-// getSingleUserTaskStats - Specific user's stats
-
-// getMyStats - Current user's own stats
-
-// 👥 USER MANAGEMENT ROUTES:
-// 15. getAssignableUsers
-// Get users available for task assignment
-
-// 16. getAllUsers
-// Get all users in system
-
-// 🔹 KEY FEATURES IMPLEMENTED:
-// Task Separation:
-// Self Tasks (taskFor: 'self') - Personal todo list
-
-// Others Tasks (taskFor: 'others') - Assigned to team members
-
