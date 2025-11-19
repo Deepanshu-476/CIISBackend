@@ -1551,7 +1551,7 @@ exports.getMyStats = async (req, res) => {
   }
 };
 
-// ✅ Get Self-Assigned Tasks of a User (For Admin to see tasks assigned to a specific user)
+// ✅ Get ALL Tasks of a User (Self-assigned + Assigned by others)
 exports.getUserSelfAssignedTasks = async (req, res) => {
   try {
     if (!['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role)) {
@@ -1564,27 +1564,77 @@ exports.getUserSelfAssignedTasks = async (req, res) => {
       return res.status(400).json({ error: 'User ID is required' });
     }
 
-    // 🔹 UPDATED: Only show self tasks
+    // 🔹 UPDATED: Get user's groups for group-assigned tasks
+    const userGroups = await Group.find({ 
+      members: userId,
+      isActive: true 
+    }).select('_id').lean();
+
+    const groupIds = userGroups.map(group => group._id);
+
+    // 🔹 CRITICAL: Now getting ALL tasks where user is involved
     const tasks = await Task.find({
-      createdBy: userId,
-      assignedUsers: userId,
-      taskFor: 'self' // 🔹 ONLY SELF TASKS
+      $or: [
+        // 1. Self-assigned tasks (user ne khud banaye)
+        { 
+          createdBy: userId,
+          assignedUsers: userId,
+          taskFor: 'self'
+        },
+        // 2. Assigned by others (dusre ne assign kiye)
+        { 
+          assignedUsers: userId,
+          taskFor: 'others' 
+        },
+        // 3. Group assigned tasks (group ke through assign)
+        { 
+          assignedGroups: { $in: groupIds },
+          taskFor: 'others'
+        }
+      ],
+      isActive: true
     })
     .populate('assignedUsers', 'name role email')
     .populate('assignedGroups', 'name description')
     .populate('createdBy', 'name email')
+    .sort({ createdAt: -1 })
     .lean();
 
-    const enrichedTasks = await enrichStatusInfo(tasks);
+    // 🔹 Add task type identification
+    const tasksWithType = tasks.map(task => {
+      const isSelfAssigned = (
+        task.createdBy._id.toString() === userId && 
+        task.taskFor === 'self'
+      );
+      
+      return {
+        ...task,
+        taskType: isSelfAssigned ? 'self_assigned' : 'assigned_by_others',
+        assignedBy: isSelfAssigned ? 'Self' : task.createdBy.name
+      };
+    });
+
+    const enrichedTasks = await enrichStatusInfo(tasksWithType);
     const groupedTasks = groupTasksByDate(enrichedTasks, 'createdAt', 'serialNo');
 
-    res.json({ groupedTasks });
+    res.json({ 
+      success: true,
+      groupedTasks,
+      summary: {
+        totalTasks: tasks.length,
+        selfAssigned: tasks.filter(t => 
+          t.createdBy._id.toString() === userId && t.taskFor === 'self'
+        ).length,
+        assignedByOthers: tasks.filter(t => 
+          t.createdBy._id.toString() !== userId || t.taskFor === 'others'
+        ).length
+      }
+    });
   } catch (error) {
     console.error('❌ Error in getUserSelfAssignedTasks:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 };
-
 // 🔹 Get assigned tasks for logged-in user - UPDATED
 exports.getAssignedTasksWithStatus = async (req, res) => {
   try {
