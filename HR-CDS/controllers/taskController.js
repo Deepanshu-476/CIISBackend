@@ -680,7 +680,7 @@ exports.getAssignedTasks = async (req, res) => {
     // 🔹 CRITICAL FIX: Only show tasks created for others by current user
     const filter = { 
       createdBy: req.user._id,
-      taskFor: 'others' // 🔹 ONLY SHOW TASKS CREATED FOR OTHERS
+      
     };
 
     // Add status filter
@@ -1261,216 +1261,13 @@ exports.getAssignableUsers = async (req, res) => {
   }
 };
 
-// 🔹 Get all users
-exports.getAllUsers = async (req, res) => {
+// 🔹 Get user's all tasks status counts (complete breakdown)
+// 🔹 Get user's task status counts with time filters
+exports.getTaskStatusCounts = async (req, res) => {
   try {
-    const users = await User.find().select('name _id role employeeType email').lean();
-    res.json({ users });
-  } catch (error) {
-    res.status(500).json({ error: 'Unable to fetch users' });
-  }
-};
+    const { period = 'today' } = req.query; // today, week, month
 
-// Controller mein yeh add karo
-exports.getAllUsersTaskStats = async (req, res) => {
-  try {
-    if (!['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role)) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
-
-    const users = await User.find().select('name email role _id').lean();
-    
-    const userStats = [];
-    
-    for (const user of users) {
-      // User ke groups find karo
-      const userGroups = await Group.find({ 
-        members: user._id,
-        isActive: true 
-      }).select('_id').lean();
-
-      const groupIds = userGroups.map(group => group._id);
-
-      // Total tasks filter
-      const totalFilter = {
-        $or: [
-          { assignedUsers: user._id },
-          { assignedGroups: { $in: groupIds } }
-        ],
-        isActive: true
-      };
-
-      // Today's tasks filter
-      const todayStart = new Date();
-      todayStart.setHours(0, 0, 0, 0);
-      
-      const todayEnd = new Date();
-      todayEnd.setHours(23, 59, 59, 999);
-
-      const todayFilter = {
-        ...totalFilter,
-        createdAt: {
-          $gte: todayStart,
-          $lte: todayEnd
-        }
-      };
-
-      const totalTasks = await Task.countDocuments(totalFilter);
-      const todayTasks = await Task.countDocuments(todayFilter);
-
-      // Status-wise count
-      const userTasks = await Task.find(totalFilter).lean();
-      
-      let pending = 0;
-      let inProgress = 0;
-      let completed = 0;
-
-      userTasks.forEach(task => {
-        const userStatus = task.statusByUser.find(status => 
-          status.user && status.user.toString() === user._id.toString()
-        );
-        
-        const status = userStatus ? userStatus.status : 'pending';
-        
-        if (status === 'completed') completed++;
-        else if (status === 'in-progress') inProgress++;
-        else pending++;
-      });
-
-      userStats.push({
-        user: {
-          _id: user._id,
-          name: user.name,
-          email: user.email,
-          role: user.role
-        },
-        tasks: {
-          total: totalTasks,
-          today: todayTasks,
-          pending,
-          inProgress,
-          completed
-        }
-      });
-    }
-
-    res.json({
-      success: true,
-      data: userStats
-    });
-
-  } catch (error) {
-    console.error('❌ Error fetching all users task stats:', error);
-    res.status(500).json({ error: 'Failed to fetch users task stats' });
-  }
-};
-
-// Controller mein yeh add karo
-exports.getSingleUserTaskStats = async (req, res) => {
-  try {
-    const { userId } = req.params;
-
-    // Check if user is accessing own data or is admin
-    if (userId !== req.user._id.toString() && 
-        !['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role)) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
-
-    const user = await User.findById(userId).select('name email role').lean();
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    // User ke groups find karo
-    const userGroups = await Group.find({ 
-      members: userId,
-      isActive: true 
-    }).select('_id').lean();
-
-    const groupIds = userGroups.map(group => group._id);
-
-    // Total tasks filter
-    const totalFilter = {
-      $or: [
-        { assignedUsers: userId },
-        { assignedGroups: { $in: groupIds } }
-      ],
-      isActive: true
-    };
-
-    // Today's tasks filter
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    
-    const todayEnd = new Date();
-    todayEnd.setHours(23, 59, 59, 999);
-
-    const todayFilter = {
-      ...totalFilter,
-      createdAt: {
-        $gte: todayStart,
-        $lte: todayEnd
-      }
-    };
-
-    // Counts nikal lo
-    const [totalTasks, todayTasks, userTasks] = await Promise.all([
-      Task.countDocuments(totalFilter),
-      Task.countDocuments(todayFilter),
-      Task.find(totalFilter).lean()
-    ]);
-
-    // Status-wise count
-    let pending = 0;
-    let inProgress = 0;
-    let completed = 0;
-
-    userTasks.forEach(task => {
-      const userStatus = task.statusByUser.find(status => 
-        status.user && status.user.toString() === userId
-      );
-      
-      const status = userStatus ? userStatus.status : 'pending';
-      
-      if (status === 'completed') completed++;
-      else if (status === 'in-progress') inProgress++;
-      else pending++;
-    });
-
-    res.json({
-      success: true,
-      data: {
-        user: {
-          _id: userId,
-          name: user.name,
-          email: user.email,
-          role: user.role
-        },
-        tasks: {
-          total: totalTasks,
-          today: todayTasks,
-          pending,
-          inProgress, 
-          completed
-        }
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Error fetching single user task stats:', error);
-    res.status(500).json({ error: 'Failed to fetch user task stats' });
-  }
-};
-
-// ✅ NEW: Get current user's stats
-exports.getMyStats = async (req, res) => {
-  try {
-    const user = await User.findById(req.user._id).select('name email role').lean();
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    // User ke groups find karo
+    // Get user's groups for group-assigned tasks
     const userGroups = await Group.find({ 
       members: req.user._id,
       isActive: true 
@@ -1478,184 +1275,794 @@ exports.getMyStats = async (req, res) => {
 
     const groupIds = userGroups.map(group => group._id);
 
-    // Total tasks filter
-    const totalFilter = {
-      $or: [
-        { assignedUsers: req.user._id },
-        { assignedGroups: { $in: groupIds } }
-      ],
-      isActive: true
-    };
-
-    // Today's tasks filter
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    // Date range calculation based on period
+    let startDate, endDate;
+    const now = new Date();
     
-    const todayEnd = new Date();
-    todayEnd.setHours(23, 59, 59, 999);
+    switch (period) {
+      case 'today':
+        startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+        break;
+      case 'week':
+        const dayOfWeek = now.getDay();
+        startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek);
+        endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + (6 - dayOfWeek) + 1);
+        break;
+      case 'month':
+        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+        endDate = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+        break;
+      default:
+        startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    }
 
-    const todayFilter = {
-      ...totalFilter,
+    // Base filter for all tasks where user is involved
+    const baseFilter = {
+      $or: [
+        { assignedUsers: req.user._id }, // Directly assigned
+        { assignedGroups: { $in: groupIds } }, // In assigned group
+        { 
+          createdBy: req.user._id,
+          taskFor: 'self' // Self-created tasks
+        }
+      ],
+      isActive: true,
       createdAt: {
-        $gte: todayStart,
-        $lte: todayEnd
+        $gte: startDate,
+        $lt: endDate
       }
     };
 
-    // Counts nikal lo
-    const [totalTasks, todayTasks, userTasks] = await Promise.all([
-      Task.countDocuments(totalFilter),
-      Task.countDocuments(todayFilter),
-      Task.find(totalFilter).lean()
+    // Get counts for all statuses
+    const [
+      total, 
+      pending, 
+      inProgress, 
+      completed, 
+      approved,
+      rejected,
+      onHold,
+      reopen,
+      cancelled,
+      overdue
+    ] = await Promise.all([
+      // Total tasks
+      Task.countDocuments(baseFilter),
+      
+      // Pending tasks
+      Task.countDocuments({
+        ...baseFilter,
+        'statusByUser.status': 'pending',
+        'statusByUser.user': req.user._id
+      }),
+      
+      // In Progress tasks - FIXED: baseFilter (not baseBuffer)
+      Task.countDocuments({
+        ...baseFilter, // ✅ FIXED TYPO
+        'statusByUser.status': 'in-progress', 
+        'statusByUser.user': req.user._id
+      }),
+      
+      // Completed tasks
+      Task.countDocuments({
+        ...baseFilter,
+        'statusByUser.status': 'completed',
+        'statusByUser.user': req.user._id
+      }),
+
+      // Approved tasks
+      Task.countDocuments({
+        ...baseFilter,
+        'statusByUser.status': 'approved',
+        'statusByUser.user': req.user._id
+      }),
+
+      // Rejected tasks
+      Task.countDocuments({
+        ...baseFilter,
+        'statusByUser.status': 'rejected',
+        'statusByUser.user': req.user._id
+      }),
+
+      // On Hold tasks
+      Task.countDocuments({
+        ...baseFilter,
+        'statusByUser.status': 'on-hold',
+        'statusByUser.user': req.user._id
+      }),
+
+      // Reopen tasks
+      Task.countDocuments({
+        ...baseFilter,
+        'statusByUser.status': 'reopen',
+        'statusByUser.user': req.user._id
+      }),
+
+      // Cancelled tasks
+      Task.countDocuments({
+        ...baseFilter,
+        'statusByUser.status': 'cancelled',
+        'statusByUser.user': req.user._id
+      }),
+      
+      // Overdue tasks (pending/in-progress + past due date)
+      Task.countDocuments({
+        ...baseFilter,
+        'statusByUser.status': { $in: ['pending', 'in-progress'] },
+        'statusByUser.user': req.user._id,
+        dueDateTime: { $lt: new Date() } // Past due date
+      })
     ]);
 
-    // Status-wise count
-    let pending = 0;
-    let inProgress = 0;
-    let completed = 0;
-
-    userTasks.forEach(task => {
-      const userStatus = task.statusByUser.find(status => 
-        status.user && status.user.toString() === req.user._id.toString()
-      );
-      
-      const status = userStatus ? userStatus.status : 'pending';
-      
-      if (status === 'completed') completed++;
-      else if (status === 'in-progress') inProgress++;
-      else pending++;
-    });
+    // Calculate percentages
+    const calculatePercentage = (count) => total > 0 ? Math.round((count / total) * 100) : 0;
 
     res.json({
       success: true,
-      data: {
-        user: {
-          _id: req.user._id,
-          name: user.name,
-          email: user.email,
-          role: user.role
+      period,
+      dateRange: {
+        start: startDate,
+        end: endDate
+      },
+      statusCounts: {
+        total,
+        pending: {
+          count: pending,
+          percentage: calculatePercentage(pending)
         },
-        tasks: {
-          total: totalTasks,
-          today: todayTasks,
-          pending,
-          inProgress, 
-          completed
+        inProgress: {
+          count: inProgress, 
+          percentage: calculatePercentage(inProgress)
+        },
+        completed: {
+          count: completed,
+          percentage: calculatePercentage(completed)
+        },
+        approved: {
+          count: approved,
+          percentage: calculatePercentage(approved)
+        },
+        rejected: {
+          count: rejected,
+          percentage: calculatePercentage(rejected)
+        },
+        onHold: {
+          count: onHold,
+          percentage: calculatePercentage(onHold)
+        },
+        reopen: {
+          count: reopen,
+          percentage: calculatePercentage(reopen)
+        },
+        cancelled: {
+          count: cancelled,
+          percentage: calculatePercentage(cancelled)
+        },
+        overdue: {
+          count: overdue,
+          percentage: calculatePercentage(overdue)
         }
-      }
+      },
+      message: `Task status counts for ${period}`
     });
 
   } catch (error) {
-    console.error('❌ Error fetching my task stats:', error);
-    res.status(500).json({ error: 'Failed to fetch my task stats' });
+    console.error('❌ Error fetching task status counts:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to get task status counts',
+      details: error.message 
+    });
   }
 };
 
-// ✅ Get ALL Tasks of a User (Self-assigned + Assigned by others)
-exports.getUserSelfAssignedTasks = async (req, res) => {
+// 👤 SPECIFIC USER DETAILED ANALYTICS - Kisi specific user ka complete data
+exports.getUserDetailedAnalytics = async (req, res) => {
   try {
     if (!['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role)) {
-      return res.status(403).json({ error: 'Access denied' });
+      return res.status(403).json({ error: 'Access denied. Admin privileges required.' });
     }
 
     const { userId } = req.params;
+    const { startDate, endDate, period = 'all' } = req.query;
 
-    if (!userId) {
-      return res.status(400).json({ error: 'User ID is required' });
+    // Get user details
+    const user = await User.findById(userId)
+      .select('name email role department employeeType joiningDate')
+      .lean();
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
     }
 
-    // 🔹 UPDATED: Get user's groups for group-assigned tasks
+    // Date range setup
+    let dateFilter = {};
+    if (startDate && endDate) {
+      dateFilter.createdAt = {
+        $gte: new Date(startDate),
+        $lte: new Date(endDate)
+      };
+    } else {
+      // Auto date range based on period
+      const now = new Date();
+      switch (period) {
+        case 'today':
+          dateFilter.createdAt = {
+            $gte: new Date(now.getFullYear(), now.getMonth(), now.getDate()),
+            $lte: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
+          };
+          break;
+        case 'week':
+          const weekStart = new Date(now);
+          weekStart.setDate(now.getDate() - now.getDay());
+          dateFilter.createdAt = {
+            $gte: weekStart,
+            $lte: now
+          };
+          break;
+        case 'month':
+          dateFilter.createdAt = {
+            $gte: new Date(now.getFullYear(), now.getMonth(), 1),
+            $lte: now
+          };
+          break;
+        // 'all' - no date filter
+      }
+    }
+
+    // Get user's groups for group tasks
     const userGroups = await Group.find({ 
       members: userId,
       isActive: true 
     }).select('_id').lean();
-
     const groupIds = userGroups.map(group => group._id);
 
-    // 🔹 CRITICAL: Now getting ALL tasks where user is involved
-    const tasks = await Task.find({
+    // Base filter for tasks involving this user
+    const baseFilter = {
+      ...dateFilter,
+      isActive: true,
       $or: [
-        // 1. Self-assigned tasks (user ne khud banaye)
-        { 
-          createdBy: userId,
-          assignedUsers: userId,
-          taskFor: 'self'
-        },
-        // 2. Assigned by others (dusre ne assign kiye)
-        { 
-          assignedUsers: userId,
-          taskFor: 'others' 
-        },
-        // 3. Group assigned tasks (group ke through assign)
-        { 
-          assignedGroups: { $in: groupIds },
-          taskFor: 'others'
-        }
-      ],
-      isActive: true
-    })
-    .populate('assignedUsers', 'name role email')
-    .populate('assignedGroups', 'name description')
-    .populate('createdBy', 'name email')
-    .sort({ createdAt: -1 })
-    .lean();
+        { assignedUsers: userId },           // Directly assigned
+        { assignedGroups: { $in: groupIds } }, // In assigned group  
+        { createdBy: userId }                // Created by this user
+      ]
+    };
 
-    // 🔹 Add task type identification
-    const tasksWithType = tasks.map(task => {
-      const isSelfAssigned = (
-        task.createdBy._id.toString() === userId && 
-        task.taskFor === 'self'
+    // Get all relevant tasks
+    const tasks = await Task.find(baseFilter)
+      .populate('assignedUsers', 'name role email')
+      .populate('createdBy', 'name role email')
+      .populate('assignedGroups', 'name description')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    // Comprehensive analysis
+    const analysis = {
+      userInfo: user,
+      
+      // Basic counts
+      summary: {
+        totalInvolved: tasks.length,
+        assigned: tasks.filter(task => 
+          task.assignedUsers?.some(u => u._id.toString() === userId)
+        ).length,
+        created: tasks.filter(task => 
+          task.createdBy && task.createdBy._id.toString() === userId
+        ).length,
+        groupTasks: tasks.filter(task => 
+          task.assignedGroups && task.assignedGroups.length > 0 &&
+          !task.assignedUsers?.some(u => u._id.toString() === userId)
+        ).length
+      },
+
+      // Status analysis for assigned tasks
+      statusAnalysis: {
+        pending: 0,
+        'in-progress': 0,
+        completed: 0,
+        approved: 0,
+        rejected: 0,
+        overdue: 0
+      },
+
+      // Priority analysis
+      priorityAnalysis: {
+        high: 0,
+        medium: 0, 
+        low: 0
+      },
+
+      // Performance metrics
+      performance: {
+        completionRate: 0,
+        avgCompletionTime: 0,
+        efficiency: 0
+      },
+
+      // Timeline (last 30 days)
+      timeline: {},
+      
+      // Recent activities
+      recentTasks: tasks.slice(0, 10).map(task => ({
+        _id: task._id,
+        title: task.title,
+        type: task.createdBy && task.createdBy._id.toString() === userId ? 
+              'created' : 'assigned',
+        status: task.statusByUser?.find(s => s.user && s.user.toString() === userId)?.status || 'pending',
+        priority: task.priority,
+        dueDate: task.dueDateTime,
+        createdAt: task.createdAt
+      }))
+    };
+
+    // Process each task for detailed analysis
+    let totalCompletionTime = 0;
+    let completedCount = 0;
+
+    tasks.forEach(task => {
+      const userStatus = task.statusByUser?.find(s => 
+        s.user && s.user.toString() === userId
+      );
+
+      const status = userStatus?.status || 'pending';
+
+      // Status counts
+      if (analysis.statusAnalysis[status] !== undefined) {
+        analysis.statusAnalysis[status]++;
+      }
+
+      // Priority counts  
+      if (task.priority && analysis.priorityAnalysis[task.priority] !== undefined) {
+        analysis.priorityAnalysis[task.priority]++;
+      }
+
+      // Overdue check
+      if (task.dueDateTime && new Date(task.dueDateTime) < new Date() && 
+          status !== 'completed') {
+        analysis.statusAnalysis.overdue++;
+      }
+
+      // Completion time calculation
+      if (status === 'completed' && userStatus?.updatedAt && task.createdAt) {
+        const completionTime = new Date(userStatus.updatedAt) - new Date(task.createdAt);
+        totalCompletionTime += completionTime;
+        completedCount++;
+      }
+
+      // Timeline data (group by date)
+      const dateKey = new Date(task.createdAt).toISOString().split('T')[0];
+      if (!analysis.timeline[dateKey]) {
+        analysis.timeline[dateKey] = {
+          date: dateKey,
+          tasks: 0,
+          completed: 0
+        };
+      }
+      analysis.timeline[dateKey].tasks++;
+      if (status === 'completed') {
+        analysis.timeline[dateKey].completed++;
+      }
+    });
+
+    // Calculate performance metrics
+    const totalAssigned = analysis.summary.assigned + analysis.summary.groupTasks;
+    analysis.performance.completionRate = totalAssigned > 0 ?
+      Math.round((analysis.statusAnalysis.completed / totalAssigned) * 100) : 0;
+    
+    analysis.performance.avgCompletionTime = completedCount > 0 ?
+      Math.round(totalCompletionTime / (completedCount * 1000 * 60 * 60 * 24)) : 0; // in days
+
+    analysis.performance.efficiency = totalAssigned > 0 ?
+      Math.round(((analysis.statusAnalysis.completed + analysis.statusAnalysis['in-progress'] * 0.5) / totalAssigned) * 100) : 0;
+
+    // Convert timeline to array
+    analysis.timelineArray = Object.values(analysis.timeline)
+      .sort((a, b) => new Date(a.date) - new Date(b.date))
+      .slice(-30); // Last 30 days
+
+    res.json({
+      success: true,
+      userAnalytics: analysis,
+      dateRange: {
+        start: startDate || 'beginning',
+        end: endDate || 'now',
+        period
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error in user detailed analytics:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to fetch user analytics' 
+    });
+  }
+};
+// 📊 GET USER SPECIFIC TASK STATISTICS
+exports.getUserTaskStats = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { period = 'today' } = req.query;
+
+    if (!['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'Access denied. Admin privileges required.' });
+    }
+
+    // Get user's groups for group tasks
+    const userGroups = await Group.find({ 
+      members: userId,
+      isActive: true 
+    }).select('_id').lean();
+    const groupIds = userGroups.map(group => group._id);
+
+    // Date range calculation
+    let dateFilter = {};
+    const now = new Date();
+    
+    switch (period) {
+      case 'today':
+        dateFilter.createdAt = {
+          $gte: new Date(now.getFullYear(), now.getMonth(), now.getDate()),
+          $lte: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
+        };
+        break;
+      case 'week':
+        const dayOfWeek = now.getDay();
+        dateFilter.createdAt = {
+          $gte: new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek),
+          $lte: new Date(now.getFullYear(), now.getMonth(), now.getDate() + (6 - dayOfWeek) + 1)
+        };
+        break;
+      case 'month':
+        dateFilter.createdAt = {
+          $gte: new Date(now.getFullYear(), now.getMonth(), 1),
+          $lte: new Date(now.getFullYear(), now.getMonth() + 1, 1)
+        };
+        break;
+      default:
+        dateFilter.createdAt = {
+          $gte: new Date(now.getFullYear(), now.getMonth(), now.getDate()),
+          $lte: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
+        };
+    }
+
+    // Base filter for user tasks
+    const baseFilter = {
+      ...dateFilter,
+      isActive: true,
+      $or: [
+        { assignedUsers: userId },
+        { assignedGroups: { $in: groupIds } },
+        { createdBy: userId }
+      ]
+    };
+
+    // Get all tasks for this user
+    const tasks = await Task.find(baseFilter)
+      .populate('assignedUsers', 'name email')
+      .populate('createdBy', 'name email')
+      .lean();
+
+    // Calculate statistics
+    const statusCounts = {
+      pending: 0,
+      'in-progress': 0,
+      completed: 0,
+      approved: 0,
+      rejected: 0,
+      overdue: 0
+    };
+
+    tasks.forEach(task => {
+      // Find user's status in this task
+      const userStatus = task.statusByUser?.find(s => 
+        s.user && s.user.toString() === userId
+      );
+
+      const status = userStatus?.status || 'pending';
+
+      if (statusCounts[status] !== undefined) {
+        statusCounts[status]++;
+      }
+
+      // Check overdue
+      if (task.dueDateTime && new Date(task.dueDateTime) < new Date() && 
+          status !== 'completed') {
+        statusCounts.overdue++;
+      }
+    });
+
+    const totalTasks = tasks.length;
+
+    // Calculate percentages
+    const calculatePercentage = (count) => 
+      totalTasks > 0 ? Math.round((count / totalTasks) * 100) : 0;
+
+    res.json({
+      success: true,
+      userId,
+      period,
+      statusCounts: {
+        total: totalTasks,
+        pending: {
+          count: statusCounts.pending,
+          percentage: calculatePercentage(statusCounts.pending)
+        },
+        inProgress: {
+          count: statusCounts['in-progress'],
+          percentage: calculatePercentage(statusCounts['in-progress'])
+        },
+        completed: {
+          count: statusCounts.completed,
+          percentage: calculatePercentage(statusCounts.completed)
+        },
+        approved: {
+          count: statusCounts.approved,
+          percentage: calculatePercentage(statusCounts.approved)
+        },
+        rejected: {
+          count: statusCounts.rejected,
+          percentage: calculatePercentage(statusCounts.rejected)
+        },
+        overdue: {
+          count: statusCounts.overdue,
+          percentage: calculatePercentage(statusCounts.overdue)
+        }
+      },
+      tasksSummary: {
+        assigned: tasks.filter(task => 
+          task.assignedUsers?.some(u => u._id.toString() === userId)
+        ).length,
+        created: tasks.filter(task => 
+          task.createdBy && task.createdBy._id.toString() === userId
+        ).length,
+        groupTasks: tasks.filter(task => 
+          task.assignedGroups && task.assignedGroups.length > 0
+        ).length
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error in getUserTaskStats:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to fetch user task statistics' 
+    });
+  }
+};
+
+// 👥 GET ALL USERS WITH THEIR TASK COUNTS
+exports.getUsersWithTaskCounts = async (req, res) => {
+  try {
+    if (!['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'Access denied. Admin privileges required.' });
+    }
+
+    const { period = 'all', employeeType } = req.query;
+
+    // Get all active users with filters
+    const userFilter = { isActive: true };
+    if (employeeType && employeeType !== 'all') {
+      userFilter.employeeType = employeeType;
+    }
+
+    const users = await User.find(userFilter)
+      .select('name email role employeeType department')
+      .lean();
+
+    // Date filter for tasks
+    let dateFilter = {};
+    if (period !== 'all') {
+      const now = new Date();
+      switch (period) {
+        case 'today':
+          dateFilter.createdAt = {
+            $gte: new Date(now.getFullYear(), now.getMonth(), now.getDate()),
+            $lte: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
+          };
+          break;
+        case 'week':
+          const dayOfWeek = now.getDay();
+          dateFilter.createdAt = {
+            $gte: new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek),
+            $lte: new Date(now.getFullYear(), now.getMonth(), now.getDate() + (6 - dayOfWeek) + 1)
+          };
+          break;
+        case 'month':
+          dateFilter.createdAt = {
+            $gte: new Date(now.getFullYear(), now.getMonth(), 1),
+            $lte: new Date(now.getFullYear(), now.getMonth() + 1, 1)
+          };
+          break;
+      }
+    }
+
+    // Get users with their task counts
+    const usersWithCounts = await Promise.all(
+      users.map(async (user) => {
+        const userGroups = await Group.find({ 
+          members: user._id,
+          isActive: true 
+        }).select('_id').lean();
+        
+        const groupIds = userGroups.map(group => group._id);
+
+        const taskFilter = {
+          ...dateFilter,
+          isActive: true,
+          $or: [
+            { assignedUsers: user._id },
+            { assignedGroups: { $in: groupIds } },
+            { createdBy: user._id }
+          ]
+        };
+
+        const userTasks = await Task.find(taskFilter).lean();
+
+        const statusCounts = {
+          pending: 0,
+          'in-progress': 0,
+          completed: 0
+        };
+
+        userTasks.forEach(task => {
+          const userStatus = task.statusByUser?.find(s => 
+            s.user && s.user.toString() === user._id.toString()
+          );
+          const status = userStatus?.status || 'pending';
+          if (statusCounts[status] !== undefined) {
+            statusCounts[status]++;
+          }
+        });
+
+        const totalTasks = userTasks.length;
+        const completedCount = statusCounts.completed;
+        const completionRate = totalTasks > 0 ? 
+          Math.round((completedCount / totalTasks) * 100) : 0;
+
+        return {
+          ...user,
+          taskStats: {
+            total: totalTasks,
+            pending: statusCounts.pending,
+            inProgress: statusCounts['in-progress'],
+            completed: completedCount,
+            completionRate: completionRate
+          }
+        };
+      })
+    );
+
+    res.json({
+      success: true,
+      period,
+      employeeType: employeeType || 'all',
+      users: usersWithCounts,
+      summary: {
+        totalUsers: usersWithCounts.length,
+        totalTasks: usersWithCounts.reduce((sum, user) => sum + user.taskStats.total, 0),
+        averageCompletionRate: Math.round(
+          usersWithCounts.reduce((sum, user) => sum + user.taskStats.completionRate, 0) / 
+          Math.max(usersWithCounts.length, 1)
+        )
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error in getUsersWithTaskCounts:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to fetch users with task counts' 
+    });
+  }
+};
+
+// 📈 GET USER TASKS WITH FILTERS
+exports.getUserTasks = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { status, search, period = 'all' } = req.query;
+
+    if (!['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'Access denied. Admin privileges required.' });
+    }
+
+    // Get user's groups
+    const userGroups = await Group.find({ 
+      members: userId,
+      isActive: true 
+    }).select('_id').lean();
+    const groupIds = userGroups.map(group => group._id);
+
+    // Date filter
+    let dateFilter = {};
+    if (period !== 'all') {
+      const now = new Date();
+      switch (period) {
+        case 'today':
+          dateFilter.createdAt = {
+            $gte: new Date(now.getFullYear(), now.getMonth(), now.getDate()),
+            $lte: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
+          };
+          break;
+        case 'week':
+          const dayOfWeek = now.getDay();
+          dateFilter.createdAt = {
+            $gte: new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek),
+            $lte: new Date(now.getFullYear(), now.getMonth(), now.getDate() + (6 - dayOfWeek) + 1)
+          };
+          break;
+        case 'month':
+          dateFilter.createdAt = {
+            $gte: new Date(now.getFullYear(), now.getMonth(), 1),
+            $lte: new Date(now.getFullYear(), now.getMonth() + 1, 1)
+          };
+          break;
+      }
+    }
+
+    // Build filter
+    const filter = {
+      ...dateFilter,
+      isActive: true,
+      $or: [
+        { assignedUsers: userId },
+        { assignedGroups: { $in: groupIds } },
+        { createdBy: userId }
+      ]
+    };
+
+    // Add status filter
+    if (status && status !== 'all') {
+      filter['statusByUser.status'] = status;
+      filter['statusByUser.user'] = userId;
+    }
+
+    // Add search filter
+    if (search) {
+      filter.$or = [
+        ...filter.$or,
+        { title: { $regex: search, $options: 'i' } },
+        { description: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    const tasks = await Task.find(filter)
+      .populate('assignedUsers', 'name email')
+      .populate('createdBy', 'name email')
+      .populate('assignedGroups', 'name description')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    // Enhance tasks with user-specific status
+    const enhancedTasks = tasks.map(task => {
+      const userStatus = task.statusByUser?.find(s => 
+        s.user && s.user.toString() === userId
       );
       
       return {
         ...task,
-        taskType: isSelfAssigned ? 'self_assigned' : 'assigned_by_others',
-        assignedBy: isSelfAssigned ? 'Self' : task.createdBy.name
+        userStatus: userStatus?.status || 'pending',
+        userStatusRemarks: userStatus?.remarks,
+        userStatusUpdatedAt: userStatus?.updatedAt
       };
     });
 
-    const enrichedTasks = await enrichStatusInfo(tasksWithType);
-    const groupedTasks = groupTasksByDate(enrichedTasks, 'createdAt', 'serialNo');
-
-    res.json({ 
+    res.json({
       success: true,
-      groupedTasks,
-      summary: {
-        totalTasks: tasks.length,
-        selfAssigned: tasks.filter(t => 
-          t.createdBy._id.toString() === userId && t.taskFor === 'self'
-        ).length,
-        assignedByOthers: tasks.filter(t => 
-          t.createdBy._id.toString() !== userId || t.taskFor === 'others'
-        ).length
-      }
+      userId,
+      filters: { status, search, period },
+      tasks: enhancedTasks,
+      total: enhancedTasks.length
     });
-  } catch (error) {
-    console.error('❌ Error in getUserSelfAssignedTasks:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-};
-// 🔹 Get assigned tasks for logged-in user - UPDATED
-exports.getAssignedTasksWithStatus = async (req, res) => {
-  try {
-    if (!['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role)) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
 
-    // 🔹 UPDATED: Only show tasks created for others
-    const tasks = await Task.find({ 
-      createdBy: req.user._id,
-      taskFor: 'others' // 🔹 ONLY OTHERS TASKS
-    })
-      .populate('assignedUsers', 'name role email')
-      .populate('assignedGroups', 'name description')
-      .populate('createdBy', 'name email')
-      .lean();
-
-    const enriched = await enrichStatusInfo(tasks);
-    res.json({ tasks: enriched });
   } catch (error) {
-    console.error('❌ Error in getAssignedTasksWithStatus:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('❌ Error in getUserTasks:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to fetch user tasks' 
+    });
   }
 };

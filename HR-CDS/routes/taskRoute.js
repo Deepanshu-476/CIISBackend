@@ -6,18 +6,16 @@ const upload = require('../../utils/multer');
 
 // ==================== TASK ROUTES ====================
 
-// 📝 Get tasks assigned to me OR created by me
+// 📝 सभी Tasks देखें - मेरे लिए assigned + मेरे द्वारा बनाए गए
 router.get('/', auth, taskController.getTasks);
 
-
-// 📄 Get only tasks assigned *to me* (including group tasks)
+// 📄 सिर्फ मेरे Tasks देखें - मेरे लिए assigned tasks (direct + group)
 router.get('/my', auth, taskController.getMyTasks);
 
-// 👨‍💼 Get tasks created (assigned) by me
+// 👨‍💼 मेरे द्वारा Assign किए गए Tasks देखें - (Admin/Manager/HR के लिए)
 router.get('/assigned', auth, taskController.getAssignedTasks);
-router.get('/assigned-tasks-status', auth, taskController.getAssignedTasksWithStatus);
 
-// ✅ Create task for self (khud ke liye)
+// ✅ खुद के लिए Task बनाएं - Self task creation
 router.post(
   '/create-self',
   auth,
@@ -28,7 +26,7 @@ router.post(
   taskController.createTaskForSelf
 );
 
-// ✅ Create task for others (dusre users ko assign kare)
+// ✅ दूसरों के लिए Task बनाएं - Others ko assign kare (Admin/Manager/HR के लिए)
 router.post(
   '/create-for-others',
   auth,
@@ -39,7 +37,7 @@ router.post(
   taskController.createTaskForOthers
 );
 
-// ✏️ Update task (Admin/Manager/HR only)
+// ✏️ Task Update करें - Edit task details (Admin/Manager/HR के लिए)
 router.put(
   '/:taskId',
   auth,
@@ -50,51 +48,65 @@ router.put(
   taskController.updateTask
 );
 
-// 🗑️ Delete task (Admin/Manager/HR only)
+// 🗑️ Task Delete करें - Soft delete task (Admin/Manager/HR के लिए)
 router.delete('/:taskId', auth, taskController.deleteTask);
 
-// 🔁 Update task status
+// 🔁 Task Status Update करें - Status change (pending → in-progress → completed)
 router.patch('/:taskId/status', auth, taskController.updateStatus);
 
 // ==================== REMARKS/COMMENTS ROUTES ====================
 
-// 💬 Add remark to task
+// 💬 Task पर Remark/Comment डालें - Add comments to task
 router.post('/:taskId/remarks', auth, taskController.addRemark);
 
-// 📋 Get task remarks
+// 📋 Task के सभी Remarks देखें - Get all task comments
 router.get('/:taskId/remarks', auth, taskController.getRemarks);
 
 // ==================== NOTIFICATION ROUTES ====================
 
-// 🔔 Get user notifications
+// 🔔 User की सभी Notifications देखें - Get user notifications
 router.get('/notifications/all', auth, taskController.getNotifications);
 
-// ✅ Mark single notification as read
+// ✅ Single Notification Read Mark करें - Mark one notification as read
 router.patch('/notifications/:notificationId/read', auth, taskController.markNotificationAsRead);
 
-// ✅ Mark all notifications as read
+// ✅ सभी Notifications Read Mark करें - Mark all notifications as read
 router.patch('/notifications/read-all', auth, taskController.markAllNotificationsAsRead);
 
 // ==================== ACTIVITY LOGS ROUTES ====================
 
-// 📊 Get activity logs for a specific task
+// 📊 Specific Task की Activity Logs देखें - Get task activity history
 router.get('/:taskId/activity-logs', auth, taskController.getTaskActivityLogs);
 
-// 📈 Get user activity timeline
-
+// 📈 User की Activity Timeline देखें - Get user activity timeline
 router.get('/user-activity/:userId', auth, taskController.getUserActivityTimeline);
 
 // ==================== USER MANAGEMENT ROUTES ====================
-// 👤 Get assignable users AND groups
+
+// 👤 Assignable Users और Groups देखें - Get users/groups for task assignment
 router.get('/assignable-users', auth, taskController.getAssignableUsers);
-// 👥 Get all users – for admin/HR panels
-router.get('/all-users', auth, taskController.getAllUsers);
-// 👤 Get self-assigned tasks for a specific user (Admin view)
-router.get('/user-self-assigned/:userId', auth, taskController.getUserSelfAssignedTasks);
-// 📊 All user task stats
-router.get('/admin/all-users-stats', auth, taskController.getAllUsersTaskStats);
-// 📈 Single User ka Task Count
-router.get('/user-stats/:userId', auth, taskController.getSingleUserTaskStats);
-// 📈 My Task Stats
-router.get('/my-stats', auth, taskController.getMyStats);
+
+
+// counts
+// ==================== TASK STATUS COUNTS ROUTES ====================
+
+// 📊 Get user all tasks status counts (complete breakdown)
+router.get('/status-counts', auth, taskController.getTaskStatusCounts);
+
+// ==================== SPECIFIC USER ANALYTICS ====================
+
+// 👤 Get specific user's complete task analytics
+router.get('/admin/dashboard/user/:userId/analytics', auth, taskController.getUserDetailedAnalytics);
+
+// ==================== NEW ADMIN DASHBOARD ROUTES ====================
+
+// 📊 Get user specific task statistics
+router.get('/user/:userId/stats', auth, taskController.getUserTaskStats);
+
+// 👥 Get all users with their task counts
+router.get('/admin/users-with-tasks', auth, taskController.getUsersWithTaskCounts);
+
+// 📈 Get user tasks with filters
+router.get('/user/:userId/tasks', auth, taskController.getUserTasks);
+
 module.exports = router;
