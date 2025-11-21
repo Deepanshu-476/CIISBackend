@@ -376,16 +376,23 @@ exports.createTaskForSelf = async (req, res) => {
       req
     );
 
-    res.status(201).json({ 
-      success: true, 
-      task,
-      message: 'Self task created successfully'
-    });
+    // Response
+res.status(201).json({
+  success: true,
+  task: {
+    ...task.toObject(),
+    taskFor: task.taskFor || 'self',  // Ensure taskFor is always included in the response
+  },
+  message: 'Self task created successfully'
+});
+
+
   } catch (error) {
     console.error("❌ Error creating self task:", error);
     res.status(500).json({ error: error.message || "Internal Server Error" });
   }
 };
+
 
 // ✅ CREATE TASK FOR OTHERS (Dusre users ko assign kare) - ONLY IN ASSIGNED TASKS
 exports.createTaskForOthers = async (req, res) => {
@@ -546,16 +553,22 @@ exports.createTaskForOthers = async (req, res) => {
       await sendTaskCreationEmail(task, task.assignedUsers);
     }
 
-    res.status(201).json({ 
-      success: true, 
-      task,
-      message: 'Task created and assigned successfully to others'
-    });
+res.status(201).json({
+  success: true,
+  task: {
+    ...task.toObject(),
+    taskFor: task.taskFor || 'others',  // Ensure taskFor is always included in the response
+  },
+  message: 'Self task created successfully'
+});
+
+
   } catch (error) {
     console.error("❌ Error creating task for others:", error);
     res.status(500).json({ error: error.message || "Internal Server Error" });
   }
 };
+
 
 // 🔹 Get all tasks: created by or assigned to logged-in user
 exports.getTasks = async (req, res) => {
