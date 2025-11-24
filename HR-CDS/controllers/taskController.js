@@ -630,7 +630,9 @@ exports.getTasks = async (req, res) => {
 // 🔹 Get only tasks assigned to logged-in user (including group assignments)
 exports.getMyTasks = async (req, res) => {
   try {
-    const { search, status } = req.query;
+    const { search, status, period } = req.query;
+    
+    console.log('📅 Received period:', period); // Debug log
 
     // Get user's groups to include group-assigned tasks
     const userGroups = await Group.find({ 
@@ -640,38 +642,126 @@ exports.getMyTasks = async (req, res) => {
 
     const groupIds = userGroups.map(group => group._id);
 
-    // 🔹 UPDATED: Show tasks where user is assigned OR created self tasks
     const filter = {
       $or: [
-        { assignedUsers: req.user._id }, // User is directly assigned
-        { assignedGroups: { $in: groupIds } }, // User is in assigned group
+        { assignedUsers: req.user._id },
+        { assignedGroups: { $in: groupIds } },
         { 
           createdBy: req.user._id,
-          taskFor: 'self' // 🔹 User created task for self
+          taskFor: 'self'
         }
       ]
     };
 
-    // Add status filter
-    if (status) {
-      filter['statusByUser.status'] = status;
+    // 🔹 FIXED: Better Time Period Filter with proper date handling
+    if (period && period !== 'total') {
+      const now = new Date();
+      now.setHours(0, 0, 0, 0); // Set to start of day
+      
+      let startDate, endDate;
+
+      switch (period) {
+        case 'today':
+          startDate = new Date(now);
+          endDate = new Date(now);
+          endDate.setDate(now.getDate() + 1);
+          break;
+        
+        case 'yesterday':
+          startDate = new Date(now);
+          startDate.setDate(now.getDate() - 1);
+          endDate = new Date(now);
+          break;
+        
+        case 'this-week':
+          startDate = new Date(now);
+          startDate.setDate(now.getDate() - now.getDay()); // Start from Sunday
+          endDate = new Date(startDate);
+          endDate.setDate(startDate.getDate() + 7);
+          break;
+        
+        case 'last-week':
+          startDate = new Date(now);
+          startDate.setDate(now.getDate() - now.getDay() - 7);
+          endDate = new Date(startDate);
+          endDate.setDate(startDate.getDate() + 7);
+          break;
+        
+        case 'this-month':
+          startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+          endDate = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+          break;
+        
+        case 'last-month':
+          startDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+          endDate = new Date(now.getFullYear(), now.getMonth(), 1);
+          break;
+        
+        case 'last-7-days':
+          startDate = new Date(now);
+          startDate.setDate(now.getDate() - 7);
+          endDate = new Date(now);
+          endDate.setDate(now.getDate() + 1);
+          break;
+        
+        case 'last-30-days':
+          startDate = new Date(now);
+          startDate.setDate(now.getDate() - 30);
+          endDate = new Date(now);
+          endDate.setDate(now.getDate() + 1);
+          break;
+        
+        default:
+          console.log('❌ Unknown period:', period);
+          break;
+      }
+
+      if (startDate && endDate) {
+        console.log('📅 Filtering by date range:', { 
+          period, 
+          startDate: startDate.toISOString(), 
+          endDate: endDate.toISOString() 
+        });
+        
+        filter.createdAt = {
+          $gte: startDate,
+          $lt: endDate
+        };
+      }
+    } else if (period === 'total') {
+      console.log('📅 Showing all tasks (total)');
     }
 
     // Add search functionality
     if (search) {
-      filter.$or = [
-        ...filter.$or,
+      if (!filter.$or) filter.$or = [];
+      filter.$or.push(
         { title: { $regex: search, $options: 'i' } },
         { description: { $regex: search, $options: 'i' } }
-      ];
+      );
     }
 
-    const tasks = await Task.find(filter)
+    console.log('🔍 Final filter:', JSON.stringify(filter, null, 2));
+
+    let tasks = await Task.find(filter)
       .populate('assignedUsers', 'name email')
       .populate('assignedGroups', 'name description')
       .populate('createdBy', 'name email')
       .sort({ dueDateTime: 1, createdAt: -1 })
       .lean();
+
+    console.log('📊 Tasks found:', tasks.length);
+
+    // Apply status filter
+    if (status) {
+      tasks = tasks.filter(task => {
+        const userStatus = task.statusByUser.find(
+          statusObj => statusObj.user.toString() === req.user._id.toString()
+        );
+        return userStatus && userStatus.status === status;
+      });
+      console.log('📊 Tasks after status filter:', tasks.length);
+    }
 
     const enriched = await enrichStatusInfo(tasks);
     const grouped = groupTasksByDate(enriched, 'createdAt', 'mySerialNo');
@@ -1274,7 +1364,7 @@ exports.getAssignableUsers = async (req, res) => {
   }
 };
 
-// 🔹 Get user's all tasks status counts (complete breakdown)
+
 // 🔹 Get user's task status counts with time filters
 exports.getTaskStatusCounts = async (req, res) => {
   try {
@@ -1328,7 +1418,7 @@ exports.getTaskStatusCounts = async (req, res) => {
       }
     };
 
-    // Get counts for all statuses
+    // Get counts for all statuses - FIXED: consistent status names
     const [
       total, 
       pending, 
@@ -1351,9 +1441,9 @@ exports.getTaskStatusCounts = async (req, res) => {
         'statusByUser.user': req.user._id
       }),
       
-      // In Progress tasks - FIXED: baseFilter (not baseBuffer)
+      // In Progress tasks
       Task.countDocuments({
-        ...baseFilter, // ✅ FIXED TYPO
+        ...baseFilter,
         'statusByUser.status': 'in-progress', 
         'statusByUser.user': req.user._id
       }),
@@ -1379,10 +1469,10 @@ exports.getTaskStatusCounts = async (req, res) => {
         'statusByUser.user': req.user._id
       }),
 
-      // On Hold tasks
+      // On Hold tasks - FIXED: consistent status name
       Task.countDocuments({
         ...baseFilter,
-        'statusByUser.status': 'on-hold',
+        'statusByUser.status': 'onhold',
         'statusByUser.user': req.user._id
       }),
 
