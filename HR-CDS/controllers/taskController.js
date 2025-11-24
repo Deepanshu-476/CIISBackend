@@ -548,7 +548,7 @@ exports.createTaskForOthers = async (req, res) => {
       req
     );
 
-    // Send email notifications to all assigned users (not creator)
+    // Send email notifications to all assigned users (not creator) 
     if (task.assignedUsers && task.assignedUsers.length > 0) {
       await sendTaskCreationEmail(task, task.assignedUsers);
     }
