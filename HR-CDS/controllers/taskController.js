@@ -5,7 +5,9 @@ const Notification = require('../models/Notification');
 const ActivityLog = require('../models/ActivityLog');
 const moment = require('moment');
 const sendEmail = require('../../utils/sendEmail');
-
+const fs = require('fs');
+const path = require('path');
+const sharp = require('sharp');
 // 🔹 Helper to create notifications
 const createNotification = async (userId, title, message, type, relatedTask = null, metadata = null) => {
   try {
@@ -961,74 +963,107 @@ exports.addRemark = async (req, res) => {
     const { taskId } = req.params;
     const { text } = req.body;
 
-    if (!text) {
-      return res.status(400).json({ error: 'Remark text is required' });
+    // Check if we have either text or image
+    if (!text && !req.file) {
+      return res.status(400).json({ error: 'Remark text or image is required' });
     }
 
     const task = await Task.findById(taskId);
-    if (!task) {
-      return res.status(404).json({ error: 'Task not found' });
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+
+    const isAuthorized =
+      task.assignedUsers.some(userId => userId.toString() === req.user._id.toString()) ||
+      task.createdBy.toString() === req.user._id.toString();
+
+    if (!isAuthorized) return res.status(403).json({ error: 'Not authorized to add remarks' });
+
+    let imagePath = null;
+
+    // Handle image upload + compression
+    if (req.file) {
+      const uploadDir = "uploads/remarks/";
+      if (!fs.existsSync(uploadDir)) {
+        fs.mkdirSync(uploadDir, { recursive: true });
+      }
+
+      const filename = `remark_${Date.now()}_${req.user._id}.jpg`;
+      imagePath = path.join(uploadDir, filename);
+
+      try {
+        // Compress and process image
+        await sharp(req.file.buffer)
+          .resize(1200, 1200, { // Resize to max 1200x1200
+            fit: 'inside',
+            withoutEnlargement: true
+          })
+          .jpeg({ 
+            quality: 80, // Better quality
+            progressive: true 
+          })
+          .toFile(imagePath);
+
+        // Check size and further compress if >1MB
+        let stats = fs.statSync(imagePath);
+        if (stats.size > 1024 * 1024) {
+          const compressedPath = imagePath.replace('.jpg', '_compressed.jpg');
+          
+          await sharp(imagePath)
+            .resize(800, 800, {
+              fit: 'inside',
+              withoutEnlargement: true
+            })
+            .jpeg({ 
+              quality: 60,
+              progressive: true 
+            })
+            .toFile(compressedPath);
+
+          // Remove original and use compressed
+          fs.unlinkSync(imagePath);
+          imagePath = compressedPath;
+        }
+      } catch (imageError) {
+        console.error("❌ Image processing error:", imageError);
+        // Clean up if image processing fails
+        if (fs.existsSync(imagePath)) {
+          fs.unlinkSync(imagePath);
+        }
+        return res.status(400).json({ error: 'Failed to process image' });
+      }
     }
 
-    // Check if user is authorized (assigned to task or creator)
-    const isAuthorized = task.assignedUsers.some(userId => 
-      userId.toString() === req.user._id.toString()
-    ) || task.createdBy.toString() === req.user._id.toString();
-
-    if (!isAuthorized) {
-      return res.status(403).json({ error: 'Not authorized to add remarks to this task' });
-    }
-
-    // Add remark
-    task.remarks.push({
+    // Create remark object
+    const newRemark = {
       user: req.user._id,
-      text: text
-    });
+      text: text || '',
+      image: imagePath,
+      createdAt: new Date()
+    };
 
+    // Add remark to task
+    task.remarks.push(newRemark);
     await task.save();
 
-    // Populate for notifications
-    await task.populate('createdBy', 'name email');
-    await task.populate('assignedUsers', 'name email');
-    const remarkUser = await User.findById(req.user._id).select('name role');
+    // Populate the newly added remark for response
+    await task.populate('remarks.user', 'name role email avatar');
 
-    // 🔹 Create notifications for task creator and all assigned users
-    const notifyUsers = [
-      task.createdBy._id,
-      ...task.assignedUsers.map(user => user._id)
-    ].filter(userId => userId.toString() !== req.user._id.toString()); // Don't notify self
+    const addedRemark = task.remarks[task.remarks.length - 1];
 
-    for (const userId of notifyUsers) {
-      await createNotification(
-        userId,
-        'New Remark Added',
-        `${remarkUser.name} added a remark to task: ${task.title}`,
-        'remark_added',
-        task._id,
-        { remark: text, addedBy: remarkUser.name }
-      );
-    }
-
-    // 🔹 Create activity log
-    await createActivityLog(
-      req.user,
-      'remark_added',
-      task._id,
-      `Added remark to task: ${text.substring(0, 50)}...`,
-      null,
-      { remark: text },
-      req
-    );
-
-    res.json({ 
-      success: true, 
-      message: 'Remark added successfully',
-      remark: task.remarks[task.remarks.length - 1]
+    res.json({
+      success: true,
+      message: "Remark added successfully",
+      remark: addedRemark,
     });
 
   } catch (error) {
-    console.error('❌ Error adding remark:', error);
-    res.status(500).json({ error: 'Failed to add remark' });
+    console.error("❌ Error adding remark:", error);
+    
+    // Clean up uploaded files if error occurs
+    if (req.file && imagePath && fs.existsSync(imagePath)) {
+      fs.unlinkSync(imagePath);
+    }
+    
+    res.status(500).json({ error: "Failed to add remark" });
   }
 };
 
@@ -1038,16 +1073,19 @@ exports.getRemarks = async (req, res) => {
     const { taskId } = req.params;
 
     const task = await Task.findById(taskId)
-      .populate('remarks.user', 'name role email')
+      .populate('remarks.user', 'name role email avatar')
       .select('remarks');
 
     if (!task) {
       return res.status(404).json({ error: 'Task not found' });
     }
 
+    // Sort remarks by creation date (newest first)
+    const sortedRemarks = task.remarks.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
     res.json({ 
       success: true, 
-      remarks: task.remarks 
+      remarks: sortedRemarks 
     });
 
   } catch (error) {

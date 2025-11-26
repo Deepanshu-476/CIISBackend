@@ -47,6 +47,7 @@ const remarkSchema = new mongoose.Schema(
       type: Date,
       default: Date.now,
     },
+    image: { type: String },
   },
   { _id: false }
 );

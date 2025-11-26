@@ -3,7 +3,8 @@ const router = express.Router();
 const taskController = require('../controllers/taskController');
 const auth = require('../../middleware/authMiddleware'); 
 const upload = require('../../utils/multer'); 
-
+// const uploadTaskImage = require('../middlewares/uploadMiddleware'); 
+const { uploadTaskImage, uploadRemarkImage } = require('../middlewares/uploadMiddleware');
 // ==================== TASK ROUTES ====================
 
 // 📝 सभी Tasks देखें - मेरे लिए assigned + मेरे द्वारा बनाए गए
@@ -57,11 +58,11 @@ router.patch('/:taskId/status', auth, taskController.updateStatus);
 // ==================== REMARKS/COMMENTS ROUTES ====================
 
 // 💬 Task पर Remark/Comment डालें - Add comments to task
-router.post('/:taskId/remarks', auth, taskController.addRemark);
-
+// router.post('/:taskId/remarks', auth, uploadTaskImage, taskController.addRemark);
+router.post('/:taskId/remarks', auth, uploadRemarkImage, taskController.addRemark);
 // 📋 Task के सभी Remarks देखें - Get all task comments
+// router.get('/:taskId/remarks', auth, taskController.getRemarks);
 router.get('/:taskId/remarks', auth, taskController.getRemarks);
-
 // ==================== NOTIFICATION ROUTES ====================
 
 // 🔔 User की सभी Notifications देखें - Get user notifications
@@ -89,7 +90,6 @@ router.get('/assignable-users', auth, taskController.getAssignableUsers);
 
 // counts
 // ==================== TASK STATUS COUNTS ROUTES ====================
-
 // 📊 Get user all tasks status counts (complete breakdown)
 router.get('/status-counts', auth, taskController.getTaskStatusCounts);
 
