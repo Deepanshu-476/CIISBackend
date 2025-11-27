@@ -49,6 +49,7 @@ app.use("/api/holidays", require("./HR-CDS/routes/Holiday"));
 app.use("/api/groups", require("./HR-CDS/routes/groupRoutes"));
 app.use("/api/projects", require("./HR-CDS/routes/projectRoutes"));
 app.use("/api/notifications", require("./HR-CDS/routes/notificationRoutes"));
+app.use("/api/clientsservice", require("./HR-CDS/routes/clientRoutes"));
 // ✅ Meetings Route
 
 // ✅ Add Meeting Management Route
