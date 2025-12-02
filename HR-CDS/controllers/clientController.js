@@ -18,7 +18,7 @@ const getAllClients = async (req, res) => {
     const filter = {};
     
     if (status) filter.status = status;
-    if (projectManager) filter.projectManager = projectManager;
+    if (projectManager) filter.projectManager = { $in: [projectManager] }; // UPDATED: For array field
     if (service) filter.services = service;
     
     // Search across multiple fields
@@ -27,7 +27,8 @@ const getAllClients = async (req, res) => {
         { client: { $regex: search, $options: 'i' } },
         { company: { $regex: search, $options: 'i' } },
         { city: { $regex: search, $options: 'i' } },
-        { email: { $regex: search, $options: 'i' } }
+        { email: { $regex: search, $options: 'i' } },
+        { description: { $regex: search, $options: 'i' } } // NEW: Search in description
       ];
     }
 
@@ -92,21 +93,46 @@ const addClient = async (req, res) => {
       client,
       company,
       city,
-      projectManager,
+      projectManager, // Can be string or array
+      projectManagers, // Alternative field for multi-select
       services,
       status,
       progress,
       email,
       phone,
       address,
+      description, // NEW: Added description
       notes
     } = req.body;
 
     // Validation
-    if (!client || !company || !city || !projectManager) {
+    if (!client || !company || !city) {
       return res.status(400).json({
         success: false,
-        message: 'Client name, company, city, and project manager are required'
+        message: 'Client name, company, and city are required'
+      });
+    }
+
+    // Handle project managers - support both single and multiple
+    let finalProjectManagers = [];
+    
+    if (projectManagers && Array.isArray(projectManagers) && projectManagers.length > 0) {
+      // Use multi-select values
+      finalProjectManagers = projectManagers.filter(manager => manager && manager.trim().length > 0);
+    } else if (projectManager) {
+      // Use single select value as array
+      if (Array.isArray(projectManager)) {
+        finalProjectManagers = projectManager.filter(manager => manager && manager.trim().length > 0);
+      } else {
+        finalProjectManagers = [projectManager.trim()];
+      }
+    }
+    
+    // Validate at least one project manager
+    if (finalProjectManagers.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'At least one project manager is required'
       });
     }
 
@@ -125,17 +151,18 @@ const addClient = async (req, res) => {
     }
 
     const newClient = new Client({
-      client,
-      company,
-      city,
-      projectManager,
+      client: client.trim(),
+      company: company.trim(),
+      city: city.trim(),
+      projectManager: finalProjectManagers, // Store as array
       services: services || [],
       status: status || 'Active',
       progress: progress || '0/0 (0%)',
-      email,
-      phone,
-      address,
-      notes
+      email: email ? email.trim().toLowerCase() : undefined,
+      phone: phone ? phone.trim() : undefined,
+      address: address ? address.trim() : undefined,
+      description: description ? description.trim() : '', // NEW: Added description
+      notes: notes ? notes.trim() : undefined
     });
 
     await newClient.save();
@@ -166,15 +193,66 @@ const addClient = async (req, res) => {
 const updateClient = async (req, res) => {
   try {
     const { id } = req.params;
-    const updateData = req.body;
+    const {
+      client,
+      company,
+      city,
+      projectManager,
+      projectManagers,
+      services,
+      status,
+      progress,
+      email,
+      phone,
+      address,
+      description, // NEW: Added description
+      notes
+    } = req.body;
+
+    // Handle project managers - support both single and multiple
+    let finalProjectManagers = [];
+    
+    if (projectManagers && Array.isArray(projectManagers) && projectManagers.length > 0) {
+      finalProjectManagers = projectManagers.filter(manager => manager && manager.trim().length > 0);
+    } else if (projectManager) {
+      if (Array.isArray(projectManager)) {
+        finalProjectManagers = projectManager.filter(manager => manager && manager.trim().length > 0);
+      } else {
+        finalProjectManagers = [projectManager.trim()];
+      }
+    }
+    
+    // If project managers are being updated, validate at least one
+    if ((projectManager !== undefined || projectManagers !== undefined) && finalProjectManagers.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'At least one project manager is required'
+      });
+    }
+
+    // Build update object
+    const updateData = {};
+    
+    if (client !== undefined) updateData.client = client.trim();
+    if (company !== undefined) updateData.company = company.trim();
+    if (city !== undefined) updateData.city = city.trim();
+    if (finalProjectManagers.length > 0) updateData.projectManager = finalProjectManagers;
+    if (services !== undefined) updateData.services = services;
+    if (status !== undefined) updateData.status = status;
+    if (progress !== undefined) updateData.progress = progress;
+    if (email !== undefined) updateData.email = email.trim().toLowerCase();
+    if (phone !== undefined) updateData.phone = phone.trim();
+    if (address !== undefined) updateData.address = address.trim();
+    if (description !== undefined) updateData.description = description.trim(); // NEW: Added description
+    if (notes !== undefined) updateData.notes = notes.trim();
 
     // Validate services exist if being updated
-    if (updateData.services && updateData.services.length > 0) {
+    if (services && services.length > 0) {
       const existingServices = await Service.find({ 
-        servicename: { $in: updateData.services } 
+        servicename: { $in: services } 
       });
       
-      if (existingServices.length !== updateData.services.length) {
+      if (existingServices.length !== services.length) {
         return res.status(400).json({
           success: false,
           message: 'One or more services do not exist'
@@ -182,13 +260,13 @@ const updateClient = async (req, res) => {
       }
     }
 
-    const client = await Client.findByIdAndUpdate(
+    const clientDoc = await Client.findByIdAndUpdate(
       id,
       updateData,
       { new: true, runValidators: true }
     );
 
-    if (!client) {
+    if (!clientDoc) {
       return res.status(404).json({
         success: false,
         message: 'Client not found'
@@ -198,7 +276,7 @@ const updateClient = async (req, res) => {
     res.json({
       success: true,
       message: 'Client updated successfully',
-      data: client
+      data: clientDoc
     });
   } catch (error) {
     if (error.name === 'ValidationError') {
@@ -297,6 +375,95 @@ const getClientStats = async (req, res) => {
   }
 };
 
+const getManagerStats = async (req, res) => {
+  try {
+    const stats = await Client.getManagerStats();
+    
+    res.json({
+      success: true,
+      data: stats
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching manager statistics',
+      error: error.message
+    });
+  }
+};
+
+const addProjectManager = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { managerName } = req.body;
+
+    if (!managerName || managerName.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Manager name is required'
+      });
+    }
+
+    const client = await Client.findById(id);
+    if (!client) {
+      return res.status(404).json({
+        success: false,
+        message: 'Client not found'
+      });
+    }
+
+    await client.addProjectManager(managerName.trim());
+
+    res.json({
+      success: true,
+      message: 'Project manager added successfully',
+      data: client
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Error adding project manager',
+      error: error.message
+    });
+  }
+};
+
+const removeProjectManager = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { managerName } = req.body;
+
+    if (!managerName || managerName.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Manager name is required'
+      });
+    }
+
+    const client = await Client.findById(id);
+    if (!client) {
+      return res.status(404).json({
+        success: false,
+        message: 'Client not found'
+      });
+    }
+
+    await client.removeProjectManager(managerName.trim());
+
+    res.json({
+      success: true,
+      message: 'Project manager removed successfully',
+      data: client
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Error removing project manager',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   getAllClients,
   getClientById,
@@ -304,5 +471,8 @@ module.exports = {
   updateClient,
   updateClientProgress,
   deleteClient,
-  getClientStats
+  getClientStats,
+  getManagerStats,
+  addProjectManager,
+  removeProjectManager
 };

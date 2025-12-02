@@ -5,7 +5,7 @@ const auth = require('../../middleware/authMiddleware');
 const isHR = require('../../middleware/isHR');
 const isAdmin = require('../../middleware/isAdmin');
 // Get all users (Admin only)
-router.get('/all-users', auth, isAdmin, userController.getAllUsers);
+router.get('/all-users', auth,  userController.getAllUsers);
 // Update user (Admin only)
 router.put('/update-user/:id', auth, isAdmin, userController.updateUser);
 // Delete user (Admin only) - Hard delete

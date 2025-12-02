@@ -3,8 +3,20 @@ const router = express.Router();
 const auth = require('../../middleware/authMiddleware');
 
 const serviceController = require('../controllers/services');
-const clientController = require('../controllers/clientController');
+const {
+  getAllClients,
+  getClientById,
+  addClient,
+  updateClient,
+  updateClientProgress,
+  deleteClient,
+  getClientStats,
+  getManagerStats,
+  addProjectManager,
+  removeProjectManager
+} = require('../controllers/clientController');
 
+// ✅ FIXED: Specific routes first, then parameter routes
 // Service Routes
 router.get('/services', serviceController.getAllServices);
 router.post('/services', serviceController.addService);
@@ -12,13 +24,20 @@ router.post('/services', serviceController.addService);
 router.put('/services/:id', serviceController.updateService);
 router.delete('/services/:id', serviceController.deleteService);
 
+// Client Stats Routes
+router.get('/stats', getClientStats);
+router.get('/manager-stats', getManagerStats);
+
 // Client Routes
-router.get('/clients', clientController.getAllClients);
-router.get('/clients/stats', clientController.getClientStats);
-router.get('/clients/:id', clientController.getClientById);
-router.post('/clients', clientController.addClient);
-router.put('/clients/:id', clientController.updateClient);
-router.patch('/clients/:id/progress', clientController.updateClientProgress);
-router.delete('/clients/:id', clientController.deleteClient);
+router.get('/', getAllClients);
+router.post('/', addClient);
+
+// ✅ FIXED: ID routes - these should come last
+router.get('/:id', getClientById);
+router.put('/:id', updateClient);
+router.patch('/:id/progress', updateClientProgress);
+router.patch('/:id/add-manager', addProjectManager);
+router.patch('/:id/remove-manager', removeProjectManager);
+router.delete('/:id', deleteClient);
 
 module.exports = router;

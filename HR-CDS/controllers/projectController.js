@@ -46,7 +46,7 @@ const sendTaskStatusEmail = async (userEmail, taskData, oldStatus, newStatus, pe
             ${taskData.description ? `<p><strong>Description:</strong> ${taskData.description}</p>` : ''}
           </div>
           <p style="margin-top: 20px;">
-            <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/projects" style="background: #1976d2; color: white; padding: 10px 20px; text-decoration: none; border-radius: 4px;">
+            <a href="${process.env.BASE_URL || 'http://localhost:3000'}/projects" style="background: #1976d2; color: white; padding: 10px 20px; text-decoration: none; border-radius: 4px;">
               View Task
             </a>
           </p>
