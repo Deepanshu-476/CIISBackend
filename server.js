@@ -50,6 +50,7 @@ app.use("/api/groups", require("./HR-CDS/routes/groupRoutes"));
 app.use("/api/projects", require("./HR-CDS/routes/projectRoutes"));
 app.use("/api/notifications", require("./HR-CDS/routes/notificationRoutes"));
 app.use("/api/clientsservice", require("./HR-CDS/routes/clientRoutes"));
+app.use("/api/clienttasks", require("./HR-CDS/routes/clientTask"));
 // ✅ Meetings Route
 
 // ✅ Add Meeting Management Route

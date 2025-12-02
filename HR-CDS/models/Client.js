@@ -1,4 +1,3 @@
-// models/Client.js
 const mongoose = require('mongoose');
 
 const clientSchema = new mongoose.Schema({
@@ -21,7 +20,7 @@ const clientSchema = new mongoose.Schema({
     maxlength: [50, 'City name cannot exceed 50 characters']
   },
   projectManager: {
-    type: [String], // CHANGED: Array for multiple project managers
+    type: [String],
     required: [true, 'At least one project manager is required'],
     validate: {
       validator: function(v) {
@@ -42,19 +41,13 @@ const clientSchema = new mongoose.Schema({
   },
   progress: {
     type: String,
-    default: '0/0 (0%)',
-    validate: {
-      validator: function(v) {
-        return /^\d+\/\d+ \(\d+%\)$/.test(v);
-      },
-      message: 'Progress must be in format: completed/total (percentage)'
-    }
+    default: '0/0 (0%)'
   },
   email: {
     type: String,
     trim: true,
     lowercase: true,
-    match: [/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/, 'Please enter a valid email']
+    sparse: true
   },
   phone: {
     type: String,
@@ -65,10 +58,11 @@ const clientSchema = new mongoose.Schema({
     trim: true,
     maxlength: [200, 'Address cannot exceed 200 characters']
   },
-  description: { // NEW: Added description field
+  description: {
     type: String,
     trim: true,
-    maxlength: [1000, 'Description cannot exceed 1000 characters']
+    maxlength: [1000, 'Description cannot exceed 1000 characters'],
+    default: ''
   },
   notes: {
     type: String,
@@ -81,20 +75,32 @@ const clientSchema = new mongoose.Schema({
   toObject: { virtuals: true }
 });
 
-// Index for better query performance
-clientSchema.index({ client: 1 });
-clientSchema.index({ company: 1 });
+// Indexes for better query performance
+clientSchema.index({ client: 1, company: 1 });
 clientSchema.index({ status: 1 });
-clientSchema.index({ projectManager: 1 }); // This will work with arrays too
+clientSchema.index({ city: 1 });
+clientSchema.index({ 'projectManager': 1 });
+clientSchema.index({ 'services': 1 });
 clientSchema.index({ createdAt: -1 });
+
+// Text index for search functionality
+clientSchema.index({
+  client: 'text',
+  company: 'text',
+  city: 'text',
+  email: 'text',
+  description: 'text',
+  notes: 'text'
+});
 
 // Virtual for progress percentage
 clientSchema.virtual('progressPercentage').get(function() {
-  const match = this.progress.match(/(\d+)%/);
+  if (!this.progress) return 0;
+  const match = this.progress.match(/\((\d+)%\)/);
   return match ? parseInt(match[1]) : 0;
 });
 
-// Virtual for display purposes - get first project manager for display
+// Virtual for display purposes
 clientSchema.virtual('primaryProjectManager').get(function() {
   return this.projectManager && this.projectManager.length > 0 ? this.projectManager[0] : 'Not assigned';
 });
@@ -120,12 +126,35 @@ clientSchema.statics.getStats = async function() {
           $sum: { 
             $cond: [{ $eq: ['$status', 'Inactive'] }, 1, 0] 
           } 
+        },
+        // Calculate average progress
+        avgProgress: {
+          $avg: {
+            $let: {
+              vars: {
+                progressMatch: { $regexFind: { input: "$progress", regex: /\\((\d+)%\\)/ } }
+              },
+              in: {
+                $cond: [
+                  { $ne: ["$$progressMatch", null] },
+                  { $toInt: "$$progressMatch.captures.0" },
+                  0
+                ]
+              }
+            }
+          }
         }
       }
     }
   ]);
   
-  return stats.length > 0 ? stats[0] : { total: 0, active: 0, onHold: 0, inactive: 0 };
+  return stats.length > 0 ? stats[0] : { 
+    total: 0, 
+    active: 0, 
+    onHold: 0, 
+    inactive: 0, 
+    avgProgress: 0 
+  };
 };
 
 // Static method to get project manager statistics
@@ -135,10 +164,26 @@ clientSchema.statics.getManagerStats = async function() {
     {
       $group: {
         _id: '$projectManager',
-        count: { $sum: 1 }
+        clientCount: { $sum: 1 },
+        avgProgress: {
+          $avg: {
+            $let: {
+              vars: {
+                progressMatch: { $regexFind: { input: "$progress", regex: /\\((\d+)%\\)/ } }
+              },
+              in: {
+                $cond: [
+                  { $ne: ["$$progressMatch", null] },
+                  { $toInt: "$$progressMatch.captures.0" },
+                  0
+                ]
+              }
+            }
+          }
+        }
       }
     },
-    { $sort: { count: -1 } }
+    { $sort: { clientCount: -1, _id: 1 } }
   ]);
   
   return stats;
@@ -161,15 +206,44 @@ clientSchema.methods.addProjectManager = function(managerName) {
 
 // Instance method to remove project manager
 clientSchema.methods.removeProjectManager = function(managerName) {
-  this.projectManager = this.projectManager.filter(manager => manager !== managerName);
+  const index = this.projectManager.indexOf(managerName);
+  if (index > -1) {
+    this.projectManager.splice(index, 1);
+  }
   return this.save();
 };
 
-// Pre-save middleware to ensure projectManager is always an array
+// Pre-save middleware
 clientSchema.pre('save', function(next) {
+  // Ensure projectManager is always an array
   if (this.projectManager && !Array.isArray(this.projectManager)) {
     this.projectManager = [this.projectManager];
   }
+  
+  // Ensure services is always an array
+  if (this.services && !Array.isArray(this.services)) {
+    this.services = [this.services];
+  }
+  
+  // Clean projectManager array - remove empty strings
+  if (this.projectManager && Array.isArray(this.projectManager)) {
+    this.projectManager = this.projectManager
+      .filter(manager => manager && typeof manager === 'string' && manager.trim().length > 0)
+      .map(manager => manager.trim());
+  }
+  
+  // Clean services array
+  if (this.services && Array.isArray(this.services)) {
+    this.services = this.services
+      .filter(service => service && typeof service === 'string' && service.trim().length > 0)
+      .map(service => service.trim());
+  }
+  
+  // Default progress if not provided
+  if (!this.progress) {
+    this.progress = '0/0 (0%)';
+  }
+  
   next();
 });
 
