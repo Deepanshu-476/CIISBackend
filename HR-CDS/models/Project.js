@@ -1,22 +1,25 @@
-// models/Project.js
 const mongoose = require("mongoose");
 const { Schema } = mongoose;
 
 /* ENUMS - Fixed to match what you're actually using */
-const TASK_STATUS = ["pending", "in progress", "completed", "rejected", "on hold", "reopened"];
-const PROJECT_STATUS = ["Active", "On Hold", "Completed", "Planning", "Cancelled"];
-const PRIORITY_LEVELS = ["Low", "Medium", "High", "Critical"];
-const ACTIVITY_TYPES = [ "Assignment", "Remark", "Creation", "Updatecd"];
+const TASK_STATUS = ["pending", "in progress", "completed", "cancelled", "on hold"];
+const PROJECT_STATUS = ["active", "on hold", "completed", "planning", "cancelled"];
+const PRIORITY_LEVELS = ["low", "medium", "high"];
+const ACTIVITY_TYPES = ["assignment", "remark", "creation", "update", "status_change"];
+const NOTIFICATION_TYPES = ["task_assigned", "status_changed", "remark_added", "deadline_approaching", "project_updated"];
 
 /* =========================
       NOTIFICATION SCHEMA
 ========================= */
 const NotificationSchema = new Schema(
   {
+    title: { type: String, required: true },
     message: { type: String, required: true },
-    type: { type: String, required: true },
+    type: { type: String, enum: NOTIFICATION_TYPES, required: true },
+    relatedTo: { type: String }, // 'task', 'project'
+    referenceId: { type: Schema.Types.ObjectId },
     createdBy: { type: Schema.Types.ObjectId, ref: "User" },
-    read: { type: Boolean, default: false },
+    isRead: { type: Boolean, default: false },
     createdAt: { type: Date, default: Date.now }
   },
   { _id: true }
@@ -33,6 +36,7 @@ const ActivityLogSchema = new Schema(
     newValue: { type: String },
     performedBy: { type: Schema.Types.ObjectId, ref: "User", required: true },
     performedAt: { type: Date, default: Date.now },
+    remark: { type: String }
   },
   { _id: true }
 );
@@ -46,7 +50,7 @@ const RemarkSchema = new Schema(
     createdAt: { type: Date, default: Date.now },
     createdBy: { type: Schema.Types.ObjectId, ref: "User" },
   },
-  { _id: false }
+  { _id: true }
 );
 
 /* =========================
@@ -58,20 +62,16 @@ const TaskSchema = new Schema(
     description: { type: String, trim: true },
     assignedTo: { type: Schema.Types.ObjectId, ref: "User", required: true },
     dueDate: { type: Date },
-    priority: { type: String, enum: PRIORITY_LEVELS, default: "medium" }, // Fixed: lowercase
-    status: { type: String, enum: TASK_STATUS, default: "pending" }, // Fixed: lowercase
+    priority: { type: String, enum: PRIORITY_LEVELS, default: "medium" },
+    status: { type: String, enum: TASK_STATUS, default: "pending" },
     pdfFile: {
       filename: String,
       path: String,
+      uploadedAt: { type: Date, default: Date.now }
     },
-    remarks: {
-      type: [RemarkSchema],
-      default: [],
-    },
-    activityLogs: {
-      type: [ActivityLogSchema],
-      default: [],
-    },
+    remarks: [RemarkSchema],
+    activityLogs: [ActivityLogSchema],
+    createdBy: { type: Schema.Types.ObjectId, ref: "User" }
   },
   { timestamps: true }
 );
@@ -84,26 +84,26 @@ const ProjectSchema = new Schema(
     projectName: { type: String, required: true, trim: true },
     description: { type: String, trim: true },
     users: [{ type: Schema.Types.ObjectId, ref: "User" }],
-    status: { type: String, enum: PROJECT_STATUS, default: "active" }, // Fixed: lowercase
+    status: { type: String, enum: PROJECT_STATUS, default: "active" },
     startDate: { type: Date },
     endDate: { type: Date },
-    priority: { type: String, enum: PRIORITY_LEVELS, default: "medium" }, // Fixed: lowercase
+    priority: { type: String, enum: PRIORITY_LEVELS, default: "medium" },
     pdfFile: {
       filename: String,
       path: String,
+      uploadedAt: { type: Date, default: Date.now }
     },
     tasks: [TaskSchema],
-    createdBy: { type: Schema.Types.ObjectId, ref: "User" },
-    // ADDED NOTIFICATIONS ARRAY
-    notifications: {
-      type: [NotificationSchema],
-      default: []
-    }
+    notifications: [NotificationSchema],
+    createdBy: { type: Schema.Types.ObjectId, ref: "User" }
   },
   { timestamps: true }
 );
 
 ProjectSchema.index({ projectName: "text" });
+ProjectSchema.index({ status: 1 });
+ProjectSchema.index({ priority: 1 });
+ProjectSchema.index({ createdBy: 1 });
 
 /* =========================
       DATA NORMALIZATION MIDDLEWARE
@@ -126,20 +126,13 @@ ProjectSchema.pre('save', function(next) {
       if (task.priority) {
         task.priority = task.priority.toLowerCase();
       }
-      if (task.activityLogs && task.activityLogs.length > 0) {
-        task.activityLogs.forEach(log => {
-          if (log.type) {
-            log.type = log.type.toLowerCase();
-          }
-        });
-      }
     });
   }
   
   next();
 });
 
-// Also add for update operations
+// Middleware for update operations
 ProjectSchema.pre('findOneAndUpdate', function(next) {
   const update = this.getUpdate();
   
@@ -152,8 +145,39 @@ ProjectSchema.pre('findOneAndUpdate', function(next) {
     }
   }
   
+  if (update.$push && update.$push.tasks) {
+    const task = update.$push.tasks.$each ? update.$push.tasks.$each[0] : update.$push.tasks;
+    if (task.status) {
+      task.status = task.status.toLowerCase();
+    }
+    if (task.priority) {
+      task.priority = task.priority.toLowerCase();
+    }
+  }
+  
   next();
 });
+
+// Virtual for formatted dates
+ProjectSchema.virtual('formattedStartDate').get(function() {
+  return this.startDate ? this.startDate.toISOString().split('T')[0] : null;
+});
+
+ProjectSchema.virtual('formattedEndDate').get(function() {
+  return this.endDate ? this.endDate.toISOString().split('T')[0] : null;
+});
+
+// Method to add notification
+ProjectSchema.methods.addNotification = function(notification) {
+  this.notifications.push(notification);
+  return this.save();
+};
+
+// Method to add task activity log
+TaskSchema.methods.addActivityLog = function(activity) {
+  this.activityLogs.push(activity);
+  return this.save();
+};
 
 /* =========================
       FINAL EXPORTS
@@ -166,4 +190,5 @@ module.exports = {
   PROJECT_STATUS,
   PRIORITY_LEVELS,
   ACTIVITY_TYPES,
+  NOTIFICATION_TYPES,
 };
