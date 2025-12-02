@@ -17,43 +17,63 @@ const getAllClients = async (req, res) => {
     // Build filter object
     const filter = {};
     
-    if (status) filter.status = status;
-    if (projectManager) filter.projectManager = { $in: [projectManager] }; // UPDATED: For array field
-    if (service) filter.services = service;
+    if (status && status !== 'All') filter.status = status;
     
-    // Search across multiple fields
-    if (search) {
+    if (projectManager && projectManager !== 'All') {
+      filter.projectManager = projectManager;
+    }
+    
+    if (service && service !== 'All') {
+      filter.services = service;
+    }
+    
+    // Enhanced search functionality
+    if (search && search.trim()) {
+      const searchRegex = new RegExp(search.trim(), 'i');
       filter.$or = [
-        { client: { $regex: search, $options: 'i' } },
-        { company: { $regex: search, $options: 'i' } },
-        { city: { $regex: search, $options: 'i' } },
-        { email: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } } // NEW: Search in description
+        { client: searchRegex },
+        { company: searchRegex },
+        { city: searchRegex },
+        { email: searchRegex },
+        { description: searchRegex },
+        { 'projectManager': searchRegex }
       ];
     }
 
+    // Sort options
     const sortOptions = {};
-    sortOptions[sortBy] = sortOrder === 'desc' ? -1 : 1;
+    const validSortFields = ['client', 'company', 'city', 'status', 'createdAt', 'updatedAt'];
+    
+    if (validSortFields.includes(sortBy)) {
+      sortOptions[sortBy] = sortOrder === 'desc' ? -1 : 1;
+    } else {
+      sortOptions.createdAt = -1;
+    }
 
-    const clients = await Client.find(filter)
-      .sort(sortOptions)
-      .limit(limit * 1)
-      .skip((page - 1) * limit)
-      .exec();
-
-    const total = await Client.countDocuments(filter);
+    // Execute query with pagination
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    
+    const [clients, total] = await Promise.all([
+      Client.find(filter)
+        .sort(sortOptions)
+        .limit(parseInt(limit))
+        .skip(skip)
+        .lean(),
+      Client.countDocuments(filter)
+    ]);
 
     res.json({
       success: true,
       data: clients,
       pagination: {
         currentPage: parseInt(page),
-        totalPages: Math.ceil(total / limit),
+        totalPages: Math.ceil(total / parseInt(limit)),
         totalItems: total,
         itemsPerPage: parseInt(limit)
       }
     });
   } catch (error) {
+    console.error('Error fetching clients:', error);
     res.status(500).json({
       success: false,
       message: 'Error fetching clients',
@@ -66,7 +86,7 @@ const getClientById = async (req, res) => {
   try {
     const { id } = req.params;
     
-    const client = await Client.findById(id);
+    const client = await Client.findById(id).lean();
     if (!client) {
       return res.status(404).json({
         success: false,
@@ -79,6 +99,7 @@ const getClientById = async (req, res) => {
       data: client
     });
   } catch (error) {
+    console.error('Error fetching client:', error);
     res.status(500).json({
       success: false,
       message: 'Error fetching client',
@@ -93,76 +114,94 @@ const addClient = async (req, res) => {
       client,
       company,
       city,
-      projectManager, // Can be string or array
-      projectManagers, // Alternative field for multi-select
+      projectManagers, // Array from frontend
       services,
       status,
       progress,
       email,
       phone,
       address,
-      description, // NEW: Added description
+      description,
       notes
     } = req.body;
 
     // Validation
-    if (!client || !company || !city) {
-      return res.status(400).json({
-        success: false,
-        message: 'Client name, company, and city are required'
-      });
-    }
-
-    // Handle project managers - support both single and multiple
-    let finalProjectManagers = [];
+    const errors = [];
     
-    if (projectManagers && Array.isArray(projectManagers) && projectManagers.length > 0) {
-      // Use multi-select values
-      finalProjectManagers = projectManagers.filter(manager => manager && manager.trim().length > 0);
-    } else if (projectManager) {
-      // Use single select value as array
-      if (Array.isArray(projectManager)) {
-        finalProjectManagers = projectManager.filter(manager => manager && manager.trim().length > 0);
-      } else {
-        finalProjectManagers = [projectManager.trim()];
-      }
+    if (!client || client.trim().length === 0) {
+      errors.push('Client name is required');
     }
     
-    // Validate at least one project manager
-    if (finalProjectManagers.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'At least one project manager is required'
-      });
+    if (!company || company.trim().length === 0) {
+      errors.push('Company name is required');
     }
-
-    // Validate services exist
-    if (services && services.length > 0) {
-      const existingServices = await Service.find({ 
-        servicename: { $in: services } 
-      });
+    
+    if (!city || city.trim().length === 0) {
+      errors.push('City is required');
+    }
+    
+    if (!projectManagers || !Array.isArray(projectManagers) || projectManagers.length === 0) {
+      errors.push('At least one project manager is required');
+    } else {
+      // Validate each project manager
+      const validManagers = projectManagers.filter(manager => 
+        manager && typeof manager === 'string' && manager.trim().length > 0
+      );
       
-      if (existingServices.length !== services.length) {
-        return res.status(400).json({
-          success: false,
-          message: 'One or more services do not exist'
+      if (validManagers.length === 0) {
+        errors.push('Valid project managers are required');
+      }
+    }
+    
+    if (errors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors
+      });
+    }
+
+    // Validate services exist if provided
+    if (services && services.length > 0) {
+      const serviceNames = services.filter(s => s && typeof s === 'string' && s.trim().length > 0);
+      if (serviceNames.length > 0) {
+        const existingServices = await Service.find({ 
+          servicename: { $in: serviceNames } 
         });
+        
+        if (existingServices.length !== serviceNames.length) {
+          const missingServices = serviceNames.filter(name => 
+            !existingServices.some(s => s.servicename === name)
+          );
+          
+          return res.status(400).json({
+            success: false,
+            message: 'Some services do not exist',
+            missingServices
+          });
+        }
       }
     }
 
+    // Clean project managers
+    const cleanProjectManagers = projectManagers
+      .filter(manager => manager && typeof manager === 'string' && manager.trim().length > 0)
+      .map(manager => manager.trim());
+
+    // Create new client
     const newClient = new Client({
       client: client.trim(),
       company: company.trim(),
       city: city.trim(),
-      projectManager: finalProjectManagers, // Store as array
+      projectManager: cleanProjectManagers,
       services: services || [],
       status: status || 'Active',
       progress: progress || '0/0 (0%)',
-      email: email ? email.trim().toLowerCase() : undefined,
-      phone: phone ? phone.trim() : undefined,
-      address: address ? address.trim() : undefined,
-      description: description ? description.trim() : '', // NEW: Added description
-      notes: notes ? notes.trim() : undefined
+      email: email ? email.trim().toLowerCase() : '',
+      phone: phone ? phone.trim() : '',
+      address: address ? address.trim() : '',
+      description: description ? description.trim() : '',
+      notes: notes ? notes.trim() : ''
     });
 
     await newClient.save();
@@ -173,6 +212,8 @@ const addClient = async (req, res) => {
       data: newClient
     });
   } catch (error) {
+    console.error('Error adding client:', error);
+    
     if (error.name === 'ValidationError') {
       const errors = Object.values(error.errors).map(err => err.message);
       return res.status(400).json({
@@ -197,7 +238,6 @@ const updateClient = async (req, res) => {
       client,
       company,
       city,
-      projectManager,
       projectManagers,
       services,
       status,
@@ -205,29 +245,76 @@ const updateClient = async (req, res) => {
       email,
       phone,
       address,
-      description, // NEW: Added description
+      description,
       notes
     } = req.body;
 
-    // Handle project managers - support both single and multiple
-    let finalProjectManagers = [];
+    // Find client
+    const existingClient = await Client.findById(id);
+    if (!existingClient) {
+      return res.status(404).json({
+        success: false,
+        message: 'Client not found'
+      });
+    }
+
+    // Validation
+    const errors = [];
     
-    if (projectManagers && Array.isArray(projectManagers) && projectManagers.length > 0) {
-      finalProjectManagers = projectManagers.filter(manager => manager && manager.trim().length > 0);
-    } else if (projectManager) {
-      if (Array.isArray(projectManager)) {
-        finalProjectManagers = projectManager.filter(manager => manager && manager.trim().length > 0);
+    if (client !== undefined && (!client || client.trim().length === 0)) {
+      errors.push('Client name cannot be empty');
+    }
+    
+    if (company !== undefined && (!company || company.trim().length === 0)) {
+      errors.push('Company name cannot be empty');
+    }
+    
+    if (city !== undefined && (!city || city.trim().length === 0)) {
+      errors.push('City cannot be empty');
+    }
+    
+    if (projectManagers !== undefined) {
+      if (!Array.isArray(projectManagers) || projectManagers.length === 0) {
+        errors.push('At least one project manager is required');
       } else {
-        finalProjectManagers = [projectManager.trim()];
+        const validManagers = projectManagers.filter(manager => 
+          manager && typeof manager === 'string' && manager.trim().length > 0
+        );
+        
+        if (validManagers.length === 0) {
+          errors.push('Valid project managers are required');
+        }
       }
     }
     
-    // If project managers are being updated, validate at least one
-    if ((projectManager !== undefined || projectManagers !== undefined) && finalProjectManagers.length === 0) {
+    if (errors.length > 0) {
       return res.status(400).json({
         success: false,
-        message: 'At least one project manager is required'
+        message: 'Validation failed',
+        errors
       });
+    }
+
+    // Validate services if being updated
+    if (services !== undefined) {
+      const serviceNames = services.filter(s => s && typeof s === 'string' && s.trim().length > 0);
+      if (serviceNames.length > 0) {
+        const existingServices = await Service.find({ 
+          servicename: { $in: serviceNames } 
+        });
+        
+        if (existingServices.length !== serviceNames.length) {
+          const missingServices = serviceNames.filter(name => 
+            !existingServices.some(s => s.servicename === name)
+          );
+          
+          return res.status(400).json({
+            success: false,
+            message: 'Some services do not exist',
+            missingServices
+          });
+        }
+      }
     }
 
     // Build update object
@@ -236,49 +323,35 @@ const updateClient = async (req, res) => {
     if (client !== undefined) updateData.client = client.trim();
     if (company !== undefined) updateData.company = company.trim();
     if (city !== undefined) updateData.city = city.trim();
-    if (finalProjectManagers.length > 0) updateData.projectManager = finalProjectManagers;
+    if (projectManagers !== undefined) {
+      updateData.projectManager = projectManagers
+        .filter(manager => manager && typeof manager === 'string' && manager.trim().length > 0)
+        .map(manager => manager.trim());
+    }
     if (services !== undefined) updateData.services = services;
     if (status !== undefined) updateData.status = status;
     if (progress !== undefined) updateData.progress = progress;
     if (email !== undefined) updateData.email = email.trim().toLowerCase();
     if (phone !== undefined) updateData.phone = phone.trim();
     if (address !== undefined) updateData.address = address.trim();
-    if (description !== undefined) updateData.description = description.trim(); // NEW: Added description
+    if (description !== undefined) updateData.description = description.trim();
     if (notes !== undefined) updateData.notes = notes.trim();
 
-    // Validate services exist if being updated
-    if (services && services.length > 0) {
-      const existingServices = await Service.find({ 
-        servicename: { $in: services } 
-      });
-      
-      if (existingServices.length !== services.length) {
-        return res.status(400).json({
-          success: false,
-          message: 'One or more services do not exist'
-        });
-      }
-    }
-
-    const clientDoc = await Client.findByIdAndUpdate(
+    // Update client
+    const updatedClient = await Client.findByIdAndUpdate(
       id,
       updateData,
       { new: true, runValidators: true }
     );
 
-    if (!clientDoc) {
-      return res.status(404).json({
-        success: false,
-        message: 'Client not found'
-      });
-    }
-
     res.json({
       success: true,
       message: 'Client updated successfully',
-      data: clientDoc
+      data: updatedClient
     });
   } catch (error) {
+    console.error('Error updating client:', error);
+    
     if (error.name === 'ValidationError') {
       const errors = Object.values(error.errors).map(err => err.message);
       return res.status(400).json({
@@ -324,6 +397,7 @@ const updateClientProgress = async (req, res) => {
       data: client
     });
   } catch (error) {
+    console.error('Error updating client progress:', error);
     res.status(500).json({
       success: false,
       message: 'Error updating client progress',
@@ -350,6 +424,7 @@ const deleteClient = async (req, res) => {
       data: client
     });
   } catch (error) {
+    console.error('Error deleting client:', error);
     res.status(500).json({
       success: false,
       message: 'Error deleting client',
@@ -367,6 +442,7 @@ const getClientStats = async (req, res) => {
       data: stats
     });
   } catch (error) {
+    console.error('Error fetching client statistics:', error);
     res.status(500).json({
       success: false,
       message: 'Error fetching client statistics',
@@ -384,6 +460,7 @@ const getManagerStats = async (req, res) => {
       data: stats
     });
   } catch (error) {
+    console.error('Error fetching manager statistics:', error);
     res.status(500).json({
       success: false,
       message: 'Error fetching manager statistics',
@@ -420,6 +497,7 @@ const addProjectManager = async (req, res) => {
       data: client
     });
   } catch (error) {
+    console.error('Error adding project manager:', error);
     res.status(500).json({
       success: false,
       message: 'Error adding project manager',
@@ -456,6 +534,7 @@ const removeProjectManager = async (req, res) => {
       data: client
     });
   } catch (error) {
+    console.error('Error removing project manager:', error);
     res.status(500).json({
       success: false,
       message: 'Error removing project manager',
