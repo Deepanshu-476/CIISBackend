@@ -20,6 +20,7 @@ const getAllClients = async (req, res) => {
     if (status && status !== 'All') filter.status = status;
     
     if (projectManager && projectManager !== 'All') {
+      // Fix: Search for array containing the value
       filter.projectManager = projectManager;
     }
     
@@ -36,7 +37,8 @@ const getAllClients = async (req, res) => {
         { city: searchRegex },
         { email: searchRegex },
         { description: searchRegex },
-        { 'projectManager': searchRegex }
+        // Fix: Search in projectManager array
+        { 'projectManager': { $regex: searchRegex } }
       ];
     }
 
@@ -114,7 +116,7 @@ const addClient = async (req, res) => {
       client,
       company,
       city,
-      projectManagers, // Array from frontend
+      projectManager, // Changed from projectManagers to projectManager
       services,
       status,
       progress,
@@ -140,11 +142,12 @@ const addClient = async (req, res) => {
       errors.push('City is required');
     }
     
-    if (!projectManagers || !Array.isArray(projectManagers) || projectManagers.length === 0) {
+    // Fix: Use projectManager (singular)
+    if (!projectManager || !Array.isArray(projectManager) || projectManager.length === 0) {
       errors.push('At least one project manager is required');
     } else {
       // Validate each project manager
-      const validManagers = projectManagers.filter(manager => 
+      const validManagers = projectManager.filter(manager => 
         manager && typeof manager === 'string' && manager.trim().length > 0
       );
       
@@ -184,7 +187,7 @@ const addClient = async (req, res) => {
     }
 
     // Clean project managers
-    const cleanProjectManagers = projectManagers
+    const cleanProjectManagers = projectManager
       .filter(manager => manager && typeof manager === 'string' && manager.trim().length > 0)
       .map(manager => manager.trim());
 
@@ -238,7 +241,7 @@ const updateClient = async (req, res) => {
       client,
       company,
       city,
-      projectManagers,
+      projectManager, // Changed from projectManagers to projectManager
       services,
       status,
       progress,
@@ -273,11 +276,12 @@ const updateClient = async (req, res) => {
       errors.push('City cannot be empty');
     }
     
-    if (projectManagers !== undefined) {
-      if (!Array.isArray(projectManagers) || projectManagers.length === 0) {
+    // Fix: Use projectManager (singular)
+    if (projectManager !== undefined) {
+      if (!Array.isArray(projectManager) || projectManager.length === 0) {
         errors.push('At least one project manager is required');
       } else {
-        const validManagers = projectManagers.filter(manager => 
+        const validManagers = projectManager.filter(manager => 
           manager && typeof manager === 'string' && manager.trim().length > 0
         );
         
@@ -323,11 +327,14 @@ const updateClient = async (req, res) => {
     if (client !== undefined) updateData.client = client.trim();
     if (company !== undefined) updateData.company = company.trim();
     if (city !== undefined) updateData.city = city.trim();
-    if (projectManagers !== undefined) {
-      updateData.projectManager = projectManagers
+    
+    // Fix: Use projectManager (singular)
+    if (projectManager !== undefined) {
+      updateData.projectManager = projectManager
         .filter(manager => manager && typeof manager === 'string' && manager.trim().length > 0)
         .map(manager => manager.trim());
     }
+    
     if (services !== undefined) updateData.services = services;
     if (status !== undefined) updateData.status = status;
     if (progress !== undefined) updateData.progress = progress;
@@ -470,17 +477,10 @@ const getManagerStats = async (req, res) => {
 };
 
 const addProjectManager = async (req, res) => {
+  const { id } = req.params;
+  const { managerName } = req.body;
+
   try {
-    const { id } = req.params;
-    const { managerName } = req.body;
-
-    if (!managerName || managerName.trim().length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Manager name is required'
-      });
-    }
-
     const client = await Client.findById(id);
     if (!client) {
       return res.status(404).json({
@@ -489,7 +489,8 @@ const addProjectManager = async (req, res) => {
       });
     }
 
-    await client.addProjectManager(managerName.trim());
+    // Add the project manager
+    await client.addProjectManager(managerName);
 
     res.json({
       success: true,
@@ -507,17 +508,10 @@ const addProjectManager = async (req, res) => {
 };
 
 const removeProjectManager = async (req, res) => {
+  const { id } = req.params;
+  const { managerName } = req.body;
+
   try {
-    const { id } = req.params;
-    const { managerName } = req.body;
-
-    if (!managerName || managerName.trim().length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Manager name is required'
-      });
-    }
-
     const client = await Client.findById(id);
     if (!client) {
       return res.status(404).json({
@@ -526,7 +520,8 @@ const removeProjectManager = async (req, res) => {
       });
     }
 
-    await client.removeProjectManager(managerName.trim());
+    // Remove the project manager
+    await client.removeProjectManager(managerName);
 
     res.json({
       success: true,

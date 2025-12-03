@@ -1,72 +1,251 @@
-const Alert = require('../models/Alert');
+const Alert = require('../models/alertModel');
+const User = require('../../models/User');
+const Group = require('../models/Group');
 
-// Get all alerts — Everyone can see
-exports.getAlerts = async (req, res) => {
+// @desc    Get all alerts (with filtering for users)
+// @route   GET /api/alerts
+// @access  Public
+const getAlerts = async (req, res) => {
   try {
-    const alerts = await Alert.find().sort({ createdAt: -1 });
-    res.json(alerts);
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-};
-
-// Add alert — Admin only
-exports.addAlert = async (req, res) => {
-  try {
-    const { type, message } = req.body;
-    if (!type || !message) {
-      return res.status(400).json({ message: 'Type and message are required' });
+    const userId = req.user?._id;
+    const userRole = req.user?.role?.toLowerCase();
+    
+    let query = {};
+    
+    // If user is not admin/hr/manager, show only assigned alerts
+    if (userRole && !['admin', 'hr', 'manager'].includes(userRole)) {
+      // Alternative approach: Check if user exists in any groups
+      // First, find all groups that have this user as member
+      const userGroups = await Group.find({ members: userId }).select('_id');
+      const userGroupIds = userGroups.map(group => group._id);
+      
+      query = {
+        $or: [
+          { assignedUsers: { $in: [userId] } },
+          { assignedGroups: { $in: userGroupIds } },
+          { assignedUsers: { $size: 0 } }, // No specific users assigned (public)
+          { assignedGroups: { $size: 0 } }  // No specific groups assigned (public)
+        ]
+      };
     }
-    const newAlert = new Alert({ type, message });
-    await newAlert.save();
-    res.status(201).json({ message: 'Alert added', alert: newAlert });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
+    
+    const alerts = await Alert.find(query)
+      .populate('assignedUsers', 'name email')
+      .populate('assignedGroups', 'name')
+      .populate('createdBy', 'name email')
+      .sort({ createdAt: -1 });
+    
+    res.json({
+      success: true,
+      count: alerts.length,
+      alerts
+    });
+  } catch (error) {
+    console.error('Error fetching alerts:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server error',
+      error: error.message 
+    });
   }
 };
 
-// Update alert — Admin only
-exports.updateAlert = async (req, res) => {
+// @desc    Get unread alerts count for user
+// @route   GET /api/alerts/unread/count
+// @access  Private
+const getUnreadCount = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const userRole = req.user?.role?.toLowerCase();
+    
+    let query = {
+      readBy: { $ne: userId }
+    };
+    
+    // If user is not admin/hr/manager, filter by assigned alerts
+    if (userRole && !['admin', 'hr', 'manager'].includes(userRole)) {
+      // Find groups where user is a member
+      const userGroups = await Group.find({ members: userId }).select('_id');
+      const userGroupIds = userGroups.map(group => group._id);
+      
+      query.$or = [
+        { assignedUsers: { $in: [userId] } },
+        { assignedGroups: { $in: userGroupIds } },
+        { assignedUsers: { $size: 0 } },
+        { assignedGroups: { $size: 0 } }
+      ];
+    }
+    
+    const count = await Alert.countDocuments(query);
+    
+    res.json({
+      success: true,
+      count
+    });
+  } catch (error) {
+    console.error('Error getting unread count:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Add an alert
+// @route   POST /api/alerts
+// @access  Private/Admin/HR/Manager
+const addAlert = async (req, res) => {
+  try {
+    const { type, message, assignedUsers = [], assignedGroups = [] } = req.body;
+    const createdBy = req.user._id;
+    
+    // Validate required fields
+    if (!message || !message.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Alert message is required'
+      });
+    }
+    
+    // Create alert
+    const alert = new Alert({
+      type: type || 'info',
+      message: message.trim(),
+      assignedUsers: Array.isArray(assignedUsers) ? assignedUsers : [],
+      assignedGroups: Array.isArray(assignedGroups) ? assignedGroups : [],
+      createdBy
+    });
+    
+    await alert.save();
+    
+    res.status(201).json({
+      success: true,
+      message: 'Alert created successfully',
+      alert
+    });
+  } catch (error) {
+    console.error('Error creating alert:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Update an alert
+// @route   PUT /api/alerts/:id
+// @access  Private/Admin/HR/Manager
+const updateAlert = async (req, res) => {
   try {
     const { id } = req.params;
-    const updated = await Alert.findByIdAndUpdate(id, req.body, { new: true });
-    if (!updated) {
-      return res.status(404).json({ message: 'Alert not found' });
-    }
-    res.json({ message: 'Alert updated', alert: updated });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-};
-
-// Delete alert — Admin only
-exports.deleteAlert = async (req, res) => {
-  try {
-    const deleted = await Alert.findByIdAndDelete(req.params.id);
-    if (!deleted) {
-      return res.status(404).json({ message: 'Alert not found' });
-    }
-    res.json({ message: 'Alert deleted' });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-};
-// controllers/alertsController.js
-exports.markAsRead = async (req, res) => {
-  const { id } = req.params;
-  const userId = req.user._id;
-
-  try {
+    const { type, message, assignedUsers, assignedGroups } = req.body;
+    
+    // Find alert
     const alert = await Alert.findById(id);
-    if (!alert) return res.status(404).json({ message: 'Alert not found' });
+    if (!alert) {
+      return res.status(404).json({
+        success: false,
+        message: 'Alert not found'
+      });
+    }
+    
+    // Update alert
+    if (type) alert.type = type;
+    if (message) alert.message = message.trim();
+    if (assignedUsers !== undefined) alert.assignedUsers = Array.isArray(assignedUsers) ? assignedUsers : [];
+    if (assignedGroups !== undefined) alert.assignedGroups = Array.isArray(assignedGroups) ? assignedGroups : [];
+    
+    await alert.save();
+    
+    res.json({
+      success: true,
+      message: 'Alert updated successfully',
+      alert
+    });
+  } catch (error) {
+    console.error('Error updating alert:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
 
+// @desc    Delete an alert
+// @route   DELETE /api/alerts/:id
+// @access  Private/Admin/HR/Manager
+const deleteAlert = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const alert = await Alert.findById(id);
+    if (!alert) {
+      return res.status(404).json({
+        success: false,
+        message: 'Alert not found'
+      });
+    }
+    
+    await alert.deleteOne();
+    
+    res.json({
+      success: true,
+      message: 'Alert deleted successfully'
+    });
+  } catch (error) {
+    console.error('Error deleting alert:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Mark alert as read
+// @route   PATCH /api/alerts/:id/read
+// @access  Private
+const markAsRead = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user._id;
+    
+    const alert = await Alert.findById(id);
+    if (!alert) {
+      return res.status(404).json({
+        success: false,
+        message: 'Alert not found'
+      });
+    }
+    
+    // Check if user has already marked as read
     if (!alert.readBy.includes(userId)) {
       alert.readBy.push(userId);
       await alert.save();
     }
-
-    res.json({ success: true, alert });
-  } catch (err) {
-    res.status(500).json({ message: 'Server error' });
+    
+    res.json({
+      success: true,
+      message: 'Alert marked as read'
+    });
+  } catch (error) {
+    console.error('Error marking alert as read:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
   }
+};
+
+module.exports = {
+  getAlerts,
+  addAlert,
+  updateAlert,
+  deleteAlert,
+  markAsRead,
+  getUnreadCount
 };

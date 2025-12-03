@@ -24,9 +24,9 @@ const clientSchema = new mongoose.Schema({
     required: [true, 'At least one project manager is required'],
     validate: {
       validator: function(v) {
-        return Array.isArray(v) && v.length > 0 && v.every(name => name.trim().length > 0);
+        return Array.isArray(v) && v.length > 0 && v.every(name => name && typeof name === 'string' && name.trim().length > 0);
       },
-      message: 'At least one project manager is required'
+      message: 'At least one valid project manager is required'
     }
   },
   services: [{
@@ -127,7 +127,6 @@ clientSchema.statics.getStats = async function() {
             $cond: [{ $eq: ['$status', 'Inactive'] }, 1, 0] 
           } 
         },
-        // Calculate average progress
         avgProgress: {
           $avg: {
             $let: {
@@ -215,21 +214,31 @@ clientSchema.methods.removeProjectManager = function(managerName) {
 
 // Pre-save middleware
 clientSchema.pre('save', function(next) {
-  // Ensure projectManager is always an array
-  if (this.projectManager && !Array.isArray(this.projectManager)) {
-    this.projectManager = [this.projectManager];
+  // Ensure projectManager is always an array with valid strings
+  if (this.projectManager) {
+    if (!Array.isArray(this.projectManager)) {
+      this.projectManager = [this.projectManager];
+    }
+    
+    // Clean projectManager array - remove null, undefined, empty strings
+    this.projectManager = this.projectManager
+      .filter(manager => manager && typeof manager === 'string' && manager.trim().length > 0)
+      .map(manager => manager.trim());
+    
+    // Remove duplicates
+    this.projectManager = [...new Set(this.projectManager)];
+    
+    // Ensure projectManager has at least one valid entry
+    if (this.projectManager.length === 0) {
+      const error = new Error('At least one valid project manager is required');
+      error.name = 'ValidationError';
+      return next(error);
+    }
   }
   
   // Ensure services is always an array
   if (this.services && !Array.isArray(this.services)) {
     this.services = [this.services];
-  }
-  
-  // Clean projectManager array - remove empty strings
-  if (this.projectManager && Array.isArray(this.projectManager)) {
-    this.projectManager = this.projectManager
-      .filter(manager => manager && typeof manager === 'string' && manager.trim().length > 0)
-      .map(manager => manager.trim());
   }
   
   // Clean services array
@@ -242,6 +251,35 @@ clientSchema.pre('save', function(next) {
   // Default progress if not provided
   if (!this.progress) {
     this.progress = '0/0 (0%)';
+  }
+  
+  next();
+});
+
+// Pre-update middleware for findByIdAndUpdate
+clientSchema.pre('findOneAndUpdate', function(next) {
+  const update = this.getUpdate();
+  
+  // Handle projectManager in updates
+  if (update.projectManager) {
+    if (!Array.isArray(update.projectManager)) {
+      update.projectManager = [update.projectManager];
+    }
+    
+    // Clean projectManager array
+    update.projectManager = update.projectManager
+      .filter(manager => manager && typeof manager === 'string' && manager.trim().length > 0)
+      .map(manager => manager.trim());
+    
+    // Remove duplicates
+    update.projectManager = [...new Set(update.projectManager)];
+    
+    // Ensure projectManager has at least one valid entry
+    if (update.projectManager.length === 0) {
+      const error = new Error('At least one valid project manager is required');
+      error.name = 'ValidationError';
+      return next(error);
+    }
   }
   
   next();
