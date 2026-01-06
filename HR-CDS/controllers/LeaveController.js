@@ -196,12 +196,14 @@ exports.updateLeaveStatus = async (req, res) => {
     leave.remarks = remarks?.trim() || '';
 
     // ✅ Push to history array
-    leave.history.push({
-      action: normalizedStatus.toLowerCase(),  // approved / rejected / pending
-      by: userName,
-      role: userRole,                          // hr / admin / manager
-      remarks: remarks?.trim() || ''
-    });
+ leave.history.push({
+  action: normalizedStatus.toLowerCase(),
+  by: req.user._id,        // ✅ USER ID
+  role: userRole,          // admin / hr / manager
+  remarks: remarks?.trim() || '',
+  at: new Date()
+});
+
 
     await leave.save();
 

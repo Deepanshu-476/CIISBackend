@@ -2,9 +2,7 @@ const Alert = require('../models/alertModel');
 const User = require('../../models/User');
 const Group = require('../models/Group');
 
-// @desc    Get all alerts (with filtering for users)
-// @route   GET /api/alerts
-// @access  Public
+
 const getAlerts = async (req, res) => {
   try {
     const userId = req.user?._id;
@@ -14,8 +12,7 @@ const getAlerts = async (req, res) => {
     
     // If user is not admin/hr/manager, show only assigned alerts
     if (userRole && !['admin', 'hr', 'manager'].includes(userRole)) {
-      // Alternative approach: Check if user exists in any groups
-      // First, find all groups that have this user as member
+
       const userGroups = await Group.find({ members: userId }).select('_id');
       const userGroupIds = userGroups.map(group => group._id);
       
@@ -50,9 +47,7 @@ const getAlerts = async (req, res) => {
   }
 };
 
-// @desc    Get unread alerts count for user
-// @route   GET /api/alerts/unread/count
-// @access  Private
+
 const getUnreadCount = async (req, res) => {
   try {
     const userId = req.user._id;
@@ -92,9 +87,6 @@ const getUnreadCount = async (req, res) => {
   }
 };
 
-// @desc    Add an alert
-// @route   POST /api/alerts
-// @access  Private/Admin/HR/Manager
 const addAlert = async (req, res) => {
   try {
     const { type, message, assignedUsers = [], assignedGroups = [] } = req.body;
