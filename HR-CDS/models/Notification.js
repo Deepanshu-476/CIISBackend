@@ -6,53 +6,51 @@ const notificationSchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
-  initiator: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  },
-  entityType: {
+  title: {
     type: String,
-    enum: [
-      'Task',
-      'Project',
-      'Leave',
-      'Meeting',
-      'Asset',
-      'Group',
-      'Holiday',
-      'System'
-    ],
     required: true
   },
-  entityId: {
-    type: mongoose.Schema.Types.ObjectId,
+  message: {
+    type: String,
     required: true
   },
-  eventType: {
+  type: {
     type: String,
     enum: [
-      'assigned',
+      'task_created',
+      'task_assigned',
       'status_updated',
+      'task_overdue',
+      'task_overdue_manual',
       'remark_added',
-      'completed',
-      'approved',
-      'rejected',
-      'on-hold',
-      'reopen',
-      'cancelled',
-      'broadcast'
+      'task_completed',
+      'task_updated',
+      'general'
     ],
-    required: true
+    default: 'general'
   },
-  title: { type: String, required: true },
-  message: { type: String, required: true },
-  metadata: { type: mongoose.Schema.Types.Mixed, default: {} },
-  isRead: { type: Boolean, default: false },
+  relatedTask: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Task'
+  },
+  metadata: {
+    type: mongoose.Schema.Types.Mixed
+  },
+  isRead: {
+    type: Boolean,
+    default: false
+  },
   readAt: Date,
-  priority: { type: String, enum: ['low', 'medium', 'high'], default: 'medium' }
-}, { timestamps: true });
+  createdAt: {
+    type: Date,
+    default: Date.now
+  }
+}, {
+  timestamps: true
+});
 
-notificationSchema.index({ user: 1, isRead: 1 });
-notificationSchema.index({ createdAt: -1 });
+// Index for faster queries
+notificationSchema.index({ user: 1, isRead: 1, createdAt: -1 });
+notificationSchema.index({ relatedTask: 1 });
 
 module.exports = mongoose.model('Notification', notificationSchema);
