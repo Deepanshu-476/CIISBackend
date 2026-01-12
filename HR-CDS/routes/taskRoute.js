@@ -6,17 +6,21 @@ const upload = require('../../utils/multer');
 const { uploadRemarkImage } = require('../middlewares/uploadMiddleware');
 
 // ==================== TASK ROUTES ====================
+// ==================== NOTIFICATION ROUTES ====================
 
-// 📝 सभी Tasks देखें - मेरे लिए assigned + मेरे द्वारा बनाए गए
-router.get('/', auth, taskController.getTasks);
+// 🔔 Get user notifications
+router.get('/notifications/all', auth, taskController.getNotifications);
 
-// 📄 सिर्फ मेरे Tasks देखें - मेरे लिए assigned tasks (direct + group)
+// Mark as read
+router.patch('/notifications/:notificationId/read', auth, taskController.markNotificationAsRead);
+router.patch('/notifications/read-all', auth, taskController.markAllNotificationsAsRead);
+
+// ==================== TASK ROUTES ====================
+router.get('/', auth, taskController.getTasks || taskController.getMyTasks);
 router.get('/my', auth, taskController.getMyTasks);
-
-// 👨‍💼 मेरे द्वारा Assign किए गए Tasks देखें - (Admin/Manager/HR के लिए)
 router.get('/assigned', auth, taskController.getAssignedTasks);
 
-// ✅ खुद के लिए Task बनाएं - Self task creation
+// ✅ Create task for self
 router.post(
   '/create-self',
   auth,
@@ -27,7 +31,7 @@ router.post(
   taskController.createTaskForSelf
 );
 
-// ✅ दूसरों के लिए Task बनाएं - Others ko assign kare (Admin/Manager/HR के लिए)
+// ✅ Create task for others
 router.post(
   '/create-for-others',
   auth,
@@ -38,7 +42,7 @@ router.post(
   taskController.createTaskForOthers
 );
 
-// ✏️ Task Update करें - Edit task details (Admin/Manager/HR के लिए)
+// ✏️ Update task (Admin/Manager/HR only)
 router.put(
   '/:taskId',
   auth,
@@ -49,79 +53,75 @@ router.put(
   taskController.updateTask
 );
 
-// 🗑️ Task Delete करें - Soft delete task (Admin/Manager/HR के लिए)
+// 🗑️ Delete task (Admin/Manager/HR only)
 router.delete('/:taskId', auth, taskController.deleteTask);
 
-// 🔁 Task Status Update करें - Status change (pending → in-progress → completed)
+// 🔁 Update task status
 router.patch('/:taskId/status', auth, taskController.updateStatus);
 
 // ==================== REMARKS/COMMENTS ROUTES ====================
 
-// 💬 Task पर Remark/Comment डालें - Add comments to task
+// 💬 Add remark to task
 router.post('/:taskId/remarks', auth, uploadRemarkImage, taskController.addRemark);
 
-// 📋 Task के सभी Remarks देखें - Get all task comments
+// 📋 Get all task remarks
 router.get('/:taskId/remarks', auth, taskController.getRemarks);
 
 // ==================== NOTIFICATION ROUTES ====================
 
-// 🔔 User की सभी Notifications देखें - Get user notifications
-router.get('/notifications/all', auth, taskController.getNotifications);
-
-// ✅ Single Notification Read Mark करें - Mark one notification as read
-router.patch('/notifications/:notificationId/read', auth, taskController.markNotificationAsRead);
-
-// ✅ सभी Notifications Read Mark करें - Mark all notifications as read
-router.patch('/notifications/read-all', auth, taskController.markAllNotificationsAsRead);
 
 // ==================== ACTIVITY LOGS ROUTES ====================
 
-// 📊 Specific Task की Activity Logs देखें - Get task activity history
+// 📊 Get task activity logs
 router.get('/:taskId/activity-logs', auth, taskController.getTaskActivityLogs);
 
-// 📈 User की Activity Timeline देखें - Get user activity timeline
+// 📈 Get user activity timeline
 router.get('/user-activity/:userId', auth, taskController.getUserActivityTimeline);
 
 // ==================== USER MANAGEMENT ROUTES ====================
 
-// 👤 Assignable Users और Groups देखें - Get users/groups for task assignment
+// 👤 Get assignable users and groups
 router.get('/assignable-users', auth, taskController.getAssignableUsers);
 
-// ==================== TASK STATUS COUNTS ROUTES ====================
-// 📊 Get user all tasks status counts (complete breakdown)
+// ==================== TASK STATISTICS ROUTES ====================
+
+// 📊 Get task status counts
 router.get('/status-counts', auth, taskController.getTaskStatusCounts);
 
 // ==================== SPECIFIC USER ANALYTICS ====================
 
-// 👤 Get specific user's complete task analytics
+// 👤 Get user detailed analytics
 router.get('/admin/dashboard/user/:userId/analytics', auth, taskController.getUserDetailedAnalytics);
 
 // ==================== NEW ADMIN DASHBOARD ROUTES ====================
 
-// 📊 Get user specific task statistics
+// 📊 Get user task statistics
 router.get('/user/:userId/stats', auth, taskController.getUserTaskStats);
 
-// 👥 Get all users with their task counts
+// 👥 Get all users with task counts
 router.get('/admin/users-with-tasks', auth, taskController.getUsersWithTaskCounts);
 
 // 📈 Get user tasks with filters
 router.get('/user/:userId/tasks', auth, taskController.getUserTasks);
 
-// ==================== OVERDUE TASK ROUTES ==================== ✅ ADDED
+// ==================== OVERDUE TASK ROUTES ====================
 
 // ⚠️ Get overdue tasks for logged-in user
 router.get('/overdue', auth, taskController.getOverdueTasks);
 
-// ⚠️ Get overdue tasks for specific user (Admin/Manager/HR)
+// ⚠️ Get overdue tasks for specific user
 router.get('/user/:userId/overdue', auth, taskController.getUserOverdueTasks);
 
-// ⚠️ Manually mark a task as overdue
-router.patch('/:taskId/overdue', auth, taskController.markTaskOverdue);
+// ⚠️ Manually mark task as overdue
+router.patch('/:taskId/overdue', auth, taskController.markTaskAsOverdue);
 
-// ⚠️ Update all overdue tasks (Admin/Manager/HR - for cron job)
+// ⚠️ Update all overdue tasks
 router.post('/update-overdue-tasks', auth, taskController.updateAllOverdueTasks);
 
-// ⚠️ Get overdue tasks summary (counts and details)
+// ⚠️ Get overdue summary
 router.get('/overdue/summary', auth, taskController.getOverdueSummary);
+
+// ⚠️ Manual trigger for overdue check
+router.get('/check-overdue', auth, taskController.updateAllOverdueTasks);
 
 module.exports = router;

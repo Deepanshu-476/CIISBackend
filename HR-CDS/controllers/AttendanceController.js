@@ -306,19 +306,100 @@ const getTodayStatus = async (req, res) => {
 };
 
 // Get Attendance List for User
+// Get Attendance List for User - FIXED VERSION
 const getAttendanceList = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
     
-    // Get attendance records for the user
-    const list = await Attendance.find({ user: userId })
+    // Get current month and year
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+    
+    // Calculate start and end of current month
+    const startOfMonth = new Date(currentYear, currentMonth, 1);
+    startOfMonth.setHours(0, 0, 0, 0);
+    
+    const endOfMonth = new Date(currentYear, currentMonth + 1, 0);
+    endOfMonth.setHours(23, 59, 59, 999);
+    
+    // Get attendance records for the user for current month
+    const list = await Attendance.find({ 
+      user: userId,
+      date: { $gte: startOfMonth, $lte: endOfMonth }
+    })
       .populate("user", "name email employeeType")
-      .sort({ date: -1 });
+      .sort({ date: 1 }); // Sort by date ascending
+
+    // Generate absent records for missing dates in current month
+    const allDatesInMonth = [];
+    const currentDate = new Date(startOfMonth);
+    
+    while (currentDate <= endOfMonth) {
+      allDatesInMonth.push(new Date(currentDate));
+      currentDate.setDate(currentDate.getDate() + 1);
+    }
+
+    // Create a map of existing records by date
+    const existingRecordsMap = {};
+    list.forEach(record => {
+      const recordDate = new Date(record.date);
+      const dateKey = `${recordDate.getFullYear()}-${recordDate.getMonth()}-${recordDate.getDate()}`;
+      existingRecordsMap[dateKey] = record;
+    });
+
+    // Create absent records for missing dates
+    const completeList = allDatesInMonth.map(date => {
+      const dateKey = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+      
+      if (existingRecordsMap[dateKey]) {
+        // Return existing record
+        return existingRecordsMap[dateKey];
+      } else {
+        // Create absent record for missing date
+        const dayOfWeek = date.getDay();
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+        
+        // Check if it's a future date
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        
+        if (date > today) {
+          // Future date - no record
+          return null;
+        }
+        
+        // Create absent record
+        const absentRecord = {
+          _id: `absent_${userId}_${date.toISOString().split('T')[0]}`,
+          user: {
+            _id: userId,
+            name: req.user.name || 'User',
+            email: req.user.email,
+            employeeType: req.user.employeeType
+          },
+          date: date,
+          inTime: null,
+          outTime: null,
+          status: isWeekend ? "WEEKEND" : "ABSENT",
+          lateBy: "00:00:00",
+          earlyLeave: "00:00:00",
+          overTime: "00:00:00",
+          totalTime: "00:00:00",
+          isClockedIn: false,
+          notes: isWeekend ? "Weekend" : "No attendance recorded",
+          createdAt: date,
+          updatedAt: date
+        };
+        
+        return absentRecord;
+      }
+    }).filter(record => record !== null); // Remove null records (future dates)
 
     res.status(200).json({
       message: "Attendance records fetched",
-      data: list.map(rec => ({
-        ...rec.toObject(),
+      data: completeList.map(rec => ({
+        ...rec.toObject ? rec.toObject() : rec,
         login: formatTime(rec.inTime),
         logout: formatTime(rec.outTime),
         status: rec.status ? rec.status.toLowerCase() : 'absent'
@@ -332,7 +413,6 @@ const getAttendanceList = async (req, res) => {
     });
   }
 };
-
 // Get All Users Attendance (Admin)
 const getAllUsersAttendance = async (req, res) => {
   try {
