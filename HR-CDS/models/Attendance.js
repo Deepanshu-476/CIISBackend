@@ -1,66 +1,58 @@
-const mongoose = require("mongoose");
+// models/Attendance.js
+const mongoose = require('mongoose');
 
-// Helper: Get today's date at 00:00:00
-const getTodayStart = () => {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  return today;
-};
-
-const attendanceSchema = new mongoose.Schema(
-  {
-    user: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true
-    },
-    date: {
-      type: Date,
-      required: true,
-      default: getTodayStart
-    },
-    inTime: {
-      type: Date
-    },
-    outTime: {
-      type: Date
-    },
-    totalTime: {
-      type: String,
-      default: "00:00:00"
-    },
-    lateBy: {
-      type: String,
-      default: "00:00:00"
-    },
-    earlyLeave: {
-      type: String,
-      default: "00:00:00"
-    },
-    overTime: {
-      type: String,
-      default: "00:00:00"
-    },
-    status: {
-      type: String,
-      enum: ["PRESENT", "HALF DAY", "LATE", "ABSENT"], // Added "LATE"
-      default: "ABSENT"
-    },
-    isClockedIn: {
-      type: Boolean,
-      default: false
-    },
-    notes: {
-      type: String,
-      default: ""
-    }
+const attendanceSchema = new mongoose.Schema({
+  user: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
   },
-  {
-    timestamps: true
+  date: {
+    type: Date,
+    required: true
+  },
+  inTime: {
+    type: Date
+  },
+  outTime: {
+    type: Date
+  },
+  status: {
+    type: String,
+    enum: ['PRESENT', 'LATE', 'HALF DAY', 'ABSENT', 'WEEKEND'],
+    default: 'ABSENT'
+  },
+  lateBy: {
+    type: String,
+    default: "00:00:00"
+  },
+  earlyLeave: {
+    type: String,
+    default: "00:00:00"
+  },
+  overTime: {
+    type: String,
+    default: "00:00:00"
+  },
+  totalTime: {
+    type: String,
+    default: "00:00:00"
+  },
+  notes: {
+    type: String
+  },
+  isClockedIn: {
+    type: Boolean,
+    default: false
   }
-);
+}, {
+  timestamps: true
+});
 
-// Index: Prevent multiple entries for same user on same day
+// Index for faster queries
 attendanceSchema.index({ user: 1, date: 1 }, { unique: true });
+attendanceSchema.index({ date: 1 });
 
-module.exports = mongoose.model("Attendance", attendanceSchema);
+const Attendance = mongoose.model('Attendance', attendanceSchema);
+
+module.exports = Attendance;

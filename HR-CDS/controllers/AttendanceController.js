@@ -147,7 +147,7 @@ const clockIn = async (req, res) => {
       data: {
         ...populatedRecord.toObject(),
         login: formatTime(populatedRecord.inTime),
-        status: populatedRecord.status.toLowerCase()
+        status: populatedRecord.status // UPPERCASE ही भेजें
       }
     });
   } catch (err) {
@@ -238,7 +238,7 @@ const clockOut = async (req, res) => {
         ...populatedRecord.toObject(),
         login: formatTime(populatedRecord.inTime),
         logout: formatTime(populatedRecord.outTime),
-        status: populatedRecord.status.toLowerCase()
+        status: populatedRecord.status // UPPERCASE ही भेजें
       }
     });
   } catch (err) {
@@ -294,7 +294,7 @@ const getTodayStatus = async (req, res) => {
       ...today.toObject(),
       login: formatTime(today.inTime),
       logout: formatTime(today.outTime),
-      status: today.status.toLowerCase()
+      status: today.status // UPPERCASE ही भेजें
     });
   } catch (err) {
     console.error("Get Today Status Error:", err.message);
@@ -306,41 +306,42 @@ const getTodayStatus = async (req, res) => {
 };
 
 // Get Attendance List for User
-// Get Attendance List for User - FIXED VERSION
 const getAttendanceList = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
     
-    // Get current month and year
+    // Current month + year
     const now = new Date();
     const currentMonth = now.getMonth();
     const currentYear = now.getFullYear();
     
-    // Calculate start and end of current month
+    // Start of month
     const startOfMonth = new Date(currentYear, currentMonth, 1);
     startOfMonth.setHours(0, 0, 0, 0);
-    
-    const endOfMonth = new Date(currentYear, currentMonth + 1, 0);
-    endOfMonth.setHours(23, 59, 59, 999);
-    
-    // Get attendance records for the user for current month
+
+    // 🔥 End date = today (not full month)
+    const today = new Date();
+    today.setHours(23, 59, 59, 999);
+    const endDate = today;  // <-- THIS IS YOUR NEW END OF RANGE
+
+    // Attendance records only till today
     const list = await Attendance.find({ 
       user: userId,
-      date: { $gte: startOfMonth, $lte: endOfMonth }
+      date: { $gte: startOfMonth, $lte: endDate }
     })
       .populate("user", "name email employeeType")
-      .sort({ date: 1 }); // Sort by date ascending
+      .sort({ date: 1 });
 
-    // Generate absent records for missing dates in current month
+    // Generate dates from startOfMonth → today
     const allDatesInMonth = [];
     const currentDate = new Date(startOfMonth);
     
-    while (currentDate <= endOfMonth) {
+    while (currentDate <= endDate) {
       allDatesInMonth.push(new Date(currentDate));
       currentDate.setDate(currentDate.getDate() + 1);
     }
 
-    // Create a map of existing records by date
+    // Map existing records
     const existingRecordsMap = {};
     list.forEach(record => {
       const recordDate = new Date(record.date);
@@ -348,29 +349,17 @@ const getAttendanceList = async (req, res) => {
       existingRecordsMap[dateKey] = record;
     });
 
-    // Create absent records for missing dates
+    // Create absent records
     const completeList = allDatesInMonth.map(date => {
       const dateKey = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
-      
+
       if (existingRecordsMap[dateKey]) {
-        // Return existing record
         return existingRecordsMap[dateKey];
       } else {
-        // Create absent record for missing date
         const dayOfWeek = date.getDay();
         const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-        
-        // Check if it's a future date
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        
-        if (date > today) {
-          // Future date - no record
-          return null;
-        }
-        
-        // Create absent record
-        const absentRecord = {
+
+        return {
           _id: `absent_${userId}_${date.toISOString().split('T')[0]}`,
           user: {
             _id: userId,
@@ -391,20 +380,19 @@ const getAttendanceList = async (req, res) => {
           createdAt: date,
           updatedAt: date
         };
-        
-        return absentRecord;
       }
-    }).filter(record => record !== null); // Remove null records (future dates)
+    });
 
     res.status(200).json({
-      message: "Attendance records fetched",
+      message: "Attendance records fetched (till today)",
       data: completeList.map(rec => ({
         ...rec.toObject ? rec.toObject() : rec,
         login: formatTime(rec.inTime),
         logout: formatTime(rec.outTime),
-        status: rec.status ? rec.status.toLowerCase() : 'absent'
+        status: rec.status || 'ABSENT'
       }))
     });
+
   } catch (err) {
     console.error("Get Attendance List Error:", err.message);
     res.status(500).json({ 
@@ -413,6 +401,8 @@ const getAttendanceList = async (req, res) => {
     });
   }
 };
+
+
 // Get All Users Attendance (Admin)
 const getAllUsersAttendance = async (req, res) => {
   try {
@@ -436,7 +426,7 @@ const getAllUsersAttendance = async (req, res) => {
       message: "All attendance records fetched successfully",
       data: records.map(record => ({
         ...record.toObject(),
-        status: record.status ? record.status.toLowerCase() : 'absent'
+        status: record.status || 'ABSENT' // UPPERCASE ही भेजें
       }))
     });
   } catch (err) {
@@ -569,7 +559,7 @@ const updateAttendanceRecord = async (req, res) => {
       message: "Attendance updated successfully", 
       data: {
         ...populatedRecord.toObject(),
-        status: populatedRecord.status ? populatedRecord.status.toLowerCase() : 'absent'
+        status: populatedRecord.status || 'ABSENT' // UPPERCASE ही भेजें
       }
     });
   } catch (err) {
@@ -645,7 +635,7 @@ const createManualAttendance = async (req, res) => {
       message: "Attendance created successfully",
       data: {
         ...populatedAttendance.toObject(),
-        status: populatedAttendance.status ? populatedAttendance.status.toLowerCase() : 'absent'
+        status: populatedAttendance.status || 'ABSENT' // UPPERCASE ही भेजें
       }
     });
   } catch (err) {
@@ -740,7 +730,7 @@ const getAttendanceByUser = async (req, res) => {
       message: "Attendance records fetched successfully", 
       data: records.map(record => ({
         ...record.toObject(),
-        status: record.status ? record.status.toLowerCase() : 'absent'
+        status: record.status || 'ABSENT' // UPPERCASE ही भेजें
       }))
     });
   } catch (err) {
