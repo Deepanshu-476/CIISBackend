@@ -1,9 +1,9 @@
 const mongoose = require("mongoose");
 
-// 🔁 Helper: Get today's date at 00:00:00 (UTC-safe)
+// Helper: Get today's date at 00:00:00
 const getTodayStart = () => {
   const today = new Date();
-  today.setHours(0, 0, 0, 0); // Reset time to midnight
+  today.setHours(0, 0, 0, 0);
   return today;
 };
 
@@ -43,20 +43,24 @@ const attendanceSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["PRESENT", "HALF DAY", "ABSENT"],
-      default: "PRESENT"
+      enum: ["PRESENT", "HALF DAY", "LATE", "ABSENT"], // Added "LATE"
+      default: "ABSENT"
     },
     isClockedIn: {
       type: Boolean,
       default: false
+    },
+    notes: {
+      type: String,
+      default: ""
     }
   },
   {
-    timestamps: true // ⏱️ Automatically adds createdAt & updatedAt
+    timestamps: true
   }
 );
 
-// 🔐 Index: Prevent multiple entries for same user on same day
+// Index: Prevent multiple entries for same user on same day
 attendanceSchema.index({ user: 1, date: 1 }, { unique: true });
 
 module.exports = mongoose.model("Attendance", attendanceSchema);

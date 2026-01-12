@@ -2207,3 +2207,415 @@ exports.getUserTasks = async (req, res) => {
     });
   }
 };
+// 🔹 Get overdue tasks for logged-in user
+exports.getOverdueTasks = async (req, res) => {
+  try {
+    // Get user's groups for group-assigned tasks
+    const userGroups = await Group.find({ 
+      members: req.user._id,
+      isActive: true 
+    }).select('_id').lean();
+
+    const groupIds = userGroups.map(group => group._id);
+
+    const filter = {
+      $or: [
+        { assignedUsers: req.user._id },
+        { assignedGroups: { $in: groupIds } },
+        { 
+          createdBy: req.user._id,
+          taskFor: 'self'
+        }
+      ],
+      isActive: true,
+      dueDateTime: { $lt: new Date() },
+      $or: [
+        { overallStatus: { $in: ['pending', 'in-progress', 'reopen', 'onhold'] } },
+        { 'statusByUser.status': { $in: ['pending', 'in-progress', 'reopen', 'onhold'] } }
+      ]
+    };
+
+    const tasks = await Task.find(filter)
+      .populate('assignedUsers', 'name email')
+      .populate('assignedGroups', 'name description')
+      .populate('createdBy', 'name email')
+      .sort({ dueDateTime: 1, createdAt: -1 })
+      .lean();
+
+    // Filter tasks where user's status is not completed/rejected/cancelled/overdue
+    const overdueTasks = tasks.filter(task => {
+      const userStatus = task.statusByUser?.find(s => 
+        s.user && s.user.toString() === req.user._id.toString()
+      );
+      return userStatus && !['completed', 'approved', 'rejected', 'cancelled', 'overdue'].includes(userStatus.status);
+    });
+
+    // Mark as overdue if not already marked
+    for (const task of overdueTasks) {
+      const taskDoc = await Task.findById(task._id);
+      if (taskDoc && !['overdue', 'completed', 'approved', 'rejected', 'cancelled'].includes(taskDoc.overallStatus)) {
+        taskDoc.checkAndMarkOverdue();
+        await taskDoc.save();
+      }
+    }
+
+    const enriched = await enrichStatusInfo(overdueTasks);
+    const grouped = groupTasksByDate(enriched, 'dueDateTime', 'overdueSerialNo');
+    
+    res.json({
+      success: true,
+      overdueTasks: grouped,
+      count: overdueTasks.length,
+      asOf: new Date()
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching overdue tasks:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to fetch overdue tasks',
+      details: error.message 
+    });
+  }
+};
+
+// 🔹 Get overdue tasks for specific user (Admin/Manager/HR)
+exports.getUserOverdueTasks = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    if (!['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role)) {
+      return res.status(403).json({ 
+        success: false,
+        error: 'Access denied. Admin privileges required.' 
+      });
+    }
+
+    // Get user's groups for group-assigned tasks
+    const userGroups = await Group.find({ 
+      members: userId,
+      isActive: true 
+    }).select('_id').lean();
+
+    const groupIds = userGroups.map(group => group._id);
+
+    const filter = {
+      $or: [
+        { assignedUsers: userId },
+        { assignedGroups: { $in: groupIds } },
+        { createdBy: userId }
+      ],
+      isActive: true,
+      dueDateTime: { $lt: new Date() },
+      $or: [
+        { overallStatus: { $in: ['pending', 'in-progress', 'reopen', 'onhold'] } },
+        { 'statusByUser.status': { $in: ['pending', 'in-progress', 'reopen', 'onhold'] } }
+      ]
+    };
+
+    const tasks = await Task.find(filter)
+      .populate('assignedUsers', 'name email')
+      .populate('assignedGroups', 'name description')
+      .populate('createdBy', 'name email')
+      .sort({ dueDateTime: 1, createdAt: -1 })
+      .lean();
+
+    const enriched = await enrichStatusInfo(tasks);
+    const grouped = groupTasksByDate(enriched, 'dueDateTime', 'overdueSerialNo');
+    
+    res.json({
+      success: true,
+      userId,
+      overdueTasks: grouped,
+      count: tasks.length,
+      asOf: new Date()
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching user overdue tasks:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to fetch user overdue tasks' 
+    });
+  }
+};
+
+// 🔹 Manually mark a task as overdue
+exports.markTaskOverdue = async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    const { remarks } = req.body;
+
+    const task = await Task.findById(taskId);
+    if (!task) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'Task not found' 
+      });
+    }
+
+    // Check if user is authorized
+    const isAuthorized = 
+      task.assignedUsers.some(userId => userId.toString() === req.user._id.toString()) ||
+      task.createdBy.toString() === req.user._id.toString() ||
+      ['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role);
+
+    if (!isAuthorized) {
+      return res.status(403).json({ 
+        success: false,
+        error: 'Not authorized to mark this task as overdue' 
+      });
+    }
+
+    // Check if task is already overdue
+    if (task.overallStatus === 'overdue') {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Task is already marked as overdue' 
+      });
+    }
+
+    // Check if due date has passed
+    if (task.dueDateTime && new Date(task.dueDateTime) >= new Date()) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Task due date has not passed yet' 
+      });
+    }
+
+    // Mark as overdue
+    const wasMarked = task.markAsOverdue(req.user._id, remarks);
+    
+    if (!wasMarked) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Task cannot be marked as overdue. It may already be completed or cancelled.' 
+      });
+    }
+
+    await task.save();
+
+    // Create notifications for all assigned users
+    const assignedUserIds = task.assignedUsers.map(id => id.toString());
+    
+    for (const userId of assignedUserIds) {
+      await createNotification(
+        userId,
+        'Task Marked as Overdue',
+        `Task "${task.title}" has been marked as overdue by ${req.user.name}`,
+        'task_overdue_manual',
+        task._id,
+        { markedBy: req.user.name, remarks }
+      );
+    }
+
+    // Create activity log
+    await createActivityLog(
+      req.user,
+      'task_marked_overdue',
+      task._id,
+      `Manually marked task as overdue: ${task.title}`,
+      { status: task.overallStatus },
+      { status: 'overdue', remarks },
+      req
+    );
+
+    res.json({
+      success: true,
+      message: '✅ Task marked as overdue successfully',
+      task: {
+        _id: task._id,
+        title: task.title,
+        overallStatus: task.overallStatus,
+        markedOverdueAt: task.markedOverdueAt
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error marking task as overdue:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to mark task as overdue' 
+    });
+  }
+};
+
+// 🔹 Update all overdue tasks (for cron job)
+exports.updateAllOverdueTasks = async (req, res) => {
+  try {
+    if (!['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role)) {
+      return res.status(403).json({ 
+        success: false,
+        error: 'Access denied. Admin privileges required.' 
+      });
+    }
+
+    const results = await Task.updateAllOverdueTasks();
+
+    // Create activity log
+    await createActivityLog(
+      req.user,
+      'update_all_overdue',
+      null,
+      `Updated all overdue tasks: ${results.updated} updated, ${results.alreadyOverdue} already overdue, ${results.skipped} skipped`,
+      null,
+      results,
+      req
+    );
+
+    res.json({
+      success: true,
+      message: `✅ Updated ${results.updated} tasks as overdue`,
+      results,
+      timestamp: new Date()
+    });
+
+  } catch (error) {
+    console.error('❌ Error updating all overdue tasks:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to update overdue tasks' 
+    });
+  }
+};
+
+// 🔹 Get overdue tasks summary
+exports.getOverdueSummary = async (req, res) => {
+  try {
+    const userId = req.params.userId || req.user._id;
+    const { period = '30days' } = req.query;
+
+    // Calculate date range
+    const now = new Date();
+    let startDate = new Date();
+    
+    switch (period) {
+      case '7days':
+        startDate.setDate(now.getDate() - 7);
+        break;
+      case '30days':
+        startDate.setDate(now.getDate() - 30);
+        break;
+      case '90days':
+        startDate.setDate(now.getDate() - 90);
+        break;
+      default:
+        startDate.setDate(now.getDate() - 30);
+    }
+
+    // Get user's groups
+    const userGroups = await Group.find({ 
+      members: userId,
+      isActive: true 
+    }).select('_id').lean();
+    const groupIds = userGroups.map(group => group._id);
+
+    const filter = {
+      $or: [
+        { assignedUsers: userId },
+        { assignedGroups: { $in: groupIds } },
+        { createdBy: userId }
+      ],
+      isActive: true,
+      dueDateTime: { 
+        $gte: startDate,
+        $lt: now 
+      },
+      $or: [
+        { overallStatus: 'overdue' },
+        { 
+          dueDateTime: { $lt: now },
+          overallStatus: { $in: ['pending', 'in-progress', 'reopen', 'onhold'] }
+        }
+      ]
+    };
+
+    const tasks = await Task.find(filter)
+      .populate('assignedUsers', 'name email')
+      .populate('createdBy', 'name email')
+      .sort({ dueDateTime: 1 })
+      .lean();
+
+    // Categorize tasks
+    const summary = {
+      total: tasks.length,
+      alreadyOverdue: 0,
+      potentialOverdue: 0,
+      byPriority: {
+        high: 0,
+        medium: 0,
+        low: 0
+      },
+      byDuration: {
+        lessThan1Day: 0,
+        '1-3Days': 0,
+        '4-7Days': 0,
+        moreThan7Days: 0
+      },
+      tasks: []
+    };
+
+    tasks.forEach(task => {
+      const isAlreadyOverdue = task.overallStatus === 'overdue';
+      
+      if (isAlreadyOverdue) {
+        summary.alreadyOverdue++;
+      } else {
+        summary.potentialOverdue++;
+      }
+
+      // Count by priority
+      if (task.priority && summary.byPriority[task.priority] !== undefined) {
+        summary.byPriority[task.priority]++;
+      }
+
+      // Calculate overdue duration
+      if (task.dueDateTime) {
+        const dueDate = new Date(task.dueDateTime);
+        const diffDays = Math.floor((now - dueDate) / (1000 * 60 * 60 * 24));
+        
+        if (diffDays < 1) summary.byDuration.lessThan1Day++;
+        else if (diffDays <= 3) summary.byDuration['1-3Days']++;
+        else if (diffDays <= 7) summary.byDuration['4-7Days']++;
+        else summary.byDuration.moreThan7Days++;
+      }
+
+      // Add task to summary
+      summary.tasks.push({
+        _id: task._id,
+        title: task.title,
+        dueDateTime: task.dueDateTime,
+        priority: task.priority,
+        overallStatus: task.overallStatus,
+        isOverdue: isAlreadyOverdue,
+        overdueDays: task.dueDateTime ? 
+          Math.floor((now - new Date(task.dueDateTime)) / (1000 * 60 * 60 * 24)) : null
+      });
+    });
+
+    // Calculate percentages
+    summary.overdueRate = summary.total > 0 ? 
+      Math.round((summary.alreadyOverdue / summary.total) * 100) : 0;
+    
+    summary.potentialOverdueRate = summary.total > 0 ? 
+      Math.round((summary.potentialOverdue / summary.total) * 100) : 0;
+
+    res.json({
+      success: true,
+      userId,
+      period,
+      dateRange: {
+        start: startDate,
+        end: now
+      },
+      summary
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching overdue summary:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to fetch overdue summary' 
+    });
+  }
+};
