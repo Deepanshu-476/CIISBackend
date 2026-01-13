@@ -617,6 +617,7 @@ exports.getAssignedTasks = async (req, res) => {
 };
 
 // ✅ CREATE TASK FOR SELF
+// ✅ CREATE TASK FOR SELF - FIXED VERSION
 exports.createTaskForSelf = async (req, res) => {
   try {
     const {
@@ -627,6 +628,9 @@ exports.createTaskForSelf = async (req, res) => {
       priorityDays,
       priority
     } = req.body;
+
+    console.log('📅 Received dueDateTime from frontend:', dueDateTime);
+    console.log('📅 Type of dueDateTime:', typeof dueDateTime);
 
     const files = (req.files?.files || []).map((f) => ({
       filename: f.filename,
@@ -642,13 +646,62 @@ exports.createTaskForSelf = async (req, res) => {
       uploadedBy: req.user._id
     } : null;
 
-    // Validate due date is not in the past
+    // 🔥 FIX: Improved date validation with timezone handling
+    let parsedDueDateTime = null;
+    
     if (dueDateTime) {
-      const dueDate = new Date(dueDateTime);
-      if (dueDate < new Date()) {
+      try {
+        // Handle different date formats
+        if (typeof dueDateTime === 'string') {
+          // If it's already a Date string from frontend (like "2026-01-13T04:37")
+          if (dueDateTime.includes('T')) {
+            // Add seconds if missing
+            const dateStr = dueDateTime.includes(':') && dueDateTime.split(':').length === 2 
+              ? `${dueDateTime}:00` 
+              : dueDateTime;
+            
+            parsedDueDateTime = new Date(dateStr);
+          } else {
+            // Try parsing as Date object
+            parsedDueDateTime = new Date(dueDateTime);
+          }
+        } else {
+          parsedDueDateTime = new Date(dueDateTime);
+        }
+
+        // Check if date is valid
+        if (isNaN(parsedDueDateTime.getTime())) {
+          console.error('❌ Invalid date after parsing:', dueDateTime);
+          return res.status(400).json({ 
+            success: false,
+            error: 'Invalid date format provided' 
+          });
+        }
+
+        console.log('📅 Parsed dueDateTime:', parsedDueDateTime);
+        console.log('📅 ISO String:', parsedDueDateTime.toISOString());
+        console.log('📅 Local String:', parsedDueDateTime.toLocaleString());
+
+        // 🔥 FIX: Better time comparison with buffer
+        const now = new Date();
+        // Allow dates that are within 5 minutes of now (buffer for timezone issues)
+        const timeBuffer = 5 * 60 * 1000; // 5 minutes in milliseconds
+        
+        console.log('📅 Current time:', now);
+        console.log('📅 Time difference:', parsedDueDateTime - now);
+        
+        if (parsedDueDateTime < new Date(now.getTime() - timeBuffer)) {
+          return res.status(400).json({ 
+            success: false,
+            error: 'Due date cannot be in the past. Please select a future date and time.' 
+          });
+        }
+
+      } catch (dateError) {
+        console.error('❌ Date parsing error:', dateError);
         return res.status(400).json({ 
           success: false,
-          error: 'Due date cannot be in the past' 
+          error: 'Invalid date format. Please use a valid date and time.' 
         });
       }
     }
@@ -663,11 +716,11 @@ exports.createTaskForSelf = async (req, res) => {
       status: "pending",
     }];
 
-    // Create the task
+    // Create the task with parsed date
     const task = await Task.create({
       title,
       description,
-      dueDateTime: dueDateTime ? new Date(dueDateTime) : null,
+      dueDateTime: parsedDueDateTime,
       whatsappNumber,
       priorityDays,
       priority: priority || "medium",
@@ -697,7 +750,7 @@ exports.createTaskForSelf = async (req, res) => {
       `You created a task for yourself: ${title}`,
       'task_created',
       task._id,
-      { priority, dueDateTime, selfAssigned: true }
+      { priority, dueDateTime: parsedDueDateTime, selfAssigned: true }
     );
 
     // Create activity log
@@ -707,7 +760,7 @@ exports.createTaskForSelf = async (req, res) => {
       task._id,
       `Created self task: ${title}`,
       null,
-      { title, description, priority },
+      { title, description, priority, dueDateTime: parsedDueDateTime },
       req
     );
 
@@ -742,6 +795,8 @@ exports.createTaskForOthers = async (req, res) => {
       assignedUsers,
       assignedGroups
     } = req.body;
+
+    console.log('📅 Received dueDateTime for others:', dueDateTime);
 
     // ✅ FIX: Get FULL user from database first
     const fullUser = await User.findById(req.user.id).lean();
@@ -785,6 +840,54 @@ exports.createTaskForOthers = async (req, res) => {
       uploadedBy: req.user._id
     } : null;
 
+    // 🔥 FIX: Improved date parsing for task for others
+    let parsedDueDateTime = null;
+    
+    if (dueDateTime) {
+      try {
+        if (typeof dueDateTime === 'string') {
+          if (dueDateTime.includes('T')) {
+            // Add seconds if missing
+            const dateStr = dueDateTime.includes(':') && dueDateTime.split(':').length === 2 
+              ? `${dueDateTime}:00` 
+              : dueDateTime;
+            
+            parsedDueDateTime = new Date(dateStr);
+          } else {
+            parsedDueDateTime = new Date(dueDateTime);
+          }
+        } else {
+          parsedDueDateTime = new Date(dueDateTime);
+        }
+
+        if (isNaN(parsedDueDateTime.getTime())) {
+          console.error('❌ Invalid date for others:', dueDateTime);
+          return res.status(400).json({ 
+            success: false,
+            error: 'Invalid date format provided' 
+          });
+        }
+
+        // Time buffer for validation
+        const now = new Date();
+        const timeBuffer = 5 * 60 * 1000;
+        
+        if (parsedDueDateTime < new Date(now.getTime() - timeBuffer)) {
+          return res.status(400).json({ 
+            success: false,
+            error: 'Due date cannot be in the past. Please select a future date and time.' 
+          });
+        }
+
+      } catch (dateError) {
+        console.error('❌ Date parsing error for others:', dateError);
+        return res.status(400).json({ 
+          success: false,
+          error: 'Invalid date format. Please use a valid date and time.' 
+        });
+      }
+    }
+
     // Safe JSON parsing
     const parsedUsers = assignedUsers && assignedUsers !== 'null' ? JSON.parse(assignedUsers) : [];
     const parsedGroups = assignedGroups && assignedGroups !== 'null' ? JSON.parse(assignedGroups) : [];
@@ -803,17 +906,6 @@ exports.createTaskForOthers = async (req, res) => {
         success: false,
         error: 'At least one user or group must be assigned' 
       });
-    }
-
-    // Validate due date is not in the past
-    if (dueDateTime) {
-      const dueDate = new Date(dueDateTime);
-      if (dueDate < new Date()) {
-        return res.status(400).json({ 
-          success: false,
-          error: 'Due date cannot be in the past' 
-        });
-      }
     }
 
     // Validate groups for privileged users
@@ -858,11 +950,11 @@ exports.createTaskForOthers = async (req, res) => {
       status: "pending",
     }));
 
-    // Create the task
+    // Create the task with parsed date
     const task = await Task.create({
       title,
       description,
-      dueDateTime: dueDateTime ? new Date(dueDateTime) : null,
+      dueDateTime: parsedDueDateTime,
       whatsappNumber,
       priorityDays,
       priority: priority || "medium",
@@ -894,7 +986,7 @@ exports.createTaskForOthers = async (req, res) => {
         `You have been assigned a new task: ${title}`,
         'task_assigned',
         task._id,
-        { priority, dueDateTime, assignedBy: req.user.name }
+        { priority, dueDateTime: parsedDueDateTime, assignedBy: req.user.name }
       );
     }
 
@@ -909,6 +1001,7 @@ exports.createTaskForOthers = async (req, res) => {
         title, 
         description, 
         priority, 
+        dueDateTime: parsedDueDateTime,
         assignedUsers: uniqueAssignedUsers,
         assignedGroups: parsedGroups 
       },
