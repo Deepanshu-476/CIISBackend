@@ -124,4 +124,10 @@ router.get('/overdue/summary', auth, taskController.getOverdueSummary);
 // ⚠️ Manual trigger for overdue check
 router.get('/check-overdue', auth, taskController.updateAllOverdueTasks);
 
+
+
+
+// PATCH /task/:taskId/quick-status
+router.patch('/:taskId/quick-status', auth, taskController.quickStatusUpdate);
+
 module.exports = router;
