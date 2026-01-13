@@ -271,9 +271,9 @@ setTimeout(() => {
 // ✅ CORS Configuration
 app.use(
   cors({
-    origin: [
+    origin: ["https://cds.ciisnetwork.in",
       "http://localhost:5173",
-      "https://cds.ciisnetwork.in",
+      
       "http://147.93.106.84",
       "http://localhost:8080",
     ],

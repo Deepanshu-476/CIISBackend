@@ -11,6 +11,27 @@ const sharp = require('sharp');
 
 // ==================== HELPER FUNCTIONS ====================
 
+// 🔹 Helper: Check if user has admin/manager privileges including Reporting-Auditor
+const hasPrivileges = (user) => {
+  if (!user) return false;
+
+  const privilegedRoles = ['admin', 'manager', 'hr', 'SuperAdmin'];
+
+  if (privilegedRoles.includes(user.role)) {
+    return true;
+  }
+
+  if (user.jobRole) {
+    const roles = Array.isArray(user.jobRole)
+      ? user.jobRole
+      : [user.jobRole];
+
+    return roles.includes('Reporting-Auditor');
+  }
+
+  return false;
+};
+
 // 🔹 Helper to create notifications
 const createNotification = async (userId, title, message, type, relatedTask = null, metadata = null) => {
   try {
@@ -127,21 +148,53 @@ const enrichStatusInfo = async (tasks) => {
 
 // 🔹 Get all users including group members
 const getAllAssignableUsers = async (req) => {
-  const isPrivileged = ['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role);
+  const loggedInUser = await User.findById(req.user.id).lean();
 
-  if (!isPrivileged) {
-    return [{ _id: req.user._id, name: req.user.name, role: req.user.role, employeeType: req.user.employeeType, email: req.user.email }];
+  console.log('👤 Logged-in full user:', loggedInUser);
+
+  // 🔑 Privilege check (already done above, but safe)
+  if (!hasPrivileges(loggedInUser)) {
+    console.log('🚫 No privilege to fetch users');
+    return [];
   }
 
-  const users = await User.find().select('name _id role employeeType email').lean();
+  let query = { isActive: true };
+
+  // 🔹 Admin / HR / SuperAdmin → sab users
+  if (['admin', 'hr', 'SuperAdmin'].includes(loggedInUser.role)) {
+    console.log('🔓 Admin-level access');
+    query = { isActive: true };
+  }
+
+  // 🔹 Manager → limited users (example)
+  else if (loggedInUser.role === 'manager') {
+    console.log('👔 Manager access');
+    query = { role: 'user', isActive: true };
+  }
+
+  // 🔹 Reporting-Auditor → READ-ONLY but ALL users
+  else if (loggedInUser.jobRole === 'Reporting-Auditor') {
+    console.log('📊 Auditor access');
+    query = { isActive: true };
+  }
+
+  console.log('📡 Final Mongo Query:', query);
+
+  const users = await User.find(query)
+    .select('_id name email role jobRole properties')
+    .lean();
+
+  console.log('✅ Assignable users found:', users.length);
+
   return users;
 };
 
 // 🔹 Get all groups for task assignment
 const getAllAssignableGroups = async (req) => {
-  const isPrivileged = ['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role);
-
-  if (!isPrivileged) {
+  // Get full user first
+  const fullUser = await User.findById(req.user.id).lean();
+  
+  if (!hasPrivileges(fullUser)) {
     return [];
   }
 
@@ -676,7 +729,7 @@ exports.createTaskForSelf = async (req, res) => {
   }
 };
 
-// ✅ CREATE TASK FOR OTHERS
+// ✅ CREATE TASK FOR OTHERS - FIXED VERSION
 exports.createTaskForOthers = async (req, res) => {
   try {
     const {
@@ -690,12 +743,31 @@ exports.createTaskForOthers = async (req, res) => {
       assignedGroups
     } = req.body;
 
-    // Check if user has permission to assign to others
-    const isPrivileged = ['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role);
+    // ✅ FIX: Get FULL user from database first
+    const fullUser = await User.findById(req.user.id).lean();
+    
+    if (!fullUser) {
+      return res.status(401).json({ 
+        success: false,
+        error: 'User not found' 
+      });
+    }
+
+    // ✅ FIX: Check privileges using full user object from DB
+    const isPrivileged = hasPrivileges(fullUser);
+    
+    console.log('🔍 Debug user privileges check:', {
+      userId: fullUser._id,
+      userRole: fullUser.role,
+      userJobRole: fullUser.jobRole,
+      isPrivileged: isPrivileged,
+      hasPrivilegesResult: hasPrivileges(fullUser)
+    });
+
     if (!isPrivileged) {
       return res.status(403).json({ 
         success: false,
-        error: 'Access denied. Only admins/managers can assign tasks to others.' 
+        error: 'Access denied. Only privileged users can assign tasks to others.' 
       });
     }
 
@@ -872,7 +944,9 @@ exports.updateTask = async (req, res) => {
     const { taskId } = req.params;
     const updateData = req.body;
 
-    if (!['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role)) {
+    // ✅ FIX: Get full user first
+    const fullUser = await User.findById(req.user.id).lean();
+    if (!fullUser || !hasPrivileges(fullUser)) {
       return res.status(403).json({ 
         success: false,
         error: 'Access denied' 
@@ -981,7 +1055,9 @@ exports.deleteTask = async (req, res) => {
   try {
     const { taskId } = req.params;
 
-    if (!['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role)) {
+    // ✅ FIX: Get full user first
+    const fullUser = await User.findById(req.user.id).lean();
+    if (!fullUser || !hasPrivileges(fullUser)) {
       return res.status(403).json({ 
         success: false,
         error: 'Access denied' 
@@ -1470,9 +1546,10 @@ exports.getUserActivityTimeline = async (req, res) => {
   try {
     const { userId } = req.params;
 
-    // Check if user is authorized (own timeline or admin/manager/hr)
+    // Check if user is authorized (own timeline or privileged user)
+    const fullUser = await User.findById(req.user.id).lean();
     const isAuthorized = userId === req.user._id.toString() || 
-                        ['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role);
+                        hasPrivileges(fullUser);
 
     if (!isAuthorized) {
       return res.status(403).json({ 
@@ -1504,19 +1581,45 @@ exports.getUserActivityTimeline = async (req, res) => {
 // ✅ GET ASSIGNABLE USERS AND GROUPS
 exports.getAssignableUsers = async (req, res) => {
   try {
+    console.log('🔑 Token user:', req.user);
+
+    // ✅ DB se FULL user lao
+    const fullUser = await User.findById(req.user.id).lean();
+
+    if (!fullUser) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    console.log('👤 Full user from DB:', fullUser);
+    console.log('👔 Role:', fullUser.role);
+    console.log('🧾 JobRole:', fullUser.jobRole);
+
+    // ✅ Privilege check
+    if (!hasPrivileges(fullUser)) {
+      console.log('🚫 Access denied for user:', fullUser.email);
+      return res.status(403).json({
+        success: false,
+        message: 'Unauthorized access'
+      });
+    }
+
     const users = await getAllAssignableUsers(req);
     const groups = await getAllAssignableGroups(req);
 
-    res.json({ 
+    res.json({
       success: true,
       users,
-      groups 
+      groups
     });
+
   } catch (error) {
     console.error('❌ Error fetching assignable data:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      error: 'Failed to fetch assignable data.' 
+      error: 'Failed to fetch assignable data.'
     });
   }
 };
@@ -1645,10 +1748,11 @@ exports.getTaskStatusCounts = async (req, res) => {
 // ✅ GET USER DETAILED ANALYTICS
 exports.getUserDetailedAnalytics = async (req, res) => {
   try {
-    if (!['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role)) {
+    const fullUser = await User.findById(req.user.id).lean();
+    if (!fullUser || !hasPrivileges(fullUser)) {
       return res.status(403).json({ 
         success: false,
-        error: 'Access denied. Admin privileges required.' 
+        error: 'Access denied. Privileges required.' 
       });
     }
 
@@ -1877,10 +1981,11 @@ exports.getUserTaskStats = async (req, res) => {
     const { userId } = req.params;
     const { period = 'today' } = req.query;
 
-    if (!['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role)) {
+    const fullUser = await User.findById(req.user.id).lean();
+    if (!fullUser || !hasPrivileges(fullUser)) {
       return res.status(403).json({ 
         success: false,
-        error: 'Access denied. Admin privileges required.' 
+        error: 'Access denied. Privileges required.' 
       });
     }
 
@@ -2030,10 +2135,11 @@ exports.getUserTaskStats = async (req, res) => {
 // ✅ GET ALL USERS WITH THEIR TASK COUNTS
 exports.getUsersWithTaskCounts = async (req, res) => {
   try {
-    if (!['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role)) {
+    const fullUser = await User.findById(req.user.id).lean();
+    if (!fullUser || !hasPrivileges(fullUser)) {
       return res.status(403).json({ 
         success: false,
-        error: 'Access denied. Admin privileges required.' 
+        error: 'Access denied. Privileges required.' 
       });
     }
 
@@ -2162,10 +2268,11 @@ exports.getUserTasks = async (req, res) => {
     const { userId } = req.params;
     const { status, search, period = 'all' } = req.query;
 
-    if (!['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role)) {
+    const fullUser = await User.findById(req.user.id).lean();
+    if (!fullUser || !hasPrivileges(fullUser)) {
       return res.status(403).json({ 
         success: false,
-        error: 'Access denied. Admin privileges required.' 
+        error: 'Access denied. Privileges required.' 
       });
     }
 
@@ -2420,10 +2527,11 @@ exports.getUserOverdueTasks = async (req, res) => {
   try {
     const { userId } = req.params;
 
-    if (!['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role)) {
+    const fullUser = await User.findById(req.user.id).lean();
+    if (!fullUser || !hasPrivileges(fullUser)) {
       return res.status(403).json({ 
         success: false,
-        error: 'Access denied. Admin privileges required.' 
+        error: 'Access denied. Privileges required.' 
       });
     }
 
@@ -2502,10 +2610,11 @@ exports.markTaskAsOverdue = async (req, res) => {
     }
 
     // Check if user is authorized
+    const fullUser = await User.findById(req.user.id).lean();
     const isAuthorized = 
       task.assignedUsers.some(userId => userId.toString() === req.user._id.toString()) ||
       task.createdBy.toString() === req.user._id.toString() ||
-      ['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role);
+      hasPrivileges(fullUser);
 
     if (!isAuthorized) {
       return res.status(403).json({ 
@@ -2590,10 +2699,11 @@ exports.markTaskAsOverdue = async (req, res) => {
 // ✅ UPDATE ALL OVERDUE TASKS (FOR CRON)
 exports.updateAllOverdueTasks = async (req, res) => {
   try {
-    if (!['admin', 'manager', 'hr', 'SuperAdmin'].includes(req.user.role)) {
+    const fullUser = await User.findById(req.user.id).lean();
+    if (!fullUser || !hasPrivileges(fullUser)) {
       return res.status(403).json({ 
         success: false,
-        error: 'Access denied. Admin privileges required.' 
+        error: 'Access denied. Privileges required.' 
       });
     }
 
@@ -2799,7 +2909,60 @@ exports.getOverdueSummary = async (req, res) => {
   }
 };
 
+// ✅ QUICK STATUS UPDATE
+exports.quickStatusUpdate = async (req, res) => {
+  req.body.remarks = 'Quick status update';
+  return exports.updateStatus(req, res);
+};
+
 // ✅ ALIAS FOR TASK STATISTICS
 exports.getTaskStatistics = exports.getTaskStatusCounts;
+
+// ✅ SNOOZE TASK
+exports.snoozeTask = async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    const { snoozeUntil } = req.body;
+
+    const task = await Task.findById(taskId);
+    if (!task) {
+      return res.status(404).json({ success: false, error: 'Task not found' });
+    }
+
+    // Authorization
+    const allowed =
+      task.assignedUsers.some(u => u.toString() === req.user._id.toString()) ||
+      task.createdBy.toString() === req.user._id.toString();
+
+    if (!allowed) {
+      return res.status(403).json({ success: false, error: 'Not authorized' });
+    }
+
+    task.snoozedUntil = new Date(snoozeUntil);
+    task.isSnoozed = true;
+
+    await task.save();
+
+    await createActivityLog(
+      req.user,
+      'task_snoozed',
+      task._id,
+      `Task snoozed until ${moment(snoozeUntil).format('DD MMM YYYY')}`,
+      null,
+      { snoozedUntil },
+      req
+    );
+
+    res.json({
+      success: true,
+      message: 'Task snoozed successfully',
+      snoozedUntil: task.snoozedUntil
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: 'Failed to snooze task' });
+  }
+};
 
 module.exports = exports;

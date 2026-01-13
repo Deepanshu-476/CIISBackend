@@ -6,6 +6,7 @@ exports.applyLeave = async (req, res) => {
 
   try {
     const { type, reason, startDate, endDate } = req.body;
+
     if (!type?.trim() || !reason?.trim() || !startDate || !endDate) {
       return res.status(400).json({ error: 'All fields are required.' });
     }
@@ -28,26 +29,29 @@ exports.applyLeave = async (req, res) => {
       days,
       status: 'Pending',
 
-      approvedBy: '',
+      approvedBy: null,   // ✔ FIXED
       remarks: '',
 
       history: [
         {
-          action: 'applied',                // ✅ changed from pending to applied
-          by: req.user.name || "Employee",
-          role: "employee",                 // ✅ Employee always stored as employee
-          remarks: ''
+          action: 'applied',
+          by: req.user._id,     // ✔ FIXED (used to be name)
+          role: "employee",
+          remarks: '',
+          at: new Date()
         }
       ]
     });
 
     await leave.save();
     res.status(201).json({ message: 'Leave applied successfully.', leave });
+
   } catch (err) {
-    console.error("❌ Error in applyLeave controller:", err.message);
+    console.error("❌ Error in applyLeave controller:", err);
     res.status(500).json({ error: 'Server error' });
   }
 };
+
 
 
 // 🔹 Get My Leaves (User)

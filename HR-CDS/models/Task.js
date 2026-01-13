@@ -127,7 +127,12 @@ const taskSchema = new mongoose.Schema(
     statusByUser: [statusSchema],
     statusHistory: [statusHistorySchema],
     remarks: [remarkSchema],
-
+    snoozedUntil: {type: Date, default: null},
+    isSnoozed: {
+      type: Boolean,
+      default: false
+    }
+,
     files: [fileSchema],
     voiceNote: {
       filename: String,
