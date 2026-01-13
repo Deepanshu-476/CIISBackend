@@ -82,7 +82,7 @@ const findAttendanceRecord = async (id, updateData = {}) => {
   return null;
 };
 
-// Clock In
+// Clock In - UPDATED with LATE status (9:10 AM to 9:30 AM)
 const clockIn = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
@@ -104,24 +104,32 @@ const clockIn = async (req, res) => {
 
     // Calculate thresholds
     const halfDayThreshold = new Date(now);
-    halfDayThreshold.setHours(10, 0, 0, 0);
+    halfDayThreshold.setHours(10, 0, 0, 0); // 10:00 AM -> HALF DAY
     
-    const lateThreshold = new Date(now);
-    lateThreshold.setHours(9, 30, 0, 0);
+    const lateThresholdEnd = new Date(now);
+    lateThresholdEnd.setHours(9, 30, 0, 0); // 9:30 AM -> Last minute for LATE
+    
+    const lateThresholdStart = new Date(now);
+    lateThresholdStart.setHours(9, 10, 0, 0); // 9:10 AM -> Start for LATE
     
     const shiftStart = new Date(now);
-    shiftStart.setHours(9, 0, 0, 0);
+    shiftStart.setHours(9, 0, 0, 0); // 9:00 AM -> Start time
 
     // Calculate lateBy
     const lateBy = now > shiftStart ? formatDuration(now - shiftStart) : "00:00:00";
 
-    // Determine status
+    // Determine status based on time
     let status = "PRESENT";
+    
     if (now >= halfDayThreshold) {
       status = "HALF DAY";
-    } else if (now >= lateThreshold) {
-      status = "LATE";
+    } else if (now >= lateThresholdStart && now <= lateThresholdEnd) {
+      status = "LATE"; // 9:10 AM to 9:30 AM = LATE
+    } else if (now > lateThresholdEnd && now < halfDayThreshold) {
+      // Between 9:31 AM and 9:59 AM = HALF DAY (as per original logic)
+      status = "HALF DAY";
     }
+    // Before 9:10 AM = PRESENT
 
     // Create new record
     const newRecord = new Attendance({
@@ -147,7 +155,7 @@ const clockIn = async (req, res) => {
       data: {
         ...populatedRecord.toObject(),
         login: formatTime(populatedRecord.inTime),
-        status: populatedRecord.status // UPPERCASE ही भेजें
+        status: populatedRecord.status
       }
     });
   } catch (err) {
@@ -159,7 +167,7 @@ const clockIn = async (req, res) => {
   }
 };
 
-// Clock Out
+// Clock Out - UPDATED with LATE status handling
 const clockOut = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
@@ -180,7 +188,7 @@ const clockOut = async (req, res) => {
     }
 
     const shiftEnd = new Date(now);
-    shiftEnd.setHours(19, 0, 0, 0);
+    shiftEnd.setHours(19, 0, 0, 0); // 7:00 PM -> Shift end
 
     // Calculate total time worked
     const totalMs = now - new Date(record.inTime);
@@ -196,26 +204,40 @@ const clockOut = async (req, res) => {
     // Update status based on login time and hours worked
     const loginTime = new Date(record.inTime);
     const halfDayThreshold = new Date(loginTime);
-    halfDayThreshold.setHours(10, 0, 0, 0);
+    halfDayThreshold.setHours(10, 0, 0, 0); // 10:00 AM
     
-    const lateThreshold = new Date(loginTime);
-    lateThreshold.setHours(9, 30, 0, 0);
+    const lateThresholdEnd = new Date(loginTime);
+    lateThresholdEnd.setHours(9, 30, 0, 0); // 9:30 AM
+    
+    const lateThresholdStart = new Date(loginTime);
+    lateThresholdStart.setHours(9, 10, 0, 0); // 9:10 AM
 
     // Rule 1: If logged in after 10:00, always HALF DAY
     if (loginTime >= halfDayThreshold) {
       record.status = "HALF DAY";
     } 
-    // Rule 2: If logged in between 9:30-10:00, status depends on hours worked
-    else if (loginTime >= lateThreshold) {
+    // Rule 2: If logged in between 9:31-10:00, use hours worked
+    else if (loginTime > lateThresholdEnd && loginTime < halfDayThreshold) {
       if (totalHours >= 9) {
-        record.status = "PRESENT";
+        record.status = "HALF DAY"; // Late but worked full day = HALF DAY
       } else if (totalHours >= 5) {
         record.status = "HALF DAY";
       } else {
         record.status = "ABSENT";
       }
     }
-    // Rule 3: If logged in before 9:30, use original rules
+    // Rule 3: If logged in between 9:10-9:30 (LATE), check hours worked
+    else if (loginTime >= lateThresholdStart && loginTime <= lateThresholdEnd) {
+      if (totalHours >= 9) {
+        // If logged in late (9:10-9:30) but worked full 9 hours, keep LATE status
+        record.status = "LATE";
+      } else if (totalHours >= 5) {
+        record.status = "HALF DAY";
+      } else {
+        record.status = "ABSENT";
+      }
+    }
+    // Rule 4: If logged in before 9:10, use original rules
     else {
       if (totalHours >= 9) {
         record.status = "PRESENT";
@@ -238,7 +260,7 @@ const clockOut = async (req, res) => {
         ...populatedRecord.toObject(),
         login: formatTime(populatedRecord.inTime),
         logout: formatTime(populatedRecord.outTime),
-        status: populatedRecord.status // UPPERCASE ही भेजें
+        status: populatedRecord.status
       }
     });
   } catch (err) {
@@ -294,7 +316,7 @@ const getTodayStatus = async (req, res) => {
       ...today.toObject(),
       login: formatTime(today.inTime),
       logout: formatTime(today.outTime),
-      status: today.status // UPPERCASE ही भेजें
+      status: today.status
     });
   } catch (err) {
     console.error("Get Today Status Error:", err.message);
@@ -306,25 +328,42 @@ const getTodayStatus = async (req, res) => {
 };
 
 // Get Attendance List for User
+// Get Attendance List for User
 const getAttendanceList = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
+    const { month, year } = req.query; // ADD THIS: Accept month and year parameters
     
-    // Current month + year
+    // Use provided month/year or current month/year
     const now = new Date();
-    const currentMonth = now.getMonth();
-    const currentYear = now.getFullYear();
+    const queryMonth = month !== undefined ? parseInt(month) : now.getMonth();
+    const queryYear = year !== undefined ? parseInt(year) : now.getFullYear();
     
-    // Start of month
-    const startOfMonth = new Date(currentYear, currentMonth, 1);
+    // Start of the requested month
+    const startOfMonth = new Date(queryYear, queryMonth, 1);
     startOfMonth.setHours(0, 0, 0, 0);
 
-    // 🔥 End date = today (not full month)
-    const today = new Date();
-    today.setHours(23, 59, 59, 999);
-    const endDate = today;  // <-- THIS IS YOUR NEW END OF RANGE
+    // End of the requested month
+    const endOfMonth = new Date(queryYear, queryMonth + 1, 0);
+    endOfMonth.setHours(23, 59, 59, 999);
 
-    // Attendance records only till today
+    // Determine end date:
+    // If requested month is in the future or current month, use today's date
+    // If requested month is in the past, use end of that month
+    let endDate = endOfMonth;
+    const today = new Date();
+    
+    if (queryYear === today.getFullYear() && queryMonth === today.getMonth()) {
+      // Current month: only show till today
+      endDate = new Date();
+      endDate.setHours(23, 59, 59, 999);
+    } else if (queryYear > today.getFullYear() || 
+               (queryYear === today.getFullYear() && queryMonth > today.getMonth())) {
+      // Future month: show nothing (or handle as you wish)
+      endDate = new Date(startOfMonth);
+    }
+
+    // Fetch attendance records for the entire requested month (or up to today for current month)
     const list = await Attendance.find({ 
       user: userId,
       date: { $gte: startOfMonth, $lte: endDate }
@@ -332,7 +371,7 @@ const getAttendanceList = async (req, res) => {
       .populate("user", "name email employeeType")
       .sort({ date: 1 });
 
-    // Generate dates from startOfMonth → today
+    // Generate all dates in the month
     const allDatesInMonth = [];
     const currentDate = new Date(startOfMonth);
     
@@ -349,7 +388,7 @@ const getAttendanceList = async (req, res) => {
       existingRecordsMap[dateKey] = record;
     });
 
-    // Create absent records
+    // Create absent records for missing dates
     const completeList = allDatesInMonth.map(date => {
       const dateKey = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
 
@@ -384,7 +423,7 @@ const getAttendanceList = async (req, res) => {
     });
 
     res.status(200).json({
-      message: "Attendance records fetched (till today)",
+      message: `Attendance records fetched for ${new Date(queryYear, queryMonth).toLocaleString('default', { month: 'long', year: 'numeric' })}`,
       data: completeList.map(rec => ({
         ...rec.toObject ? rec.toObject() : rec,
         login: formatTime(rec.inTime),
@@ -401,7 +440,6 @@ const getAttendanceList = async (req, res) => {
     });
   }
 };
-
 
 // Get All Users Attendance (Admin)
 const getAllUsersAttendance = async (req, res) => {
@@ -426,7 +464,7 @@ const getAllUsersAttendance = async (req, res) => {
       message: "All attendance records fetched successfully",
       data: records.map(record => ({
         ...record.toObject(),
-        status: record.status || 'ABSENT' // UPPERCASE ही भेजें
+        status: record.status || 'ABSENT'
       }))
     });
   } catch (err) {
@@ -438,7 +476,7 @@ const getAllUsersAttendance = async (req, res) => {
   }
 };
 
-// Update Attendance Record (Admin)
+// Update Attendance Record (Admin) - UPDATED with new LATE threshold
 const updateAttendanceRecord = async (req, res) => {
   try {
     const { id } = req.params;
@@ -476,12 +514,15 @@ const updateAttendanceRecord = async (req, res) => {
       const minute = loginTime.getMinutes();
       const totalMinutes = (hour * 60) + minute;
       
-      if (totalMinutes >= 600) {
+      // New thresholds for LATE (9:10 to 9:30)
+      if (totalMinutes >= 600) { // 10:00 AM
         record.status = "HALF DAY";
-      } else if (totalMinutes >= 570) {
+      } else if (totalMinutes >= 570) { // 9:30 AM to 9:59 AM
+        record.status = "HALF DAY";
+      } else if (totalMinutes >= 550) { // 9:10 AM to 9:29 AM = LATE
         record.status = "LATE";
       } else {
-        record.status = "PRESENT";
+        record.status = "PRESENT"; // Before 9:10 AM
       }
     }
     
@@ -510,14 +551,41 @@ const updateAttendanceRecord = async (req, res) => {
         const halfDayThreshold = new Date(loginTime);
         halfDayThreshold.setHours(10, 0, 0, 0);
         
+        const lateThresholdEnd = new Date(loginTime);
+        lateThresholdEnd.setHours(9, 30, 0, 0);
+        
+        const lateThresholdStart = new Date(loginTime);
+        lateThresholdStart.setHours(9, 10, 0, 0);
+        
         if (loginTime >= halfDayThreshold) {
           record.status = "HALF DAY";
-        } else if (totalHours >= 9) {
-          record.status = "PRESENT";
-        } else if (totalHours >= 5) {
-          record.status = "HALF DAY";
+        } else if (loginTime > lateThresholdEnd && loginTime < halfDayThreshold) {
+          if (totalHours >= 9) {
+            record.status = "HALF DAY";
+          } else if (totalHours >= 5) {
+            record.status = "HALF DAY";
+          } else {
+            record.status = "ABSENT";
+          }
+        } else if (loginTime >= lateThresholdStart && loginTime <= lateThresholdEnd) {
+          if (totalHours >= 9) {
+            // Keep LATE status if already set, else set based on login time
+            if (record.status !== "LATE") {
+              record.status = "PRESENT";
+            }
+          } else if (totalHours >= 5) {
+            record.status = "HALF DAY";
+          } else {
+            record.status = "ABSENT";
+          }
         } else {
-          record.status = "ABSENT";
+          if (totalHours >= 9) {
+            record.status = "PRESENT";
+          } else if (totalHours >= 5) {
+            record.status = "HALF DAY";
+          } else {
+            record.status = "ABSENT";
+          }
         }
       }
     }
@@ -559,7 +627,7 @@ const updateAttendanceRecord = async (req, res) => {
       message: "Attendance updated successfully", 
       data: {
         ...populatedRecord.toObject(),
-        status: populatedRecord.status || 'ABSENT' // UPPERCASE ही भेजें
+        status: populatedRecord.status || 'ABSENT'
       }
     });
   } catch (err) {
@@ -635,7 +703,7 @@ const createManualAttendance = async (req, res) => {
       message: "Attendance created successfully",
       data: {
         ...populatedAttendance.toObject(),
-        status: populatedAttendance.status || 'ABSENT' // UPPERCASE ही भेजें
+        status: populatedAttendance.status || 'ABSENT'
       }
     });
   } catch (err) {
@@ -730,7 +798,7 @@ const getAttendanceByUser = async (req, res) => {
       message: "Attendance records fetched successfully", 
       data: records.map(record => ({
         ...record.toObject(),
-        status: record.status || 'ABSENT' // UPPERCASE ही भेजें
+        status: record.status || 'ABSENT'
       }))
     });
   } catch (err) {
@@ -785,7 +853,7 @@ const markDailyAbsent = async () => {
   }
 };
 
-// Get Attendance Statistics
+// Get Attendance Statistics - UPDATED to include LATE
 const getAttendanceStats = async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
