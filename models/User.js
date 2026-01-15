@@ -2,10 +2,9 @@ const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 const validator = require("validator");
 const crypto = require("crypto");
-const { type } = require("os");
 
 const userSchema = new mongoose.Schema({
-  // Core Fields
+  // Core Fields (Required)
   name: {
     type: String,
     required: [true, "Name is required"],
@@ -30,50 +29,60 @@ const userSchema = new mongoose.Schema({
     minlength: [8, "Password must be at least 8 characters"],
     select: false
   },
-  role: {
+  department: {
     type: String,
-    enum: ['admin', 'user', 'hr', 'manager','SuperAdmin'],
+    required: [true, "Department is required"],
+  },
+  jobRole: {
+    type: String,
+    enum: ['admin', 'user', 'hr', 'manager', 'SuperAdmin'],
+    required: [true, "Job role is required"],
     default: 'user'
   },
 
-  // Extended Fields (for 'user' role)
+  // Optional Fields (Editable by anyone)
   phone: String,
   address: String,
-  gender: String,
-  maritalStatus: String,
+  gender: {
+    type: String,
+    enum: ['male', 'female', 'other']
+  },
+  maritalStatus: {
+    type: String,
+    enum: ['single', 'married', 'divorced', 'widowed']
+  },
   dob: Date,
-  salary: String,
-
+  salary: Number,
+  
   // Bank Details
   accountNumber: String,
   ifsc: String,
   bankName: String,
   bankHolderName: String,
-
+  
   // Assets
   employeeType: {
     type: String,
     enum: ['intern', 'technical', 'non-technical', 'sales'],
   },
-  jobRole: String,
   properties: {
     type: [String],
     enum: ['sim', 'phone', 'laptop', 'desktop', 'headphones'],
-    default: ['sim']
+    default: []
   },
   propertyOwned: String,
   additionalDetails: String,
-
+  
   // Family Details
   fatherName: String,
   motherName: String,
-
+  
   // Emergency Details
   emergencyName: String,
   emergencyPhone: String,
   emergencyRelation: String,
   emergencyAddress: String,
-
+  
   // Security & Meta
   resetToken: {
     type: String,
@@ -91,14 +100,9 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
-  failedLoginAttempts: {
-    type: Number,
-    default: 0,
-    select: false
-  },
-  accountLockedUntil: {
-    type: Date,
-    select: false
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User"
   }
 
 }, {
@@ -125,28 +129,9 @@ userSchema.methods.comparePassword = async function (candidatePassword) {
   return await bcrypt.compare(candidatePassword, this.password);
 };
 
-// Method to generate password reset token
-userSchema.methods.createPasswordResetToken = function () {
-  const resetToken = crypto.randomBytes(32).toString("hex");
-
-  this.resetToken = crypto
-    .createHash("sha256")
-    .update(resetToken)
-    .digest("hex");
-
-  this.resetTokenExpiry = Date.now() + 10 * 60 * 1000; // 10 minutes
-
-  return resetToken;
-};
-
-// Query helper to exclude inactive users by default
-userSchema.query.active = function () {
-  return this.where({ isActive: true });
-};
-
-// Indexes for better performance
+// Indexes
 userSchema.index({ email: 1 });
-userSchema.index({ resetToken: 1 });
-userSchema.index({ role: 1 });
+userSchema.index({ department: 1 });
+userSchema.index({ jobRole: 1 });
 
 module.exports = mongoose.model("User", userSchema);

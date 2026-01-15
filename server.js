@@ -140,8 +140,6 @@ setTimeout(async () => {
   await checkAndMarkOverdueTasks();
 }, 10000); // Wait 10 seconds after server starts
 
-// ==================== ATTENDANCE CRON JOBS ====================
-
 // Import models for attendance cron jobs
 const Attendance = require("./HR-CDS/models/Attendance");
 const User = require("./models/User");
@@ -289,15 +287,12 @@ app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // ✅ ROUTES
 app.use("/api/auth", require("./routes/authRoutes"));
-app.use("/api/leads", require("./routes/leadRoutes"));
-app.use("/api/calls", require("./routes/callRoutes"));
-app.use("/api/followups", require("./routes/followUpRoutes"));
-app.use("/api/dashboard", require("./routes/dashboardRoutes"));
 app.use("/api/attendance", require("./HR-CDS/routes/attendanceRoutes"));
 app.use("/api/leaves", require("./HR-CDS/routes/LeaveRoutes"));
 app.use("/api/assets", require("./HR-CDS/routes/assetsRoute"));
 app.use("/api/task", require("./HR-CDS/routes/taskRoute"));
 app.use("/api/users", require("./HR-CDS/routes/userRoutes"));
+app.use("/api/departments", require("../CiisNetorkBackend/routes/Department.routes"))
 app.use("/api/users/profile", require("./HR-CDS/routes/profileRoute"));
 app.use("/api/alerts", require("./HR-CDS/routes/alertRoutes"));
 app.use("/api/holidays", require("./HR-CDS/routes/Holiday"));
