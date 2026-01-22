@@ -1,50 +1,10 @@
+// middleware/authMiddleware.js
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
-const auth = (req, res, next) => {
-  const authHeader = req.headers.authorization;
 
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({
-      success: false,
-      message: "Authorization token missing or malformed",
-    });
-  }
-
-  const token = authHeader.split(" ")[1];
-
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-    const userId =
-      decoded._id ||
-      decoded.id ||
-      decoded.userId ||
-      (decoded.user && decoded.user._id) ||
-      (decoded.user && decoded.user.id);
-
-    if (!userId) {
-      return res.status(401).json({
-        success: false,
-        message: "Invalid token structure",
-      });
-    }
-
-    req.user = {
-      ...decoded,
-      _id: userId.toString(),
-    };
-
-    next();
-  } catch (err) {
-    return res.status(401).json({
-      success: false,
-      message: "Invalid or expired token",
-    });
-  }
-};
+// Single middleware for authentication
 exports.protect = async (req, res, next) => {
   try {
-    console.log("Protect middleware triggered"); 
     let token;
 
     // Check for token in headers
@@ -88,9 +48,10 @@ exports.protect = async (req, res, next) => {
     });
   }
 };
+
+// Role-based authorization
 exports.authorize = (...roles) => {
   return (req, res, next) => {
-    console.log("Authorize middleware triggered with roles:", roles); // Log the roles and check if this function is triggered
     if (!req.user) {
       return res.status(401).json({
         success: false,
@@ -108,9 +69,10 @@ exports.authorize = (...roles) => {
     next();
   };
 };
+
+// Token verification endpoint
 exports.verify = async (req, res) => {
   try {
-    console.log("Verify middleware triggered"); // Log to check if the function is triggered
     let token;
 
     // Check for token in headers
@@ -163,5 +125,3 @@ exports.verify = async (req, res) => {
     });
   }
 };
-
-module.exports = auth;

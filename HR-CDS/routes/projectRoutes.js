@@ -1,23 +1,25 @@
 const express = require("express");
 const router = express.Router();
 const projectController = require("../controllers/projectController");
-const auth = require("../../middleware/authMiddleware");
+
+const { protect, authorize } = require('../../middleware/authMiddleware');
+
 const { check, validationResult } = require("express-validator");
 
 // ==========================================
 // 📌 NOTIFICATION ROUTES
 // ==========================================
-router.get("/notifications", auth, projectController.getUserNotifications);
-router.patch("/notifications/:notificationId/read", auth, projectController.markNotificationAsRead);
-router.delete("/notifications/clear", auth, projectController.clearAllNotifications);
+router.get("/notifications", protect, projectController.getUserNotifications);
+router.patch("/notifications/:notificationId/read", protect, projectController.markNotificationAsRead);
+router.delete("/notifications/clear", protect, projectController.clearAllNotifications);
 
 // ==========================================
 // 📌 PROJECT CRUD ROUTES
 // ==========================================
-router.get("/", auth, projectController.listProjects);
-router.get("/:id", auth, projectController.getProjectById);
+router.get("/", protect, projectController.listProjects);
+router.get("/:id", protect, projectController.getProjectById);
 
-router.post("/", auth, [
+router.post("/", protect, [
   check("projectName").notEmpty().withMessage("Project name is required"),
   check("description").notEmpty().withMessage("Description is required"),
   check("users").custom(value => {
@@ -30,37 +32,36 @@ router.post("/", auth, [
   }).withMessage("At least one member is required")
 ], projectController.createProject);
 
-router.put("/:id", auth, [
+router.put("/:id", protect, [
   check("projectName").notEmpty().withMessage("Project name is required"),
   check("description").notEmpty().withMessage("Description is required")
 ], projectController.updateProject);
 
-router.delete("/:id", auth, projectController.deleteProject);
+router.delete("/:id", protect, projectController.deleteProject);
 
 // ==========================================
 // 📌 TASK CRUD ROUTES
 // ==========================================
-router.post("/:id/tasks", auth, [
+router.post("/:id/tasks", protect, [
   check("title").notEmpty().withMessage("Task title is required"),
   check("assignedTo").notEmpty().withMessage("Assigned user is required")
 ], projectController.addTask);
 
-router.patch("/:id/tasks/:taskId", auth, projectController.updateTask);
-router.delete("/:id/tasks/:taskId", auth, projectController.deleteTask);
+router.patch("/:id/tasks/:taskId", protect, projectController.updateTask);
+router.delete("/:id/tasks/:taskId", protect, projectController.deleteTask);
 
 // ==========================================
 // 📌 TASK STATUS & ACTIVITY ROUTES
 // ==========================================
-router.patch("/:projectId/tasks/:taskId/status", auth, [
+router.patch("/:projectId/tasks/:taskId/status", protect, [
   check("status").notEmpty().withMessage("Status is required")
 ], projectController.updateTaskStatus);
 
-router.get("/:projectId/tasks/:taskId/activity", auth, projectController.getTaskActivityLogs);
-
+router.get("/:projectId/tasks/:taskId/activity", protect, projectController.getTaskActivityLogs);
 // ==========================================
 // 📌 REMARKS ROUTES
 // ==========================================
-router.post("/:projectId/tasks/:taskId/remarks", auth, [
+router.post("/:projectId/tasks/:taskId/remarks", protect, [
   check("text").notEmpty().withMessage("Remark text is required")
 ], projectController.addRemark);
 

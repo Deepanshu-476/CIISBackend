@@ -277,7 +277,12 @@ app.use(
     ],
     credentials: true,
     methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-User-JobRole", "X-User-Id"],
+      exposedHeaders: [
+    'Authorization',
+    'X-User-JobRole',
+    'X-User-Id'
+  ]
   })
 );
 
@@ -292,7 +297,7 @@ app.use("/api/leaves", require("./HR-CDS/routes/LeaveRoutes"));
 app.use("/api/assets", require("./HR-CDS/routes/assetsRoute"));
 app.use("/api/task", require("./HR-CDS/routes/taskRoute"));
 app.use("/api/users", require("./HR-CDS/routes/userRoutes"));
-app.use("/api/departments", require("../CiisNetorkBackend/routes/Department.routes"))
+app.use("/api/departments", require("./routes/Department.routes"))
 app.use("/api/users/profile", require("./HR-CDS/routes/profileRoute"));
 app.use("/api/alerts", require("./HR-CDS/routes/alertRoutes"));
 app.use("/api/holidays", require("./HR-CDS/routes/Holiday"));
@@ -301,7 +306,8 @@ app.use("/api/projects", require("./HR-CDS/routes/projectRoutes"));
 app.use("/api/notifications", require("./HR-CDS/routes/notificationRoutes"));
 app.use("/api/clientsservice", require("./HR-CDS/routes/clientRoutes"));
 app.use("/api/clienttasks", require("./HR-CDS/routes/clientTask"));
-
+app.use('/api/menu-access', require("./routes/menuAccess"));
+app.use('/api/menu-items', require("./routes/menuItems"));
 // ✅ Add Meeting Management Route
 app.use("/api/meetings", require("./HR-CDS/routes/meetingRoutes"));
 
@@ -351,9 +357,5 @@ app.use((err, req, res, next) => {
 // ✅ Start Server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📅 Cron Jobs Status:
-    • Overdue Check: Every 30 minutes
-    • Daily Summary: 9:00 AM daily
-    • Attendance Absent Marking: 10:30 AM daily`);
+  console.log(`🚀 Server running on port ${PORT}`)
 });

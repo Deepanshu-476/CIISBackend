@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const taskController = require('../controllers/taskController');
-const auth = require('../../middleware/authMiddleware'); 
+const { protect, authorize }= require('../../middleware/authMiddleware'); 
 const upload = require('../../utils/multer'); 
 const { uploadRemarkImage } = require('../middlewares/uploadMiddleware');
 
@@ -9,21 +9,19 @@ const { uploadRemarkImage } = require('../middlewares/uploadMiddleware');
 // ==================== NOTIFICATION ROUTES ====================
 
 // 🔔 Get user notifications
-router.get('/notifications/all', auth, taskController.getNotifications);
+router.get('/notifications/all', protect, taskController.getNotifications);
 
 // Mark as read
-router.patch('/notifications/:notificationId/read', auth, taskController.markNotificationAsRead);
-router.patch('/notifications/read-all', auth, taskController.markAllNotificationsAsRead);
-
+router.patch('/notifications/:notificationId/read', protect, taskController.markNotificationAsRead);
+router.patch('/notifications/read-all', protect, taskController.markAllNotificationsAsRead);
 // ==================== TASK ROUTES ====================
-router.get('/', auth, taskController.getTasks || taskController.getMyTasks);
-router.get('/my', auth, taskController.getMyTasks);
-router.get('/assigned', auth, taskController.getAssignedTasks);
-
+router.get('/', protect, taskController.getTasks || taskController.getMyTasks);
+router.get('/my', protect, taskController.getMyTasks);
+router.get('/assigned', protect, taskController.getAssignedTasks);
 // ✅ Create task for self
 router.post(
   '/create-self',
-  auth,
+  protect,
   upload.fields([
     { name: 'files', maxCount: 10 },
     { name: 'voiceNote', maxCount: 1 }
@@ -34,7 +32,7 @@ router.post(
 // ✅ Create task for others
 router.post(
   '/create-for-others',
-  auth,
+  protect,
   upload.fields([
     { name: 'files', maxCount: 10 },
     { name: 'voiceNote', maxCount: 1 }
@@ -45,7 +43,7 @@ router.post(
 // ✏️ Update task (Admin/Manager/HR only)
 router.put(
   '/:taskId',
-  auth,
+  protect,
   upload.fields([
     { name: 'files', maxCount: 10 },
     { name: 'voiceNote', maxCount: 1 }
@@ -54,18 +52,18 @@ router.put(
 );
 
 // 🗑️ Delete task (Admin/Manager/HR only)
-router.delete('/:taskId', auth, taskController.deleteTask);
+router.delete('/:taskId', protect, taskController.deleteTask);
 
 // 🔁 Update task status
-router.patch('/:taskId/status', auth, taskController.updateStatus);
+router.patch('/:taskId/status', protect, taskController.updateStatus);
 
 // ==================== REMARKS/COMMENTS ROUTES ====================
 
 // 💬 Add remark to task
-router.post('/:taskId/remarks', auth, uploadRemarkImage, taskController.addRemark);
+router.post('/:taskId/remarks', protect, uploadRemarkImage, taskController.addRemark);
 
 // 📋 Get all task remarks
-router.get('/:taskId/remarks', auth, taskController.getRemarks);
+router.get('/:taskId/remarks', protect, taskController.getRemarks);
 
 // ==================== NOTIFICATION ROUTES ====================
 
@@ -73,61 +71,58 @@ router.get('/:taskId/remarks', auth, taskController.getRemarks);
 // ==================== ACTIVITY LOGS ROUTES ====================
 
 // 📊 Get task activity logs
-router.get('/:taskId/activity-logs', auth, taskController.getTaskActivityLogs);
+router.get('/:taskId/activity-logs', protect, taskController.getTaskActivityLogs);
 
 // 📈 Get user activity timeline
-router.get('/user-activity/:userId', auth, taskController.getUserActivityTimeline);
+router.get('/user-activity/:userId', protect, taskController.getUserActivityTimeline);
 
 // ==================== USER MANAGEMENT ROUTES ====================
 
 // 👤 Get assignable users and groups
-router.get('/assignable-users', auth, taskController.getAssignableUsers);
+router.get('/assignable-users', protect, taskController.getAssignableUsers);
 
 // ==================== TASK STATISTICS ROUTES ====================
 
 // 📊 Get task status counts
-router.get('/status-counts', auth, taskController.getTaskStatusCounts);
+router.get('/status-counts', protect, taskController.getTaskStatusCounts);
 
 // ==================== SPECIFIC USER ANALYTICS ====================
 
 // 👤 Get user detailed analytics
-router.get('/admin/dashboard/user/:userId/analytics', auth, taskController.getUserDetailedAnalytics);
+router.get('/admin/dashboard/user/:userId/analytics', protect, taskController.getUserDetailedAnalytics);
 
 // ==================== NEW ADMIN DASHBOARD ROUTES ====================
 
 // 📊 Get user task statistics
-router.get('/user/:userId/stats', auth, taskController.getUserTaskStats);
+router.get('/user/:userId/stats', protect, taskController.getUserTaskStats);
 
 // 👥 Get all users with task counts
-router.get('/admin/users-with-tasks', auth, taskController.getUsersWithTaskCounts);
+router.get('/admin/users-with-tasks', protect, taskController.getUsersWithTaskCounts);
 
 // 📈 Get user tasks with filters
-router.get('/user/:userId/tasks', auth, taskController.getUserTasks);
+router.get('/user/:userId/tasks', protect, taskController.getUserTasks);
 
 // ==================== OVERDUE TASK ROUTES ====================
 
 // ⚠️ Get overdue tasks for logged-in user
-router.get('/overdue', auth, taskController.getOverdueTasks);
+router.get('/overdue', protect, taskController.getOverdueTasks);
 
 // ⚠️ Get overdue tasks for specific user
-router.get('/user/:userId/overdue', auth, taskController.getUserOverdueTasks);
+router.get('/user/:userId/overdue', protect, taskController.getUserOverdueTasks);
 
 // ⚠️ Manually mark task as overdue
-router.patch('/:taskId/overdue', auth, taskController.markTaskAsOverdue);
+router.patch('/:taskId/overdue', protect, taskController.markTaskAsOverdue);
 
 // ⚠️ Update all overdue tasks
-router.post('/update-overdue-tasks', auth, taskController.updateAllOverdueTasks);
+router.post('/update-overdue-tasks', protect, taskController.updateAllOverdueTasks);
 
 // ⚠️ Get overdue summary
-router.get('/overdue/summary', auth, taskController.getOverdueSummary);
+router.get('/overdue/summary', protect , taskController.getOverdueSummary);
 
 // ⚠️ Manual trigger for overdue check
-router.get('/check-overdue', auth, taskController.updateAllOverdueTasks);
-
-
+router.get('/check-overdue', protect, taskController.updateAllOverdueTasks);
 
 
 // PATCH /task/:taskId/quick-status
-router.patch('/:taskId/quick-status', auth, taskController.quickStatusUpdate);
-
+router.patch('/:taskId/quick-status', protect, taskController.quickStatusUpdate);
 module.exports = router;

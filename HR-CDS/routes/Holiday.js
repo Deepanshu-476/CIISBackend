@@ -2,16 +2,15 @@
 const express = require("express");
 const router = express.Router();
 const holidayController = require("../controllers/HolidayController");
-const auth = require("../../middleware/authMiddleware");
-const isManager = require("../../middleware/isManager"); 
+const { protect, authorize } = require('../../middleware/authMiddleware');
+
 
 // ✅ Add holiday (Manager only)
-router.post("/add", auth, isManager, holidayController.addHoliday);
-
+router.post("/add", protect, authorize('manager'), holidayController.addHoliday);   
 // ✅ Get holidays (all users can view, optional month filter => ?month=January)
-router.get("/", auth, holidayController.getHolidays);
+router.get("/", protect, holidayController.getHolidays);
 // routes/holidayRoutes.js
-router.put("/:id", auth, isManager, holidayController.updateHoliday);
-router.delete("/:id", auth, isManager, holidayController.deleteHoliday);
+router.put("/:id", protect, authorize('manager'), holidayController.updateHoliday);
+router.delete("/:id", protect, authorize('manager'), holidayController.deleteHoliday);
 
 module.exports = router;

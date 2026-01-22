@@ -35,7 +35,7 @@ const userSchema = new mongoose.Schema({
   },
   jobRole: {
     type: String,
-    enum: ['admin', 'user', 'hr', 'manager', 'SuperAdmin'],
+    enum: ['admin', 'user', 'hr', 'manager', 'SuperAdmin','intern'],
     required: [true, "Job role is required"],
     default: 'user'
   },

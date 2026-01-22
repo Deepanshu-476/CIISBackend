@@ -1,25 +1,18 @@
 const express = require('express');
 const router = express.Router();
 const leaveController = require('../controllers/LeaveController');
-const auth = require('../../middleware/authMiddleware');
-const isAdmin = require('../../middleware/isAdmin'); // 🛡️ Admin check middleware
-const isManager = require('../../middleware/isManager'); // 🛡️ Manager check middleware
+const { protect, authorize } = require('../../middleware/authMiddleware');
 
 // ✅ USER ROUTES
+router.post('/apply', protect, leaveController.applyLeave);
+router.get('/status', protect, leaveController.getMyLeaves);
 
-// 🟢 Apply for a leave (only for logged-in users)
-router.post('/apply', auth, leaveController.applyLeave);
+// ✅ ADMIN/HR/MANAGER ROUTES
+router.get('/all', protect, authorize('admin', 'hr', 'superadmin', 'manager'), leaveController.getAllLeaves);
+router.patch('/status/:id', protect, authorize('admin', 'hr', 'superadmin', 'manager'), leaveController.updateLeaveStatus);
+router.delete('/:id', protect, authorize('admin', 'hr', 'superadmin', 'manager'), leaveController.deleteLeave);
 
-// 🔵 Get logged-in user's leave history
-router.get('/status', auth, leaveController.getMyLeaves);
+// ✅ DEPARTMENT SPECIFIC ROUTES (for managers)
+router.get('/department/:department', protect, authorize('admin', 'hr', 'superadmin', 'manager'), leaveController.getLeavesByDepartment);
 
-
-// ✅ ADMIN ROUTES
-
-// 🔴 Get all leave requests (admin only) — supports optional ?date=YYYY-MM-DD filter
-router.get('/all', auth, isAdmin, leaveController.getAllLeaves);
-
-// 🟠 Update status (approve/reject) of a leave by ID (admin only)
-router.patch('/status/:id', auth, isAdmin, leaveController.updateLeaveStatus);
-router.delete('/:id', auth, isManager, leaveController.deleteLeave);
 module.exports = router;
