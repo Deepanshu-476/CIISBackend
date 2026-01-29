@@ -17,6 +17,8 @@ exports.register = async (req, res) => {
       password,
       department,
       jobRole,
+      company, 
+      companyCode, 
       // Optional fields
       phone, address, gender, maritalStatus, dob, salary,
       accountNumber, ifsc, bankName, bankHolderName,
@@ -26,8 +28,8 @@ exports.register = async (req, res) => {
     } = req.body;
 
     // Required fields validation
-    if (!name || !email || !password || !department || !jobRole) {
-      return errorResponse(res, 400, "Name, email, password, department and job role are required");
+    if (!name || !email || !password || !department || !jobRole ||!company || !companyCode) {
+      return errorResponse(res, 400, "Name, email, password, department, job role, company and company code are required");
     }
 
     const cleanEmail = email.trim().toLowerCase();
@@ -50,7 +52,7 @@ exports.register = async (req, res) => {
     }
 
     // Validate job role
-    const validJobRoles = ["admin", "user", "hr", "manager", ];
+    const validJobRoles = ["admin", "user", "hr", "manager","supper-admin","intern"];
     if (!validJobRoles.includes(jobRole)) {
       return errorResponse(res, 400, "Invalid job role");
     }
@@ -62,6 +64,8 @@ exports.register = async (req, res) => {
       password,
       department,
       jobRole,
+      company,
+      companyCode,
       // Optional fields
       ...(phone && { phone }),
       ...(address && { address }),
@@ -95,6 +99,8 @@ exports.register = async (req, res) => {
         email: user.email,
         department: user.department,
         jobRole: user.jobRole,
+        company: user.company,
+        companyCode: user.companyCode,
         createdAt: user.createdAt,
       },
     });
@@ -132,6 +138,7 @@ exports.login = async (req, res) => {
         jobRole: user.jobRole,
         department: user.department?._id,
         name: user.name 
+
       },
       process.env.JWT_SECRET,
       { expiresIn: "12h" }
@@ -150,6 +157,8 @@ exports.login = async (req, res) => {
         phone: user.phone,
         address: user.address,
         gender: user.gender,
+        company: user.company,
+        companyCode: user.companyCode,
         maritalStatus: user.maritalStatus,
         dob: user.dob,
         salary: user.salary,

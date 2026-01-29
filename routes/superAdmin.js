@@ -114,7 +114,8 @@ router.post('/login', async (req, res) => {
         companyRole: user.companyRole,
         department: user.department,
         jobRole: user.jobRole,
-        employeeId: user.employeeId
+        employeeId: user.employeeId,
+        companyCode: user.companyCode
       }
     });
     

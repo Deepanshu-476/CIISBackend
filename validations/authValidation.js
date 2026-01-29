@@ -11,6 +11,14 @@ const registerSchema = Joi.object({
     "string.empty": "Email is required",
     "string.email": "Please provide a valid email"
   }),
+    company: Joi.string().hex().length(24).required().messages({
+    "string.empty": "Company is required",
+    "string.hex": "Invalid company ID format",
+    "string.length": "Invalid company ID length"
+  }),
+  companyCode: Joi.string().required().messages({
+    "string.empty": "Company code is required"
+  }),
   password: Joi.string().min(8).required().messages({
     "string.empty": "Password is required",
     "string.min": "Password must be at least 8 characters"
@@ -20,7 +28,7 @@ const registerSchema = Joi.object({
     "string.hex": "Invalid department ID format",
     "string.length": "Invalid department ID length"
   }),
-  jobRole: Joi.string().valid('admin', 'user', 'hr', 'manager').required().messages({
+  jobRole: Joi.string().valid('admin', 'user', 'hr', 'manager','intern').required().messages({
     "string.empty": "Job role is required",
     "any.only": "Invalid job role"
   }),
