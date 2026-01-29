@@ -20,7 +20,7 @@ const registerSchema = Joi.object({
     "string.hex": "Invalid department ID format",
     "string.length": "Invalid department ID length"
   }),
-  jobRole: Joi.string().valid('admin', 'user', 'hr', 'manager', 'SuperAdmin').required().messages({
+  jobRole: Joi.string().valid('admin', 'user', 'hr', 'manager').required().messages({
     "string.empty": "Job role is required",
     "any.only": "Invalid job role"
   }),

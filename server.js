@@ -308,6 +308,11 @@ app.use("/api/clientsservice", require("./HR-CDS/routes/clientRoutes"));
 app.use("/api/clienttasks", require("./HR-CDS/routes/clientTask"));
 app.use('/api/menu-access', require("./routes/menuAccess"));
 app.use('/api/menu-items', require("./routes/menuItems"));
+app.use('/api/company', require("./routes/companyRoutes"));
+app.use('/api/company-auth', require("./routes/companyRoutes"));
+
+
+app.use('/api/super-admin', require("./routes/superAdmin"));
 // ✅ Add Meeting Management Route
 app.use("/api/meetings", require("./HR-CDS/routes/meetingRoutes"));
 

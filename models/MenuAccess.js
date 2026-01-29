@@ -12,7 +12,7 @@ const menuAccessSchema = new Schema(
     jobRole: {
       type: String,
       required: true,
-      enum: ['admin', 'user', 'hr', 'manager', 'SuperAdmin'] // You can adjust the roles as needed
+      enum: ['admin', 'user', 'hr', 'manager'] // You can adjust the roles as needed
     },
     accessItems: {
       type: [String], // Array of strings to store the menu access items

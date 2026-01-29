@@ -124,7 +124,7 @@
       user: ['dashboard', 'attendance', 'my-leaves', 'my-assets', 'create-task', 'employee-project', 'alerts', 'employee-meeting'],
       hr: ['dashboard', 'attendance', 'my-leaves', 'my-assets', 'emp-details', 'emp-attendance', 'emp-leaves', 'emp-assets', 'create-user'],
       manager: ['dashboard', 'attendance', 'my-leaves', 'my-assets', 'create-task', 'employee-project', 'alerts', 'employee-meeting', 'emp-details', 'emp-attendance', 'emp-leaves', 'emp-assets', 'admin-task-create', 'emp-client', 'emp-all-task', 'admin-meeting'],
-      superadmin: ['*'] // All access
+   
     };
     
     return defaults[jobRole?.toLowerCase()] || defaults.user;

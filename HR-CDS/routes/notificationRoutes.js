@@ -14,7 +14,7 @@ router.put("/mark-read/:id", notificationController.markAsRead);
 router.patch("/read-all", notificationController.markAllAsRead);
 
 // ✅ Admin-only routes
-router.post("/", authorize('admin', 'hr', 'manager', 'SuperAdmin'), notificationController.createNotification);
-router.delete("/cleanup", authorize('admin', 'SuperAdmin'), notificationController.deleteOldNotifications);
+router.post("/", authorize('admin', 'hr', 'manager'), notificationController.createNotification);
+router.delete("/cleanup", authorize('admin' ), notificationController.deleteOldNotifications);
 
 module.exports = router;

@@ -55,7 +55,7 @@ const validateUserData = (data, isUpdate = false) => {
   }
 
   // Job role validation
-  if (data.jobRole && !['admin', 'user', 'hr', 'manager', 'SuperAdmin'].includes(data.jobRole)) {
+  if (data.jobRole && !['admin', 'user', 'hr', 'manager'].includes(data.jobRole)) {
     errors.push("Invalid job role");
   }
 
@@ -390,8 +390,8 @@ exports.updateUser = async (req, res) => {
       return errorResponse(res, 404, "User not found");
     }
 
-    // Admin, HR, Manager, SuperAdmin roles
-    const adminRoles = ['admin', 'hr', 'manager', 'SuperAdmin'];
+    // Admin, HR, Manager roles
+    const adminRoles = ['admin', 'hr', 'manager'];
     
     // Check if requesting user has admin rights
     const isAdmin = adminRoles.includes(requestingUser.jobRole);
@@ -421,7 +421,7 @@ exports.updateUser = async (req, res) => {
     }
 
     // Validate job role if being updated
-    if (updateData.jobRole && !['admin', 'user', 'hr', 'manager', 'SuperAdmin'].includes(updateData.jobRole)) {
+    if (updateData.jobRole && !['admin', 'user', 'hr', 'manager'].includes(updateData.jobRole)) {
       return errorResponse(res, 400, "Invalid job role");
     }
 
@@ -475,8 +475,8 @@ exports.deleteUser = async (req, res) => {
       return errorResponse(res, 404, "User not found");
     }
     
-    // Check permissions - only admin or SuperAdmin can delete
-    const canDelete = ['admin', 'SuperAdmin'].includes(requestingUser.jobRole);
+    // Check permissions - only admin or can delete
+    const canDelete = ['admin'].includes(requestingUser.jobRole);
     if (!canDelete) {
       return errorResponse(res, 403, "You don't have permission to delete users");
     }

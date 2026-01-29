@@ -50,7 +50,7 @@ exports.register = async (req, res) => {
     }
 
     // Validate job role
-    const validJobRoles = ["admin", "user", "hr", "manager", "SuperAdmin"];
+    const validJobRoles = ["admin", "user", "hr", "manager", ];
     if (!validJobRoles.includes(jobRole)) {
       return errorResponse(res, 400, "Invalid job role");
     }
@@ -103,8 +103,6 @@ exports.register = async (req, res) => {
     return errorResponse(res, 500, "Registration failed");
   }
 };
-
-
 // ✅ Login
 exports.login = async (req, res) => {
   try {
@@ -178,7 +176,6 @@ exports.login = async (req, res) => {
     return errorResponse(res, 500, "Server error during login");
   }
 };
-
 // ✅ Forgot Password
 exports.forgotPassword = async (req, res) => {
   try {
@@ -215,7 +212,6 @@ exports.forgotPassword = async (req, res) => {
     return errorResponse(res, 500, "Server error during password reset request");
   }
 };
-
 // ✅ Reset Password
 exports.resetPassword = async (req, res) => {
   try {
@@ -246,7 +242,6 @@ exports.resetPassword = async (req, res) => {
     return errorResponse(res, 500, "Server error during password reset");
   }
 };
-
 // ✅ Change Password (email + old password)
 exports.changePassword = async (req, res) => {
   try {

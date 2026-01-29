@@ -15,7 +15,7 @@ const sharp = require('sharp');
 const hasPrivileges = (user) => {
   if (!user) return false;
 
-  const privilegedRoles = ['admin', 'manager', 'hr', 'SuperAdmin'];
+  const privilegedRoles = ['admin', 'manager', 'hr', ];
 
   if (privilegedRoles.includes(user.role)) {
     return true;
@@ -160,8 +160,8 @@ const getAllAssignableUsers = async (req) => {
 
   let query = { isActive: true };
 
-  // 🔹 Admin / HR / SuperAdmin → sab users
-  if (['admin', 'hr', 'SuperAdmin'].includes(loggedInUser.role)) {
+  // 🔹 Admin / HR → sab users
+  if (['admin', 'hr', ].includes(loggedInUser.role)) {
     console.log('🔓 Admin-level access');
     query = { isActive: true };
   }

@@ -10,8 +10,8 @@ router.use(protect);
 router.get("/", departmentController.getAllDepartments);
 
 // ✅ Admin-only routes
-router.post("/", authorize('admin', 'hr', 'manager', 'SuperAdmin'), departmentController.createDepartment);
-router.put("/:id", authorize('admin', 'hr', 'manager', 'SuperAdmin'), departmentController.updateDepartment);
-router.delete("/:id", authorize('admin', 'SuperAdmin'), departmentController.deleteDepartment);
+router.post("/", authorize('admin', 'hr', 'manager'), departmentController.createDepartment);
+router.put("/:id", authorize('admin', 'hr', 'manager'), departmentController.updateDepartment);
+router.delete("/:id", authorize('admin'), departmentController.deleteDepartment);
 
 module.exports = router;
