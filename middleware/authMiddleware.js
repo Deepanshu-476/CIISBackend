@@ -133,25 +133,45 @@ exports.protect = async (req, res, next) => {
     // Check for token in headers
     if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
       token = req.headers.authorization.split(' ')[1];
+      console.log("🟢 Token found in headers:", token ? "Yes" : "No");
+    } else {
+      console.log("🔴 No Authorization header found");
     }
     
     if (!token) {
       return res.status(401).json({
-        error: 'Not authorized to access this route'
+        success: false,
+        message: "Not authorized to access this route - No token"
       });
     }
     
     // Verify token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    console.log("✅ Token decoded successfully. User ID:", decoded.id);
     
-    // Get user from database
-    const user = await User.findById(decoded.id).select('+lastPasswordChange');
+    // 🔴 FIX THIS LINE: Select ALL necessary fields including company
+    const user = await User.findById(decoded.id)
+      .select('+lastPasswordChange')
+      .populate('company', 'name code') // Add this to populate company
+      .populate('department', 'name');  // Add this to populate department
     
     if (!user) {
+      console.log("❌ User not found in database for ID:", decoded.id);
       return res.status(401).json({
-        error: 'User not found'
+        success: false,
+        message: "User not found"
       });
     }
+    
+    console.log("✅ User found in database:", {
+      id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      jobRole: user.jobRole,
+      company: user.company?._id || user.company,
+      department: user.department?._id || user.department
+    });
     
     // Check if user changed password after token was issued
     if (user.lastPasswordChange) {
@@ -161,18 +181,49 @@ exports.protect = async (req, res, next) => {
       );
       
       if (decoded.iat < changedTimestamp) {
+        console.log("🔒 Password changed after token issued");
         return res.status(401).json({
-          error: 'User recently changed password. Please login again.'
+          success: false,
+          message: "User recently changed password. Please login again."
         });
       }
     }
     
-    // Attach user to request
-    req.user = user;
+    // Attach FULL user to request
+    req.user = {
+      id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      jobRole: user.jobRole,
+      department: user.department?._id || user.department,
+      // CRITICAL: Make sure company is included
+      company: user.company?._id || user.company,
+      companyCode: user.company?.code || user.companyCode
+    };
+    
+    console.log("📋 req.user object attached:", req.user);
     next();
   } catch (error) {
+    console.error("❌ Protect middleware error:", error.message);
+    
+    if (error.name === 'JsonWebTokenError') {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid token"
+      });
+    }
+    
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({
+        success: false,
+        message: "Token expired, please login again"
+      });
+    }
+    
     return res.status(401).json({
-      error: 'Not authorized to access this route'
+      success: false,
+      message: "Not authorized to access this route"
     });
   }
 };

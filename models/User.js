@@ -52,9 +52,14 @@ const userSchema = new mongoose.Schema({
   
   jobRole: {
     type: String,
-    enum: ['admin', 'user', 'hr', 'manager', 'super_admin', 'intern', 'owner'],
+   
     required: [true, "Job role is required"],
     default: 'user'
+  },
+  
+  companyRole: {
+    type: String,
+    default: 'employee'
   },
 
   // ==================== PERSONAL INFORMATION ====================

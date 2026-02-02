@@ -310,7 +310,7 @@ app.use('/api/menu-access', require("./routes/menuAccess"));
 app.use('/api/menu-items', require("./routes/menuItems"));
 app.use('/api/company', require("./routes/companyRoutes"));
 app.use('/api/company-auth', require("./routes/companyRoutes"));
-
+app.use('/api/job-roles', require("./routes/jobRoleRoutes"));
 
 app.use('/api/super-admin', require("./routes/superAdmin"));
 // ✅ Add Meeting Management Route

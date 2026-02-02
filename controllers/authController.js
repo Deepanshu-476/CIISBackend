@@ -51,11 +51,6 @@ exports.register = async (req, res) => {
       return errorResponse(res, 404, "Department not found");
     }
 
-    // Validate job role
-    const validJobRoles = ["admin", "user", "hr", "manager","supper-admin","intern"];
-    if (!validJobRoles.includes(jobRole)) {
-      return errorResponse(res, 400, "Invalid job role");
-    }
 
     // Create user
     const user = await User.create({
