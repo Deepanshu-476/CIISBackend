@@ -1,43 +1,34 @@
 const express = require("express");
 const router = express.Router();
-
-const {
-  register,
-  login,
-  forgotPassword,
-  resetPassword,
-  changePassword // 
-} = require("../controllers/authController");
-
+const authController = require("../controllers/authController");
 const { validateRequest } = require("../middleware/validation");
 const {
   registerSchema,
   loginSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
-  changePasswordSchema // 
+  changePasswordSchema
 } = require("../validations/authValidation");
 
-// ✅ Rate limiting to prevent brute force attacks
-const rateLimit = require("express-rate-limit");
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 20, // limit each IP to 20 requests per windowMs
-  message: "Too many requests from this IP, please try again later"
-});
+// ✅ Public routes
+router.post("/register", validateRequest(registerSchema), authController.register);
+router.post("/login", validateRequest(loginSchema), authController.login);
+router.post("/forgot-password", validateRequest(forgotPasswordSchema), authController.forgotPassword);
+router.post("/reset-password", validateRequest(resetPasswordSchema), authController.resetPassword);
+router.get("/verify-email/:token", authController.verifyEmail);
+router.post("/refresh-token", authController.refreshToken);
+router.post("/logout", authController.logout);
 
-// ✅ Apply rate limiting only to critical endpoints
-router.use(["/register", "/login", "/forgot-password"], authLimiter);
-
-// ✅ Auth routes
-router.post("/register", validateRequest(registerSchema), register);
-router.post("/login", validateRequest(loginSchema), login);
-
-// ✅ Password reset routes
-router.post("/forgot-password", validateRequest(forgotPasswordSchema), forgotPassword);
-router.post("/reset-password", validateRequest(resetPasswordSchema), resetPassword);
-
-// ✅ Password change (old password + new password)
-router.post("/change-password", validateRequest(changePasswordSchema), changePassword); // ✅ new route
+// ✅ Company-specific login route
+router.post("/company/:companyCode/login", (req, res, next) => {
+  console.log('Company login route hit:', {
+    identifier: req.params.companyIdentifier,
+    body: { email: req.body.email ? `${req.body.email.substring(0, 3)}...` : 'undefined' }
+  });
+  
+  // Add company identifier to request body
+  req.body.companyIdentifier = req.params.companyIdentifier;
+  next();
+}, validateRequest(loginSchema), authController.login);
 
 module.exports = router;

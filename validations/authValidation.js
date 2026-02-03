@@ -16,6 +16,22 @@ const registerSchema = Joi.object({
     "string.hex": "Invalid company ID format",
     "string.length": "Invalid company ID length"
   }),
+  companyIdentifier: Joi.string()
+    .optional()
+    .allow('', null)
+    .messages({
+      'string.base': 'Company identifier must be a string'
+    }),
+    
+  // For two-factor authentication
+  twoFactorCode: Joi.string()
+    .optional()
+    .length(6)
+    .pattern(/^[0-9]+$/)
+    .messages({
+      'string.length': 'Two-factor code must be 6 digits',
+      'string.pattern.base': 'Two-factor code must contain only numbers'
+    }),
   companyCode: Joi.string().required().messages({
     "string.empty": "Company code is required"
   }),
@@ -72,7 +88,22 @@ const loginSchema = Joi.object({
   }),
   password: Joi.string().required().messages({
     "string.empty": "Password is required"
-  })
+  }),
+    companyIdentifier: Joi.string()
+    .optional()
+    .allow('', null)
+    .messages({
+      'string.base': 'Company identifier must be a string'
+    }),
+    twoFactorCode: Joi.string()
+    .optional()
+    .length(6)
+    .pattern(/^[0-9]+$/)
+    .allow('', null)
+    .messages({
+      'string.length': 'Two-factor code must be 6 digits',
+      'string.pattern.base': 'Two-factor code must contain only numbers'
+    })
 });
 
 // Forgot password validation

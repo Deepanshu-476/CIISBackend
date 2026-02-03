@@ -85,7 +85,7 @@ const userSchema = new mongoose.Schema({
   // ==================== EMPLOYMENT DETAILS ====================
   employeeType: {
     type: String,
-    enum: ['intern', 'technical', 'non-technical', 'sales', 'management'],
+    
   },
   employeeId: {
     type: String,

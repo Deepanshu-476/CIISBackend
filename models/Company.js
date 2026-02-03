@@ -62,6 +62,9 @@ const companySchema = new mongoose.Schema(
     loginUrl: {
       type: String,
       unique: true,
+       default: function() {
+      return `/company/${this.companyCode}/login`;
+    }
     },
 
     // ✅ Auto-generated

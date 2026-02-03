@@ -4,13 +4,31 @@ const User = require("../models/User");
 const crypto = require("crypto");
 const mongoose = require("mongoose");
 
-/**
- * ✅ CREATE COMPANY + CREATE OWNER (Super Admin)
- * POST /api/v1/company
- */
+// Helper function
+const isValidObjectId = (id) => {
+  return mongoose.Types.ObjectId.isValid(id);
+};
+
+// Helper function to get company stats
+const getCompanyStats = async (companyId) => {
+  const [totalUsers, activeUsers, deactivatedUsers] = await Promise.all([
+    User.countDocuments({ company: companyId }),
+    User.countDocuments({ company: companyId, isActive: true }),
+    User.countDocuments({ company: companyId, isActive: false }),
+  ]);
+
+  return {
+    totalUsers,
+    activeUsers,
+    deactivatedUsers,
+  };
+};
+
+
 exports.createCompany = async (req, res) => {
   let transactionCompleted = false;
   let companyCreated = false;
+  let createdCompany = null;
   
   try {
     const {
@@ -80,14 +98,36 @@ exports.createCompany = async (req, res) => {
     const lowerOwnerEmail = ownerEmail.toLowerCase().trim();
     const trimmedPhone = companyPhone.trim();
 
-    // Check for duplicates with specific messages
-    const [existingCompanyEmail, existingCompanyPhone, existingCompanyName, existingUserEmail] = await Promise.all([
+    // Generate company code FIRST (before duplicate check)
+    const generateCompanyCode = (name) => {
+      // Take first 3-4 letters, remove spaces and special chars, make uppercase
+      const code = name
+        .replace(/[^a-zA-Z0-9]/g, '') // Remove special characters
+        .substring(0, 6) // Increased to 6 for better uniqueness
+        .toUpperCase();
+      
+      // If code is less than 3 chars, add some numbers
+      if (code.length < 3) {
+        return `${code}${Math.floor(100 + Math.random() * 900)}`;
+      }
+      
+      return code;
+    };
+
+    const companyCode = generateCompanyCode(trimmedCompanyName);
+    
+    // ✅ Generate dbIdentifier for multi-tenancy
+    const dbIdentifier = `company_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    // Check for duplicates including company code
+    const [existingCompanyEmail, existingCompanyPhone, existingCompanyName, existingUserEmail, existingCompanyCode] = await Promise.all([
       Company.findOne({ companyEmail: lowerCompanyEmail }),
       Company.findOne({ companyPhone: trimmedPhone }),
       Company.findOne({ 
         companyName: { $regex: new RegExp(`^${trimmedCompanyName}$`, 'i') }
       }),
-      User.findOne({ email: lowerOwnerEmail })
+      User.findOne({ email: lowerOwnerEmail }),
+      Company.findOne({ companyCode }) // Check if company code already exists
     ]);
 
     if (existingCompanyEmail) {
@@ -130,28 +170,54 @@ exports.createCompany = async (req, res) => {
       });
     }
 
-    // ✅ 3. CREATE COMPANY IN TRANSACTION (to ensure data consistency)
+    if (existingCompanyCode) {
+      // If company code exists, generate a new one with suffix
+      const newCompanyCode = `${companyCode}${Math.floor(10 + Math.random() * 90)}`;
+      return res.status(409).json({
+        success: false,
+        message: `Company code '${companyCode}' already exists`,
+        field: "companyCode",
+        value: companyCode,
+        suggestion: `Please use '${newCompanyCode}' instead`,
+        alternativeCode: newCompanyCode
+      });
+    }
+
+    // ✅ 3. CREATE COMPANY IN TRANSACTION
     const session = await mongoose.startSession();
     session.startTransaction();
 
     try {
-      // Create company
-      const company = await Company.create([{
+      // ✅ CREATE COMPANY WITH ALL FIELDS INCLUDING loginUrl
+      const baseUrl = `${req.protocol}://${req.get("host")}`;
+      const frontendLoginUrl = `/company/${companyCode}/login`;
+      const apiLoginUrl = `${baseUrl}/api/v1/auth/company/${companyCode}/login`;
+      
+      const companyData = {
         companyName: trimmedCompanyName,
+        companyCode: companyCode,
         companyEmail: lowerCompanyEmail,
         companyAddress: companyAddress.trim(),
         companyPhone: trimmedPhone,
         ownerName: ownerName.trim(),
         logo: logo || null,
-      }], { session });
+        companyDomain: lowerCompanyEmail.split('@')[1] || 'example.com',
+        loginUrl: frontendLoginUrl, // ✅ SET HERE with companyCode
+        apiLoginUrl: apiLoginUrl, // ✅ SET HERE
+        dbIdentifier: dbIdentifier,
+        isActive: true,
+        // Other fields...
+      };
 
-      const createdCompany = company[0];
+      const company = await Company.create([companyData], { session });
+
+      createdCompany = company[0];
       companyCreated = true;
 
-      // ✅ 4. CREATE OWNER USER WITH ENHANCED VALIDATION
+      // ✅ 4. CREATE OWNER USER
       const ownerUser = await User.create([{
         company: createdCompany._id,
-        companyCode: createdCompany.companyCode,
+        companyCode: companyCode,
         name: ownerName.trim(),
         email: lowerOwnerEmail,
         password: ownerPassword,
@@ -168,12 +234,13 @@ exports.createCompany = async (req, res) => {
       // ✅ 5. GENERATE LOGIN TOKEN
       const loginToken = crypto.randomBytes(32).toString("hex");
       createdCompany.loginToken = loginToken;
+      
+      // ✅ 6. SET SUBSCRIPTION EXPIRY (30 days from now)
+      const subscriptionExpiry = new Date();
+      subscriptionExpiry.setDate(subscriptionExpiry.getDate() + 30);
+      createdCompany.subscriptionExpiry = subscriptionExpiry;
+      
       await createdCompany.save({ session });
-
-      // ✅ 6. CREATE API LOGIN URL
-      const apiLoginUrl = `${req.protocol}://${req.get(
-        "host"
-      )}/api/v1/auth/company/${createdCompany.companyCode}/login`;
 
       // Commit transaction
       await session.commitTransaction();
@@ -185,16 +252,17 @@ exports.createCompany = async (req, res) => {
         company: {
           id: createdCompany._id,
           companyName: createdCompany.companyName,
-          companyCode: createdCompany.companyCode,
+          companyCode: companyCode,
           companyEmail: createdCompany.companyEmail,
           companyPhone: createdCompany.companyPhone,
           companyAddress: createdCompany.companyAddress,
           ownerName: createdCompany.ownerName,
           companyDomain: createdCompany.companyDomain,
-          loginUrl: createdCompany.loginUrl,
-          apiLoginUrl,
+          loginUrl: frontendLoginUrl,
+          apiLoginUrl: apiLoginUrl,
           dbIdentifier: createdCompany.dbIdentifier,
           isActive: createdCompany.isActive,
+          subscriptionExpiry: createdCompany.subscriptionExpiry,
           createdAt: createdCompany.createdAt,
         },
         owner: {
@@ -283,13 +351,13 @@ exports.createCompany = async (req, res) => {
       cleanupRequired = companyCreated;
     }
 
-    // ✅ 8. CLEANUP IF PARTIALLY CREATED (for non-transactional scenario)
+    // ✅ 8. CLEANUP IF PARTIALLY CREATED
     if (cleanupRequired && !transactionCompleted) {
       try {
         // Attempt to clean up partially created data
-        if (companyCreated) {
-          await Company.findByIdAndDelete(createdCompany?._id);
-          await User.deleteMany({ company: createdCompany?._id });
+        if (companyCreated && createdCompany) {
+          await Company.findByIdAndDelete(createdCompany._id);
+          await User.deleteMany({ company: createdCompany._id });
           console.log("✅ Cleaned up partially created company data");
         }
       } catch (cleanupError) {
@@ -355,6 +423,10 @@ exports.getAllCompanies = async (req, res) => {
   }
 };
 
+/**
+ * ✅ GET COMPANY BY ID
+ * GET /api/v1/company/:id
+ */
 exports.getCompanyById = async (req, res) => {
   try {
     const { id } = req.params;
@@ -392,7 +464,8 @@ exports.getCompanyById = async (req, res) => {
     });
   }
 };
-    
+
+
 exports.getCompanyByCode = async (req, res) => {
   try {
     const { companyCode } = req.params;
@@ -433,10 +506,121 @@ exports.getCompanyByCode = async (req, res) => {
   }
 };
 
-/**
- * ✅ UPDATE COMPANY (SAFE)
- * PATCH /api/v1/company/:id
- */
+
+exports.getCompanyDetailsByIdentifier = async (req, res) => {
+  try {
+    const { identifier } = req.params;
+    
+    console.log('Fetching company for identifier:', identifier);
+    
+    // Multiple ways to find company:
+    // 1. By companyCode
+    // 2. By loginUrl segment
+    // 3. By extracted code from URL
+    const company = await Company.findOne({
+      $or: [
+        { companyCode: identifier },
+        { loginUrl: { $regex: identifier, $options: 'i' } },
+        { 
+          loginUrl: { 
+            $regex: identifier.replace(/-/g, '.*'), 
+            $options: 'i' 
+          } 
+        }
+      ]
+    }).select('-loginToken -__v');
+
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: 'Company not found'
+      });
+    }
+
+    // Check if company is active
+    if (!company.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: 'Company account is deactivated'
+      });
+    }
+
+    // Check subscription expiry
+    if (new Date() > new Date(company.subscriptionExpiry)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Company subscription has expired'
+      });
+    }
+
+    res.json({
+      success: true,
+      company: {
+        _id: company._id,
+        companyName: company.companyName,
+        companyEmail: company.companyEmail,
+        companyAddress: company.companyAddress,
+        companyPhone: company.companyPhone,
+        ownerName: company.ownerName,
+        logo: company.logo,
+        companyDomain: company.companyDomain,
+        companyCode: company.companyCode,
+        isActive: company.isActive,
+        subscriptionExpiry: company.subscriptionExpiry,
+        loginUrl: company.loginUrl,
+        dbIdentifier: company.dbIdentifier,
+        createdAt: company.createdAt,
+        updatedAt: company.updatedAt
+      }
+    });
+
+  } catch (error) {
+    console.error('Company details error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+
+exports.validateCompanyUrl = async (req, res) => {
+  try {
+    const { identifier } = req.params;
+    
+    const company = await Company.findOne({
+      $or: [
+        { companyCode: identifier },
+        { loginUrl: { $regex: identifier, $options: 'i' } }
+      ]
+    }).select('companyName loginUrl isActive');
+
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        exists: false,
+        message: 'Company URL not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      exists: true,
+      companyName: company.companyName,
+      isActive: company.isActive
+    });
+
+  } catch (error) {
+    console.error('URL validation error:', error);
+    res.status(500).json({
+      success: false,
+      exists: false,
+      message: 'Server error'
+    });
+  }
+};
+
 exports.updateCompany = async (req, res) => {
   try {
     const { id } = req.params;
@@ -506,10 +690,6 @@ exports.updateCompany = async (req, res) => {
   }
 };
 
-/**
- * ✅ DEACTIVATE COMPANY
- * PATCH /api/v1/company/:id/deactivate
- */
 exports.deactivateCompany = async (req, res) => {
   try {
     const { id } = req.params;
@@ -560,10 +740,6 @@ exports.deactivateCompany = async (req, res) => {
   }
 };
 
-/**
- * ✅ ACTIVATE COMPANY
- * PATCH /api/v1/company/:id/activate
- */
 exports.activateCompany = async (req, res) => {
   try {
     const { id } = req.params;
@@ -614,10 +790,7 @@ exports.activateCompany = async (req, res) => {
   }
 };
 
-/**
- * ✅ DELETE COMPANY PERMANENTLY
- * DELETE /api/v1/company/:id
- */
+
 exports.deleteCompanyPermanently = async (req, res) => {
   try {
     const { id } = req.params;
@@ -656,10 +829,6 @@ exports.deleteCompanyPermanently = async (req, res) => {
   }
 };
 
-/**
- * ✅ GET COMPANY USERS (With pagination + filters)
- * GET /api/v1/company/:id/users?page=1&limit=20&role=Admin&department=IT&active=true
- */
 exports.getCompanyUsers = async (req, res) => {
   try {
     const { id } = req.params;
@@ -724,6 +893,48 @@ exports.getCompanyUsers = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to fetch company users",
+    });
+  }
+};
+
+
+exports.getCompanyStats = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid company id",
+      });
+    }
+
+    const company = await Company.findById(id);
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: "Company not found",
+      });
+    }
+
+    const stats = await getCompanyStats(id);
+
+    return res.status(200).json({
+      success: true,
+      stats,
+      company: {
+        id: company._id,
+        companyName: company.companyName,
+        companyCode: company.companyCode,
+        isActive: company.isActive,
+        subscriptionExpiry: company.subscriptionExpiry,
+      }
+    });
+  } catch (err) {
+    console.error("❌ Get company stats error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch company stats",
     });
   }
 };

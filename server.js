@@ -311,7 +311,8 @@ app.use('/api/menu-items', require("./routes/menuItems"));
 app.use('/api/company', require("./routes/companyRoutes"));
 app.use('/api/company-auth', require("./routes/companyRoutes"));
 app.use('/api/job-roles', require("./routes/jobRoleRoutes"));
-
+app.use('/api/v1/company', require("./routes/companyRoutes"));
+app.use('/api/v1/auth', require("./routes/authRoutes"));
 app.use('/api/super-admin', require("./routes/superAdmin"));
 // ✅ Add Meeting Management Route
 app.use("/api/meetings", require("./HR-CDS/routes/meetingRoutes"));
