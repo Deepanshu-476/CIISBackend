@@ -381,11 +381,6 @@ exports.createCompany = async (req, res) => {
     });
   }
 };
-
-/**
- * ✅ GET ALL COMPANIES
- * GET /api/v1/company
- */
 exports.getAllCompanies = async (req, res) => {
   try {
     const companies = await Company.find({})
@@ -423,10 +418,6 @@ exports.getAllCompanies = async (req, res) => {
   }
 };
 
-/**
- * ✅ GET COMPANY BY ID
- * GET /api/v1/company/:id
- */
 exports.getCompanyById = async (req, res) => {
   try {
     const { id } = req.params;
