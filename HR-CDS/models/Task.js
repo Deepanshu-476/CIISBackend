@@ -32,7 +32,7 @@ const statusHistorySchema = new mongoose.Schema(
     },
     changedByType: {
       type: String,
-      enum: ["user", "system"],
+      
       default: "user",
     },
     changedAt: {
@@ -165,7 +165,7 @@ const taskSchema = new mongoose.Schema(
 
     taskFor: {
       type: String,
-      enum: ["self", "others"],
+      
       default: "self"
     },
 

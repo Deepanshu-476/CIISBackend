@@ -13,7 +13,7 @@ const historySchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['admin', 'user', 'hr', 'manager', 'intern'],
+    
     default: 'user'
   },
   remarks: {

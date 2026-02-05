@@ -6,6 +6,7 @@ const { body, param, query } = require('express-validator');
 const validateRequest = require('../../middleware/validateRequest.js');
 const Leave = require('../models/Leave');
 const User = require('../../models/User');
+const mongoose = require('mongoose');
 
 // 🔐 All routes are protected
 router.use(authMiddleware.protect);
@@ -47,9 +48,8 @@ router.post('/sync',
 
 router.get('/stats', leaveController.getLeaveStats);
 
-// 👨‍💼 Manager/Admin Routes
+// 📋 All Leaves Route - Now accessible to everyone in same company
 router.get('/all', 
-  authMiddleware.restrictTo('admin', 'hr', 'manager'),
   [
     query('date').optional().isISO8601().withMessage('Invalid date format'),
     query('status').optional().isIn(['Pending', 'Approved', 'Rejected', 'Cancelled', 'All']).withMessage('Invalid status value'),
@@ -60,31 +60,406 @@ router.get('/all',
     query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
     validateRequest
   ],
-  leaveController.getAllLeaves
+  async (req, res) => {
+    try {
+      console.log('📊 Getting all leaves for user:', {
+        userId: req.user._id,
+        name: req.user.name,
+        companyId: req.user.company,
+        company: req.user.companyName
+      });
+
+      const { 
+        date, 
+        status, 
+        type, 
+        department, 
+        search, 
+        page = 1, 
+        limit = 20 
+      } = req.query;
+
+      // Build filter
+      const filter = {};
+      
+      // 🔧 Get the user's company ID
+      const userCompanyId = req.user.company || req.user.companyId;
+      if (!userCompanyId) {
+        return res.status(400).json({
+          success: false,
+          error: 'User does not belong to any company'
+        });
+      }
+
+      console.log(`👤 User's company ID: ${userCompanyId}`);
+
+      // Find all users from the same company
+      const companyUsers = await User.find({ 
+        $or: [
+          { company: userCompanyId },
+          { companyId: userCompanyId }
+        ]
+      }).select('_id');
+      
+      const companyUserIds = companyUsers.map(user => user._id);
+      
+      console.log(`🏢 Found ${companyUserIds.length} users in the same company`);
+
+      if (companyUserIds.length === 0) {
+        return res.status(200).json({
+          success: true,
+          data: {
+            leaves: [],
+            pagination: {
+              total: 0,
+              page: 1,
+              limit: parseInt(limit),
+              pages: 0
+            },
+            filters: {
+              date,
+              status,
+              type,
+              department,
+              search
+            },
+            company: userCompanyId
+          }
+        });
+      }
+
+      // 🔧 Filter leaves by users from the same company
+      filter.user = { $in: companyUserIds };
+
+      // Date filter
+      if (date) {
+        const selectedDate = new Date(date);
+        const startOfDay = new Date(selectedDate.setHours(0, 0, 0, 0));
+        const endOfDay = new Date(selectedDate.setHours(23, 59, 59, 999));
+        
+        filter.$or = [
+          {
+            startDate: { $lte: endOfDay },
+            endDate: { $gte: startOfDay }
+          }
+        ];
+      }
+
+      // Status filter
+      if (status && status !== 'All') {
+        filter.status = status;
+      }
+
+      // Type filter
+      if (type && type !== 'all') {
+        filter.type = type;
+      }
+
+      // Department filter (optional)
+      if (department) {
+        // Get users from the specified department
+        const departmentUsers = await User.find({ 
+          _id: { $in: companyUserIds },
+          department: department 
+        }).select('_id');
+        
+        const departmentUserIds = departmentUsers.map(user => user._id);
+        
+        if (departmentUserIds.length > 0) {
+          filter.user = { $in: departmentUserIds };
+          console.log(`🔍 Filtering by department "${department}": ${departmentUserIds.length} users`);
+        } else {
+          // If no users in that department, return empty results
+          return res.status(200).json({
+            success: true,
+            data: {
+              leaves: [],
+              pagination: {
+                total: 0,
+                page: 1,
+                limit: parseInt(limit),
+                pages: 0
+              },
+              filters: {
+                date,
+                status,
+                type,
+                department,
+                search
+              },
+              company: userCompanyId
+            }
+          });
+        }
+      }
+
+      // Search filter
+      if (search) {
+        // Create user filter for search
+        const userFilter = {
+          _id: { $in: companyUserIds },
+          $or: [
+            { name: { $regex: search, $options: 'i' } },
+            { email: { $regex: search, $options: 'i' } },
+            { department: { $regex: search, $options: 'i' } },
+            { employeeId: { $regex: search, $options: 'i' } }
+          ]
+        };
+
+        // Get user IDs that match search
+        const users = await User.find(userFilter).select('_id');
+        const userIds = users.map(user => user._id);
+        
+        if (userIds.length > 0) {
+          filter.user = { $in: userIds };
+          console.log(`🔍 Search "${search}": found ${userIds.length} matching users`);
+        } else {
+          // Also search in leave reasons
+          filter.$or = [
+            { user: { $in: companyUserIds } }, // Keep company filter
+            { reason: { $regex: search, $options: 'i' } }
+          ];
+        }
+      }
+
+      // Calculate pagination
+      const skip = (page - 1) * limit;
+
+      // Get total count
+      const total = await Leave.countDocuments(filter);
+
+      // Get leaves with populated user data
+      const leaves = await Leave.find(filter)
+        .populate({
+          path: 'user',
+          select: 'name email department phone employeeType jobRole employeeId',
+          match: { _id: { $in: companyUserIds } }, // Ensure only same company users
+          transform: (doc) => {
+            if (!doc) return null;
+            return {
+              id: doc._id || doc.id,
+              _id: doc._id || doc.id,
+              name: doc.name,
+              email: doc.email,
+              department: doc.department,
+              phone: doc.phone,
+              employeeType: doc.employeeType,
+              jobRole: doc.jobRole,
+              employeeId: doc.employeeId
+            };
+          }
+        })
+        .populate({
+          path: 'approvedBy',
+          select: 'name email',
+          match: { _id: { $in: companyUserIds } }, // Ensure only same company users
+          transform: (doc) => {
+            if (!doc) return null;
+            return {
+              id: doc._id || doc.id,
+              name: doc.name,
+              email: doc.email
+            };
+          }
+        })
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean();
+
+      // Filter out leaves where user population failed
+      const validLeaves = leaves.filter(leave => leave.user !== null && leave.user !== undefined);
+
+      // Format the response
+      const formattedLeaves = validLeaves.map(leave => ({
+        _id: leave._id,
+        user: leave.user || {
+          id: leave.user?._id || leave.user,
+          name: 'Unknown User',
+          email: 'N/A',
+          department: 'N/A'
+        },
+        type: leave.type,
+        reason: leave.reason,
+        startDate: leave.startDate,
+        endDate: leave.endDate,
+        days: leave.days || 0,
+        status: leave.status || 'Pending',
+        remarks: leave.remarks || '',
+        approvedBy: leave.approvedBy,
+        history: leave.history || [],
+        createdAt: leave.createdAt,
+        updatedAt: leave.updatedAt,
+        // Add company info for verification
+        company: userCompanyId
+      }));
+
+      console.log(`✅ Found ${formattedLeaves.length} leaves out of ${total} total for company ${userCompanyId}`);
+
+      res.status(200).json({
+        success: true,
+        data: {
+          leaves: formattedLeaves,
+          pagination: {
+            total,
+            page: parseInt(page),
+            limit: parseInt(limit),
+            pages: Math.ceil(total / limit)
+          },
+          filters: {
+            date,
+            status,
+            type,
+            department,
+            search
+          },
+          company: userCompanyId,
+          companyName: req.user.companyName || 'Your Company',
+          userInfo: {
+            id: req.user._id,
+            name: req.user.name,
+            role: req.user.jobRole || req.user.role,
+            department: req.user.department
+          }
+        }
+      });
+
+    } catch (error) {
+      console.error('❌ Error in getAllLeaves:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Server error while fetching leaves',
+        details: error.message
+      });
+    }
+  }
 );
 
+// ✅ Update Leave Status - Now accessible to everyone in same company
 router.put('/:id/status',
-  authMiddleware.restrictTo('admin', 'hr', 'manager'),
   [
     param('id').isMongoId().withMessage('Invalid leave ID format'),
     body('status').isIn(['Approved', 'Rejected', 'Pending', 'Cancelled']).withMessage('Invalid status value'),
     body('remarks').optional().trim().isLength({ max: 500 }).withMessage('Remarks must be less than 500 characters'),
     validateRequest
   ],
-  leaveController.updateLeaveStatus
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { status, remarks } = req.body;
+      const userId = req.user._id;
+      const userCompanyId = req.user.company || req.user.companyId;
+
+      // Find the leave
+      const leave = await Leave.findById(id).populate('user', 'company companyId');
+
+      if (!leave) {
+        return res.status(404).json({
+          success: false,
+          error: 'Leave not found'
+        });
+      }
+
+      // 🔧 Check if the leave belongs to someone in the same company
+      const leaveUserCompanyId = leave.user.company || leave.user.companyId;
+      if (leaveUserCompanyId !== userCompanyId) {
+        return res.status(403).json({
+          success: false,
+          error: 'You can only update leaves from your own company'
+        });
+      }
+
+      // Check if user is trying to update their own leave
+      if (leave.user._id.toString() === userId.toString()) {
+        return res.status(400).json({
+          success: false,
+          error: 'You cannot update the status of your own leave'
+        });
+      }
+
+      // Update the leave status
+      leave.status = status;
+      leave.remarks = remarks || leave.remarks;
+      leave.approvedBy = userId;
+      
+      // Add to history
+      leave.history = leave.history || [];
+      leave.history.push({
+        action: status,
+        by: userId,
+        remarks: remarks || '',
+        at: new Date()
+      });
+
+      await leave.save();
+
+      res.status(200).json({
+        success: true,
+        message: `Leave ${status.toLowerCase()} successfully`,
+        data: leave
+      });
+
+    } catch (error) {
+      console.error('Error updating leave status:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Server error while updating leave status'
+      });
+    }
+  }
 );
 
+// ✅ Delete Leave - Now accessible to everyone in same company
 router.delete('/:id',
-  authMiddleware.restrictTo('admin', 'hr', 'manager'),
   [
     param('id').isMongoId().withMessage('Invalid leave ID format'),
     validateRequest
   ],
-  leaveController.deleteLeave
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const userId = req.user._id;
+      const userCompanyId = req.user.company || req.user.companyId;
+
+      // Find the leave
+      const leave = await Leave.findById(id).populate('user', 'company companyId');
+
+      if (!leave) {
+        return res.status(404).json({
+          success: false,
+          error: 'Leave not found'
+        });
+      }
+
+      // 🔧 Check if the leave belongs to someone in the same company
+      const leaveUserCompanyId = leave.user.company || leave.user.companyId;
+      if (leaveUserCompanyId !== userCompanyId) {
+        return res.status(403).json({
+          success: false,
+          error: 'You can only delete leaves from your own company'
+        });
+      }
+
+      // Delete the leave
+      await Leave.findByIdAndDelete(id);
+
+      res.status(200).json({
+        success: true,
+        message: 'Leave deleted successfully'
+      });
+
+    } catch (error) {
+      console.error('Error deleting leave:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Server error while deleting leave'
+      });
+    }
+  }
 );
 
+// ✅ Department Leaves - Now accessible to everyone in same company
 router.get('/department/:department',
-  authMiddleware.restrictTo('admin', 'hr', 'manager'),
   [
     param('department').trim().notEmpty().withMessage('Department is required'),
     query('status').optional().isIn(['Pending', 'Approved', 'Rejected', 'Cancelled', 'All']).withMessage('Invalid status value'),
@@ -92,10 +467,89 @@ router.get('/department/:department',
     query('date').optional().isISO8601().withMessage('Invalid date format'),
     validateRequest
   ],
-  leaveController.getLeavesByDepartment
+  async (req, res) => {
+    try {
+      const { department } = req.params;
+      const { status, type, date } = req.query;
+      const userCompanyId = req.user.company || req.user.companyId;
+
+      // Get users from the same company and specified department
+      const departmentUsers = await User.find({ 
+        company: userCompanyId,
+        department: department 
+      }).select('_id');
+      
+      const userIds = departmentUsers.map(user => user._id);
+
+      if (userIds.length === 0) {
+        return res.status(200).json({
+          success: true,
+          data: {
+            leaves: [],
+            department,
+            company: userCompanyId,
+            total: 0
+          }
+        });
+      }
+
+      const filter = { user: { $in: userIds } };
+
+      // Date filter
+      if (date) {
+        const selectedDate = new Date(date);
+        const startOfDay = new Date(selectedDate.setHours(0, 0, 0, 0));
+        const endOfDay = new Date(selectedDate.setHours(23, 59, 59, 999));
+        
+        filter.$or = [
+          {
+            startDate: { $lte: endOfDay },
+            endDate: { $gte: startOfDay }
+          }
+        ];
+      }
+
+      // Status filter
+      if (status && status !== 'All') {
+        filter.status = status;
+      }
+
+      // Type filter
+      if (type && type !== 'all') {
+        filter.type = type;
+      }
+
+      const leaves = await Leave.find(filter)
+        .populate({
+          path: 'user',
+          select: 'name email department phone',
+          match: { _id: { $in: userIds } }
+        })
+        .populate('approvedBy', 'name email')
+        .sort({ createdAt: -1 })
+        .lean();
+
+      res.status(200).json({
+        success: true,
+        data: {
+          leaves,
+          department,
+          company: userCompanyId,
+          total: leaves.length
+        }
+      });
+
+    } catch (error) {
+      console.error('Department leaves error:', error);
+      res.status(500).json({ 
+        success: false,
+        error: 'Server error while fetching department leaves' 
+      });
+    }
+  }
 );
 
-// 🔄 Leave Calendar View (For all users)
+// 🔄 Leave Calendar View (For all users in same company)
 router.get('/calendar',
   [
     query('month').optional().isInt({ min: 1, max: 12 }).withMessage('Invalid month (1-12)'),
@@ -105,6 +559,7 @@ router.get('/calendar',
   async (req, res) => {
     try {
       const userId = req.user._id;
+      const userCompanyId = req.user.company || req.user.companyId;
       const { month, year } = req.query;
       
       const currentDate = new Date();
@@ -115,8 +570,12 @@ router.get('/calendar',
       const startDate = new Date(targetYear, targetMonth - 1, 1);
       const endDate = new Date(targetYear, targetMonth, 0);
       
+      // Get all users from same company
+      const companyUsers = await User.find({ company: userCompanyId }).select('_id');
+      const companyUserIds = companyUsers.map(user => user._id);
+      
       const leaves = await Leave.find({
-        user: userId,
+        user: { $in: companyUserIds },
         $or: [
           {
             startDate: { $lte: endDate },
@@ -131,7 +590,7 @@ router.get('/calendar',
       // Format calendar data
       const calendarData = leaves.map(leave => ({
         id: leave._id,
-        title: `${leave.type} Leave`,
+        title: `${leave.user?.name || 'User'} - ${leave.type} Leave`,
         start: new Date(leave.startDate).toISOString().split('T')[0],
         end: new Date(new Date(leave.endDate).getTime() + 24 * 60 * 60 * 1000).toISOString().split('T')[0],
         status: leave.status,
@@ -139,6 +598,8 @@ router.get('/calendar',
                leave.status === 'Pending' ? '#f59e0b' : 
                leave.status === 'Rejected' ? '#ef4444' : '#6b7280',
         extendedProps: {
+          userId: leave.user?._id,
+          userName: leave.user?.name,
           type: leave.type,
           days: leave.days,
           reason: leave.reason
@@ -151,7 +612,8 @@ router.get('/calendar',
           calendarData,
           month: targetMonth,
           year: targetYear,
-          total: leaves.length
+          total: leaves.length,
+          company: userCompanyId
         }
       });
       
@@ -165,9 +627,8 @@ router.get('/calendar',
   }
 );
 
-// 📊 Department Statistics (For managers)
+// 📊 Department Statistics (For all users in same company)
 router.get('/department-stats/:department',
-  authMiddleware.restrictTo('admin', 'hr', 'manager'),
   [
     param('department').trim().notEmpty().withMessage('Department is required'),
     query('year').optional().isInt({ min: 2000, max: 2100 }).withMessage('Invalid year'),
@@ -177,10 +638,47 @@ router.get('/department-stats/:department',
     try {
       const { department } = req.params;
       const year = req.query.year || new Date().getFullYear();
+      const userCompanyId = req.user.company || req.user.companyId;
       
-      // Get users from department
-      const departmentUsers = await User.find({ department }, '_id');
+      console.log(`📊 Getting department stats for: ${department}, year: ${year}, company: ${userCompanyId}`);
+      
+      // Get users from same company and department
+      const departmentUsers = await User.find({ 
+        company: userCompanyId,
+        department: department 
+      }, '_id');
+      
       const userIds = departmentUsers.map(user => user._id);
+      
+      if (userIds.length === 0) {
+        return res.status(200).json({
+          success: true,
+          data: {
+            department,
+            year,
+            company: userCompanyId,
+            stats: {
+              total: 0,
+              approved: 0,
+              pending: 0,
+              rejected: 0,
+              cancelled: 0,
+              totalDays: 0,
+              avgProcessingTime: 0
+            },
+            monthlyStats: Array.from({ length: 12 }, (_, i) => ({
+              month: i + 1,
+              total: 0,
+              approved: 0,
+              pending: 0,
+              rejected: 0,
+              cancelled: 0
+            })),
+            typeStats: {},
+            employeeCount: 0
+          }
+        });
+      }
       
       // Calculate yearly statistics
       const startOfYear = new Date(year, 0, 1);
@@ -233,6 +731,7 @@ router.get('/department-stats/:department',
         data: {
           department,
           year,
+          company: userCompanyId,
           stats,
           monthlyStats,
           typeStats,
@@ -250,9 +749,8 @@ router.get('/department-stats/:department',
   }
 );
 
-// 📈 Dashboard Analytics (For managers)
+// 📈 Dashboard Analytics (For all users in same company)
 router.get('/analytics',
-  authMiddleware.restrictTo('admin', 'hr', 'manager'),
   [
     query('period').optional().isIn(['daily', 'weekly', 'monthly', 'yearly']).withMessage('Invalid period'),
     query('startDate').optional().isISO8601().withMessage('Invalid start date'),
@@ -262,6 +760,7 @@ router.get('/analytics',
   async (req, res) => {
     try {
       const { period = 'monthly', startDate, endDate } = req.query;
+      const userCompanyId = req.user.company || req.user.companyId;
       
       let dateFilter = {};
       if (startDate && endDate) {
@@ -277,6 +776,14 @@ router.get('/analytics',
         dateFilter.startDate = { $gte: firstDay, $lte: lastDay };
       }
       
+      // Get all users from same company
+      const companyUsers = await User.find({ company: userCompanyId }).select('_id');
+      const userIds = companyUsers.map(user => user._id);
+      
+      if (userIds.length > 0) {
+        dateFilter.user = { $in: userIds };
+      }
+      
       // Get all leaves for the period
       const leaves = await Leave.find(dateFilter)
         .populate('user', 'name department')
@@ -285,6 +792,7 @@ router.get('/analytics',
       // Calculate analytics
       const analytics = {
         period,
+        company: userCompanyId,
         totalLeaves: leaves.length,
         approvalRate: leaves.length > 0 ? 
           (leaves.filter(l => l.status === 'Approved').length / leaves.length * 100).toFixed(1) : 0,
@@ -335,7 +843,7 @@ router.get('/balance',
         startDate: { $gte: startOfYear, $lte: endOfYear }
       }).lean();
       
-      // Default leave policies (this should come from database)
+      // Default leave policies
       const leavePolicies = {
         Casual: { maxDays: 12, description: 'For personal work' },
         Sick: { maxDays: 10, description: 'For health issues' },
@@ -397,9 +905,8 @@ router.get('/balance',
   }
 );
 
-// 📤 Export Leaves (For managers)
+// 📤 Export Leaves (For all users in same company)
 router.get('/export',
-  authMiddleware.restrictTo('admin', 'hr', 'manager'),
   [
     query('format').optional().isIn(['csv', 'excel', 'pdf']).withMessage('Invalid export format'),
     query('startDate').optional().isISO8601().withMessage('Invalid start date'),
@@ -410,8 +917,15 @@ router.get('/export',
   async (req, res) => {
     try {
       const { format = 'csv', startDate, endDate, department } = req.query;
+      const userCompanyId = req.user.company || req.user.companyId;
       
       let filter = {};
+      
+      // Get all users from same company
+      const companyUsers = await User.find({ company: userCompanyId }).select('_id');
+      const userIds = companyUsers.map(user => user._id);
+      
+      filter.user = { $in: userIds };
       
       // Date filter
       if (startDate && endDate) {
@@ -421,20 +935,32 @@ router.get('/export',
         };
       }
       
-      // Department filter for managers
-      const userRole = req.user.jobRole?.toLowerCase();
-      if (userRole === 'manager' && req.user.department) {
-        const departmentUsers = await User.find({ department: req.user.department }, '_id');
-        const userIds = departmentUsers.map(user => user._id);
-        filter.user = { $in: userIds };
-      } else if (department) {
-        const departmentUsers = await User.find({ department }, '_id');
-        const userIds = departmentUsers.map(user => user._id);
-        filter.user = { $in: userIds };
+      // Department filter
+      if (department) {
+        const departmentUsers = await User.find({ 
+          company: userCompanyId,
+          department: department 
+        }).select('_id');
+        
+        const departmentUserIds = departmentUsers.map(user => user._id);
+        filter.user = { $in: departmentUserIds };
       }
       
       const leaves = await Leave.find(filter)
-        .populate('user', 'name email department jobRole')
+        .populate({
+          path: 'user',
+          select: 'name email department jobRole',
+          transform: (doc) => {
+            if (!doc) return null;
+            return {
+              id: doc._id || doc.id,
+              name: doc.name,
+              email: doc.email,
+              department: doc.department,
+              jobRole: doc.jobRole
+            };
+          }
+        })
         .sort({ startDate: -1 })
         .lean();
       

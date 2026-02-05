@@ -238,220 +238,315 @@ exports.register = async (req, res) => {
 // ✅ Enhanced Login with rate limiting
 exports.login = async (req, res) => {
   const startTime = Date.now();
-  const { email, password, companyIdentifier } = req.body;
-  
+  const { email, password, companyCode, companyIdentifier } = req.body;
+
   try {
-    console.log('🔐 Login attempt:', { 
-      email: email ? `${email.substring(0, 3)}...` : 'undefined',
+    console.log("🔐 Login attempt:", {
+      email: email ? `${email.substring(0, 3)}...` : "undefined",
+      companyCode,
       companyIdentifier,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
 
-    // Validate input
+    // ✅ Validate input
     if (!email || !password) {
       return res.status(400).json({
         success: false,
-        message: 'Email and password are required',
-        errorCode: 'MISSING_CREDENTIALS'
+        message: "Email and password are required",
+        errorCode: "MISSING_CREDENTIALS",
       });
     }
 
     const cleanEmail = email.toLowerCase().trim();
 
-    // Find user
+    // ✅ Find user
     const user = await User.findOne({ email: cleanEmail })
-      .select('+password +isActive +failedLoginAttempts +lockUntil')
-      .populate('department', 'name')
-      .populate('company', 'companyName companyCode isActive subscriptionExpiry logo')
+      .select("+password +isActive +failedLoginAttempts +lockUntil")
+      .populate("department", "name")
+      .populate("company", "companyName companyCode isActive subscriptionExpiry logo companyEmail companyPhone companyAddress dbIdentifier loginUrl")
       .lean();
 
     if (!user) {
-      console.log('❌ User not found:', cleanEmail);
+      console.log("❌ User not found:", cleanEmail);
       return res.status(401).json({
         success: false,
-        message: 'Invalid email or password',
-        errorCode: 'INVALID_CREDENTIALS'
+        message: "Invalid email or password",
+        errorCode: "INVALID_CREDENTIALS",
       });
     }
 
-    // Check if user is active
+    // ✅ Check if user is active
     if (!user.isActive) {
       return res.status(403).json({
         success: false,
-        message: 'Your account has been deactivated. Please contact your administrator.',
-        errorCode: 'ACCOUNT_DEACTIVATED'
+        message: "Your account has been deactivated. Please contact your administrator.",
+        errorCode: "ACCOUNT_DEACTIVATED",
       });
     }
 
-    // Check account lock
+    // ✅ Check account lock
     if (user.lockUntil && user.lockUntil > Date.now()) {
       const lockMinutes = Math.ceil((user.lockUntil - Date.now()) / 60000);
       return res.status(429).json({
         success: false,
         message: `Account temporarily locked. Try again in ${lockMinutes} minutes.`,
-        errorCode: 'ACCOUNT_LOCKED'
+        errorCode: "ACCOUNT_LOCKED",
+        retryAfter: user.lockUntil,
       });
     }
 
-    // Verify password
+    // ✅ Verify password
     const isPasswordValid = await bcrypt.compare(password, user.password);
-    
+
     if (!isPasswordValid) {
-      // Update failed attempts
-      await User.findByIdAndUpdate(user._id, {
-        $inc: { failedLoginAttempts: 1 },
-        ...(user.failedLoginAttempts >= 4 && { lockUntil: Date.now() + 15 * 60 * 1000 })
-      });
+      const updatedAttempts = (user.failedLoginAttempts || 0) + 1;
+      const updateData = {
+        failedLoginAttempts: updatedAttempts,
+      };
+
+      if (updatedAttempts >= 5) {
+        updateData.lockUntil = Date.now() + 15 * 60 * 1000; // 15 minutes lock
+      }
+
+      await User.findByIdAndUpdate(user._id, updateData);
 
       return res.status(401).json({
         success: false,
-        message: 'Invalid email or password',
-        errorCode: 'INVALID_CREDENTIALS',
-        remainingAttempts: Math.max(0, 5 - (user.failedLoginAttempts + 1))
+        message: "Invalid email or password",
+        errorCode: "INVALID_CREDENTIALS",
+        remainingAttempts: Math.max(0, 5 - updatedAttempts),
       });
     }
 
-    // ✅ VALIDATE COMPANY IDENTIFIER IF PROVIDED
-    if (companyIdentifier) {
-      console.log('🔍 Validating company identifier:', companyIdentifier);
-      
-      if (!user.company) {
+    // ✅ Use companyCode if provided, otherwise use companyIdentifier
+    const providedCompanyCode = companyCode || companyIdentifier;
+    
+    // ✅ VALIDATE COMPANY CODE IF PROVIDED
+    if (providedCompanyCode) {
+      console.log("🔍 Validating company code:", providedCompanyCode);
+      console.log("📋 User company details:", {
+        userCompanyCode: user.companyCode,
+        company: user.company,
+        hasCompany: !!user.company
+      });
+
+      if (!user.company && !user.companyCode) {
+        console.log("❌ User has no company association");
         return res.status(403).json({
           success: false,
-          message: 'User is not associated with any company',
-          errorCode: 'NO_COMPANY'
+          message: "User is not associated with any company",
+          errorCode: "NO_COMPANY",
         });
       }
 
       const company = user.company;
+
+      // ✅ Check company status
+      if (company && !company.isActive) {
+        return res.status(403).json({
+          success: false,
+          message: "Company account is deactivated",
+          errorCode: "COMPANY_DEACTIVATED",
+        });
+      }
+
+      // ✅ Check subscription
+      if (company && company.subscriptionExpiry) {
+        const expiryDate = new Date(company.subscriptionExpiry);
+        if (expiryDate < new Date()) {
+          return res.status(403).json({
+            success: false,
+            message: "Company subscription has expired",
+            errorCode: "SUBSCRIPTION_EXPIRED",
+            expiryDate: expiryDate.toISOString(),
+          });
+        }
+      }
+
+      // ✅ Verify company code matches
+      const cleanProvidedCode = providedCompanyCode.toLowerCase().trim();
+      const userCompanyCode = (user.companyCode || (company && company.companyCode) || '').toLowerCase();
       
-      // Check company status
-      if (!company.isActive) {
-        return res.status(403).json({
-          success: false,
-          message: 'Company account is deactivated',
-          errorCode: 'COMPANY_DEACTIVATED'
-        });
-      }
+      console.log("🔍 Company code comparison:", {
+        provided: cleanProvidedCode,
+        userCompanyCode: userCompanyCode,
+        companyCode: company?.companyCode,
+        companyLoginUrl: company?.loginUrl,
+        companyDbIdentifier: company?.dbIdentifier
+      });
 
-      // Check subscription
-      const expiryDate = new Date(company.subscriptionExpiry);
-      if (expiryDate < new Date()) {
-        return res.status(403).json({
-          success: false,
-          message: 'Company subscription has expired',
-          errorCode: 'SUBSCRIPTION_EXPIRED',
-          expiryDate: expiryDate.toISOString()
-        });
-      }
-
-      // Verify company identifier matches
-      const cleanCompanyIdentifier = companyIdentifier.toLowerCase().trim();
-      const companyCodeLower = company.companyCode.toLowerCase();
-      const userCompanyCodeLower = user.companyCode.toLowerCase();
+      // ✅ Multiple ways to match company code
+      let isValidCompany = false;
       
-      // Check multiple possible matches
-      const isValidIdentifier = 
-        cleanCompanyIdentifier === companyCodeLower ||
-        cleanCompanyIdentifier === userCompanyCodeLower ||
-        cleanCompanyIdentifier === `company-${companyCodeLower}` ||
-        cleanCompanyIdentifier === company.dbIdentifier?.toLowerCase() ||
-        company.loginUrl?.toLowerCase().includes(cleanCompanyIdentifier);
+      // 1. Direct match with companyCode
+      if (userCompanyCode === cleanProvidedCode) {
+        isValidCompany = true;
+      }
+      // 2. Match with company identifier (dbIdentifier)
+      else if (company?.dbIdentifier && company.dbIdentifier.toLowerCase() === cleanProvidedCode) {
+        isValidCompany = true;
+      }
+      // 3. Match with login URL segment
+      else if (company?.loginUrl && company.loginUrl.toLowerCase().includes(cleanProvidedCode)) {
+        isValidCompany = true;
+      }
 
-      if (!isValidIdentifier) {
-        console.log('❌ Invalid company identifier:', {
-          provided: cleanCompanyIdentifier,
-          companyCode: company.companyCode,
-          userCompanyCode: user.companyCode
+      if (!isValidCompany) {
+        console.log("❌ Invalid company code:", {
+          provided: cleanProvidedCode,
+          expected: userCompanyCode,
+          company: company
         });
-        
+
         return res.status(403).json({
           success: false,
-          message: 'Invalid company access',
-          errorCode: 'INVALID_COMPANY_ACCESS',
-          providedIdentifier: cleanCompanyIdentifier,
-          expectedIdentifier: company.companyCode
+          message: "Invalid company access. Please check your company URL.",
+          errorCode: "COMPANY_MISMATCH",
+          providedCode: providedCompanyCode,
+          expectedCode: userCompanyCode.toUpperCase(),
+          userCompany: company?.companyName || "Unknown",
         });
       }
 
-      console.log('✅ Company identifier validated successfully');
+      console.log("✅ Company code validated successfully");
+    } else {
+      console.log("ℹ️ No company code provided, proceeding with general login");
     }
 
-    // Reset failed attempts on successful login
+    // ✅ Reset failed attempts on successful login
     await User.findByIdAndUpdate(user._id, {
-      $set: { 
+      $set: {
         failedLoginAttempts: 0,
         lockUntil: null,
-        lastLogin: new Date()
-      }
+        lastLogin: new Date(),
+      },
     });
 
-    // Generate JWT token
+    // ✅ Get user with populated data for response
+    const userForResponse = await User.findById(user._id)
+      .select("-password -failedLoginAttempts -lockUntil")
+      .populate("department", "name")
+      .populate("company", "companyName companyCode logo")
+      .lean();
+
+    // ✅ Create token payload WITHOUT exp field (let jwt handle it)
     const tokenPayload = {
-      userId: user._id,
+      id: user._id.toString(), // ✅ CRITICAL: यह field authMiddleware में use होता है
+      _id: user._id.toString(), // ✅ Backup field
       email: user.email,
-      role: user.jobRole,
-      companyId: user.company?._id,
-      companyCode: user.companyCode,
-      employeeId: user.employeeId
+      companyCode: user.companyCode || (user.company && user.company.companyCode),
+      role: user.role?._id || user.role,
+      jobRole: user.jobRole,
+      iat: Math.floor(Date.now() / 1000),
+      // ❌ REMOVE exp field from here
     };
 
-    const tokenExpiry = '24h';
+    console.log("🔐 Token payload:", tokenPayload);
+
+    // ✅ Create token - let jwt add the exp field automatically
     const token = jwt.sign(
       tokenPayload,
-      process.env.JWT_SECRET || 'your-secret-key',
-      { expiresIn: tokenExpiry }
+      process.env.JWT_SECRET || "your-secret-key",
+      {
+        expiresIn: process.env.JWT_EXPIRE || "30d",
+      }
     );
 
-    // Prepare response
+    // ✅ Decode token to get actual expiration
+    const decodedToken = jwt.decode(token);
+    const tokenExpiry = decodedToken.exp;
+    
+    console.log("🔐 Token created successfully. Expires at:", new Date(tokenExpiry * 1000).toISOString());
+
+    // ✅ Prepare company details for response
+    const companyDetails = user.company ? {
+      _id: user.company._id,
+      companyName: user.company.companyName,
+      companyCode: user.company.companyCode,
+      companyEmail: user.company.companyEmail,
+      companyPhone: user.company.companyPhone,
+      companyAddress: user.company.companyAddress,
+      logo: user.company.logo,
+      dbIdentifier: user.company.dbIdentifier,
+      loginUrl: user.company.loginUrl,
+      isActive: user.company.isActive,
+      subscriptionExpiry: user.company.subscriptionExpiry,
+      createdAt: user.company.createdAt,
+      updatedAt: user.company.updatedAt
+    } : null;
+
+    // ✅ Prepare response
     const response = {
       success: true,
-      message: 'Login successful',
+      message: "Login successful",
       token,
-      tokenType: 'Bearer',
-      expiresIn: tokenExpiry,
+      tokenType: "Bearer",
+      expiresIn: process.env.JWT_EXPIRE || "30d",
+      expiresAt: new Date(tokenExpiry * 1000).toISOString(),
       user: {
-        _id: user._id,
-        employeeId: user.employeeId,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        role: user.jobRole,
-        department: user.department,
-        company: user.company,
-        companyCode: user.companyCode,
-        isActive: user.isActive,
-        lastLogin: user.lastLogin,
-        createdAt: user.createdAt
+        _id: userForResponse._id,
+        employeeId: userForResponse.employeeId,
+        name: userForResponse.name,
+        email: userForResponse.email,
+        phone: userForResponse.phone,
+        role: userForResponse.role,
+        jobRole: userForResponse.jobRole,
+        department: userForResponse.department,
+        company: userForResponse.company?._id,
+        companyName: userForResponse.company?.companyName,
+        companyCode: userForResponse.companyCode || (userForResponse.company && userForResponse.company.companyCode),
+        isActive: userForResponse.isActive,
+        lastLogin: new Date(),
+        createdAt: userForResponse.createdAt,
+        updatedAt: userForResponse.updatedAt
       },
+      companyDetails: companyDetails,
       metadata: {
         timestamp: new Date().toISOString(),
         responseTime: Date.now() - startTime,
-        companyIdentifier: companyIdentifier || 'general'
-      }
+        companyCode: providedCompanyCode || "general",
+      },
     };
 
-    // Set HTTP-only cookie
-    res.cookie('auth_token', token, {
+    // ✅ Set HTTP-only cookie
+    res.cookie("auth_token", token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 24 * 60 * 60 * 1000
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days (matches token expiry)
     });
 
-    console.log('✅ Login successful for:', user.email);
-    return res.json(response);
-
-  } catch (error) {
-    console.error('🔥 Login error:', error);
+    console.log("✅ Login successful for:", {
+      user: user.email,
+      userId: user._id,
+      company: user.company?.companyName || "No company",
+      companyCode: user.companyCode
+    });
     
+    return res.json(response);
+  } catch (error) {
+    console.error("🔥 Login error:", error);
+    console.error("🔥 Error stack:", error.stack);
+
+    // Handle specific JWT errors
+    if (error.message.includes('expiresIn')) {
+      console.error("⚠️ JWT expiresIn error - check token payload");
+      return res.status(500).json({
+        success: false,
+        message: "Token generation error",
+        errorCode: "TOKEN_ERROR",
+      });
+    }
+
     return res.status(500).json({
       success: false,
-      message: 'An internal server error occurred.',
-      errorCode: 'INTERNAL_SERVER_ERROR'
+      message: "An internal server error occurred.",
+      errorCode: "INTERNAL_SERVER_ERROR",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
+
 
 // ✅ Enhanced Forgot Password with token expiry
 exports.forgotPassword = async (req, res) => {

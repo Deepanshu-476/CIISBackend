@@ -1,5 +1,7 @@
+// attendanceController.js - UPDATED
 const Attendance = require("../models/Attendance");
 const User = require("../../models/User");
+const Company = require("../../models/Company");
 const mongoose = require("mongoose");
 
 // Helper function: Format duration in HH:MM:SS
@@ -23,12 +25,10 @@ const isValidObjectId = (id) => {
 
 // Find or create attendance record based on ID
 const findAttendanceRecord = async (id, updateData = {}) => {
-  // If ID is a valid ObjectId, search by _id
   if (isValidObjectId(id)) {
     return await Attendance.findById(id);
   }
   
-  // If ID starts with 'absent_', it's a frontend-generated ID
   if (id.startsWith('absent_')) {
     const parts = id.split('_');
     if (parts.length < 3) {
@@ -38,25 +38,21 @@ const findAttendanceRecord = async (id, updateData = {}) => {
     const userId = parts[1];
     const dateStr = parts[2];
     
-    // Check if user exists
     const user = await User.findById(userId);
     if (!user) {
       throw new Error("User not found");
     }
     
-    // Convert date string to Date object
     const searchDate = new Date(dateStr);
     searchDate.setHours(0, 0, 0, 0);
     const endOfDay = new Date(searchDate);
     endOfDay.setHours(23, 59, 59, 999);
     
-    // Try to find existing record
     let record = await Attendance.findOne({
       user: userId,
       date: { $gte: searchDate, $lte: endOfDay }
-    }).populate("user", "name email employeeType");
+    }).populate("user", "name email employeeType companyCode");
     
-    // If record doesn't exist, create a new one
     if (!record) {
       record = new Attendance({
         user: userId,
@@ -72,8 +68,7 @@ const findAttendanceRecord = async (id, updateData = {}) => {
       });
       
       await record.save();
-      // Populate user data
-      record = await Attendance.findById(record._id).populate("user", "name email employeeType");
+      record = await Attendance.findById(record._id).populate("user", "name email employeeType companyCode");
     }
     
     return record;
@@ -82,15 +77,37 @@ const findAttendanceRecord = async (id, updateData = {}) => {
   return null;
 };
 
-// Clock In - UPDATED with LATE status (9:10 AM to 9:30 AM)
+// Get user's company code for filtering
+const getUserCompanyCode = async (userId) => {
+  try {
+    const user = await User.findById(userId).select('companyCode company');
+    if (user) {
+      // Check both companyCode field and populated company
+      return user.companyCode || (user.company ? user.company.companyCode : null);
+    }
+    return null;
+  } catch (error) {
+    console.error("Error getting user company code:", error);
+    return null;
+  }
+};
+
+// Clock In - UPDATED with company filtering
 const clockIn = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
+    const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
+    
+    if (!userCompanyCode) {
+      return res.status(400).json({ 
+        message: "User company code not found. Please contact admin." 
+      });
+    }
+    
     const now = new Date();
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
-    // Check if already clocked in today
     const alreadyIn = await Attendance.findOne({ 
       user: userId, 
       date: { $gte: todayStart } 
@@ -102,36 +119,30 @@ const clockIn = async (req, res) => {
       });
     }
 
-    // Calculate thresholds
     const halfDayThreshold = new Date(now);
-    halfDayThreshold.setHours(10, 0, 0, 0); // 10:00 AM -> HALF DAY
+    halfDayThreshold.setHours(10, 0, 0, 0);
     
     const lateThresholdEnd = new Date(now);
-    lateThresholdEnd.setHours(9, 30, 0, 0); // 9:30 AM -> Last minute for LATE
+    lateThresholdEnd.setHours(9, 30, 0, 0);
     
     const lateThresholdStart = new Date(now);
-    lateThresholdStart.setHours(9, 10, 0, 0); // 9:10 AM -> Start for LATE
+    lateThresholdStart.setHours(9, 10, 0, 0);
     
     const shiftStart = new Date(now);
-    shiftStart.setHours(9, 0, 0, 0); // 9:00 AM -> Start time
+    shiftStart.setHours(9, 0, 0, 0);
 
-    // Calculate lateBy
     const lateBy = now > shiftStart ? formatDuration(now - shiftStart) : "00:00:00";
 
-    // Determine status based on time
     let status = "PRESENT";
     
     if (now >= halfDayThreshold) {
       status = "HALF DAY";
     } else if (now >= lateThresholdStart && now <= lateThresholdEnd) {
-      status = "LATE"; // 9:10 AM to 9:30 AM = LATE
+      status = "LATE";
     } else if (now > lateThresholdEnd && now < halfDayThreshold) {
-      // Between 9:31 AM and 9:59 AM = HALF DAY (as per original logic)
       status = "HALF DAY";
     }
-    // Before 9:10 AM = PRESENT
 
-    // Create new record
     const newRecord = new Attendance({
       user: userId,
       date: now,
@@ -141,14 +152,21 @@ const clockIn = async (req, res) => {
       isClockedIn: true,
       totalTime: "00:00:00",
       overTime: "00:00:00",
-      earlyLeave: "00:00:00"
+      earlyLeave: "00:00:00",
+      companyCode: userCompanyCode // Add company code to attendance record
     });
 
     await newRecord.save();
 
-    // Populate user data
     const populatedRecord = await Attendance.findById(newRecord._id)
-      .populate("user", "name email employeeType");
+      .populate({
+        path: "user",
+        select: "name email employeeType companyCode",
+        populate: {
+          path: "company",
+          select: "companyCode companyName"
+        }
+      });
 
     res.status(200).json({
       message: "Clocked in successfully",
@@ -167,15 +185,16 @@ const clockIn = async (req, res) => {
   }
 };
 
-// Clock Out - UPDATED with LATE status handling
+// Clock Out - UPDATED with company filtering
 const clockOut = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
+    const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
+    
     const now = new Date();
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
-    // Find today's record
     const record = await Attendance.findOne({ 
       user: userId, 
       date: { $gte: todayStart } 
@@ -188,57 +207,46 @@ const clockOut = async (req, res) => {
     }
 
     const shiftEnd = new Date(now);
-    shiftEnd.setHours(19, 0, 0, 0); // 7:00 PM -> Shift end
+    shiftEnd.setHours(19, 0, 0, 0);
 
-    // Calculate total time worked
     const totalMs = now - new Date(record.inTime);
     const totalHours = totalMs / (1000 * 60 * 60);
 
-    // Update record
     record.outTime = now;
     record.isClockedIn = false;
     record.totalTime = formatDuration(totalMs);
     record.overTime = now > shiftEnd ? formatDuration(now - shiftEnd) : "00:00:00";
     record.earlyLeave = now < shiftEnd ? formatDuration(shiftEnd - now) : "00:00:00";
 
-    // Update status based on login time and hours worked
     const loginTime = new Date(record.inTime);
     const halfDayThreshold = new Date(loginTime);
-    halfDayThreshold.setHours(10, 0, 0, 0); // 10:00 AM
+    halfDayThreshold.setHours(10, 0, 0, 0);
     
     const lateThresholdEnd = new Date(loginTime);
-    lateThresholdEnd.setHours(9, 30, 0, 0); // 9:30 AM
+    lateThresholdEnd.setHours(9, 30, 0, 0);
     
     const lateThresholdStart = new Date(loginTime);
-    lateThresholdStart.setHours(9, 10, 0, 0); // 9:10 AM
+    lateThresholdStart.setHours(9, 10, 0, 0);
 
-    // Rule 1: If logged in after 10:00, always HALF DAY
     if (loginTime >= halfDayThreshold) {
       record.status = "HALF DAY";
-    } 
-    // Rule 2: If logged in between 9:31-10:00, use hours worked
-    else if (loginTime > lateThresholdEnd && loginTime < halfDayThreshold) {
+    } else if (loginTime > lateThresholdEnd && loginTime < halfDayThreshold) {
       if (totalHours >= 9) {
-        record.status = "HALF DAY"; // Late but worked full day = HALF DAY
+        record.status = "HALF DAY";
       } else if (totalHours >= 5) {
         record.status = "HALF DAY";
       } else {
         record.status = "ABSENT";
       }
-    }
-    // Rule 3: If logged in between 9:10-9:30 (LATE), check hours worked
-    else if (loginTime >= lateThresholdStart && loginTime <= lateThresholdEnd) {
+    } else if (loginTime >= lateThresholdStart && loginTime <= lateThresholdEnd) {
       if (totalHours >= 9) {
-        // If logged in late (9:10-9:30) but worked full 9 hours, keep LATE status
         record.status = "LATE";
       } else if (totalHours >= 5) {
         record.status = "HALF DAY";
       } else {
         record.status = "ABSENT";
       }
-    }
-    // Rule 4: If logged in before 9:10, use original rules
-    else {
+    } else {
       if (totalHours >= 9) {
         record.status = "PRESENT";
       } else if (totalHours >= 5) {
@@ -248,11 +256,22 @@ const clockOut = async (req, res) => {
       }
     }
 
+    // Ensure company code is set
+    if (!record.companyCode && userCompanyCode) {
+      record.companyCode = userCompanyCode;
+    }
+
     await record.save();
 
-    // Populate user data
     const populatedRecord = await Attendance.findById(record._id)
-      .populate("user", "name email employeeType");
+      .populate({
+        path: "user",
+        select: "name email employeeType companyCode",
+        populate: {
+          path: "company",
+          select: "companyCode companyName"
+        }
+      });
 
     res.status(200).json({
       message: "Clocked out successfully",
@@ -272,29 +291,28 @@ const clockOut = async (req, res) => {
   }
 };
 
-// Get Today's Status
+// Get Today's Status - UPDATED
 const getTodayStatus = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
+    const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
+    
     const now = new Date();
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
     const todayEnd = new Date();
     todayEnd.setHours(23, 59, 59, 999);
 
-    // Find today's attendance
     const today = await Attendance.findOne({ 
       user: userId, 
       date: { $gte: todayStart, $lte: todayEnd } 
     });
 
     if (!today) {
-      // Check if it's past 10:00 AM and no attendance recorded
       const currentTime = new Date();
       const endOfDay = new Date();
       endOfDay.setHours(23, 59, 59, 999);
       
-      // If current time is after 10:00 AM and before end of day, mark as ABSENT
       const absentThreshold = new Date();
       absentThreshold.setHours(10, 0, 0, 0);
       
@@ -327,48 +345,54 @@ const getTodayStatus = async (req, res) => {
   }
 };
 
-// Get Attendance List for User
-// Get Attendance List for User
+// Get Attendance List for User - UPDATED with company filtering
 const getAttendanceList = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
-    const { month, year } = req.query; // ADD THIS: Accept month and year parameters
+    const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
+    const { month, year } = req.query;
     
-    // Use provided month/year or current month/year
+    if (!userCompanyCode) {
+      return res.status(400).json({ 
+        message: "User company code not found" 
+      });
+    }
+    
     const now = new Date();
     const queryMonth = month !== undefined ? parseInt(month) : now.getMonth();
     const queryYear = year !== undefined ? parseInt(year) : now.getFullYear();
     
-    // Start of the requested month
     const startOfMonth = new Date(queryYear, queryMonth, 1);
     startOfMonth.setHours(0, 0, 0, 0);
 
-    // End of the requested month
     const endOfMonth = new Date(queryYear, queryMonth + 1, 0);
     endOfMonth.setHours(23, 59, 59, 999);
 
-    // Determine end date:
-    // If requested month is in the future or current month, use today's date
-    // If requested month is in the past, use end of that month
     let endDate = endOfMonth;
     const today = new Date();
     
     if (queryYear === today.getFullYear() && queryMonth === today.getMonth()) {
-      // Current month: only show till today
       endDate = new Date();
       endDate.setHours(23, 59, 59, 999);
     } else if (queryYear > today.getFullYear() || 
                (queryYear === today.getFullYear() && queryMonth > today.getMonth())) {
-      // Future month: show nothing (or handle as you wish)
       endDate = new Date(startOfMonth);
     }
 
-    // Fetch attendance records for the entire requested month (or up to today for current month)
+    // Fetch attendance records filtered by company code
     const list = await Attendance.find({ 
       user: userId,
+      companyCode: userCompanyCode, // Add company code filter
       date: { $gte: startOfMonth, $lte: endDate }
     })
-      .populate("user", "name email employeeType")
+      .populate({
+        path: "user",
+        select: "name email employeeType companyCode",
+        populate: {
+          path: "company",
+          select: "companyCode companyName"
+        }
+      })
       .sort({ date: 1 });
 
     // Generate all dates in the month
@@ -380,7 +404,6 @@ const getAttendanceList = async (req, res) => {
       currentDate.setDate(currentDate.getDate() + 1);
     }
 
-    // Map existing records
     const existingRecordsMap = {};
     list.forEach(record => {
       const recordDate = new Date(record.date);
@@ -388,7 +411,6 @@ const getAttendanceList = async (req, res) => {
       existingRecordsMap[dateKey] = record;
     });
 
-    // Create absent records for missing dates
     const completeList = allDatesInMonth.map(date => {
       const dateKey = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
 
@@ -404,7 +426,8 @@ const getAttendanceList = async (req, res) => {
             _id: userId,
             name: req.user.name || 'User',
             email: req.user.email,
-            employeeType: req.user.employeeType
+            employeeType: req.user.employeeType,
+            companyCode: userCompanyCode
           },
           date: date,
           inTime: null,
@@ -415,6 +438,7 @@ const getAttendanceList = async (req, res) => {
           overTime: "00:00:00",
           totalTime: "00:00:00",
           isClockedIn: false,
+          companyCode: userCompanyCode, // Add company code to absent records
           notes: isWeekend ? "Weekend" : "No attendance recorded",
           createdAt: date,
           updatedAt: date
@@ -441,11 +465,19 @@ const getAttendanceList = async (req, res) => {
   }
 };
 
-// Get All Users Attendance (Admin)
+// Get All Users Attendance (Admin) - UPDATED with company filtering
 const getAllUsersAttendance = async (req, res) => {
   try {
+    const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     const { date } = req.query;
-    let filter = {};
+    
+    if (!userCompanyCode) {
+      return res.status(400).json({ 
+        message: "Company code not found" 
+      });
+    }
+    
+    let filter = { companyCode: userCompanyCode }; // Filter by company code
 
     if (date) {
       const start = new Date(date);
@@ -455,9 +487,15 @@ const getAllUsersAttendance = async (req, res) => {
       filter.date = { $gte: start, $lte: end };
     }
 
-    // Get all attendance records
     const records = await Attendance.find(filter)
-      .populate("user", "name email employeeType")
+      .populate({
+        path: "user",
+        select: "name email employeeType companyCode",
+        populate: {
+          path: "company",
+          select: "companyCode companyName"
+        }
+      })
       .sort({ date: -1 });
 
     res.status(200).json({ 
@@ -476,15 +514,21 @@ const getAllUsersAttendance = async (req, res) => {
   }
 };
 
-// Update Attendance Record (Admin) - UPDATED with new LATE threshold
+// Update Attendance Record (Admin) - UPDATED
 const updateAttendanceRecord = async (req, res) => {
   try {
     const { id } = req.params;
     const updateData = req.body;
+    const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     
     console.log("Update request received:", { id, updateData });
     
-    // Find or create the attendance record
+    if (!userCompanyCode) {
+      return res.status(400).json({ 
+        message: "Company code not found" 
+      });
+    }
+    
     let record = await findAttendanceRecord(id, updateData);
     
     if (!record) {
@@ -494,11 +538,17 @@ const updateAttendanceRecord = async (req, res) => {
       });
     }
     
+    // Verify the record belongs to the same company
+    if (record.companyCode && record.companyCode !== userCompanyCode) {
+      return res.status(403).json({ 
+        message: "Access denied. Record belongs to different company." 
+      });
+    }
+    
     // Update inTime if provided
     if (updateData.inTime) {
       record.inTime = new Date(updateData.inTime);
       
-      // Calculate lateBy based on inTime
       const shiftStart = new Date(record.inTime);
       shiftStart.setHours(9, 0, 0, 0);
       
@@ -508,21 +558,19 @@ const updateAttendanceRecord = async (req, res) => {
         record.lateBy = "00:00:00";
       }
       
-      // Auto-calculate status based on inTime
       const loginTime = record.inTime;
       const hour = loginTime.getHours();
       const minute = loginTime.getMinutes();
       const totalMinutes = (hour * 60) + minute;
       
-      // New thresholds for LATE (9:10 to 9:30)
-      if (totalMinutes >= 600) { // 10:00 AM
+      if (totalMinutes >= 600) {
         record.status = "HALF DAY";
-      } else if (totalMinutes >= 570) { // 9:30 AM to 9:59 AM
+      } else if (totalMinutes >= 570) {
         record.status = "HALF DAY";
-      } else if (totalMinutes >= 550) { // 9:10 AM to 9:29 AM = LATE
+      } else if (totalMinutes >= 550) {
         record.status = "LATE";
       } else {
-        record.status = "PRESENT"; // Before 9:10 AM
+        record.status = "PRESENT";
       }
     }
     
@@ -531,12 +579,10 @@ const updateAttendanceRecord = async (req, res) => {
       record.outTime = new Date(updateData.outTime);
       record.isClockedIn = false;
       
-      // Calculate total time if both inTime and outTime exist
       if (record.inTime && record.outTime) {
         const totalMs = record.outTime - record.inTime;
         record.totalTime = formatDuration(totalMs);
         
-        // Calculate overtime and early leave
         const shiftEnd = new Date(record.outTime);
         shiftEnd.setHours(19, 0, 0, 0);
         
@@ -545,7 +591,6 @@ const updateAttendanceRecord = async (req, res) => {
         record.earlyLeave = record.outTime < shiftEnd ? 
           formatDuration(shiftEnd - record.outTime) : "00:00:00";
         
-        // Update status based on hours worked
         const totalHours = totalMs / (1000 * 60 * 60);
         const loginTime = record.inTime;
         const halfDayThreshold = new Date(loginTime);
@@ -555,7 +600,7 @@ const updateAttendanceRecord = async (req, res) => {
         lateThresholdEnd.setHours(9, 30, 0, 0);
         
         const lateThresholdStart = new Date(loginTime);
-        lateThresholdStart.setHours(9, 10, 0, 0);
+        lateThresholdStart.setHeaders(9, 10, 0, 0);
         
         if (loginTime >= halfDayThreshold) {
           record.status = "HALF DAY";
@@ -569,7 +614,6 @@ const updateAttendanceRecord = async (req, res) => {
           }
         } else if (loginTime >= lateThresholdStart && loginTime <= lateThresholdEnd) {
           if (totalHours >= 9) {
-            // Keep LATE status if already set, else set based on login time
             if (record.status !== "LATE") {
               record.status = "PRESENT";
             }
@@ -590,7 +634,7 @@ const updateAttendanceRecord = async (req, res) => {
       }
     }
     
-    // Update status if explicitly provided (overrides auto-calculation)
+    // Update status if explicitly provided
     if (updateData.status && updateData.status.trim() !== '') {
       record.status = updateData.status.toUpperCase();
     }
@@ -616,12 +660,22 @@ const updateAttendanceRecord = async (req, res) => {
       record.date = new Date(updateData.date);
     }
     
-    // Save the updated record
+    // Ensure company code is set
+    if (!record.companyCode) {
+      record.companyCode = userCompanyCode;
+    }
+    
     await record.save();
     
-    // Populate user data
     const populatedRecord = await Attendance.findById(record._id)
-      .populate("user", "name email employeeType");
+      .populate({
+        path: "user",
+        select: "name email employeeType companyCode",
+        populate: {
+          path: "company",
+          select: "companyCode companyName"
+        }
+      });
     
     res.status(200).json({ 
       message: "Attendance updated successfully", 
@@ -639,21 +693,26 @@ const updateAttendanceRecord = async (req, res) => {
   }
 };
 
-// Create Manual Attendance (Admin)
+// Create Manual Attendance (Admin) - UPDATED
 const createManualAttendance = async (req, res) => {
   try {
     const { user, date, inTime, outTime, status, lateBy, earlyLeave, overTime, notes } = req.body;
+    const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     
     console.log("Creating manual attendance:", req.body);
     
-    // Validate required fields
+    if (!userCompanyCode) {
+      return res.status(400).json({ 
+        message: "Company code not found" 
+      });
+    }
+    
     if (!user || !date) {
       return res.status(400).json({ 
         message: "User and date are required fields" 
       });
     }
     
-    // Check if user exists
     const userExists = await User.findById(user);
     if (!userExists) {
       return res.status(404).json({ 
@@ -661,7 +720,13 @@ const createManualAttendance = async (req, res) => {
       });
     }
     
-    // Check if attendance already exists for this user on this date
+    // Verify user belongs to same company
+    if (userExists.companyCode !== userCompanyCode) {
+      return res.status(403).json({ 
+        message: "Cannot create attendance for user from different company" 
+      });
+    }
+    
     const existingDate = new Date(date);
     existingDate.setHours(0, 0, 0, 0);
     const endOfDay = new Date(existingDate);
@@ -679,7 +744,6 @@ const createManualAttendance = async (req, res) => {
       });
     }
     
-    // Create new attendance record
     const attendance = new Attendance({
       user,
       date: new Date(date),
@@ -690,14 +754,21 @@ const createManualAttendance = async (req, res) => {
       earlyLeave: earlyLeave || "00:00:00",
       overTime: overTime || "00:00:00",
       notes: notes || "",
-      isClockedIn: !outTime
+      isClockedIn: !outTime,
+      companyCode: userCompanyCode // Add company code
     });
     
     await attendance.save();
     
-    // Populate user data
     const populatedAttendance = await Attendance.findById(attendance._id)
-      .populate("user", "name email employeeType");
+      .populate({
+        path: "user",
+        select: "name email employeeType companyCode",
+        populate: {
+          path: "company",
+          select: "companyCode companyName"
+        }
+      });
     
     res.status(201).json({
       message: "Attendance created successfully",
@@ -715,16 +786,22 @@ const createManualAttendance = async (req, res) => {
   }
 };
 
-// Delete Attendance Record (Admin)
+// Delete Attendance Record (Admin) - UPDATED
 const deleteAttendanceRecord = async (req, res) => {
   try {
     const { id } = req.params;
+    const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     
     console.log("Delete request received for ID:", id);
     
-    // Check if ID is valid ObjectId
+    if (!userCompanyCode) {
+      return res.status(400).json({ 
+        message: "Company code not found" 
+      });
+    }
+    
     if (isValidObjectId(id)) {
-      const record = await Attendance.findByIdAndDelete(id);
+      const record = await Attendance.findById(id);
       
       if (!record) {
         return res.status(404).json({ 
@@ -732,12 +809,20 @@ const deleteAttendanceRecord = async (req, res) => {
         });
       }
       
+      // Verify record belongs to same company
+      if (record.companyCode && record.companyCode !== userCompanyCode) {
+        return res.status(403).json({ 
+          message: "Cannot delete attendance from different company" 
+        });
+      }
+      
+      await Attendance.findByIdAndDelete(id);
+      
       return res.status(200).json({ 
         message: "Attendance record deleted successfully" 
       });
     }
     
-    // If ID starts with 'absent_', it's a frontend-generated record
     if (id.startsWith('absent_')) {
       return res.status(400).json({ 
         message: "Cannot delete absent record - it doesn't exist in database",
@@ -757,20 +842,25 @@ const deleteAttendanceRecord = async (req, res) => {
   }
 };
 
-// Get Attendance by User ID (Admin)
+// Get Attendance by User ID (Admin) - UPDATED
 const getAttendanceByUser = async (req, res) => {
   try {
     const { userId } = req.params;
     const { date } = req.query;
+    const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     
-    // Validate user ID
+    if (!userCompanyCode) {
+      return res.status(400).json({ 
+        message: "Company code not found" 
+      });
+    }
+    
     if (!isValidObjectId(userId)) {
       return res.status(400).json({ 
         message: "Invalid user ID" 
       });
     }
     
-    // Check if user exists
     const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({ 
@@ -778,9 +868,18 @@ const getAttendanceByUser = async (req, res) => {
       });
     }
     
-    let query = { user: userId };
+    // Verify user belongs to same company
+    if (user.companyCode !== userCompanyCode) {
+      return res.status(403).json({ 
+        message: "Cannot access attendance for user from different company" 
+      });
+    }
     
-    // Add date filter if provided
+    let query = { 
+      user: userId,
+      companyCode: userCompanyCode // Add company filter
+    };
+    
     if (date) {
       const start = new Date(date);
       start.setHours(0, 0, 0, 0);
@@ -789,9 +888,15 @@ const getAttendanceByUser = async (req, res) => {
       query.date = { $gte: start, $lte: end };
     }
     
-    // Get attendance records
     const records = await Attendance.find(query)
-      .populate("user", "name email employeeType")
+      .populate({
+        path: "user",
+        select: "name email employeeType companyCode",
+        populate: {
+          path: "company",
+          select: "companyCode companyName"
+        }
+      })
       .sort({ date: -1 });
     
     res.status(200).json({ 
@@ -810,7 +915,7 @@ const getAttendanceByUser = async (req, res) => {
   }
 };
 
-// Mark Daily Absent (Cron Job)
+// Mark Daily Absent (Cron Job) - UPDATED
 const markDailyAbsent = async () => {
   try {
     const todayStart = new Date();
@@ -818,49 +923,63 @@ const markDailyAbsent = async () => {
     const todayEnd = new Date();
     todayEnd.setHours(23, 59, 59, 999);
     
-    // Get all users
-    const allUsers = await User.find({});
+    // Get all companies
+    const companies = await Company.find({ isActive: true });
     
-    // For each user, check if they have attendance today
-    for (const user of allUsers) {
-      const existingAttendance = await Attendance.findOne({
-        user: user._id,
-        date: { $gte: todayStart, $lte: todayEnd }
+    for (const company of companies) {
+      // Get all users for this company
+      const companyUsers = await User.find({ 
+        companyCode: company.companyCode,
+        isActive: true 
       });
       
-      // If no attendance exists and it's past 10:00 AM, mark as absent
-      if (!existingAttendance) {
-        const now = new Date();
-        const absentThreshold = new Date();
-        absentThreshold.setHours(10, 0, 0, 0);
+      // For each user in company, check attendance
+      for (const user of companyUsers) {
+        const existingAttendance = await Attendance.findOne({
+          user: user._id,
+          date: { $gte: todayStart, $lte: todayEnd }
+        });
         
-        if (now >= absentThreshold) {
-          const absentRecord = new Attendance({
-            user: user._id,
-            date: todayStart,
-            status: "ABSENT",
-            isClockedIn: false
-          });
+        if (!existingAttendance) {
+          const now = new Date();
+          const absentThreshold = new Date();
+          absentThreshold.setHours(10, 0, 0, 0);
           
-          await absentRecord.save();
+          if (now >= absentThreshold) {
+            const absentRecord = new Attendance({
+              user: user._id,
+              date: todayStart,
+              status: "ABSENT",
+              isClockedIn: false,
+              companyCode: company.companyCode // Add company code
+            });
+            
+            await absentRecord.save();
+          }
         }
       }
     }
     
-    console.log("Daily absent marking completed");
+    console.log("Daily absent marking completed for all companies");
   } catch (err) {
     console.error("Mark Daily Absent Error:", err.message);
   }
 };
 
-// Get Attendance Statistics - UPDATED to include LATE
+// Get Attendance Statistics - UPDATED
 const getAttendanceStats = async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
+    const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     
-    let matchStage = {};
+    if (!userCompanyCode) {
+      return res.status(400).json({ 
+        message: "Company code not found" 
+      });
+    }
     
-    // Add date filter if provided
+    let matchStage = { companyCode: userCompanyCode }; // Filter by company code
+    
     if (startDate && endDate) {
       const start = new Date(startDate);
       start.setHours(0, 0, 0, 0);
@@ -870,7 +989,6 @@ const getAttendanceStats = async (req, res) => {
       matchStage.date = { $gte: start, $lte: end };
     }
     
-    // Aggregate statistics
     const stats = await Attendance.aggregate([
       { $match: matchStage },
       {

@@ -44,6 +44,12 @@ const attendanceSchema = new mongoose.Schema({
   isClockedIn: {
     type: Boolean,
     default: false
+  },
+    companyCode: {
+    type: String,
+    required: true,
+    index: true,
+    default: 'UNKNOWN' 
   }
 }, {
   timestamps: true

@@ -1,26 +1,34 @@
-// HR-CDS/routes/userRoutes.js
 const express = require('express');
 const router = express.Router();
 const userController = require('../controllers/userControllers');
-const { protect, authorize } = require('../../middleware/authMiddleware');
+const { protect } = require('../../middleware/authMiddleware');
 
-// Public route
-router.post('/register', userController.register);
+// ✅ Register user (only logged-in user can create)
+router.post('/register', protect, userController.register);
 
-// All routes below require authentication
+// ✅ All routes below require authentication
 router.use(protect);
 
-// User routes (for all authenticated users)
+// ✅ User profile routes
 router.get('/me', userController.getMe);
 router.put('/me', userController.updateMe);
 router.put('/change-password', userController.changePassword);
 
-// Admin only routes
-router.get('/all', authorize('admin', 'hr', 'manager'), userController.getAllUsers);
-router.get('/deleted', authorize('admin'), userController.getDeletedUsers);
-router.put('/restore/:id', authorize('admin'), userController.restoreUser);
-router.get('/search', authorize('admin', 'hr', 'manager'), userController.searchUsers);
-router.get('/:id', authorize('admin', 'hr', 'manager'), userController.getUser);
-router.put('/:id', authorize('admin', 'hr', 'manager'), userController.updateUser);
-router.delete('/:id', authorize('admin'), userController.deleteUser);   
+// ✅ Company users routes - EXACT MATCH FIRST
+router.get('/company-users', userController.getCompanyUsers);
+// router.get('/company-users/paginated', userController.getCompanyUsersPaginated);
+
+// ✅ Users management
+router.get('/all', userController.getAllUsers);
+router.get('/deleted', userController.getDeletedUsers);
+router.put('/restore/:id', userController.restoreUser);
+router.delete('/:id', userController.deleteUser);
+
+// ✅ Search users
+router.get('/search', userController.searchUsers);
+
+// ✅ Single user routes - THESE MUST COME LAST
+router.get('/:id', userController.getUser);
+router.put('/:id', userController.updateUser);
+
 module.exports = router;

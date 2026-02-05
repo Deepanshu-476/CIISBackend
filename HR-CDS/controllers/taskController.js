@@ -11,25 +11,17 @@ const sharp = require('sharp');
 
 // ==================== HELPER FUNCTIONS ====================
 
-// 🔹 Helper: Check if user has admin/manager privileges including Reporting-Auditor
-const hasPrivileges = (user) => {
-  if (!user) return false;
-
-  const privilegedRoles = ['admin', 'manager', 'hr', ];
-
-  if (privilegedRoles.includes(user.role)) {
-    return true;
-  }
-
-  if (user.jobRole) {
-    const roles = Array.isArray(user.jobRole)
-      ? user.jobRole
-      : [user.jobRole];
-
-    return roles.includes('Reporting-Auditor');
-  }
-
-  return false;
+// 🔹 Helper: Check if user belongs to same company and department
+const checkSameCompanyDepartment = (currentUser, targetUser) => {
+  if (!currentUser || !targetUser) return false;
+  
+  // Compare company
+  const sameCompany = currentUser.company.toString() === targetUser.company.toString();
+  
+  // Compare department
+  const sameDepartment = currentUser.department.toString() === targetUser.department.toString();
+  
+  return sameCompany && sameDepartment;
 };
 
 // 🔹 Helper to create notifications
@@ -146,43 +138,26 @@ const enrichStatusInfo = async (tasks) => {
   });
 };
 
-// 🔹 Get all users including group members
+// 🔹 Get all users from same company and department
 const getAllAssignableUsers = async (req) => {
   const loggedInUser = await User.findById(req.user.id).lean();
 
   console.log('👤 Logged-in full user:', loggedInUser);
 
-  // 🔑 Privilege check (already done above, but safe)
-  if (!hasPrivileges(loggedInUser)) {
-    console.log('🚫 No privilege to fetch users');
+  if (!loggedInUser) {
+    console.log('🚫 User not found');
     return [];
   }
 
-  let query = { isActive: true };
-
-  // 🔹 Admin / HR → sab users
-  if (['admin', 'hr', ].includes(loggedInUser.role)) {
-    console.log('🔓 Admin-level access');
-    query = { isActive: true };
-  }
-
-  // 🔹 Manager → limited users (example)
-  else if (loggedInUser.role === 'manager') {
-    console.log('👔 Manager access');
-    query = { role: 'user', isActive: true };
-  }
-
-  // 🔹 Reporting-Auditor → READ-ONLY but ALL users
-  else if (loggedInUser.jobRole === 'Reporting-Auditor') {
-    console.log('📊 Auditor access');
-    query = { isActive: true };
-  }
-
-  console.log('📡 Final Mongo Query:', query);
-
-  const users = await User.find(query)
-    .select('_id name email role jobRole properties')
-    .lean();
+  // Get users from same company and department only
+  const users = await User.find({
+    isActive: true,
+    company: loggedInUser.company,
+    department: loggedInUser.department,
+    _id: { $ne: loggedInUser._id } // Exclude self
+  })
+  .select('_id name email role jobRole properties')
+  .lean();
 
   console.log('✅ Assignable users found:', users.length);
 
@@ -191,15 +166,16 @@ const getAllAssignableUsers = async (req) => {
 
 // 🔹 Get all groups for task assignment
 const getAllAssignableGroups = async (req) => {
-  // Get full user first
-  const fullUser = await User.findById(req.user.id).lean();
+  // Get current user
+  const currentUser = await User.findById(req.user.id).lean();
   
-  if (!hasPrivileges(fullUser)) {
+  if (!currentUser) {
     return [];
   }
 
+  // Get groups created by current user
   const groups = await Group.find({
-    createdBy: req.user._id,
+    createdBy: currentUser._id,
     isActive: true
   })
   .populate('members', 'name role email')
@@ -360,6 +336,15 @@ exports.getTasks = async (req, res) => {
   const { status, search } = req.query;
   
   try {
+    // Get current user details
+    const currentUser = await User.findById(req.user.id).lean();
+    if (!currentUser) {
+      return res.status(401).json({ 
+        success: false,
+        error: 'User not found' 
+      });
+    }
+
     // Get user's groups to include group-assigned tasks
     const userGroups = await Group.find({ 
       members: req.user._id,
@@ -423,6 +408,15 @@ exports.getMyTasks = async (req, res) => {
     const { search, status, period } = req.query;
     
     console.log('📅 Received period:', period);
+
+    // Get current user details
+    const currentUser = await User.findById(req.user.id).lean();
+    if (!currentUser) {
+      return res.status(401).json({ 
+        success: false,
+        error: 'User not found' 
+      });
+    }
 
     // Get user's groups to include group-assigned tasks
     const userGroups = await Group.find({ 
@@ -573,6 +567,15 @@ exports.getAssignedTasks = async (req, res) => {
   try {
     const { search, status } = req.query;
 
+    // Get current user details
+    const currentUser = await User.findById(req.user.id).lean();
+    if (!currentUser) {
+      return res.status(401).json({ 
+        success: false,
+        error: 'User not found' 
+      });
+    }
+
     // Only show tasks created for others by current user
     const filter = { 
       createdBy: req.user._id,
@@ -616,7 +619,6 @@ exports.getAssignedTasks = async (req, res) => {
   }
 };
 
-// ✅ CREATE TASK FOR SELF
 // ✅ CREATE TASK FOR SELF - FIXED VERSION
 exports.createTaskForSelf = async (req, res) => {
   try {
@@ -798,47 +800,142 @@ exports.createTaskForOthers = async (req, res) => {
 
     console.log('📅 Received dueDateTime for others:', dueDateTime);
 
-    // ✅ FIX: Get FULL user from database first
-    const fullUser = await User.findById(req.user.id).lean();
+    // ✅ Get current user's complete details from database
+    const currentUser = await User.findById(req.user.id).lean();
     
-    if (!fullUser) {
+    if (!currentUser) {
       return res.status(401).json({ 
         success: false,
         error: 'User not found' 
       });
     }
 
-    // ✅ FIX: Check privileges using full user object from DB
-    const isPrivileged = hasPrivileges(fullUser);
-    
-    console.log('🔍 Debug user privileges check:', {
-      userId: fullUser._id,
-      userRole: fullUser.role,
-      userJobRole: fullUser.jobRole,
-      isPrivileged: isPrivileged,
-      hasPrivilegesResult: hasPrivileges(fullUser)
+    console.log('👤 Current User:', {
+      id: currentUser._id,
+      name: currentUser.name,
+      department: currentUser.department,
+      company: currentUser.company
     });
 
-    if (!isPrivileged) {
-      return res.status(403).json({ 
+    // 🔥 NEW CHECK: Validate assigned users exist and belong to same company & department
+    let parsedUsers = [];
+    
+    if (assignedUsers && assignedUsers !== 'null') {
+      try {
+        parsedUsers = JSON.parse(assignedUsers);
+        
+        // Ensure it's an array
+        if (!Array.isArray(parsedUsers)) {
+          parsedUsers = [parsedUsers];
+        }
+        
+        // Validate each assigned user exists and belongs to same company & department
+        const assignedUsersData = await User.find({
+          _id: { $in: parsedUsers },
+          isActive: true
+        }).select('_id name email department company').lean();
+
+        console.log('✅ Found assigned users:', assignedUsersData);
+
+        // Check if all requested users were found
+        if (assignedUsersData.length !== parsedUsers.length) {
+          const foundIds = assignedUsersData.map(u => u._id.toString());
+          const missingIds = parsedUsers.filter(id => !foundIds.includes(id));
+          
+          return res.status(400).json({ 
+            success: false,
+            error: `Some users not found or inactive: ${missingIds.join(', ')}` 
+          });
+        }
+
+        // Check same company and department for all assigned users
+        const invalidUsers = [];
+        for (const user of assignedUsersData) {
+          if (user.company.toString() !== currentUser.company.toString()) {
+            invalidUsers.push({
+              id: user._id,
+              name: user.name,
+              reason: 'Different company'
+            });
+          } else if (user.department.toString() !== currentUser.department.toString()) {
+            invalidUsers.push({
+              id: user._id,
+              name: user.name,
+              reason: 'Different department'
+            });
+          }
+        }
+
+        if (invalidUsers.length > 0) {
+          console.log('❌ Invalid assigned users:', invalidUsers);
+          return res.status(400).json({ 
+            success: false,
+            error: 'You can only assign tasks to users in your same company and department',
+            invalidUsers: invalidUsers
+          });
+        }
+
+      } catch (parseError) {
+        console.error('❌ Error parsing assignedUsers:', parseError);
+        return res.status(400).json({ 
+          success: false,
+          error: 'Invalid assignedUsers format' 
+        });
+      }
+    }
+
+    // ✅ Prevent self-assignment
+    const currentUserId = currentUser._id.toString();
+    if (parsedUsers.includes(currentUserId)) {
+      return res.status(400).json({ 
         success: false,
-        error: 'Access denied. Only privileged users can assign tasks to others.' 
+        error: 'You cannot assign task to yourself in "Create for Others". Use "Create for Self" instead.' 
       });
     }
 
-    const files = (req.files?.files || []).map((f) => ({
-      filename: f.filename,
-      originalName: f.originalname,
-      path: f.path,
-      uploadedBy: req.user._id
-    }));
+    // ✅ Validate that at least one user or group is assigned
+    const parsedGroups = assignedGroups && assignedGroups !== 'null' ? JSON.parse(assignedGroups) : [];
+    
+    if (parsedUsers.length === 0 && parsedGroups.length === 0) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'At least one user or group must be assigned' 
+      });
+    }
 
-    const voiceNote = req.files?.voiceNote?.[0] ? {
-      filename: req.files.voiceNote[0].filename,
-      originalName: req.files.voiceNote[0].originalname,
-      path: req.files.voiceNote[0].path,
-      uploadedBy: req.user._id
-    } : null;
+    // ✅ Validate groups (if any) belong to same company & department
+    if (parsedGroups.length > 0) {
+      const groups = await Group.find({
+        _id: { $in: parsedGroups },
+        createdBy: currentUser._id,
+        isActive: true,
+      }).populate('members', '_id department company').lean();
+
+      if (groups.length !== parsedGroups.length) {
+        return res.status(400).json({
+          success: false,
+          error: "Some groups are invalid or you do not have permission",
+        });
+      }
+
+      // Check all group members belong to same company & department
+      for (const group of groups) {
+        for (const member of group.members) {
+          if (member.company.toString() !== currentUser.company.toString()) {
+            return res.status(400).json({
+              success: false,
+              error: `Group "${group.name}" contains members from different company`
+            });
+          }
+          if (member.department.toString() !== currentUser.department.toString()) {
+            return res.status(400).json({
+              success: false,
+              error: `Group "${group.name}" contains members from different department`
+            });
+          }
+        }
+      }
+    }
 
     // 🔥 FIX: Improved date parsing for task for others
     let parsedDueDateTime = null;
@@ -888,42 +985,6 @@ exports.createTaskForOthers = async (req, res) => {
       }
     }
 
-    // Safe JSON parsing
-    const parsedUsers = assignedUsers && assignedUsers !== 'null' ? JSON.parse(assignedUsers) : [];
-    const parsedGroups = assignedGroups && assignedGroups !== 'null' ? JSON.parse(assignedGroups) : [];
-
-    // Validate that creator is NOT in assigned users
-    if (parsedUsers.includes(req.user._id.toString())) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'You cannot assign task to yourself in "Create for Others". Use "Create for Self" instead.' 
-      });
-    }
-
-    // Validate that at least one user or group is assigned
-    if (parsedUsers.length === 0 && parsedGroups.length === 0) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'At least one user or group must be assigned' 
-      });
-    }
-
-    // Validate groups for privileged users
-    if (parsedGroups.length > 0) {
-      const groups = await Group.find({
-        _id: { $in: parsedGroups },
-        createdBy: req.user._id,
-        isActive: true,
-      }).lean();
-
-      if (groups.length !== parsedGroups.length) {
-        return res.status(400).json({
-          success: false,
-          error: "Some groups are invalid or you do not have permission",
-        });
-      }
-    }
-
     // Collect all assigned users (direct + group members)
     const allAssignedUsers = [...new Set([...parsedUsers])];
 
@@ -941,14 +1002,37 @@ exports.createTaskForOthers = async (req, res) => {
 
     // Remove duplicates and ensure creator is NOT included
     const uniqueAssignedUsers = [...new Set(allAssignedUsers)].filter(userId => 
-      userId !== req.user._id.toString()
+      userId !== currentUserId
     );
+
+    // Check if after filtering we still have users
+    if (uniqueAssignedUsers.length === 0) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'No valid users found to assign task to' 
+      });
+    }
 
     // Create status tracking ONLY for assigned users (not creator)
     const statusByUser = uniqueAssignedUsers.map((uid) => ({
       user: uid,
       status: "pending",
     }));
+
+    // Process files
+    const files = (req.files?.files || []).map((f) => ({
+      filename: f.filename,
+      originalName: f.originalname,
+      path: f.path,
+      uploadedBy: currentUser._id
+    }));
+
+    const voiceNote = req.files?.voiceNote?.[0] ? {
+      filename: req.files.voiceNote[0].filename,
+      originalName: req.files.voiceNote[0].originalname,
+      path: req.files.voiceNote[0].path,
+      uploadedBy: currentUser._id
+    } : null;
 
     // Create the task with parsed date
     const task = await Task.create({
@@ -963,12 +1047,12 @@ exports.createTaskForOthers = async (req, res) => {
       statusByUser,
       files,
       voiceNote,
-      createdBy: req.user._id,
+      createdBy: currentUser._id,
       isRecurring: false,
       taskFor: 'others',
       statusHistory: [{
         status: 'pending',
-        changedBy: req.user._id,
+        changedBy: currentUser._id,
         remarks: 'Task created and assigned to others'
       }]
     });
@@ -986,13 +1070,13 @@ exports.createTaskForOthers = async (req, res) => {
         `You have been assigned a new task: ${title}`,
         'task_assigned',
         task._id,
-        { priority, dueDateTime: parsedDueDateTime, assignedBy: req.user.name }
+        { priority, dueDateTime: parsedDueDateTime, assignedBy: currentUser.name }
       );
     }
 
     // Create activity log
     await createActivityLog(
-      req.user,
+      currentUser,
       'task_created_for_others',
       task._id,
       `Created task for others: ${title}`,
@@ -1037,12 +1121,12 @@ exports.updateTask = async (req, res) => {
     const { taskId } = req.params;
     const updateData = req.body;
 
-    // ✅ FIX: Get full user first
-    const fullUser = await User.findById(req.user.id).lean();
-    if (!fullUser || !hasPrivileges(fullUser)) {
+    // ✅ Get current user
+    const currentUser = await User.findById(req.user.id).lean();
+    if (!currentUser) {
       return res.status(403).json({ 
         success: false,
-        error: 'Access denied' 
+        error: 'User not found' 
       });
     }
 
@@ -1051,6 +1135,14 @@ exports.updateTask = async (req, res) => {
       return res.status(404).json({ 
         success: false,
         error: 'Task not found' 
+      });
+    }
+
+    // Check authorization - only creator can update
+    if (task.createdBy.toString() !== currentUser._id.toString()) {
+      return res.status(403).json({ 
+        success: false,
+        error: 'Only task creator can update this task' 
       });
     }
 
@@ -1108,10 +1200,59 @@ exports.updateTask = async (req, res) => {
 
     // Update assigned users and groups if provided
     if (assignedUsers.length > 0) {
+      // Validate assigned users belong to same company and department
+      const assignedUsersData = await User.find({
+        _id: { $in: assignedUsers },
+        isActive: true
+      }).select('_id name email department company').lean();
+
+      if (assignedUsersData.length !== assignedUsers.length) {
+        return res.status(400).json({ 
+          success: false,
+          error: 'Some users not found or inactive' 
+        });
+      }
+
+      // Check same company and department
+      for (const user of assignedUsersData) {
+        if (!checkSameCompanyDepartment(currentUser, user)) {
+          return res.status(400).json({ 
+            success: false,
+            error: `User ${user.name} belongs to different company/department` 
+          });
+        }
+      }
+
       task.assignedUsers = assignedUsers;
     }
 
     if (assignedGroups.length > 0) {
+      // Validate groups
+      const groups = await Group.find({
+        _id: { $in: assignedGroups },
+        createdBy: currentUser._id,
+        isActive: true,
+      }).populate('members', '_id department company').lean();
+
+      if (groups.length !== assignedGroups.length) {
+        return res.status(400).json({
+          success: false,
+          error: "Some groups are invalid or you do not have permission",
+        });
+      }
+
+      // Check all group members belong to same company & department
+      for (const group of groups) {
+        for (const member of group.members) {
+          if (!checkSameCompanyDepartment(currentUser, member)) {
+            return res.status(400).json({
+              success: false,
+              error: `Group "${group.name}" contains members from different company/department`
+            });
+          }
+        }
+      }
+
       task.assignedGroups = assignedGroups;
     }
 
@@ -1119,7 +1260,7 @@ exports.updateTask = async (req, res) => {
 
     // 🔹 Create activity log
     await createActivityLog(
-      req.user,
+      currentUser,
       'task_updated',
       task._id,
       `Updated task: ${task.title}`,
@@ -1148,12 +1289,12 @@ exports.deleteTask = async (req, res) => {
   try {
     const { taskId } = req.params;
 
-    // ✅ FIX: Get full user first
-    const fullUser = await User.findById(req.user.id).lean();
-    if (!fullUser || !hasPrivileges(fullUser)) {
+    // ✅ Get current user
+    const currentUser = await User.findById(req.user.id).lean();
+    if (!currentUser) {
       return res.status(403).json({ 
         success: false,
-        error: 'Access denied' 
+        error: 'User not found' 
       });
     }
 
@@ -1165,6 +1306,14 @@ exports.deleteTask = async (req, res) => {
       });
     }
 
+    // Check authorization - only creator can delete
+    if (task.createdBy.toString() !== currentUser._id.toString()) {
+      return res.status(403).json({ 
+        success: false,
+        error: 'Only task creator can delete this task' 
+      });
+    }
+
     const taskTitle = task.title;
 
     // Soft delete by setting isActive to false
@@ -1173,7 +1322,7 @@ exports.deleteTask = async (req, res) => {
 
     // 🔹 Create activity log
     await createActivityLog(
-      req.user,
+      currentUser,
       'task_deleted',
       taskId,
       `Deleted task: ${taskTitle}`,
@@ -1639,10 +1788,26 @@ exports.getUserActivityTimeline = async (req, res) => {
   try {
     const { userId } = req.params;
 
-    // Check if user is authorized (own timeline or privileged user)
-    const fullUser = await User.findById(req.user.id).lean();
+    // Get current user
+    const currentUser = await User.findById(req.user.id).lean();
+    if (!currentUser) {
+      return res.status(401).json({ 
+        success: false,
+        error: 'User not found' 
+      });
+    }
+
+    // Check if user is authorized (own timeline or same company/department)
+    const targetUser = await User.findById(userId).lean();
+    if (!targetUser) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'User not found' 
+      });
+    }
+
     const isAuthorized = userId === req.user._id.toString() || 
-                        hasPrivileges(fullUser);
+                        checkSameCompanyDepartment(currentUser, targetUser);
 
     if (!isAuthorized) {
       return res.status(403).json({ 
@@ -1676,28 +1841,17 @@ exports.getAssignableUsers = async (req, res) => {
   try {
     console.log('🔑 Token user:', req.user);
 
-    // ✅ DB se FULL user lao
-    const fullUser = await User.findById(req.user.id).lean();
+    // ✅ DB se current user lao
+    const currentUser = await User.findById(req.user.id).lean();
 
-    if (!fullUser) {
+    if (!currentUser) {
       return res.status(401).json({
         success: false,
         message: 'User not found'
       });
     }
 
-    console.log('👤 Full user from DB:', fullUser);
-    console.log('👔 Role:', fullUser.role);
-    console.log('🧾 JobRole:', fullUser.jobRole);
-
-    // ✅ Privilege check
-    if (!hasPrivileges(fullUser)) {
-      console.log('🚫 Access denied for user:', fullUser.email);
-      return res.status(403).json({
-        success: false,
-        message: 'Unauthorized access'
-      });
-    }
+    console.log('👤 Current user from DB:', currentUser);
 
     const users = await getAllAssignableUsers(req);
     const groups = await getAllAssignableGroups(req);
@@ -1721,6 +1875,15 @@ exports.getAssignableUsers = async (req, res) => {
 exports.getTaskStatusCounts = async (req, res) => {
   try {
     const { period = 'today' } = req.query;
+
+    // Get current user
+    const currentUser = await User.findById(req.user.id).lean();
+    if (!currentUser) {
+      return res.status(401).json({ 
+        success: false,
+        error: 'User not found' 
+      });
+    }
 
     // Get user's groups
     const userGroups = await Group.find({ 
@@ -1841,26 +2004,34 @@ exports.getTaskStatusCounts = async (req, res) => {
 // ✅ GET USER DETAILED ANALYTICS
 exports.getUserDetailedAnalytics = async (req, res) => {
   try {
-    const fullUser = await User.findById(req.user.id).lean();
-    if (!fullUser || !hasPrivileges(fullUser)) {
-      return res.status(403).json({ 
+    const currentUser = await User.findById(req.user.id).lean();
+    if (!currentUser) {
+      return res.status(401).json({ 
         success: false,
-        error: 'Access denied. Privileges required.' 
+        error: 'User not found' 
       });
     }
 
     const { userId } = req.params;
     const { startDate, endDate, period = 'all' } = req.query;
 
-    // Get user details
-    const user = await User.findById(userId)
-      .select('name email role department employeeType joiningDate')
+    // Get target user details
+    const targetUser = await User.findById(userId)
+      .select('name email role department employeeType joiningDate company')
       .lean();
 
-    if (!user) {
+    if (!targetUser) {
       return res.status(404).json({ 
         success: false,
         error: 'User not found' 
+      });
+    }
+
+    // Check if current user can access target user's analytics
+    if (!checkSameCompanyDepartment(currentUser, targetUser)) {
+      return res.status(403).json({ 
+        success: false,
+        error: 'Access denied. Can only access analytics of users in same company and department.' 
       });
     }
 
@@ -1927,7 +2098,7 @@ exports.getUserDetailedAnalytics = async (req, res) => {
 
     // Comprehensive analysis
     const analysis = {
-      userInfo: user,
+      userInfo: targetUser,
       
       // Basic counts
       summary: {
@@ -2074,11 +2245,28 @@ exports.getUserTaskStats = async (req, res) => {
     const { userId } = req.params;
     const { period = 'today' } = req.query;
 
-    const fullUser = await User.findById(req.user.id).lean();
-    if (!fullUser || !hasPrivileges(fullUser)) {
+    const currentUser = await User.findById(req.user.id).lean();
+    if (!currentUser) {
+      return res.status(401).json({ 
+        success: false,
+        error: 'User not found' 
+      });
+    }
+
+    // Get target user
+    const targetUser = await User.findById(userId).lean();
+    if (!targetUser) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'User not found' 
+      });
+    }
+
+    // Check if current user can access target user's stats
+    if (!checkSameCompanyDepartment(currentUser, targetUser)) {
       return res.status(403).json({ 
         success: false,
-        error: 'Access denied. Privileges required.' 
+        error: 'Access denied. Can only access stats of users in same company and department.' 
       });
     }
 
@@ -2225,21 +2413,26 @@ exports.getUserTaskStats = async (req, res) => {
   }
 };
 
-// ✅ GET ALL USERS WITH THEIR TASK COUNTS
+// ✅ GET ALL USERS WITH THEIR TASK COUNTS (from same company and department)
 exports.getUsersWithTaskCounts = async (req, res) => {
   try {
-    const fullUser = await User.findById(req.user.id).lean();
-    if (!fullUser || !hasPrivileges(fullUser)) {
-      return res.status(403).json({ 
+    const currentUser = await User.findById(req.user.id).lean();
+    if (!currentUser) {
+      return res.status(401).json({ 
         success: false,
-        error: 'Access denied. Privileges required.' 
+        error: 'User not found' 
       });
     }
 
     const { period = 'all', employeeType } = req.query;
 
-    // Get all active users with filters
-    const userFilter = { isActive: true };
+    // Get users from same company and department only
+    const userFilter = { 
+      isActive: true,
+      company: currentUser.company,
+      department: currentUser.department
+    };
+    
     if (employeeType && employeeType !== 'all') {
       userFilter.employeeType = employeeType;
     }
@@ -2361,11 +2554,28 @@ exports.getUserTasks = async (req, res) => {
     const { userId } = req.params;
     const { status, search, period = 'all' } = req.query;
 
-    const fullUser = await User.findById(req.user.id).lean();
-    if (!fullUser || !hasPrivileges(fullUser)) {
+    const currentUser = await User.findById(req.user.id).lean();
+    if (!currentUser) {
+      return res.status(401).json({ 
+        success: false,
+        error: 'User not found' 
+      });
+    }
+
+    // Get target user
+    const targetUser = await User.findById(userId).lean();
+    if (!targetUser) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'User not found' 
+      });
+    }
+
+    // Check if current user can access target user's tasks
+    if (!checkSameCompanyDepartment(currentUser, targetUser)) {
       return res.status(403).json({ 
         success: false,
-        error: 'Access denied. Privileges required.' 
+        error: 'Access denied. Can only access tasks of users in same company and department.' 
       });
     }
 
@@ -2467,11 +2677,18 @@ exports.getUserTasks = async (req, res) => {
   }
 };
 
-// ==================== OVERDUE TASKS FUNCTIONS ====================
-
 // ✅ GET OVERDUE TASKS FOR LOGGED-IN USER
 exports.getOverdueTasks = async (req, res) => {
   try {
+    // Get current user
+    const currentUser = await User.findById(req.user.id).lean();
+    if (!currentUser) {
+      return res.status(401).json({ 
+        success: false,
+        error: 'User not found' 
+      });
+    }
+
     // Get user's groups for group-assigned tasks
     const userGroups = await Group.find({ 
       members: req.user._id,
@@ -2615,16 +2832,33 @@ exports.getOverdueTasks = async (req, res) => {
   }
 };
 
-// ✅ GET USER OVERDUE TASKS (ADMIN/HR/MANAGER)
+// ✅ GET USER OVERDUE TASKS
 exports.getUserOverdueTasks = async (req, res) => {
   try {
     const { userId } = req.params;
 
-    const fullUser = await User.findById(req.user.id).lean();
-    if (!fullUser || !hasPrivileges(fullUser)) {
+    const currentUser = await User.findById(req.user.id).lean();
+    if (!currentUser) {
+      return res.status(401).json({ 
+        success: false,
+        error: 'User not found' 
+      });
+    }
+
+    // Get target user
+    const targetUser = await User.findById(userId).lean();
+    if (!targetUser) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'User not found' 
+      });
+    }
+
+    // Check if current user can access target user's overdue tasks
+    if (!checkSameCompanyDepartment(currentUser, targetUser)) {
       return res.status(403).json({ 
         success: false,
-        error: 'Access denied. Privileges required.' 
+        error: 'Access denied. Can only access overdue tasks of users in same company and department.' 
       });
     }
 
@@ -2694,6 +2928,15 @@ exports.markTaskAsOverdue = async (req, res) => {
     const { taskId } = req.params;
     const { remarks } = req.body;
 
+    // Get current user
+    const currentUser = await User.findById(req.user.id).lean();
+    if (!currentUser) {
+      return res.status(401).json({ 
+        success: false,
+        error: 'User not found' 
+      });
+    }
+
     const task = await Task.findById(taskId);
     if (!task) {
       return res.status(404).json({ 
@@ -2703,11 +2946,9 @@ exports.markTaskAsOverdue = async (req, res) => {
     }
 
     // Check if user is authorized
-    const fullUser = await User.findById(req.user.id).lean();
     const isAuthorized = 
       task.assignedUsers.some(userId => userId.toString() === req.user._id.toString()) ||
-      task.createdBy.toString() === req.user._id.toString() ||
-      hasPrivileges(fullUser);
+      task.createdBy.toString() === req.user._id.toString();
 
     if (!isAuthorized) {
       return res.status(403).json({ 
@@ -2792,11 +3033,11 @@ exports.markTaskAsOverdue = async (req, res) => {
 // ✅ UPDATE ALL OVERDUE TASKS (FOR CRON)
 exports.updateAllOverdueTasks = async (req, res) => {
   try {
-    const fullUser = await User.findById(req.user.id).lean();
-    if (!fullUser || !hasPrivileges(fullUser)) {
-      return res.status(403).json({ 
+    const currentUser = await User.findById(req.user.id).lean();
+    if (!currentUser) {
+      return res.status(401).json({ 
         success: false,
-        error: 'Access denied. Privileges required.' 
+        error: 'User not found' 
       });
     }
 
@@ -2836,7 +3077,7 @@ exports.updateAllOverdueTasks = async (req, res) => {
 
     // Create activity log
     await createActivityLog(
-      req.user,
+      currentUser,
       'update_all_overdue',
       null,
       `Updated all overdue tasks: ${updated} updated, ${alreadyOverdue} already overdue, ${skipped} skipped`,
@@ -2866,6 +3107,33 @@ exports.getOverdueSummary = async (req, res) => {
   try {
     const userId = req.params.userId || req.user._id;
     const { period = '30days' } = req.query;
+
+    // Get current user
+    const currentUser = await User.findById(req.user.id).lean();
+    if (!currentUser) {
+      return res.status(401).json({ 
+        success: false,
+        error: 'User not found' 
+      });
+    }
+
+    // If requesting other user's summary, check authorization
+    if (userId !== req.user._id.toString()) {
+      const targetUser = await User.findById(userId).lean();
+      if (!targetUser) {
+        return res.status(404).json({ 
+          success: false,
+          error: 'User not found' 
+        });
+      }
+      
+      if (!checkSameCompanyDepartment(currentUser, targetUser)) {
+        return res.status(403).json({ 
+          success: false,
+          error: 'Access denied. Can only access summary of users in same company and department.' 
+        });
+      }
+    }
 
     // Calculate date range
     const now = new Date();
@@ -3017,6 +3285,15 @@ exports.snoozeTask = async (req, res) => {
     const { taskId } = req.params;
     const { snoozeUntil } = req.body;
 
+    // Get current user
+    const currentUser = await User.findById(req.user.id).lean();
+    if (!currentUser) {
+      return res.status(401).json({ 
+        success: false,
+        error: 'User not found' 
+      });
+    }
+
     const task = await Task.findById(taskId);
     if (!task) {
       return res.status(404).json({ success: false, error: 'Task not found' });
@@ -3037,7 +3314,7 @@ exports.snoozeTask = async (req, res) => {
     await task.save();
 
     await createActivityLog(
-      req.user,
+      currentUser,
       'task_snoozed',
       task._id,
       `Task snoozed until ${moment(snoozeUntil).format('DD MMM YYYY')}`,

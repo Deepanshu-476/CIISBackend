@@ -68,7 +68,8 @@ exports.getMe = async (req, res) => {
     const user = await User.findById(req.user.id)
       .select('-password -resetToken -resetTokenExpiry')
       .populate('department', 'name description')
-      .populate('createdBy', 'name email');
+      .populate('createdBy', 'name email')
+      .populate('company', 'name companyCode');
 
     if (!user) {
       return errorResponse(res, 404, "User not found");
@@ -79,6 +80,7 @@ exports.getMe = async (req, res) => {
         id: user._id,
         name: user.name,
         email: user.email,
+        company: user.company,
         department: user.department,
         jobRole: user.jobRole,
         phone: user.phone,
@@ -134,7 +136,7 @@ exports.updateMe = async (req, res) => {
     });
 
     // Normal users cannot update these fields
-    if (req.body.jobRole || req.body.department || req.body.employeeType || req.body.salary) {
+    if (req.body.jobRole || req.body.department || req.body.employeeType || req.body.salary || req.body.company) {
       return errorResponse(res, 403, "You cannot update restricted fields");
     }
 
@@ -147,7 +149,8 @@ exports.updateMe = async (req, res) => {
       }
     )
     .select('-password -resetToken -resetTokenExpiry')
-    .populate('department', 'name description');
+    .populate('department', 'name description')
+    .populate('company', 'name companyCode');
 
     return successResponse(res, 200, {
       message: "Profile updated successfully",
@@ -212,6 +215,11 @@ exports.register = async (req, res) => {
       userData.createdBy = req.user.id;
     }
 
+    // Add company from authenticated user's company
+    if (req.user?.company) {
+      userData.company = req.user.company;
+    }
+
     // Validate required fields
     const validationErrors = validateUserData(userData);
     if (validationErrors.length > 0) {
@@ -224,9 +232,12 @@ exports.register = async (req, res) => {
     }
 
     // Check existing user
-    const existingUser = await User.findOne({ email: userData.email });
+    const existingUser = await User.findOne({ 
+      email: userData.email,
+      company: userData.company 
+    });
     if (existingUser) {
-      return errorResponse(res, 409, "Email already in use");
+      return errorResponse(res, 409, "Email already in use in this company");
     }
 
     // Check if department exists
@@ -246,6 +257,7 @@ exports.register = async (req, res) => {
         id: user._id,
         name: user.name,
         email: user.email,
+        company: user.company,
         department: user.department,
         jobRole: user.jobRole,
         phone: user.phone,
@@ -258,12 +270,35 @@ exports.register = async (req, res) => {
   }
 };
 
-// Get all users
+// Get all users - FILTERED BY COMPANY AND DEPARTMENT
 exports.getAllUsers = async (req, res) => {
   try {
-    const users = await User.find({ isActive: true })
+    // Get authenticated user's company and department from token
+    const userCompany = req.user.company;
+    const userDepartment = req.user.department;
+    
+    if (!userCompany) {
+      return errorResponse(res, 400, "Company information is required");
+    }
+
+    // Build filter based on user role
+    let filter = { 
+      isActive: true,
+      company: userCompany  // Always filter by company
+    };
+
+    // If user is not admin, filter by department as well
+    const adminRoles = ['admin'];
+    const isAdmin = adminRoles.includes(req.user.jobRole);
+    
+    if (!isAdmin && userDepartment) {
+      filter.department = userDepartment;
+    }
+
+    const users = await User.find(filter)
       .select('-password -resetToken -resetTokenExpiry')
       .populate('department', 'name description')
+      .populate('company', 'name companyCode')
       .populate('createdBy', 'name email')
       .sort({ createdAt: -1 });
 
@@ -272,6 +307,7 @@ exports.getAllUsers = async (req, res) => {
       id: user._id,
       name: user.name,
       email: user.email,
+      company: user.company,
       department: user.department,
       jobRole: user.jobRole,
       phone: user.phone,
@@ -309,16 +345,27 @@ exports.getAllUsers = async (req, res) => {
   }
 };
 
-// Get single user by ID
+// Get single user by ID - WITH COMPANY CHECK
 exports.getUser = async (req, res) => {
   try {
     const user = await User.findById(req.params.id)
       .select('-password -resetToken -resetTokenExpiry')
       .populate('department', 'name description')
+      .populate('company', 'name companyCode')
       .populate('createdBy', 'name email');
 
     if (!user) {
       return errorResponse(res, 404, "User not found");
+    }
+
+    // Check if user belongs to the same company
+    if (user.company && req.user.company) {
+      const userCompanyId = user.company._id ? user.company._id.toString() : user.company.toString();
+      const reqCompanyId = req.user.company._id ? req.user.company._id.toString() : req.user.company.toString();
+      
+      if (userCompanyId !== reqCompanyId) {
+        return errorResponse(res, 403, "Access denied. User belongs to a different company.");
+      }
     }
 
     // Format response with all fields
@@ -326,6 +373,7 @@ exports.getUser = async (req, res) => {
       id: user._id,
       name: user.name,
       email: user.email,
+      company: user.company,
       department: user.department,
       jobRole: user.jobRole,
       phone: user.phone,
@@ -363,7 +411,7 @@ exports.getUser = async (req, res) => {
   }
 };
 
-// Update user by ID
+// Update user by ID - WITH COMPANY CHECK
 exports.updateUser = async (req, res) => {
   try {
     const { id } = req.params;
@@ -375,20 +423,30 @@ exports.updateUser = async (req, res) => {
       return errorResponse(res, 401, "Authentication required");
     }
 
-    const updateData = {};
-    
-    // Extract only valid user fields from request body
-    USER_FIELDS.ALL().forEach(field => {
-      if (req.body[field] !== undefined && field !== 'password' && field !== 'email') {
-        updateData[field] = req.body[field];
-      }
-    });
-
-    // Find user to update
+    // First, get the user to check company
     const user = await User.findById(id);
     if (!user) {
       return errorResponse(res, 404, "User not found");
     }
+
+    // Check if user belongs to the same company
+    if (user.company && requestingUser.company) {
+      const userCompanyId = user.company._id ? user.company._id.toString() : user.company.toString();
+      const reqCompanyId = requestingUser.company._id ? requestingUser.company._id.toString() : requestingUser.company.toString();
+      
+      if (userCompanyId !== reqCompanyId) {
+        return errorResponse(res, 403, "Access denied. User belongs to a different company.");
+      }
+    }
+
+    const updateData = {};
+    
+    // Extract only valid user fields from request body
+    USER_FIELDS.ALL().forEach(field => {
+      if (req.body[field] !== undefined && field !== 'password' && field !== 'email' && field !== 'company') {
+        updateData[field] = req.body[field];
+      }
+    });
 
     // Admin, HR, Manager roles
     const adminRoles = ['admin', 'hr', 'manager'];
@@ -442,6 +500,7 @@ exports.updateUser = async (req, res) => {
     )
     .select('-password -resetToken -resetTokenExpiry')
     .populate('department', 'name description')
+    .populate('company', 'name companyCode')
     .populate('createdBy', 'name email');
 
     return successResponse(res, 200, {
@@ -457,7 +516,7 @@ exports.updateUser = async (req, res) => {
   }
 };
 
-// Delete user by ID (Soft delete)
+// Delete user by ID (Soft delete) - WITH COMPANY CHECK
 exports.deleteUser = async (req, res) => {
   try {
     const { id } = req.params;
@@ -474,8 +533,18 @@ exports.deleteUser = async (req, res) => {
     if (!user) {
       return errorResponse(res, 404, "User not found");
     }
+
+    // Check if user belongs to the same company
+    if (user.company && requestingUser.company) {
+      const userCompanyId = user.company._id ? user.company._id.toString() : user.company.toString();
+      const reqCompanyId = requestingUser.company._id ? requestingUser.company._id.toString() : requestingUser.company.toString();
+      
+      if (userCompanyId !== reqCompanyId) {
+        return errorResponse(res, 403, "Access denied. User belongs to a different company.");
+      }
+    }
     
-    // Check permissions - only admin or can delete
+    // Check permissions - only admin can delete
     const canDelete = ['admin'].includes(requestingUser.jobRole);
     if (!canDelete) {
       return errorResponse(res, 403, "You don't have permission to delete users");
@@ -506,7 +575,7 @@ exports.deleteUser = async (req, res) => {
   }
 };
 
-// Restore soft-deleted user
+// Restore soft-deleted user - WITH COMPANY CHECK
 exports.restoreUser = async (req, res) => {
   try {
     const { id } = req.params;
@@ -514,6 +583,16 @@ exports.restoreUser = async (req, res) => {
     const user = await User.findById(id);
     if (!user) {
       return errorResponse(res, 404, "User not found");
+    }
+
+    // Check if user belongs to the same company
+    if (user.company && req.user.company) {
+      const userCompanyId = user.company._id ? user.company._id.toString() : user.company.toString();
+      const reqCompanyId = req.user.company._id ? req.user.company._id.toString() : req.user.company.toString();
+      
+      if (userCompanyId !== reqCompanyId) {
+        return errorResponse(res, 403, "Access denied. User belongs to a different company.");
+      }
     }
 
     // Restore original email (remove deleted suffix)
@@ -534,12 +613,22 @@ exports.restoreUser = async (req, res) => {
   }
 };
 
-// Get deleted users
+// Get deleted users - FILTERED BY COMPANY
 exports.getDeletedUsers = async (req, res) => {
   try {
-    const users = await User.find({ isActive: false })
+    const userCompany = req.user.company;
+    
+    if (!userCompany) {
+      return errorResponse(res, 400, "Company information is required");
+    }
+
+    const users = await User.find({ 
+      isActive: false,
+      company: userCompany  // Filter by company
+    })
       .select('-password -resetToken -resetTokenExpiry')
       .populate('department', 'name description')
+      .populate('company', 'name companyCode')
       .sort({ deletedAt: -1 });
 
     return successResponse(res, 200, {
@@ -551,8 +640,218 @@ exports.getDeletedUsers = async (req, res) => {
     return errorResponse(res, 500, "Failed to fetch deleted users");
   }
 };
+// HR-CDS/controllers/userControllers.js में निम्न function जोड़ें:
 
-// Search users with filters
+// HR-CDS/controllers/userControllers.js में getCompanyUsers function update करें:
+exports.getCompanyUsers = async (req, res) => {
+  try {
+    console.log("📊 GET request received for company users");
+    
+    // Check if this is being called as /users/:id instead
+    if (req.params.id && req.params.id === 'company-users') {
+      return errorResponse(res, 400, "Invalid endpoint. Use GET /users/company-users");
+    }
+    
+    // Get authenticated user from req.user (attached by middleware)
+    const currentUser = req.user;
+    
+    if (!currentUser) {
+      return errorResponse(res, 401, "Authentication required");
+    }
+    
+    // Get company ID from current user
+    const companyId = currentUser.company;
+    
+    if (!companyId) {
+      return errorResponse(res, 400, "User does not belong to any company");
+    }
+    
+    console.log("🔍 Fetching users for company ID:", companyId);
+    
+    // Build filter
+    const filter = { 
+      isActive: true,
+      company: companyId
+    };
+    
+    // If user is not admin/manager/hr, filter by department
+    const adminRoles = ['admin', 'hr', 'manager'];
+    if (!adminRoles.includes(currentUser.jobRole) && currentUser.department) {
+      filter.department = currentUser.department;
+    }
+    
+    // Get users with populated data
+    const users = await User.find(filter)
+      .select('-password -resetToken -resetTokenExpiry')
+      .populate('department', 'name description')
+      .populate('company', 'name companyCode companyEmail companyPhone companyAddress logo')
+      .populate('createdBy', 'name email')
+      .sort({ createdAt: -1 });
+    
+    console.log(`✅ Found ${users.length} users`);
+    
+    // Get company details from localStorage data if available
+    let companyDetails = null;
+    try {
+      const companyData = localStorage.getItem('companyDetails');
+      if (companyData) {
+        companyDetails = JSON.parse(companyData);
+      }
+    } catch (e) {
+      console.log('No company details in localStorage');
+    }
+    
+    return successResponse(res, 200, {
+      company: companyDetails || {
+        id: companyId,
+        name: currentUser.companyName || 'Company'
+      },
+      count: users.length,
+      users: users.map(user => ({
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        company: user.company,
+        department: user.department,
+        jobRole: user.jobRole,
+        phone: user.phone,
+        address: user.address,
+        gender: user.gender,
+        maritalStatus: user.maritalStatus,
+        dob: user.dob,
+        employeeType: user.employeeType,
+        salary: user.salary,
+        accountNumber: user.accountNumber,
+        ifsc: user.ifsc,
+        bankName: user.bankName,
+        bankHolderName: user.bankHolderName,
+        fatherName: user.fatherName,
+        motherName: user.motherName,
+        emergencyName: user.emergencyName,
+        emergencyPhone: user.emergencyPhone,
+        emergencyRelation: user.emergencyRelation,
+        emergencyAddress: user.emergencyAddress,
+        properties: user.properties,
+        propertyOwned: user.propertyOwned,
+        additionalDetails: user.additionalDetails,
+        isActive: user.isActive,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt
+      }))
+    });
+    
+  } catch (err) {
+    console.error("❌ Get company users error:", err.message);
+    return errorResponse(res, 500, "Failed to fetch company users");
+  }
+};
+// Get company users with pagination
+// HR-CDS/controllers/userControllers.js में getCompanyUsers function update करें:
+exports.getCompanyUsers = async (req, res) => {
+  try {
+    console.log("📊 GET request received for company users");
+    console.log("🔍 Request params:", req.params);
+    console.log("🔍 Request path:", req.path);
+    
+    // Get authenticated user from req.user (attached by middleware)
+    const currentUser = req.user;
+    
+    if (!currentUser) {
+      return errorResponse(res, 401, "Authentication required");
+    }
+    
+    // Get company ID from current user
+    const companyId = currentUser.company;
+    
+    if (!companyId) {
+      return errorResponse(res, 400, "User does not belong to any company");
+    }
+    
+    console.log("🔍 Current User:", {
+      id: currentUser.id,
+      name: currentUser.name,
+      company: companyId,
+      jobRole: currentUser.jobRole,
+      department: currentUser.department
+    });
+    
+    // Build filter
+    const filter = { 
+      isActive: true,
+      company: companyId
+    };
+    
+    // If user is not admin/manager/hr, filter by department
+    const adminRoles = ['admin', 'hr', 'manager'];
+    if (!adminRoles.includes(currentUser.jobRole) && currentUser.department) {
+      filter.department = currentUser.department;
+      console.log("🔍 Filtering by department:", currentUser.department);
+    }
+    
+    console.log("🔍 Database filter:", filter);
+    
+    // Get users with populated data
+    const users = await User.find(filter)
+      .select('-password -resetToken -resetTokenExpiry')
+      .populate('department', 'name description')
+      .populate('company', 'name companyCode companyEmail companyPhone companyAddress logo')
+      .populate('createdBy', 'name email')
+      .sort({ createdAt: -1 });
+    
+    console.log(`✅ Found ${users.length} users`);
+    
+    return successResponse(res, 200, {
+      company: {
+        id: companyId,
+        name: currentUser.companyName || currentUser.company?.name || 'Company',
+        companyCode: currentUser.companyCode || currentUser.company?.companyCode
+      },
+      currentUser: {
+        id: currentUser.id,
+        name: currentUser.name,
+        jobRole: currentUser.jobRole
+      },
+      count: users.length,
+      users: users.map(user => ({
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        company: user.company,
+        department: user.department,
+        jobRole: user.jobRole,
+        phone: user.phone,
+        address: user.address,
+        gender: user.gender,
+        maritalStatus: user.maritalStatus,
+        dob: user.dob,
+        employeeType: user.employeeType,
+        salary: user.salary,
+        accountNumber: user.accountNumber,
+        ifsc: user.ifsc,
+        bankName: user.bankName,
+        bankHolderName: user.bankHolderName,
+        fatherName: user.fatherName,
+        motherName: user.motherName,
+        emergencyName: user.emergencyName,
+        emergencyPhone: user.emergencyPhone,
+        emergencyRelation: user.emergencyRelation,
+        emergencyAddress: user.emergencyAddress,
+        properties: user.properties,
+        propertyOwned: user.propertyOwned,
+        additionalDetails: user.additionalDetails,
+        isActive: user.isActive,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt
+      }))
+    });
+    
+  } catch (err) {
+    console.error("❌ Get company users error:", err.message);
+    console.error("❌ Error stack:", err.stack);
+    return errorResponse(res, 500, "Failed to fetch company users: " + err.message);
+  }
+};
+// Search users with filters - FILTERED BY COMPANY AND DEPARTMENT
 exports.searchUsers = async (req, res) => {
   try {
     const { 
@@ -560,7 +859,23 @@ exports.searchUsers = async (req, res) => {
       gender, maritalStatus, isActive 
     } = req.query;
 
-    const filter = {};
+    // Get authenticated user's company and department
+    const userCompany = req.user.company;
+    const userDepartment = req.user.department;
+    
+    if (!userCompany) {
+      return errorResponse(res, 400, "Company information is required");
+    }
+
+    const filter = { company: userCompany };  // Always filter by company
+
+    // If user is not admin, filter by department as well
+    const adminRoles = ['admin'];
+    const isAdmin = adminRoles.includes(req.user.jobRole);
+    
+    if (!isAdmin && userDepartment) {
+      filter.department = userDepartment;
+    }
 
     if (name) filter.name = { $regex: name, $options: 'i' };
     if (email) filter.email = { $regex: email, $options: 'i' };
@@ -574,6 +889,7 @@ exports.searchUsers = async (req, res) => {
     const users = await User.find(filter)
       .select('-password -resetToken -resetTokenExpiry')
       .populate('department', 'name description')
+      .populate('company', 'name companyCode')
       .sort({ createdAt: -1 });
 
     return successResponse(res, 200, {

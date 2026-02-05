@@ -89,6 +89,12 @@ const loginSchema = Joi.object({
   password: Joi.string().required().messages({
     "string.empty": "Password is required"
   }),
+   companyCode: Joi.string()
+    .optional()
+    .allow('', null)
+    .messages({
+      'string.base': 'Company code must be a string'
+    }),
     companyIdentifier: Joi.string()
     .optional()
     .allow('', null)
