@@ -11,19 +11,6 @@ const sharp = require('sharp');
 
 // ==================== HELPER FUNCTIONS ====================
 
-// 🔹 Helper: Check if user belongs to same company and department
-const checkSameCompanyDepartment = (currentUser, targetUser) => {
-  if (!currentUser || !targetUser) return false;
-  
-  // Compare company
-  const sameCompany = currentUser.company.toString() === targetUser.company.toString();
-  
-  // Compare department
-  const sameDepartment = currentUser.department.toString() === targetUser.department.toString();
-  
-  return sameCompany && sameDepartment;
-};
-
 // 🔹 Helper to create notifications
 const createNotification = async (userId, title, message, type, relatedTask = null, metadata = null) => {
   try {
@@ -138,44 +125,34 @@ const enrichStatusInfo = async (tasks) => {
   });
 };
 
-// 🔹 Get all users from same company and department
+// 🔹 Get all users (no restrictions)
 const getAllAssignableUsers = async (req) => {
-  const loggedInUser = await User.findById(req.user.id).lean();
+  console.log('👤 Getting all active users');
 
-  console.log('👤 Logged-in full user:', loggedInUser);
+  const loggedInUser = await User.findById(req.user.id).lean();
 
   if (!loggedInUser) {
     console.log('🚫 User not found');
     return [];
   }
 
-  // Get users from same company and department only
+  // Get all active users except self
   const users = await User.find({
     isActive: true,
-    company: loggedInUser.company,
-    department: loggedInUser.department,
-    _id: { $ne: loggedInUser._id } // Exclude self
+    _id: { $ne: loggedInUser._id }
   })
   .select('_id name email role jobRole properties')
   .lean();
 
-  console.log('✅ Assignable users found:', users.length);
+  console.log('✅ All active users found:', users.length);
 
   return users;
 };
 
-// 🔹 Get all groups for task assignment
+// 🔹 Get all groups (no restrictions)
 const getAllAssignableGroups = async (req) => {
-  // Get current user
-  const currentUser = await User.findById(req.user.id).lean();
-  
-  if (!currentUser) {
-    return [];
-  }
-
-  // Get groups created by current user
+  // Get all active groups
   const groups = await Group.find({
-    createdBy: currentUser._id,
     isActive: true
   })
   .populate('members', 'name role email')
@@ -619,7 +596,7 @@ exports.getAssignedTasks = async (req, res) => {
   }
 };
 
-// ✅ CREATE TASK FOR SELF - FIXED VERSION
+// ✅ CREATE TASK FOR SELF
 exports.createTaskForSelf = async (req, res) => {
   try {
     const {
@@ -648,7 +625,7 @@ exports.createTaskForSelf = async (req, res) => {
       uploadedBy: req.user._id
     } : null;
 
-    // 🔥 FIX: Improved date validation with timezone handling
+    // Date validation
     let parsedDueDateTime = null;
     
     if (dueDateTime) {
@@ -684,9 +661,8 @@ exports.createTaskForSelf = async (req, res) => {
         console.log('📅 ISO String:', parsedDueDateTime.toISOString());
         console.log('📅 Local String:', parsedDueDateTime.toLocaleString());
 
-        // 🔥 FIX: Better time comparison with buffer
+        // Time comparison with buffer
         const now = new Date();
-        // Allow dates that are within 5 minutes of now (buffer for timezone issues)
         const timeBuffer = 5 * 60 * 1000; // 5 minutes in milliseconds
         
         console.log('📅 Current time:', now);
@@ -784,7 +760,7 @@ exports.createTaskForSelf = async (req, res) => {
   }
 };
 
-// ✅ CREATE TASK FOR OTHERS - FIXED VERSION
+// ✅ CREATE TASK FOR OTHERS - WITHOUT RESTRICTIONS
 exports.createTaskForOthers = async (req, res) => {
   try {
     const {
@@ -800,7 +776,7 @@ exports.createTaskForOthers = async (req, res) => {
 
     console.log('📅 Received dueDateTime for others:', dueDateTime);
 
-    // ✅ Get current user's complete details from database
+    // ✅ Get current user's details
     const currentUser = await User.findById(req.user.id).lean();
     
     if (!currentUser) {
@@ -812,12 +788,10 @@ exports.createTaskForOthers = async (req, res) => {
 
     console.log('👤 Current User:', {
       id: currentUser._id,
-      name: currentUser.name,
-      department: currentUser.department,
-      company: currentUser.company
+      name: currentUser.name
     });
 
-    // 🔥 NEW CHECK: Validate assigned users exist and belong to same company & department
+    // Parse assigned users
     let parsedUsers = [];
     
     if (assignedUsers && assignedUsers !== 'null') {
@@ -829,11 +803,11 @@ exports.createTaskForOthers = async (req, res) => {
           parsedUsers = [parsedUsers];
         }
         
-        // Validate each assigned user exists and belongs to same company & department
+        // Check if users exist and are active (NO DEPARTMENT/COMPANY CHECKS)
         const assignedUsersData = await User.find({
           _id: { $in: parsedUsers },
           isActive: true
-        }).select('_id name email department company').lean();
+        }).select('_id name email').lean();
 
         console.log('✅ Found assigned users:', assignedUsersData);
 
@@ -845,33 +819,6 @@ exports.createTaskForOthers = async (req, res) => {
           return res.status(400).json({ 
             success: false,
             error: `Some users not found or inactive: ${missingIds.join(', ')}` 
-          });
-        }
-
-        // Check same company and department for all assigned users
-        const invalidUsers = [];
-        for (const user of assignedUsersData) {
-          if (user.company.toString() !== currentUser.company.toString()) {
-            invalidUsers.push({
-              id: user._id,
-              name: user.name,
-              reason: 'Different company'
-            });
-          } else if (user.department.toString() !== currentUser.department.toString()) {
-            invalidUsers.push({
-              id: user._id,
-              name: user.name,
-              reason: 'Different department'
-            });
-          }
-        }
-
-        if (invalidUsers.length > 0) {
-          console.log('❌ Invalid assigned users:', invalidUsers);
-          return res.status(400).json({ 
-            success: false,
-            error: 'You can only assign tasks to users in your same company and department',
-            invalidUsers: invalidUsers
           });
         }
 
@@ -903,48 +850,28 @@ exports.createTaskForOthers = async (req, res) => {
       });
     }
 
-    // ✅ Validate groups (if any) belong to same company & department
+    // ✅ Validate groups (if any) - NO RESTRICTIONS
     if (parsedGroups.length > 0) {
       const groups = await Group.find({
         _id: { $in: parsedGroups },
-        createdBy: currentUser._id,
         isActive: true,
-      }).populate('members', '_id department company').lean();
+      }).populate('members', '_id name email').lean();
 
       if (groups.length !== parsedGroups.length) {
         return res.status(400).json({
           success: false,
-          error: "Some groups are invalid or you do not have permission",
+          error: "Some groups are invalid",
         });
-      }
-
-      // Check all group members belong to same company & department
-      for (const group of groups) {
-        for (const member of group.members) {
-          if (member.company.toString() !== currentUser.company.toString()) {
-            return res.status(400).json({
-              success: false,
-              error: `Group "${group.name}" contains members from different company`
-            });
-          }
-          if (member.department.toString() !== currentUser.department.toString()) {
-            return res.status(400).json({
-              success: false,
-              error: `Group "${group.name}" contains members from different department`
-            });
-          }
-        }
       }
     }
 
-    // 🔥 FIX: Improved date parsing for task for others
+    // Date parsing and validation
     let parsedDueDateTime = null;
     
     if (dueDateTime) {
       try {
         if (typeof dueDateTime === 'string') {
           if (dueDateTime.includes('T')) {
-            // Add seconds if missing
             const dateStr = dueDateTime.includes(':') && dueDateTime.split(':').length === 2 
               ? `${dueDateTime}:00` 
               : dueDateTime;
@@ -978,9 +905,9 @@ exports.createTaskForOthers = async (req, res) => {
 
       } catch (dateError) {
         console.error('❌ Date parsing error for others:', dateError);
-        return res.status(400).json({ 
+        return res.status(500).json({ 
           success: false,
-          error: 'Invalid date format. Please use a valid date and time.' 
+          error: 'Internal server error' 
         });
       }
     }
@@ -1115,7 +1042,7 @@ exports.createTaskForOthers = async (req, res) => {
   }
 };
 
-// ✅ UPDATE TASK
+// ✅ UPDATE TASK - WITHOUT RESTRICTIONS
 exports.updateTask = async (req, res) => {
   try {
     const { taskId } = req.params;
@@ -1198,13 +1125,13 @@ exports.updateTask = async (req, res) => {
       }
     });
 
-    // Update assigned users and groups if provided
+    // Update assigned users and groups if provided - NO DEPARTMENT/COMPANY CHECKS
     if (assignedUsers.length > 0) {
-      // Validate assigned users belong to same company and department
+      // Just check if users exist and are active
       const assignedUsersData = await User.find({
         _id: { $in: assignedUsers },
         isActive: true
-      }).select('_id name email department company').lean();
+      }).select('_id name email').lean();
 
       if (assignedUsersData.length !== assignedUsers.length) {
         return res.status(400).json({ 
@@ -1213,44 +1140,21 @@ exports.updateTask = async (req, res) => {
         });
       }
 
-      // Check same company and department
-      for (const user of assignedUsersData) {
-        if (!checkSameCompanyDepartment(currentUser, user)) {
-          return res.status(400).json({ 
-            success: false,
-            error: `User ${user.name} belongs to different company/department` 
-          });
-        }
-      }
-
       task.assignedUsers = assignedUsers;
     }
 
     if (assignedGroups.length > 0) {
-      // Validate groups
+      // Just check if groups exist and are active
       const groups = await Group.find({
         _id: { $in: assignedGroups },
-        createdBy: currentUser._id,
         isActive: true,
-      }).populate('members', '_id department company').lean();
+      }).lean();
 
       if (groups.length !== assignedGroups.length) {
         return res.status(400).json({
           success: false,
-          error: "Some groups are invalid or you do not have permission",
+          error: "Some groups are invalid",
         });
-      }
-
-      // Check all group members belong to same company & department
-      for (const group of groups) {
-        for (const member of group.members) {
-          if (!checkSameCompanyDepartment(currentUser, member)) {
-            return res.status(400).json({
-              success: false,
-              error: `Group "${group.name}" contains members from different company/department`
-            });
-          }
-        }
       }
 
       task.assignedGroups = assignedGroups;
@@ -1783,7 +1687,7 @@ exports.getTaskActivityLogs = async (req, res) => {
   }
 };
 
-// ✅ GET USER ACTIVITY TIMELINE
+// ✅ GET USER ACTIVITY TIMELINE - WITHOUT RESTRICTIONS
 exports.getUserActivityTimeline = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -1797,7 +1701,7 @@ exports.getUserActivityTimeline = async (req, res) => {
       });
     }
 
-    // Check if user is authorized (own timeline or same company/department)
+    // Check if target user exists
     const targetUser = await User.findById(userId).lean();
     if (!targetUser) {
       return res.status(404).json({ 
@@ -1806,15 +1710,7 @@ exports.getUserActivityTimeline = async (req, res) => {
       });
     }
 
-    const isAuthorized = userId === req.user._id.toString() || 
-                        checkSameCompanyDepartment(currentUser, targetUser);
-
-    if (!isAuthorized) {
-      return res.status(403).json({ 
-        success: false,
-        error: 'Not authorized to view this activity timeline' 
-      });
-    }
+    // 🔴 REMOVED: No access restrictions - any user can view any timeline
 
     const logs = await ActivityLog.find({ user: userId })
       .populate('task', 'title')
@@ -1836,12 +1732,12 @@ exports.getUserActivityTimeline = async (req, res) => {
   }
 };
 
-// ✅ GET ASSIGNABLE USERS AND GROUPS
+// ✅ GET ASSIGNABLE USERS AND GROUPS - WITHOUT RESTRICTIONS
 exports.getAssignableUsers = async (req, res) => {
   try {
     console.log('🔑 Token user:', req.user);
 
-    // ✅ DB se current user lao
+    // ✅ Get current user
     const currentUser = await User.findById(req.user.id).lean();
 
     if (!currentUser) {
@@ -1853,8 +1749,21 @@ exports.getAssignableUsers = async (req, res) => {
 
     console.log('👤 Current user from DB:', currentUser);
 
-    const users = await getAllAssignableUsers(req);
-    const groups = await getAllAssignableGroups(req);
+    // Get all active users except self
+    const users = await User.find({
+      isActive: true,
+      _id: { $ne: currentUser._id }
+    })
+    .select('_id name email role jobRole')
+    .lean();
+
+    // Get all active groups
+    const groups = await Group.find({
+      isActive: true
+    })
+    .populate('members', 'name role email')
+    .select('name description members')
+    .lean();
 
     res.json({
       success: true,
@@ -2001,7 +1910,7 @@ exports.getTaskStatusCounts = async (req, res) => {
   }
 };
 
-// ✅ GET USER DETAILED ANALYTICS
+// ✅ GET USER DETAILED ANALYTICS - WITHOUT RESTRICTIONS
 exports.getUserDetailedAnalytics = async (req, res) => {
   try {
     const currentUser = await User.findById(req.user.id).lean();
@@ -2017,7 +1926,7 @@ exports.getUserDetailedAnalytics = async (req, res) => {
 
     // Get target user details
     const targetUser = await User.findById(userId)
-      .select('name email role department employeeType joiningDate company')
+      .select('name email role employeeType joiningDate')
       .lean();
 
     if (!targetUser) {
@@ -2027,13 +1936,7 @@ exports.getUserDetailedAnalytics = async (req, res) => {
       });
     }
 
-    // Check if current user can access target user's analytics
-    if (!checkSameCompanyDepartment(currentUser, targetUser)) {
-      return res.status(403).json({ 
-        success: false,
-        error: 'Access denied. Can only access analytics of users in same company and department.' 
-      });
-    }
+    // 🔴 REMOVED: No access restrictions - any user can view any user's analytics
 
     // Date range setup
     let dateFilter = {};
@@ -2239,7 +2142,7 @@ exports.getUserDetailedAnalytics = async (req, res) => {
   }
 };
 
-// ✅ GET USER TASK STATISTICS
+// ✅ GET USER TASK STATISTICS - WITHOUT RESTRICTIONS
 exports.getUserTaskStats = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -2262,13 +2165,7 @@ exports.getUserTaskStats = async (req, res) => {
       });
     }
 
-    // Check if current user can access target user's stats
-    if (!checkSameCompanyDepartment(currentUser, targetUser)) {
-      return res.status(403).json({ 
-        success: false,
-        error: 'Access denied. Can only access stats of users in same company and department.' 
-      });
-    }
+    // 🔴 REMOVED: No access restrictions - any user can view any user's stats
 
     // Get user's groups for group tasks
     const userGroups = await Group.find({ 
@@ -2413,7 +2310,7 @@ exports.getUserTaskStats = async (req, res) => {
   }
 };
 
-// ✅ GET ALL USERS WITH THEIR TASK COUNTS (from same company and department)
+// ✅ GET ALL USERS WITH THEIR TASK COUNTS (NO RESTRICTIONS)
 exports.getUsersWithTaskCounts = async (req, res) => {
   try {
     const currentUser = await User.findById(req.user.id).lean();
@@ -2426,11 +2323,9 @@ exports.getUsersWithTaskCounts = async (req, res) => {
 
     const { period = 'all', employeeType } = req.query;
 
-    // Get users from same company and department only
+    // 🔴 CHANGED: Get all active users, no restrictions
     const userFilter = { 
-      isActive: true,
-      company: currentUser.company,
-      department: currentUser.department
+      isActive: true
     };
     
     if (employeeType && employeeType !== 'all') {
@@ -2438,7 +2333,7 @@ exports.getUsersWithTaskCounts = async (req, res) => {
     }
 
     const users = await User.find(userFilter)
-      .select('name email role employeeType department')
+      .select('name email role employeeType')
       .lean();
 
     // Date filter for tasks
@@ -2548,7 +2443,158 @@ exports.getUsersWithTaskCounts = async (req, res) => {
   }
 };
 
-// ✅ GET USER TASKS WITH FILTERS
+
+
+
+
+exports.getDepartmentUsersWithTaskCounts = async (req, res) => {
+  try {
+    const currentUser = await User.findById(req.user.id).lean();
+    if (!currentUser) {
+      return res.status(401).json({ 
+        success: false,
+        error: 'User not found' 
+      });
+    }
+
+    // Get current user's company and department
+    const userCompanyId = currentUser.company;
+    const userDepartmentId = currentUser.department;
+
+    if (!userCompanyId || !userDepartmentId) {
+      return res.status(400).json({
+        success: false,
+        error: 'User company or department not found'
+      });
+    }
+
+    const { period = 'all', employeeType } = req.query;
+
+    // 🔴 UPDATED: Filter users by same company AND same department
+    const userFilter = { 
+      isActive: true,
+      company: userCompanyId,
+      department: userDepartmentId
+    };
+    
+    if (employeeType && employeeType !== 'all') {
+      userFilter.employeeType = employeeType;
+    }
+
+    // Exclude the current user if needed (optional)
+    // userFilter._id = { $ne: currentUser._id };
+
+    const users = await User.find(userFilter)
+      .select('name email role employeeType department company')
+      .lean();
+
+    // Date filter for tasks
+    let dateFilter = {};
+    if (period !== 'all') {
+      const now = new Date();
+      switch (period) {
+        case 'today':
+          dateFilter.createdAt = {
+            $gte: new Date(now.getFullYear(), now.getMonth(), now.getDate()),
+            $lte: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
+          };
+          break;
+        case 'week':
+          const dayOfWeek = now.getDay();
+          dateFilter.createdAt = {
+            $gte: new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek),
+            $lte: new Date(now.getFullYear(), now.getMonth(), now.getDate() + (6 - dayOfWeek) + 1)
+          };
+          break;
+        case 'month':
+          dateFilter.createdAt = {
+            $gte: new Date(now.getFullYear(), now.getMonth(), 1),
+            $lte: new Date(now.getFullYear(), now.getMonth() + 1, 1)
+          };
+          break;
+      }
+    }
+
+    // Get users with their task counts
+    const usersWithCounts = await Promise.all(
+      users.map(async (user) => {
+        const userGroups = await Group.find({ 
+          members: user._id,
+          isActive: true 
+        }).select('_id').lean();
+        
+        const groupIds = userGroups.map(group => group._id);
+
+        const taskFilter = {
+          ...dateFilter,
+          isActive: true,
+          $or: [
+            { assignedUsers: user._id },
+            { assignedGroups: { $in: groupIds } },
+            { createdBy: user._id }
+          ]
+        };
+
+        const userTasks = await Task.find(taskFilter).lean();
+
+        const statusCounts = {
+          pending: 0,
+          'in-progress': 0,
+          completed: 0
+        };
+
+        userTasks.forEach(task => {
+          const userStatus = task.statusByUser?.find(s => 
+            s.user && s.user.toString() === user._id.toString()
+          );
+          const status = userStatus?.status || 'pending';
+          if (statusCounts[status] !== undefined) {
+            statusCounts[status]++;
+          }
+        });
+
+        const totalTasks = userTasks.length;
+        const completedCount = statusCounts.completed;
+        const completionRate = totalTasks > 0 ? 
+          Math.round((completedCount / totalTasks) * 100) : 0;
+
+        return {
+          ...user,
+          taskStats: {
+            total: totalTasks,
+            pending: statusCounts.pending,
+            inProgress: statusCounts['in-progress'],
+            completed: completedCount,
+            completionRate: completionRate
+          }
+        };
+      })
+    );
+
+    res.json({
+      success: true,
+      period,
+      employeeType: employeeType || 'all',
+      users: usersWithCounts,
+      summary: {
+        totalUsers: usersWithCounts.length,
+        totalTasks: usersWithCounts.reduce((sum, user) => sum + user.taskStats.total, 0),
+        averageCompletionRate: Math.round(
+          usersWithCounts.reduce((sum, user) => sum + user.taskStats.completionRate, 0) / 
+          Math.max(usersWithCounts.length, 1)
+        )
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error in getUsersWithTaskCounts:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to fetch users with task counts' 
+    });
+  }
+};
+// ✅ GET USER TASKS WITH FILTERS - WITHOUT RESTRICTIONS
 exports.getUserTasks = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -2571,13 +2617,7 @@ exports.getUserTasks = async (req, res) => {
       });
     }
 
-    // Check if current user can access target user's tasks
-    if (!checkSameCompanyDepartment(currentUser, targetUser)) {
-      return res.status(403).json({ 
-        success: false,
-        error: 'Access denied. Can only access tasks of users in same company and department.' 
-      });
-    }
+    // 🔴 REMOVED: No access restrictions - any user can view any user's tasks
 
     // Get user's groups
     const userGroups = await Group.find({ 
@@ -2832,7 +2872,7 @@ exports.getOverdueTasks = async (req, res) => {
   }
 };
 
-// ✅ GET USER OVERDUE TASKS
+// ✅ GET USER OVERDUE TASKS - WITHOUT RESTRICTIONS
 exports.getUserOverdueTasks = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -2854,13 +2894,7 @@ exports.getUserOverdueTasks = async (req, res) => {
       });
     }
 
-    // Check if current user can access target user's overdue tasks
-    if (!checkSameCompanyDepartment(currentUser, targetUser)) {
-      return res.status(403).json({ 
-        success: false,
-        error: 'Access denied. Can only access overdue tasks of users in same company and department.' 
-      });
-    }
+    // 🔴 REMOVED: No access restrictions
 
     // Get user's groups for group-assigned tasks
     const userGroups = await Group.find({ 
@@ -3102,7 +3136,7 @@ exports.updateAllOverdueTasks = async (req, res) => {
   }
 };
 
-// ✅ GET OVERDUE SUMMARY
+// ✅ GET OVERDUE SUMMARY - WITHOUT RESTRICTIONS
 exports.getOverdueSummary = async (req, res) => {
   try {
     const userId = req.params.userId || req.user._id;
@@ -3117,7 +3151,7 @@ exports.getOverdueSummary = async (req, res) => {
       });
     }
 
-    // If requesting other user's summary, check authorization
+    // If requesting other user's summary
     if (userId !== req.user._id.toString()) {
       const targetUser = await User.findById(userId).lean();
       if (!targetUser) {
@@ -3127,12 +3161,7 @@ exports.getOverdueSummary = async (req, res) => {
         });
       }
       
-      if (!checkSameCompanyDepartment(currentUser, targetUser)) {
-        return res.status(403).json({ 
-          success: false,
-          error: 'Access denied. Can only access summary of users in same company and department.' 
-        });
-      }
+      // 🔴 REMOVED: No access restrictions
     }
 
     // Calculate date range
