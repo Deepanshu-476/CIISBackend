@@ -29,7 +29,7 @@ router.get("/:id/users", companyController.getCompanyUsers);
 router.get("/:id", companyController.getCompanyById);
 
 // ✅ Update company
-router.patch("/:id", companyController.updateCompany);
+router.put("/:id", companyController.updateCompany);
 
 // ✅ Deactivate company (soft delete)
 router.patch("/:id/deactivate", companyController.deactivateCompany);
