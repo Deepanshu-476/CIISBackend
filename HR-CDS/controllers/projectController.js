@@ -37,10 +37,149 @@ const upload = multer({
 const handleFileUpload = upload.single('pdfFile');
 
 // ==========================================
+// 📌 HELPER FUNCTIONS
+// ==========================================
+const hasProjectAccess = (project, userId, userRole) => {
+  // Super admin and admin have full access
+  if (userRole === 'super-admin' || userRole === 'admin') {
+    return true;
+  }
+  
+  // Check if user is in project users array
+  const isUserInProject = project.users.some(user => 
+    user._id.toString() === userId.toString()
+  );
+  
+  // Check if user created the project
+  const isCreator = project.createdBy?._id?.toString() === userId.toString();
+  
+  return isUserInProject || isCreator;
+};
+
+// ==========================================
+// 📌 DEBUG/UTILITY CONTROLLERS
+// ==========================================
+exports.getProjectUsers = async (req, res) => {
+  try {
+    console.log("🔍 Debug - Fetching project users");
+    console.log("Project ID:", req.params.id);
+    console.log("User ID:", req.user.id);
+    console.log("User Role:", req.user.role);
+    
+    const project = await Project.findById(req.params.id)
+      .select('users projectName createdBy')
+      .populate('users', 'name email role _id')
+      .populate('createdBy', 'name email _id');
+    
+    if (!project) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Project not found" 
+      });
+    }
+    
+    // Check access
+    if (!hasProjectAccess(project, req.user.id, req.user.role)) {
+      return res.status(403).json({ 
+        success: false, 
+        message: "Access denied to view project users" 
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      projectName: project.projectName,
+      createdBy: project.createdBy,
+      users: project.users,
+      totalUsers: project.users.length,
+      hasAccess: hasProjectAccess(project, req.user.id, req.user.role)
+    });
+  } catch (error) {
+    console.error("❌ Error fetching project users:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Error fetching project users" 
+    });
+  }
+};
+
+exports.addUserToProject = async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { userId } = req.body;
+    
+    console.log("➕ Adding user to project");
+    console.log("Project ID:", projectId);
+    console.log("User ID to add:", userId);
+    console.log("Requested by:", req.user.id);
+    
+    const project = await Project.findById(projectId);
+    
+    if (!project) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Project not found" 
+      });
+    }
+    
+    // Check if requester has permission
+    if (!hasProjectAccess(project, req.user.id, req.user.role)) {
+      return res.status(403).json({ 
+        success: false, 
+        message: "Access denied to modify project" 
+      });
+    }
+    
+    // Check if user already exists
+    const userExists = project.users.some(userIdObj => 
+      userIdObj.toString() === userId
+    );
+    
+    if (userExists) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "User already in project" 
+      });
+    }
+    
+    // Add user
+    project.users.push(userId);
+    await project.save();
+    
+    // Add notification
+    const notification = {
+      title: "User Added to Project",
+      message: `${req.user.name} added a new user to project "${project.projectName}"`,
+      type: "project_updated",
+      relatedTo: "project",
+      referenceId: project._id,
+      createdBy: req.user.id
+    };
+    
+    await project.addNotification(notification);
+    
+    res.status(200).json({
+      success: true,
+      message: "User added to project successfully",
+      projectId: project._id,
+      userId: userId
+    });
+  } catch (error) {
+    console.error("❌ Error adding user to project:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Error adding user to project" 
+    });
+  }
+};
+
+// ==========================================
 // 📌 NOTIFICATION CONTROLLERS
 // ==========================================
 exports.getUserNotifications = async (req, res) => {
   try {
+    console.log("🔔 Fetching notifications for user:", req.user.id);
+    
     const projects = await Project.find({
       users: req.user.id
     }).populate('notifications.createdBy', 'name email');
@@ -65,7 +204,7 @@ exports.getUserNotifications = async (req, res) => {
       notifications: allNotifications
     });
   } catch (error) {
-    console.error("Error fetching notifications:", error);
+    console.error("❌ Error fetching notifications:", error);
     res.status(500).json({ 
       success: false, 
       message: "Error fetching notifications" 
@@ -76,6 +215,8 @@ exports.getUserNotifications = async (req, res) => {
 exports.markNotificationAsRead = async (req, res) => {
   try {
     const { notificationId } = req.params;
+    
+    console.log("📌 Marking notification as read:", notificationId);
     
     // Find project containing this notification
     const project = await Project.findOne({
@@ -101,7 +242,7 @@ exports.markNotificationAsRead = async (req, res) => {
       message: "Notification marked as read"
     });
   } catch (error) {
-    console.error("Error marking notification as read:", error);
+    console.error("❌ Error marking notification as read:", error);
     res.status(500).json({ 
       success: false, 
       message: "Error marking notification as read" 
@@ -111,6 +252,8 @@ exports.markNotificationAsRead = async (req, res) => {
 
 exports.clearAllNotifications = async (req, res) => {
   try {
+    console.log("🗑️ Clearing all notifications for user:", req.user.id);
+    
     await Project.updateMany(
       { users: req.user.id },
       { $set: { notifications: [] } }
@@ -121,7 +264,7 @@ exports.clearAllNotifications = async (req, res) => {
       message: "All notifications cleared"
     });
   } catch (error) {
-    console.error("Error clearing notifications:", error);
+    console.error("❌ Error clearing notifications:", error);
     res.status(500).json({ 
       success: false, 
       message: "Error clearing notifications" 
@@ -134,11 +277,17 @@ exports.clearAllNotifications = async (req, res) => {
 // ==========================================
 exports.listProjects = async (req, res) => {
   try {
+    console.log("📋 Listing projects for user:", req.user.id);
+    console.log("User role:", req.user.role);
+    
     let query = {};
     
-    // If not admin, only show projects user is part of
-    if (req.user.role !== 'admin') {
+    // If not admin/super-admin, only show projects user is part of
+    if (req.user.role !== 'admin' && req.user.role !== 'super-admin') {
       query.users = req.user.id;
+      console.log("Non-admin query:", query);
+    } else {
+      console.log("Admin query: showing all projects");
     }
 
     const projects = await Project.find(query)
@@ -148,13 +297,15 @@ exports.listProjects = async (req, res) => {
       .populate('tasks.createdBy', 'name email')
       .sort({ createdAt: -1 });
 
+    console.log(`Found ${projects.length} projects`);
+
     res.status(200).json({
       success: true,
       count: projects.length,
       items: projects
     });
   } catch (error) {
-    console.error("Error listing projects:", error);
+    console.error("❌ Error listing projects:", error);
     res.status(500).json({ 
       success: false, 
       message: "Error fetching projects" 
@@ -164,36 +315,59 @@ exports.listProjects = async (req, res) => {
 
 exports.getProjectById = async (req, res) => {
   try {
+    console.log("🔍 Fetching project by ID");
+    console.log("Project ID:", req.params.id);
+    console.log("User ID:", req.user.id);
+    console.log("User Role:", req.user.role);
+    
     const project = await Project.findById(req.params.id)
-      .populate('users', 'name email role')
-      .populate('createdBy', 'name email')
+      .populate('users', 'name email role _id')
+      .populate('createdBy', 'name email _id')
       .populate('tasks.assignedTo', 'name email')
       .populate('tasks.createdBy', 'name email')
       .populate('tasks.remarks.createdBy', 'name email')
       .populate('tasks.activityLogs.performedBy', 'name email');
 
     if (!project) {
+      console.log("❌ Project not found:", req.params.id);
       return res.status(404).json({ 
         success: false, 
         message: "Project not found" 
       });
     }
 
+    console.log("Project found:", project.projectName);
+    console.log("Project users:", project.users.map(u => ({id: u._id, name: u.name})));
+    console.log("Project created by:", project.createdBy?._id);
+    
     // Check if user has access to this project
-    if (req.user.role !== 'admin' && 
-        !project.users.some(user => user._id.toString() === req.user.id)) {
+    if (!hasProjectAccess(project, req.user.id, req.user.role)) {
+      console.log("❌ Access denied for user:", req.user.id);
+      console.log("User role:", req.user.role);
+      console.log("Has admin role:", req.user.role === 'admin' || req.user.role === 'super-admin');
+      
+      // Return more informative error
       return res.status(403).json({ 
         success: false, 
-        message: "Access denied" 
+        message: "Access denied. You are not a member of this project.",
+        details: {
+          userId: req.user.id,
+          userRole: req.user.role,
+          projectId: project._id,
+          projectUsers: project.users.map(u => u._id)
+        }
       });
     }
 
+    console.log("✅ Access granted, returning project data");
+
     res.status(200).json({
       success: true,
-      ...project.toObject()
+      ...project.toObject(),
+      userHasAccess: true
     });
   } catch (error) {
-    console.error("Error fetching project:", error);
+    console.error("❌ Error fetching project:", error);
     res.status(500).json({ 
       success: false, 
       message: "Error fetching project" 
@@ -213,11 +387,22 @@ exports.createProject = async (req, res) => {
 
       const { projectName, description, startDate, endDate, priority, status, users } = req.body;
       
+      console.log("🆕 Creating new project");
+      console.log("Created by:", req.user.id);
+      console.log("Project name:", projectName);
+      console.log("Users to add:", users);
+      
       let usersArray = [];
       try {
         usersArray = JSON.parse(users);
       } catch (parseError) {
         usersArray = Array.isArray(users) ? users : [];
+      }
+
+      // Add creator to users array if not already included
+      if (!usersArray.includes(req.user.id)) {
+        usersArray.push(req.user.id);
+        console.log("Added creator to users array");
       }
 
       // Prepare project data
@@ -247,13 +432,15 @@ exports.createProject = async (req, res) => {
       const notification = {
         title: "New Project Created",
         message: `${req.user.name} created project "${projectName}"`,
-        type: "project_updated",
+        type: "project_created",
         relatedTo: "project",
         referenceId: project._id,
         createdBy: req.user.id
       };
 
       await project.addNotification(notification);
+
+      console.log("✅ Project created successfully:", project._id);
 
       res.status(201).json({
         success: true,
@@ -262,7 +449,7 @@ exports.createProject = async (req, res) => {
       });
     });
   } catch (error) {
-    console.error("Error creating project:", error);
+    console.error("❌ Error creating project:", error);
     res.status(500).json({ 
       success: false, 
       message: "Error creating project" 
@@ -283,13 +470,9 @@ exports.updateProject = async (req, res) => {
       const { id } = req.params;
       const { projectName, description, startDate, endDate, priority, status, users } = req.body;
       
-      let usersArray = [];
-      try {
-        usersArray = JSON.parse(users);
-      } catch (parseError) {
-        usersArray = Array.isArray(users) ? users : [];
-      }
-
+      console.log("✏️ Updating project:", id);
+      console.log("Updated by:", req.user.id);
+      
       // Find existing project
       const project = await Project.findById(id);
       if (!project) {
@@ -297,6 +480,21 @@ exports.updateProject = async (req, res) => {
           success: false, 
           message: "Project not found" 
         });
+      }
+
+      // Check access
+      if (!hasProjectAccess(project, req.user.id, req.user.role)) {
+        return res.status(403).json({ 
+          success: false, 
+          message: "Access denied to update project" 
+        });
+      }
+
+      let usersArray = [];
+      try {
+        usersArray = JSON.parse(users);
+      } catch (parseError) {
+        usersArray = Array.isArray(users) ? users : [];
       }
 
       // Update fields
@@ -337,6 +535,8 @@ exports.updateProject = async (req, res) => {
 
       await project.addNotification(notification);
 
+      console.log("✅ Project updated successfully:", id);
+
       res.status(200).json({
         success: true,
         message: "Project updated successfully",
@@ -344,7 +544,7 @@ exports.updateProject = async (req, res) => {
       });
     });
   } catch (error) {
-    console.error("Error updating project:", error);
+    console.error("❌ Error updating project:", error);
     res.status(500).json({ 
       success: false, 
       message: "Error updating project" 
@@ -354,12 +554,27 @@ exports.updateProject = async (req, res) => {
 
 exports.deleteProject = async (req, res) => {
   try {
+    console.log("🗑️ Deleting project:", req.params.id);
+    console.log("Deleted by:", req.user.id);
+    
     const project = await Project.findById(req.params.id);
     
     if (!project) {
       return res.status(404).json({ 
         success: false, 
         message: "Project not found" 
+      });
+    }
+
+    // Check access - only admin/super-admin or creator can delete
+    const canDelete = req.user.role === 'admin' || 
+                     req.user.role === 'super-admin' ||
+                     project.createdBy?.toString() === req.user.id;
+    
+    if (!canDelete) {
+      return res.status(403).json({ 
+        success: false, 
+        message: "Access denied to delete project" 
       });
     }
 
@@ -381,12 +596,14 @@ exports.deleteProject = async (req, res) => {
 
     await project.deleteOne();
 
+    console.log("✅ Project deleted successfully:", req.params.id);
+
     res.status(200).json({
       success: true,
       message: "Project deleted successfully"
     });
   } catch (error) {
-    console.error("Error deleting project:", error);
+    console.error("❌ Error deleting project:", error);
     res.status(500).json({ 
       success: false, 
       message: "Error deleting project" 
@@ -410,11 +627,23 @@ exports.addTask = async (req, res) => {
       const { id } = req.params;
       const { title, description, assignedTo, dueDate, priority, status } = req.body;
 
+      console.log("➕ Adding task to project:", id);
+      console.log("Task title:", title);
+      console.log("Assigned to:", assignedTo);
+
       const project = await Project.findById(id);
       if (!project) {
         return res.status(404).json({ 
           success: false, 
           message: "Project not found" 
+        });
+      }
+
+      // Check access
+      if (!hasProjectAccess(project, req.user.id, req.user.role)) {
+        return res.status(403).json({ 
+          success: false, 
+          message: "Access denied to add task" 
         });
       }
 
@@ -425,7 +654,7 @@ exports.addTask = async (req, res) => {
         assignedTo,
         dueDate,
         priority: priority?.toLowerCase(),
-        status: status?.toLowerCase(),
+        status: status?.toLowerCase() || 'pending',
         createdBy: req.user.id
       };
 
@@ -462,6 +691,8 @@ exports.addTask = async (req, res) => {
 
       await project.addNotification(notification);
 
+      console.log("✅ Task added successfully");
+
       res.status(201).json({
         success: true,
         message: "Task added successfully",
@@ -469,7 +700,7 @@ exports.addTask = async (req, res) => {
       });
     });
   } catch (error) {
-    console.error("Error adding task:", error);
+    console.error("❌ Error adding task:", error);
     res.status(500).json({ 
       success: false, 
       message: "Error adding task" 
@@ -482,11 +713,23 @@ exports.updateTask = async (req, res) => {
     const { id, taskId } = req.params;
     const updateData = req.body;
 
+    console.log("✏️ Updating task:", taskId);
+    console.log("In project:", id);
+    console.log("Updated by:", req.user.id);
+
     const project = await Project.findById(id);
     if (!project) {
       return res.status(404).json({ 
         success: false, 
         message: "Project not found" 
+      });
+    }
+
+    // Check project access
+    if (!hasProjectAccess(project, req.user.id, req.user.role)) {
+      return res.status(403).json({ 
+        success: false, 
+        message: "Access denied to update task" 
       });
     }
 
@@ -516,13 +759,15 @@ exports.updateTask = async (req, res) => {
 
     await project.save();
 
+    console.log("✅ Task updated successfully");
+
     res.status(200).json({
       success: true,
       message: "Task updated successfully",
       task
     });
   } catch (error) {
-    console.error("Error updating task:", error);
+    console.error("❌ Error updating task:", error);
     res.status(500).json({ 
       success: false, 
       message: "Error updating task" 
@@ -534,11 +779,23 @@ exports.deleteTask = async (req, res) => {
   try {
     const { id, taskId } = req.params;
 
+    console.log("🗑️ Deleting task:", taskId);
+    console.log("From project:", id);
+    console.log("Deleted by:", req.user.id);
+
     const project = await Project.findById(id);
     if (!project) {
       return res.status(404).json({ 
         success: false, 
         message: "Project not found" 
+      });
+    }
+
+    // Check project access
+    if (!hasProjectAccess(project, req.user.id, req.user.role)) {
+      return res.status(403).json({ 
+        success: false, 
+        message: "Access denied to delete task" 
       });
     }
 
@@ -561,12 +818,14 @@ exports.deleteTask = async (req, res) => {
     project.tasks.pull(taskId);
     await project.save();
 
+    console.log("✅ Task deleted successfully");
+
     res.status(200).json({
       success: true,
       message: "Task deleted successfully"
     });
   } catch (error) {
-    console.error("Error deleting task:", error);
+    console.error("❌ Error deleting task:", error);
     res.status(500).json({ 
       success: false, 
       message: "Error deleting task" 
@@ -582,6 +841,12 @@ exports.updateTaskStatus = async (req, res) => {
     const { projectId, taskId } = req.params;
     const { status, remark } = req.body;
 
+    console.log("🔄 Updating task status");
+    console.log("Project:", projectId);
+    console.log("Task:", taskId);
+    console.log("New status:", status);
+    console.log("Updated by:", req.user.id);
+
     if (!TASK_STATUS.includes(status.toLowerCase())) {
       return res.status(400).json({ 
         success: false, 
@@ -594,6 +859,14 @@ exports.updateTaskStatus = async (req, res) => {
       return res.status(404).json({ 
         success: false, 
         message: "Project not found" 
+      });
+    }
+
+    // Check project access
+    if (!hasProjectAccess(project, req.user.id, req.user.role)) {
+      return res.status(403).json({ 
+        success: false, 
+        message: "Access denied to update task status" 
       });
     }
 
@@ -632,13 +905,15 @@ exports.updateTaskStatus = async (req, res) => {
 
     await project.addNotification(notification);
 
+    console.log("✅ Task status updated successfully");
+
     res.status(200).json({
       success: true,
       message: "Task status updated successfully",
       task
     });
   } catch (error) {
-    console.error("Error updating task status:", error);
+    console.error("❌ Error updating task status:", error);
     res.status(500).json({ 
       success: false, 
       message: "Error updating task status" 
@@ -650,11 +925,24 @@ exports.getTaskActivityLogs = async (req, res) => {
   try {
     const { projectId, taskId } = req.params;
 
+    console.log("📊 Fetching task activity logs");
+    console.log("Project:", projectId);
+    console.log("Task:", taskId);
+    console.log("Requested by:", req.user.id);
+
     const project = await Project.findById(projectId);
     if (!project) {
       return res.status(404).json({ 
         success: false, 
         message: "Project not found" 
+      });
+    }
+
+    // Check project access
+    if (!hasProjectAccess(project, req.user.id, req.user.role)) {
+      return res.status(403).json({ 
+        success: false, 
+        message: "Access denied to view activity logs" 
       });
     }
 
@@ -672,12 +960,14 @@ exports.getTaskActivityLogs = async (req, res) => {
       select: 'name email'
     });
 
+    console.log(`✅ Found ${task.activityLogs.length} activity logs`);
+
     res.status(200).json({
       success: true,
       activityLogs: task.activityLogs
     });
   } catch (error) {
-    console.error("Error fetching activity logs:", error);
+    console.error("❌ Error fetching activity logs:", error);
     res.status(500).json({ 
       success: false, 
       message: "Error fetching activity logs" 
@@ -693,6 +983,11 @@ exports.addRemark = async (req, res) => {
     const { projectId, taskId } = req.params;
     const { text } = req.body;
 
+    console.log("💬 Adding remark to task");
+    console.log("Project:", projectId);
+    console.log("Task:", taskId);
+    console.log("Added by:", req.user.id);
+
     if (!text || text.trim() === "") {
       return res.status(400).json({ 
         success: false, 
@@ -705,6 +1000,14 @@ exports.addRemark = async (req, res) => {
       return res.status(404).json({ 
         success: false, 
         message: "Project not found" 
+      });
+    }
+
+    // Check project access
+    if (!hasProjectAccess(project, req.user.id, req.user.role)) {
+      return res.status(403).json({ 
+        success: false, 
+        message: "Access denied to add remark" 
       });
     }
 
@@ -743,13 +1046,15 @@ exports.addRemark = async (req, res) => {
 
     await project.addNotification(notification);
 
+    console.log("✅ Remark added successfully");
+
     res.status(201).json({
       success: true,
       message: "Remark added successfully",
       remark: task.remarks[task.remarks.length - 1]
     });
   } catch (error) {
-    console.error("Error adding remark:", error);
+    console.error("❌ Error adding remark:", error);
     res.status(500).json({ 
       success: false, 
       message: "Error adding remark" 

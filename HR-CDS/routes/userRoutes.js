@@ -15,6 +15,7 @@ router.put('/me', userController.updateMe);
 router.put('/change-password', userController.changePassword);
 
 // ✅ Company users routes - EXACT MATCH FIRST
+router.get('/department-users', userController.getCompanydepartmentUsers);
 router.get('/company-users', userController.getCompanyUsers);
 // router.get('/company-users/paginated', userController.getCompanyUsersPaginated);
 
@@ -29,6 +30,6 @@ router.get('/search', userController.searchUsers);
 
 // ✅ Single user routes - THESE MUST COME LAST
 router.get('/:id', userController.getUser);
+router.put('/profile-update/:id', userController.updateSelfUser);
 router.put('/:id', userController.updateUser);
-
 module.exports = router;
