@@ -317,6 +317,8 @@ app.use('/api/super-admin', require("./routes/superAdmin"));
 // ✅ Add Meeting Management Route
 app.use("/api/meetings", require("./HR-CDS/routes/meetingRoutes"));
 app.use('/api/cmeeting', require("./HR-CDS/routes/clientMeetingRoutes"));
+
+app.use('/api/sidebar', require("./routes/sidebarConfigs"));
 // ✅ Health check
 app.get("/api", (req, res) => {
   res.json({ 
