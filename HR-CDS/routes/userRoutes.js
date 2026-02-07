@@ -19,6 +19,9 @@ router.get('/department-users', userController.getCompanydepartmentUsers);
 router.get('/company-users', userController.getCompanyUsers);
 // router.get('/company-users/paginated', userController.getCompanyUsersPaginated);
 
+
+// push
+
 // ✅ Users management
 router.get('/all', userController.getAllUsers);
 router.get('/deleted', userController.getDeletedUsers);
