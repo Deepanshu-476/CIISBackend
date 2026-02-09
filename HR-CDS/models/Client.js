@@ -19,6 +19,12 @@ const clientSchema = new mongoose.Schema({
     trim: true,
     maxlength: [50, 'City name cannot exceed 50 characters']
   },
+  companyCode: {
+    type: String,
+    required: [true, 'Company code is required'],
+    uppercase: true,
+    trim: true
+  },
   projectManager: {
     type: [String],
     required: [true, 'At least one project manager is required'],
@@ -76,7 +82,8 @@ const clientSchema = new mongoose.Schema({
 });
 
 // Indexes for better query performance
-clientSchema.index({ client: 1, company: 1 });
+clientSchema.index({ client: 1, companyCode: 1 }, { unique: true }); // Unique client per company
+clientSchema.index({ companyCode: 1 });
 clientSchema.index({ status: 1 });
 clientSchema.index({ city: 1 });
 clientSchema.index({ 'projectManager': 1 });
@@ -105,9 +112,12 @@ clientSchema.virtual('primaryProjectManager').get(function() {
   return this.projectManager && this.projectManager.length > 0 ? this.projectManager[0] : 'Not assigned';
 });
 
-// Static method to get client statistics
-clientSchema.statics.getStats = async function() {
+// Static method to get client statistics with companyCode filter
+clientSchema.statics.getStats = async function(companyCode = null) {
+  const matchStage = companyCode ? { companyCode } : {};
+  
   const stats = await this.aggregate([
+    { $match: matchStage },
     {
       $group: {
         _id: null,
@@ -156,9 +166,12 @@ clientSchema.statics.getStats = async function() {
   };
 };
 
-// Static method to get project manager statistics
-clientSchema.statics.getManagerStats = async function() {
+// Static method to get project manager statistics with companyCode filter
+clientSchema.statics.getManagerStats = async function(companyCode = null) {
+  const matchStage = companyCode ? { companyCode } : {};
+  
   const stats = await this.aggregate([
+    { $match: matchStage },
     { $unwind: '$projectManager' },
     {
       $group: {
@@ -214,6 +227,11 @@ clientSchema.methods.removeProjectManager = function(managerName) {
 
 // Pre-save middleware
 clientSchema.pre('save', function(next) {
+  // Convert companyCode to uppercase
+  if (this.companyCode) {
+    this.companyCode = this.companyCode.trim().toUpperCase();
+  }
+  
   // Ensure projectManager is always an array with valid strings
   if (this.projectManager) {
     if (!Array.isArray(this.projectManager)) {
@@ -259,6 +277,11 @@ clientSchema.pre('save', function(next) {
 // Pre-update middleware for findByIdAndUpdate
 clientSchema.pre('findOneAndUpdate', function(next) {
   const update = this.getUpdate();
+  
+  // Convert companyCode to uppercase if being updated
+  if (update.companyCode) {
+    update.companyCode = update.companyCode.trim().toUpperCase();
+  }
   
   // Handle projectManager in updates
   if (update.projectManager) {

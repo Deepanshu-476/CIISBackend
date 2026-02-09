@@ -9,19 +9,20 @@ const assetRequestSchema = new mongoose.Schema({
   assetName: {
     type: String,
     required: true,
-    enum: ['phone', 'sim', 'laptop', 'desktop', 'headphone'] // Add more if needed
+    enum: ['phone', 'sim', 'laptop', 'desktop', 'headphone']
   },
   status: {
     type: String,
     enum: ['pending', 'approved', 'rejected'],
     default: 'pending'
   },
-  requestedAt: {
-    type: Date,
-    default: Date.now
+  companyCode: {
+    type: String,
+    required: true
   },
-  decisionDate: {
-    type: Date
+  department: {
+    type: String,
+    required: true
   },
   adminComment: {
     type: String,
@@ -29,11 +30,13 @@ const assetRequestSchema = new mongoose.Schema({
   },
   approvedBy: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    default: null
+    ref: 'User'
+  },
+  decisionDate: {
+    type: Date
   }
 }, {
-  timestamps: true // ✅ Adds createdAt and updatedAt fields
+  timestamps: true
 });
 
 module.exports = mongoose.model('AssetRequest', assetRequestSchema);

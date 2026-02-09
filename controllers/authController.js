@@ -154,9 +154,8 @@ exports.register = async (req, res) => {
       return errorResponse(res, 403, "Company subscription has expired", "SUBSCRIPTION_EXPIRED");
     }
 
-    // Hash password
-    const saltRounds = 10;
-    const hashedPassword = await bcrypt.hash(password, saltRounds);
+
+
 
     // Generate employee ID
     const employeeId = `EMP${Date.now()}${Math.floor(Math.random() * 1000)}`;
@@ -165,7 +164,7 @@ exports.register = async (req, res) => {
     const user = await User.create([{
       name: name.trim(),
       email: cleanEmail,
-      password: hashedPassword,
+      password: password,
       department,
       jobRole,
       company,

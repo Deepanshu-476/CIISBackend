@@ -2323,20 +2323,34 @@ exports.getUsersWithTaskCounts = async (req, res) => {
 
     const { period = 'all', employeeType } = req.query;
 
-    // 🔴 CHANGED: Get all active users, no restrictions
+    // 🔴 FIXED: Filter users by current user's company
     const userFilter = { 
-      isActive: true
+      isActive: true,
+      company: currentUser.company // Add this line
     };
     
     if (employeeType && employeeType !== 'all') {
       userFilter.employeeType = employeeType;
     }
 
+    // Agar company field nahi hai to usi department/team ke users dikhao
+    // Isse pehle check karein ki company field exists karti hai ya nahi
+    if (!currentUser.company) {
+      // Alternative: Agar company field nahi hai to role-based filtering
+      // Ya fir sath ke users dikhayein
+      delete userFilter.company;
+      // Ya fir error throw karein
+      // return res.status(400).json({ 
+      //   success: false, 
+      //   error: 'Company information not found' 
+      // });
+    }
+
     const users = await User.find(userFilter)
-      .select('name email role employeeType')
+      .select('name email role employeeType company')
       .lean();
 
-    // Date filter for tasks
+    // Rest of the code remains same...
     let dateFilter = {};
     if (period !== 'all') {
       const now = new Date();
@@ -2368,14 +2382,17 @@ exports.getUsersWithTaskCounts = async (req, res) => {
       users.map(async (user) => {
         const userGroups = await Group.find({ 
           members: user._id,
-          isActive: true 
+          isActive: true,
+          company: currentUser.company // Groups bhi company-based filter karein
         }).select('_id').lean();
         
         const groupIds = userGroups.map(group => group._id);
 
+        // Tasks bhi company-based filter karein
         const taskFilter = {
           ...dateFilter,
           isActive: true,
+          company: currentUser.company, // Add company filter for tasks
           $or: [
             { assignedUsers: user._id },
             { assignedGroups: { $in: groupIds } },
@@ -2423,6 +2440,7 @@ exports.getUsersWithTaskCounts = async (req, res) => {
       success: true,
       period,
       employeeType: employeeType || 'all',
+      company: currentUser.company, // Add company info in response
       users: usersWithCounts,
       summary: {
         totalUsers: usersWithCounts.length,

@@ -1,9 +1,18 @@
 const Service = require('../models/Service');
 
-// Get all services
+// Get all services (with companyCode filter)
 const getAllServices = async (req, res) => {
   try {
-    const services = await Service.find().sort({ servicename: 1 });
+    const { companyCode } = req.query;
+    
+    let query = {};
+    
+    // Filter by companyCode if provided
+    if (companyCode) {
+      query.companyCode = companyCode.toUpperCase();
+    }
+    
+    const services = await Service.find(query).sort({ servicename: 1 });
 
     res.json({
       success: true,
@@ -19,11 +28,12 @@ const getAllServices = async (req, res) => {
   }
 };
 
-// Add new service
+// Add new service (with companyCode)
 const addService = async (req, res) => {
   try {
-    const { servicename } = req.body;
+    const { servicename, companyCode } = req.body;
 
+    // Validate required fields
     if (!servicename || servicename.trim() === '') {
       return res.status(400).json({
         success: false,
@@ -31,8 +41,18 @@ const addService = async (req, res) => {
       });
     }
 
+    if (!companyCode || companyCode.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'Company code is required'
+      });
+    }
+
+    // Create new service with companyCode
     const newService = new Service({
-      servicename: servicename.trim()
+      servicename: servicename.trim(),
+      companyCode: companyCode.trim().toUpperCase(),
+      createdBy: req.user?._id // Optional: if you have user authentication
     });
 
     await newService.save();
@@ -46,7 +66,7 @@ const addService = async (req, res) => {
     if (error.code === 11000) {
       return res.status(400).json({
         success: false,
-        message: 'Service already exists'
+        message: 'Service already exists for this company'
       });
     }
     
@@ -90,7 +110,7 @@ const deleteService = async (req, res) => {
 const updateService = async (req, res) => {
   try {
     const { id } = req.params;
-    const { servicename } = req.body;
+    const { servicename, companyCode } = req.body;
 
     if (!servicename || servicename.trim() === '') {
       return res.status(400).json({
@@ -99,9 +119,18 @@ const updateService = async (req, res) => {
       });
     }
 
+    const updateData = {
+      servicename: servicename.trim()
+    };
+
+    // Update companyCode if provided
+    if (companyCode && companyCode.trim() !== '') {
+      updateData.companyCode = companyCode.trim().toUpperCase();
+    }
+
     const service = await Service.findByIdAndUpdate(
       id,
-      { servicename: servicename.trim() },
+      updateData,
       { new: true, runValidators: true }
     );
 
@@ -121,7 +150,7 @@ const updateService = async (req, res) => {
     if (error.code === 11000) {
       return res.status(400).json({
         success: false,
-        message: 'Service name already exists'
+        message: 'Service name already exists for this company'
       });
     }
     
@@ -133,9 +162,40 @@ const updateService = async (req, res) => {
   }
 };
 
+// Get services by company code
+const getServicesByCompany = async (req, res) => {
+  try {
+    const { companyCode } = req.params;
+
+    if (!companyCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'Company code is required'
+      });
+    }
+
+    const services = await Service.find({ 
+      companyCode: companyCode.toUpperCase() 
+    }).sort({ servicename: 1 });
+
+    res.json({
+      success: true,
+      data: services,
+      count: services.length
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching services for company',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   getAllServices,
   addService,
   deleteService,
-  updateService
+  updateService,
+  getServicesByCompany
 };

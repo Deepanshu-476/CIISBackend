@@ -11,16 +11,25 @@ const getAllClients = async (req, res) => {
       search,
       status,
       projectManager,
-      service
+      service,
+      companyCode // Add companyCode filter
     } = req.query;
 
     // Build filter object
     const filter = {};
     
+    // ✅ Add companyCode filter (mandatory)
+    if (!companyCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'Company code is required'
+      });
+    }
+    filter.companyCode = companyCode.toUpperCase();
+    
     if (status && status !== 'All') filter.status = status;
     
     if (projectManager && projectManager !== 'All') {
-      // Fix: Search for array containing the value
       filter.projectManager = projectManager;
     }
     
@@ -37,7 +46,6 @@ const getAllClients = async (req, res) => {
         { city: searchRegex },
         { email: searchRegex },
         { description: searchRegex },
-        // Fix: Search in projectManager array
         { 'projectManager': { $regex: searchRegex } }
       ];
     }
@@ -116,7 +124,8 @@ const addClient = async (req, res) => {
       client,
       company,
       city,
-      projectManager, // Changed from projectManagers to projectManager
+      companyCode, // ✅ Add companyCode
+      projectManager,
       services,
       status,
       progress,
@@ -142,11 +151,14 @@ const addClient = async (req, res) => {
       errors.push('City is required');
     }
     
-    // Fix: Use projectManager (singular)
+    // ✅ Add companyCode validation
+    if (!companyCode || companyCode.trim().length === 0) {
+      errors.push('Company code is required');
+    }
+    
     if (!projectManager || !Array.isArray(projectManager) || projectManager.length === 0) {
       errors.push('At least one project manager is required');
     } else {
-      // Validate each project manager
       const validManagers = projectManager.filter(manager => 
         manager && typeof manager === 'string' && manager.trim().length > 0
       );
@@ -164,12 +176,26 @@ const addClient = async (req, res) => {
       });
     }
 
+    // Check if client already exists for this company
+    const existingClient = await Client.findOne({
+      client: client.trim(),
+      companyCode: companyCode.trim().toUpperCase()
+    });
+
+    if (existingClient) {
+      return res.status(400).json({
+        success: false,
+        message: 'Client already exists for this company'
+      });
+    }
+
     // Validate services exist if provided
     if (services && services.length > 0) {
       const serviceNames = services.filter(s => s && typeof s === 'string' && s.trim().length > 0);
       if (serviceNames.length > 0) {
         const existingServices = await Service.find({ 
-          servicename: { $in: serviceNames } 
+          servicename: { $in: serviceNames },
+          companyCode: companyCode.trim().toUpperCase() // ✅ Filter by companyCode
         });
         
         if (existingServices.length !== serviceNames.length) {
@@ -179,7 +205,7 @@ const addClient = async (req, res) => {
           
           return res.status(400).json({
             success: false,
-            message: 'Some services do not exist',
+            message: 'Some services do not exist for this company',
             missingServices
           });
         }
@@ -196,6 +222,7 @@ const addClient = async (req, res) => {
       client: client.trim(),
       company: company.trim(),
       city: city.trim(),
+      companyCode: companyCode.trim().toUpperCase(), // ✅ Save companyCode
       projectManager: cleanProjectManagers,
       services: services || [],
       status: status || 'Active',
@@ -216,6 +243,13 @@ const addClient = async (req, res) => {
     });
   } catch (error) {
     console.error('Error adding client:', error);
+    
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: 'Client already exists for this company'
+      });
+    }
     
     if (error.name === 'ValidationError') {
       const errors = Object.values(error.errors).map(err => err.message);
@@ -241,7 +275,8 @@ const updateClient = async (req, res) => {
       client,
       company,
       city,
-      projectManager, // Changed from projectManagers to projectManager
+      companyCode, // ✅ Add companyCode
+      projectManager,
       services,
       status,
       progress,
@@ -276,7 +311,11 @@ const updateClient = async (req, res) => {
       errors.push('City cannot be empty');
     }
     
-    // Fix: Use projectManager (singular)
+    // ✅ Add companyCode validation
+    if (companyCode !== undefined && (!companyCode || companyCode.trim().length === 0)) {
+      errors.push('Company code cannot be empty');
+    }
+    
     if (projectManager !== undefined) {
       if (!Array.isArray(projectManager) || projectManager.length === 0) {
         errors.push('At least one project manager is required');
@@ -299,12 +338,30 @@ const updateClient = async (req, res) => {
       });
     }
 
+    // Check if client name already exists for this company (if updating client name)
+    if (client !== undefined && companyCode !== undefined) {
+      const duplicateClient = await Client.findOne({
+        _id: { $ne: id },
+        client: client.trim(),
+        companyCode: companyCode.trim().toUpperCase()
+      });
+
+      if (duplicateClient) {
+        return res.status(400).json({
+          success: false,
+          message: 'Client name already exists for this company'
+        });
+      }
+    }
+
     // Validate services if being updated
     if (services !== undefined) {
       const serviceNames = services.filter(s => s && typeof s === 'string' && s.trim().length > 0);
       if (serviceNames.length > 0) {
+        const companyCodeToUse = companyCode || existingClient.companyCode;
         const existingServices = await Service.find({ 
-          servicename: { $in: serviceNames } 
+          servicename: { $in: serviceNames },
+          companyCode: companyCodeToUse.trim().toUpperCase() // ✅ Filter by companyCode
         });
         
         if (existingServices.length !== serviceNames.length) {
@@ -314,7 +371,7 @@ const updateClient = async (req, res) => {
           
           return res.status(400).json({
             success: false,
-            message: 'Some services do not exist',
+            message: 'Some services do not exist for this company',
             missingServices
           });
         }
@@ -327,8 +384,8 @@ const updateClient = async (req, res) => {
     if (client !== undefined) updateData.client = client.trim();
     if (company !== undefined) updateData.company = company.trim();
     if (city !== undefined) updateData.city = city.trim();
+    if (companyCode !== undefined) updateData.companyCode = companyCode.trim().toUpperCase(); // ✅ Update companyCode
     
-    // Fix: Use projectManager (singular)
     if (projectManager !== undefined) {
       updateData.projectManager = projectManager
         .filter(manager => manager && typeof manager === 'string' && manager.trim().length > 0)
@@ -358,6 +415,13 @@ const updateClient = async (req, res) => {
     });
   } catch (error) {
     console.error('Error updating client:', error);
+    
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: 'Client name already exists for this company'
+      });
+    }
     
     if (error.name === 'ValidationError') {
       const errors = Object.values(error.errors).map(err => err.message);
@@ -442,7 +506,9 @@ const deleteClient = async (req, res) => {
 
 const getClientStats = async (req, res) => {
   try {
-    const stats = await Client.getStats();
+    const { companyCode } = req.query;
+    
+    const stats = await Client.getStats(companyCode);
     
     res.json({
       success: true,
@@ -460,7 +526,9 @@ const getClientStats = async (req, res) => {
 
 const getManagerStats = async (req, res) => {
   try {
-    const stats = await Client.getManagerStats();
+    const { companyCode } = req.query;
+    
+    const stats = await Client.getManagerStats(companyCode);
     
     res.json({
       success: true,
@@ -538,6 +606,37 @@ const removeProjectManager = async (req, res) => {
   }
 };
 
+// Get clients by company code
+const getClientsByCompany = async (req, res) => {
+  try {
+    const { companyCode } = req.params;
+    
+    if (!companyCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'Company code is required'
+      });
+    }
+
+    const clients = await Client.find({ 
+      companyCode: companyCode.toUpperCase() 
+    }).sort({ client: 1 });
+
+    res.json({
+      success: true,
+      data: clients,
+      count: clients.length
+    });
+  } catch (error) {
+    console.error('Error fetching clients by company:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching clients',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   getAllClients,
   getClientById,
@@ -548,5 +647,6 @@ module.exports = {
   getClientStats,
   getManagerStats,
   addProjectManager,
-  removeProjectManager
+  removeProjectManager,
+  getClientsByCompany
 };
