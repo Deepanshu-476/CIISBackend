@@ -911,8 +911,4 @@ exports.getCompanyDetailsByIdentifier = async (req, res) => {
 };
 // Helper function to blacklist token
 const blacklistToken = async (token, expiry) => {
-  // Implement token blacklist logic here
-  // Could use Redis, MongoDB, or in-memory store
-  // Example with Redis:
-  // await redis.set(`blacklist:${token}`, '1', 'EX', expiry);
 };
