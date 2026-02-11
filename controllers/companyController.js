@@ -1,8 +1,57 @@
-// controllers/companyController.js
 const Company = require("../models/Company");
 const User = require("../models/User");
 const crypto = require("crypto");
 const mongoose = require("mongoose");
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+
+// =============================
+// MULTER CONFIGURATION FOR LOGOS
+// =============================
+
+// Configure multer for logo storage
+const logoStorage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    // Create logos directory if it doesn't exist
+    const logoDir = path.join(__dirname, '../uploads/logos');
+    if (!fs.existsSync(logoDir)) {
+      fs.mkdirSync(logoDir, { recursive: true });
+    }
+    cb(null, logoDir);
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, `logo-${uniqueSuffix}${ext}`);
+  }
+});
+
+// File filter for images only
+const logoFileFilter = (req, file, cb) => {
+  const allowedTypes = /jpeg|jpg|png|gif|svg|webp/;
+  const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+  const mimetype = allowedTypes.test(file.mimetype);
+  
+  if (extname && mimetype) {
+    cb(null, true);
+  } else {
+    cb(new Error('Only image files are allowed (JPEG, PNG, GIF, SVG, WEBP)'), false);
+  }
+};
+
+// Multer middleware for single file upload
+exports.uploadLogo = multer({
+  storage: logoStorage,
+  fileFilter: logoFileFilter,
+  limits: {
+    fileSize: 2 * 1024 * 1024 // 2MB limit
+  }
+}).single('logo');
+
+// =============================
+// HELPER FUNCTIONS
+// =============================
 
 // Helper function
 const isValidObjectId = (id) => {
@@ -24,6 +73,125 @@ const getCompanyStats = async (companyId) => {
   };
 };
 
+// =============================
+// LOGO UPLOAD HANDLER
+// =============================
+
+exports.uploadLogoHandler = async (req, res) => {
+  try {
+    // Check if file was uploaded
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No file uploaded. Please select a logo image.'
+      });
+    }
+
+    // Get file details
+    const file = req.file;
+    
+    // Generate URL to the uploaded file
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    const logoUrl = `${baseUrl}/uploads/logos/${file.filename}`;
+
+    // Return success response
+    return res.status(200).json({
+      success: true,
+      message: 'Logo uploaded successfully 🎉',
+      logoUrl: logoUrl,
+      fileDetails: {
+        filename: file.filename,
+        originalName: file.originalname,
+        size: file.size,
+        mimetype: file.mimetype
+      },
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (err) {
+    console.error('❌ Logo upload error:', err);
+    
+    // Handle multer errors
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({
+        success: false,
+        message: 'File size too large. Maximum size is 2MB.'
+      });
+    }
+    
+    if (err.message.includes('Only image files')) {
+      return res.status(400).json({
+        success: false,
+        message: err.message
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to upload logo',
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+  }
+};
+
+// =============================
+// COMPANY LOGO UPDATE
+// =============================
+
+exports.updateCompanyLogo = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { logoUrl } = req.body;
+
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid company id",
+      });
+    }
+
+    if (!logoUrl || logoUrl.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: "Logo URL is required",
+      });
+    }
+
+    const company = await Company.findById(id);
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: "Company not found",
+      });
+    }
+
+    // Update logo
+    company.logo = logoUrl.trim();
+    await company.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Company logo updated successfully",
+      company: {
+        id: company._id,
+        companyName: company.companyName,
+        logo: company.logo,
+        updatedAt: company.updatedAt
+      }
+    });
+
+  } catch (err) {
+    console.error("❌ Update company logo error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update company logo",
+    });
+  }
+};
+
+// =============================
+// CREATE COMPANY
+// =============================
 
 exports.createCompany = async (req, res) => {
   let transactionCompleted = false;
@@ -206,7 +374,6 @@ exports.createCompany = async (req, res) => {
         apiLoginUrl: apiLoginUrl, // ✅ SET HERE
         dbIdentifier: dbIdentifier,
         isActive: true,
-        // Other fields...
       };
 
       const company = await Company.create([companyData], { session });
@@ -381,6 +548,11 @@ exports.createCompany = async (req, res) => {
     });
   }
 };
+
+// =============================
+// GET ALL COMPANIES
+// =============================
+
 exports.getAllCompanies = async (req, res) => {
   try {
     const companies = await Company.find({})
@@ -417,6 +589,10 @@ exports.getAllCompanies = async (req, res) => {
     });
   }
 };
+
+// =============================
+// GET COMPANY BY ID
+// =============================
 
 exports.getCompanyById = async (req, res) => {
   try {
@@ -456,6 +632,9 @@ exports.getCompanyById = async (req, res) => {
   }
 };
 
+// =============================
+// GET COMPANY BY CODE
+// =============================
 
 exports.getCompanyByCode = async (req, res) => {
   try {
@@ -497,6 +676,9 @@ exports.getCompanyByCode = async (req, res) => {
   }
 };
 
+// =============================
+// GET COMPANY DETAILS BY IDENTIFIER
+// =============================
 
 exports.getCompanyDetailsByIdentifier = async (req, res) => {
   try {
@@ -575,6 +757,9 @@ exports.getCompanyDetailsByIdentifier = async (req, res) => {
   }
 };
 
+// =============================
+// VALIDATE COMPANY URL
+// =============================
 
 exports.validateCompanyUrl = async (req, res) => {
   try {
@@ -611,6 +796,10 @@ exports.validateCompanyUrl = async (req, res) => {
     });
   }
 };
+
+// =============================
+// UPDATE COMPANY
+// =============================
 
 exports.updateCompany = async (req, res) => {
   try {
@@ -681,6 +870,10 @@ exports.updateCompany = async (req, res) => {
   }
 };
 
+// =============================
+// DEACTIVATE COMPANY
+// =============================
+
 exports.deactivateCompany = async (req, res) => {
   try {
     const { id } = req.params;
@@ -730,6 +923,10 @@ exports.deactivateCompany = async (req, res) => {
     });
   }
 };
+
+// =============================
+// ACTIVATE COMPANY
+// =============================
 
 exports.activateCompany = async (req, res) => {
   try {
@@ -781,6 +978,9 @@ exports.activateCompany = async (req, res) => {
   }
 };
 
+// =============================
+// DELETE COMPANY PERMANENTLY
+// =============================
 
 exports.deleteCompanyPermanently = async (req, res) => {
   try {
@@ -819,6 +1019,10 @@ exports.deleteCompanyPermanently = async (req, res) => {
     });
   }
 };
+
+// =============================
+// GET COMPANY USERS
+// =============================
 
 exports.getCompanyUsers = async (req, res) => {
   try {
@@ -888,6 +1092,9 @@ exports.getCompanyUsers = async (req, res) => {
   }
 };
 
+// =============================
+// GET COMPANY STATS
+// =============================
 
 exports.getCompanyStats = async (req, res) => {
   try {
