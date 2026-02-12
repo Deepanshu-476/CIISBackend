@@ -4,8 +4,9 @@ const cors = require("cors");
 const connectDB = require("./config/db");
 const path = require("path");
 const schedule = require('node-schedule');
-const Task = require("./HR-CDS/models/Task"); // Import Task model for cron
-const Notification = require("./HR-CDS/models/Notification"); // Import Notification model
+const Task = require("./HR-CDS/models/Task");
+const Notification = require("./HR-CDS/models/Notification");
+const companyController = require("./controllers/companyController"); // Import for direct route
 
 dotenv.config();
 
@@ -26,7 +27,6 @@ const checkAndMarkOverdueTasks = async () => {
     
     const now = new Date();
     
-    // Find tasks that are overdue but not marked yet
     const overdueTasks = await Task.find({
       dueDateTime: { $lt: now },
       isActive: true,
@@ -53,7 +53,6 @@ const checkAndMarkOverdueTasks = async () => {
           await task.save();
           markedCount++;
           
-          // Send notifications to assigned users
           for (const userId of task.assignedUsers) {
             try {
               await Notification.create({
@@ -138,13 +137,13 @@ const dailySummaryJob = schedule.scheduleJob('0 9 * * *', async () => {
 setTimeout(async () => {
   console.log('🚀 Server started, running initial overdue check...');
   await checkAndMarkOverdueTasks();
-}, 10000); // Wait 10 seconds after server starts
+}, 10000);
 
 // Import models for attendance cron jobs
 const Attendance = require("./HR-CDS/models/Attendance");
 const User = require("./models/User");
 
-// Function to mark absent for past dates (last 30 days)
+// Function to mark absent for past dates
 const markPastAbsentRecords = async () => {
   try {
     console.log('🔍 Checking for missing past attendance records...');
@@ -153,18 +152,15 @@ const markPastAbsentRecords = async () => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
-    // Get last 30 days (excluding today)
     const startDate = new Date(today);
     startDate.setDate(startDate.getDate() - 30);
     
     for (const user of users) {
-      // Get existing attendance records for the user in last 30 days
       const existingAttendances = await Attendance.find({ 
         user: user._id,
         date: { $gte: startDate, $lt: today }
       });
       
-      // Create a map of existing attendance dates
       const existingDates = new Set();
       existingAttendances.forEach(record => {
         const date = new Date(record.date);
@@ -172,18 +168,13 @@ const markPastAbsentRecords = async () => {
         existingDates.add(date.toISOString());
       });
       
-      // Check each day from startDate to yesterday
       const currentDate = new Date(startDate);
       while (currentDate < today) {
         const dateStr = currentDate.toISOString();
-        
-        // Skip weekends
         const dayOfWeek = currentDate.getDay();
         const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
         
-        // If no record exists and it's not a weekend, create absent record
         if (!existingDates.has(dateStr) && !isWeekend) {
-          // Check if it's a future date (shouldn't happen, but just in case)
           if (currentDate < today) {
             const absentRecord = new Attendance({
               user: user._id,
@@ -207,7 +198,7 @@ const markPastAbsentRecords = async () => {
   }
 };
 
-// Function to mark absent for today (for users who haven't clocked in by 10:00 AM)
+// Function to mark absent for today
 const markDailyAbsent = async () => {
   try {
     console.log('🔍 Running daily absent marking job...');
@@ -218,17 +209,14 @@ const markDailyAbsent = async () => {
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
     
-    // Get all users
     const users = await User.find({});
     
     for (const user of users) {
-      // Check if attendance exists for today
       const existingAttendance = await Attendance.findOne({
         user: user._id,
         date: { $gte: today, $lt: tomorrow }
       });
       
-      // If no attendance exists, create absent record
       if (!existingAttendance) {
         const dayOfWeek = today.getDay();
         const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
@@ -253,42 +241,56 @@ const markDailyAbsent = async () => {
   }
 };
 
-// Schedule daily job to run at 10:30 AM every day
+// Schedule daily job to run at 10:30 AM
 const dailyAbsentJob = schedule.scheduleJob('30 10 * * *', async () => {
   console.log('⏰ Running scheduled daily absent marking...');
   await markDailyAbsent();
 });
 
-// Run once on server start to mark past absent records
+// Run once on server start
 setTimeout(() => {
   markPastAbsentRecords();
-}, 15000); // Wait 15 seconds after server starts
+}, 15000);
 
 // ==================== END OF CRON JOBS ====================
 
 // ✅ CORS Configuration
 app.use(
   cors({
-    origin: ["https://cds.ciisnetwork.in",
+    origin: [
+      "https://cds.ciisnetwork.in",
       "http://localhost:5173",
-      
       "http://147.93.106.84",
       "http://localhost:8080",
     ],
     credentials: true,
     methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "X-User-JobRole", "X-User-Id"],
-      exposedHeaders: [
-    'Authorization',
-    'X-User-JobRole',
-    'X-User-Id'
-  ]
+    exposedHeaders: [
+      'Authorization',
+      'X-User-JobRole',
+      'X-User-Id'
+    ]
   })
 );
 
 // ✅ Middleware
 app.use(express.json());
+
+// ✅ IMPORTANT: Serve static files BEFORE routes
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+
+// ✅ DIRECT ROUTE FOR LOGO UPLOAD - FIXES THE ISSUE
+app.post('/upload-logo', 
+  companyController.uploadLogo, 
+  companyController.uploadLogoHandler
+);
+
+// ✅ DIRECT ROUTE FOR API/UPLOAD-LOGO - ALTERNATIVE PATH
+app.post('/api/upload-logo', 
+  companyController.uploadLogo, 
+  companyController.uploadLogoHandler
+);
 
 // ✅ ROUTES
 app.use("/api/auth", require("./routes/authRoutes"));
@@ -297,7 +299,7 @@ app.use("/api/leaves", require("./HR-CDS/routes/LeaveRoutes"));
 app.use("/api/assets", require("./HR-CDS/routes/assetsRoute"));
 app.use("/api/task", require("./HR-CDS/routes/taskRoute"));
 app.use("/api/users", require("./HR-CDS/routes/userRoutes"));
-app.use("/api/departments", require("./routes/Department.routes"))
+app.use("/api/departments", require("./routes/Department.routes"));
 app.use("/api/users/profile", require("./HR-CDS/routes/profileRoute"));
 app.use("/api/alerts", require("./HR-CDS/routes/alertRoutes"));
 app.use("/api/holidays", require("./HR-CDS/routes/Holiday"));
@@ -310,15 +312,13 @@ app.use('/api/menu-access', require("./routes/menuAccess"));
 app.use('/api/menu-items', require("./routes/menuItems"));
 app.use('/api/company', require("./routes/companyRoutes"));
 app.use('/api/company-auth', require("./routes/companyRoutes"));
-app.use('/api/job-roles', require("./routes/jobRoleRoutes"));
 app.use('/api/v1/company', require("./routes/companyRoutes"));
-app.use('/api/v1/auth', require("./routes/authRoutes"));
+app.use('/api/job-roles', require("./routes/jobRoleRoutes"));
 app.use('/api/superAdmin', require("./routes/superAdmin"));
-// ✅ Add Meeting Management Route
 app.use("/api/meetings", require("./HR-CDS/routes/meetingRoutes"));
 app.use('/api/cmeeting', require("./HR-CDS/routes/clientMeetingRoutes"));
-
 app.use('/api/sidebar', require("./routes/sidebarConfigs"));
+
 // ✅ Health check
 app.get("/api", (req, res) => {
   res.json({ 
@@ -332,7 +332,29 @@ app.get("/api", (req, res) => {
   });
 });
 
-// ✅ Manual overdue check endpoint (for testing)
+// ✅ Test endpoint to check if uploads are accessible
+app.get("/test-uploads", (req, res) => {
+  const uploadsDir = path.join(__dirname, "uploads/logos");
+  const fs = require('fs');
+  
+  if (fs.existsSync(uploadsDir)) {
+    const files = fs.readdirSync(uploadsDir);
+    res.json({
+      success: true,
+      uploadsPath: uploadsDir,
+      files: files,
+      publicUrl: `${req.protocol}://${req.get('host')}/uploads/logos/`
+    });
+  } else {
+    res.json({
+      success: false,
+      message: "Uploads directory does not exist",
+      path: uploadsDir
+    });
+  }
+});
+
+// ✅ Manual overdue check endpoint
 app.get("/api/manual-overdue-check", async (req, res) => {
   try {
     console.log('🔄 Manual overdue check triggered via API...');
@@ -365,5 +387,8 @@ app.use((err, req, res, next) => {
 // ✅ Start Server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`)
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📁 Uploads directory: ${path.join(__dirname, "uploads/logos")}`);
+  console.log(`🖼️ Logo upload endpoint: http://localhost:${PORT}/upload-logo`);
+  console.log(`🖼️ Alternative endpoint: http://localhost:${PORT}/api/upload-logo`);
 });

@@ -1,10 +1,8 @@
-// routes/companyRoutes.js
 const express = require("express");
 const router = express.Router();
-
 const companyController = require("../controllers/companyController");
 
-// ✅ LOGO UPLOAD ROUTE
+// ✅ LOGO UPLOAD ROUTE - Using multer middleware
 router.post("/upload-logo", 
   companyController.uploadLogo,           // Multer middleware for file upload
   companyController.uploadLogoHandler     // Handle logo upload
