@@ -65,3 +65,4 @@ exports.completeFollowUp = async (req, res) => {
 
 
 
+console.log("✅ followupController.js loaded successfully");

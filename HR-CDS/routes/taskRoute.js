@@ -287,7 +287,7 @@ router.get('/:taskId/details', protect, async (req, res) => {
 // ==================== HEALTH CHECK ROUTES ====================
 
 // ✅ HEALTH CHECK
-router.get('/health', (req, res) => {
+router.get('/test', (req, res) => {
   return res.json({
     success: true,
     message: 'Task management API is running',
@@ -297,7 +297,7 @@ router.get('/health', (req, res) => {
 });
 
 // ✅ API INFO
-router.get('/info', protect, (req, res) => {
+router.get('/test1', protect, (req, res) => {
   return res.json({
     success: true,
     user: {

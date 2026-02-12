@@ -212,3 +212,4 @@ exports.deleteOldNotifications = async (req, res) => {
     });
   }
 };
+console.log("✅ notificationController.js loaded successfully");

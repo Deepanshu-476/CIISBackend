@@ -929,3 +929,4 @@ exports.getCompanyStats = async (req, res) => {
     });
   }
 };
+console.log("✅ companyController.js loaded successfully");

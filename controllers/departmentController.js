@@ -529,4 +529,4 @@ exports.getDepartmentsByCompany = async (req, res) => {
   }
 };
 
-console.log("✅ departmentController.js loaded successfully");
+console.log("✅ departmentController.js loaded successfully");  

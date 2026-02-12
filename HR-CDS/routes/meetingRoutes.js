@@ -23,5 +23,11 @@ router.get("/view-status/:meetingId", getViewStatus);
 
 // 🟢 Get all meetings (Admin dashboard)
 router.get("/", getAllMeetings);  // ✅ new route added here
-
+router.get("/test", (req, res) => {
+  console.log("Debug user info:", req.user);
+  res.json({
+    success: true,
+    user: req.user
+  });
+});
 module.exports = router;

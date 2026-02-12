@@ -136,3 +136,5 @@ exports.generatePDF = async (req, res) => {
     res.status(500).json({ error: "Failed to generate PDF" });
   }
 };
+
+console.log("✅ pdfController.js loaded successfully");

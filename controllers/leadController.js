@@ -51,3 +51,4 @@ exports.addNote = async (req, res) => {
     res.status(400).json({ msg: "Failed to add note", error: err.message });
   }
 };
+console.log("✅ leadController.js loaded successfully");

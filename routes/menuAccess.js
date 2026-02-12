@@ -120,14 +120,23 @@
   // Helper function for default access
   function getDefaultAccess(jobRole) {
     const defaults = {
-      admin: ['dashboard', 'attendance', 'my-leaves', 'my-assets', 'emp-details', 'emp-attendance', 'emp-leaves', 'emp-assets', 'create-user'],
+  
       user: ['dashboard', 'attendance', 'my-leaves', 'my-assets', 'create-task', 'employee-project', 'alerts', 'employee-meeting'],
-      hr: ['dashboard', 'attendance', 'my-leaves', 'my-assets', 'emp-details', 'emp-attendance', 'emp-leaves', 'emp-assets', 'create-user'],
-      manager: ['dashboard', 'attendance', 'my-leaves', 'my-assets', 'create-task', 'employee-project', 'alerts', 'employee-meeting', 'emp-details', 'emp-attendance', 'emp-leaves', 'emp-assets', 'admin-task-create', 'emp-client', 'emp-all-task', 'admin-meeting'],
-   
+     
     };
     
     return defaults[jobRole?.toLowerCase()] || defaults.user;
   }
-
+// Simple health check
+router.get('/test', (req, res) => {
+  res.json({
+    status: 'healthy',
+    service: 'Menu Access API',
+    timestamp: new Date().toISOString(),
+    version: '1.0.0',
+    uptime: process.uptime()
+  });
+});
   module.exports = router;
+
+

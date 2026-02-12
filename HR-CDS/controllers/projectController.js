@@ -57,123 +57,6 @@ const hasProjectAccess = (project, userId, userRole) => {
 };
 
 // ==========================================
-// 📌 DEBUG/UTILITY CONTROLLERS
-// ==========================================
-exports.getProjectUsers = async (req, res) => {
-  try {
-    console.log("🔍 Debug - Fetching project users");
-    console.log("Project ID:", req.params.id);
-    console.log("User ID:", req.user.id);
-    console.log("User Role:", req.user.role);
-    
-    const project = await Project.findById(req.params.id)
-      .select('users projectName createdBy')
-      .populate('users', 'name email role _id')
-      .populate('createdBy', 'name email _id');
-    
-    if (!project) {
-      return res.status(404).json({ 
-        success: false, 
-        message: "Project not found" 
-      });
-    }
-    
-    // Check access
-    if (!hasProjectAccess(project, req.user.id, req.user.role)) {
-      return res.status(403).json({ 
-        success: false, 
-        message: "Access denied to view project users" 
-      });
-    }
-    
-    res.status(200).json({
-      success: true,
-      projectName: project.projectName,
-      createdBy: project.createdBy,
-      users: project.users,
-      totalUsers: project.users.length,
-      hasAccess: hasProjectAccess(project, req.user.id, req.user.role)
-    });
-  } catch (error) {
-    console.error("❌ Error fetching project users:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: "Error fetching project users" 
-    });
-  }
-};
-
-exports.addUserToProject = async (req, res) => {
-  try {
-    const { projectId } = req.params;
-    const { userId } = req.body;
-    
-    console.log("➕ Adding user to project");
-    console.log("Project ID:", projectId);
-    console.log("User ID to add:", userId);
-    console.log("Requested by:", req.user.id);
-    
-    const project = await Project.findById(projectId);
-    
-    if (!project) {
-      return res.status(404).json({ 
-        success: false, 
-        message: "Project not found" 
-      });
-    }
-    
-    // Check if requester has permission
-    if (!hasProjectAccess(project, req.user.id, req.user.role)) {
-      return res.status(403).json({ 
-        success: false, 
-        message: "Access denied to modify project" 
-      });
-    }
-    
-    // Check if user already exists
-    const userExists = project.users.some(userIdObj => 
-      userIdObj.toString() === userId
-    );
-    
-    if (userExists) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "User already in project" 
-      });
-    }
-    
-    // Add user
-    project.users.push(userId);
-    await project.save();
-    
-    // Add notification
-    const notification = {
-      title: "User Added to Project",
-      message: `${req.user.name} added a new user to project "${project.projectName}"`,
-      type: "project_updated",
-      relatedTo: "project",
-      referenceId: project._id,
-      createdBy: req.user.id
-    };
-    
-    await project.addNotification(notification);
-    
-    res.status(200).json({
-      success: true,
-      message: "User added to project successfully",
-      projectId: project._id,
-      userId: userId
-    });
-  } catch (error) {
-    console.error("❌ Error adding user to project:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: "Error adding user to project" 
-    });
-  }
-};
-
-// ==========================================
 // 📌 NOTIFICATION CONTROLLERS
 // ==========================================
 exports.getUserNotifications = async (req, res) => {
@@ -607,6 +490,123 @@ exports.deleteProject = async (req, res) => {
     res.status(500).json({ 
       success: false, 
       message: "Error deleting project" 
+    });
+  }
+};
+
+// ==========================================
+// 📌 DEBUG/UTILITY CONTROLLERS
+// ==========================================
+exports.getProjectUsers = async (req, res) => {
+  try {
+    console.log("🔍 Debug - Fetching project users");
+    console.log("Project ID:", req.params.id);
+    console.log("User ID:", req.user.id);
+    console.log("User Role:", req.user.role);
+    
+    const project = await Project.findById(req.params.id)
+      .select('users projectName createdBy')
+      .populate('users', 'name email role _id')
+      .populate('createdBy', 'name email _id');
+    
+    if (!project) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Project not found" 
+      });
+    }
+    
+    // Check access
+    if (!hasProjectAccess(project, req.user.id, req.user.role)) {
+      return res.status(403).json({ 
+        success: false, 
+        message: "Access denied to view project users" 
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      projectName: project.projectName,
+      createdBy: project.createdBy,
+      users: project.users,
+      totalUsers: project.users.length,
+      hasAccess: hasProjectAccess(project, req.user.id, req.user.role)
+    });
+  } catch (error) {
+    console.error("❌ Error fetching project users:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Error fetching project users" 
+    });
+  }
+};
+
+exports.addUserToProject = async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { userId } = req.body;
+    
+    console.log("➕ Adding user to project");
+    console.log("Project ID:", projectId);
+    console.log("User ID to add:", userId);
+    console.log("Requested by:", req.user.id);
+    
+    const project = await Project.findById(projectId);
+    
+    if (!project) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Project not found" 
+      });
+    }
+    
+    // Check if requester has permission
+    if (!hasProjectAccess(project, req.user.id, req.user.role)) {
+      return res.status(403).json({ 
+        success: false, 
+        message: "Access denied to modify project" 
+      });
+    }
+    
+    // Check if user already exists
+    const userExists = project.users.some(userIdObj => 
+      userIdObj.toString() === userId
+    );
+    
+    if (userExists) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "User already in project" 
+      });
+    }
+    
+    // Add user
+    project.users.push(userId);
+    await project.save();
+    
+    // Add notification
+    const notification = {
+      title: "User Added to Project",
+      message: `${req.user.name} added a new user to project "${project.projectName}"`,
+      type: "project_updated",
+      relatedTo: "project",
+      referenceId: project._id,
+      createdBy: req.user.id
+    };
+    
+    await project.addNotification(notification);
+    
+    res.status(200).json({
+      success: true,
+      message: "User added to project successfully",
+      projectId: project._id,
+      userId: userId
+    });
+  } catch (error) {
+    console.error("❌ Error adding user to project:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Error adding user to project" 
     });
   }
 };
@@ -1061,3 +1061,4 @@ exports.addRemark = async (req, res) => {
     });
   }
 };
+console.log("✅ projectController.js loaded successfully");

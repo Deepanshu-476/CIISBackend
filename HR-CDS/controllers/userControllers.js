@@ -1070,3 +1070,4 @@ exports.searchUsers = async (req, res) => {
     return errorResponse(res, 500, "Failed to search users");
   }
 };
+console.log("✅ userControllers.js loaded successfully");

@@ -288,5 +288,12 @@ router.get('/user-config', async (req, res) => {
     });
   }
 });
-
+router.get("/test", (req, res) => {
+  console.log("Debug user info:", req.user);
+  res.json({
+    success: true,
+    user: req.user
+  });
+});
 module.exports = router;
+console.log("✅ sidebarConfigs.js loaded successfully");

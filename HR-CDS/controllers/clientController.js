@@ -650,3 +650,4 @@ module.exports = {
   removeProjectManager,
   getClientsByCompany
 };
+console.log("✅ clientController.js loaded successfully");

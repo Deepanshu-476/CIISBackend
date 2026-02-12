@@ -115,5 +115,15 @@ router.put('/:id/restore', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+router.get('/test', (req, res) => {
+  res.json({
+    status: 'healthy',
+    service: 'Menu Access API',
+    timestamp: new Date().toISOString(),
+    version: '1.0.0',
+    uptime: process.uptime()
+  });
+});
 
 module.exports = router;
+console.log("✅ menuItems.js loaded successfully");

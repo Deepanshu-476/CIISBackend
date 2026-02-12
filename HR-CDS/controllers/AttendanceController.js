@@ -1,4 +1,4 @@
-// attendanceController.js - UPDATED
+
 const Attendance = require("../models/Attendance");
 const User = require("../../models/User");
 const Company = require("../../models/Company");
@@ -1053,3 +1053,4 @@ module.exports = {
   markDailyAbsent,
   getAttendanceStats
 };
+console.log("✅ AttendanceController.js loaded successfully");
