@@ -1,54 +1,50 @@
-// routes/companyRoutes.js
 const express = require("express");
 const router = express.Router();
-
 const companyController = require("../controllers/companyController");
 
-// ✅ Create company
+// ✅ LOGO UPLOAD ROUTE - Using multer middleware
+router.post("/upload-logo", 
+  companyController.uploadLogo,           // Multer middleware for file upload
+  companyController.uploadLogoHandler     // Handle logo upload
+);
+
+// ✅ UPDATE COMPANY LOGO (via URL)
+router.patch("/:id/logo", companyController.updateCompanyLogo);
+
+// ✅ CREATE COMPANY
 router.post("/", companyController.createCompany);
 
-// ✅ Get all companies
+// ✅ GET ALL COMPANIES
 router.get("/", companyController.getAllCompanies);
 
-// ✅ Get company by code
+// ✅ GET COMPANY BY CODE
 router.get("/code/:companyCode", companyController.getCompanyByCode);
 
-// ✅ Get company details by identifier (for login page)
+// ✅ GET COMPANY DETAILS BY IDENTIFIER (for login page)
 router.get("/details/:identifier", companyController.getCompanyDetailsByIdentifier);
 
-// ✅ Validate company URL
+// ✅ VALIDATE COMPANY URL
 router.get("/validate-url/:identifier", companyController.validateCompanyUrl);
 
-// ✅ Get company stats
+// ✅ GET COMPANY STATS
 router.get("/:id/stats", companyController.getCompanyStats);
 
-// ✅ Get company users
+// ✅ GET COMPANY USERS
 router.get("/:id/users", companyController.getCompanyUsers);
 
-// ✅ Get company by ID
+// ✅ GET COMPANY BY ID
 router.get("/:id", companyController.getCompanyById);
 
-// ✅ Update company
+// ✅ UPDATE COMPANY
 router.put("/:id", companyController.updateCompany);
 
-// ✅ Deactivate company (soft delete)
+// ✅ DEACTIVATE COMPANY (soft delete)
 router.patch("/:id/deactivate", companyController.deactivateCompany);
 
-// ✅ Activate company
+// ✅ ACTIVATE COMPANY
 router.patch("/:id/activate", companyController.activateCompany);
 
-
-router.get('/test', (req, res) => {
-  res.json({
-    status: 'healthy',
-    service: 'Menu Access API',
-    timestamp: new Date().toISOString(),
-    version: '1.0.0',
-    uptime: process.uptime()
-  });
-});
-
-// ✅ Hard delete company
+// ✅ HARD DELETE COMPANY
 router.delete("/:id", companyController.deleteCompanyPermanently);
 router.get('/test', (req, res) => {
   res.json({
