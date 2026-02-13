@@ -225,6 +225,7 @@ exports.companyLogin = async (req, res) => {
     const tokenPayload = {
       id: user._id.toString(),
       _id: user._id.toString(),
+      companyRole: user.companyRole,
       email: user.email,
       companyCode: company.companyCode,
       role: user.role?._id || user.role,
@@ -730,6 +731,7 @@ exports.login = async (req, res) => {
       companyPhone: user.company.companyPhone,
       companyAddress: user.company.companyAddress,
       logo: user.company.logo,
+      
       dbIdentifier: user.company.dbIdentifier,
       loginUrl: user.company.loginUrl,
       isActive: user.company.isActive,
@@ -760,6 +762,7 @@ exports.login = async (req, res) => {
         companyCode: userForResponse.companyCode || (userForResponse.company && userForResponse.company.companyCode),
         isActive: userForResponse.isActive,
         lastLogin: new Date(),
+        companyRole: userForResponse.companyRole,
         createdAt: userForResponse.createdAt,
         updatedAt: userForResponse.updatedAt
       },

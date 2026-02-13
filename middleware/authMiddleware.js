@@ -234,6 +234,84 @@ exports.protect = async (req, res, next) => {
   }
 };
 
+exports.isCompanyOwner = async (req, res, next) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        message: "Not authorized - User not found"
+      });
+    }
+
+    // Get full user data with company details
+    const user = await User.findById(req.user._id)
+      .select('companyRole company companyCode email name')
+      .populate('company', 'companyName companyCode isActive');
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    // Check if user has companyRole = "Owner"
+    const userCompanyRole = (user.companyRole || '').toLowerCase();
+    if (userCompanyRole !== 'owner') {
+      console.log(`❌ User ${user.email} is not an owner. Role: ${user.companyRole}`);
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Company owner privileges required."
+      });
+    }
+
+    // Check if user belongs to the company they're trying to access
+    // Either through companyCode or company ObjectId
+    const userCompanyId = user.company?._id?.toString() || user.companyCode;
+    
+    // Get target company from params or from user's context
+    let targetCompanyId = req.params.companyId || req.params.companyCode;
+    
+    // If no specific company in params, use the user's company
+    if (!targetCompanyId) {
+      targetCompanyId = userCompanyId;
+    }
+
+    // Verify user belongs to this company
+    if (targetCompanyId !== userCompanyId) {
+      console.log(`❌ User ${user.email} does not belong to company ${targetCompanyId}`);
+      return res.status(403).json({
+        success: false,
+        message: "You can only manage your own company"
+      });
+    }
+
+    // Check if company is active
+    if (user.company && !user.company.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: "Company account is deactivated"
+      });
+    }
+
+    // Attach owner info to req.user
+    req.user.companyRole = user.companyRole;
+    req.user.isCompanyOwner = true;
+    req.user.companyDetails = user.company;
+    
+    console.log(`✅ Company owner verified: ${user.email} for company: ${user.company?.companyName || user.companyCode}`);
+    
+    next();
+    
+  } catch (error) {
+    console.error("❌ isCompanyOwner middleware error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error in owner validation"
+    });
+  }
+};
+
 // Role-based authorization (using jobRole instead of role)
 exports.authorize = (...roles) => {
   return (req, res, next) => {
