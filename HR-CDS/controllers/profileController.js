@@ -22,3 +22,4 @@ exports.getUserProfile = async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error' });
   }
 };
+console.log("✅ profileController.js loaded successfully");

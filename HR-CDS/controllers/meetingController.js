@@ -122,3 +122,4 @@ module.exports = {
   getViewStatus,
   getAllMeetings, 
 };
+console.log("✅ meetingController.js loaded successfully");

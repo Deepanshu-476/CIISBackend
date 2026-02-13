@@ -6,6 +6,9 @@ const sendEmail = require("../utils/sendEmail");
 const Department = require("../models/Department");
 const crypto = require("crypto");
 const mongoose = require("mongoose");
+const { validateRequest } = require("../middleware/validation");
+const { loginSchema } = require("../validations/authValidation");
+
 // Rate limiting store for brute force protection
 const loginAttempts = new Map();
 const MAX_ATTEMPTS = 5;
@@ -58,6 +61,267 @@ const errorResponse = (res, status, message, errorCode = null) => {
     message,
     errorCode 
   });
+};
+
+// ✅ Company Login Route Handler (with middleware)
+exports.companyLoginRoute = [
+  (req, res, next) => {
+    console.log('🏢 Company login route hit:', {
+      companyCode: req.params.companyCode,
+      body: { email: req.body.email ? `${req.body.email.substring(0, 3)}...` : 'undefined' }
+    });
+    next();
+  },
+  validateRequest(loginSchema),
+  async (req, res) => {
+    await exports.companyLogin(req, res);
+  }
+];
+
+// ✅ Company Login Endpoint
+exports.companyLogin = async (req, res) => {
+  const startTime = Date.now();
+  const { email, password } = req.body;
+  const { companyCode } = req.params;
+
+  try {
+    console.log("🏢 Company login attempt:", {
+      email: email ? `${email.substring(0, 3)}...` : "undefined",
+      companyCode,
+      timestamp: new Date().toISOString(),
+    });
+
+    // ✅ Validate input
+    if (!email || !password || !companyCode) {
+      return res.status(400).json({
+        success: false,
+        message: "Email, password and company code are required",
+        errorCode: "MISSING_CREDENTIALS",
+      });
+    }
+
+    const cleanEmail = email.toLowerCase().trim();
+    const cleanCompanyCode = companyCode.toLowerCase().trim();
+
+    // ✅ Find company first
+    const company = await Company.findOne({
+      $or: [
+        { companyCode: cleanCompanyCode.toUpperCase() },
+        { dbIdentifier: cleanCompanyCode },
+        { loginUrl: { $regex: cleanCompanyCode, $options: 'i' } }
+      ]
+    }).select('+isActive +subscriptionExpiry');
+
+    if (!company) {
+      console.log("❌ Company not found:", cleanCompanyCode);
+      return res.status(404).json({
+        success: false,
+        message: "Company not found or invalid company code",
+        errorCode: "COMPANY_NOT_FOUND",
+      });
+    }
+
+    // ✅ Check company status
+    if (!company.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: "Company account is deactivated",
+        errorCode: "COMPANY_DEACTIVATED",
+      });
+    }
+
+    // ✅ Check subscription expiry
+    if (company.subscriptionExpiry && new Date() > new Date(company.subscriptionExpiry)) {
+      return res.status(403).json({
+        success: false,
+        message: "Company subscription has expired",
+        errorCode: "SUBSCRIPTION_EXPIRED",
+        expiryDate: company.subscriptionExpiry,
+      });
+    }
+
+    // ✅ Find user with company association
+    const user = await User.findOne({
+      email: cleanEmail,
+      $or: [
+        { companyCode: company.companyCode },
+        { company: company._id }
+      ]
+    })
+      .select("+password +isActive +failedLoginAttempts +lockUntil")
+      .populate("department", "name")
+      .populate("company", "companyName companyCode logo")
+      .lean();
+
+    if (!user) {
+      console.log("❌ User not found for company:", { email: cleanEmail, company: company.companyName });
+      return res.status(401).json({
+        success: false,
+        message: "Invalid email or password for this company",
+        errorCode: "INVALID_CREDENTIALS",
+      });
+    }
+
+    // ✅ Check if user is active
+    if (!user.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: "Your account has been deactivated. Please contact your administrator.",
+        errorCode: "ACCOUNT_DEACTIVATED",
+      });
+    }
+
+    // ✅ Check account lock
+    if (user.lockUntil && user.lockUntil > Date.now()) {
+      const lockMinutes = Math.ceil((user.lockUntil - Date.now()) / 60000);
+      return res.status(429).json({
+        success: false,
+        message: `Account temporarily locked. Try again in ${lockMinutes} minutes.`,
+        errorCode: "ACCOUNT_LOCKED",
+        retryAfter: user.lockUntil,
+      });
+    }
+
+    // ✅ Verify password
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+
+    if (!isPasswordValid) {
+      const updatedAttempts = (user.failedLoginAttempts || 0) + 1;
+      const updateData = {
+        failedLoginAttempts: updatedAttempts,
+      };
+
+      if (updatedAttempts >= 5) {
+        updateData.lockUntil = Date.now() + 15 * 60 * 1000; // 15 minutes lock
+      }
+
+      await User.findByIdAndUpdate(user._id, updateData);
+
+      return res.status(401).json({
+        success: false,
+        message: "Invalid email or password",
+        errorCode: "INVALID_CREDENTIALS",
+        remainingAttempts: Math.max(0, 5 - updatedAttempts),
+      });
+    }
+
+    // ✅ Reset failed attempts on successful login
+    await User.findByIdAndUpdate(user._id, {
+      $set: {
+        failedLoginAttempts: 0,
+        lockUntil: null,
+        lastLogin: new Date(),
+      },
+    });
+
+    // ✅ Get user with populated data for response
+    const userForResponse = await User.findById(user._id)
+      .select("-password -failedLoginAttempts -lockUntil")
+      .populate("department", "name")
+      .populate("company", "companyName companyCode logo")
+      .lean();
+
+    // ✅ Create token payload
+    const tokenPayload = {
+      id: user._id.toString(),
+      _id: user._id.toString(),
+      email: user.email,
+      companyCode: company.companyCode,
+      role: user.role?._id || user.role,
+      jobRole: user.jobRole,
+      iat: Math.floor(Date.now() / 1000),
+    };
+
+    console.log("🔐 Company login token payload:", tokenPayload);
+
+    // ✅ Create token
+    const token = jwt.sign(
+      tokenPayload,
+      process.env.JWT_SECRET || "your-secret-key",
+      {
+        expiresIn: process.env.JWT_EXPIRE || "30d",
+      }
+    );
+
+    // ✅ Decode token to get actual expiration
+    const decodedToken = jwt.decode(token);
+    const tokenExpiry = decodedToken.exp;
+    
+    console.log("🔐 Company login token created. Expires at:", new Date(tokenExpiry * 1000).toISOString());
+
+    // ✅ Prepare response
+    const response = {
+      success: true,
+      message: "Company login successful",
+      token,
+      tokenType: "Bearer",
+      expiresIn: process.env.JWT_EXPIRE || "30d",
+      expiresAt: new Date(tokenExpiry * 1000).toISOString(),
+      user: {
+        _id: userForResponse._id,
+        employeeId: userForResponse.employeeId,
+        name: userForResponse.name,
+        email: userForResponse.email,
+        phone: userForResponse.phone,
+        role: userForResponse.role,
+        jobRole: userForResponse.jobRole,
+        department: userForResponse.department,
+        company: userForResponse.company?._id,
+        companyName: userForResponse.company?.companyName,
+        companyCode: userForResponse.company?.companyCode,
+        isActive: userForResponse.isActive,
+        lastLogin: new Date(),
+        createdAt: userForResponse.createdAt,
+        updatedAt: userForResponse.updatedAt
+      },
+      companyDetails: {
+        _id: company._id,
+        companyName: company.companyName,
+        companyCode: company.companyCode,
+        companyEmail: company.companyEmail,
+        companyPhone: company.companyPhone,
+        companyAddress: company.companyAddress,
+        logo: company.logo,
+        dbIdentifier: company.dbIdentifier,
+        loginUrl: company.loginUrl,
+        isActive: company.isActive,
+        subscriptionExpiry: company.subscriptionExpiry,
+        createdAt: company.createdAt,
+        updatedAt: company.updatedAt
+      },
+      metadata: {
+        timestamp: new Date().toISOString(),
+        responseTime: Date.now() - startTime,
+        companyCode: company.companyCode,
+      },
+    };
+
+    // ✅ Set HTTP-only cookie
+    res.cookie("auth_token", token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+    });
+
+    console.log("✅ Company login successful:", {
+      user: user.email,
+      company: company.companyName,
+      companyCode: company.companyCode
+    });
+    
+    return res.json(response);
+  } catch (error) {
+    console.error("🔥 Company login error:", error);
+    console.error("🔥 Error stack:", error.stack);
+
+    return res.status(500).json({
+      success: false,
+      message: "An internal server error occurred during company login.",
+      errorCode: "INTERNAL_SERVER_ERROR",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
 };
 
 // ✅ Register User with enhanced validation
@@ -154,17 +418,17 @@ exports.register = async (req, res) => {
       return errorResponse(res, 403, "Company subscription has expired", "SUBSCRIPTION_EXPIRED");
     }
 
-
-
-
     // Generate employee ID
     const employeeId = `EMP${Date.now()}${Math.floor(Math.random() * 1000)}`;
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
 
     // Create user in session
     const user = await User.create([{
       name: name.trim(),
       email: cleanEmail,
-      password: password,
+      password: hashedPassword,
       department,
       jobRole,
       company,
@@ -546,7 +810,6 @@ exports.login = async (req, res) => {
   }
 };
 
-
 // ✅ Enhanced Forgot Password with token expiry
 exports.forgotPassword = async (req, res) => {
   try {
@@ -784,33 +1047,7 @@ exports.logout = async (req, res) => {
   }
 };
 
-// Helper function to send welcome email
-const sendWelcomeEmail = async (email, name, companyName) => {
-  try {
-    await sendEmail(
-      email,
-      `🎉 Welcome to ${companyName}!`,
-      `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #4CAF50;">Welcome to ${companyName}, ${name}!</h2>
-          <p>Your account has been successfully created.</p>
-          <p>You can now login to your account using your credentials.</p>
-          <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
-            <p><strong>Next Steps:</strong></p>
-            <ul>
-              <li>Complete your profile</li>
-              <li>Set up two-factor authentication (recommended)</li>
-              <li>Explore the dashboard</li>
-            </ul>
-          </div>
-          <p>If you have any questions, please contact your administrator.</p>
-        </div>
-      `
-    );
-  } catch (err) {
-    console.error("Failed to send welcome email:", err);
-  }
-};
+// ✅ Get Company Details by Identifier
 exports.getCompanyDetailsByIdentifier = async (req, res) => {
   try {
     const { identifier } = req.params;
@@ -908,6 +1145,72 @@ exports.getCompanyDetailsByIdentifier = async (req, res) => {
     });
   }
 };
+
+// ✅ Test API Endpoint
+exports.testAPI = async (req, res) => {
+  try {
+    return res.status(200).json({
+      success: true,
+      message: "Auth API is working! 🚀",
+      timestamp: new Date().toISOString(),
+      endpoints: {
+        register: "POST /api/auth/register",
+        login: "POST /api/auth/login",
+        companyLoginRoute: "POST /api/auth/company/:companyCode/login",
+        companyLogin: "POST /api/auth/company-login/:companyCode",
+        forgotPassword: "POST /api/auth/forgot-password",
+        resetPassword: "POST /api/auth/reset-password",
+        verifyEmail: "GET /api/auth/verify-email/:token",
+        refreshToken: "POST /api/auth/refresh-token",
+        logout: "POST /api/auth/logout",
+        getCompanyDetails: "GET /api/auth/company/:identifier",
+        test: "GET /api/auth/test"
+      },
+      status: "operational",
+      version: "1.0.0"
+    });
+  } catch (error) {
+    console.error("🔥 Test API error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Test API failed",
+      error: error.message
+    });
+  }
+};
+
+// Helper function to send welcome email
+const sendWelcomeEmail = async (email, name, companyName) => {
+  try {
+    await sendEmail(
+      email,
+      `🎉 Welcome to ${companyName}!`,
+      `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #4CAF50;">Welcome to ${companyName}, ${name}!</h2>
+          <p>Your account has been successfully created.</p>
+          <p>You can now login to your account using your credentials.</p>
+          <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
+            <p><strong>Next Steps:</strong></p>
+            <ul>
+              <li>Complete your profile</li>
+              <li>Set up two-factor authentication (recommended)</li>
+              <li>Explore the dashboard</li>
+            </ul>
+          </div>
+          <p>If you have any questions, please contact your administrator.</p>
+        </div>
+      `
+    );
+  } catch (err) {
+    console.error("Failed to send welcome email:", err);
+  }
+};
+
 // Helper function to blacklist token
 const blacklistToken = async (token, expiry) => {
+  // Implement your token blacklist logic here
+  // This could use Redis, MongoDB, or in-memory storage
+  console.log(`Token blacklisted: ${token.substring(0, 20)}...`);
 };
+console.log("✅ authController.js loaded successfully");

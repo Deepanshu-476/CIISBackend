@@ -398,3 +398,4 @@ module.exports = {
   deleteTask,
   getTaskStats
 };
+console.log("✅ ClientTask.js loaded successfully");

@@ -355,3 +355,4 @@ module.exports = {
   getMeetingStats,
   searchMeetings
 };
+console.log("✅ clientMeetingController.js loaded successfully");

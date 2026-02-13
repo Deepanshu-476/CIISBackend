@@ -46,5 +46,14 @@ router.patch("/:id/activate", companyController.activateCompany);
 
 // ✅ HARD DELETE COMPANY
 router.delete("/:id", companyController.deleteCompanyPermanently);
+router.get('/test', (req, res) => {
+  res.json({
+    status: 'healthy',
+    service: 'Menu Access API',
+    timestamp: new Date().toISOString(),
+    version: '1.0.0',
+    uptime: process.uptime()
+  });
+});
 
 module.exports = router;

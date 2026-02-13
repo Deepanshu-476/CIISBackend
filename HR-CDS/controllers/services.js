@@ -199,3 +199,4 @@ module.exports = {
   updateService,
   getServicesByCompany
 };
+console.log("✅ servicesController.js loaded successfully");

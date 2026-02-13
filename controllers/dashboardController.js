@@ -174,3 +174,4 @@ exports.getDashboardSummary = async (req, res) => {
   }
 };
 
+console.log("✅ dashboardController.js loaded successfully");

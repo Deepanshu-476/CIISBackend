@@ -25,7 +25,7 @@ router.put("/:id", departmentController.updateDepartment);
 router.delete("/:id", departmentController.deleteDepartment);
 
 // Debug route to check user info
-router.get("/debug", (req, res) => {
+router.get("/test", (req, res) => {
   console.log("Debug user info:", req.user);
   res.json({
     success: true,

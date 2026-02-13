@@ -64,3 +64,5 @@ module.exports.deleteHoliday = async (req, res) => {
         res.status(500).json({ message: "Failed to delete holiday", error: error.message });
     }
 };
+
+console.log("✅ HolidayController.js loaded successfully");

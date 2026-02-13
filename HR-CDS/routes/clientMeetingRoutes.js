@@ -25,4 +25,13 @@ router.put('/:id', updateMeeting);
 router.patch('/:id/status', updateMeetingStatus);
 router.delete('/:id', deleteMeeting);
 
+
+router.get("/test", (req, res) => {
+  console.log("Debug user info:", req.user);
+  res.json({
+    success: true,
+    user: req.user
+  });
+});
+
 module.exports = router;

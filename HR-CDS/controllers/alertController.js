@@ -232,7 +232,7 @@ const markAsRead = async (req, res) => {
     });
   }
 };
-
+console.log("✅ alertController.js loaded successfully");
 module.exports = {
   getAlerts,
   addAlert,

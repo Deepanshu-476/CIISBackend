@@ -37,3 +37,4 @@ exports.getAgentCalls = async (req, res) => {
     res.status(500).json({ msg: "Error fetching call logs", error: err.message });
   }
 };
+console.log("✅ callController.js loaded successfully");

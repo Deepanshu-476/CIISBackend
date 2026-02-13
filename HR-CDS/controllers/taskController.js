@@ -3383,3 +3383,4 @@ exports.snoozeTask = async (req, res) => {
 };
 
 module.exports = exports;
+console.log("✅ taskController.js loaded successfully");

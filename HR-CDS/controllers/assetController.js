@@ -266,3 +266,4 @@ exports.deleteRequest = async (req, res) => {
     return res.status(500).json({ error: 'Server error while deleting request' });
   }
 };
+console.log("✅ assetController.js loaded successfully");

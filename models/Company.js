@@ -142,11 +142,6 @@ companySchema.pre("save", async function (next) {
   next();
 });
 
-// Indexes
-companySchema.index({ companyCode: 1 });
-companySchema.index({ companyEmail: 1 });
-companySchema.index({ companyPhone: 1 });
-companySchema.index({ loginUrl: 1 });
-companySchema.index({ dbIdentifier: 1 });
+
 
 module.exports = mongoose.model("Company", companySchema);

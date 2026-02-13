@@ -25,7 +25,7 @@ router.put("/:id", jobRoleController.updateJobRole);
 router.delete("/:id", jobRoleController.deleteJobRole);
 
 // Debug route to check user info
-router.get("/debug", (req, res) => {
+router.get("/test", (req, res) => {
   console.log("Debug user info:", req.user);
   res.json({
     success: true,
