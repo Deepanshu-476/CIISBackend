@@ -5,7 +5,7 @@ const mongoose = require("mongoose");
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-
+const emailService = require('../services/emailService');
 // =============================
 // MULTER CONFIGURATION FOR LOGOS
 // =============================
@@ -197,6 +197,7 @@ exports.createCompany = async (req, res) => {
   let transactionCompleted = false;
   let companyCreated = false;
   let createdCompany = null;
+  let createdOwner = null;
   
   try {
     const {
@@ -264,38 +265,50 @@ exports.createCompany = async (req, res) => {
     const trimmedCompanyName = companyName.trim();
     const lowerCompanyEmail = companyEmail.toLowerCase().trim();
     const lowerOwnerEmail = ownerEmail.toLowerCase().trim();
-    const trimmedPhone = companyPhone.trim();
+    const trimmedPhone = companyPhone.replace(/\D/g, '').slice(0, 10); // Clean phone number
 
-    // Generate company code FIRST (before duplicate check)
+    // Generate company code
     const generateCompanyCode = (name) => {
-      // Take first 3-4 letters, remove spaces and special chars, make uppercase
-      const code = name
-        .replace(/[^a-zA-Z0-9]/g, '') // Remove special characters
-        .substring(0, 6) // Increased to 6 for better uniqueness
+      // Take first 4 letters, remove spaces and special chars, make uppercase
+      const baseCode = name
+        .replace(/[^a-zA-Z0-9]/g, '')
+        .substring(0, 4)
         .toUpperCase();
       
-      // If code is less than 3 chars, add some numbers
-      if (code.length < 3) {
-        return `${code}${Math.floor(100 + Math.random() * 900)}`;
-      }
+      // Add timestamp suffix for uniqueness
+      const timestamp = Date.now().toString().slice(-4);
+      const random = Math.floor(10 + Math.random() * 90);
       
-      return code;
+      return `${baseCode}${timestamp}${random}`;
     };
 
-    const companyCode = generateCompanyCode(trimmedCompanyName);
-    
-    // ✅ Generate dbIdentifier for multi-tenancy
-    const dbIdentifier = `company_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    let companyCode = generateCompanyCode(trimmedCompanyName);
+    let isCodeUnique = false;
+    let attempts = 0;
+    const maxAttempts = 5;
 
-    // Check for duplicates including company code
-    const [existingCompanyEmail, existingCompanyPhone, existingCompanyName, existingUserEmail, existingCompanyCode] = await Promise.all([
+    // Ensure unique company code
+    while (!isCodeUnique && attempts < maxAttempts) {
+      const existingCode = await Company.findOne({ companyCode });
+      if (!existingCode) {
+        isCodeUnique = true;
+      } else {
+        companyCode = generateCompanyCode(trimmedCompanyName + attempts);
+        attempts++;
+      }
+    }
+
+    // ✅ Generate dbIdentifier for multi-tenancy
+    const dbIdentifier = `company_${companyCode}_${Date.now()}`;
+
+    // Check for duplicates
+    const [existingCompanyEmail, existingCompanyPhone, existingCompanyName, existingUserEmail] = await Promise.all([
       Company.findOne({ companyEmail: lowerCompanyEmail }),
       Company.findOne({ companyPhone: trimmedPhone }),
       Company.findOne({ 
         companyName: { $regex: new RegExp(`^${trimmedCompanyName}$`, 'i') }
       }),
-      User.findOne({ email: lowerOwnerEmail }),
-      Company.findOne({ companyCode }) // Check if company code already exists
+      User.findOne({ email: lowerOwnerEmail })
     ]);
 
     if (existingCompanyEmail) {
@@ -338,27 +351,14 @@ exports.createCompany = async (req, res) => {
       });
     }
 
-    if (existingCompanyCode) {
-      // If company code exists, generate a new one with suffix
-      const newCompanyCode = `${companyCode}${Math.floor(10 + Math.random() * 90)}`;
-      return res.status(409).json({
-        success: false,
-        message: `Company code '${companyCode}' already exists`,
-        field: "companyCode",
-        value: companyCode,
-        suggestion: `Please use '${newCompanyCode}' instead`,
-        alternativeCode: newCompanyCode
-      });
-    }
-
     // ✅ 3. CREATE COMPANY IN TRANSACTION
     const session = await mongoose.startSession();
     session.startTransaction();
 
     try {
-      // ✅ CREATE COMPANY WITH ALL FIELDS INCLUDING loginUrl
+      // ✅ CREATE COMPANY WITH ALL FIELDS
       const baseUrl = `${req.protocol}://${req.get("host")}`;
-      const frontendLoginUrl = `/company/${companyCode}/login`;
+      const frontendLoginUrl = `${process.env.FRONTEND_URL || baseUrl}/company/${companyCode}/login`;
       const apiLoginUrl = `${baseUrl}/api/v1/auth/company/${companyCode}/login`;
       
       const companyData = {
@@ -370,14 +370,13 @@ exports.createCompany = async (req, res) => {
         ownerName: ownerName.trim(),
         logo: logo || null,
         companyDomain: lowerCompanyEmail.split('@')[1] || 'example.com',
-        loginUrl: frontendLoginUrl, // ✅ SET HERE with companyCode
-        apiLoginUrl: apiLoginUrl, // ✅ SET HERE
+        loginUrl: frontendLoginUrl,
+        apiLoginUrl: apiLoginUrl,
         dbIdentifier: dbIdentifier,
         isActive: true,
       };
 
       const company = await Company.create([companyData], { session });
-
       createdCompany = company[0];
       companyCreated = true;
 
@@ -394,9 +393,11 @@ exports.createCompany = async (req, res) => {
         isActive: true,
         isVerified: true,
         createdBy: null,
+        role: 'super_admin',
+        permissions: ['all']
       }], { session });
 
-      const createdOwner = ownerUser[0];
+      createdOwner = ownerUser[0];
 
       // ✅ 5. GENERATE LOGIN TOKEN
       const loginToken = crypto.randomBytes(32).toString("hex");
@@ -412,10 +413,52 @@ exports.createCompany = async (req, res) => {
       // Commit transaction
       await session.commitTransaction();
       transactionCompleted = true;
+      session.endSession();
 
+      // ✅ 7. SEND EMAILS AFTER TRANSACTION IS COMMITTED
+      // Don't await - send emails in background
+      const emailPromise = emailService.sendCompanyRegistrationEmails(
+        {
+          id: createdCompany._id,
+          companyName: createdCompany.companyName,
+          companyCode: companyCode,
+          companyEmail: createdCompany.companyEmail,
+          companyPhone: createdCompany.companyPhone,
+          companyAddress: createdCompany.companyAddress,
+          ownerName: createdCompany.ownerName,
+          loginUrl: frontendLoginUrl,
+          apiLoginUrl: apiLoginUrl,
+          createdAt: createdCompany.createdAt,
+          subscriptionExpiry: createdCompany.subscriptionExpiry
+        },
+        {
+          id: createdOwner._id,
+          name: createdOwner.name,
+          email: createdOwner.email,
+          jobRole: createdOwner.jobRole,
+          department: createdOwner.department,
+          employeeId: createdOwner.employeeId,
+          password: ownerPassword // Only for email template, never log this
+        }
+      );
+
+      // Handle email promise without blocking response
+      emailPromise
+        .then(emailResults => {
+          console.log(`✅ Registration emails processed for company: ${companyCode}`);
+          if (process.env.NODE_ENV === 'development') {
+            console.log('Email results:', emailResults);
+          }
+        })
+        .catch(emailError => {
+          console.error('❌ Background email sending failed:', emailError);
+          // Log to error tracking service in production
+        });
+
+      // ✅ 8. SUCCESS RESPONSE
       return res.status(201).json({
         success: true,
-        message: "Company registered successfully 🎉",
+        message: "Company registered successfully! 🎉 Check your email for login credentials.",
         company: {
           id: createdCompany._id,
           companyName: createdCompany.companyName,
@@ -441,27 +484,32 @@ exports.createCompany = async (req, res) => {
           employeeId: createdOwner.employeeId,
           isVerified: createdOwner.isVerified,
         },
+        emailStatus: {
+          message: "Registration emails are being sent to company and owner",
+          companyEmail: createdCompany.companyEmail,
+          ownerEmail: createdOwner.email
+        },
         metadata: {
           timestamp: new Date().toISOString(),
           transactionId: createdCompany._id.toString(),
-          stepsCompleted: ["company_creation", "owner_creation", "token_generation"]
+          companyCode: companyCode,
+          stepsCompleted: ["company_creation", "owner_creation", "token_generation", "email_queued"]
         }
       });
 
     } catch (transactionError) {
       // Rollback transaction on error
       await session.abortTransaction();
+      session.endSession();
       
       // Re-throw to be caught by outer catch block
       throw transactionError;
-    } finally {
-      session.endSession();
     }
 
   } catch (err) {
     console.error("❌ Create company error:", err);
     
-    // ✅ 7. ENHANCED ERROR HANDLING WITH CLEANUP
+    // ✅ 9. ENHANCED ERROR HANDLING WITH CLEANUP
     let statusCode = 500;
     let errorMessage = "Failed to create company";
     let errorDetails = null;
@@ -518,13 +566,15 @@ exports.createCompany = async (req, res) => {
       cleanupRequired = companyCreated;
     }
 
-    // ✅ 8. CLEANUP IF PARTIALLY CREATED
+    // ✅ 10. CLEANUP IF PARTIALLY CREATED
     if (cleanupRequired && !transactionCompleted) {
       try {
         // Attempt to clean up partially created data
         if (companyCreated && createdCompany) {
           await Company.findByIdAndDelete(createdCompany._id);
-          await User.deleteMany({ company: createdCompany._id });
+          if (createdOwner) {
+            await User.findByIdAndDelete(createdOwner._id);
+          }
           console.log("✅ Cleaned up partially created company data");
         }
       } catch (cleanupError) {
