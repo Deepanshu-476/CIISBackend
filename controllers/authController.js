@@ -148,10 +148,9 @@ exports.companyLogin = async (req, res) => {
         { company: company._id }
       ]
     })
-      .select("+password +isActive +failedLoginAttempts +lockUntil")
+      .select("+password +isActive +loginAttempts +lockUntil")
       .populate("department", "name")
       .populate("company", "companyName companyCode logo")
-      .lean();
 
     if (!user) {
       console.log("❌ User not found for company:", { email: cleanEmail, company: company.companyName });
@@ -422,13 +421,13 @@ exports.register = async (req, res) => {
     const employeeId = `EMP${Date.now()}${Math.floor(Math.random() * 1000)}`;
 
     // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
+    
 
     // Create user in session
     const user = await User.create([{
       name: name.trim(),
       email: cleanEmail,
-      password: hashedPassword,
+      password: Password,
       department,
       jobRole,
       company,
@@ -687,10 +686,10 @@ exports.login = async (req, res) => {
 
     // ✅ Get user with populated data for response
     const userForResponse = await User.findById(user._id)
-      .select("-password -failedLoginAttempts -lockUntil")
+      .select("-password -loginAttempts -lockUntil")
       .populate("department", "name")
       .populate("company", "companyName companyCode logo")
-      .lean();
+     
 
     // ✅ Create token payload WITHOUT exp field (let jwt handle it)
     const tokenPayload = {
