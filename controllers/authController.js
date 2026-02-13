@@ -260,10 +260,10 @@ exports.login = async (req, res) => {
 
     // ✅ Find user
     const user = await User.findOne({ email: cleanEmail })
-      .select("+password +isActive +failedLoginAttempts +lockUntil")
+      .select("+password +isActive +loginAttempts +lockUntil")
       .populate("department", "name")
       .populate("company", "companyName companyCode isActive subscriptionExpiry logo companyEmail companyPhone companyAddress dbIdentifier loginUrl")
-      .lean();
+     
 
     if (!user) {
       console.log("❌ User not found:", cleanEmail);
@@ -644,7 +644,6 @@ exports.resetPassword = async (req, res) => {
     }
 
     // Hash new password
-    const hashedPassword = await bcrypt.hash(password, 10);
     
     user.password = hashedPassword;
     user.resetPasswordToken = undefined;
