@@ -5,10 +5,11 @@ const leaveController = require('../controllers/LeaveController');
 const authMiddleware = require('../../middleware/authMiddleware');
 const { body, param, query } = require('express-validator');
 const validateRequest = require('../../middleware/validateRequest.js');
-
+const { isCompanyOwner } = require('../../middleware/authMiddleware');
 // 🔐 All routes are protected
 router.use(authMiddleware.protect);
-
+// router.patch('/status/:id', leaveController.updateLeaveStatus);
+// router.get('/status', leaveController.getLeavesWithStatus);
 // 📋 User Routes
 router.post('/apply', 
   [
@@ -21,10 +22,10 @@ router.post('/apply',
   leaveController.applyLeave
 );
 
-router.get('/status', 
+router.get('/status',  // ← This is GET /leaves/status
   [
-    query('status').optional().isIn(['Pending', 'Approved', 'Rejected', 'Cancelled', 'All']).withMessage('Invalid status value'),
-    query('type').optional().isIn(['Casual', 'Sick', 'Paid', 'Unpaid', 'Other', 'all']).withMessage('Invalid type value'),
+    query('status').optional().isIn(['Pending', 'Approved', 'Rejected', 'Cancelled', 'All']).withMessage('Invalid status'),
+    query('type').optional().isIn(['Casual', 'Sick', 'Paid', 'Unpaid', 'Other', 'all']).withMessage('Invalid type'),
     query('date').optional().isISO8601().withMessage('Invalid date format'),
     query('year').optional().isInt({ min: 2000, max: 2100 }).withMessage('Invalid year'),
     query('month').optional().isInt({ min: 1, max: 12 }).withMessage('Invalid month'),
@@ -49,13 +50,19 @@ router.get('/stats', leaveController.getLeaveStats);
 // 📋 All Leaves Route - Accessible to everyone in same company
 router.get('/all', leaveController.getAllLeaves);
 
-// ✅ Update Leave Status
-router.put('/:id/status',
+router.patch('/status/:id',
   [
     param('id').isMongoId().withMessage('Invalid leave ID format'),
-    body('status').isIn(['Approved', 'Rejected', 'Pending', 'Cancelled']).withMessage('Invalid status value'),
-    body('remarks').optional().trim().isLength({ max: 500 }).withMessage('Remarks must be less than 500 characters'),
-    validateRequest
+    body('status')
+      .isIn(['Approved', 'Rejected', 'Pending', 'Cancelled'])
+      .withMessage('Status must be Approved, Rejected, Pending, or Cancelled'),
+    body('remarks')
+      .optional()
+      .trim()
+      .isLength({ max: 500 })
+      .withMessage('Remarks must be less than 500 characters'),
+    validateRequest,
+    isCompanyOwner
   ],
   leaveController.updateLeaveStatus
 );

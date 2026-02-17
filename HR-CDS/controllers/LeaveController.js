@@ -2,7 +2,14 @@
 const Leave = require('../models/Leave');
 const User = require('../../models/User');
 const Company = require('../../models/Company');
-const { sendLeaveAppliedEmail, sendLeaveStatusEmail, sendLeaveDeletedEmail } = require('../../utils/sendEmail');
+const nodemailer = require('nodemailer'); // ✅ Add this import
+
+// ✅ IMPORT email functions from utils - SIRF EK BAAR
+const { 
+  sendLeaveAppliedEmail, 
+  sendLeaveStatusEmail,  // ✅ This is imported, don't redefine!
+  sendLeaveDeletedEmail 
+} = require('../../utils/sendEmail');
 
 // 🔹 Apply for Leave (User)
 exports.applyLeave = async (req, res) => {
@@ -78,7 +85,7 @@ exports.applyLeave = async (req, res) => {
       .populate('user', 'name email jobRole department')
       .populate('history.by', 'name email');
 
-    // Send email notification
+    // ✅ Send email notification - using IMPORTED function
     try {
       await sendLeaveAppliedEmail(
         user.email,
@@ -413,81 +420,170 @@ exports.getAllLeaves = async (req, res) => {
   }
 };
 
-// 🔹 Update Leave Status
+// ============================================
+// UPDATE LEAVE STATUS - ONLY OWNER
+// ============================================
+// ============================================
+// UPDATE LEAVE STATUS - ONLY OWNER - SIMPLIFIED
+// ============================================
 exports.updateLeaveStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { status, remarks } = req.body;
-    const userId = req.user._id;
-    const userCompanyId = req.user.company || req.user.companyId;
+    const currentUser = req.user;
+    
+    // 🔥 CRITICAL FIX #1: LOG FULL USER OBJECT TO DEBUG
+    console.log('🔄 ========== UPDATE LEAVE STATUS ==========');
+    console.log('📋 Leave ID:', id);
+    console.log('📋 New Status:', status);
+    console.log('👤 Current User (FULL):', {
+      _id: currentUser._id,
+      name: currentUser.name,
+      email: currentUser.email,
+      companyRole: currentUser.companyRole, 
+      role: currentUser.role,
+      company: currentUser.company,
+      companyId: currentUser.companyId,
+      companyCode: currentUser.companyCode
+    });
 
-    // Find the leave
-    const leave = await Leave.findById(id).populate('user', 'company companyId');
+    // 🔥 CRITICAL FIX #2: SIMPLE OWNER CHECK - NO COMPLEX LOGIC
+    // Direct check - no fallbacks, no case conversion issues
+    const isOwner = currentUser.companyRole === 'Owner';
+    
+    console.log('👑 Owner Check:', {
+      companyRole: currentUser.companyRole,
+      isOwner: isOwner
+    });
 
-    if (!leave) {
-      return res.status(404).json({
-        success: false,
-        error: 'Leave not found'
-      });
-    }
-
-    // Check if the leave belongs to someone in the same company
-    const leaveUserCompanyId = leave.user.company || leave.user.companyId;
-    if (leaveUserCompanyId !== userCompanyId) {
+    // 🔥 CRITICAL FIX #3: IF NOT OWNER, REJECT IMMEDIATELY
+    if (!isOwner) {
+      console.log('❌ ACCESS DENIED - User is not Owner. Role:', currentUser.companyRole);
       return res.status(403).json({
         success: false,
-        error: 'You can only update leaves from your own company'
+        error: 'You do not have permission to update leave status. Only Company Owner can perform this action.'
       });
     }
 
-    // Check if user is trying to update their own leave
-    if (leave.user._id.toString() === userId.toString()) {
+    console.log('👑✅ OWNER ACCESS GRANTED');
+
+    // 🔥 CRITICAL FIX #4: FIND LEAVE WITHOUT COMPLEX POPULATE FIRST
+    const leave = await Leave.findById(id);
+    
+    if (!leave) {
+      console.log('❌ Leave not found:', id);
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Leave not found' 
+      });
+    }
+
+    console.log('📋 Leave found:', {
+      id: leave._id,
+      currentStatus: leave.status,
+      userId: leave.user
+    });
+
+    // ✅ Validate status
+    const validStatuses = ['Pending', 'Approved', 'Rejected', 'Cancelled'];
+    if (!validStatuses.includes(status)) {
       return res.status(400).json({
         success: false,
-        error: 'You cannot update the status of your own leave'
+        error: `Invalid status. Must be one of: ${validStatuses.join(', ')}`
       });
     }
 
-    // Update the leave status
+    // ✅ Store old status for history
+    const oldStatus = leave.status;
+
+    // ✅ Update the leave - OWNER CAN UPDATE ANY LEAVE
     leave.status = status;
     leave.remarks = remarks || leave.remarks;
-    leave.approvedBy = userId;
-    
-    // Add to history
+    leave.approvedBy = currentUser._id;
+    leave.updatedAt = new Date();
+
+    // ✅ Add to history
     leave.history = leave.history || [];
     leave.history.push({
       action: status,
-      by: userId,
+      from: oldStatus,
+      to: status,
+      by: currentUser._id,
+      byName: currentUser.name || currentUser.email || 'Owner',
+      byRole: 'Owner',
       remarks: remarks || '',
       at: new Date()
     });
 
+    // ✅ Save the leave
     await leave.save();
+    
+    console.log('✅ Leave status updated in database');
+    console.log(`📋 Status changed: ${oldStatus} → ${status}`);
+    console.log('👤 Updated By:', currentUser.name, '(Owner)');
+
+    // ✅ Populate user and approvedBy for response
+    await leave.populate([
+      { path: 'user', select: 'name email phone' },
+      { path: 'approvedBy', select: 'name email' }
+    ]);
+
+    console.log('✅ ========== STATUS UPDATE SUCCESS ==========');
 
     res.status(200).json({
       success: true,
       message: `Leave ${status.toLowerCase()} successfully`,
-      data: leave
+      data: {
+        _id: leave._id,
+        status: leave.status,
+        remarks: leave.remarks,
+        approvedBy: leave.approvedBy,
+        history: leave.history.slice(-1)[0]
+      }
     });
 
   } catch (error) {
-    console.error('Error updating leave status:', error);
+    console.error('❌❌❌ ERROR IN UPDATE LEAVE STATUS ❌❌❌');
+    console.error('Error:', error);
+    console.error('Stack:', error.stack);
+    
     res.status(500).json({
       success: false,
-      error: 'Server error while updating leave status'
+      error: 'Server error while updating leave status',
+      details: error.message
     });
   }
 };
 
-// 🔹 Delete Leave
+// ============================================
+// DELETE LEAVE - ONLY OWNER
+// ============================================
 exports.deleteLeave = async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.user._id;
-    const userCompanyId = req.user.company || req.user.companyId;
+    const currentUser = req.user;
+    const userId = currentUser._id;
+    const userRole = currentUser.companyRole || currentUser.role || '';
+    const isOwner = currentUser.companyRole === 'Owner' || currentUser.companyRole === 'owner' || currentUser.companyRole === 'OWNER';
+
+    console.log('🗑️ ========== DELETE LEAVE ==========');
+    console.log('📋 Leave ID:', id);
+    console.log('👤 Requested By:', userId);
+    console.log('👑 Is Owner:', isOwner);
+
+    // 🔥 🔥 🔥 CRITICAL: ONLY OWNER CAN DELETE LEAVES 🔥 🔥 🔥
+    if (!isOwner) {
+      console.log('❌ ACCESS DENIED - Not Owner. Role:', userRole);
+      return res.status(403).json({
+        success: false,
+        error: 'You do not have permission to delete leave. Only Company Owner can perform this action.'
+      });
+    }
+
+    console.log('👑 OWNER ACCESS GRANTED - Proceeding with deletion');
 
     // Find the leave
-    const leave = await Leave.findById(id).populate('user', 'company companyId');
+    const leave = await Leave.findById(id).populate('user', 'email name');
 
     if (!leave) {
       return res.status(404).json({
@@ -496,17 +592,29 @@ exports.deleteLeave = async (req, res) => {
       });
     }
 
-    // Check if the leave belongs to someone in the same company
-    const leaveUserCompanyId = leave.user.company || leave.user.companyId;
-    if (leaveUserCompanyId !== userCompanyId) {
-      return res.status(403).json({
-        success: false,
-        error: 'You can only delete leaves from your own company'
-      });
+    // ✅ Send deletion email (optional)
+    try {
+      if (typeof sendLeaveDeletedEmail === 'function') {
+        await sendLeaveDeletedEmail(
+          leave.user.email,
+          leave.user.name,
+          leave._id.toString(),
+          leave.type,
+          leave.startDate,
+          leave.endDate,
+          leave.reason
+        );
+        console.log('📧 Leave deletion email sent');
+      }
+    } catch (emailError) {
+      console.error('❌ Failed to send deletion email:', emailError);
     }
 
     // Delete the leave
     await Leave.findByIdAndDelete(id);
+
+    console.log('✅ Leave deleted successfully:', id);
+    console.log('🗑️ ========== DELETE COMPLETE ==========');
 
     res.status(200).json({
       success: true,
@@ -514,7 +622,7 @@ exports.deleteLeave = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error deleting leave:', error);
+    console.error('❌ Error deleting leave:', error);
     res.status(500).json({
       success: false,
       error: 'Server error while deleting leave'
@@ -1271,16 +1379,11 @@ exports.exportLeaves = async (req, res) => {
       exportContent = [headers, ...rows].join('\n');
       contentType = 'text/csv';
       filename = `leaves_export_${new Date().toISOString().split('T')[0]}.csv`;
-    } else if (format === 'excel') {
-      // For Excel, you would use a library like exceljs
-      exportContent = JSON.stringify(exportData);
-      contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-      filename = `leaves_export_${new Date().toISOString().split('T')[0]}.xlsx`;
     } else {
-      // PDF would require additional libraries
-      exportContent = JSON.stringify(exportData);
-      contentType = 'application/pdf';
-      filename = `leaves_export_${new Date().toISOString().split('T')[0]}.pdf`;
+      // Default to JSON
+      exportContent = JSON.stringify(exportData, null, 2);
+      contentType = 'application/json';
+      filename = `leaves_export_${new Date().toISOString().split('T')[0]}.json`;
     }
     
     res.setHeader('Content-Type', contentType);
@@ -1296,4 +1399,5 @@ exports.exportLeaves = async (req, res) => {
     });
   }
 };
+
 console.log("✅ LeaveController.js loaded successfully");

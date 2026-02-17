@@ -3,7 +3,7 @@ const mongoose = require("mongoose");
 const historySchema = new mongoose.Schema({
   action: {
     type: String,
-    enum: ['applied', 'approved', 'rejected', 'cancelled', 'updated'],
+
     required: true
   },
   by: {
