@@ -8,6 +8,9 @@ const crypto = require("crypto");
 const mongoose = require("mongoose");
 const { validateRequest } = require("../middleware/validation");
 const { loginSchema } = require("../validations/authValidation");
+const OTP = require('../models/OTP');
+const emailService = require('../services/emailService');
+
 
 // Rate limiting store for brute force protection
 const loginAttempts = new Map();
@@ -1216,3 +1219,75 @@ const blacklistToken = async (token, expiry) => {
   console.log(`Token blacklisted: ${token.substring(0, 20)}...`);
 };
 console.log("✅ authController.js loaded successfully");
+
+exports.forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    const user = await require('../models/User').findOne({ email });
+    if (!user) {
+      return res.status(404).json({ message: 'No account found with this email.' });
+    }
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+
+    await OTP.deleteMany({ email });
+
+    await OTP.create({
+      email,
+      otp,
+      expiresAt: new Date(Date.now() + 5 * 60 * 1000)
+    });
+
+    await emailService.sendEmail(
+      email,
+      "🔐 CIIS NETWORK - Password Reset OTP",
+      `
+        <div style="font-family: Arial; padding:20px;">
+          <h2 style="color:#2563eb;">Password Reset OTP</h2>
+          <p>Your OTP is:</p>
+          <h1 style="letter-spacing:4px;">${otp}</h1>
+          <p>This OTP is valid for 5 minutes.</p>
+        </div>
+      `
+    );
+
+
+    res.json({ success: true });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Failed to send OTP' });
+  }
+};
+
+exports.resetPassword = async (req, res) => {
+  try {
+    const { email, otp, newPassword } = req.body;
+
+    const otpRecord = await OTP.findOne({ email, otp });
+
+    if (!otpRecord)
+      return res.status(400).json({ message: 'Invalid OTP' });
+
+    if (otpRecord.expiresAt < new Date())
+      return res.status(400).json({ message: 'OTP expired' });
+
+    const user = await require('../models/User').findOne({ email });
+    if (!user)
+      return res.status(404).json({ message: 'User not found' });
+
+    const bcrypt = require('bcryptjs');
+    const salt = await bcrypt.genSalt(10);
+    user.password = newPassword; // Store plain password temporarily for validation
+    await user.save();
+
+    await OTP.deleteMany({ email });
+
+    res.json({ success: true });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Failed to reset password' });
+  }
+};
