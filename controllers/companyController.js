@@ -358,7 +358,7 @@ exports.createCompany = async (req, res) => {
     try {
       // ✅ CREATE COMPANY WITH ALL FIELDS
       const baseUrl = `${req.protocol}://${req.get("host")}`;
-      const frontendLoginUrl = `${process.env.FRONTEND_URL || baseUrl}/company/${companyCode}/login`;
+      const frontendLoginUrl = `${"https://cds.ciisnetwork.in"}/company/${companyCode}/login`;
       const apiLoginUrl = `${baseUrl}/api/v1/auth/company/${companyCode}/login`;
       
       const companyData = {

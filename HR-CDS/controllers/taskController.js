@@ -2496,8 +2496,7 @@ exports.getDepartmentUsersWithTaskCounts = async (req, res) => {
     // 🔴 UPDATED: Filter users by same company AND same department
     const userFilter = { 
       isActive: true,
-      company: userCompanyId,
-      department: userDepartmentId
+      
     };
     
     if (employeeType && employeeType !== 'all') {

@@ -321,14 +321,19 @@ exports.getAllLeaves = async (req, res) => {
         path: 'user',
         select: 'name email department phone employeeType jobRole employeeId',
         match: { _id: { $in: companyUserIds } },
+        populate: {
+          path: 'department',
+          select: 'name'
+        },
         transform: (doc) => {
+
           if (!doc) return null;
           return {
             id: doc._id || doc.id,
             _id: doc._id || doc.id,
             name: doc.name,
             email: doc.email,
-            department: doc.department,
+            department: doc.department?.name || doc.department,
             phone: doc.phone,
             employeeType: doc.employeeType,
             jobRole: doc.jobRole,

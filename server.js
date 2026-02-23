@@ -325,6 +325,7 @@ app.use('/api/superAdmin', require("./routes/superAdmin.js"));
 app.use("/api/meetings", require("./HR-CDS/routes/meetingRoutes.js"));
 app.use('/api/cmeeting', require("./HR-CDS/routes/clientMeetingRoutes.js"));
 app.use('/api/sidebar', require("./routes/sidebarConfigs.js"));
+app.use('/api/assets12', require('./routes/assetRoutes'));
 
 // ==================== API ENDPOINTS ====================
 

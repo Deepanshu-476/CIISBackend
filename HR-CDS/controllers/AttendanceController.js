@@ -136,11 +136,11 @@ const clockIn = async (req, res) => {
     let status = "PRESENT";
     
     if (now >= halfDayThreshold) {
-      status = "HALF DAY";
+      status = "HALFDAY";
     } else if (now >= lateThresholdStart && now <= lateThresholdEnd) {
       status = "LATE";
     } else if (now > lateThresholdEnd && now < halfDayThreshold) {
-      status = "HALF DAY";
+      status = "HALFDAY";
     }
 
     const newRecord = new Attendance({
@@ -229,12 +229,12 @@ const clockOut = async (req, res) => {
     lateThresholdStart.setHours(9, 10, 0, 0);
 
     if (loginTime >= halfDayThreshold) {
-      record.status = "HALF DAY";
+      record.status = "HALFDAY";
     } else if (loginTime > lateThresholdEnd && loginTime < halfDayThreshold) {
       if (totalHours >= 9) {
-        record.status = "HALF DAY";
+        record.status = "HALFDAY";
       } else if (totalHours >= 5) {
-        record.status = "HALF DAY";
+        record.status = "HALFDAY";
       } else {
         record.status = "ABSENT";
       }
@@ -242,7 +242,7 @@ const clockOut = async (req, res) => {
       if (totalHours >= 9) {
         record.status = "LATE";
       } else if (totalHours >= 5) {
-        record.status = "HALF DAY";
+        record.status = "HALFDAY";
       } else {
         record.status = "ABSENT";
       }
@@ -250,7 +250,7 @@ const clockOut = async (req, res) => {
       if (totalHours >= 9) {
         record.status = "PRESENT";
       } else if (totalHours >= 5) {
-        record.status = "HALF DAY";
+        record.status = "HALFDAY";
       } else {
         record.status = "ABSENT";
       }
@@ -564,9 +564,9 @@ const updateAttendanceRecord = async (req, res) => {
       const totalMinutes = (hour * 60) + minute;
       
       if (totalMinutes >= 600) {
-        record.status = "HALF DAY";
+        record.status = "HALFDAY";
       } else if (totalMinutes >= 570) {
-        record.status = "HALF DAY";
+        record.status = "HALFDAY";
       } else if (totalMinutes >= 550) {
         record.status = "LATE";
       } else {
@@ -603,12 +603,12 @@ const updateAttendanceRecord = async (req, res) => {
         lateThresholdStart.setHeaders(9, 10, 0, 0);
         
         if (loginTime >= halfDayThreshold) {
-          record.status = "HALF DAY";
+          record.status = "HALFDAY";
         } else if (loginTime > lateThresholdEnd && loginTime < halfDayThreshold) {
           if (totalHours >= 9) {
-            record.status = "HALF DAY";
+            record.status = "HALFDAY";
           } else if (totalHours >= 5) {
-            record.status = "HALF DAY";
+            record.status = "HALFDAY";
           } else {
             record.status = "ABSENT";
           }
@@ -618,7 +618,7 @@ const updateAttendanceRecord = async (req, res) => {
               record.status = "PRESENT";
             }
           } else if (totalHours >= 5) {
-            record.status = "HALF DAY";
+            record.status = "HALFDAY";
           } else {
             record.status = "ABSENT";
           }
@@ -626,7 +626,7 @@ const updateAttendanceRecord = async (req, res) => {
           if (totalHours >= 9) {
             record.status = "PRESENT";
           } else if (totalHours >= 5) {
-            record.status = "HALF DAY";
+            record.status = "HALFDAY";
           } else {
             record.status = "ABSENT";
           }
@@ -738,11 +738,22 @@ const createManualAttendance = async (req, res) => {
     });
     
     if (existingAttendance) {
-      return res.status(400).json({ 
-        message: "Attendance already exists for this user on this date",
-        data: existingAttendance
-      });
-    }
+  existingAttendance.status = status ? status.toUpperCase() : existingAttendance.status;
+  existingAttendance.inTime = inTime ? new Date(inTime) : existingAttendance.inTime;
+  existingAttendance.outTime = outTime ? new Date(outTime) : existingAttendance.outTime;
+  existingAttendance.lateBy = lateBy || existingAttendance.lateBy;
+  existingAttendance.earlyLeave = earlyLeave || existingAttendance.earlyLeave;
+  existingAttendance.overTime = overTime || existingAttendance.overTime;
+  existingAttendance.notes = notes || existingAttendance.notes;
+
+  await existingAttendance.save();
+
+  return res.status(200).json({
+    message: "Attendance updated successfully",
+    data: existingAttendance
+  });
+}
+
     
     const attendance = new Attendance({
       user,
@@ -1007,7 +1018,7 @@ const getAttendanceStats = async (req, res) => {
           },
           halfDay: {
             $sum: {
-              $cond: [{ $eq: ["$status", "HALF DAY"] }, 1, 0]
+              $cond: [{ $eq: ["$status", "HALFDAY"] }, 1, 0]
             }
           },
           absent: {

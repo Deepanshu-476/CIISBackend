@@ -191,3 +191,38 @@ exports.getCompanyProfile = async (req, res) => {
     });
   }
 };
+// ✅ Middleware: Check Company Access
+exports.checkCompanyAccess = (req, res, next) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        message: "Not authorized"
+      });
+    }
+
+    if (!req.user.companyCode) {
+      return res.status(403).json({
+        success: false,
+        message: "Company access denied"
+      });
+    }
+
+    next();
+  } catch (error) {
+    console.error("❌ Company access middleware error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error in company access middleware"
+    });
+  }
+};
+module.exports = function (req, res, next) {
+  if (!req.user || !req.user.companyCode) {
+    return res.status(403).json({
+      success: false,
+      message: "Company access denied"
+    });
+  }
+  next();
+};

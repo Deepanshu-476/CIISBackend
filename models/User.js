@@ -169,6 +169,16 @@ const userSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: "User"
   },
+
+  // Add to your User schema
+assets: [{
+  type: mongoose.Schema.Types.ObjectId,
+  ref: 'Asset'
+}],
+currentlyAssignedAssets: [{
+  type: mongoose.Schema.Types.ObjectId,
+  ref: 'Asset'
+}],
   
   reportingManager: {
     type: mongoose.Schema.Types.ObjectId,
