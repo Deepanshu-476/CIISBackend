@@ -721,6 +721,11 @@ exports.createTaskForSelf = async (req, res) => {
     await task.populate("assignedUsers", "name role email");
     await task.populate("createdBy", "name email");
 
+    // ✅ SEND EMAIL HERE
+      if (task.assignedUsers && task.assignedUsers.length > 0) {
+        await sendTaskCreationEmail(task, task.assignedUsers);
+      }
+
     // Create notification for self
     await createNotification(
       req.user._id,
