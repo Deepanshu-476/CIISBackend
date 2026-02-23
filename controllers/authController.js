@@ -431,7 +431,7 @@ exports.register = async (req, res) => {
     const user = await User.create([{
       name: name.trim(),
       email: cleanEmail,
-      password: Password,
+      password: password,
       department,
       jobRole,
       company,
