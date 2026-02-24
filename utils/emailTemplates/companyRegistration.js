@@ -65,7 +65,7 @@ const getCompanyRegistrationEmailTemplate = (companyData, ownerData, isOwnerEmai
           100% { transform: rotate(360deg); }
         }
         .logo {
-          width: 80px;
+          width: 180px;
           height: 80px;
           background: white;
           border-radius: 12px;
@@ -77,7 +77,7 @@ const getCompanyRegistrationEmailTemplate = (companyData, ownerData, isOwnerEmai
           box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
         }
         .logo img {
-          width: 60px;
+          width: 200px;
           height: 60px;
           object-fit: contain;
         }
