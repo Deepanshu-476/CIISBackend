@@ -1,4 +1,3 @@
-
 const Attendance = require("../models/Attendance");
 const User = require("../../models/User");
 const Company = require("../../models/Company");
