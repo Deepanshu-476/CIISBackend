@@ -94,6 +94,14 @@ const checkAndMarkOverdueTasks = async () => {
   }
 };
 
+const attendanceController = require("./HR-CDS/controllers/attendanceController");
+
+setInterval(() => {
+
+ attendanceController.autoClockOut();
+
+}, 60000);
+
 // Function for daily summary
 const dailyOverdueSummary = async () => {
   try {

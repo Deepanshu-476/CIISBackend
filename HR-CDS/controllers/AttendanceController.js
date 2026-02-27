@@ -118,29 +118,41 @@ const clockIn = async (req, res) => {
       });
     }
 
-    const halfDayThreshold = new Date(now);
-    halfDayThreshold.setHours(10, 0, 0, 0);
     
-    const lateThresholdEnd = new Date(now);
-    lateThresholdEnd.setHours(9, 30, 0, 0);
-    
-    const lateThresholdStart = new Date(now);
-    lateThresholdStart.setHours(9, 10, 0, 0);
-    
-    const shiftStart = new Date(now);
-    shiftStart.setHours(9, 0, 0, 0);
+    const shiftStart = new Date();
+shiftStart.setHours(9, 0, 0, 0);
 
-    const lateBy = now > shiftStart ? formatDuration(now - shiftStart) : "00:00:00";
+const presentEnd = new Date();
+presentEnd.setHours(9, 30, 0, 0);
 
-    let status = "PRESENT";
-    
-    if (now >= halfDayThreshold) {
-      status = "HALFDAY";
-    } else if (now >= lateThresholdStart && now <= lateThresholdEnd) {
-      status = "LATE";
-    } else if (now > lateThresholdEnd && now < halfDayThreshold) {
-      status = "HALFDAY";
-    }
+const lateEnd = new Date();
+lateEnd.setHours(10, 0, 0, 0);
+
+const autoLogoutTime = new Date();
+autoLogoutTime.setHours(20, 30, 0, 0); // 8:30 PM
+
+   const lateBy =
+ now > presentEnd
+   ? formatDuration(now - shiftStart)
+   : "00:00:00";
+
+let status = "";
+
+if (now >= shiftStart && now <= presentEnd) {
+
+  status = "PRESENT";
+
+}
+else if (now > presentEnd && now <= lateEnd) {
+
+  status = "LATE";
+
+}
+else if (now > lateEnd) {
+
+  status = "HALFDAY";
+
+}
 
     const newRecord = new Attendance({
       user: userId,
@@ -599,7 +611,7 @@ const updateAttendanceRecord = async (req, res) => {
         lateThresholdEnd.setHours(9, 30, 0, 0);
         
         const lateThresholdStart = new Date(loginTime);
-        lateThresholdStart.setHeaders(9, 10, 0, 0);
+        lateThresholdStart.setHours(9, 10, 0, 0);
         
         if (loginTime >= halfDayThreshold) {
           record.status = "HALFDAY";
@@ -767,9 +779,10 @@ const createManualAttendance = async (req, res) => {
       isClockedIn: !outTime,
       companyCode: userCompanyCode // Add company code
     });
-    
-    await attendance.save();
-    
+
+
+   await attendance.save();
+
     const populatedAttendance = await Attendance.findById(attendance._id)
       .populate({
         path: "user",
@@ -976,6 +989,68 @@ const markDailyAbsent = async () => {
   }
 };
 
+// AUTO CLOCK OUT (Cron Job) - 8:30 PM
+const autoClockOut = async () => {
+  try {
+
+    const now = new Date();
+
+    const autoLogoutTime = new Date();
+    autoLogoutTime.setHours(20, 30, 0, 0); // 8:30 PM
+
+    // sirf 8:30 ke baad run kare
+    if (now < autoLogoutTime) return;
+
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+
+    // find users who are still clocked in
+    const records = await Attendance.find({
+      date: { $gte: todayStart, $lte: todayEnd },
+      isClockedIn: true
+    });
+
+    for (const record of records) {
+
+      const logoutTime = autoLogoutTime;
+
+      const totalMs = logoutTime - new Date(record.inTime);
+
+      record.outTime = logoutTime;
+
+      record.isClockedIn = false;
+
+      record.totalTime = formatDuration(totalMs);
+
+      const shiftEnd = new Date(logoutTime);
+      shiftEnd.setHours(19, 0, 0, 0);
+
+      record.overTime =
+        logoutTime > shiftEnd
+          ? formatDuration(logoutTime - shiftEnd)
+          : "00:00:00";
+
+      record.earlyLeave =
+        logoutTime < shiftEnd
+          ? formatDuration(shiftEnd - logoutTime)
+          : "00:00:00";
+
+      await record.save();
+
+    }
+
+    console.log("✅ Auto clock-out completed");
+
+  } catch (err) {
+
+    console.error("Auto clock-out error:", err.message);
+
+  }
+};
+
 // Get Attendance Statistics - UPDATED
 const getAttendanceStats = async (req, res) => {
   try {
@@ -1061,6 +1136,7 @@ module.exports = {
   createManualAttendance,
   getAttendanceByUser,
   markDailyAbsent,
-  getAttendanceStats
+  getAttendanceStats,
+  autoClockOut   // ✅ ADD THIS
 };
 console.log("✅ AttendanceController.js loaded successfully");
