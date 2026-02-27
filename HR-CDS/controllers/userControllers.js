@@ -3,6 +3,8 @@ const User = require('../../models/User');
 const Department = require('../../models/Department');
 const bcrypt = require('bcryptjs');
 const { errorResponse, successResponse } = require('../utils/responseHelper.js');
+const Task = require('../../HR-CDS/models/Task.js');
+
 
 // All field names for consistent usage
 const USER_FIELDS = {
@@ -818,99 +820,70 @@ exports.getCompanydepartmentUsers = async (req, res) => {
 };
 exports.getCompanyUsers = async (req, res) => {
   try {
-    console.log("📊 GET request received for company users");
-    
     const currentUser = req.user;
-    
+
     if (!currentUser) {
       return errorResponse(res, 401, "Authentication required");
     }
-    
+
     const companyId = currentUser.company;
-    
+
     if (!companyId) {
       return errorResponse(res, 400, "User does not belong to any company");
     }
-    
-    // Build base filter
-    const filter = { 
+
+    const filter = {
       isActive: true,
       company: companyId
     };
-    
-    // OPTIONAL: Add filters if query parameters exist
-    if (req.query.department) {
-      filter.department = req.query.department;
-    }
-    
-    if (req.query.jobRole) {
-      filter.jobRole = req.query.jobRole;
-    }
-    
-    if (req.query.employeeType) {
-      filter.employeeType = req.query.employeeType;
-    }
-    
-    if (req.query.search) {
-      filter.$or = [
-        { name: { $regex: req.query.search, $options: 'i' } },
-        { email: { $regex: req.query.search, $options: 'i' } },
-        { phone: { $regex: req.query.search, $options: 'i' } }
-      ];
-    }
-    
-    console.log("🔍 Fetching users for company ID:", companyId, "with filter:", filter);
-    
+
     const users = await User.find(filter)
-      .select('-password -resetToken -resetTokenExpiry')
-      .populate('department', 'name description')
-      .populate('company', 'name companyCode companyEmail companyPhone companyAddress logo')
-      .populate('createdBy', 'name email')
-      .sort({ createdAt: -1 });
-    
-    console.log(`✅ Found ${users.length} users`);
-    
+      .select("-password -resetToken -resetTokenExpiry")
+      .populate("department", "name description")
+      .populate("company", "name companyCode");
+
+    // ✅ YEH PART IMPORTANT HAI
+    const usersWithStats = await Promise.all(
+      users.map(async (user) => {
+
+        const total = await Task.countDocuments({
+          assignedTo: user._id,
+          company: companyId
+        });
+
+        const completed = await Task.countDocuments({
+          assignedTo: user._id,
+          company: companyId,
+          status: "completed"
+        });
+
+        const completionRate =
+          total > 0 ? Math.round((completed / total) * 100) : 0;
+
+        return {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          company: user.company,
+          department: user.department,
+          jobRole: user.jobRole,
+          phone: user.phone,
+          taskStats: {
+            total,
+            completed,
+            completionRate
+          }
+        };
+      })
+    );
+
     return successResponse(res, 200, {
-      company: {
-        id: companyId,
-        name: currentUser.companyName || 'Company'
-      },
-      count: users.length,
-      users: users.map(user => ({
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        company: user.company,
-        department: user.department,
-        jobRole: user.jobRole,
-        phone: user.phone,
-        address: user.address,
-        gender: user.gender,
-        maritalStatus: user.maritalStatus,
-        dob: user.dob,
-        employeeType: user.employeeType,
-        salary: user.salary,
-        accountNumber: user.accountNumber,
-        ifsc: user.ifsc,
-        bankName: user.bankName,
-        bankHolderName: user.bankHolderName,
-        fatherName: user.fatherName,
-        motherName: user.motherName,
-        emergencyName: user.emergencyName,
-        emergencyPhone: user.emergencyPhone,
-        emergencyRelation: user.emergencyRelation,
-        emergencyAddress: user.emergencyAddress,
-        properties: user.properties,
-        propertyOwned: user.propertyOwned,
-        additionalDetails: user.additionalDetails,
-        isActive: user.isActive,
-        createdAt: user.createdAt,
-        updatedAt: user.updatedAt
-      }))
+      count: usersWithStats.length,
+      users: usersWithStats
     });
-    
+
   } catch (err) {
-    console.error("❌ Get company users error:", err.message);
+    console.error("❌ Get company users error:", err);
     return errorResponse(res, 500, "Failed to fetch company users");
   }
 };

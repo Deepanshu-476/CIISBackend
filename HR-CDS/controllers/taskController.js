@@ -1661,17 +1661,8 @@ exports.getTaskActivityLogs = async (req, res) => {
       });
     }
 
-    // Check if user is authorized to view task logs
-    const isAuthorized = task.assignedUsers.some(userId => 
-      userId.toString() === req.user._id.toString()
-    ) || task.createdBy.toString() === req.user._id.toString();
-
-    if (!isAuthorized) {
-      return res.status(403).json({ 
-        success: false,
-        error: 'Not authorized to view activity logs for this task' 
-      });
-    }
+    // 🔥 REMOVE THE AUTHORIZATION CHECK COMPLETELY
+    // किसी को भी activity logs देखने दो
 
     const logs = await ActivityLog.find({ task: taskId })
       .populate('user', 'name role email')
@@ -2620,7 +2611,7 @@ exports.getDepartmentUsersWithTaskCounts = async (req, res) => {
 exports.getUserTasks = async (req, res) => {
   try {
     const { userId } = req.params;
-    const { status, search, period = 'all' } = req.query;
+    const { status, search, period = 'today' } = req.query;
 
     const currentUser = await User.findById(req.user.id).lean();
     if (!currentUser) {
@@ -2650,7 +2641,7 @@ exports.getUserTasks = async (req, res) => {
 
     // Date filter
     let dateFilter = {};
-    if (period !== 'all') {
+    if (period !== 'today') {
       const now = new Date();
       switch (period) {
         case 'today':
