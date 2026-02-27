@@ -563,22 +563,108 @@ exports.updateLeaveStatus = async (req, res) => {
 // ============================================
 // DELETE LEAVE - ONLY OWNER
 // ============================================
+// exports.deleteLeave = async (req, res) => {
+//   try {
+//     const { id } = req.params;
+//     const currentUser = req.user;
+//     const userId = currentUser._id;
+//     const userRole = currentUser.companyRole || currentUser.role || '';
+//     const isOwner = currentUser.companyRole === 'Owner' || currentUser.companyRole === 'owner' || currentUser.companyRole === 'OWNER';
+
+//     console.log('🗑️ ========== DELETE LEAVE ==========');
+//     console.log('📋 Leave ID:', id);
+//     console.log('👤 Requested By:', userId);
+//     console.log('👑 Is Owner:', isOwner);
+
+//     // 🔥 🔥 🔥 CRITICAL: ONLY OWNER CAN DELETE LEAVES 🔥 🔥 🔥
+//     if (!isOwner) {
+//       console.log('❌ ACCESS DENIED - Not Owner. Role:', userRole);
+//       return res.status(403).json({
+//         success: false,
+//         error: 'You do not have permission to delete leave. Only Company Owner can perform this action.'
+//       });
+//     }
+
+//     console.log('👑 OWNER ACCESS GRANTED - Proceeding with deletion');
+
+//     // Find the leave
+//     const leave = await Leave.findById(id).populate('user', 'email name');
+
+//     if (!leave) {
+//       return res.status(404).json({
+//         success: false,
+//         error: 'Leave not found'
+//       });
+//     }
+
+//     // ✅ Send deletion email (optional)
+//     try {
+//       if (typeof sendLeaveDeletedEmail === 'function') {
+//         await sendLeaveDeletedEmail(
+//           leave.user.email,
+//           leave.user.name,
+//           leave._id.toString(),
+//           leave.type,
+//           leave.startDate,
+//           leave.endDate,
+//           leave.reason
+//         );
+//         console.log('📧 Leave deletion email sent');
+//       }
+//     } catch (emailError) {
+//       console.error('❌ Failed to send deletion email:', emailError);
+//     }
+
+//     // Delete the leave
+//     await Leave.findByIdAndDelete(id);
+
+//     console.log('✅ Leave deleted successfully:', id);
+//     console.log('🗑️ ========== DELETE COMPLETE ==========');
+
+//     res.status(200).json({
+//       success: true,
+//       message: 'Leave deleted successfully'
+//     });
+
+//   } catch (error) {
+//     console.error('❌ Error deleting leave:', error);
+//     res.status(500).json({
+//       success: false,
+//       error: 'Server error while deleting leave'
+//     });
+//   }
+// };
+
+
+
+
 exports.deleteLeave = async (req, res) => {
   try {
     const { id } = req.params;
-    const currentUser = req.user;
-    const userId = currentUser._id;
-    const userRole = currentUser.companyRole || currentUser.role || '';
-    const isOwner = currentUser.companyRole === 'Owner' || currentUser.companyRole === 'owner' || currentUser.companyRole === 'OWNER';
-
+    
+    // ✅ Frontend se aaye user data ko headers se lo
+    const userId = req.headers['x-user-id'] || req.user?._id;
+    const userCompanyRole = req.headers['x-user-company-role'] || req.user?.companyRole || req.user?.role || '';
+    const userCompanyId = req.headers['x-user-company-id'];
+    
+    // ✅ Debugging ke liye
     console.log('🗑️ ========== DELETE LEAVE ==========');
     console.log('📋 Leave ID:', id);
     console.log('👤 Requested By:', userId);
-    console.log('👑 Is Owner:', isOwner);
+    console.log('👑 User Company Role:', userCompanyRole); // ✅ Should be "Owner"
+    console.log('🏢 User Company ID:', userCompanyId);
+    console.log('📦 Headers Received:', {
+      'x-user-id': req.headers['x-user-id'],
+      'x-user-company-role': req.headers['x-user-company-role'],
+      'x-user-role': req.headers['x-user-role'],
+      'x-user-company-id': req.headers['x-user-company-id']
+    });
 
-    // 🔥 🔥 🔥 CRITICAL: ONLY OWNER CAN DELETE LEAVES 🔥 🔥 🔥
+    // ✅ CRITICAL: Owner check - case insensitive
+    const isOwner = userCompanyRole?.toLowerCase() === 'owner';
+
     if (!isOwner) {
-      console.log('❌ ACCESS DENIED - Not Owner. Role:', userRole);
+      console.log('❌ ACCESS DENIED - Not Owner. Role:', userCompanyRole);
       return res.status(403).json({
         success: false,
         error: 'You do not have permission to delete leave. Only Company Owner can perform this action.'
@@ -594,6 +680,15 @@ exports.deleteLeave = async (req, res) => {
       return res.status(404).json({
         success: false,
         error: 'Leave not found'
+      });
+    }
+
+    // ✅ Optional: Verify that leave belongs to same company
+    if (userCompanyId && leave.company?.toString() !== userCompanyId) {
+      console.log('❌ Company mismatch - Leave belongs to different company');
+      return res.status(403).json({
+        success: false,
+        error: 'You can only delete leaves from your own company'
       });
     }
 
@@ -634,7 +729,6 @@ exports.deleteLeave = async (req, res) => {
     });
   }
 };
-
 // 🔹 Get Leaves with Status Filter
 exports.getLeavesWithStatus = async (req, res) => {
   console.log("➡️ getLeavesWithStatus controller called");

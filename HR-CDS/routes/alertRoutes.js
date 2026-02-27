@@ -22,10 +22,10 @@ router.get("/", protect, alertController.getAlerts);
 router.get("/unread/count", protect, alertController.getUnreadCount);
 router.patch("/:id/read", protect, alertController.markAsRead);
 
-// Protected routes (admin/hr/manager only)
-router.post("/", protect, canManageAlerts, alertController.addAlert);
-router.put("/:id", protect, canManageAlerts, alertController.updateAlert);
-router.delete("/:id", protect , canManageAlerts, alertController.deleteAlert);
+
+router.post("/", protect, alertController.addAlert);
+router.put("/:id", protect, alertController.updateAlert);
+router.delete("/:id", protect ,  alertController.deleteAlert);
 
 
 
