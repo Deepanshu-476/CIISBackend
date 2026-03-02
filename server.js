@@ -4,10 +4,15 @@ const cors = require("cors");
 const connectDB = require("./config/db");
 const path = require("path");
 const schedule = require('node-schedule');
+const http = require('http');
+const socketIo = require('socket.io');
 
 dotenv.config();
 
 const app = express();
+
+// Create HTTP server
+const server = http.createServer(app);
 
 // ✅ Trust proxy for production
 app.set("trust proxy", 1);
@@ -20,6 +25,46 @@ const Task = require("./HR-CDS/models/Task");
 const Notification = require("./HR-CDS/models/Notification");
 const Attendance = require("./HR-CDS/models/Attendance");
 const User = require("./models/User");
+
+// ==================== SOCKET.IO INITIALIZATION ====================
+// Initialize Socket.IO
+const io = socketIo(server, {
+  cors: {
+    origin: (origin, callback) => {
+      const allowedOrigins = [
+        "https://cds.ciisnetwork.in",
+        "http://localhost:5173",
+        "http://localhost:5174", // ✅ Added for new port
+        "http://localhost:5175",
+        "http://147.93.106.84",
+        "http://localhost:8080"
+      ];
+      // Allow requests with no origin (like mobile apps, curl, postman)
+      if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+        callback(null, true);
+      } else {
+        console.log(`❌ Socket CORS blocked: ${origin}`);
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"], // ✅ Added all methods
+    allowedHeaders: ["Content-Type", "Authorization"]
+  },
+  transports: ['websocket', 'polling'],
+  allowEIO3: true,
+  pingTimeout: 60000,
+  pingInterval: 25000
+});
+
+// Make io globally available
+global.io = io;
+
+// ✅ FIXED: Correct path for socket initializer
+const initializeSocket = require('./HR-CDS/socket/index.js');
+
+// Initialize socket with our configuration
+initializeSocket(io);
 
 // ==================== TASK OVERDUE CRON JOBS ====================
 
@@ -57,24 +102,52 @@ const checkAndMarkOverdueTasks = async () => {
           await task.save();
           markedCount++;
           
-          // Send notifications to assigned users
-          for (const userId of task.assignedUsers) {
+          // ✅ FIXED: Send notifications to assigned users with proper error handling
+          for (const assignedUser of task.assignedUsers) {
             try {
+              // Get user ID properly
+              const userId = assignedUser._id || assignedUser.id || assignedUser;
+              
+              if (!userId) {
+                console.error('❌ Invalid user object:', assignedUser);
+                continue;
+              }
+
+              console.log(`📨 Creating notification for user: ${userId}`);
+
+              // Create notification in database
               await Notification.create({
-                user: userId._id,
+                recipient: userId, // ✅ Using 'recipient' field
                 title: 'Task Marked as Overdue',
                 message: `Task "${task.title}" has been automatically marked as overdue.`,
                 type: 'task_overdue',
-                relatedTask: task._id,
-                metadata: {
-                  dueDate: task.dueDateTime,
+                data: {
+                  taskId: task._id,
                   taskTitle: task.title,
+                  dueDate: task.dueDateTime,
                   markedAt: new Date()
                 }
               });
+              
               notificationCount++;
+              console.log(`✅ Notification created for user ${userId}`);
+
+              // 🔔 Socket event for real-time notification
+              if (global.io) {
+                global.io.to(`user:${userId}`).emit('notification:new', {
+                  type: 'task_overdue',
+                  title: 'Task Marked as Overdue',
+                  message: `Task "${task.title}" has been automatically marked as overdue.`,
+                  data: {
+                    taskId: task._id,
+                    taskTitle: task.title,
+                    dueDate: task.dueDateTime
+                  }
+                });
+                console.log(`📢 Socket event sent to user:${userId}`);
+              }
             } catch (notifyError) {
-              console.error(`Error creating notification for user ${userId._id}:`, notifyError);
+              console.error(`❌ Error creating notification for user:`, notifyError.message);
             }
           }
         }
@@ -97,9 +170,7 @@ const checkAndMarkOverdueTasks = async () => {
 const attendanceController = require("./HR-CDS/controllers/attendanceController");
 
 setInterval(() => {
-
  attendanceController.autoClockOut();
-
 }, 60000);
 
 // Function for daily summary
@@ -184,6 +255,18 @@ const markPastAbsentRecords = async () => {
             });
             
             await absentRecord.save();
+
+            // 🔔 Socket event for attendance notification
+            if (global.io) {
+              global.io.to(`user:${user._id}`).emit('attendance:marked', {
+                type: 'attendance_absent',
+                message: 'You were marked absent for ' + currentDate.toLocaleDateString(),
+                data: {
+                  date: currentDate,
+                  status: 'ABSENT'
+                }
+              });
+            }
           }
         }
         
@@ -233,6 +316,18 @@ const markDailyAbsent = async () => {
           });
           
           await absentRecord.save();
+
+          // 🔔 Socket event for today's absent marking
+          if (global.io) {
+            global.io.to(`user:${user._id}`).emit('attendance:marked', {
+              type: 'attendance_absent',
+              message: 'You have been marked absent for today',
+              data: {
+                date: today,
+                status: 'ABSENT'
+              }
+            });
+          }
         }
       }
     }
@@ -271,12 +366,13 @@ setTimeout(async () => {
 }, 10000);
 
 // ==================== CORS CONFIGURATION ====================
-// ✅ Fixed CORS Configuration
 const corsOptions = {
   origin: (origin, callback) => {
     const allowedOrigins = [
       "https://cds.ciisnetwork.in",
       "http://localhost:5173",
+      "http://localhost:5174",
+      "http://localhost:5175",
       "http://147.93.106.84",
       "http://localhost:8080"
     ];
@@ -319,15 +415,13 @@ app.use("/api/users", require("./HR-CDS/routes/userRoutes.js"));
 app.use("/api/departments", require("./routes/Department.routes.js"));
 app.use("/api/users/profile", require("./HR-CDS/routes/profileRoute.js"));
 app.use("/api/alerts", require("./HR-CDS/routes/alertRoutes.js"));
-// app.use("/api/holidays", require("./HR-CDS/routes/Holiday.js"));
-  app.use("/api/groups", require("./HR-CDS/routes/groupRoutes.js"));
+app.use("/api/groups", require("./HR-CDS/routes/groupRoutes.js"));
 app.use("/api/projects", require("./HR-CDS/routes/projectRoutes.js"));
-// app.use("/api/notifications", require("./HR-CDS/routes/notificationRoutes.js"));
 app.use("/api/clientsservice", require("./HR-CDS/routes/clientRoutes.js"));
 app.use("/api/clienttasks", require("./HR-CDS/routes/clientTask.js"));
 app.use('/api/menu-access', require("./routes/menuAccess.js"));
 app.use('/api/menu-items', require("./routes/menuItems.js"));
-app.use('/api/company', require("./routes/companyRoutes.js")); // ✅ Only one company route
+app.use('/api/company', require("./routes/companyRoutes.js"));
 app.use('/api/job-roles', require("./routes/jobRoleRoutes.js"));
 app.use('/api/superAdmin', require("./routes/superAdmin.js"));
 app.use("/api/meetings", require("./HR-CDS/routes/meetingRoutes.js"));
@@ -344,6 +438,7 @@ app.get("/", (req, res) => {
     version: "1.0.0",
     status: "active",
     basePath: "/api",
+    socket: global.io ? "connected" : "disconnected",
     timestamp: new Date().toISOString()
   });
 });
@@ -353,13 +448,37 @@ app.get("/api", (req, res) => {
   res.json({ 
     message: "✅ API is live",
     status: "running",
+    socket: global.io ? "connected" : "disconnected",
     timestamp: new Date().toISOString(),
     services: {
       task_overdue_cron: "active",
       attendance_cron: "active",
+      socket_io: global.io ? "active" : "inactive",
       database: "MongoDB connected"
     }
   });
+});
+
+// ✅ Socket.IO status endpoint
+app.get("/api/socket-status", (req, res) => {
+  try {
+    const socketStatus = {
+      initialized: !!global.io,
+      connections: global.io?.engine?.clientsCount || 0,
+      rooms: global.io?.sockets?.adapter?.rooms?.size || 0
+    };
+    
+    res.json({
+      success: true,
+      data: socketStatus,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
 });
 
 // ✅ Manual overdue check endpoint (for testing)
@@ -426,15 +545,18 @@ app.use((err, req, res, next) => {
 // ==================== START SERVER ====================
 const PORT = process.env.PORT || 3000;
 
-app.listen(PORT, () => {
+// Use server.listen instead of app.listen
+server.listen(PORT, () => {
   console.log(`
 🚀 ====================================
 ✅ Server running on port ${PORT}
 ✅ Environment: ${process.env.NODE_ENV || 'development'}
 ✅ MongoDB: Connected
+✅ Socket.IO: Initialized
 ✅ Cron Jobs: Scheduled
 ✅ Time: ${new Date().toLocaleString()}
 ✅ Base URL: http://localhost:${PORT}/api
+✅ Socket URL: ws://localhost:${PORT}
 ========================================
   `);
 });

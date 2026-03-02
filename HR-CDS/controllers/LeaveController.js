@@ -2,14 +2,23 @@
 const Leave = require('../models/Leave');
 const User = require('../../models/User');
 const Company = require('../../models/Company');
-const nodemailer = require('nodemailer'); // ✅ Add this import
+const nodemailer = require('nodemailer');
 
-// ✅ IMPORT email functions from utils - SIRF EK BAAR
+// ✅ IMPORT email functions from utils
 const { 
   sendLeaveAppliedEmail, 
-  sendLeaveStatusEmail,  // ✅ This is imported, don't redefine!
+  sendLeaveStatusEmail,
   sendLeaveDeletedEmail 
 } = require('../../utils/sendEmail');
+
+// ✅ IMPORT notification helper
+const { 
+  sendNotification, 
+  notifyCompanyOwners 
+} = require('../../HR-CDS/utils/notificationHelper');
+
+// ✅ IMPORT socket emit events
+const { emitLeaveEvents } = require('../socket/handlers/leaveHandlers');
 
 // 🔹 Apply for Leave (User)
 exports.applyLeave = async (req, res) => {
@@ -78,14 +87,14 @@ exports.applyLeave = async (req, res) => {
     await leave.save();
 
     // Get user basic info for response
-    const user = await User.findById(req.user._id).select('name email department jobRole employeeId phone');
+    const user = await User.findById(req.user._id).select('name email department jobRole employeeId phone company companyId');
 
     // Populate leave for response
     const populatedLeave = await Leave.findById(leave._id)
       .populate('user', 'name email jobRole department')
       .populate('history.by', 'name email');
 
-    // ✅ Send email notification - using IMPORTED function
+    // ✅ Send email notification
     try {
       await sendLeaveAppliedEmail(
         user.email,
@@ -99,6 +108,43 @@ exports.applyLeave = async (req, res) => {
       console.log(`✅ Leave application email sent to ${user.email}`);
     } catch (emailError) {
       console.error('❌ Failed to send application email:', emailError.message);
+    }
+
+    // ✅ 🔔 SEND NOTIFICATION TO COMPANY OWNERS/ADMINS
+    try {
+      await notifyCompanyOwners({
+        companyId: user.company || user.companyId,
+        type: 'leave_applied',
+        title: 'New Leave Application',
+        message: `${user.name} has applied for ${type} leave from ${new Date(startDate).toLocaleDateString()} to ${new Date(endDate).toLocaleDateString()}`,
+        data: {
+          leaveId: leave._id,
+          userId: user._id,
+          userName: user.name,
+          leaveType: type,
+          startDate,
+          endDate,
+          days,
+          reason
+        },
+        excludeUser: user._id
+      });
+      console.log('✅ Notification sent to company owners');
+    } catch (notifError) {
+      console.error('❌ Failed to send notification to owners:', notifError.message);
+    }
+
+    // ✅ 📢 SOCKET: Emit new leave event to admins
+    try {
+      if (global.io) {
+        emitLeaveEvents.newLeaveApplied(global.io, {
+          companyId: user.company || user.companyId,
+          leave: populatedLeave.toObject ? populatedLeave.toObject() : populatedLeave
+        });
+        console.log('📢 Socket event emitted: new leave applied');
+      }
+    } catch (socketError) {
+      console.error('❌ Failed to emit socket event:', socketError.message);
     }
 
     res.status(201).json({ 
@@ -426,10 +472,7 @@ exports.getAllLeaves = async (req, res) => {
 };
 
 // ============================================
-// UPDATE LEAVE STATUS - ONLY OWNER
-// ============================================
-// ============================================
-// UPDATE LEAVE STATUS - ONLY OWNER - SIMPLIFIED
+// UPDATE LEAVE STATUS - WITH NOTIFICATIONS & SOCKET
 // ============================================
 exports.updateLeaveStatus = async (req, res) => {
   try {
@@ -437,33 +480,21 @@ exports.updateLeaveStatus = async (req, res) => {
     const { status, remarks } = req.body;
     const currentUser = req.user;
     
-    // 🔥 CRITICAL FIX #1: LOG FULL USER OBJECT TO DEBUG
     console.log('🔄 ========== UPDATE LEAVE STATUS ==========');
     console.log('📋 Leave ID:', id);
     console.log('📋 New Status:', status);
-    console.log('👤 Current User (FULL):', {
+    console.log('👤 Current User:', {
       _id: currentUser._id,
       name: currentUser.name,
       email: currentUser.email,
-      companyRole: currentUser.companyRole, 
-      role: currentUser.role,
-      company: currentUser.company,
-      companyId: currentUser.companyId,
-      companyCode: currentUser.companyCode
+      companyRole: currentUser.companyRole
     });
 
-    // 🔥 CRITICAL FIX #2: SIMPLE OWNER CHECK - NO COMPLEX LOGIC
-    // Direct check - no fallbacks, no case conversion issues
+    // Owner check
     const isOwner = currentUser.companyRole === 'Owner';
     
-    console.log('👑 Owner Check:', {
-      companyRole: currentUser.companyRole,
-      isOwner: isOwner
-    });
-
-    // 🔥 CRITICAL FIX #3: IF NOT OWNER, REJECT IMMEDIATELY
     if (!isOwner) {
-      console.log('❌ ACCESS DENIED - User is not Owner. Role:', currentUser.companyRole);
+      console.log('❌ ACCESS DENIED - User is not Owner');
       return res.status(403).json({
         success: false,
         error: 'You do not have permission to update leave status. Only Company Owner can perform this action.'
@@ -472,8 +503,8 @@ exports.updateLeaveStatus = async (req, res) => {
 
     console.log('👑✅ OWNER ACCESS GRANTED');
 
-    // 🔥 CRITICAL FIX #4: FIND LEAVE WITHOUT COMPLEX POPULATE FIRST
-    const leave = await Leave.findById(id);
+    // Find leave with user info
+    const leave = await Leave.findById(id).populate('user', 'name email phone company companyId');
     
     if (!leave) {
       console.log('❌ Leave not found:', id);
@@ -486,10 +517,11 @@ exports.updateLeaveStatus = async (req, res) => {
     console.log('📋 Leave found:', {
       id: leave._id,
       currentStatus: leave.status,
-      userId: leave.user
+      userId: leave.user._id,
+      userName: leave.user.name
     });
 
-    // ✅ Validate status
+    // Validate status
     const validStatuses = ['Pending', 'Approved', 'Rejected', 'Cancelled'];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({
@@ -498,16 +530,16 @@ exports.updateLeaveStatus = async (req, res) => {
       });
     }
 
-    // ✅ Store old status for history
+    // Store old status
     const oldStatus = leave.status;
 
-    // ✅ Update the leave - OWNER CAN UPDATE ANY LEAVE
+    // Update the leave
     leave.status = status;
     leave.remarks = remarks || leave.remarks;
     leave.approvedBy = currentUser._id;
     leave.updatedAt = new Date();
 
-    // ✅ Add to history
+    // Add to history
     leave.history = leave.history || [];
     leave.history.push({
       action: status,
@@ -520,18 +552,82 @@ exports.updateLeaveStatus = async (req, res) => {
       at: new Date()
     });
 
-    // ✅ Save the leave
+    // Save the leave
     await leave.save();
     
     console.log('✅ Leave status updated in database');
-    console.log(`📋 Status changed: ${oldStatus} → ${status}`);
-    console.log('👤 Updated By:', currentUser.name, '(Owner)');
 
-    // ✅ Populate user and approvedBy for response
-    await leave.populate([
-      { path: 'user', select: 'name email phone' },
-      { path: 'approvedBy', select: 'name email' }
-    ]);
+    // Populate approvedBy for response
+    await leave.populate('approvedBy', 'name email');
+
+    // ✅ 🔔 SEND NOTIFICATION TO THE USER
+    try {
+      const statusMessage = status === 'Approved' ? 'approved' : 
+                           status === 'Rejected' ? 'rejected' : 
+                           status === 'Cancelled' ? 'cancelled' : 'updated';
+      
+      await sendNotification({
+        recipient: leave.user._id,
+        type: 'leave_status_changed',
+        title: `Leave ${status}`,
+        message: `Your ${leave.type} leave request from ${new Date(leave.startDate).toLocaleDateString()} to ${new Date(leave.endDate).toLocaleDateString()} has been ${statusMessage}${remarks ? ': ' + remarks : ''}`,
+        data: {
+          leaveId: leave._id,
+          userId: leave.user._id,
+          oldStatus,
+          newStatus: status,
+          leaveType: leave.type,
+          startDate: leave.startDate,
+          endDate: leave.endDate,
+          days: leave.days,
+          reason: leave.reason,
+          remarks,
+          approvedBy: {
+            id: currentUser._id,
+            name: currentUser.name,
+            email: currentUser.email
+          }
+        },
+        priority: 'high'
+      });
+      
+      console.log(`✅ Status change notification sent to ${leave.user.name}`);
+    } catch (notifError) {
+      console.error('❌ Failed to send notification to user:', notifError.message);
+    }
+
+    // ✅ SEND EMAIL NOTIFICATION
+    try {
+      await sendLeaveStatusEmail(
+        leave.user.email,
+        leave.user.name,
+        leave._id.toString(),
+        leave.type,
+        leave.startDate,
+        leave.endDate,
+        leave.days,
+        status,
+        remarks || ''
+      );
+      console.log(`✅ Status change email sent to ${leave.user.email}`);
+    } catch (emailError) {
+      console.error('❌ Failed to send status email:', emailError.message);
+    }
+
+    // ✅ 📢 SOCKET: Emit status change event
+    try {
+      if (global.io) {
+        emitLeaveEvents.leaveStatusChanged(global.io, {
+          leave: leave.toObject ? leave.toObject() : leave,
+          oldStatus,
+          newStatus: status,
+          updatedBy: currentUser
+        });
+        console.log('📢 Socket event emitted: leave status changed');
+      }
+    } catch (socketError) {
+      console.error('❌ Failed to emit socket event:', socketError.message);
+    }
 
     console.log('✅ ========== STATUS UPDATE SUCCESS ==========');
 
@@ -561,110 +657,27 @@ exports.updateLeaveStatus = async (req, res) => {
 };
 
 // ============================================
-// DELETE LEAVE - ONLY OWNER
+// DELETE LEAVE - WITH NOTIFICATIONS & SOCKET
 // ============================================
-// exports.deleteLeave = async (req, res) => {
-//   try {
-//     const { id } = req.params;
-//     const currentUser = req.user;
-//     const userId = currentUser._id;
-//     const userRole = currentUser.companyRole || currentUser.role || '';
-//     const isOwner = currentUser.companyRole === 'Owner' || currentUser.companyRole === 'owner' || currentUser.companyRole === 'OWNER';
-
-//     console.log('🗑️ ========== DELETE LEAVE ==========');
-//     console.log('📋 Leave ID:', id);
-//     console.log('👤 Requested By:', userId);
-//     console.log('👑 Is Owner:', isOwner);
-
-//     // 🔥 🔥 🔥 CRITICAL: ONLY OWNER CAN DELETE LEAVES 🔥 🔥 🔥
-//     if (!isOwner) {
-//       console.log('❌ ACCESS DENIED - Not Owner. Role:', userRole);
-//       return res.status(403).json({
-//         success: false,
-//         error: 'You do not have permission to delete leave. Only Company Owner can perform this action.'
-//       });
-//     }
-
-//     console.log('👑 OWNER ACCESS GRANTED - Proceeding with deletion');
-
-//     // Find the leave
-//     const leave = await Leave.findById(id).populate('user', 'email name');
-
-//     if (!leave) {
-//       return res.status(404).json({
-//         success: false,
-//         error: 'Leave not found'
-//       });
-//     }
-
-//     // ✅ Send deletion email (optional)
-//     try {
-//       if (typeof sendLeaveDeletedEmail === 'function') {
-//         await sendLeaveDeletedEmail(
-//           leave.user.email,
-//           leave.user.name,
-//           leave._id.toString(),
-//           leave.type,
-//           leave.startDate,
-//           leave.endDate,
-//           leave.reason
-//         );
-//         console.log('📧 Leave deletion email sent');
-//       }
-//     } catch (emailError) {
-//       console.error('❌ Failed to send deletion email:', emailError);
-//     }
-
-//     // Delete the leave
-//     await Leave.findByIdAndDelete(id);
-
-//     console.log('✅ Leave deleted successfully:', id);
-//     console.log('🗑️ ========== DELETE COMPLETE ==========');
-
-//     res.status(200).json({
-//       success: true,
-//       message: 'Leave deleted successfully'
-//     });
-
-//   } catch (error) {
-//     console.error('❌ Error deleting leave:', error);
-//     res.status(500).json({
-//       success: false,
-//       error: 'Server error while deleting leave'
-//     });
-//   }
-// };
-
-
-
-
 exports.deleteLeave = async (req, res) => {
   try {
     const { id } = req.params;
     
-    // ✅ Frontend se aaye user data ko headers se lo
     const userId = req.headers['x-user-id'] || req.user?._id;
     const userCompanyRole = req.headers['x-user-company-role'] || req.user?.companyRole || req.user?.role || '';
     const userCompanyId = req.headers['x-user-company-id'];
     
-    // ✅ Debugging ke liye
     console.log('🗑️ ========== DELETE LEAVE ==========');
     console.log('📋 Leave ID:', id);
     console.log('👤 Requested By:', userId);
-    console.log('👑 User Company Role:', userCompanyRole); // ✅ Should be "Owner"
+    console.log('👑 User Company Role:', userCompanyRole);
     console.log('🏢 User Company ID:', userCompanyId);
-    console.log('📦 Headers Received:', {
-      'x-user-id': req.headers['x-user-id'],
-      'x-user-company-role': req.headers['x-user-company-role'],
-      'x-user-role': req.headers['x-user-role'],
-      'x-user-company-id': req.headers['x-user-company-id']
-    });
 
-    // ✅ CRITICAL: Owner check - case insensitive
+    // Owner check
     const isOwner = userCompanyRole?.toLowerCase() === 'owner';
 
     if (!isOwner) {
-      console.log('❌ ACCESS DENIED - Not Owner. Role:', userCompanyRole);
+      console.log('❌ ACCESS DENIED - Not Owner');
       return res.status(403).json({
         success: false,
         error: 'You do not have permission to delete leave. Only Company Owner can perform this action.'
@@ -673,8 +686,8 @@ exports.deleteLeave = async (req, res) => {
 
     console.log('👑 OWNER ACCESS GRANTED - Proceeding with deletion');
 
-    // Find the leave
-    const leave = await Leave.findById(id).populate('user', 'email name');
+    // Find the leave with user info
+    const leave = await Leave.findById(id).populate('user', 'email name phone company companyId');
 
     if (!leave) {
       return res.status(404).json({
@@ -683,31 +696,78 @@ exports.deleteLeave = async (req, res) => {
       });
     }
 
-    // ✅ Optional: Verify that leave belongs to same company
-    if (userCompanyId && leave.company?.toString() !== userCompanyId) {
-      console.log('❌ Company mismatch - Leave belongs to different company');
+    // Verify company ownership
+    if (userCompanyId && leave.user.company?.toString() !== userCompanyId && 
+        leave.user.companyId?.toString() !== userCompanyId) {
+      console.log('❌ Company mismatch');
       return res.status(403).json({
         success: false,
         error: 'You can only delete leaves from your own company'
       });
     }
 
-    // ✅ Send deletion email (optional)
+    // ✅ 🔔 SEND NOTIFICATION TO USER BEFORE DELETING
     try {
-      if (typeof sendLeaveDeletedEmail === 'function') {
-        await sendLeaveDeletedEmail(
-          leave.user.email,
-          leave.user.name,
-          leave._id.toString(),
-          leave.type,
-          leave.startDate,
-          leave.endDate,
-          leave.reason
-        );
-        console.log('📧 Leave deletion email sent');
-      }
+      await sendNotification({
+        recipient: leave.user._id,
+        type: 'leave_deleted',
+        title: 'Leave Deleted',
+        message: `Your ${leave.type} leave request from ${new Date(leave.startDate).toLocaleDateString()} to ${new Date(leave.endDate).toLocaleDateString()} has been deleted by ${req.user?.name || 'Owner'}`,
+        data: {
+          leaveId: leave._id,
+          userId: leave.user._id,
+          leaveType: leave.type,
+          startDate: leave.startDate,
+          endDate: leave.endDate,
+          days: leave.days,
+          reason: leave.reason,
+          deletedBy: {
+            id: userId,
+            name: req.user?.name || 'Owner'
+          }
+        },
+        priority: 'high'
+      });
+      
+      console.log(`✅ Deletion notification sent to ${leave.user.name}`);
+    } catch (notifError) {
+      console.error('❌ Failed to send deletion notification:', notifError.message);
+    }
+
+    // ✅ SEND DELETION EMAIL
+    try {
+      await sendLeaveDeletedEmail(
+        leave.user.email,
+        leave.user.name,
+        leave._id.toString(),
+        leave.type,
+        leave.startDate,
+        leave.endDate,
+        leave.reason
+      );
+      console.log('📧 Leave deletion email sent');
     } catch (emailError) {
       console.error('❌ Failed to send deletion email:', emailError);
+    }
+
+    // ✅ 📢 SOCKET: Emit delete event before deleting
+    try {
+      if (global.io) {
+        emitLeaveEvents.leaveDeleted(global.io, {
+          leaveId: leave._id,
+          userId: leave.user._id,
+          deletedBy: req.user,
+          leaveData: {
+            type: leave.type,
+            startDate: leave.startDate,
+            endDate: leave.endDate,
+            days: leave.days
+          }
+        });
+        console.log('📢 Socket event emitted: leave deleted');
+      }
+    } catch (socketError) {
+      console.error('❌ Failed to emit socket event:', socketError.message);
     }
 
     // Delete the leave
@@ -729,6 +789,7 @@ exports.deleteLeave = async (req, res) => {
     });
   }
 };
+
 // 🔹 Get Leaves with Status Filter
 exports.getLeavesWithStatus = async (req, res) => {
   console.log("➡️ getLeavesWithStatus controller called");
@@ -1499,4 +1560,4 @@ exports.exportLeaves = async (req, res) => {
   }
 };
 
-console.log("✅ LeaveController.js loaded successfully");
+console.log("✅ LeaveController.js loaded successfully with notifications & socket.io");
