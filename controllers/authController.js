@@ -11,11 +11,29 @@ const { loginSchema } = require("../validations/authValidation");
 const OTP = require('../models/OTP');
 const emailService = require('../services/emailService');
 
+// Login OTP Model (add this if not exists)
+const LoginOTPSchema = new mongoose.Schema({
+  email: { type: String, required: true, index: true },
+  otp: { type: String, required: true },
+  tempToken: { type: String, required: true },
+  expiresAt: { type: Date, required: true, default: () => new Date(Date.now() + 5 * 60 * 1000) },
+  attempts: { type: Number, default: 0 },
+  verified: { type: Boolean, default: false },
+  createdAt: { type: Date, default: Date.now }
+});
+
+LoginOTPSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+const LoginOTP = mongoose.models.LoginOTP || mongoose.model('LoginOTP', LoginOTPSchema);
 
 // Rate limiting store for brute force protection
 const loginAttempts = new Map();
 const MAX_ATTEMPTS = 5;
 const LOCK_TIME = 15 * 60 * 1000; // 15 minutes
+
+// Helper function to generate OTP
+const generateOTP = () => {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+};
 
 // Helper function to track login attempts
 const trackLoginAttempt = (email, success = false) => {
@@ -216,104 +234,55 @@ exports.companyLogin = async (req, res) => {
       },
     });
 
-    // ✅ Get user with populated data for response
-    const userForResponse = await User.findById(user._id)
-      .select("-password -failedLoginAttempts -lockUntil")
-      .populate("department", "name")
-      .populate("company", "companyName companyCode logo")
-      .lean();
-
-    // ✅ Create token payload
-    const tokenPayload = {
-      id: user._id.toString(),
-      _id: user._id.toString(),
-      companyRole: user.companyRole,
-      email: user.email,
-      companyCode: company.companyCode,
-      role: user.role?._id || user.role,
-      jobRole: user.jobRole,
-      iat: Math.floor(Date.now() / 1000),
-    };
-
-    console.log("🔐 Company login token payload:", tokenPayload);
-
-    // ✅ Create token
-    const token = jwt.sign(
-      tokenPayload,
-      process.env.JWT_SECRET || "your-secret-key",
-      {
-        expiresIn: process.env.JWT_EXPIRE || "30d",
-      }
+    // ✅ Generate OTP for login verification
+    const otp = generateOTP();
+    const tempToken = jwt.sign(
+      { 
+        email: user.email,
+        userId: user._id,
+        purpose: 'login-verification',
+        companyCode: company.companyCode
+      },
+      process.env.JWT_SECRET + '-temp',
+      { expiresIn: '10m' }
     );
 
-    // ✅ Decode token to get actual expiration
-    const decodedToken = jwt.decode(token);
-    const tokenExpiry = decodedToken.exp;
-    
-    console.log("🔐 Company login token created. Expires at:", new Date(tokenExpiry * 1000).toISOString());
+    // ✅ Save OTP to database
+    await LoginOTP.create({
+      email: user.email,
+      otp,
+      tempToken,
+      expiresAt: new Date(Date.now() + 5 * 60 * 1000) // 5 minutes
+    });
 
-    // ✅ Prepare response
-    const response = {
+    // ✅ Send OTP via email
+    await emailService.sendEmail(
+      user.email,
+      "🔐 Company Login Verification OTP",
+      `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <h2 style="color: #2563eb;">Company Login Verification</h2>
+          <p>Hello ${user.name},</p>
+          <p>Your OTP for logging into <strong>${company.companyName}</strong> is:</p>
+          <h1 style="font-size: 36px; letter-spacing: 8px; background: #f3f4f6; padding: 20px; text-align: center; border-radius: 8px;">${otp}</h1>
+          <p>This OTP is valid for 5 minutes.</p>
+          <p>If you didn't attempt to login, please contact your company administrator immediately.</p>
+        </div>
+      `
+    );
+
+    console.log(`✅ OTP sent to ${user.email} for company login verification`);
+
+    // ✅ Return response indicating OTP verification required
+    return res.json({
       success: true,
-      message: "Company login successful",
-      token,
-      tokenType: "Bearer",
-      expiresIn: process.env.JWT_EXPIRE || "30d",
-      expiresAt: new Date(tokenExpiry * 1000).toISOString(),
-      user: {
-        _id: userForResponse._id,
-        employeeId: userForResponse.employeeId,
-        name: userForResponse.name,
-        email: userForResponse.email,
-        phone: userForResponse.phone,
-        role: userForResponse.role,
-        jobRole: userForResponse.jobRole,
-        department: userForResponse.department,
-        company: userForResponse.company?._id,
-        companyName: userForResponse.company?.companyName,
-        companyCode: userForResponse.company?.companyCode,
-        isActive: userForResponse.isActive,
-        lastLogin: new Date(),
-        createdAt: userForResponse.createdAt,
-        updatedAt: userForResponse.updatedAt
-      },
-      companyDetails: {
-        _id: company._id,
-        companyName: company.companyName,
-        companyCode: company.companyCode,
-        companyEmail: company.companyEmail,
-        companyPhone: company.companyPhone,
-        companyAddress: company.companyAddress,
-        logo: company.logo,
-        dbIdentifier: company.dbIdentifier,
-        loginUrl: company.loginUrl,
-        isActive: company.isActive,
-        subscriptionExpiry: company.subscriptionExpiry,
-        createdAt: company.createdAt,
-        updatedAt: company.updatedAt
-      },
-      metadata: {
-        timestamp: new Date().toISOString(),
-        responseTime: Date.now() - startTime,
-        companyCode: company.companyCode,
-      },
-    };
-
-    // ✅ Set HTTP-only cookie
-    res.cookie("auth_token", token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
-      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+      requiresOTP: true,
+      message: "OTP sent to your email",
+      tempToken: tempToken,
+      email: user.email,
+      companyName: company.companyName
     });
 
-    console.log("✅ Company login successful:", {
-      user: user.email,
-      company: company.companyName,
-      companyCode: company.companyCode
-    });
-    
-    return res.json(response);
   } catch (error) {
     console.error("🔥 Company login error:", error);
     console.error("🔥 Error stack:", error.stack);
@@ -424,9 +393,6 @@ exports.register = async (req, res) => {
     // Generate employee ID
     const employeeId = `EMP${Date.now()}${Math.floor(Math.random() * 1000)}`;
 
-    // Hash password
-    
-
     // Create user in session
     const user = await User.create([{
       name: name.trim(),
@@ -501,7 +467,7 @@ exports.register = async (req, res) => {
   }
 };
 
-// ✅ Enhanced Login with rate limiting
+// ✅ Enhanced Login with rate limiting and OTP verification
 exports.login = async (req, res) => {
   const startTime = Date.now();
   const { email, password, companyCode, companyIdentifier } = req.body;
@@ -529,8 +495,7 @@ exports.login = async (req, res) => {
     const user = await User.findOne({ email: cleanEmail })
       .select("+password +isActive +loginAttempts +lockUntil")
       .populate("department", "name")
-      .populate("company", "companyName companyCode isActive subscriptionExpiry logo companyEmail companyPhone companyAddress dbIdentifier loginUrl")
-     
+      .populate("company", "companyName companyCode isActive subscriptionExpiry logo companyEmail companyPhone companyAddress dbIdentifier loginUrl");
 
     if (!user) {
       console.log("❌ User not found:", cleanEmail);
@@ -679,119 +644,63 @@ exports.login = async (req, res) => {
       console.log("ℹ️ No company code provided, proceeding with general login");
     }
 
-    // ✅ Reset failed attempts on successful login
+    // ✅ Reset failed attempts on successful password verification
     await User.findByIdAndUpdate(user._id, {
       $set: {
         failedLoginAttempts: 0,
         lockUntil: null,
-        lastLogin: new Date(),
       },
     });
 
-    // ✅ Get user with populated data for response
-    const userForResponse = await User.findById(user._id)
-      .select("-password -loginAttempts -lockUntil")
-      .populate("department", "name")
-      .populate("company", "companyName companyCode logo")
-     
-
-    // ✅ Create token payload WITHOUT exp field (let jwt handle it)
-    const tokenPayload = {
-      id: user._id.toString(), // ✅ CRITICAL: यह field authMiddleware में use होता है
-      _id: user._id.toString(), // ✅ Backup field
-      email: user.email,
-      companyCode: user.companyCode || (user.company && user.company.companyCode),
-      role: user.role?._id || user.role,
-      jobRole: user.jobRole,
-      iat: Math.floor(Date.now() / 1000),
-      // ❌ REMOVE exp field from here
-    };
-
-    console.log("🔐 Token payload:", tokenPayload);
-
-    // ✅ Create token - let jwt add the exp field automatically
-    const token = jwt.sign(
-      tokenPayload,
-      process.env.JWT_SECRET || "your-secret-key",
-      {
-        expiresIn: process.env.JWT_EXPIRE || "30d",
-      }
+    // ✅ Generate OTP for login verification
+    const otp = generateOTP();
+    const tempToken = jwt.sign(
+      { 
+        email: user.email,
+        userId: user._id,
+        purpose: 'login-verification',
+        companyCode: user.companyCode || (user.company && user.company.companyCode)
+      },
+      process.env.JWT_SECRET + '-temp',
+      { expiresIn: '10m' }
     );
 
-    // ✅ Decode token to get actual expiration
-    const decodedToken = jwt.decode(token);
-    const tokenExpiry = decodedToken.exp;
-    
-    console.log("🔐 Token created successfully. Expires at:", new Date(tokenExpiry * 1000).toISOString());
+    // ✅ Save OTP to database
+    await LoginOTP.create({
+      email: user.email,
+      otp,
+      tempToken,
+      expiresAt: new Date(Date.now() + 5 * 60 * 1000) // 5 minutes
+    });
 
-    // ✅ Prepare company details for response
-    const companyDetails = user.company ? {
-      _id: user.company._id,
-      companyName: user.company.companyName,
-      companyCode: user.company.companyCode,
-      companyEmail: user.company.companyEmail,
-      companyPhone: user.company.companyPhone,
-      companyAddress: user.company.companyAddress,
-      logo: user.company.logo,
-      
-      dbIdentifier: user.company.dbIdentifier,
-      loginUrl: user.company.loginUrl,
-      isActive: user.company.isActive,
-      subscriptionExpiry: user.company.subscriptionExpiry,
-      createdAt: user.company.createdAt,
-      updatedAt: user.company.updatedAt
-    } : null;
+    // ✅ Send OTP via email
+    await emailService.sendEmail(
+      user.email,
+      "🔐 Login Verification OTP",
+      `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <h2 style="color: #2563eb;">Login Verification</h2>
+          <p>Hello ${user.name},</p>
+          <p>Your OTP for login verification is:</p>
+          <h1 style="font-size: 36px; letter-spacing: 8px; background: #f3f4f6; padding: 20px; text-align: center; border-radius: 8px;">${otp}</h1>
+          <p>This OTP is valid for 5 minutes.</p>
+          <p>If you didn't attempt to login, please ignore this email.</p>
+        </div>
+      `
+    );
 
-    // ✅ Prepare response
-    const response = {
+    console.log(`✅ OTP sent to ${user.email} for login verification`);
+
+    // ✅ Return response indicating OTP verification required
+    return res.json({
       success: true,
-      message: "Login successful",
-      token,
-      tokenType: "Bearer",
-      expiresIn: process.env.JWT_EXPIRE || "30d",
-      expiresAt: new Date(tokenExpiry * 1000).toISOString(),
-      user: {
-        _id: userForResponse._id,
-        employeeId: userForResponse.employeeId,
-        name: userForResponse.name,
-        email: userForResponse.email,
-        phone: userForResponse.phone,
-        role: userForResponse.role,
-        jobRole: userForResponse.jobRole,
-        department: userForResponse.department,
-        company: userForResponse.company?._id,
-        companyName: userForResponse.company?.companyName,
-        companyCode: userForResponse.companyCode || (userForResponse.company && userForResponse.company.companyCode),
-        isActive: userForResponse.isActive,
-        lastLogin: new Date(),
-        companyRole: userForResponse.companyRole,
-        createdAt: userForResponse.createdAt,
-        updatedAt: userForResponse.updatedAt
-      },
-      companyDetails: companyDetails,
-      metadata: {
-        timestamp: new Date().toISOString(),
-        responseTime: Date.now() - startTime,
-        companyCode: providedCompanyCode || "general",
-      },
-    };
-
-    // ✅ Set HTTP-only cookie
-    res.cookie("auth_token", token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
-      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days (matches token expiry)
+      requiresOTP: true,
+      message: "OTP sent to your email",
+      tempToken: tempToken,
+      email: user.email,
+      companyName: user.company?.companyName || "CIIS NETWORK"
     });
 
-    console.log("✅ Login successful for:", {
-      user: user.email,
-      userId: user._id,
-      company: user.company?.companyName || "No company",
-      companyCode: user.companyCode
-    });
-    
-    return res.json(response);
   } catch (error) {
     console.error("🔥 Login error:", error);
     console.error("🔥 Error stack:", error.stack);
@@ -815,136 +724,363 @@ exports.login = async (req, res) => {
   }
 };
 
-// ✅ Enhanced Forgot Password with token expiry
-exports.forgotPassword = async (req, res) => {
+// ✅ Verify Login OTP
+exports.verifyLoginOTP = async (req, res) => {
   try {
-    const { email } = req.body;
-    const cleanEmail = email?.trim().toLowerCase();
+    const { email, otp, tempToken } = req.body;
 
-    if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
-      return errorResponse(res, 400, "Please provide a valid email address");
-    }
-
-    const user = await User.findOne({ email: cleanEmail });
-    
-    if (!user) {
-      // For security, don't reveal if email exists
-      return res.status(200).json({
-        success: true,
-        message: "If an account exists with this email, a reset link has been sent"
+    if (!email || !otp || !tempToken) {
+      return res.status(400).json({
+        success: false,
+        message: "Email, OTP and tempToken are required"
       });
     }
 
-    // Generate reset token with expiry
-    const resetToken = crypto.randomBytes(32).toString('hex');
-    const resetTokenExpiry = Date.now() + 3600000; // 1 hour
-    
-    user.resetPasswordToken = resetToken;
-    user.resetPasswordExpires = resetTokenExpiry;
+    // ✅ Verify tempToken
+    let decoded;
+    try {
+      decoded = jwt.verify(tempToken, process.env.JWT_SECRET + '-temp');
+    } catch (err) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid or expired session"
+      });
+    }
+
+    // ✅ Check if email matches
+    if (decoded.email !== email) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid session"
+      });
+    }
+
+    // ✅ Find and verify OTP
+    const otpRecord = await LoginOTP.findOne({
+      email,
+      otp,
+      tempToken,
+      verified: false
+    });
+
+    if (!otpRecord) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid OTP"
+      });
+    }
+
+    // ✅ Check expiry
+    if (otpRecord.expiresAt < new Date()) {
+      await LoginOTP.deleteOne({ _id: otpRecord._id });
+      return res.status(400).json({
+        success: false,
+        message: "OTP has expired"
+      });
+    }
+
+    // ✅ Check attempts
+    if (otpRecord.attempts >= 3) {
+      await LoginOTP.deleteOne({ _id: otpRecord._id });
+      return res.status(429).json({
+        success: false,
+        message: "Too many failed attempts. Please login again."
+      });
+    }
+
+    // ✅ Increment attempts
+    otpRecord.attempts += 1;
+    await otpRecord.save();
+
+    // ✅ Mark as verified
+    otpRecord.verified = true;
+    await otpRecord.save();
+
+    // ✅ Get user with populated data
+    const user = await User.findOne({ email })
+      .select("-password -loginAttempts -lockUntil")
+      .populate("department", "name")
+      .populate("company", "companyName companyCode logo companyEmail companyPhone companyAddress");
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    // ✅ Update last login
+    user.lastLogin = new Date();
     await user.save();
 
-    // Create reset URL
-    const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}&email=${encodeURIComponent(cleanEmail)}`;
+    // ✅ Create final token
+    const tokenPayload = {
+      id: user._id.toString(),
+      _id: user._id.toString(),
+      email: user.email,
+      companyCode: user.companyCode || (user.company && user.company.companyCode),
+      role: user.role?._id || user.role,
+      jobRole: user.jobRole,
+    };
 
-    // Send email
-    await sendEmail(
-      cleanEmail,
-      "🔐 Password Reset Request",
+    const finalToken = jwt.sign(
+      tokenPayload,
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRE || "30d" }
+    );
+
+    // ✅ Clean up OTP records
+    await LoginOTP.deleteMany({ email });
+
+    // ✅ Prepare company details
+    const companyDetails = user.company ? {
+      _id: user.company._id,
+      companyName: user.company.companyName,
+      companyCode: user.company.companyCode,
+      companyEmail: user.company.companyEmail,
+      companyPhone: user.company.companyPhone,
+      companyAddress: user.company.companyAddress,
+      logo: user.company.logo,
+      isActive: user.company.isActive,
+      subscriptionExpiry: user.company.subscriptionExpiry,
+    } : null;
+
+    // ✅ Prepare response
+    const response = {
+      success: true,
+      message: "Login successful",
+      token: finalToken,
+      tokenType: "Bearer",
+      expiresIn: process.env.JWT_EXPIRE || "30d",
+      user: {
+        _id: user._id,
+        employeeId: user.employeeId,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        jobRole: user.jobRole,
+        department: user.department,
+        company: user.company?._id,
+        companyName: user.company?.companyName,
+        companyCode: user.companyCode || (user.company && user.company.companyCode),
+        isActive: user.isActive,
+        lastLogin: user.lastLogin,
+        companyRole: user.companyRole,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt
+      },
+      companyDetails: companyDetails
+    };
+
+    // ✅ Set HTTP-only cookie
+    res.cookie("auth_token", finalToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+    });
+
+    console.log("✅ OTP verification successful for:", {
+      user: user.email,
+      userId: user._id,
+      company: user.company?.companyName || "No company"
+    });
+
+    return res.json(response);
+
+  } catch (error) {
+    console.error("🔥 OTP verification error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "OTP verification failed",
+      errorCode: "INTERNAL_SERVER_ERROR"
+    });
+  }
+};
+
+// ✅ Resend Login OTP
+exports.resendLoginOTP = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: "Email is required"
+      });
+    }
+
+    // ✅ Check rate limiting (don't allow too many resends)
+    const recentOTPs = await LoginOTP.countDocuments({
+      email,
+      createdAt: { $gt: new Date(Date.now() - 5 * 60 * 1000) }
+    });
+
+    if (recentOTPs >= 3) {
+      return res.status(429).json({
+        success: false,
+        message: "Too many OTP requests. Please try again after 5 minutes."
+      });
+    }
+
+    // ✅ Find user
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    // ✅ Delete old OTPs
+    await LoginOTP.deleteMany({ email });
+
+    // ✅ Generate new OTP and tempToken
+    const otp = generateOTP();
+    const tempToken = jwt.sign(
+      { 
+        email: user.email,
+        userId: user._id,
+        purpose: 'login-verification'
+      },
+      process.env.JWT_SECRET + '-temp',
+      { expiresIn: '10m' }
+    );
+
+    // ✅ Save new OTP
+    await LoginOTP.create({
+      email,
+      otp,
+      tempToken,
+      expiresAt: new Date(Date.now() + 5 * 60 * 1000)
+    });
+
+    // ✅ Send OTP email
+    await emailService.sendEmail(
+      email,
+      "🔐 New Login OTP",
       `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #333;">Password Reset Request</h2>
-          <p>You requested a password reset for your account.</p>
-          <p>Click the button below to reset your password (link expires in 1 hour):</p>
-          <div style="text-align: center; margin: 30px 0;">
-            <a href="${resetUrl}" 
-               style="background-color: #4CAF50; color: white; padding: 12px 24px; 
-                      text-decoration: none; border-radius: 5px; font-weight: bold;">
-              Reset Password
-            </a>
-          </div>
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <h2 style="color: #2563eb;">New Login OTP</h2>
+          <p>Hello ${user.name},</p>
+          <p>Your new OTP for login verification is:</p>
+          <h1 style="font-size: 36px; letter-spacing: 8px; background: #f3f4f6; padding: 20px; text-align: center; border-radius: 8px;">${otp}</h1>
+          <p>This OTP is valid for 5 minutes.</p>
           <p>If you didn't request this, please ignore this email.</p>
-          <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
-          <p style="color: #666; font-size: 12px;">
-            This is an automated message. Please do not reply to this email.
-          </p>
         </div>
       `
     );
 
-    return res.status(200).json({
+    return res.json({
       success: true,
-      message: "If an account exists with this email, a reset link has been sent"
+      message: "OTP resent successfully",
+      tempToken
     });
 
-  } catch (err) {
-    console.error("❌ Forgot password error:", err);
-    return errorResponse(res, 500, "Server error during password reset request");
+  } catch (error) {
+    console.error("🔥 Resend OTP error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to resend OTP"
+    });
   }
 };
 
-// ✅ Enhanced Reset Password with token validation
-exports.resetPassword = async (req, res) => {
+// ✅ Enhanced Forgot Password with OTP
+exports.forgotPassword = async (req, res) => {
   try {
-    const { token, email, password } = req.body;
+    const { email } = req.body;
 
-    if (!token || !email || !password) {
-      return errorResponse(res, 400, "All fields are required");
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(404).json({ message: 'No account found with this email.' });
     }
 
-    if (password.length < 8) {
-      return errorResponse(res, 400, "Password must be at least 8 characters");
-    }
+    const otp = generateOTP();
 
-    const user = await User.findOne({
-      email: email.toLowerCase().trim(),
-      resetPasswordToken: token,
-      resetPasswordExpires: { $gt: Date.now() }
+    await OTP.deleteMany({ email });
+
+    await OTP.create({
+      email,
+      otp,
+      expiresAt: new Date(Date.now() + 5 * 60 * 1000)
     });
 
-    if (!user) {
-      return errorResponse(res, 400, "Invalid or expired reset token");
-    }
+    await emailService.sendEmail(
+      email,
+      "🔐 Password Reset OTP",
+      `
+        <div style="font-family: Arial; padding:20px;">
+          <h2 style="color:#2563eb;">Password Reset OTP</h2>
+          <p>Hello ${user.name},</p>
+          <p>Your OTP is:</p>
+          <h1 style="letter-spacing:4px;">${otp}</h1>
+          <p>This OTP is valid for 5 minutes.</p>
+        </div>
+      `
+    );
+
+    res.json({ success: true, message: "OTP sent successfully" });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Failed to send OTP' });
+  }
+};
+
+// ✅ Reset Password with OTP
+exports.resetPassword = async (req, res) => {
+  try {
+    const { email, otp, newPassword } = req.body;
+
+    const otpRecord = await OTP.findOne({ email, otp });
+
+    if (!otpRecord)
+      return res.status(400).json({ message: 'Invalid OTP' });
+
+    if (otpRecord.expiresAt < new Date())
+      return res.status(400).json({ message: 'OTP expired' });
+
+    const user = await User.findOne({ email });
+    if (!user)
+      return res.status(404).json({ message: 'User not found' });
 
     // Check if new password is same as old
-    const isSamePassword = await bcrypt.compare(password, user.password);
+    const isSamePassword = await bcrypt.compare(newPassword, user.password);
     if (isSamePassword) {
-      return errorResponse(res, 400, "New password cannot be same as old password");
+      return res.status(400).json({ 
+        success: false,
+        message: "New password cannot be same as old password" 
+      });
     }
 
     // Hash new password
-    
-    user.password = hashedPassword;
-    user.resetPasswordToken = undefined;
-    user.resetPasswordExpires = undefined;
+    const salt = await bcrypt.genSalt(10);
+    user.password = await bcrypt.hash(newPassword, salt);
     user.passwordChangedAt = Date.now();
-    
     await user.save();
 
+    await OTP.deleteMany({ email });
+
     // Send confirmation email
-    sendEmail(
-      user.email,
+    emailService.sendEmail(
+      email,
       "✅ Password Reset Successful",
       `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #4CAF50;">Password Reset Successful</h2>
+        <div style="font-family: Arial; padding:20px;">
+          <h2 style="color:#4CAF50;">Password Reset Successful</h2>
           <p>Your password has been successfully reset.</p>
           <p>If you did not make this change, please contact support immediately.</p>
-          <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
-          <p style="color: #666; font-size: 12px;">
-            For security reasons, we recommend you regularly update your password.
-          </p>
         </div>
       `
     ).catch(console.error);
 
-    return res.status(200).json({
-      success: true,
-      message: "Password has been reset successfully"
-    });
+    res.json({ success: true, message: "Password reset successfully" });
 
-  } catch (err) {
-    console.error("❌ Reset password error:", err);
-    return errorResponse(res, 500, "Server error during password reset");
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Failed to reset password' });
   }
 };
 
@@ -1163,6 +1299,8 @@ exports.testAPI = async (req, res) => {
         login: "POST /api/auth/login",
         companyLoginRoute: "POST /api/auth/company/:companyCode/login",
         companyLogin: "POST /api/auth/company-login/:companyCode",
+        verifyLoginOTP: "POST /api/auth/verify-login-otp",
+        resendLoginOTP: "POST /api/auth/resend-login-otp",
         forgotPassword: "POST /api/auth/forgot-password",
         resetPassword: "POST /api/auth/reset-password",
         verifyEmail: "GET /api/auth/verify-email/:token",
@@ -1218,76 +1356,5 @@ const blacklistToken = async (token, expiry) => {
   // This could use Redis, MongoDB, or in-memory storage
   console.log(`Token blacklisted: ${token.substring(0, 20)}...`);
 };
+
 console.log("✅ authController.js loaded successfully");
-
-exports.forgotPassword = async (req, res) => {
-  try {
-    const { email } = req.body;
-
-    const user = await require('../models/User').findOne({ email });
-    if (!user) {
-      return res.status(404).json({ message: 'No account found with this email.' });
-    }
-
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-
-    await OTP.deleteMany({ email });
-
-    await OTP.create({
-      email,
-      otp,
-      expiresAt: new Date(Date.now() + 5 * 60 * 1000)
-    });
-
-    await emailService.sendEmail(
-      email,
-      "🔐 CIIS NETWORK - Password Reset OTP",
-      `
-        <div style="font-family: Arial; padding:20px;">
-          <h2 style="color:#2563eb;">Password Reset OTP</h2>
-          <p>Your OTP is:</p>
-          <h1 style="letter-spacing:4px;">${otp}</h1>
-          <p>This OTP is valid for 5 minutes.</p>
-        </div>
-      `
-    );
-
-
-    res.json({ success: true });
-
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Failed to send OTP' });
-  }
-};
-
-exports.resetPassword = async (req, res) => {
-  try {
-    const { email, otp, newPassword } = req.body;
-
-    const otpRecord = await OTP.findOne({ email, otp });
-
-    if (!otpRecord)
-      return res.status(400).json({ message: 'Invalid OTP' });
-
-    if (otpRecord.expiresAt < new Date())
-      return res.status(400).json({ message: 'OTP expired' });
-
-    const user = await require('../models/User').findOne({ email });
-    if (!user)
-      return res.status(404).json({ message: 'User not found' });
-
-    const bcrypt = require('bcryptjs');
-    const salt = await bcrypt.genSalt(10);
-    user.password = newPassword; // Store plain password temporarily for validation
-    await user.save();
-
-    await OTP.deleteMany({ email });
-
-    res.json({ success: true });
-
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Failed to reset password' });
-  }
-};
