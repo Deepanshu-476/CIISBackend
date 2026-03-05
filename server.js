@@ -34,7 +34,7 @@ const io = socketIo(server, {
       const allowedOrigins = [
         "https://cds.ciisnetwork.in",
         "http://localhost:5173",
-        "http://localhost:5174", // ✅ Added for new port
+        "http://localhost:5174", 
         "http://localhost:5175",
         "http://147.93.106.84",
         "http://localhost:8080"
@@ -169,9 +169,7 @@ const checkAndMarkOverdueTasks = async () => {
 
 const attendanceController = require("./HR-CDS/controllers/AttendanceController");
 
-setInterval(() => {
- attendanceController.autoClockOut();
-}, 60000);
+
 
 // Function for daily summary
 const dailyOverdueSummary = async () => {
@@ -429,6 +427,7 @@ app.use("/api/meetings", require("./HR-CDS/routes/meetingRoutes.js"));
 app.use('/api/cmeeting', require("./HR-CDS/routes/clientMeetingRoutes.js"));
 app.use('/api/sidebar', require("./routes/sidebarConfigs.js"));
 app.use('/api/assets12', require('./routes/assetRoutes'));
+app.use("/api/holidays", require("./HR-CDS/routes/Holiday.js"));
 
 // ==================== API ENDPOINTS ====================
 
