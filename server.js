@@ -419,7 +419,6 @@ app.use("/api/clientsservice", require("./HR-CDS/routes/clientRoutes.js"));
 app.use("/api/clienttasks", require("./HR-CDS/routes/clientTask.js"));
 app.use('/api/menu-access', require("./routes/menuAccess.js"));
 app.use('/api/menu-items', require("./routes/menuItems.js"));
-app.use("/api/holidays", require("./HR-CDS/routes/Holiday.js"));
 app.use('/api/company', require("./routes/companyRoutes.js"));
 app.use('/api/job-roles', require("./routes/jobRoleRoutes.js"));
 app.use('/api/superAdmin', require("./routes/superAdmin.js"));
