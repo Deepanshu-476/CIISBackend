@@ -310,7 +310,7 @@ const sendTaskStatusUpdateEmail = async (task, updatedUser, oldStatus, newStatus
 
 // ✅ GET ALL TASKS (assigned to or created by user)
 exports.getTasks = async (req, res) => {
-  const { status, search } = req.query;
+  const { status, search, period = "today" } = req.query;
   
   try {
     // Get current user details
@@ -331,16 +331,31 @@ exports.getTasks = async (req, res) => {
     const groupIds = userGroups.map(group => group._id);
 
     const filter = {
-      $or: [
-        { assignedUsers: req.user._id },
-        { assignedGroups: { $in: groupIds } },
-        { 
-          createdBy: req.user._id,
-          taskFor: 'self'
-        }
-      ],
-      isActive: true
-    };
+        $or: [
+          { assignedUsers: req.user._id },
+          { assignedGroups: { $in: groupIds } },
+          { 
+            createdBy: req.user._id,
+            taskFor: 'self'
+          }
+        ],
+        isActive: true
+      };
+
+      if (period === "today") {
+
+        const today = new Date();
+        today.setHours(0,0,0,0);
+
+        const tomorrow = new Date(today);
+        tomorrow.setDate(today.getDate()+1);
+
+        filter.createdAt = {
+          $gte: today,
+          $lt: tomorrow
+        };
+
+      }
 
     if (status) {
       filter['statusByUser.status'] = status;
@@ -379,7 +394,7 @@ exports.getTasks = async (req, res) => {
   }
 };
 
-// ✅ GET MY TASKS (only tasks assigned to logged-in user)
+// ✅ GET MY TASKS (only tasks assigned to logged-in user) - FIXED VERSION
 exports.getMyTasks = async (req, res) => {
   try {
     const { search, status, period } = req.query;
@@ -415,62 +430,72 @@ exports.getMyTasks = async (req, res) => {
       isActive: true
     };
 
-    // Time period filter
+    // FIXED: Time period filter
     if (period && period !== 'all') {
       const now = new Date();
-      now.setHours(0, 0, 0, 0);
+      
+      // Set to start of day in local timezone
+      const startOfDay = new Date(now);
+      startOfDay.setHours(0, 0, 0, 0);
+      
+      const endOfDay = new Date(now);
+      endOfDay.setHours(23, 59, 59, 999);
       
       let startDate, endDate;
 
       switch (period) {
         case 'today':
-          startDate = new Date(now);
-          endDate = new Date(now);
-          endDate.setDate(now.getDate() + 1);
+          startDate = new Date(startOfDay);
+          endDate = new Date(endOfDay);
           break;
         
         case 'yesterday':
-          startDate = new Date(now);
-          startDate.setDate(now.getDate() - 1);
-          endDate = new Date(now);
+          startDate = new Date(startOfDay);
+          startDate.setDate(startDate.getDate() - 1);
+          endDate = new Date(endOfDay);
+          endDate.setDate(endDate.getDate() - 1);
           break;
         
         case 'this-week':
-          startDate = new Date(now);
-          startDate.setDate(now.getDate() - now.getDay());
-          endDate = new Date(startDate);
-          endDate.setDate(startDate.getDate() + 7);
+          // Get first day of week (Sunday)
+          startDate = new Date(startOfDay);
+          startDate.setDate(startDate.getDate() - startDate.getDay());
+          endDate = new Date(endOfDay);
           break;
         
         case 'last-week':
-          startDate = new Date(now);
-          startDate.setDate(now.getDate() - now.getDay() - 7);
+          // Get first day of last week
+          startDate = new Date(startOfDay);
+          startDate.setDate(startDate.getDate() - startDate.getDay() - 7);
           endDate = new Date(startDate);
-          endDate.setDate(startDate.getDate() + 7);
+          endDate.setDate(endDate.getDate() + 6);
+          endDate.setHours(23, 59, 59, 999);
           break;
         
         case 'this-month':
           startDate = new Date(now.getFullYear(), now.getMonth(), 1);
-          endDate = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+          startDate.setHours(0, 0, 0, 0);
+          endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+          endDate.setHours(23, 59, 59, 999);
           break;
         
         case 'last-month':
           startDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-          endDate = new Date(now.getFullYear(), now.getMonth(), 1);
+          startDate.setHours(0, 0, 0, 0);
+          endDate = new Date(now.getFullYear(), now.getMonth(), 0);
+          endDate.setHours(23, 59, 59, 999);
           break;
         
         case 'last-7-days':
-          startDate = new Date(now);
-          startDate.setDate(now.getDate() - 7);
-          endDate = new Date(now);
-          endDate.setDate(now.getDate() + 1);
+          startDate = new Date(startOfDay);
+          startDate.setDate(startDate.getDate() - 7);
+          endDate = new Date(endOfDay);
           break;
         
         case 'last-30-days':
-          startDate = new Date(now);
-          startDate.setDate(now.getDate() - 30);
-          endDate = new Date(now);
-          endDate.setDate(now.getDate() + 1);
+          startDate = new Date(startOfDay);
+          startDate.setDate(startDate.getDate() - 30);
+          endDate = new Date(endOfDay);
           break;
         
         default:
@@ -485,20 +510,21 @@ exports.getMyTasks = async (req, res) => {
           endDate: endDate.toISOString() 
         });
         
+        // FIXED: Filter by createdAt date range
         filter.createdAt = {
           $gte: startDate,
-          $lt: endDate
+          $lte: endDate
         };
       }
     }
 
     // Add search functionality
     if (search) {
-      if (!filter.$or) filter.$or = [];
-      filter.$or.push(
+      filter.$or = [
+        ...filter.$or,
         { title: { $regex: search, $options: 'i' } },
         { description: { $regex: search, $options: 'i' } }
-      );
+      ];
     }
 
     console.log('🔍 Final filter:', JSON.stringify(filter, null, 2));
@@ -507,12 +533,12 @@ exports.getMyTasks = async (req, res) => {
       .populate('assignedUsers', 'name email')
       .populate('assignedGroups', 'name description')
       .populate('createdBy', 'name email')
-      .sort({ dueDateTime: 1, createdAt: -1 })
+      .sort({ createdAt: -1 }) // Sort by createdAt descending (newest first)
       .lean();
 
     console.log('📊 Tasks found:', tasks.length);
 
-    // Apply status filter
+    // Apply status filter (client-side filtering)
     if (status && status !== 'all') {
       tasks = tasks.filter(task => {
         const userStatus = task.statusByUser?.find(
