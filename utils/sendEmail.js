@@ -34,7 +34,7 @@ const sendEmail = async (to, subject, html) => {
 
     // Send email
     const info = await transporter.sendMail({
-      from: `"Leave Management System" <${process.env.EMAIL_USER}>`,
+      from: `"CIIS NETWORK" <${process.env.EMAIL_USER}>`,
       to: Array.isArray(to) ? to.join(', ') : to,
       subject: subject,
       html: html,

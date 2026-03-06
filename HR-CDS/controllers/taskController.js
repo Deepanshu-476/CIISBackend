@@ -4,7 +4,7 @@ const Group = require('../models/Group');
 const Notification = require('../models/Notification');
 const ActivityLog = require('../models/ActivityLog');
 const moment = require('moment');
-const sendEmail = require('../../utils/sendEmail');
+const { sendEmail } = require('../../utils/sendEmail');
 const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
@@ -722,9 +722,13 @@ exports.createTaskForSelf = async (req, res) => {
     await task.populate("createdBy", "name email");
 
     // ✅ SEND EMAIL HERE
-      if (task.assignedUsers && task.assignedUsers.length > 0) {
-        await sendTaskCreationEmail(task, task.assignedUsers);
-      }
+      const assignedUsersData = await User.find({
+          _id: { $in: task.assignedUsers }
+        }).select("name email");
+
+        if (assignedUsersData.length > 0) {
+          await sendTaskCreationEmail(task, assignedUsersData);
+        }
 
     // Create notification for self
     await createNotification(
