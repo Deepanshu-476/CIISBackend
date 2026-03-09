@@ -1,7 +1,33 @@
+// clientController.js
 const Client = require('../models/Client');
 const Service = require('../models/Service');
+const User = require('../../models/User');
+const Department = require('../../models/Department');
+const JobRole = require('../../models/JobRole');
+const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
+const mongoose = require('mongoose');
+const Company = require('../../models/Company');
+// Default department ID for clients
+const DEFAULT_CLIENT_DEPARTMENT_ID = '69ae555c9a1e47e80a40204c';
+// Default job role ID for clients
+const DEFAULT_CLIENT_JOB_ROLE_ID = '69ae559b9a1e47e80a4020a2';
+
+// Helper function to send welcome email
+const sendWelcomeEmail = async (email, name, company, password) => {
+  console.log('📧 ====== WELCOME EMAIL ======');
+  console.log(`📧 To: ${email}`);
+  console.log(`📧 Name: ${name}`);
+  console.log(`📧 Company: ${company}`);
+  console.log(`📧 Auto-generated password: ${password}`);
+  console.log(`📧 Login URL: ${process.env.FRONTEND_URL || 'http://localhost:3000'}/login`);
+  console.log('📧 ===========================');
+  // In production, you would send an actual email
+  // You can integrate with nodemailer or any email service here
+};
 
 const getAllClients = async (req, res) => {
+  console.log('🔍 getAllClients called with query:', req.query);
   try {
     const {
       page = 1,
@@ -15,17 +41,21 @@ const getAllClients = async (req, res) => {
       companyCode // Add companyCode filter
     } = req.query;
 
+    console.log('🔍 Parsed query params:', { page, limit, sortBy, sortOrder, search, status, projectManager, service, companyCode });
+
     // Build filter object
     const filter = {};
     
     // ✅ Add companyCode filter (mandatory)
     if (!companyCode) {
+      console.warn('⚠️ No companyCode provided in request');
       return res.status(400).json({
         success: false,
         message: 'Company code is required'
       });
     }
     filter.companyCode = companyCode.toUpperCase();
+    console.log('🔍 Filter with companyCode:', filter.companyCode);
     
     if (status && status !== 'All') filter.status = status;
     
@@ -48,6 +78,7 @@ const getAllClients = async (req, res) => {
         { description: searchRegex },
         { 'projectManager': { $regex: searchRegex } }
       ];
+      console.log('🔍 Search filter:', filter.$or);
     }
 
     // Sort options
@@ -59,9 +90,11 @@ const getAllClients = async (req, res) => {
     } else {
       sortOptions.createdAt = -1;
     }
+    console.log('🔍 Sort options:', sortOptions);
 
     // Execute query with pagination
     const skip = (parseInt(page) - 1) * parseInt(limit);
+    console.log('🔍 Pagination - skip:', skip, 'limit:', limit);
     
     const [clients, total] = await Promise.all([
       Client.find(filter)
@@ -71,6 +104,8 @@ const getAllClients = async (req, res) => {
         .lean(),
       Client.countDocuments(filter)
     ]);
+
+    console.log(`✅ Found ${clients.length} clients out of ${total} total`);
 
     res.json({
       success: true,
@@ -83,7 +118,7 @@ const getAllClients = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching clients:', error);
+    console.error('❌ Error fetching clients:', error);
     res.status(500).json({
       success: false,
       message: 'Error fetching clients',
@@ -93,23 +128,26 @@ const getAllClients = async (req, res) => {
 };
 
 const getClientById = async (req, res) => {
+  console.log('🔍 getClientById called with id:', req.params.id);
   try {
     const { id } = req.params;
     
     const client = await Client.findById(id).lean();
     if (!client) {
+      console.warn('⚠️ Client not found with id:', id);
       return res.status(404).json({
         success: false,
         message: 'Client not found'
       });
     }
 
+    console.log('✅ Client found:', client._id);
     res.json({
       success: true,
       data: client
     });
   } catch (error) {
-    console.error('Error fetching client:', error);
+    console.error('❌ Error fetching client:', error);
     res.status(500).json({
       success: false,
       message: 'Error fetching client',
@@ -119,12 +157,16 @@ const getClientById = async (req, res) => {
 };
 
 const addClient = async (req, res) => {
+  console.log('🔍 addClient called with body:', req.body);
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  
   try {
     const {
       client,
       company,
       city,
-      companyCode, // ✅ Add companyCode
+      companyCode,
       projectManager,
       services,
       status,
@@ -135,6 +177,17 @@ const addClient = async (req, res) => {
       description,
       notes
     } = req.body;
+
+    console.log('🔍 Processing client data:', {
+      client,
+      company,
+      city,
+      companyCode,
+      projectManager,
+      services,
+      email,
+      phone
+    });
 
     // Validation
     const errors = [];
@@ -151,7 +204,6 @@ const addClient = async (req, res) => {
       errors.push('City is required');
     }
     
-    // ✅ Add companyCode validation
     if (!companyCode || companyCode.trim().length === 0) {
       errors.push('Company code is required');
     }
@@ -169,6 +221,8 @@ const addClient = async (req, res) => {
     }
     
     if (errors.length > 0) {
+      console.warn('⚠️ Validation errors:', errors);
+      await session.abortTransaction();
       return res.status(400).json({
         success: false,
         message: 'Validation failed',
@@ -180,13 +234,43 @@ const addClient = async (req, res) => {
     const existingClient = await Client.findOne({
       client: client.trim(),
       companyCode: companyCode.trim().toUpperCase()
-    });
+    }).session(session);
 
     if (existingClient) {
+      console.warn('⚠️ Client already exists:', existingClient._id);
+      await session.abortTransaction();
       return res.status(400).json({
         success: false,
         message: 'Client already exists for this company'
       });
+    }
+
+    // Check if email is already in use (if email provided)
+    let cleanEmail = email ? email.trim().toLowerCase() : '';
+    if (cleanEmail) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(cleanEmail)) {
+        console.warn('⚠️ Invalid email format:', cleanEmail);
+        await session.abortTransaction();
+        return res.status(400).json({
+          success: false,
+          message: "Invalid email format"
+        });
+      }
+
+      const existingUser = await User.findOne({ email: cleanEmail }).session(session);
+      if (existingUser) {
+        console.warn('⚠️ Email already in use:', cleanEmail);
+        await session.abortTransaction();
+        return res.status(409).json({
+          success: false,
+          message: "Email already in use"
+        });
+      }
+    } else {
+      // Generate email if not provided
+      cleanEmail = `${client.toLowerCase().replace(/[^a-z0-9]/g, '')}@${companyCode.toLowerCase()}.com`;
+      console.log('🔍 Generated email:', cleanEmail);
     }
 
     // Validate services exist if provided
@@ -195,14 +279,16 @@ const addClient = async (req, res) => {
       if (serviceNames.length > 0) {
         const existingServices = await Service.find({ 
           servicename: { $in: serviceNames },
-          companyCode: companyCode.trim().toUpperCase() // ✅ Filter by companyCode
-        });
+          companyCode: companyCode.trim().toUpperCase()
+        }).session(session);
         
         if (existingServices.length !== serviceNames.length) {
           const missingServices = serviceNames.filter(name => 
             !existingServices.some(s => s.servicename === name)
           );
           
+          console.warn('⚠️ Missing services:', missingServices);
+          await session.abortTransaction();
           return res.status(400).json({
             success: false,
             message: 'Some services do not exist for this company',
@@ -211,6 +297,119 @@ const addClient = async (req, res) => {
         }
       }
     }
+
+    // Check if default department exists
+    console.log('🔍 Checking default department:', DEFAULT_CLIENT_DEPARTMENT_ID);
+    const departmentExists = await Department.findById(DEFAULT_CLIENT_DEPARTMENT_ID).session(session);
+    if (!departmentExists) {
+      console.error('❌ Default department not found:', DEFAULT_CLIENT_DEPARTMENT_ID);
+      await session.abortTransaction();
+      return res.status(404).json({
+        success: false,
+        message: "Default department not found for client",
+        departmentId: DEFAULT_CLIENT_DEPARTMENT_ID
+      });
+    }
+    console.log('✅ Default department found');
+
+    // Check if default job role exists
+    console.log('🔍 Checking default job role:', DEFAULT_CLIENT_JOB_ROLE_ID);
+    const jobRoleExists = await JobRole.findById(DEFAULT_CLIENT_JOB_ROLE_ID).session(session);
+    if (!jobRoleExists) {
+      console.error('❌ Default job role not found:', DEFAULT_CLIENT_JOB_ROLE_ID);
+      await session.abortTransaction();
+      return res.status(404).json({
+        success: false,
+        message: "Default job role not found for client",
+        jobRoleId: DEFAULT_CLIENT_JOB_ROLE_ID
+      });
+    }
+    console.log('✅ Default job role found');
+
+    // Get company ID from companyCode
+    console.log('🔍 Finding company with code:', companyCode);
+    
+    const companyExists = await Company.findOne({ companyCode: companyCode.trim().toUpperCase() }).session(session);
+    if (!companyExists) {
+      console.error('❌ Company not found with code:', companyCode);
+      await session.abortTransaction();
+      return res.status(404).json({
+        success: false,
+        message: "Company not found"
+      });
+    }
+    console.log('✅ Company found:', companyExists._id);
+
+    // Generate password from client name
+    const generatePassword = (name) => {
+      // Remove special characters and spaces, convert to lowercase
+      const baseName = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+      // Add random numbers for security
+      const randomNum = Math.floor(1000 + Math.random() * 9000);
+      return `${baseName}@${randomNum}`;
+    };
+
+    const autoPassword = generatePassword(client);
+    console.log('🔍 Generated auto password for user');
+    
+    // Hash the password
+    const salt = await bcrypt.genSalt(12);
+    const hashedPassword = await bcrypt.hash(autoPassword, salt);
+
+    // Generate employee ID for user
+    const employeeId = `CLT${Date.now()}${Math.floor(Math.random() * 1000)}`;
+    console.log('🔍 Generated employee ID:', employeeId);
+
+    // Get current user from request (if authenticated)
+    const currentUserId = req.user?.id || null;
+
+    // Create user first (as client representative)
+    const userData = {
+      name: client.trim(),
+      email: cleanEmail,
+      password: hashedPassword,
+      department: DEFAULT_CLIENT_DEPARTMENT_ID,
+      jobRole: DEFAULT_CLIENT_JOB_ROLE_ID,
+      company: companyExists._id,
+      companyCode: companyCode.trim().toUpperCase(),
+      employeeId,
+      phone: phone?.trim() || '',
+      address: address?.trim() || '',
+      gender: 'other', // Default value
+      maritalStatus: 'single', // Default value
+      dob: null,
+      salary: null,
+      accountNumber: '',
+      ifsc: '',
+      bankName: '',
+      bankHolderName: '',
+      employeeType: 'client', // Set employeeType to indicate this is a client user
+      properties: [],
+      propertyOwned: '',
+      additionalDetails: JSON.stringify({
+        clientId: null, // Will update after client creation
+        isClientRepresentative: true,
+        companyName: company,
+        city: city
+      }),
+      fatherName: '',
+      motherName: '',
+      emergencyName: '',
+      emergencyPhone: '',
+      emergencyRelation: '',
+      emergencyAddress: '',
+      isActive: true,
+      isVerified: false,
+      verificationToken: crypto.randomBytes(32).toString('hex'),
+      createdBy: currentUserId
+    };
+
+    console.log('🔍 Creating user with data:', { ...userData, password: '[HIDDEN]' });
+
+    // Create user in session
+    const createdUsers = await User.create([userData], { session });
+    const createdUser = createdUsers[0];
+    console.log('✅ User created successfully:', createdUser._id);
 
     // Clean project managers
     const cleanProjectManagers = projectManager
@@ -222,29 +421,67 @@ const addClient = async (req, res) => {
       client: client.trim(),
       company: company.trim(),
       city: city.trim(),
-      companyCode: companyCode.trim().toUpperCase(), // ✅ Save companyCode
+      companyCode: companyCode.trim().toUpperCase(),
       projectManager: cleanProjectManagers,
       services: services || [],
       status: status || 'Active',
       progress: progress || '0/0 (0%)',
-      email: email ? email.trim().toLowerCase() : '',
+      email: cleanEmail,
       phone: phone ? phone.trim() : '',
       address: address ? address.trim() : '',
       description: description ? description.trim() : '',
-      notes: notes ? notes.trim() : ''
+      notes: notes ? notes.trim() : '',
+      userId: createdUser._id // Link to the created user
     });
 
-    await newClient.save();
+    console.log('🔍 Creating client with data:', newClient);
+    await newClient.save({ session });
+    console.log('✅ Client created successfully:', newClient._id);
 
+    // Update user's additionalDetails with client ID
+    const updatedAdditionalDetails = JSON.parse(createdUser.additionalDetails || '{}');
+    updatedAdditionalDetails.clientId = newClient._id;
+    
+    await User.findByIdAndUpdate(
+      createdUser._id,
+      { 
+        $set: { 
+          'additionalDetails': JSON.stringify(updatedAdditionalDetails),
+          employeeType: newClient._id.toString() // Store client ID in employeeType
+        } 
+      },
+      { session }
+    );
+    console.log('✅ User updated with client reference');
+
+    // Commit transaction
+    await session.commitTransaction();
+    console.log('✅ Transaction committed successfully');
+
+    // Send welcome email with auto-generated password
+    sendWelcomeEmail(cleanEmail, client, company, autoPassword);
+
+    console.log('✅ Client and user created successfully');
     res.status(201).json({
       success: true,
-      message: 'Client added successfully',
-      data: newClient
+      message: 'Client added successfully. User account created with auto-generated password.',
+      data: {
+        client: newClient,
+        user: {
+          id: createdUser._id,
+          employeeId: createdUser.employeeId,
+          name: createdUser.name,
+          email: createdUser.email,
+          autoPassword: autoPassword // Include in response so admin can share with client
+        }
+      }
     });
   } catch (error) {
-    console.error('Error adding client:', error);
+    await session.abortTransaction();
+    console.error('❌ Error adding client:', error);
     
     if (error.code === 11000) {
+      console.error('❌ Duplicate key error:', error.keyValue);
       return res.status(400).json({
         success: false,
         message: 'Client already exists for this company'
@@ -253,6 +490,7 @@ const addClient = async (req, res) => {
     
     if (error.name === 'ValidationError') {
       const errors = Object.values(error.errors).map(err => err.message);
+      console.error('❌ Validation errors:', errors);
       return res.status(400).json({
         success: false,
         message: 'Validation error',
@@ -265,17 +503,21 @@ const addClient = async (req, res) => {
       message: 'Error adding client',
       error: error.message
     });
+  } finally {
+    session.endSession();
+    console.log('🔍 Database session ended');
   }
 };
 
 const updateClient = async (req, res) => {
+  console.log('🔍 updateClient called with id:', req.params.id, 'body:', req.body);
   try {
     const { id } = req.params;
     const {
       client,
       company,
       city,
-      companyCode, // ✅ Add companyCode
+      companyCode,
       projectManager,
       services,
       status,
@@ -290,6 +532,7 @@ const updateClient = async (req, res) => {
     // Find client
     const existingClient = await Client.findById(id);
     if (!existingClient) {
+      console.warn('⚠️ Client not found for update:', id);
       return res.status(404).json({
         success: false,
         message: 'Client not found'
@@ -331,6 +574,7 @@ const updateClient = async (req, res) => {
     }
     
     if (errors.length > 0) {
+      console.warn('⚠️ Validation errors:', errors);
       return res.status(400).json({
         success: false,
         message: 'Validation failed',
@@ -347,6 +591,7 @@ const updateClient = async (req, res) => {
       });
 
       if (duplicateClient) {
+        console.warn('⚠️ Duplicate client name:', client);
         return res.status(400).json({
           success: false,
           message: 'Client name already exists for this company'
@@ -361,7 +606,7 @@ const updateClient = async (req, res) => {
         const companyCodeToUse = companyCode || existingClient.companyCode;
         const existingServices = await Service.find({ 
           servicename: { $in: serviceNames },
-          companyCode: companyCodeToUse.trim().toUpperCase() // ✅ Filter by companyCode
+          companyCode: companyCodeToUse.trim().toUpperCase()
         });
         
         if (existingServices.length !== serviceNames.length) {
@@ -369,6 +614,7 @@ const updateClient = async (req, res) => {
             !existingServices.some(s => s.servicename === name)
           );
           
+          console.warn('⚠️ Missing services:', missingServices);
           return res.status(400).json({
             success: false,
             message: 'Some services do not exist for this company',
@@ -384,7 +630,7 @@ const updateClient = async (req, res) => {
     if (client !== undefined) updateData.client = client.trim();
     if (company !== undefined) updateData.company = company.trim();
     if (city !== undefined) updateData.city = city.trim();
-    if (companyCode !== undefined) updateData.companyCode = companyCode.trim().toUpperCase(); // ✅ Update companyCode
+    if (companyCode !== undefined) updateData.companyCode = companyCode.trim().toUpperCase();
     
     if (projectManager !== undefined) {
       updateData.projectManager = projectManager
@@ -401,6 +647,8 @@ const updateClient = async (req, res) => {
     if (description !== undefined) updateData.description = description.trim();
     if (notes !== undefined) updateData.notes = notes.trim();
 
+    console.log('🔍 Update data:', updateData);
+
     // Update client
     const updatedClient = await Client.findByIdAndUpdate(
       id,
@@ -408,13 +656,14 @@ const updateClient = async (req, res) => {
       { new: true, runValidators: true }
     );
 
+    console.log('✅ Client updated successfully:', updatedClient._id);
     res.json({
       success: true,
       message: 'Client updated successfully',
       data: updatedClient
     });
   } catch (error) {
-    console.error('Error updating client:', error);
+    console.error('❌ Error updating client:', error);
     
     if (error.code === 11000) {
       return res.status(400).json({
@@ -441,11 +690,13 @@ const updateClient = async (req, res) => {
 };
 
 const updateClientProgress = async (req, res) => {
+  console.log('🔍 updateClientProgress called with id:', req.params.id, 'body:', req.body);
   try {
     const { id } = req.params;
     const { completed, total } = req.body;
 
     if (completed === undefined || total === undefined) {
+      console.warn('⚠️ Missing completed or total values');
       return res.status(400).json({
         success: false,
         message: 'Completed and total values are required'
@@ -454,6 +705,7 @@ const updateClientProgress = async (req, res) => {
 
     const client = await Client.findById(id);
     if (!client) {
+      console.warn('⚠️ Client not found:', id);
       return res.status(404).json({
         success: false,
         message: 'Client not found'
@@ -461,6 +713,7 @@ const updateClientProgress = async (req, res) => {
     }
 
     await client.updateProgress(parseInt(completed), parseInt(total));
+    console.log('✅ Progress updated for client:', id);
 
     res.json({
       success: true,
@@ -468,7 +721,7 @@ const updateClientProgress = async (req, res) => {
       data: client
     });
   } catch (error) {
-    console.error('Error updating client progress:', error);
+    console.error('❌ Error updating client progress:', error);
     res.status(500).json({
       success: false,
       message: 'Error updating client progress',
@@ -478,24 +731,27 @@ const updateClientProgress = async (req, res) => {
 };
 
 const deleteClient = async (req, res) => {
+  console.log('🔍 deleteClient called with id:', req.params.id);
   try {
     const { id } = req.params;
     
     const client = await Client.findByIdAndDelete(id);
     if (!client) {
+      console.warn('⚠️ Client not found for deletion:', id);
       return res.status(404).json({
         success: false,
         message: 'Client not found'
       });
     }
 
+    console.log('✅ Client deleted successfully:', id);
     res.json({
       success: true,
       message: 'Client deleted successfully',
       data: client
     });
   } catch (error) {
-    console.error('Error deleting client:', error);
+    console.error('❌ Error deleting client:', error);
     res.status(500).json({
       success: false,
       message: 'Error deleting client',
@@ -505,17 +761,19 @@ const deleteClient = async (req, res) => {
 };
 
 const getClientStats = async (req, res) => {
+  console.log('🔍 getClientStats called with query:', req.query);
   try {
     const { companyCode } = req.query;
     
     const stats = await Client.getStats(companyCode);
+    console.log('✅ Client stats:', stats);
     
     res.json({
       success: true,
       data: stats
     });
   } catch (error) {
-    console.error('Error fetching client statistics:', error);
+    console.error('❌ Error fetching client statistics:', error);
     res.status(500).json({
       success: false,
       message: 'Error fetching client statistics',
@@ -525,17 +783,19 @@ const getClientStats = async (req, res) => {
 };
 
 const getManagerStats = async (req, res) => {
+  console.log('🔍 getManagerStats called with query:', req.query);
   try {
     const { companyCode } = req.query;
     
     const stats = await Client.getManagerStats(companyCode);
+    console.log('✅ Manager stats:', stats);
     
     res.json({
       success: true,
       data: stats
     });
   } catch (error) {
-    console.error('Error fetching manager statistics:', error);
+    console.error('❌ Error fetching manager statistics:', error);
     res.status(500).json({
       success: false,
       message: 'Error fetching manager statistics',
@@ -545,12 +805,14 @@ const getManagerStats = async (req, res) => {
 };
 
 const addProjectManager = async (req, res) => {
+  console.log('🔍 addProjectManager called with id:', req.params.id, 'body:', req.body);
   const { id } = req.params;
   const { managerName } = req.body;
 
   try {
     const client = await Client.findById(id);
     if (!client) {
+      console.warn('⚠️ Client not found:', id);
       return res.status(404).json({
         success: false,
         message: 'Client not found'
@@ -559,6 +821,7 @@ const addProjectManager = async (req, res) => {
 
     // Add the project manager
     await client.addProjectManager(managerName);
+    console.log('✅ Project manager added to client:', id);
 
     res.json({
       success: true,
@@ -566,7 +829,7 @@ const addProjectManager = async (req, res) => {
       data: client
     });
   } catch (error) {
-    console.error('Error adding project manager:', error);
+    console.error('❌ Error adding project manager:', error);
     res.status(500).json({
       success: false,
       message: 'Error adding project manager',
@@ -576,12 +839,14 @@ const addProjectManager = async (req, res) => {
 };
 
 const removeProjectManager = async (req, res) => {
+  console.log('🔍 removeProjectManager called with id:', req.params.id, 'body:', req.body);
   const { id } = req.params;
   const { managerName } = req.body;
 
   try {
     const client = await Client.findById(id);
     if (!client) {
+      console.warn('⚠️ Client not found:', id);
       return res.status(404).json({
         success: false,
         message: 'Client not found'
@@ -590,6 +855,7 @@ const removeProjectManager = async (req, res) => {
 
     // Remove the project manager
     await client.removeProjectManager(managerName);
+    console.log('✅ Project manager removed from client:', id);
 
     res.json({
       success: true,
@@ -597,7 +863,7 @@ const removeProjectManager = async (req, res) => {
       data: client
     });
   } catch (error) {
-    console.error('Error removing project manager:', error);
+    console.error('❌ Error removing project manager:', error);
     res.status(500).json({
       success: false,
       message: 'Error removing project manager',
@@ -608,10 +874,12 @@ const removeProjectManager = async (req, res) => {
 
 // Get clients by company code
 const getClientsByCompany = async (req, res) => {
+  console.log('🔍 getClientsByCompany called with companyCode:', req.params.companyCode);
   try {
     const { companyCode } = req.params;
     
     if (!companyCode) {
+      console.warn('⚠️ No companyCode provided');
       return res.status(400).json({
         success: false,
         message: 'Company code is required'
@@ -622,13 +890,14 @@ const getClientsByCompany = async (req, res) => {
       companyCode: companyCode.toUpperCase() 
     }).sort({ client: 1 });
 
+    console.log(`✅ Found ${clients.length} clients for company ${companyCode}`);
     res.json({
       success: true,
       data: clients,
       count: clients.length
     });
   } catch (error) {
-    console.error('Error fetching clients by company:', error);
+    console.error('❌ Error fetching clients by company:', error);
     res.status(500).json({
       success: false,
       message: 'Error fetching clients',
@@ -650,4 +919,5 @@ module.exports = {
   removeProjectManager,
   getClientsByCompany
 };
-console.log("✅ clientController.js loaded successfully");
+
+console.log("✅ clientController.js loaded successfully with auto-user creation");
