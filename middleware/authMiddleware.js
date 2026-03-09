@@ -68,7 +68,7 @@ exports.protect = async (req, res, next) => {
     // Check for token in headers
     if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
       token = req.headers.authorization.split(' ')[1];
-      console.log("🟢 Token found in headers:", token ? "Yes" : "No");
+      // console.log("🟢 Token found in headers:", token ? "Yes" : "No");
     } else {
       console.log("🔴 No Authorization header found");
       return res.status(401).json({
@@ -87,7 +87,7 @@ exports.protect = async (req, res, next) => {
     try {
       // Decode token first to check contents
       const decodedToken = jwt.decode(token);
-      console.log("🔍 Decoded token payload:", decodedToken);
+      // console.log("🔍 Decoded token payload:", decodedToken);
       
       if (!decodedToken) {
         return res.status(401).json({
@@ -107,11 +107,11 @@ exports.protect = async (req, res, next) => {
         });
       }
       
-      console.log("✅ User ID extracted from token:", userId);
+      // console.log("✅ User ID extracted from token:", userId);
       
       // Verify token
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      console.log("✅ Token verified successfully");
+      // console.log("✅ Token verified successfully");
       
       // Find user WITHOUT role populate (since role field doesn't exist)
       const user = await User.findById(userId)
@@ -128,15 +128,15 @@ exports.protect = async (req, res, next) => {
         });
       }
       
-      console.log("✅ User found in database:", {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        jobRole: user.jobRole,
-        company: user.company?.companyName,
-        companyCode: user.companyCode,
-        department: user.department?.name
-      });
+      // console.log("✅ User found in database:", {
+      //   id: user._id,
+      //   name: user.name,
+      //   email: user.email,
+      //   jobRole: user.jobRole,
+      //   company: user.company?.companyName,
+      //   companyCode: user.companyCode,
+      //   department: user.department?.name
+      // });
       
       // Check if user is active
       if (!user.isActive) {
@@ -192,7 +192,7 @@ exports.protect = async (req, res, next) => {
         createdAt: user.createdAt
       };
       
-      console.log("📋 req.user object attached successfully");
+      // console.log("📋 req.user object attached successfully");
       next();
       
     } catch (error) {
