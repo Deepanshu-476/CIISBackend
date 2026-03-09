@@ -1456,60 +1456,38 @@ exports.addRemark = async (req, res) => {
     let imagePath = null;
 
     // Handle image upload + compression
-    if (req.file) {
-      const uploadDir = "uploads/remarks/";
-      if (!fs.existsSync(uploadDir)) {
-        fs.mkdirSync(uploadDir, { recursive: true });
-      }
+   if (req.file) {
+  try {
 
-      const filename = `remark_${Date.now()}_${req.user._id}.jpg`;
-      imagePath = path.join(uploadDir, filename);
+    const uploadDir = path.join(__dirname, "../../uploads/remarks");
 
-      try {
-        // Compress and process image
-        await sharp(req.file.buffer)
-          .resize(1200, 1200, {
-            fit: 'inside',
-            withoutEnlargement: true
-          })
-          .jpeg({ 
-            quality: 80,
-            progressive: true 
-          })
-          .toFile(imagePath);
-
-        // Check size and further compress if >1MB
-        let stats = fs.statSync(imagePath);
-        if (stats.size > 1024 * 1024) {
-          const compressedPath = imagePath.replace('.jpg', '_compressed.jpg');
-          
-          await sharp(imagePath)
-            .resize(800, 800, {
-              fit: 'inside',
-              withoutEnlargement: true
-            })
-            .jpeg({ 
-              quality: 60,
-              progressive: true 
-            })
-            .toFile(compressedPath);
-
-          // Remove original and use compressed
-          fs.unlinkSync(imagePath);
-          imagePath = compressedPath;
-        }
-      } catch (imageError) {
-        console.error("❌ Image processing error:", imageError);
-        // Clean up if image processing fails
-        if (fs.existsSync(imagePath)) {
-          fs.unlinkSync(imagePath);
-        }
-        return res.status(400).json({ 
-          success: false,
-          error: 'Failed to process image' 
-        });
-      }
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
     }
+
+    const filename = `remark_${Date.now()}_${req.user._id}.jpg`;
+
+    const savePath = path.join(uploadDir, filename);
+
+    imagePath = `remarks/${filename}`;
+
+    console.log("Saving image at:", savePath);
+
+    await sharp(req.file.buffer)
+      .resize(1200, 1200, {
+        fit: "inside",
+        withoutEnlargement: true
+      })
+      .jpeg({
+        quality: 80,
+        progressive: true
+      })
+      .toFile(savePath);
+
+  } catch (err) {
+    console.error("Image upload error:", err);
+  }
+}
 
     // Create remark object
     const newRemark = {
