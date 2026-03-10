@@ -527,7 +527,7 @@ exports.getMyTasks = async (req, res) => {
       ];
     }
 
-    console.log('🔍 Final filter:', JSON.stringify(filter, null, 2));
+    // console.log('🔍 Final filter:', JSON.stringify(filter, null, 2));
 
     let tasks = await Task.find(filter)
       .populate('assignedUsers', 'name email')
@@ -536,7 +536,7 @@ exports.getMyTasks = async (req, res) => {
       .sort({ createdAt: -1 }) // Sort by createdAt descending (newest first)
       .lean();
 
-    console.log('📊 Tasks found:', tasks.length);
+   
 
     // Apply status filter (client-side filtering)
     if (status && status !== 'all') {

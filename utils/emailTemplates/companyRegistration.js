@@ -190,7 +190,7 @@ const getCompanyRegistrationEmailTemplate = (companyData, ownerData, isOwnerEmai
           display: inline-block;
           padding: 14px 32px;
           background: linear-gradient(135deg, ${primaryColor} 0%, ${secondaryColor} 100%);
-          color: white;
+          color: #ffffff !important;
           text-decoration: none;
           border-radius: 8px;
           font-weight: 600;
@@ -446,17 +446,13 @@ const getCompanyRegistrationEmailTemplate = (companyData, ownerData, isOwnerEmai
 
         <div class="footer">
           <div style="margin-bottom: 20px;">
-            <img src="https://via.placeholder.com/40x40/ffffff/2563eb?text=CIIS" alt="CIIS" style="border-radius: 8px;">
-          </div>
-          <h3 style="color: white; margin-bottom: 10px;">CIIS NETWORK</h3>
-          <p style="color: #9ca3af; margin-bottom: 20px; font-size: 14px;">
-            Enterprise Leave Management Solution
-          </p>
-          <div style="display: flex; justify-content: center; gap: 20px; margin-bottom: 20px; flex-wrap: wrap;">
-            <a href="#" style="color: #93c5fd; font-size: 12px;">Help Center</a>
-            <a href="#" style="color: #93c5fd; font-size: 12px;">Privacy Policy</a>
-            <a href="#" style="color: #93c5fd; font-size: 12px;">Terms of Service</a>
-            <a href="#" style="color: #93c5fd; font-size: 12px;">Contact Support</a>
+            <a href="https://cds.ciisnetwork.in" target="_blank" style="text-decoration:none;">
+              <img 
+                src="https://cds.ciisnetwork.in/logoo.png" 
+                alt="CIIS"
+                style="width:120px; height:auto; border-radius:8px; display:block; margin:0 auto;"
+              >
+            </a>
           </div>
           <p style="color: #6b7280; font-size: 12px; border-top: 1px solid #374151; padding-top: 20px;">
             © ${new Date().getFullYear()} CIIS NETWORK. All rights reserved.<br>

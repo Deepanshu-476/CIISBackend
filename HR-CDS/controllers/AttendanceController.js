@@ -81,7 +81,6 @@ const getUserCompanyCode = async (userId) => {
   try {
     const user = await User.findById(userId).select('companyCode company');
     if (user) {
-      // Check both companyCode field and populated company
       return user.companyCode || (user.company ? user.company.companyCode : null);
     }
     return null;
@@ -91,7 +90,7 @@ const getUserCompanyCode = async (userId) => {
   }
 };
 
-// Clock In - UPDATED with company filtering
+// Clock In
 const clockIn = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
@@ -152,7 +151,7 @@ const clockIn = async (req, res) => {
       totalTime: "00:00:00",
       overTime: "00:00:00",
       earlyLeave: "00:00:00",
-      companyCode: userCompanyCode // Add company code to attendance record
+      companyCode: userCompanyCode
     });
 
     await newRecord.save();
@@ -184,7 +183,7 @@ const clockIn = async (req, res) => {
   }
 };
 
-// Clock Out - UPDATED with company filtering
+// Clock Out
 const clockOut = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
@@ -255,7 +254,6 @@ const clockOut = async (req, res) => {
       }
     }
 
-    // Ensure company code is set
     if (!record.companyCode && userCompanyCode) {
       record.companyCode = userCompanyCode;
     }
@@ -290,7 +288,7 @@ const clockOut = async (req, res) => {
   }
 };
 
-// Get Today's Status - UPDATED
+// Get Today's Status
 const getTodayStatus = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
@@ -344,7 +342,7 @@ const getTodayStatus = async (req, res) => {
   }
 };
 
-// Get Attendance List for User - UPDATED with company filtering
+// 🔥 FIXED: Get Attendance List for User with ALL TIME support (with ALL dates)
 const getAttendanceList = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
@@ -357,33 +355,57 @@ const getAttendanceList = async (req, res) => {
       });
     }
     
-    const now = new Date();
-    const queryMonth = month !== undefined ? parseInt(month) : now.getMonth();
-    const queryYear = year !== undefined ? parseInt(year) : now.getFullYear();
+    let query = { 
+      user: userId,
+      companyCode: userCompanyCode
+    };
     
-    const startOfMonth = new Date(queryYear, queryMonth, 1);
-    startOfMonth.setHours(0, 0, 0, 0);
-
-    const endOfMonth = new Date(queryYear, queryMonth + 1, 0);
-    endOfMonth.setHours(23, 59, 59, 999);
-
-    let endDate = endOfMonth;
-    const today = new Date();
+    let allDates = [];
+    let isAllTime = false;
+    let startDate, endDate;
     
-    if (queryYear === today.getFullYear() && queryMonth === today.getMonth()) {
+    // Check if ALL TIME request (no month/year params)
+    if (month === undefined || year === undefined || month === 'all' || year === 'all') {
+      isAllTime = true;
+      
+      // Get user's join date from database
+      const user = await User.findById(userId).select('createdAt');
+      const userJoinDate = user?.createdAt || new Date(2020, 0, 1);
+      
+      startDate = new Date(userJoinDate);
+      startDate.setHours(0, 0, 0, 0);
+      
       endDate = new Date();
       endDate.setHours(23, 59, 59, 999);
-    } else if (queryYear > today.getFullYear() || 
-               (queryYear === today.getFullYear() && queryMonth > today.getMonth())) {
-      endDate = new Date(startOfMonth);
+      
+      query.date = { $gte: startDate, $lte: endDate };
+      
+      console.log("📊 Fetching ALL TIME attendance data from:", userJoinDate, "to:", new Date());
+    } else {
+      // Specific month/year requested
+      const queryMonth = parseInt(month);
+      const queryYear = parseInt(year);
+      
+      startDate = new Date(queryYear, queryMonth, 1);
+      startDate.setHours(0, 0, 0, 0);
+
+      endDate = new Date(queryYear, queryMonth + 1, 0);
+      endDate.setHours(23, 59, 59, 999);
+      
+      query.date = { $gte: startDate, $lte: endDate };
     }
 
-    // Fetch attendance records filtered by company code
-    const list = await Attendance.find({ 
-      user: userId,
-      companyCode: userCompanyCode, // Add company code filter
-      date: { $gte: startOfMonth, $lte: endDate }
-    })
+    // Generate ALL dates from startDate to endDate
+    const currentDate = new Date(startDate);
+    while (currentDate <= endDate) {
+      allDates.push(new Date(currentDate));
+      currentDate.setDate(currentDate.getDate() + 1);
+    }
+
+    console.log(`📅 Generating ${allDates.length} dates from ${startDate.toDateString()} to ${endDate.toDateString()}`);
+
+    // Fetch attendance records
+    const list = await Attendance.find(query)
       .populate({
         path: "user",
         select: "name email employeeType companyCode",
@@ -394,15 +416,7 @@ const getAttendanceList = async (req, res) => {
       })
       .sort({ date: 1 });
 
-    // Generate all dates in the month
-    const allDatesInMonth = [];
-    const currentDate = new Date(startOfMonth);
-    
-    while (currentDate <= endDate) {
-      allDatesInMonth.push(new Date(currentDate));
-      currentDate.setDate(currentDate.getDate() + 1);
-    }
-
+    // Create map of existing records
     const existingRecordsMap = {};
     list.forEach(record => {
       const recordDate = new Date(record.date);
@@ -410,12 +424,21 @@ const getAttendanceList = async (req, res) => {
       existingRecordsMap[dateKey] = record;
     });
 
-    const completeList = allDatesInMonth.map(date => {
+    // Create complete list with placeholders for ALL dates
+    const completeList = allDates.map(date => {
       const dateKey = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
 
       if (existingRecordsMap[dateKey]) {
-        return existingRecordsMap[dateKey];
+        // Return actual record
+        const record = existingRecordsMap[dateKey];
+        return {
+          ...record.toObject ? record.toObject() : record,
+          login: formatTime(record.inTime),
+          logout: formatTime(record.outTime),
+          status: record.status || 'ABSENT'
+        };
       } else {
+        // Create placeholder record for missing date
         const dayOfWeek = date.getDay();
         const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
 
@@ -437,22 +460,24 @@ const getAttendanceList = async (req, res) => {
           overTime: "00:00:00",
           totalTime: "00:00:00",
           isClockedIn: false,
-          companyCode: userCompanyCode, // Add company code to absent records
+          companyCode: userCompanyCode,
           notes: isWeekend ? "Weekend" : "No attendance recorded",
           createdAt: date,
-          updatedAt: date
+          updatedAt: date,
+          login: "",
+          logout: ""
         };
       }
     });
 
+    // Sort by date (newest first for display)
+    completeList.sort((a, b) => new Date(b.date) - new Date(a.date));
+
     res.status(200).json({
-      message: `Attendance records fetched for ${new Date(queryYear, queryMonth).toLocaleString('default', { month: 'long', year: 'numeric' })}`,
-      data: completeList.map(rec => ({
-        ...rec.toObject ? rec.toObject() : rec,
-        login: formatTime(rec.inTime),
-        logout: formatTime(rec.outTime),
-        status: rec.status || 'ABSENT'
-      }))
+      message: isAllTime 
+        ? `All time attendance records fetched successfully from ${startDate.toDateString()} to ${endDate.toDateString()}` 
+        : `Attendance records fetched for ${new Date(parseInt(year), parseInt(month)).toLocaleString('default', { month: 'long', year: 'numeric' })}`,
+      data: completeList
     });
 
   } catch (err) {
@@ -464,7 +489,7 @@ const getAttendanceList = async (req, res) => {
   }
 };
 
-// Get All Users Attendance (Admin) - UPDATED with company filtering
+// Get All Users Attendance (Admin)
 const getAllUsersAttendance = async (req, res) => {
   try {
     const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
@@ -476,7 +501,7 @@ const getAllUsersAttendance = async (req, res) => {
       });
     }
     
-    let filter = { companyCode: userCompanyCode }; // Filter by company code
+    let filter = { companyCode: userCompanyCode };
 
     if (date) {
       const start = new Date(date);
@@ -513,7 +538,7 @@ const getAllUsersAttendance = async (req, res) => {
   }
 };
 
-// Update Attendance Record (Admin) - UPDATED
+// Update Attendance Record (Admin)
 const updateAttendanceRecord = async (req, res) => {
   try {
     const { id } = req.params;
@@ -537,14 +562,12 @@ const updateAttendanceRecord = async (req, res) => {
       });
     }
     
-    // Verify the record belongs to the same company
     if (record.companyCode && record.companyCode !== userCompanyCode) {
       return res.status(403).json({ 
         message: "Access denied. Record belongs to different company." 
       });
     }
     
-    // Update inTime if provided
     if (updateData.inTime) {
       record.inTime = new Date(updateData.inTime);
       
@@ -573,7 +596,6 @@ const updateAttendanceRecord = async (req, res) => {
       }
     }
     
-    // Update outTime if provided
     if (updateData.outTime) {
       record.outTime = new Date(updateData.outTime);
       record.isClockedIn = false;
@@ -599,7 +621,7 @@ const updateAttendanceRecord = async (req, res) => {
         lateThresholdEnd.setHours(9, 30, 0, 0);
         
         const lateThresholdStart = new Date(loginTime);
-        lateThresholdStart.setHeaders(9, 10, 0, 0);
+        lateThresholdStart.setHours(9, 10, 0, 0);
         
         if (loginTime >= halfDayThreshold) {
           record.status = "HALFDAY";
@@ -633,12 +655,10 @@ const updateAttendanceRecord = async (req, res) => {
       }
     }
     
-    // Update status if explicitly provided
     if (updateData.status && updateData.status.trim() !== '') {
       record.status = updateData.status.toUpperCase();
     }
     
-    // Update other fields if provided
     if (updateData.lateBy !== undefined) {
       record.lateBy = updateData.lateBy;
     }
@@ -659,7 +679,6 @@ const updateAttendanceRecord = async (req, res) => {
       record.date = new Date(updateData.date);
     }
     
-    // Ensure company code is set
     if (!record.companyCode) {
       record.companyCode = userCompanyCode;
     }
@@ -692,7 +711,7 @@ const updateAttendanceRecord = async (req, res) => {
   }
 };
 
-// Create Manual Attendance (Admin) - UPDATED
+// Create Manual Attendance (Admin)
 const createManualAttendance = async (req, res) => {
   try {
     const { user, date, inTime, outTime, status, lateBy, earlyLeave, overTime, notes } = req.body;
@@ -719,7 +738,6 @@ const createManualAttendance = async (req, res) => {
       });
     }
     
-    // Verify user belongs to same company
     if (userExists.companyCode !== userCompanyCode) {
       return res.status(403).json({ 
         message: "Cannot create attendance for user from different company" 
@@ -737,22 +755,22 @@ const createManualAttendance = async (req, res) => {
     });
     
     if (existingAttendance) {
-  existingAttendance.status = status ? status.toUpperCase() : existingAttendance.status;
-  existingAttendance.inTime = inTime ? new Date(inTime) : existingAttendance.inTime;
-  existingAttendance.outTime = outTime ? new Date(outTime) : existingAttendance.outTime;
-  existingAttendance.lateBy = lateBy || existingAttendance.lateBy;
-  existingAttendance.earlyLeave = earlyLeave || existingAttendance.earlyLeave;
-  existingAttendance.overTime = overTime || existingAttendance.overTime;
-  existingAttendance.notes = notes || existingAttendance.notes;
+      existingAttendance.status = status ? status.toUpperCase() : existingAttendance.status;
+      existingAttendance.inTime = inTime ? new Date(inTime) : existingAttendance.inTime;
+      existingAttendance.outTime = outTime ? new Date(outTime) : existingAttendance.outTime;
+      existingAttendance.lateBy = lateBy || existingAttendance.lateBy;
+      existingAttendance.earlyLeave = earlyLeave || existingAttendance.earlyLeave;
+      existingAttendance.overTime = overTime || existingAttendance.overTime;
+      existingAttendance.notes = notes || existingAttendance.notes;
+      existingAttendance.companyCode = userCompanyCode;
 
-  await existingAttendance.save();
+      await existingAttendance.save();
 
-  return res.status(200).json({
-    message: "Attendance updated successfully",
-    data: existingAttendance
-  });
-}
-
+      return res.status(200).json({
+        message: "Attendance updated successfully",
+        data: existingAttendance
+      });
+    }
     
     const attendance = new Attendance({
       user,
@@ -765,7 +783,7 @@ const createManualAttendance = async (req, res) => {
       overTime: overTime || "00:00:00",
       notes: notes || "",
       isClockedIn: !outTime,
-      companyCode: userCompanyCode // Add company code
+      companyCode: userCompanyCode
     });
     
     await attendance.save();
@@ -796,7 +814,7 @@ const createManualAttendance = async (req, res) => {
   }
 };
 
-// Delete Attendance Record (Admin) - UPDATED
+// Delete Attendance Record (Admin)
 const deleteAttendanceRecord = async (req, res) => {
   try {
     const { id } = req.params;
@@ -819,7 +837,6 @@ const deleteAttendanceRecord = async (req, res) => {
         });
       }
       
-      // Verify record belongs to same company
       if (record.companyCode && record.companyCode !== userCompanyCode) {
         return res.status(403).json({ 
           message: "Cannot delete attendance from different company" 
@@ -852,7 +869,7 @@ const deleteAttendanceRecord = async (req, res) => {
   }
 };
 
-// Get Attendance by User ID (Admin) - UPDATED
+// Get Attendance by User ID (Admin)
 const getAttendanceByUser = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -878,7 +895,6 @@ const getAttendanceByUser = async (req, res) => {
       });
     }
     
-    // Verify user belongs to same company
     if (user.companyCode !== userCompanyCode) {
       return res.status(403).json({ 
         message: "Cannot access attendance for user from different company" 
@@ -887,7 +903,7 @@ const getAttendanceByUser = async (req, res) => {
     
     let query = { 
       user: userId,
-      companyCode: userCompanyCode // Add company filter
+      companyCode: userCompanyCode
     };
     
     if (date) {
@@ -925,7 +941,7 @@ const getAttendanceByUser = async (req, res) => {
   }
 };
 
-// Mark Daily Absent (Cron Job) - UPDATED
+// Mark Daily Absent (Cron Job)
 const markDailyAbsent = async () => {
   try {
     const todayStart = new Date();
@@ -933,17 +949,14 @@ const markDailyAbsent = async () => {
     const todayEnd = new Date();
     todayEnd.setHours(23, 59, 59, 999);
     
-    // Get all companies
     const companies = await Company.find({ isActive: true });
     
     for (const company of companies) {
-      // Get all users for this company
       const companyUsers = await User.find({ 
         companyCode: company.companyCode,
         isActive: true 
       });
       
-      // For each user in company, check attendance
       for (const user of companyUsers) {
         const existingAttendance = await Attendance.findOne({
           user: user._id,
@@ -961,7 +974,7 @@ const markDailyAbsent = async () => {
               date: todayStart,
               status: "ABSENT",
               isClockedIn: false,
-              companyCode: company.companyCode // Add company code
+              companyCode: company.companyCode
             });
             
             await absentRecord.save();
@@ -976,7 +989,7 @@ const markDailyAbsent = async () => {
   }
 };
 
-// Get Attendance Statistics - UPDATED
+// Get Attendance Statistics
 const getAttendanceStats = async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
@@ -988,7 +1001,7 @@ const getAttendanceStats = async (req, res) => {
       });
     }
     
-    let matchStage = { companyCode: userCompanyCode }; // Filter by company code
+    let matchStage = { companyCode: userCompanyCode };
     
     if (startDate && endDate) {
       const start = new Date(startDate);
@@ -1063,4 +1076,5 @@ module.exports = {
   markDailyAbsent,
   getAttendanceStats
 };
+
 console.log("✅ AttendanceController.js loaded successfully");

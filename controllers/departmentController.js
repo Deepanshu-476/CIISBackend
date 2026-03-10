@@ -62,16 +62,16 @@ exports.createDepartment = async (req, res) => {
       return errorResponse(res, 400, "User not found");
     }
 
-    console.log("✅ User found in database:", {
-      id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      department: user.department,
-      jobRole: user.jobRole,
-      company: user.company,
-      companyCode: user.companyCode
-    });
+    // console.log("✅ User found in database:", {
+    //   id: user._id,
+    //   name: user.name,
+    //   email: user.email,
+    //   role: user.role,
+    //   department: user.department,
+    //   jobRole: user.jobRole,
+    //   company: user.company,
+    //   companyCode: user.companyCode
+    // });
 
     // Check if user has company
     if (!user.company) {

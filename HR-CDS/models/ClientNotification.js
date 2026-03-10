@@ -17,7 +17,6 @@ const clientNotificationSchema = new mongoose.Schema({
   type: {
     type: String,
     required: true,
-    enum: ['info', 'success', 'warning', 'error', 'client_added', 'client_updated', 'client_deleted', 'service_added', 'service_deleted'],
     default: 'info'
   },
   isRead: {
