@@ -57,10 +57,10 @@ const userSchema = new mongoose.Schema({
     default: 'user'
   },
   
-  companyRole: {
-    type: String,
-    default: 'employee'
-  },
+  // companyRole: {
+  //   type: String,
+  //   default: 'employee'
+  // },
 
   // ==================== PERSONAL INFORMATION ====================
   phone: String,

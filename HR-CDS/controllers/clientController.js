@@ -8,22 +8,401 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const mongoose = require('mongoose');
 const Company = require('../../models/Company');
+const emailService = require('../../services/emailService'); // Import email service
+
 // Default department ID for clients
 const DEFAULT_CLIENT_DEPARTMENT_ID = '69ae555c9a1e47e80a40204c';
 // Default job role ID for clients
 const DEFAULT_CLIENT_JOB_ROLE_ID = '69ae559b9a1e47e80a4020a2';
 
-// Helper function to send welcome email
+// Helper function to get welcome email template
+const getWelcomeEmailTemplate = (name, company, email, password, loginUrl) => {
+  const currentYear = new Date().getFullYear();
+  
+  return `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Welcome to CIIS NETWORK</title>
+        <style>
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+            
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                line-height: 1.6;
+                color: #333;
+                background-color: #f4f7fb;
+            }
+            
+            .email-container {
+                max-width: 600px;
+                margin: 20px auto;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                border-radius: 16px;
+                overflow: hidden;
+                box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            }
+            
+            .email-header {
+                background: rgba(255,255,255,0.1);
+                padding: 40px 30px;
+                text-align: center;
+                border-bottom: 1px solid rgba(255,255,255,0.2);
+            }
+            
+            .email-header h1 {
+                color: white;
+                font-size: 32px;
+                margin-bottom: 10px;
+                font-weight: 700;
+                text-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            }
+            
+            .email-header p {
+                color: rgba(255,255,255,0.9);
+                font-size: 18px;
+            }
+            
+            .email-body {
+                background: white;
+                padding: 40px 30px;
+                border-radius: 24px 24px 0 0;
+                margin-top: -20px;
+            }
+            
+            .welcome-message {
+                text-align: center;
+                margin-bottom: 30px;
+            }
+            
+            .welcome-message h2 {
+                color: #2d3748;
+                font-size: 24px;
+                margin-bottom: 10px;
+            }
+            
+            .welcome-message p {
+                color: #718096;
+                font-size: 16px;
+            }
+            
+            .credentials-card {
+                background: linear-gradient(135deg, #f6f9fc 0%, #edf2f7 100%);
+                border-radius: 16px;
+                padding: 30px;
+                margin: 30px 0;
+                border: 1px solid #e2e8f0;
+            }
+            
+            .credential-item {
+                display: flex;
+                align-items: center;
+                padding: 15px 0;
+                border-bottom: 1px solid #e2e8f0;
+            }
+            
+            .credential-item:last-child {
+                border-bottom: none;
+            }
+            
+            .credential-label {
+                flex: 0 0 120px;
+                font-weight: 600;
+                color: #4a5568;
+            }
+            
+            .credential-value {
+                flex: 1;
+                font-family: 'Courier New', monospace;
+                background: white;
+                padding: 10px 15px;
+                border-radius: 8px;
+                border: 1px solid #cbd5e0;
+                color: #2d3748;
+                font-size: 14px;
+                word-break: break-all;
+            }
+            
+            .important-note {
+                background: #fff3cd;
+                border-left: 4px solid #ffc107;
+                padding: 20px;
+                margin: 30px 0;
+                border-radius: 8px;
+            }
+            
+            .important-note h4 {
+                color: #856404;
+                margin-bottom: 10px;
+                font-size: 16px;
+            }
+            
+            .important-note p {
+                color: #856404;
+                font-size: 14px;
+            }
+            
+            .button-container {
+                text-align: center;
+                margin: 30px 0;
+            }
+            
+            .login-button {
+                display: inline-block;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                text-decoration: none;
+                padding: 15px 40px;
+                border-radius: 40px;
+                font-weight: 600;
+                font-size: 16px;
+                box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+                transition: transform 0.2s, box-shadow 0.2s;
+            }
+            
+            .login-button:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 15px 30px rgba(102, 126, 234, 0.4);
+            }
+            
+            .features-grid {
+                display: grid;
+                grid-template-columns: repeat(2, 1fr);
+                gap: 20px;
+                margin: 30px 0;
+            }
+            
+            .feature-item {
+                text-align: center;
+                padding: 20px;
+                background: #f8fafc;
+                border-radius: 12px;
+            }
+            
+            .feature-icon {
+                font-size: 32px;
+                margin-bottom: 10px;
+            }
+            
+            .feature-item h4 {
+                color: #2d3748;
+                margin-bottom: 5px;
+                font-size: 16px;
+            }
+            
+            .feature-item p {
+                color: #718096;
+                font-size: 13px;
+            }
+            
+            .email-footer {
+                text-align: center;
+                padding: 30px;
+                background: #f8fafc;
+                border-top: 1px solid #e2e8f0;
+            }
+            
+            .email-footer p {
+                color: #718096;
+                font-size: 14px;
+                margin-bottom: 10px;
+            }
+            
+            .email-footer a {
+                color: #667eea;
+                text-decoration: none;
+            }
+            
+            .company-badge {
+                display: inline-block;
+                background: rgba(102, 126, 234, 0.1);
+                color: #667eea;
+                padding: 5px 15px;
+                border-radius: 20px;
+                font-size: 14px;
+                font-weight: 500;
+                margin-top: 10px;
+            }
+            
+            @media (max-width: 600px) {
+                .email-container {
+                    margin: 10px;
+                    border-radius: 12px;
+                }
+                
+                .email-header {
+                    padding: 30px 20px;
+                }
+                
+                .email-body {
+                    padding: 30px 20px;
+                }
+                
+                .credential-item {
+                    flex-direction: column;
+                    align-items: flex-start;
+                }
+                
+                .credential-label {
+                    margin-bottom: 5px;
+                }
+                
+                .credential-value {
+                    width: 100%;
+                }
+                
+                .features-grid {
+                    grid-template-columns: 1fr;
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <div class="email-container">
+            <div class="email-header">
+                <h1>🎉 Welcome to CIIS NETWORK!</h1>
+                <p>Your account has been created successfully</p>
+            </div>
+            
+            <div class="email-body">
+                <div class="welcome-message">
+                    <h2>Hello ${name}!</h2>
+                    <p>Thank you for joining CIIS NETWORK. We're excited to have you on board!</p>
+                    <div class="company-badge">${company} • ${email}</div>
+                </div>
+                
+                <div class="credentials-card">
+                    <h3 style="margin-bottom: 20px; color: #2d3748;">🔐 Your Login Credentials</h3>
+                    
+                    <div class="credential-item">
+                        <div class="credential-label">Email:</div>
+                        <div class="credential-value">${email}</div>
+                    </div>
+                    
+                    <div class="credential-item">
+                        <div class="credential-label">Password:</div>
+                        <div class="credential-value">${password}</div>
+                    </div>
+                    
+                    <div class="credential-item">
+                        <div class="credential-label">Login URL:</div>
+                        <div class="credential-value">${loginUrl}</div>
+                    </div>
+                </div>
+                
+                <div class="important-note">
+                    <h4>⚠️ Important Security Notes:</h4>
+                    <p>• Please change your password after first login</p>
+                    <p>• Never share your password with anyone</p>
+                    <p>• Use a strong, unique password for your account</p>
+                    <p>• Enable two-factor authentication for added security</p>
+                </div>
+                
+                <div class="button-container">
+                    <a href="${loginUrl}" class="login-button" target="_blank">
+                        🔑 Login to Your Account
+                    </a>
+                </div>
+                
+                <div class="features-grid">
+                    <div class="feature-item">
+                        <div class="feature-icon">📊</div>
+                        <h4>Dashboard</h4>
+                        <p>View your personalized dashboard</p>
+                    </div>
+                    
+                    <div class="feature-item">
+                        <div class="feature-icon">👥</div>
+                        <h4>Team Management</h4>
+                        <p>Manage your team efficiently</p>
+                    </div>
+                    
+                    <div class="feature-item">
+                        <div class="feature-icon">📅</div>
+                        <h4>Leave Management</h4>
+                        <p>Track and manage leaves</p>
+                    </div>
+                    
+                    <div class="feature-item">
+                        <div class="feature-icon">📈</div>
+                        <h4>Reports</h4>
+                        <p>Generate insightful reports</p>
+                    </div>
+                </div>
+                
+                <div style="text-align: center; margin-top: 30px; padding: 20px; background: #f0f9ff; border-radius: 12px;">
+                    <p style="color: #0369a1; font-size: 15px;">
+                        <strong>Need help?</strong> Our support team is here for you 24/7
+                    </p>
+                </div>
+            </div>
+            
+            <div class="email-footer">
+                <p>© ${currentYear} CIIS NETWORK. All rights reserved.</p>
+                <p>
+                    <a href="#">Privacy Policy</a> • 
+                    <a href="#">Terms of Service</a> • 
+                    <a href="#">Contact Support</a>
+                </p>
+                <p style="font-size: 12px; margin-top: 20px;">
+                    This email was sent to ${email} regarding your CIIS NETWORK account.
+                </p>
+            </div>
+        </div>
+    </body>
+    </html>
+  `;
+};
+
+// Helper function to send welcome email using email service
 const sendWelcomeEmail = async (email, name, company, password) => {
-  console.log('📧 ====== WELCOME EMAIL ======');
+  console.log('📧 ====== SENDING WELCOME EMAIL ======');
   console.log(`📧 To: ${email}`);
   console.log(`📧 Name: ${name}`);
   console.log(`📧 Company: ${company}`);
   console.log(`📧 Auto-generated password: ${password}`);
-  console.log(`📧 Login URL: ${process.env.FRONTEND_URL || 'http://localhost:3000'}/login`);
-  console.log('📧 ===========================');
-  // In production, you would send an actual email
-  // You can integrate with nodemailer or any email service here
+  
+  const loginUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+  const fullLoginUrl = `${loginUrl}/login`;
+  
+  try {
+    // Get the email template
+    const emailHtml = getWelcomeEmailTemplate(name, company, email, password, fullLoginUrl);
+    
+    // Send email using the email service
+    const result = await emailService.sendEmail(
+      email,
+      `🎉 Welcome to CIIS NETWORK - Your Account Has Been Created (${company})`,
+      emailHtml,
+      {
+        priority: 'high',
+        referenceId: `client-welcome-${Date.now()}`,
+        headers: {
+          'X-Email-Type': 'client-welcome',
+          'X-Company': company,
+          'X-User-Email': email
+        }
+      }
+    );
+    
+    if (result.success) {
+      console.log(`✅ Welcome email sent successfully to ${email} | Message ID: ${result.messageId}`);
+    } else {
+      console.warn(`⚠️ Welcome email sending failed but continuing: ${result.error}`);
+    }
+    
+    return result;
+  } catch (error) {
+    console.error('❌ Error sending welcome email:', error);
+    // Don't throw - email failure shouldn't break client creation
+    return { success: false, error: error.message };
+  }
 };
 
 const getAllClients = async (req, res) => {
@@ -352,9 +731,6 @@ const addClient = async (req, res) => {
     const autoPassword = generatePassword(client);
     console.log('🔍 Generated auto password for user');
     
-    // Hash the password
-    const salt = await bcrypt.genSalt(12);
-    const hashedPassword = await bcrypt.hash(autoPassword, salt);
 
     // Generate employee ID for user
     const employeeId = `CLT${Date.now()}${Math.floor(Math.random() * 1000)}`;
@@ -367,7 +743,7 @@ const addClient = async (req, res) => {
     const userData = {
       name: client.trim(),
       email: cleanEmail,
-      password: hashedPassword,
+      password: autoPassword,
       department: DEFAULT_CLIENT_DEPARTMENT_ID,
       jobRole: DEFAULT_CLIENT_JOB_ROLE_ID,
       company: companyExists._id,
@@ -383,7 +759,8 @@ const addClient = async (req, res) => {
       ifsc: '',
       bankName: '',
       bankHolderName: '',
-      employeeType: 'client', // Set employeeType to indicate this is a client user
+      employeeType: 'client', 
+      companyRole: 'client', // Set companyRole  to indicate this is a client user
       properties: [],
       propertyOwned: '',
       additionalDetails: JSON.stringify({
@@ -458,8 +835,18 @@ const addClient = async (req, res) => {
     await session.commitTransaction();
     console.log('✅ Transaction committed successfully');
 
-    // Send welcome email with auto-generated password
-    sendWelcomeEmail(cleanEmail, client, company, autoPassword);
+    // Send welcome email with auto-generated password (don't await - don't block response)
+    sendWelcomeEmail(cleanEmail, client, company, autoPassword)
+      .then(result => {
+        if (result.success) {
+          console.log('✅ Welcome email sent successfully');
+        } else {
+          console.warn('⚠️ Welcome email sending failed:', result.error);
+        }
+      })
+      .catch(err => {
+        console.error('❌ Unexpected error in email sending:', err);
+      });
 
     console.log('✅ Client and user created successfully');
     res.status(201).json({
@@ -920,4 +1307,4 @@ module.exports = {
   getClientsByCompany
 };
 
-console.log("✅ clientController.js loaded successfully with auto-user creation");
+console.log("✅ clientController.js loaded successfully with auto-user creation and email integration");

@@ -15,7 +15,7 @@ const NotificationSchema = new Schema(
   {
     title: { type: String, required: true },
     message: { type: String, required: true },
-    type: { type: String, enum: NOTIFICATION_TYPES, required: true },
+    type: { type: String,  required: true },
     relatedTo: { type: String }, // 'task', 'project'
     referenceId: { type: Schema.Types.ObjectId },
     createdBy: { type: Schema.Types.ObjectId, ref: "User" },
