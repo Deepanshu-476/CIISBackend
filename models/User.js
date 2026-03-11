@@ -120,9 +120,9 @@ const userSchema = new mongoose.Schema({
   
   // ==================== COMPANY-SPECIFIC FIELDS ====================
   companyRole: {
-    type: String,
-    default: 'employee'
-  },
+  type: String,
+  default: "employee"
+},
   
   // ==================== SECURITY & AUTHENTICATION ====================
   resetToken: {
