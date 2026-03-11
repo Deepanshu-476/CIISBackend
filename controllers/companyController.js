@@ -379,27 +379,26 @@ exports.createCompany = async (req, res) => {
       const company = await Company.create([companyData], { session });
       createdCompany = company[0];
       companyCreated = true;
-      
 
       // ✅ 4. CREATE OWNER USER
-      const ownerUser = new User({
-      company: createdCompany._id,
-      companyCode: companyCode,
-      name: ownerName.trim(),
-      email: lowerOwnerEmail,
-      password: ownerPassword,
-      department: department,
-      jobRole: "super_admin",
-      companyRole: "owner",
-      phone: trimmedPhone,
-      isActive: true,
-      isVerified: true,
-      createdBy: null
-    });
+      const ownerUser = await User.create([{
+        company: createdCompany._id,
+        companyCode: companyCode,
+        name: ownerName.trim(),
+        email: lowerOwnerEmail,
+        password: ownerPassword,
+        department: department,
+        jobRole: "super_admin",
+        companyRole: "Owner",
+        phone: trimmedPhone,
+        isActive: true,
+        isVerified: true,
+        createdBy: null,
+        role: 'super_admin',
+        permissions: ['all']
+      }], { session });
 
-    await ownerUser.save({ session });
-
-    createdOwner = ownerUser;
+      createdOwner = ownerUser[0];
 
       // ✅ 5. GENERATE LOGIN TOKEN
       const loginToken = crypto.randomBytes(32).toString("hex");
