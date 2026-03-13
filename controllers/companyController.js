@@ -390,6 +390,7 @@ exports.createCompany = async (req, res) => {
         department: department,
         jobRole: "super_admin",
         companyRole: "Owner",
+        
         phone: trimmedPhone,
         isActive: true,
         isVerified: true,
