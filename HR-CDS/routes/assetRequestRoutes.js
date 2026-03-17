@@ -1,7 +1,7 @@
 // assetRoutes.js
 const express = require('express');
 const router = express.Router();
-const assetController = require('../controllers/assetController');
+const assetController = require('../controllers/assetRequestController');
 const { protect, authorize } = require('../../middleware/authMiddleware');
 const isAdmin = require('../../middleware/isAdmin');
 const isManager = require('../../middleware/isManager');
