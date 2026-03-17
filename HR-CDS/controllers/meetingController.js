@@ -1,7 +1,7 @@
 const Meeting = require("../models/Meeting");
 const MeetingView = require("../models/MeetingView");
 const User = require("../../models/User");
-const sendEmail = require("../../utils/sendEmail");
+const { sendEmail } = require("../../utils/sendEmail");
 
 /**
  * 🟢 Create Meeting (Admin)
