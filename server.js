@@ -169,8 +169,6 @@ const checkAndMarkOverdueTasks = async () => {
 
 const attendanceController = require("./HR-CDS/controllers/AttendanceController");
 
-
-
 // Function for daily summary
 const dailyOverdueSummary = async () => {
   try {
@@ -407,7 +405,8 @@ app.use((req, res, next) => {
 app.use("/api/auth", require("./routes/authRoutes.js"));
 app.use("/api/attendance", require("./HR-CDS/routes/attendanceRoutes.js"));
 app.use("/api/leaves", require("./HR-CDS/routes/LeaveRoutes.js"));
-app.use("/api/assets", require("./HR-CDS/routes/assetsRoute.js"));
+// 🔥 FIXED: Added missing closing parenthesis
+app.use("/api/asset-requests", require("./HR-CDS/routes/assetRequestRoutes.js"));
 app.use("/api/task", require("./HR-CDS/routes/taskRoute.js"));
 app.use("/api/users", require("./HR-CDS/routes/userRoutes.js"));
 app.use("/api/departments", require("./routes/Department.routes.js"));
@@ -425,7 +424,7 @@ app.use('/api/superAdmin', require("./routes/superAdmin.js"));
 app.use("/api/meetings", require("./HR-CDS/routes/meetingRoutes.js"));
 app.use('/api/cmeeting', require("./HR-CDS/routes/clientMeetingRoutes.js"));
 app.use('/api/sidebar', require("./routes/sidebarConfigs.js"));
-app.use('/api/assets12', require('./routes/assetRoutes'));
+app.use('/api/company-assets', require('./routes/companyAssetRoutes'));
 app.use("/api/holidays", require("./HR-CDS/routes/Holiday.js"));
 
 // ==================== API ENDPOINTS ====================
