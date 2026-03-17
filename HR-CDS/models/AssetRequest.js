@@ -6,14 +6,27 @@ const assetRequestSchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
+  asset: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'CompanyAsset',
+    required: true
+  },
   assetName: {
     type: String,
-    required: true,
-    enum: ['phone', 'sim', 'laptop', 'desktop', 'headphone']
+    required: true
+  },
+  assetStatus: {
+    type: String,
+    default: 'Available'
+  },
+  requestType: {
+    type: String,
+    enum: ['new', 'assignment', 'maintenance', 'return'],
+    default: 'assignment'
   },
   status: {
     type: String,
-    enum: ['pending', 'approved', 'rejected'],
+    enum: ['pending', 'approved', 'rejected', 'completed', 'cancelled'],
     default: 'pending'
   },
   companyCode: {
@@ -24,6 +37,10 @@ const assetRequestSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  reason: {
+    type: String,
+    default: ''
+  },
   adminComment: {
     type: String,
     default: ''
@@ -32,11 +49,29 @@ const assetRequestSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
   },
+  requestDate: {
+    type: Date,
+    default: Date.now
+  },
   decisionDate: {
+    type: Date
+  },
+  expectedReturnDate: {
+    type: Date
+  },
+  actualReturnDate: {
     type: Date
   }
 }, {
   timestamps: true
 });
 
-module.exports = mongoose.model('AssetRequest', assetRequestSchema);
+// Indexes for better performance
+assetRequestSchema.index({ user: 1, status: 1 });
+assetRequestSchema.index({ asset: 1 });
+assetRequestSchema.index({ companyCode: 1 });
+assetRequestSchema.index({ status: 1, createdAt: -1 });
+
+const AssetRequest = mongoose.model('AssetRequest', assetRequestSchema);
+
+module.exports = AssetRequest;
