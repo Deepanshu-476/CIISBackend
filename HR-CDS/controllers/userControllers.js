@@ -744,7 +744,12 @@ exports.getCompanydepartmentUsers = async (req, res) => {
     // Build filter
     const filter = { 
       isActive: true,
-      company: companyId
+      company: companyId,
+      companyRole: { 
+  $exists: true,
+  $not: /^client$/i 
+}
+
     };
     
     // If user is not admin/manager/hr, filter by department
@@ -809,7 +814,8 @@ exports.getCompanydepartmentUsers = async (req, res) => {
         additionalDetails: user.additionalDetails,
         isActive: user.isActive,
         createdAt: user.createdAt,
-        updatedAt: user.updatedAt
+        updatedAt: user.updatedAt,
+        companyRole:user.companyRole
       }))
     });
     
@@ -834,7 +840,11 @@ exports.getCompanyUsers = async (req, res) => {
 
     const filter = {
       isActive: true,
-      company: companyId
+      company: companyId,
+      companyRole: { 
+  $exists: true,
+  $not: /^client$/i 
+}
     };
 
     const users = await User.find(filter)
@@ -868,6 +878,7 @@ exports.getCompanyUsers = async (req, res) => {
           department: user.department,
           jobRole: user.jobRole,
           phone: user.phone,
+          companyRole:user.companyRole,
           taskStats: {
             total,
             completed,
@@ -914,13 +925,19 @@ exports.getCompanyUsersPaginated = async (req, res) => {
       name: currentUser.name,
       company: companyId,
       jobRole: currentUser.jobRole,
-      department: currentUser.department
+      department: currentUser.department,
+      companyRole:currentUser.companyRole,
+      
     });
     
     // Build filter
     const filter = { 
       isActive: true,
-      company: companyId
+      company: companyId,
+      companyRole: { 
+  $exists: true,
+  $not: /^client$/i 
+}
     };
     
     // If user is not admin/manager/hr, filter by department
