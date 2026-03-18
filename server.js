@@ -405,7 +405,6 @@ app.use((req, res, next) => {
 app.use("/api/auth", require("./routes/authRoutes.js"));
 app.use("/api/attendance", require("./HR-CDS/routes/attendanceRoutes.js"));
 app.use("/api/leaves", require("./HR-CDS/routes/LeaveRoutes.js"));
-// 🔥 FIXED: Added missing closing parenthesis
 app.use("/api/asset-requests", require("./HR-CDS/routes/assetRequestRoutes.js"));
 app.use("/api/task", require("./HR-CDS/routes/taskRoute.js"));
 app.use("/api/users", require("./HR-CDS/routes/userRoutes.js"));
@@ -415,7 +414,11 @@ app.use("/api/alerts", require("./HR-CDS/routes/alertRoutes.js"));
 app.use("/api/groups", require("./HR-CDS/routes/groupRoutes.js"));
 app.use("/api/projects", require("./HR-CDS/routes/projectRoutes.js"));
 app.use("/api/clientsservice", require("./HR-CDS/routes/clientRoutes.js"));
-app.use("/api/clienttasks", require("./HR-CDS/routes/clientTask.js"));
+
+// 🔥 IMPORTANT: यहाँ clientTasks routes mount किए गए हैं
+// यह सुनिश्चित करता है कि /api/tasks/... endpoints काम करेंगे
+app.use("/api/tasks", require("./HR-CDS/routes/clientTask.js"));
+
 app.use('/api/menu-access', require("./routes/menuAccess.js"));
 app.use('/api/menu-items', require("./routes/menuItems.js"));
 app.use('/api/company', require("./routes/companyRoutes.js"));
@@ -511,6 +514,20 @@ app.get("/api/manual-attendance-check", async (req, res) => {
   }
 });
 
+// ✅ NEW: Test endpoint for assigned tasks
+app.get("/api/tasks/test", (req, res) => {
+  res.json({
+    success: true,
+    message: "Tasks API is working",
+    endpoints: {
+      assignedToMe: "/api/tasks/assigned-to-me",
+      clientTasks: "/api/tasks/client/:clientId",
+      serviceTasks: "/api/tasks/client/:clientId/service/:service"
+    },
+    timestamp: new Date().toISOString()
+  });
+});
+
 // ==================== ERROR HANDLERS ====================
 
 // ✅ 404 Handler - Improved
@@ -556,5 +573,11 @@ server.listen(PORT, () => {
 ✅ Base URL: http://localhost:${PORT}/api
 ✅ Socket URL: ws://localhost:${PORT}
 ========================================
+
+📌 Available Endpoints:
+   • GET  /api/tasks/test
+   • GET  /api/tasks/assigned-to-me (NEW!)
+   • GET  /api/tasks/client/:clientId
+   • POST /api/tasks/client/:clientId/service/:service
   `);
 });

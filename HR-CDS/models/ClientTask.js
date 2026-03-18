@@ -17,19 +17,35 @@ const clienttaskSchema = new mongoose.Schema({
     trim: true,
     maxlength: [200, 'Task name cannot exceed 200 characters']
   },
+  description: {
+    type: String,
+    trim: true,
+    default: ''
+  },
   dueDate: {
     type: Date,
     default: null
   },
   assignee: {
-    type: String,
+    type: String,  // User ID or User Name
     trim: true,
-    default: ''
+    default: '',
+    index: true     // Index for faster queries
+  },
+  assigneeId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
   },
   priority: {
     type: String,
     enum: ['Low', 'Medium', 'High'],
     default: 'Medium'
+  },
+  status: {
+    type: String,
+    enum: ['pending', 'in-progress', 'completed', 'overdue', 'onhold'],
+    default: 'pending'
   },
   completed: {
     type: Boolean,
@@ -38,7 +54,25 @@ const clienttaskSchema = new mongoose.Schema({
   completedAt: {
     type: Date,
     default: null
-  }
+  },
+  files: [{
+    filename: String,
+    path: String,
+    uploadedAt: Date
+  }],
+  remarks: [{
+    text: String,
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    userName: String,
+    createdAt: { type: Date, default: Date.now }
+  }],
+  activityLogs: [{
+    action: String,
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    userName: String,
+    description: String,
+    createdAt: { type: Date, default: Date.now }
+  }]
 }, {
   timestamps: true,
   toJSON: { virtuals: true },
@@ -49,8 +83,11 @@ const clienttaskSchema = new mongoose.Schema({
 clienttaskSchema.index({ clientId: 1, service: 1 });
 clienttaskSchema.index({ clientId: 1, completed: 1 });
 clienttaskSchema.index({ dueDate: 1 });
-clienttaskSchema.index({ assignee: 1 });
+clienttaskSchema.index({ assignee: 1 });  // Important for assigned-to-me queries
+clienttaskSchema.index({ assigneeId: 1 });
+clienttaskSchema.index({ status: 1 });
 clienttaskSchema.index({ priority: 1 });
+clienttaskSchema.index({ createdAt: -1 });
 
 // Virtual for checking if task is overdue
 clienttaskSchema.virtual('isOverdue').get(function() {
@@ -62,13 +99,31 @@ clienttaskSchema.virtual('isOverdue').get(function() {
   return dueDate < today;
 });
 
-// Pre-save middleware for completedAt
+// Pre-save middleware
 clienttaskSchema.pre('save', function(next) {
-  if (this.isModified('completed') && this.completed && !this.completedAt) {
-    this.completedAt = new Date();
-  } else if (this.isModified('completed') && !this.completed && this.completedAt) {
-    this.completedAt = null;
+  // Update completedAt when task is completed
+  if (this.isModified('completed')) {
+    if (this.completed && !this.completedAt) {
+      this.completedAt = new Date();
+      this.status = 'completed';
+    } else if (!this.completed) {
+      this.completedAt = null;
+      if (this.status === 'completed') {
+        this.status = 'pending';
+      }
+    }
   }
+  
+  // Add activity log
+  if (this.isModified('status')) {
+    this.activityLogs = this.activityLogs || [];
+    this.activityLogs.push({
+      action: 'status_change',
+      description: `Status changed to ${this.status}`,
+      createdAt: new Date()
+    });
+  }
+  
   next();
 });
 
