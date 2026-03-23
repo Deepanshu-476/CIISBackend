@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const taskController = require('../controllers/taskController');
-const { protect } = require('../../middleware/authMiddleware'); // ✅ authorize हटा दिया
+const { protect } = require('../../middleware/authMiddleware'); 
 const upload = require('../../utils/multer'); 
 const { uploadRemarkImage } = require('../middlewares/uploadMiddleware');
 

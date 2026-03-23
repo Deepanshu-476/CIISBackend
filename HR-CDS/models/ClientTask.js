@@ -27,10 +27,10 @@ const clienttaskSchema = new mongoose.Schema({
     default: null
   },
   assignee: {
-    type: String,  // User ID or User Name
+    type: String,
     trim: true,
     default: '',
-    index: true     // Index for faster queries
+    index: true
   },
   assigneeId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -57,11 +57,22 @@ const clienttaskSchema = new mongoose.Schema({
   },
   files: [{
     filename: String,
+    originalName: String,
     path: String,
-    uploadedAt: Date
+    uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    uploadedAt: { type: Date, default: Date.now }
   }],
   remarks: [{
     text: String,
+    images: [{
+      url: String,
+      filename: String,
+      originalName: String,
+      size: Number,
+      mimeType: String,
+      uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      uploadedAt: { type: Date, default: Date.now }
+    }],
     user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     userName: String,
     createdAt: { type: Date, default: Date.now }
@@ -71,6 +82,8 @@ const clienttaskSchema = new mongoose.Schema({
     user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     userName: String,
     description: String,
+    ipAddress: String,
+    userAgent: String,
     createdAt: { type: Date, default: Date.now }
   }]
 }, {
@@ -83,11 +96,13 @@ const clienttaskSchema = new mongoose.Schema({
 clienttaskSchema.index({ clientId: 1, service: 1 });
 clienttaskSchema.index({ clientId: 1, completed: 1 });
 clienttaskSchema.index({ dueDate: 1 });
-clienttaskSchema.index({ assignee: 1 });  // Important for assigned-to-me queries
+clienttaskSchema.index({ assignee: 1 });
 clienttaskSchema.index({ assigneeId: 1 });
 clienttaskSchema.index({ status: 1 });
 clienttaskSchema.index({ priority: 1 });
 clienttaskSchema.index({ createdAt: -1 });
+clienttaskSchema.index({ 'activityLogs.createdAt': -1 });
+clienttaskSchema.index({ 'remarks.createdAt': -1 });
 
 // Virtual for checking if task is overdue
 clienttaskSchema.virtual('isOverdue').get(function() {
@@ -101,7 +116,6 @@ clienttaskSchema.virtual('isOverdue').get(function() {
 
 // Pre-save middleware
 clienttaskSchema.pre('save', function(next) {
-  // Update completedAt when task is completed
   if (this.isModified('completed')) {
     if (this.completed && !this.completedAt) {
       this.completedAt = new Date();
@@ -113,17 +127,6 @@ clienttaskSchema.pre('save', function(next) {
       }
     }
   }
-  
-  // Add activity log
-  if (this.isModified('status')) {
-    this.activityLogs = this.activityLogs || [];
-    this.activityLogs.push({
-      action: 'status_change',
-      description: `Status changed to ${this.status}`,
-      createdAt: new Date()
-    });
-  }
-  
   next();
 });
 
