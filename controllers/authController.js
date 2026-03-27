@@ -1029,6 +1029,513 @@ exports.forgotPassword = async (req, res) => {
   }
 };
 
+// ==================== SUPER ADMIN OTP LOGIN ====================
+
+// ✅ Enhanced Helper: Check Super Admin Access (More Flexible)
+const isSuperAdminUser = (user) => {
+  if (!user) return false;
+  
+  console.log("🔍 Checking SuperAdmin status for user:", {
+    email: user.email,
+    companyRole: user.companyRole,
+    jobRole: user.jobRole,
+    department: user.department,
+    role: user.role
+  });
+  
+  // Method 1: Check by role fields
+  const hasSuperAdminRole = (
+    user.companyRole === "Owner" ||
+    user.companyRole === "SuperAdmin" ||
+    user.companyRole === "superadmin" ||
+    user.jobRole === "SuperAdmin" ||
+    user.jobRole === "superadmin" ||
+    user.role === "SuperAdmin" ||
+    user.role === "superadmin" ||
+    user.userType === "superadmin"
+  );
+  
+  // Method 2: Check if user has superAdmin flag
+  const hasSuperAdminFlag = (
+    user.isSuperAdmin === true ||
+    user.superAdmin === true
+  );
+  
+  // Method 3: Check by email domain for CIIS NETWORK
+  const isCIISEmail = (
+    user.email?.endsWith("@ciisnetwork.in") ||
+    user.email === "admin@ciisnetwork.in" ||
+    user.email === "superadmin@ciisnetwork.in"
+  );
+  
+  // Method 4: Check if user has Management department with Owner/SuperAdmin role
+  const hasManagementRole = (
+    (user.department === "Management" || user.department === "Admin") &&
+    (user.companyRole === "Owner" || user.jobRole === "SuperAdmin")
+  );
+  
+  // Return true if any condition matches
+  const isSuperAdmin = (
+    hasSuperAdminRole ||
+    hasSuperAdminFlag ||
+    (isCIISEmail && hasManagementRole)
+  );
+  
+  console.log("✅ SuperAdmin check result:", {
+    isSuperAdmin,
+    hasSuperAdminRole,
+    hasSuperAdminFlag,
+    isCIISEmail,
+    hasManagementRole
+  });
+  
+  return isSuperAdmin;
+};
+
+// ✅ Super Admin Login - Send OTP (Updated with better debugging)
+exports.superAdminLogin = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    console.log("🔐 SuperAdmin Login attempt:", {
+      email: email ? `${email.substring(0, 3)}...` : "undefined",
+      timestamp: new Date().toISOString(),
+    });
+
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: "Email and password are required",
+        errorCode: "MISSING_CREDENTIALS",
+      });
+    }
+
+    const cleanEmail = email.toLowerCase().trim();
+
+    // Find user with all fields
+    const user = await User.findOne({ email: cleanEmail })
+      .select("+password +isActive +loginAttempts +lockUntil +companyRole +jobRole +department +role +isSuperAdmin +superAdmin +userType")
+      .populate("company", "companyName companyCode logo");
+
+    if (!user) {
+      console.log("❌ User not found:", cleanEmail);
+      return res.status(401).json({
+        success: false,
+        message: "Invalid email or password",
+        errorCode: "INVALID_CREDENTIALS",
+      });
+    }
+
+    // Log user details for debugging
+    console.log("👤 User found:", {
+      id: user._id,
+      name: user.name,
+      email: user.email,
+      companyRole: user.companyRole,
+      jobRole: user.jobRole,
+      department: user.department,
+      role: user.role,
+      isSuperAdmin: user.isSuperAdmin,
+      superAdmin: user.superAdmin,
+      userType: user.userType
+    });
+
+    // Check if active
+    if (!user.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: "Your account has been deactivated",
+        errorCode: "ACCOUNT_DEACTIVATED",
+      });
+    }
+
+    // Check if SuperAdmin with detailed logging
+    const isSuperAdmin = isSuperAdminUser(user);
+    console.log("🔍 SuperAdmin check result:", {
+      isSuperAdmin,
+      userDetails: {
+        companyRole: user.companyRole,
+        jobRole: user.jobRole,
+        department: user.department,
+        email: user.email
+      }
+    });
+
+    if (!isSuperAdmin) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Super Admin only.",
+        errorCode: "SUPERADMIN_ONLY",
+        details: {
+          required: "User must have SuperAdmin privileges",
+          current: {
+            companyRole: user.companyRole || "Not set",
+            jobRole: user.jobRole || "Not set",
+            department: user.department || "Not set",
+            email: user.email
+          },
+          suggestion: "Contact system administrator to grant SuperAdmin access"
+        }
+      });
+    }
+
+    // Check lock
+    if (user.lockUntil && user.lockUntil > Date.now()) {
+      const lockMinutes = Math.ceil((user.lockUntil - Date.now()) / 60000);
+      return res.status(429).json({
+        success: false,
+        message: `Account temporarily locked. Try again in ${lockMinutes} minutes.`,
+        errorCode: "ACCOUNT_LOCKED",
+      });
+    }
+
+    // Verify password
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+
+    if (!isPasswordValid) {
+      const updatedAttempts = (user.failedLoginAttempts || 0) + 1;
+      const updateData = {
+        failedLoginAttempts: updatedAttempts,
+      };
+
+      if (updatedAttempts >= 5) {
+        updateData.lockUntil = Date.now() + 15 * 60 * 1000;
+      }
+
+      await User.findByIdAndUpdate(user._id, updateData);
+
+      return res.status(401).json({
+        success: false,
+        message: "Invalid email or password",
+        errorCode: "INVALID_CREDENTIALS",
+        remainingAttempts: Math.max(0, 5 - updatedAttempts),
+      });
+    }
+
+    // Reset failed attempts
+    await User.findByIdAndUpdate(user._id, {
+      $set: {
+        failedLoginAttempts: 0,
+        lockUntil: null,
+      },
+    });
+
+    // Delete old OTPs
+    await LoginOTP.deleteMany({ email: user.email });
+
+    // Generate OTP
+    const otp = generateOTP();
+
+    const tempToken = jwt.sign(
+      {
+        email: user.email,
+        userId: user._id,
+        purpose: "superadmin-login",
+        role: "SuperAdmin",
+      },
+      process.env.JWT_SECRET + "-temp",
+      { expiresIn: "10m" }
+    );
+
+    // Save OTP
+    await LoginOTP.create({
+      email: user.email,
+      otp,
+      tempToken,
+      expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+    });
+
+    // Send OTP Email
+    await emailService.sendEmail(
+      user.email,
+      "🔐 Super Admin Login OTP",
+      `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <h2 style="color: #dc2626;">Super Admin Login Verification</h2>
+          <p>Hello ${user.name},</p>
+          <p>Your OTP for <strong>Super Admin Panel Login</strong> is:</p>
+          <h1 style="font-size: 36px; letter-spacing: 8px; background: #f3f4f6; padding: 20px; text-align: center; border-radius: 8px;">${otp}</h1>
+          <p>This OTP is valid for 5 minutes.</p>
+          <p>If you didn't attempt this login, please contact support immediately.</p>
+        </div>
+      `
+    );
+
+    console.log(`✅ SuperAdmin OTP sent to ${user.email}`);
+
+    return res.status(200).json({
+      success: true,
+      requiresOTP: true,
+      message: "Super Admin OTP sent successfully",
+      tempToken,
+      email: user.email,
+      userType: "SuperAdmin",
+    });
+  } catch (error) {
+    console.error("🔥 SuperAdmin Login Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Super Admin login failed",
+      errorCode: "INTERNAL_SERVER_ERROR",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+// ✅ Super Admin Verify OTP (Updated)
+exports.verifySuperAdminOTP = async (req, res) => {
+  try {
+    const { email, otp, tempToken } = req.body;
+
+    if (!email || !otp || !tempToken) {
+      return res.status(400).json({
+        success: false,
+        message: "Email, OTP and tempToken are required",
+      });
+    }
+
+    // Verify temp token
+    let decoded;
+    try {
+      decoded = jwt.verify(tempToken, process.env.JWT_SECRET + "-temp");
+    } catch (err) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid or expired session",
+      });
+    }
+
+    if (decoded.email !== email || decoded.purpose !== "superadmin-login") {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid Super Admin session",
+      });
+    }
+
+    const otpRecord = await LoginOTP.findOne({
+      email,
+      otp,
+      tempToken,
+      verified: false,
+    });
+
+    if (!otpRecord) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid OTP",
+      });
+    }
+
+    if (otpRecord.expiresAt < new Date()) {
+      await LoginOTP.deleteOne({ _id: otpRecord._id });
+      return res.status(400).json({
+        success: false,
+        message: "OTP has expired",
+      });
+    }
+
+    if (otpRecord.attempts >= 3) {
+      await LoginOTP.deleteOne({ _id: otpRecord._id });
+      return res.status(429).json({
+        success: false,
+        message: "Too many failed attempts. Please login again.",
+      });
+    }
+
+    otpRecord.attempts += 1;
+    otpRecord.verified = true;
+    await otpRecord.save();
+
+    const user = await User.findOne({ email })
+      .select("-password -loginAttempts -lockUntil")
+      .populate("company", "companyName companyCode logo");
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    // SuperAdmin re-check
+    if (!isSuperAdminUser(user)) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Not a Super Admin.",
+      });
+    }
+
+    user.lastLogin = new Date();
+    await user.save();
+
+    // Final JWT
+    const finalToken = jwt.sign(
+      {
+        id: user._id.toString(),
+        _id: user._id.toString(),
+        email: user.email,
+        companyCode: user.companyCode,
+        companyRole: user.companyRole,
+        department: user.department,
+        jobRole: user.jobRole,
+        role: "SuperAdmin",
+        loginType: "superadmin",
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRE || "30d" }
+    );
+
+    // Delete OTPs
+    await LoginOTP.deleteMany({ email });
+
+    res.cookie("auth_token", finalToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: 30 * 24 * 60 * 60 * 1000,
+    });
+
+    console.log(`✅ SuperAdmin verified successfully: ${user.email}`);
+
+    return res.status(200).json({
+      success: true,
+      message: "Super Admin login successful",
+      token: finalToken,
+      tokenType: "Bearer",
+      expiresIn: process.env.JWT_EXPIRE || "30d",
+      user: {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        companyRole: user.companyRole,
+        department: user.department,
+        jobRole: user.jobRole,
+        companyCode: user.companyCode,
+        companyName: user.company?.companyName || "CIIS NETWORK",
+        loginType: "superadmin",
+      },
+    });
+  } catch (error) {
+    console.error("🔥 SuperAdmin OTP Verify Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Super Admin OTP verification failed",
+      errorCode: "INTERNAL_SERVER_ERROR",
+    });
+  }
+};
+
+// ✅ Super Admin Resend OTP (Updated)
+exports.resendSuperAdminOTP = async (req, res) => {
+  try {
+    const { email, tempToken } = req.body;
+
+    if (!email || !tempToken) {
+      return res.status(400).json({
+        success: false,
+        message: "Email and tempToken are required",
+      });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(tempToken, process.env.JWT_SECRET + "-temp");
+    } catch (err) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid or expired session",
+      });
+    }
+
+    if (decoded.email !== email || decoded.purpose !== "superadmin-login") {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid Super Admin session",
+      });
+    }
+
+    const user = await User.findOne({ email }).populate("company", "companyName");
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    if (!isSuperAdminUser(user)) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Super Admin only.",
+      });
+    }
+
+    // Check rate limiting for resend
+    const recentOTPs = await LoginOTP.countDocuments({
+      email,
+      createdAt: { $gt: new Date(Date.now() - 5 * 60 * 1000) }
+    });
+
+    if (recentOTPs >= 3) {
+      return res.status(429).json({
+        success: false,
+        message: "Too many OTP requests. Please try again after 5 minutes."
+      });
+    }
+
+    // Delete old OTPs
+    await LoginOTP.deleteMany({ email });
+
+    const otp = generateOTP();
+
+    const newTempToken = jwt.sign(
+      {
+        email: user.email,
+        userId: user._id,
+        purpose: "superadmin-login",
+        role: "SuperAdmin",
+      },
+      process.env.JWT_SECRET + "-temp",
+      { expiresIn: "10m" }
+    );
+
+    await LoginOTP.create({
+      email,
+      otp,
+      tempToken: newTempToken,
+      expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+    });
+
+    await emailService.sendEmail(
+      email,
+      "🔐 New Super Admin OTP",
+      `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <h2 style="color: #dc2626;">New Super Admin OTP</h2>
+          <p>Hello ${user.name},</p>
+          <p>Your new OTP is:</p>
+          <h1 style="font-size: 36px; letter-spacing: 8px; background: #f3f4f6; padding: 20px; text-align: center; border-radius: 8px;">${otp}</h1>
+          <p>This OTP is valid for 5 minutes.</p>
+        </div>
+      `
+    );
+
+    console.log(`✅ SuperAdmin OTP resent to ${email}`);
+
+    return res.status(200).json({
+      success: true,
+      message: "Super Admin OTP resent successfully",
+      tempToken: newTempToken,
+    });
+  } catch (error) {
+    console.error("🔥 Resend SuperAdmin OTP Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to resend Super Admin OTP",
+    });
+  }
+};
+
 // ✅ Reset Password with OTP
 exports.resetPassword = async (req, res) => {
   try {
@@ -1307,7 +1814,12 @@ exports.testAPI = async (req, res) => {
         refreshToken: "POST /api/auth/refresh-token",
         logout: "POST /api/auth/logout",
         getCompanyDetails: "GET /api/auth/company/:identifier",
-        test: "GET /api/auth/test"
+        test: "GET /api/auth/test",
+        superAdmin: {
+          login: "POST /api/auth/superadmin/login",
+          verifyOTP: "POST /api/auth/superadmin/verify-otp",
+          resendOTP: "POST /api/auth/superadmin/resend-otp"
+        }
       },
       status: "operational",
       version: "1.0.0"

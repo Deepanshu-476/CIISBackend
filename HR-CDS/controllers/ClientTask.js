@@ -3,6 +3,7 @@ const Client = require('../models/Client');
 const mongoose = require('mongoose');
 const fs = require('fs');
 const path = require('path');
+const sharp = require('sharp'); 
 
 console.log("✅ ClientTask.js loading...");
 
@@ -35,19 +36,161 @@ const addClientActivityLogHelper = async (task, logData, req = null) => {
   }
 };
 
+// Updated deleteImageFiles function to handle image paths correctly
 const deleteImageFiles = (images) => {
   if (!images || images.length === 0) return;
   images.forEach(image => {
-    const filePath = path.join(__dirname, '../uploads/client-remarks', path.basename(image.url));
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-      console.log(`🗑️ Deleted image: ${filePath}`);
+    // Extract filename from URL
+    let filename = '';
+    if (image.url) {
+      filename = path.basename(image.url);
+    } else if (image.filename) {
+      filename = image.filename;
+    }
+    
+    if (filename) {
+      const filePath = path.join(__dirname, '../uploads/client-remarks', filename);
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+        console.log(`🗑️ Deleted image: ${filePath}`);
+      }
     }
   });
 };
 
-// ===== REMARK FUNCTIONS =====
+// ===== UPDATED: ADD CLIENT REMARK WITH IMAGES (WITH COMPRESSION) =====
+const addClientRemarkWithImages = async (req, res) => {
+  try {
+    console.log('\n📸 ===== ADD CLIENT REMARK WITH IMAGES =====');
+    const { taskId } = req.params;
+    const { text } = req.body;
+    const currentUser = req.user;
+    
+    console.log('📸 Files received:', req.files?.length || 0);
+    
+    if (!mongoose.Types.ObjectId.isValid(taskId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid task ID format'
+      });
+    }
+    
+    const task = await Task.findById(taskId);
+    if (!task) {
+      return res.status(404).json({
+        success: false,
+        message: 'Task not found'
+      });
+    }
+    
+    console.log('✅ Task found:', task.name);
+    
+    // Process images with sharp compression (same as Task controller)
+    const images = [];
+    
+    if (req.files && req.files.length > 0) {
+      const uploadDir = path.join(__dirname, '../uploads/client-remarks');
+      
+      // Ensure upload directory exists
+      if (!fs.existsSync(uploadDir)) {
+        fs.mkdirSync(uploadDir, { recursive: true });
+      }
+      
+      for (const file of req.files) {
+        try {
+          // Generate unique filename
+          const timestamp = Date.now();
+          const randomStr = Math.random().toString(36).substring(2, 8);
+          const filename = `remark_${timestamp}_${randomStr}_${currentUser?._id || 'user'}.jpg`;
+          
+          // Full path where image will be saved
+          const savePath = path.join(uploadDir, filename);
+          
+          console.log(`🖼️ Compressing and saving image: ${filename}`);
+          
+          // Compress and save image using sharp (same as Task controller)
+          await sharp(file.buffer)
+            .resize(1200, 1200, {
+              fit: "inside",
+              withoutEnlargement: true
+            })
+            .jpeg({
+              quality: 80,
+              progressive: true
+            })
+            .toFile(savePath);
+          
+          // Store relative path in database
+          const imageUrl = `/uploads/client-remarks/${filename}`;
+          
+          console.log(`✅ Image saved: ${imageUrl}`);
+          console.log(`📁 Physical path: ${savePath}`);
+          console.log(`📁 File exists: ${fs.existsSync(savePath)}`);
+          
+          images.push({
+            url: imageUrl,
+            filename: filename,
+            originalName: file.originalname,
+            size: file.size,
+            mimeType: file.mimetype,
+            uploadedBy: currentUser?.id || currentUser?._id,
+            uploadedAt: new Date()
+          });
+          
+        } catch (imgError) {
+          console.error(`❌ Error processing image ${file.originalname}:`, imgError);
+        }
+      }
+    }
+    
+    console.log(`📸 Total images processed: ${images.length}`);
+    
+    const remark = {
+      text: text || '',
+      images: images,
+      user: currentUser?.id || currentUser?._id,
+      userName: currentUser?.name || currentUser?.username || 'System',
+      createdAt: new Date()
+    };
+    
+    if (!task.remarks) {
+      task.remarks = [];
+    }
+    
+    task.remarks.push(remark);
+    
+    await addClientActivityLogHelper(task, {
+      action: 'remark_added',
+      description: `Added remark with ${images.length} image(s)${text ? `: ${text.substring(0, 50)}` : ''}`,
+      user: currentUser?.id || currentUser?._id,
+      userName: currentUser?.name || currentUser?.username || 'System'
+    }, req);
+    
+    await task.save();
+    await task.populate('remarks.user', 'name email');
+    
+    const addedRemark = task.remarks[task.remarks.length - 1];
+    
+    console.log('✅ Remark added successfully');
+    console.log('=====================================\n');
+    
+    res.status(201).json({
+      success: true,
+      message: 'Remark with images added successfully',
+      data: addedRemark
+    });
+    
+  } catch (error) {
+    console.error('❌ Error uploading images:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error uploading images',
+      error: error.message
+    });
+  }
+};
 
+// ===== UPDATED: ADD SIMPLE CLIENT REMARK (WITHOUT IMAGES) =====
 const addClientRemark = async (req, res) => {
   try {
     console.log('📝 addClientRemark called');
@@ -79,7 +222,7 @@ const addClientRemark = async (req, res) => {
 
     const remark = {
       text: text.trim(),
-      images: [],
+      images: [], // Empty images array
       user: currentUser?.id || currentUser?._id,
       userName: currentUser?.name || currentUser?.username || 'System',
       createdAt: new Date()
@@ -119,87 +262,14 @@ const addClientRemark = async (req, res) => {
   }
 };
 
-const addClientRemarkWithImages = async (req, res) => {
-  try {
-    console.log('📸 addClientRemarkWithImages called');
-    const { taskId } = req.params;
-    const { text } = req.body;
-    const currentUser = req.user;
-    
-    if (!mongoose.Types.ObjectId.isValid(taskId)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid task ID format'
-      });
-    }
-    
-    const task = await Task.findById(taskId);
-    if (!task) {
-      return res.status(404).json({
-        success: false,
-        message: 'Task not found'
-      });
-    }
-    
-    // FIX: Ensure full URL path is stored correctly
-    const images = (req.files || []).map(file => ({
-      url: `/uploads/client-remarks/${file.filename}`, // Full path with leading slash
-      filename: file.filename,
-      originalName: file.originalname,
-      size: file.size,
-      mimeType: file.mimetype,
-      uploadedBy: currentUser?.id || currentUser?._id,
-      uploadedAt: new Date()
-    }));
-    
-    console.log(`📸 Storing ${images.length} images with URLs:`, images.map(img => img.url));
-    
-    const remark = {
-      text: text || '',
-      images: images,
-      user: currentUser?.id || currentUser?._id,
-      userName: currentUser?.name || currentUser?.username || 'System',
-      createdAt: new Date()
-    };
-    
-    if (!task.remarks) {
-      task.remarks = [];
-    }
-    
-    task.remarks.push(remark);
-    
-    await addClientActivityLogHelper(task, {
-      action: 'remark_added',
-      description: `Added remark with ${images.length} image(s): ${text ? text.substring(0, 100) : 'No text'}`,
-      user: currentUser?.id || currentUser?._id,
-      userName: currentUser?.name || currentUser?.username || 'System'
-    }, req);
-    
-    await task.save();
-    await task.populate('remarks.user', 'name email');
-    
-    const addedRemark = task.remarks[task.remarks.length - 1];
-    
-    res.status(201).json({
-      success: true,
-      message: 'Remark with images added successfully',
-      data: addedRemark
-    });
-    
-  } catch (error) {
-    console.error('❌ Error uploading images:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error uploading images',
-      error: error.message
-    });
-  }
-};
-
+// ===== UPDATED: GET CLIENT REMARKS WITH FILE VERIFICATION =====
 const getClientRemarks = async (req, res) => {
   try {
     const { taskId } = req.params;
     const { limit = 50, page = 1 } = req.query;
+
+    console.log('\n📋 ===== FETCH CLIENT REMARKS =====');
+    console.log('Task ID:', taskId);
 
     if (!mongoose.Types.ObjectId.isValid(taskId)) {
       return res.status(400).json({
@@ -222,27 +292,56 @@ const getClientRemarks = async (req, res) => {
 
     let remarks = task.remarks || [];
     
-    // FIX: Ensure all image URLs are properly formatted
+    console.log(`📊 Total remarks found: ${remarks.length}`);
+    
+    // Verify image files exist and ensure proper URL format
+    let imagesFound = 0;
+    let imagesMissing = 0;
+    
     remarks = remarks.map(remark => {
       if (remark.images && remark.images.length > 0) {
+        console.log(`\n🖼️ Remark has ${remark.images.length} image(s):`);
+        
         remark.images = remark.images.map(img => {
           // Ensure URL has leading slash
           if (img.url && !img.url.startsWith('/')) {
             img.url = '/' + img.url;
           }
+          
+          // Check if file exists on disk
+          const filename = img.filename;
+          if (filename) {
+            const fullPath = path.join(__dirname, '../uploads/client-remarks', filename);
+            const fileExists = fs.existsSync(fullPath);
+            
+            if (fileExists) {
+              imagesFound++;
+              console.log(`   ✅ ${img.url} - EXISTS`);
+            } else {
+              imagesMissing++;
+              console.log(`   ❌ ${img.url} - MISSING (path: ${fullPath})`);
+            }
+          }
+          
           return img;
         });
       }
       return remark;
     });
     
+    console.log(`\n📸 Image Summary:`);
+    console.log(`   - Images found: ${imagesFound}`);
+    console.log(`   - Images missing: ${imagesMissing}`);
+    
+    // Sort remarks by creation date (newest first)
     remarks.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     
     const startIndex = (page - 1) * limit;
     const endIndex = startIndex + parseInt(limit);
     const paginatedRemarks = remarks.slice(startIndex, endIndex);
 
-    console.log(`📤 Sending ${paginatedRemarks.length} remarks with images`);
+    console.log(`📤 Sending ${paginatedRemarks.length} remarks`);
+    console.log('=====================================\n');
 
     res.json({
       success: true,
@@ -265,6 +364,7 @@ const getClientRemarks = async (req, res) => {
   }
 };
 
+// ===== UPDATED: DELETE CLIENT REMARK WITH IMAGE CLEANUP =====
 const deleteClientRemark = async (req, res) => {
   try {
     const { taskId, remarkId } = req.params;
@@ -295,6 +395,7 @@ const deleteClientRemark = async (req, res) => {
 
     const remark = task.remarks[remarkIndex];
     
+    // Check authorization
     const isAuthorized = 
       (remark.user && remark.user.toString() === (currentUser?.id || currentUser?._id)) ||
       currentUser?.role === 'admin';
@@ -306,10 +407,12 @@ const deleteClientRemark = async (req, res) => {
       });
     }
     
+    // Delete image files from disk
     if (remark.images && remark.images.length > 0) {
       deleteImageFiles(remark.images);
     }
     
+    // Remove remark from array
     task.remarks.splice(remarkIndex, 1);
     
     await addClientActivityLogHelper(task, {
@@ -336,7 +439,7 @@ const deleteClientRemark = async (req, res) => {
   }
 };
 
-// ===== ACTIVITY LOG FUNCTIONS =====
+// ===== ACTIVITY LOG FUNCTIONS (Unchanged) =====
 
 const addClientActivityLog = async (req, res) => {
   try {
@@ -443,7 +546,7 @@ const getClientTaskActivityLogs = async (req, res) => {
   }
 };
 
-// ===== EXISTING TASK FUNCTIONS =====
+// ===== EXISTING TASK FUNCTIONS (Unchanged) =====
 
 const getAssignedToMeTasks = async (req, res) => {
   try {

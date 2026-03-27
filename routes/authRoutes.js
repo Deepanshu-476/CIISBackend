@@ -16,9 +16,9 @@ router.post("/verify-login-otp", authController.verifyLoginOTP);
 router.post("/resend-login-otp", authController.resendLoginOTP);
 
 // ==================== SUPER ADMIN ROUTES ====================
-router.post("/superadmin/login", authController.login);
-router.post("/superadmin/verify-otp", authController.verifyLoginOTP);
-router.post("/superadmin/resend-otp", authController.resendLoginOTP);
+router.post("/superadmin/login", authController.superAdminLogin);
+router.post("/superadmin/verify-otp", authController.verifySuperAdminOTP);
+router.post("/superadmin/resend-otp", authController.resendSuperAdminOTP);
 
 // ==================== COMPANY-SPECIFIC ROUTES ====================
 router.post("/company/:companyCode/login", authController.companyLoginRoute);
