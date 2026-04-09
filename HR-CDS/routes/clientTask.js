@@ -90,6 +90,7 @@ router.get('/test', (req, res) => {
     endpoints: [
       'GET /api/tasks/test',
       'GET /api/tasks/assigned-to-me',
+      'GET /api/tasks/user/:userId/assigned-tasks',
       'GET /api/tasks/client/:clientId/service/:service',
       'POST /api/tasks/client/:clientId/service/:service',
       'GET /api/tasks/client/:clientId',
@@ -108,13 +109,25 @@ router.get('/test', (req, res) => {
   });
 });
 
-// ===== ASSIGNED TO ME ROUTES =====
+// ===== ASSIGNED TASK ROUTES =====
+
+// Logged-in user's assigned client tasks
 router.get('/assigned-to-me', authMiddleware, taskController.getAssignedToMeTasks);
+
+// NEW: Selected employee's assigned client tasks
+router.get('/user/:userId/assigned-tasks', authMiddleware, taskController.getAssignedTasksByUserId);
+
 router.patch('/assigned/:taskId/status', authMiddleware, taskController.updateAssignedTaskStatus);
 
 // ===== CLIENT REMARK ROUTES =====
 router.post('/:taskId/client-remarks', authMiddleware, taskController.addClientRemark);
-router.post('/:taskId/client-remarks/upload-images', authMiddleware, upload.array('images', 5), compressImage, taskController.addClientRemarkWithImages);
+router.post(
+  '/:taskId/client-remarks/upload-images',
+  authMiddleware,
+  upload.array('images', 5),
+  compressImage,
+  taskController.addClientRemarkWithImages
+);
 router.get('/:taskId/client-remarks', authMiddleware, taskController.getClientRemarks);
 router.delete('/:taskId/client-remarks/:remarkId', authMiddleware, taskController.deleteClientRemark);
 

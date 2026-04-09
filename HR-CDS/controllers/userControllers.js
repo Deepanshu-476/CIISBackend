@@ -412,6 +412,7 @@ exports.getUser = async (req, res) => {
     return errorResponse(res, 500, "Failed to fetch user");
   }
 };
+
 exports.updateUser = async (req, res) => {
   try {
     const { id } = req.params;
@@ -493,6 +494,7 @@ exports.updateUser = async (req, res) => {
     return errorResponse(res, 500, "Failed to update user");
   }
 };
+
 // Update user by ID - WITH COMPANY CHECK
 exports.updateSelfUser = async (req, res) => {
   try {
@@ -589,7 +591,7 @@ exports.updateSelfUser = async (req, res) => {
   }
 };
 
-// Delete user by ID (Soft delete) - WITH COMPANY CHECK
+// ✅ UPDATED: Delete user by ID (Permanent Hard Delete) - WITH COMPANY CHECK
 exports.deleteUser = async (req, res) => {
   try {
     const { id } = req.params;
@@ -601,7 +603,7 @@ exports.deleteUser = async (req, res) => {
       return errorResponse(res, 401, "Authentication required");
     }
 
-    // Check if user exists
+    // Check if user exists before deletion
     const user = await User.findById(id);
     if (!user) {
       return errorResponse(res, 404, "User not found");
@@ -617,10 +619,10 @@ exports.deleteUser = async (req, res) => {
       }
     }
     
-    // Check permissions - only admin can delete
-    const canDelete = ['admin'].includes(requestingUser.jobRole);
+    // Check permissions - only super_admin can delete
+    const canDelete = ['super_admin'].includes(requestingUser.jobRole);
     if (!canDelete) {
-      return errorResponse(res, 403, "You don't have permission to delete users");
+      return errorResponse(res, 403, "You don't have permission to delete users. Only super_admin can delete users.");
     }
     
     // Prevent self-deletion
@@ -631,20 +633,22 @@ exports.deleteUser = async (req, res) => {
       return errorResponse(res, 400, "You cannot delete your own account");
     }
 
-    // Soft delete (deactivate)
-    await User.findByIdAndUpdate(id, { 
-      isActive: false,
-      deletedAt: new Date(),
-      // Append timestamp to email to allow reuse
-      email: `${user.email}_deleted_${Date.now()}@deleted.com`
-    });
+    // 🔥 PERMANENT HARD DELETE - Remove user completely from database
+    await User.findByIdAndDelete(id);
 
     return successResponse(res, 200, {
-      message: "User deleted successfully"
+      message: "User deleted permanently from database",
+      deletedUser: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        company: user.company,
+        department: user.department
+      }
     });
   } catch (err) {
     console.error("❌ Delete user error:", err);
-    return errorResponse(res, 500, "Failed to delete user");
+    return errorResponse(res, 500, "Failed to delete user permanently: " + err.message);
   }
 };
 
@@ -713,6 +717,7 @@ exports.getDeletedUsers = async (req, res) => {
     return errorResponse(res, 500, "Failed to fetch deleted users");
   }
 };
+
 // HR-CDS/controllers/userControllers.js में निम्न function जोड़ें:
 
 // HR-CDS/controllers/userControllers.js में getCompanyUsers function update करें:
@@ -746,10 +751,9 @@ exports.getCompanydepartmentUsers = async (req, res) => {
       isActive: true,
       company: companyId,
       companyRole: { 
-  $exists: true,
-  $not: /^client$/i 
-}
-
+        $exists: true,
+        $not: /^client$/i 
+      }
     };
     
     // If user is not admin/manager/hr, filter by department
@@ -815,7 +819,7 @@ exports.getCompanydepartmentUsers = async (req, res) => {
         isActive: user.isActive,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
-        companyRole:user.companyRole
+        companyRole: user.companyRole
       }))
     });
     
@@ -824,6 +828,7 @@ exports.getCompanydepartmentUsers = async (req, res) => {
     return errorResponse(res, 500, "Failed to fetch company users");
   }
 };
+
 exports.getCompanyUsers = async (req, res) => {
   try {
     const currentUser = req.user;
@@ -842,9 +847,9 @@ exports.getCompanyUsers = async (req, res) => {
       isActive: true,
       company: companyId,
       companyRole: { 
-  $exists: true,
-  $not: /^client$/i 
-}
+        $exists: true,
+        $not: /^client$/i 
+      }
     };
 
     const users = await User.find(filter)
@@ -878,7 +883,7 @@ exports.getCompanyUsers = async (req, res) => {
           department: user.department,
           jobRole: user.jobRole,
           phone: user.phone,
-          companyRole:user.companyRole,
+          companyRole: user.companyRole,
           taskStats: {
             total,
             completed,
@@ -898,6 +903,7 @@ exports.getCompanyUsers = async (req, res) => {
     return errorResponse(res, 500, "Failed to fetch company users");
   }
 };
+
 // Get company users with pagination
 // HR-CDS/controllers/userControllers.js में getCompanyUsers function update करें:
 exports.getCompanyUsersPaginated = async (req, res) => {
@@ -926,8 +932,7 @@ exports.getCompanyUsersPaginated = async (req, res) => {
       company: companyId,
       jobRole: currentUser.jobRole,
       department: currentUser.department,
-      companyRole:currentUser.companyRole,
-      
+      companyRole: currentUser.companyRole,
     });
     
     // Build filter
@@ -935,9 +940,9 @@ exports.getCompanyUsersPaginated = async (req, res) => {
       isActive: true,
       company: companyId,
       companyRole: { 
-  $exists: true,
-  $not: /^client$/i 
-}
+        $exists: true,
+        $not: /^client$/i 
+      }
     };
     
     // If user is not admin/manager/hr, filter by department
@@ -1010,6 +1015,7 @@ exports.getCompanyUsersPaginated = async (req, res) => {
     return errorResponse(res, 500, "Failed to fetch company users: " + err.message);
   }
 };
+
 // Search users with filters - FILTERED BY COMPANY AND DEPARTMENT
 exports.searchUsers = async (req, res) => {
   try {
@@ -1060,4 +1066,5 @@ exports.searchUsers = async (req, res) => {
     return errorResponse(res, 500, "Failed to search users");
   }
 };
+
 console.log("✅ userControllers.js loaded successfully");

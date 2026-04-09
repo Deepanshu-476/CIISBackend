@@ -3,7 +3,7 @@ const Client = require('../models/Client');
 const mongoose = require('mongoose');
 const fs = require('fs');
 const path = require('path');
-const sharp = require('sharp'); 
+const sharp = require('sharp');
 
 console.log("✅ ClientTask.js loading...");
 
@@ -36,11 +36,10 @@ const addClientActivityLogHelper = async (task, logData, req = null) => {
   }
 };
 
-// Updated deleteImageFiles function to handle image paths correctly
+// Delete image files function
 const deleteImageFiles = (images) => {
   if (!images || images.length === 0) return;
   images.forEach(image => {
-    // Extract filename from URL
     let filename = '';
     if (image.url) {
       filename = path.basename(image.url);
@@ -58,7 +57,7 @@ const deleteImageFiles = (images) => {
   });
 };
 
-// ===== UPDATED: ADD CLIENT REMARK WITH IMAGES (WITH COMPRESSION) =====
+// ===== ADD CLIENT REMARK WITH IMAGES =====
 const addClientRemarkWithImages = async (req, res) => {
   try {
     console.log('\n📸 ===== ADD CLIENT REMARK WITH IMAGES =====');
@@ -66,9 +65,13 @@ const addClientRemarkWithImages = async (req, res) => {
     const { text } = req.body;
     const currentUser = req.user;
     
-    console.log('📸 Files received:', req.files?.length || 0);
+    console.log('Task ID:', taskId);
+    console.log('Text:', text);
+    console.log('Files received:', req.files?.length || 0);
+    console.log('Current user:', currentUser?._id, currentUser?.name);
     
     if (!mongoose.Types.ObjectId.isValid(taskId)) {
+      console.log('❌ Invalid task ID format');
       return res.status(400).json({
         success: false,
         message: 'Invalid task ID format'
@@ -77,15 +80,16 @@ const addClientRemarkWithImages = async (req, res) => {
     
     const task = await Task.findById(taskId);
     if (!task) {
+      console.log('❌ Task not found');
       return res.status(404).json({
         success: false,
         message: 'Task not found'
       });
     }
     
-    console.log('✅ Task found:', task.name);
+    console.log('✅ Task found:', task.name, task._id);
     
-    // Process images with sharp compression (same as Task controller)
+    // Process images with sharp compression
     const images = [];
     
     if (req.files && req.files.length > 0) {
@@ -94,6 +98,7 @@ const addClientRemarkWithImages = async (req, res) => {
       // Ensure upload directory exists
       if (!fs.existsSync(uploadDir)) {
         fs.mkdirSync(uploadDir, { recursive: true });
+        console.log('📁 Created upload directory:', uploadDir);
       }
       
       for (const file of req.files) {
@@ -108,7 +113,7 @@ const addClientRemarkWithImages = async (req, res) => {
           
           console.log(`🖼️ Compressing and saving image: ${filename}`);
           
-          // Compress and save image using sharp (same as Task controller)
+          // Compress and save image using sharp
           await sharp(file.buffer)
             .resize(1200, 1200, {
               fit: "inside",
@@ -124,8 +129,6 @@ const addClientRemarkWithImages = async (req, res) => {
           const imageUrl = `/uploads/client-remarks/${filename}`;
           
           console.log(`✅ Image saved: ${imageUrl}`);
-          console.log(`📁 Physical path: ${savePath}`);
-          console.log(`📁 File exists: ${fs.existsSync(savePath)}`);
           
           images.push({
             url: imageUrl,
@@ -167,9 +170,12 @@ const addClientRemarkWithImages = async (req, res) => {
     }, req);
     
     await task.save();
-    await task.populate('remarks.user', 'name email');
     
+    // Populate the newly added remark
     const addedRemark = task.remarks[task.remarks.length - 1];
+    if (addedRemark.user) {
+      await task.populate('remarks.user', 'name email');
+    }
     
     console.log('✅ Remark added successfully');
     console.log('=====================================\n');
@@ -181,24 +187,31 @@ const addClientRemarkWithImages = async (req, res) => {
     });
     
   } catch (error) {
-    console.error('❌ Error uploading images:', error);
+    console.error('❌ Error in addClientRemarkWithImages:', error);
+    console.error('Error stack:', error.stack);
     res.status(500).json({
       success: false,
       message: 'Error uploading images',
-      error: error.message
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 };
 
-// ===== UPDATED: ADD SIMPLE CLIENT REMARK (WITHOUT IMAGES) =====
+// ===== ADD SIMPLE CLIENT REMARK =====
 const addClientRemark = async (req, res) => {
   try {
-    console.log('📝 addClientRemark called');
+    console.log('\n📝 ===== ADD CLIENT REMARK =====');
     const { taskId } = req.params;
     const { text } = req.body;
     const currentUser = req.user;
 
+    console.log('Task ID:', taskId);
+    console.log('Text:', text);
+    console.log('Current user:', currentUser?._id, currentUser?.name);
+
     if (!text || text.trim().length === 0) {
+      console.log('❌ Remark text is required');
       return res.status(400).json({
         success: false,
         message: 'Remark text is required'
@@ -206,6 +219,7 @@ const addClientRemark = async (req, res) => {
     }
 
     if (!mongoose.Types.ObjectId.isValid(taskId)) {
+      console.log('❌ Invalid task ID format');
       return res.status(400).json({
         success: false,
         message: 'Invalid task ID format'
@@ -214,15 +228,18 @@ const addClientRemark = async (req, res) => {
 
     const task = await Task.findById(taskId);
     if (!task) {
+      console.log('❌ Task not found');
       return res.status(404).json({
         success: false,
         message: 'Task not found'
       });
     }
 
+    console.log('✅ Task found:', task.name, task._id);
+
     const remark = {
       text: text.trim(),
-      images: [], // Empty images array
+      images: [],
       user: currentUser?.id || currentUser?._id,
       userName: currentUser?.name || currentUser?.username || 'System',
       createdAt: new Date()
@@ -242,9 +259,15 @@ const addClientRemark = async (req, res) => {
     }, req);
 
     await task.save();
-    await task.populate('remarks.user', 'name email');
-
+    
+    // Populate the newly added remark
     const addedRemark = task.remarks[task.remarks.length - 1];
+    if (addedRemark.user) {
+      await task.populate('remarks.user', 'name email');
+    }
+
+    console.log('✅ Remark added successfully');
+    console.log('=====================================\n');
 
     res.status(201).json({
       success: true,
@@ -253,16 +276,18 @@ const addClientRemark = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Error adding client remark:', error);
+    console.error('❌ Error in addClientRemark:', error);
+    console.error('Error stack:', error.stack);
     res.status(500).json({
       success: false,
       message: 'Error adding remark',
-      error: error.message
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 };
 
-// ===== UPDATED: GET CLIENT REMARKS WITH FILE VERIFICATION =====
+// ===== GET CLIENT REMARKS =====
 const getClientRemarks = async (req, res) => {
   try {
     const { taskId } = req.params;
@@ -300,8 +325,6 @@ const getClientRemarks = async (req, res) => {
     
     remarks = remarks.map(remark => {
       if (remark.images && remark.images.length > 0) {
-        console.log(`\n🖼️ Remark has ${remark.images.length} image(s):`);
-        
         remark.images = remark.images.map(img => {
           // Ensure URL has leading slash
           if (img.url && !img.url.startsWith('/')) {
@@ -316,10 +339,8 @@ const getClientRemarks = async (req, res) => {
             
             if (fileExists) {
               imagesFound++;
-              console.log(`   ✅ ${img.url} - EXISTS`);
             } else {
               imagesMissing++;
-              console.log(`   ❌ ${img.url} - MISSING (path: ${fullPath})`);
             }
           }
           
@@ -329,9 +350,7 @@ const getClientRemarks = async (req, res) => {
       return remark;
     });
     
-    console.log(`\n📸 Image Summary:`);
-    console.log(`   - Images found: ${imagesFound}`);
-    console.log(`   - Images missing: ${imagesMissing}`);
+    console.log(`📸 Image Summary: Found: ${imagesFound}, Missing: ${imagesMissing}`);
     
     // Sort remarks by creation date (newest first)
     remarks.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
@@ -364,7 +383,7 @@ const getClientRemarks = async (req, res) => {
   }
 };
 
-// ===== UPDATED: DELETE CLIENT REMARK WITH IMAGE CLEANUP =====
+// ===== DELETE CLIENT REMARK =====
 const deleteClientRemark = async (req, res) => {
   try {
     const { taskId, remarkId } = req.params;
@@ -439,7 +458,7 @@ const deleteClientRemark = async (req, res) => {
   }
 };
 
-// ===== ACTIVITY LOG FUNCTIONS (Unchanged) =====
+// ===== ACTIVITY LOG FUNCTIONS =====
 
 const addClientActivityLog = async (req, res) => {
   try {
@@ -546,8 +565,142 @@ const getClientTaskActivityLogs = async (req, res) => {
   }
 };
 
-// ===== EXISTING TASK FUNCTIONS (Unchanged) =====
+// ===== UPDATE ASSIGNED TASK STATUS (FIXED FOR OVERDUE TO IN-PROGRESS) =====
+const updateAssignedTaskStatus = async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    const { status, completed, remarks } = req.body;
+    const currentUser = req.user;
 
+    console.log(`🔄 Updating task status for task ${taskId}`);
+    console.log(`   Requested status: ${status}`);
+    console.log(`   Completed: ${completed}`);
+
+    const task = await Task.findById(taskId);
+    if (!task) {
+      return res.status(404).json({
+        success: false,
+        message: 'Task not found'
+      });
+    }
+
+    // Check if user is authorized to update this task
+    const isAssignedToUser = 
+      task.assignee === currentUser.id?.toString() ||
+      task.assignee === currentUser._id?.toString() ||
+      task.assignee === currentUser.name ||
+      task.assignee === currentUser.email;
+
+    if (!isAssignedToUser) {
+      console.log(`❌ User not authorized to update task assigned to ${task.assignee}`);
+      return res.status(403).json({
+        success: false,
+        message: 'You are not authorized to update this task'
+      });
+    }
+
+    const previousStatus = task.status;
+    const previousCompleted = task.completed;
+
+    // Handle status updates based on the provided status
+    if (status === 'completed' || completed === true) {
+      task.completed = true;
+      task.completedAt = new Date();
+      task.status = 'completed';
+      console.log(`   Task marked as completed`);
+    } else if (status === 'in-progress') {
+      task.completed = false;
+      task.status = 'in-progress';
+      console.log(`   Task marked as in-progress (from ${previousStatus})`);
+    } else if (status === 'pending') {
+      task.completed = false;
+      task.status = 'pending';
+      console.log(`   Task marked as pending (from ${previousStatus})`);
+    } else if (status === 'overdue') {
+      task.completed = false;
+      task.status = 'overdue';
+      console.log(`   Task marked as overdue (from ${previousStatus})`);
+    }
+    
+    // Handle case where we're updating an overdue task to in-progress
+    if (!status && previousStatus === 'overdue' && !completed) {
+      task.completed = false;
+      task.status = 'in-progress';
+      console.log(`   Task automatically moved from overdue to in-progress`);
+    }
+
+    // Log status change if status actually changed
+    if (previousStatus !== task.status) {
+      await addClientActivityLogHelper(task, {
+        action: 'status_changed',
+        description: `Status changed from "${previousStatus}" to "${task.status}"`,
+        user: currentUser?.id || currentUser?._id,
+        userName: currentUser?.name || currentUser?.username || 'System'
+      }, req);
+      console.log(`   ✅ Status change logged: ${previousStatus} → ${task.status}`);
+    }
+
+    // Log completion/reopen if completed status changed
+    if (previousCompleted !== task.completed) {
+      const action = task.completed ? 'completed' : 'reopened';
+      await addClientActivityLogHelper(task, {
+        action: action,
+        description: `Task ${action}`,
+        user: currentUser?.id || currentUser?._id,
+        userName: currentUser?.name || currentUser?.username || 'System'
+      }, req);
+      console.log(`   ✅ ${action} logged`);
+    }
+
+    // Add remark if provided
+    if (remarks && remarks.trim()) {
+      task.remarks = task.remarks || [];
+      const remark = {
+        text: remarks.trim(),
+        images: [],
+        user: currentUser?.id || currentUser?._id,
+        userName: currentUser?.name || currentUser?.username || 'System',
+        createdAt: new Date()
+      };
+      task.remarks.push(remark);
+      
+      await addClientActivityLogHelper(task, {
+        action: 'remark_added',
+        description: `Added remark: ${remarks.substring(0, 100)}${remarks.length > 100 ? '...' : ''}`,
+        user: currentUser?.id || currentUser?._id,
+        userName: currentUser?.name || currentUser?.username || 'System'
+      }, req);
+      console.log(`   ✅ Remark added`);
+    }
+
+    await task.save();
+    console.log(`✅ Task status updated successfully. New status: ${task.status}, Completed: ${task.completed}`);
+
+    res.json({
+      success: true,
+      message: 'Task status updated successfully',
+      data: {
+        _id: task._id,
+        name: task.name,
+        completed: task.completed,
+        status: task.status,
+        completedAt: task.completedAt,
+        remarks: task.remarks,
+        activityLogs: task.activityLogs
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error updating assigned task:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update task status',
+      error: error.message
+    });
+  }
+};
+
+// ===== GET ASSIGNED TO ME TASKS =====
 const getAssignedToMeTasks = async (req, res) => {
   try {
     const currentUser = req.user;
@@ -575,11 +728,13 @@ const getAssignedToMeTasks = async (req, res) => {
         filter.completed = true;
       } else if (status === 'pending') {
         filter.completed = false;
+        filter.status = 'pending';
       } else if (status === 'in-progress') {
         filter.status = 'in-progress';
         filter.completed = false;
       } else if (status === 'overdue') {
         filter.completed = false;
+        filter.status = 'overdue';
         filter.dueDate = { $lt: new Date() };
       }
     }
@@ -734,113 +889,76 @@ const getAssignedToMeTasks = async (req, res) => {
   }
 };
 
-const updateAssignedTaskStatus = async (req, res) => {
+// ===== GET ASSIGNED TASKS BY USER ID =====
+const getAssignedTasksByUserId = async (req, res) => {
   try {
-    const { taskId } = req.params;
-    const { status, completed, remarks } = req.body;
-    const currentUser = req.user;
+    const { userId } = req.params;
+    const User = require('../../models/User');
 
-    const task = await Task.findById(taskId);
-    if (!task) {
+    const user = await User.findById(userId).select('name email').lean();
+
+    if (!user) {
       return res.status(404).json({
         success: false,
-        message: 'Task not found'
+        message: 'User not found'
       });
     }
 
-    const isAssignedToUser = 
-      task.assignee === currentUser.id?.toString() ||
-      task.assignee === currentUser._id?.toString() ||
-      task.assignee === currentUser.name;
+    const tasks = await Task.find({
+      $or: [
+        { assignee: userId.toString() },
+        { assignee: userId },
+        { assignee: user.name },
+        { assignee: user.email }
+      ]
+    })
+      .populate('clientId', 'name email company phone')
+      .sort({ dueDate: 1, createdAt: -1 });
 
-    if (!isAssignedToUser) {
-      return res.status(403).json({
-        success: false,
-        message: 'You are not authorized to update this task'
-      });
-    }
-
-    const previousStatus = task.status;
-    const previousCompleted = task.completed;
-
-    if (status === 'completed' || completed === true) {
-      task.completed = true;
-      task.completedAt = new Date();
-      task.status = 'completed';
-    } else if (status === 'in-progress') {
-      task.completed = false;
-      task.status = 'in-progress';
-    } else if (status === 'pending') {
-      task.completed = false;
-      task.status = 'pending';
-    } else if (status === 'overdue') {
-      task.completed = false;
-      task.status = 'overdue';
-    }
-
-    if (previousStatus !== task.status) {
-      await addClientActivityLogHelper(task, {
-        action: 'status_changed',
-        description: `Status changed from "${previousStatus}" to "${task.status}"`,
-        user: currentUser?.id || currentUser?._id,
-        userName: currentUser?.name || currentUser?.username || 'System'
-      }, req);
-    }
-
-    if (previousCompleted !== task.completed) {
-      const action = task.completed ? 'completed' : 'reopened';
-      await addClientActivityLogHelper(task, {
-        action: action,
-        description: `Task ${action}`,
-        user: currentUser?.id || currentUser?._id,
-        userName: currentUser?.name || currentUser?.username || 'System'
-      }, req);
-    }
-
-    if (remarks && remarks.trim()) {
-      task.remarks = task.remarks || [];
-      const remark = {
-        text: remarks.trim(),
-        images: [],
-        user: currentUser?.id || currentUser?._id,
-        userName: currentUser?.name || currentUser?.username || 'System',
-        createdAt: new Date()
-      };
-      task.remarks.push(remark);
-      
-      await addClientActivityLogHelper(task, {
-        action: 'remark_added',
-        description: `Added remark: ${remarks.substring(0, 100)}${remarks.length > 100 ? '...' : ''}`,
-        user: currentUser?.id || currentUser?._id,
-        userName: currentUser?.name || currentUser?.username || 'System'
-      }, req);
-    }
-
-    await task.save();
+    const formattedTasks = tasks.map(task => ({
+      _id: task._id,
+      title: task.name,
+      name: task.name,
+      description: task.description || task.name,
+      dueDate: task.dueDate,
+      dueDateTime: task.dueDate,
+      completed: task.completed,
+      status: task.completed
+        ? 'completed'
+        : task.status === 'in-progress'
+        ? 'in-progress'
+        : 'pending',
+      priority: (task.priority || 'Medium').toLowerCase(),
+      clientName: task.clientId?.name || 'Unknown Client',
+      clientId: task.clientId,
+      clientEmail: task.clientId?.email,
+      clientCompany: task.clientId?.company,
+      files: task.files || [],
+      remarks: task.remarks || [],
+      activityLogs: task.activityLogs || [],
+      createdAt: task.createdAt,
+      service: task.service,
+      assignee: task.assignee,
+      source: 'client'
+    }));
 
     res.json({
       success: true,
-      message: 'Task status updated successfully',
-      data: {
-        _id: task._id,
-        name: task.name,
-        completed: task.completed,
-        status: task.status,
-        completedAt: task.completedAt,
-        remarks: task.remarks,
-        activityLogs: task.activityLogs
-      }
+      tasks: formattedTasks,
+      count: formattedTasks.length
     });
 
   } catch (error) {
-    console.error('❌ Error updating assigned task:', error);
+    console.error('❌ Error in getAssignedTasksByUserId:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to update task status',
-      error: error.message
+      error: 'Failed to fetch assigned tasks by user',
+      message: error.message
     });
   }
 };
+
+// ===== TASK CRUD OPERATIONS =====
 
 const getTasksByClientService = async (req, res) => {
   try {
@@ -1317,7 +1435,8 @@ module.exports = {
   getTaskStats,
   getAssignedToMeTasks,
   updateAssignedTaskStatus,
-  debugActivityLogs
+  debugActivityLogs,
+  getAssignedTasksByUserId
 };
 
 console.log("✅ ClientTask.js loaded successfully");
