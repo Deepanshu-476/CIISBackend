@@ -5,7 +5,6 @@ const bcrypt = require('bcryptjs');
 const { errorResponse, successResponse } = require('../utils/responseHelper.js');
 const Task = require('../../HR-CDS/models/Task.js');
 
-
 // All field names for consistent usage
 const USER_FIELDS = {
   // Basic fields (required in registration)
@@ -13,11 +12,12 @@ const USER_FIELDS = {
   
   // Personal information fields
   PERSONAL: ['phone', 'address', 'gender', 'maritalStatus', 'dob', 
-             'fatherName', 'motherName'],
+             'fatherName', 'motherName', 'city', 'state', 'zipCode', 'country'],
   
   // Employment information fields
   EMPLOYMENT: ['employeeType', 'salary', 'properties', 'propertyOwned', 
-               'additionalDetails'],
+               'additionalDetails', 'employeeId', 'companyRole', 'reportingManager',
+               'dateOfJoining', 'workLocation'],
   
   // Banking information fields
   BANKING: ['accountNumber', 'ifsc', 'bankName', 'bankHolderName'],
@@ -26,6 +26,12 @@ const USER_FIELDS = {
   EMERGENCY: ['emergencyName', 'emergencyPhone', 'emergencyRelation', 
               'emergencyAddress'],
   
+  // Family fields
+  FAMILY: ['children', 'spouseName'],
+  
+  // Document fields
+  DOCUMENTS: ['documents'],
+  
   // All fields combined (for reference)
   ALL: function() {
     return [
@@ -33,7 +39,9 @@ const USER_FIELDS = {
       ...this.PERSONAL,
       ...this.EMPLOYMENT,
       ...this.BANKING,
-      ...this.EMERGENCY
+      ...this.EMERGENCY,
+      ...this.FAMILY,
+      ...this.DOCUMENTS
     ];
   }
 };
@@ -56,8 +64,8 @@ const validateUserData = (data, isUpdate = false) => {
     errors.push("Invalid email format");
   }
 
-  // Job role validation
-  if (data.jobRole && !['admin', 'user', 'hr', 'manager'].includes(data.jobRole)) {
+  // Job role validation - include super_admin
+  if (data.jobRole && !['super_admin', 'admin', 'user', 'hr', 'manager'].includes(data.jobRole)) {
     errors.push("Invalid job role");
   }
 
@@ -98,6 +106,9 @@ exports.getMe = async (req, res) => {
         bankHolderName: user.bankHolderName,
         fatherName: user.fatherName,
         motherName: user.motherName,
+        spouseName: user.spouseName,
+        children: user.children,
+        documents: user.documents,
         emergencyName: user.emergencyName,
         emergencyPhone: user.emergencyPhone,
         emergencyRelation: user.emergencyRelation,
@@ -105,6 +116,15 @@ exports.getMe = async (req, res) => {
         properties: user.properties,
         propertyOwned: user.propertyOwned,
         additionalDetails: user.additionalDetails,
+        employeeId: user.employeeId,
+        companyRole: user.companyRole,
+        reportingManager: user.reportingManager,
+        dateOfJoining: user.dateOfJoining,
+        workLocation: user.workLocation,
+        city: user.city,
+        state: user.state,
+        zipCode: user.zipCode,
+        country: user.country,
         isActive: user.isActive,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt
@@ -122,12 +142,13 @@ exports.updateMe = async (req, res) => {
     const userId = req.user.id;
     const updateData = {};
     
-    // Fields that normal users can update
+    // Allow more fields for self-update including family and emergency info
     const allowedFields = [
       'name', 'phone', 'address', 'gender', 'maritalStatus', 'dob',
-      'fatherName', 'motherName', 'accountNumber', 'ifsc', 'bankName',
-      'bankHolderName', 'emergencyName', 'emergencyPhone', 
-      'emergencyRelation', 'emergencyAddress'
+      'fatherName', 'motherName', 'spouseName', 'children', 'documents',
+      'accountNumber', 'ifsc', 'bankName', 'bankHolderName', 
+      'emergencyName', 'emergencyPhone', 'emergencyRelation', 'emergencyAddress',
+      'city', 'state', 'zipCode', 'country'
     ];
     
     // Extract only allowed fields
@@ -136,12 +157,34 @@ exports.updateMe = async (req, res) => {
         updateData[field] = req.body[field];
       }
     });
-
-    // Normal users cannot update these fields
-    if (req.body.jobRole || req.body.department || req.body.employeeType || req.body.salary || req.body.company) {
-      return errorResponse(res, 403, "You cannot update restricted fields");
+    
+    // Handle nested objects like children array
+    if (req.body.children !== undefined) {
+      updateData.children = req.body.children;
     }
-
+    
+    if (req.body.documents !== undefined) {
+      updateData.documents = req.body.documents;
+    }
+    
+    // Normal users cannot update these restricted fields
+    const restrictedFields = ['jobRole', 'department', 'employeeType', 'salary', 'company', 'employeeId', 'companyRole'];
+    const hasRestrictedField = restrictedFields.some(field => req.body[field] !== undefined);
+    
+    if (hasRestrictedField) {
+      // Check if user is super_admin - allow restricted fields for super_admin
+      const isSuperAdmin = req.user.jobRole === 'super_admin';
+      if (!isSuperAdmin) {
+        return errorResponse(res, 403, "You cannot update restricted fields (jobRole, department, employeeType, salary, company, employeeId, companyRole)");
+      }
+      // If super_admin, add restricted fields to updateData
+      restrictedFields.forEach(field => {
+        if (req.body[field] !== undefined) {
+          updateData[field] = req.body[field];
+        }
+      });
+    }
+    
     const updatedUser = await User.findByIdAndUpdate(
       userId,
       { $set: updateData },
@@ -153,7 +196,7 @@ exports.updateMe = async (req, res) => {
     .select('-password -resetToken -resetTokenExpiry')
     .populate('department', 'name description')
     .populate('company', 'name companyCode');
-
+    
     return successResponse(res, 200, {
       message: "Profile updated successfully",
       user: updatedUser
@@ -207,6 +250,14 @@ exports.register = async (req, res) => {
     // Extract all fields from request body
     const userData = {};
     USER_FIELDS.ALL().forEach(field => {
+      if (req.body[field] !== undefined) {
+        userData[field] = req.body[field];
+      }
+    });
+    
+    // Add additional fields that might not be in USER_FIELDS
+    const extraFields = ['city', 'state', 'zipCode', 'country', 'spouseName', 'children', 'documents', 'employeeId', 'companyRole', 'reportingManager', 'dateOfJoining', 'workLocation'];
+    extraFields.forEach(field => {
       if (req.body[field] !== undefined) {
         userData[field] = req.body[field];
       }
@@ -285,12 +336,11 @@ exports.getAllUsers = async (req, res) => {
 
     // Build filter based on user role
     let filter = { 
-      isActive: true,
       company: userCompany  // Always filter by company
     };
 
     // If user is not admin, filter by department as well
-    const adminRoles = ['admin'];
+    const adminRoles = ['admin', 'super_admin'];
     const isAdmin = adminRoles.includes(req.user.jobRole);
     
     if (!isAdmin && userDepartment) {
@@ -304,7 +354,7 @@ exports.getAllUsers = async (req, res) => {
       .populate('createdBy', 'name email')
       .sort({ createdAt: -1 });
 
-    // Format response with consistent field structure
+    // Format response with complete field structure
     const formattedUsers = users.map(user => ({
       id: user._id,
       name: user.name,
@@ -325,6 +375,9 @@ exports.getAllUsers = async (req, res) => {
       bankHolderName: user.bankHolderName,
       fatherName: user.fatherName,
       motherName: user.motherName,
+      spouseName: user.spouseName,
+      children: user.children,
+      documents: user.documents,
       emergencyName: user.emergencyName,
       emergencyPhone: user.emergencyPhone,
       emergencyRelation: user.emergencyRelation,
@@ -332,6 +385,15 @@ exports.getAllUsers = async (req, res) => {
       properties: user.properties,
       propertyOwned: user.propertyOwned,
       additionalDetails: user.additionalDetails,
+      employeeId: user.employeeId,
+      companyRole: user.companyRole,
+      reportingManager: user.reportingManager,
+      dateOfJoining: user.dateOfJoining,
+      workLocation: user.workLocation,
+      city: user.city,
+      state: user.state,
+      zipCode: user.zipCode,
+      country: user.country,
       isActive: user.isActive,
       createdAt: user.createdAt,
       updatedAt: user.updatedAt
@@ -391,6 +453,9 @@ exports.getUser = async (req, res) => {
       bankHolderName: user.bankHolderName,
       fatherName: user.fatherName,
       motherName: user.motherName,
+      spouseName: user.spouseName,
+      children: user.children,
+      documents: user.documents,
       emergencyName: user.emergencyName,
       emergencyPhone: user.emergencyPhone,
       emergencyRelation: user.emergencyRelation,
@@ -398,6 +463,15 @@ exports.getUser = async (req, res) => {
       properties: user.properties,
       propertyOwned: user.propertyOwned,
       additionalDetails: user.additionalDetails,
+      employeeId: user.employeeId,
+      companyRole: user.companyRole,
+      reportingManager: user.reportingManager,
+      dateOfJoining: user.dateOfJoining,
+      workLocation: user.workLocation,
+      city: user.city,
+      state: user.state,
+      zipCode: user.zipCode,
+      country: user.country,
       isActive: user.isActive,
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,
@@ -413,6 +487,7 @@ exports.getUser = async (req, res) => {
   }
 };
 
+// ✅ UPDATED: Update user by ID - Saves ALL fields including children, documents, etc.
 exports.updateUser = async (req, res) => {
   try {
     const { id } = req.params;
@@ -440,16 +515,56 @@ exports.updateUser = async (req, res) => {
       }
     }
 
+    // Check permissions - Only super_admin or admin can update other users
+    const isSuperAdmin = requestingUser.jobRole === 'super_admin';
+    const isAdmin = requestingUser.jobRole === 'admin';
+    const isSelfUpdate = requestingUser.id.toString() === id;
+    
+    if (!isSelfUpdate && !isSuperAdmin && !isAdmin) {
+      return errorResponse(res, 403, "You don't have permission to update other users");
+    }
+
+    // Create update data from entire request body (NO RESTRICTIONS!)
     const updateData = {};
     
-    // Extract only valid user fields from request body
-    USER_FIELDS.ALL().forEach(field => {
-      if (req.body[field] !== undefined && field !== 'password' && field !== 'email' && field !== 'company') {
-        updateData[field] = req.body[field];
+    // Get all fields from request body
+    Object.keys(req.body).forEach(key => {
+      // Skip sensitive fields that shouldn't be updated directly
+      if (key !== 'password' && key !== 'resetToken' && key !== 'resetTokenExpiry' && key !== '__v') {
+        updateData[key] = req.body[key];
       }
     });
+    
+    // Special handling for arrays
+    if (req.body.children !== undefined) {
+      updateData.children = req.body.children;
+    }
+    
+    if (req.body.documents !== undefined) {
+      updateData.documents = req.body.documents;
+    }
+    
+    if (req.body.properties !== undefined) {
+      updateData.properties = req.body.properties;
+    }
+    
+    // For non-super_admin updating others, restrict certain fields
+    if (!isSelfUpdate && !isSuperAdmin) {
+      // Admin can update but not change jobRole to super_admin
+      if (updateData.jobRole === 'super_admin') {
+        delete updateData.jobRole;
+      }
+    }
+    
+    // For self-update (non-super_admin), restrict sensitive fields
+    if (isSelfUpdate && !isSuperAdmin) {
+      const restrictedForSelf = ['jobRole', 'department', 'employeeId', 'companyRole', 'salary', 'employeeType'];
+      restrictedForSelf.forEach(field => {
+        delete updateData[field];
+      });
+    }
 
-    // If updating department, validate it exists
+    // Validate department if being updated
     if (updateData.department) {
       const departmentExists = await Department.findById(updateData.department);
       if (!departmentExists) {
@@ -458,7 +573,7 @@ exports.updateUser = async (req, res) => {
     }
 
     // Validate job role if being updated
-    if (updateData.jobRole && !['admin', 'user', 'hr', 'manager'].includes(updateData.jobRole)) {
+    if (updateData.jobRole && !['super_admin', 'admin', 'user', 'hr', 'manager'].includes(updateData.jobRole)) {
       return errorResponse(res, 400, "Invalid job role");
     }
 
@@ -467,7 +582,7 @@ exports.updateUser = async (req, res) => {
       updateData.password = req.body.password;
     }
 
-    // Update user
+    // Update user - save ALL fields
     const updatedUser = await User.findByIdAndUpdate(
       id,
       { $set: updateData },
@@ -491,39 +606,26 @@ exports.updateUser = async (req, res) => {
     if (err.name === 'ValidationError') {
       return errorResponse(res, 400, err.message);
     }
-    return errorResponse(res, 500, "Failed to update user");
+    return errorResponse(res, 500, "Failed to update user: " + err.message);
   }
 };
 
-// Update user by ID - WITH COMPANY CHECK
+// Update self user (deprecated - use updateUser instead)
 exports.updateSelfUser = async (req, res) => {
   try {
     const { id } = req.params;
-    
-    // Use authenticated user from middleware
     const requestingUser = req.user;
     
     if (!requestingUser) {
       return errorResponse(res, 401, "Authentication required");
     }
 
-    // First, get the user to check company
     const user = await User.findById(id);
     if (!user) {
       return errorResponse(res, 404, "User not found");
     }
 
-    // Check if user belongs to the same company
-    if (user.company && requestingUser.company) {
-      const userCompanyId = user.company._id ? user.company._id.toString() : user.company.toString();
-      const reqCompanyId = requestingUser.company._id ? requestingUser.company._id.toString() : requestingUser.company.toString();
-      
-      if (userCompanyId !== reqCompanyId) {
-        return errorResponse(res, 403, "Access denied. User belongs to a different company.");
-      }
-    }
-
-    // Check if user is trying to update someone else's profile
+    // Check if user is updating themselves
     const requestingUserId = requestingUser._id || requestingUser.id;
     const targetUserId = user._id || id;
     
@@ -533,61 +635,35 @@ exports.updateSelfUser = async (req, res) => {
 
     const updateData = {};
     
-    // Extract only valid user fields from request body
-    USER_FIELDS.ALL().forEach(field => {
-      if (req.body[field] !== undefined && field !== 'password' && field !== 'email' && field !== 'company') {
-        updateData[field] = req.body[field];
+    // Get all fields from request body
+    Object.keys(req.body).forEach(key => {
+      if (key !== 'password' && key !== 'resetToken' && key !== 'resetTokenExpiry' && key !== '__v') {
+        updateData[key] = req.body[key];
       }
     });
+    
+    // Restrict sensitive fields for self-update
+    const restrictedForSelf = ['jobRole', 'department', 'employeeId', 'companyRole', 'salary', 'employeeType'];
+    restrictedForSelf.forEach(field => {
+      delete updateData[field];
+    });
 
-    // Normal users cannot update jobRole or department
-    if (updateData.jobRole || updateData.department) {
-      return errorResponse(res, 403, "You cannot update job role or department");
-    }
-
-    // If updating department, validate it exists
-    if (updateData.department) {
-      const departmentExists = await Department.findById(updateData.department);
-      if (!departmentExists) {
-        return errorResponse(res, 404, "Department not found");
-      }
-    }
-
-    // Validate job role if being updated
-    if (updateData.jobRole && !['admin', 'user', 'hr', 'manager'].includes(updateData.jobRole)) {
-      return errorResponse(res, 400, "Invalid job role");
-    }
-
-    // Handle password update separately
-    if (req.body.password) {
-      updateData.password = req.body.password;
-    }
-
-    // Update user
     const updatedUser = await User.findByIdAndUpdate(
       id,
       { $set: updateData },
-      { 
-        new: true, 
-        runValidators: true,
-        context: 'query'
-      }
+      { new: true, runValidators: true }
     )
     .select('-password -resetToken -resetTokenExpiry')
     .populate('department', 'name description')
-    .populate('company', 'name companyCode')
-    .populate('createdBy', 'name email');
+    .populate('company', 'name companyCode');
 
     return successResponse(res, 200, {
-      message: "User updated successfully",
+      message: "Profile updated successfully",
       user: updatedUser
     });
   } catch (err) {
-    console.error("❌ Update user error:", err);
-    if (err.name === 'ValidationError') {
-      return errorResponse(res, 400, err.message);
-    }
-    return errorResponse(res, 500, "Failed to update user");
+    console.error("❌ Update self user error:", err);
+    return errorResponse(res, 500, "Failed to update profile");
   }
 };
 
@@ -676,7 +752,7 @@ exports.restoreUser = async (req, res) => {
     const originalEmail = user.email.split('_deleted_')[0];
     
     await User.findByIdAndUpdate(id, { 
-      isActive: true,
+    
       deletedAt: null,
       email: originalEmail
     });
@@ -718,26 +794,21 @@ exports.getDeletedUsers = async (req, res) => {
   }
 };
 
-// HR-CDS/controllers/userControllers.js में निम्न function जोड़ें:
-
-// HR-CDS/controllers/userControllers.js में getCompanyUsers function update करें:
+// Get company users with department filter
 exports.getCompanydepartmentUsers = async (req, res) => {
   try {
     console.log("📊 GET request received for company users");
     
-    // Check if this is being called as /users/:id instead
     if (req.params.id && req.params.id === 'department-users') {
       return errorResponse(res, 400, "Invalid endpoint. Use GET /users/department-users");
     }
     
-    // Get authenticated user from req.user (attached by middleware)
     const currentUser = req.user;
     
     if (!currentUser) {
       return errorResponse(res, 401, "Authentication required");
     }
     
-    // Get company ID from current user
     const companyId = currentUser.company;
     
     if (!companyId) {
@@ -746,9 +817,8 @@ exports.getCompanydepartmentUsers = async (req, res) => {
     
     console.log("🔍 Fetching users for company ID:", companyId);
     
-    // Build filter
     const filter = { 
-      isActive: true,
+     
       company: companyId,
       companyRole: { 
         $exists: true,
@@ -756,13 +826,11 @@ exports.getCompanydepartmentUsers = async (req, res) => {
       }
     };
     
-    // If user is not admin/manager/hr, filter by department
-    const adminRoles = ['admin', 'hr', 'manager'];
+    const adminRoles = ['admin', 'hr', 'manager', 'super_admin'];
     if (!adminRoles.includes(currentUser.jobRole) && currentUser.department) {
       filter.department = currentUser.department;
     }
     
-    // Get users with populated data
     const users = await User.find(filter)
       .select('-password -resetToken -resetTokenExpiry')
       .populate('department', 'name description')
@@ -772,19 +840,8 @@ exports.getCompanydepartmentUsers = async (req, res) => {
     
     console.log(`✅ Found ${users.length} users`);
     
-    // Get company details from localStorage data if available
-    let companyDetails = null;
-    try {
-      const companyData = localStorage.getItem('companyDetails');
-      if (companyData) {
-        companyDetails = JSON.parse(companyData);
-      }
-    } catch (e) {
-      console.log('No company details in localStorage');
-    }
-    
     return successResponse(res, 200, {
-      company: companyDetails || {
+      company: {
         id: companyId,
         name: currentUser.companyName || 'Company'
       },
@@ -809,6 +866,9 @@ exports.getCompanydepartmentUsers = async (req, res) => {
         bankHolderName: user.bankHolderName,
         fatherName: user.fatherName,
         motherName: user.motherName,
+        spouseName: user.spouseName,
+        children: user.children,
+        documents: user.documents,
         emergencyName: user.emergencyName,
         emergencyPhone: user.emergencyPhone,
         emergencyRelation: user.emergencyRelation,
@@ -816,10 +876,18 @@ exports.getCompanydepartmentUsers = async (req, res) => {
         properties: user.properties,
         propertyOwned: user.propertyOwned,
         additionalDetails: user.additionalDetails,
+        employeeId: user.employeeId,
+        companyRole: user.companyRole,
+        reportingManager: user.reportingManager,
+        dateOfJoining: user.dateOfJoining,
+        workLocation: user.workLocation,
+        city: user.city,
+        state: user.state,
+        zipCode: user.zipCode,
+        country: user.country,
         isActive: user.isActive,
         createdAt: user.createdAt,
-        updatedAt: user.updatedAt,
-        companyRole: user.companyRole
+        updatedAt: user.updatedAt
       }))
     });
     
@@ -829,6 +897,7 @@ exports.getCompanydepartmentUsers = async (req, res) => {
   }
 };
 
+// Get company users with complete data
 exports.getCompanyUsers = async (req, res) => {
   try {
     const currentUser = req.user;
@@ -844,7 +913,7 @@ exports.getCompanyUsers = async (req, res) => {
     }
 
     const filter = {
-      isActive: true,
+      
       company: companyId,
       companyRole: { 
         $exists: true,
@@ -857,10 +926,9 @@ exports.getCompanyUsers = async (req, res) => {
       .populate("department", "name description")
       .populate("company", "name companyCode");
 
-    // ✅ YEH PART IMPORTANT HAI
+    // Format users with complete data and task stats
     const usersWithStats = await Promise.all(
       users.map(async (user) => {
-
         const total = await Task.countDocuments({
           assignedTo: user._id,
           company: companyId
@@ -872,8 +940,7 @@ exports.getCompanyUsers = async (req, res) => {
           status: "completed"
         });
 
-        const completionRate =
-          total > 0 ? Math.round((completed / total) * 100) : 0;
+        const completionRate = total > 0 ? Math.round((completed / total) * 100) : 0;
 
         return {
           id: user._id,
@@ -883,7 +950,40 @@ exports.getCompanyUsers = async (req, res) => {
           department: user.department,
           jobRole: user.jobRole,
           phone: user.phone,
+          address: user.address,
+          gender: user.gender,
+          maritalStatus: user.maritalStatus,
+          dob: user.dob,
+          employeeType: user.employeeType,
+          salary: user.salary,
+          accountNumber: user.accountNumber,
+          ifsc: user.ifsc,
+          bankName: user.bankName,
+          bankHolderName: user.bankHolderName,
+          fatherName: user.fatherName,
+          motherName: user.motherName,
+          spouseName: user.spouseName,
+          children: user.children,
+          documents: user.documents,
+          emergencyName: user.emergencyName,
+          emergencyPhone: user.emergencyPhone,
+          emergencyRelation: user.emergencyRelation,
+          emergencyAddress: user.emergencyAddress,
+          properties: user.properties,
+          propertyOwned: user.propertyOwned,
+          additionalDetails: user.additionalDetails,
+          employeeId: user.employeeId,
           companyRole: user.companyRole,
+          reportingManager: user.reportingManager,
+          dateOfJoining: user.dateOfJoining,
+          workLocation: user.workLocation,
+          city: user.city,
+          state: user.state,
+          zipCode: user.zipCode,
+          country: user.country,
+          isActive: user.isActive,
+          createdAt: user.createdAt,
+          updatedAt: user.updatedAt,
           taskStats: {
             total,
             completed,
@@ -905,21 +1005,16 @@ exports.getCompanyUsers = async (req, res) => {
 };
 
 // Get company users with pagination
-// HR-CDS/controllers/userControllers.js में getCompanyUsers function update करें:
 exports.getCompanyUsersPaginated = async (req, res) => {
   try {
     console.log("📊 GET request received for company users");
-    console.log("🔍 Request params:", req.params);
-    console.log("🔍 Request path:", req.path);
     
-    // Get authenticated user from req.user (attached by middleware)
     const currentUser = req.user;
     
     if (!currentUser) {
       return errorResponse(res, 401, "Authentication required");
     }
     
-    // Get company ID from current user
     const companyId = currentUser.company;
     
     if (!companyId) {
@@ -935,9 +1030,8 @@ exports.getCompanyUsersPaginated = async (req, res) => {
       companyRole: currentUser.companyRole,
     });
     
-    // Build filter
     const filter = { 
-      isActive: true,
+     
       company: companyId,
       companyRole: { 
         $exists: true,
@@ -945,8 +1039,7 @@ exports.getCompanyUsersPaginated = async (req, res) => {
       }
     };
     
-    // If user is not admin/manager/hr, filter by department
-    const adminRoles = ['admin', 'hr', 'manager'];
+    const adminRoles = ['admin', 'hr', 'manager', 'super_admin'];
     if (!adminRoles.includes(currentUser.jobRole) && currentUser.department) {
       filter.department = currentUser.department;
       console.log("🔍 Filtering by department:", currentUser.department);
@@ -954,7 +1047,6 @@ exports.getCompanyUsersPaginated = async (req, res) => {
     
     console.log("🔍 Database filter:", filter);
     
-    // Get users with populated data
     const users = await User.find(filter)
       .select('-password -resetToken -resetTokenExpiry')
       .populate('department', 'name description')
@@ -996,6 +1088,9 @@ exports.getCompanyUsersPaginated = async (req, res) => {
         bankHolderName: user.bankHolderName,
         fatherName: user.fatherName,
         motherName: user.motherName,
+        spouseName: user.spouseName,
+        children: user.children,
+        documents: user.documents,
         emergencyName: user.emergencyName,
         emergencyPhone: user.emergencyPhone,
         emergencyRelation: user.emergencyRelation,
@@ -1003,6 +1098,15 @@ exports.getCompanyUsersPaginated = async (req, res) => {
         properties: user.properties,
         propertyOwned: user.propertyOwned,
         additionalDetails: user.additionalDetails,
+        employeeId: user.employeeId,
+        companyRole: user.companyRole,
+        reportingManager: user.reportingManager,
+        dateOfJoining: user.dateOfJoining,
+        workLocation: user.workLocation,
+        city: user.city,
+        state: user.state,
+        zipCode: user.zipCode,
+        country: user.country,
         isActive: user.isActive,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt
@@ -1024,7 +1128,6 @@ exports.searchUsers = async (req, res) => {
       gender, maritalStatus, isActive 
     } = req.query;
 
-    // Get authenticated user's company and department
     const userCompany = req.user.company;
     const userDepartment = req.user.department;
     
@@ -1032,10 +1135,9 @@ exports.searchUsers = async (req, res) => {
       return errorResponse(res, 400, "Company information is required");
     }
 
-    const filter = { company: userCompany };  // Always filter by company
+    const filter = { company: userCompany };
 
-    // If user is not admin, filter by department as well
-    const adminRoles = ['admin'];
+    const adminRoles = ['admin', 'super_admin'];
     const isAdmin = adminRoles.includes(req.user.jobRole);
     
     if (!isAdmin && userDepartment) {
