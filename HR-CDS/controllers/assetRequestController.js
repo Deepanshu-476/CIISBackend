@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const AssetRequest = require('../models/AssetRequest');
 const CompanyAsset = require('../../models/CompanyAsset');
 const User = require('../../models/User');
+const { sendNotification, notifyCompanyOwners } = require('../../HR-CDS/utils/notificationHelper');
 
 // ✅ USER: Get available company assets for dropdown
 exports.getAvailableAssets = async (req, res) => {
@@ -101,6 +102,30 @@ exports.requestAsset = async (req, res) => {
     });
 
     await newRequest.save();
+
+    // 🔔 NOTIFY ADMINS / OWNERS
+try {
+  await notifyCompanyOwners({
+    companyId: req.user.company || req.user.companyId,
+    type: 'asset_requested',
+    title: 'New Asset Request',
+    message: `${req.user.name} requested asset: ${asset.name}`,
+    data: {
+      requestId: newRequest._id,
+      assetId: asset._id,
+      assetName: asset.name,
+      userId: req.user._id,
+      userName: req.user.name,
+      reason,
+      expectedReturnDate
+    },
+    excludeUser: req.user._id
+  });
+
+  console.log('✅ Asset request notification sent to admins');
+} catch (err) {
+  console.error('❌ Notification error:', err.message);
+}
     
     // Populate user and asset details for response
     await newRequest.populate([
@@ -281,6 +306,29 @@ exports.updateRequestStatus = async (req, res) => {
     }
 
     await request.save();
+
+    // 🔔 NOTIFY USER ABOUT STATUS CHANGE
+try {
+  await sendNotification({
+    recipient: request.user,
+    type: 'asset_request_status',
+    title: `Asset Request ${status}`,
+    message: `Your request for "${request.asset.name}" has been ${status}${adminComment ? ': ' + adminComment : ''}`,
+    data: {
+      requestId: request._id,
+      assetId: request.asset._id,
+      assetName: request.asset.name,
+      status,
+      adminComment,
+      approvedBy: req.user._id
+    },
+    priority: 'high'
+  });
+
+  console.log('✅ Notification sent to user');
+} catch (err) {
+  console.error('❌ Notification error:', err.message);
+}
 
     res.status(200).json({
       success: true,

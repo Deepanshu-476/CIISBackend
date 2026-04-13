@@ -362,32 +362,26 @@ setTimeout(async () => {
 }, 10000);
 
 // ==================== CORS CONFIGURATION ====================
-const corsOptions = {
-  origin: (origin, callback) => {
-    const allowedOrigins = [
-      "https://cds.ciisnetwork.in",
-      "http://localhost:5173",
-      "http://localhost:5174",
-      "http://localhost:5175",
-      "http://147.93.106.84",
-      "http://localhost:8080"
-    ];
-    
-    // Allow requests with no origin (like mobile apps, curl, postman)
-    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://cds.ciisnetwork.in"
+];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      console.log(`❌ CORS blocked: ${origin}`);
-      callback(new Error('Not allowed by CORS'));
+      callback(new Error("Not allowed by CORS"));
     }
   },
-  credentials: true,
-  methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-User-JobRole", "X-User-Id"],
-  exposedHeaders: ['Authorization', 'X-User-JobRole', 'X-User-Id']
-};
+  credentials: true
+}));
 
-app.use(cors(corsOptions));
+
+
+const cookieParser = require("cookie-parser");
+app.use(cookieParser());
 
 // ✅ Middleware
 app.use(express.json());

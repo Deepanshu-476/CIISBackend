@@ -9,7 +9,7 @@ const mongoose = require("mongoose");
 const { validateRequest } = require("../middleware/validation");
 const { loginSchema } = require("../validations/authValidation");
 const OTP = require('../models/OTP');
-const emailService = require('../services/emailService');
+const emailService = require('../services/emailService'); 
 
 // Login OTP Model (add this if not exists)
 const LoginOTPSchema = new mongoose.Schema({
