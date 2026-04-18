@@ -5,7 +5,12 @@ const connectionHandler = (io, socket) => {
   console.log(`🔌 New client connected: ${socket.id} - User: ${socket.user?.name}`);
 
   // Join user to their personal room
-  socket.join(`user:${socket.userId}`);
+  if (socket.userId) {
+    socket.join(`user:${socket.userId}`);
+    console.log(`📌 Joined room: user:${socket.userId}`);
+  } else {
+    console.log("❌ socket.userId missing");
+  }
   console.log(`📌 Joined room: user:${socket.userId}`);
 
   // Join company room if user has company

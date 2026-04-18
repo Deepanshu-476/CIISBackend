@@ -2,13 +2,14 @@ const Meeting = require("../models/Meeting");
 const MeetingView = require("../models/MeetingView");
 const User = require("../../models/User");
 const { sendEmail } = require("../../utils/sendEmail");
+const Notification = require("../../HR-CDS/models/Notification");
 
 /**
  * 🟢 Create Meeting (Admin)
  */
 const createMeeting = async (req, res) => {
   try {
-    const { title, description, date, time, recurring, attendees, createdBy } = req.body;
+    const { title, description, date, time, recurring, attendees, createdBy, companyCode } = req.body;
 
     if (!title || !date || !time || !Array.isArray(attendees))
       return res.status(400).json({ error: "Missing required fields" });
@@ -21,11 +22,32 @@ const createMeeting = async (req, res) => {
       recurring,
       createdBy,
       attendees,
+      companyCode,
     });
 
     // create MeetingView & send mail
     for (const empId of attendees) {
       await MeetingView.create({ meetingId: meeting._id, userId: empId });
+      // ✅ ADD THIS BLOCK (notification)
+      const notification = await Notification.create({
+        recipient: empId, // 👈 IMPORTANT (userId nahi)
+        title: "New Meeting Scheduled",
+        message: `Meeting "${title}" on ${new Date(date).toDateString()} at ${time}`,
+        type: "meeting"
+      });
+
+      // ✅ SOCKET EMIT
+      if (global.io) {
+        global.io.to(`user:${empId.toString()}`).emit("new_notification", notification);
+      }
+
+      // ✅ UNREAD COUNT
+      const unreadCount = await Notification.countDocuments({
+        recipient: empId,
+        isRead: false
+      });
+
+      global.io.to(`user:${empId.toString()}`).emit("notification:unread_count", unreadCount);
       const emp = await User.findById(empId);
       if (emp && emp.email) {
         const html = `
@@ -51,7 +73,13 @@ const createMeeting = async (req, res) => {
  */
 const getUserMeetings = async (req, res) => {
   try {
-    const userMeetings = await Meeting.find({ attendees: req.params.userId }).sort({ date: 1 });
+    const { companyCode } = req.query; // 👈 ADD THIS
+
+    const userMeetings = await Meeting.find({
+      attendees: req.params.userId,
+      ...(companyCode && { companyCode }) // 👈 ADD FILTER
+    }).sort({ date: 1 });
+
     const views = await MeetingView.find({ userId: req.params.userId });
 
     const data = userMeetings.map((m) => {
@@ -108,18 +136,46 @@ const getViewStatus = async (req, res) => {
 
 const getAllMeetings = async (req, res) => {
   try {
-    const meetings = await Meeting.find().sort({ date: -1 });
+    const { companyCode } = req.query;
+    const filter = companyCode ? { companyCode } : {};
+    const meetings = await Meeting.find(filter).sort({ date: -1 });
     res.json(meetings);
   } catch (error) {
     console.error("Get All Meetings Error:", error);
     res.status(500).json({ error: error.message });
   }
 }
+
+/**
+ * ❌ Delete Meeting (Admin)
+ */
+const deleteMeeting = async (req, res) => {
+  try {
+    const { meetingId } = req.params;
+
+    if (!meetingId) {
+      return res.status(400).json({ error: "Meeting ID required" });
+    }
+
+    await Meeting.findByIdAndDelete(meetingId);
+
+    // Related views bhi delete karo
+    await MeetingView.deleteMany({ meetingId });
+
+    res.json({ success: true, message: "Meeting deleted successfully" });
+
+  } catch (error) {
+    console.error("Delete Meeting Error:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
 module.exports = {
   createMeeting,
   getUserMeetings,
   markAsViewed,
   getViewStatus,
   getAllMeetings, 
+  deleteMeeting,
 };
 console.log("✅ meetingController.js loaded successfully");

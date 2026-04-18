@@ -4,13 +4,16 @@ const {
   getUserMeetings,
   markAsViewed,
   getViewStatus,
-  getAllMeetings,   // ✅ add this line
+  getAllMeetings,   
+  deleteMeeting,
 } = require("../controllers/meetingController");
 
 const router = express.Router();
 
 // 🟢 Create new meeting (Admin)
 router.post("/create", createMeeting);
+
+router.delete("/:meetingId", deleteMeeting);
 
 // 👨‍💻 Get meetings assigned to a specific user (Employee)
 router.get("/user/:userId", getUserMeetings);
