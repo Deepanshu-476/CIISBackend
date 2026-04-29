@@ -575,3 +575,11 @@ server.listen(PORT, () => {
    • POST /api/tasks/client/:clientId/service/:service
   `);
 });
+server.on("error", (err) => {
+  if (err.code === "EADDRINUSE") {
+    console.error("❌ Port already in use: " + PORT);
+    process.exit(1);
+  } else {
+    console.error("Server error:", err);
+  }
+});

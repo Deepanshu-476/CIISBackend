@@ -4,7 +4,6 @@ const { protect } = require('../middleware/authMiddleware');
 const {
   getCompanyAssets,
   createCompanyAsset,
-  updateAssetStatus,
   deleteCompanyAsset
 } = require('../controllers/companyAssetController');
 
@@ -22,9 +21,6 @@ router.route('/')
   .get(getCompanyAssets)
   .post(createCompanyAsset);
 
-// Status update route
-router.route('/:id/status')
-  .put(updateAssetStatus);
 
 router.route('/:id')
   .delete(deleteCompanyAsset);

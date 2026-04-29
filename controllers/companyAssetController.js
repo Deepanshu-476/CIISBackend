@@ -55,7 +55,7 @@ const createCompanyAsset = async (req, res) => {
       });
     }
 
-    const { name, description } = req.body;
+    const { name, description, quantity } = req.body;
 
     // Validate name
     if (!name || !name.trim()) {
@@ -79,7 +79,7 @@ const createCompanyAsset = async (req, res) => {
     const assetData = {
       name: name.trim(),
       description: description ? description.trim() : '',
-      status: 'Available', // Default status set to Available
+      quantity: quantity || 0,
       company: req.user.companyName || req.user.company || 'Unknown',
       companyCode: req.user.companyCode,
       createdBy: req.user._id
@@ -129,63 +129,7 @@ const createCompanyAsset = async (req, res) => {
   }
 };
 
-// @desc    Update asset status
-// @route   PUT /api/company-assets/:id/status
-// @access  Private
-const updateAssetStatus = async (req, res) => {
-  try {
-    const { status } = req.body;
-    const { id } = req.params;
 
-    console.log('🔍 PUT /company-assets/:id/status - ID:', id);
-    console.log('🔍 New status:', status);
-
-    // Validate status
-    const validStatuses = ['Available', 'Assigned', 'Maintenance', 'Damaged', 'Retired'];
-    if (!validStatuses.includes(status)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid status value'
-      });
-    }
-
-    const asset = await CompanyAsset.findById(id);
-
-    if (!asset) {
-      return res.status(404).json({
-        success: false,
-        message: 'Company asset not found'
-      });
-    }
-
-    // Check company access
-    if (asset.companyCode !== req.user.companyCode) {
-      return res.status(403).json({
-        success: false,
-        message: 'Access denied - Asset belongs to different company'
-      });
-    }
-
-    // Update status
-    asset.status = status;
-    await asset.save();
-
-    console.log('✅ Status updated successfully');
-
-    res.json({
-      success: true,
-      message: 'Asset status updated successfully',
-      asset
-    });
-  } catch (error) {
-    console.error('❌ Update status error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error while updating status',
-      error: error.message
-    });
-  }
-};
 
 // @desc    Delete company asset
 // @route   DELETE /api/company-assets/:id
@@ -238,6 +182,5 @@ const deleteCompanyAsset = async (req, res) => {
 module.exports = {
   getCompanyAssets,
   createCompanyAsset,
-  updateAssetStatus,
   deleteCompanyAsset
 };
