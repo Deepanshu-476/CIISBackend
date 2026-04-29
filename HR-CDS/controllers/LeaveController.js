@@ -674,17 +674,24 @@ exports.deleteLeave = async (req, res) => {
     console.log('🏢 User Company ID:', userCompanyId);
 
     // Owner check
-    const isOwner = userCompanyRole?.toLowerCase() === 'owner';
+   const role = (userCompanyRole || '').toLowerCase();
+      const jobRole = (req.headers['x-user-job-role'] || req.user?.jobRole || '').toLowerCase();
 
-    if (!isOwner) {
-      console.log('❌ ACCESS DENIED - Not Owner');
-      return res.status(403).json({
-        success: false,
-        error: 'You do not have permission to delete leave. Only Company Owner can perform this action.'
-      });
-    }
+      // ✅ allowed roles
+      const allowedRoles = ['owner', 'admin', 'hr', 'manager'];
 
-    console.log('👑 OWNER ACCESS GRANTED - Proceeding with deletion');
+      // ✅ final permission check
+      const isAllowed =
+        allowedRoles.includes(role) ||
+        jobRole === 'superadmin';   // 👈 YE ADD KIYA
+
+      if (!isAllowed) {
+        console.log('❌ ACCESS DENIED');
+        return res.status(403).json({
+          success: false,
+          error: 'You do not have permission to delete leave.'
+        });
+      }
 
     // Find the leave with user info
     const leave = await Leave.findById(id).populate('user', 'email name phone company companyId');
