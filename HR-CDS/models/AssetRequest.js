@@ -41,10 +41,13 @@ const assetRequestSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
-  adminComment: {
-    type: String,
-    default: ''
-  },
+  adminComments: [
+  {
+    text: { type: String },
+    addedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    addedAt: { type: Date, default: Date.now }
+  }
+],
   approvedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
