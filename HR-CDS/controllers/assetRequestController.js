@@ -11,7 +11,7 @@ exports.getAvailableAssets = async (req, res) => {
     
     const query = { 
       companyCode: req.user.companyCode,
-      status: 'Available'  // Sirf available assets dikhao
+      status: 'Available'  
     };
     
     const assets = await CompanyAsset.find(query)

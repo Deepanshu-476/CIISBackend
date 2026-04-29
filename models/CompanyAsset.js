@@ -11,10 +11,9 @@ const companyAssetSchema = new mongoose.Schema({
     trim: true,
     default: ''
   },
-  status: {
-    type: String,
-    enum: ['Available', 'Assigned', 'Maintenance', 'Damaged', 'Retired'],
-    default: 'Available'
+  quantity: {
+    type: Number,
+    default: 0
   },
   company: {
     type: String,
