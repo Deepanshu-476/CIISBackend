@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const Attendance = require("../models/Attendance");
 const Leave = require("../models/Leave");
 const AssetRequest = require("../models/AssetRequest");
@@ -26,7 +27,7 @@ const getDashboardActivity = async (req, res) => {
 
     let responseData = {};
 
-    // ✅ Check role (case insensitive - "employee", "Owner", "client")
+    // ✅ Check role (case insensitive)
     const userRole = (role || "").toLowerCase();
     
     if (userRole === "employee") {
@@ -69,13 +70,28 @@ const getEmployeeDashboard = async (userId, companyCode) => {
     const todayEnd = new Date();
     todayEnd.setHours(23, 59, 59, 999);
 
+    // Debug: Check counts
+    const leaveCount = await Leave.countDocuments({ 
+      user: userId, 
+      companyCode: companyCode 
+    });
+    const taskCount = await Task.countDocuments({ 
+      assigneeId: userId, 
+      companyCode: companyCode 
+    });
+    const assetCount = await AssetRequest.countDocuments({ 
+      user: userId, 
+      companyCode: companyCode 
+    });
+    
+    console.log("📊 Employee Data Counts:", { leaveCount, taskCount, assetCount });
+
     const [
       todayAttendance,
       leaveRequests,
       assetRequests,
       assignedTasks,
       meetings,
-      holidays,
     ] = await Promise.all([
       Attendance.findOne({
         user: userId,
@@ -91,7 +107,8 @@ const getEmployeeDashboard = async (userId, companyCode) => {
       })
         .sort({ createdAt: -1 })
         .limit(10)
-        .select("startDate endDate type status reason createdAt")
+        .populate("user", "name email employeeId")
+        .select("user startDate endDate type status reason createdAt")
         .lean(),
 
       AssetRequest.find({
@@ -100,7 +117,8 @@ const getEmployeeDashboard = async (userId, companyCode) => {
       })
         .sort({ createdAt: -1 })
         .limit(10)
-        .select("assetName requestType status reason adminComments createdAt")
+        .populate("user", "name email employeeId")
+        .select("user assetName requestType status reason adminComments createdAt")
         .lean(),
 
       Task.find({
@@ -109,7 +127,9 @@ const getEmployeeDashboard = async (userId, companyCode) => {
       })
         .sort({ createdAt: -1 })
         .limit(10)
-        .select("name description priority status dueDate createdAt")
+        .populate("assigneeId", "name email")
+        .populate("createdBy", "name email")
+        .select("name description priority status dueDate createdAt assigneeId createdBy")
         .lean(),
 
       Meeting.find({
@@ -118,18 +138,17 @@ const getEmployeeDashboard = async (userId, companyCode) => {
       })
         .sort({ date: -1, time: -1 })
         .limit(10)
+        .populate("createdBy", "name email")
         .select("title description date time status createdBy createdAt")
         .lean(),
-
-      Holiday.find({
-        companyCode: companyCode,
-        date: { $gte: new Date(new Date().setMonth(new Date().getMonth() - 1)) },
-      })
-        .sort({ date: 1 })
-        .limit(20)
-        .select("title date description")
-        .lean(),
     ]);
+
+    console.log("📊 Employee Found Data:", {
+      leaves: leaveRequests.length,
+      assets: assetRequests.length,
+      tasks: assignedTasks.length,
+      meetings: meetings.length
+    });
 
     const attendanceStatus = todayAttendance
       ? {
@@ -149,8 +168,7 @@ const getEmployeeDashboard = async (userId, companyCode) => {
       leaveRequests,
       assetRequests,
       assignedTasks,
-      meetings,
-      holidays
+      meetings
     );
 
     return {
@@ -159,7 +177,6 @@ const getEmployeeDashboard = async (userId, companyCode) => {
       assets: assetRequests,
       tasks: assignedTasks,
       meetings: meetings,
-      holidays: holidays,
       recentActivity: recentActivity.slice(0, 10),
     };
   } catch (error) {
@@ -172,14 +189,12 @@ const getOwnerDashboard = async (companyCode, ownerId) => {
   try {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
-
     const todayEnd = new Date();
     todayEnd.setHours(23, 59, 59, 999);
 
     const monthStart = new Date();
     monthStart.setDate(1);
     monthStart.setHours(0, 0, 0, 0);
-
     const monthEnd = new Date();
     monthEnd.setMonth(monthEnd.getMonth() + 1);
     monthEnd.setDate(0);
@@ -192,8 +207,7 @@ const getOwnerDashboard = async (companyCode, ownerId) => {
       leaveRequests,
       assetRequests,
       ownerTasks,
-      meetings,
-      holidays,
+      meetings
     ] = await Promise.all([
       User.find({
         companyCode: companyCode,
@@ -221,51 +235,53 @@ const getOwnerDashboard = async (companyCode, ownerId) => {
         },
       ]),
 
+      // ✅ FIX: Show ALL leaves (remove status filter)
       Leave.find({
         companyCode: companyCode,
+        // ✅ REMOVED: status: "Pending"
       })
-        .sort({ createdAt: -1 })
-        .limit(10)
-        .populate("user", "name email employeeId")
-        .select("user startDate endDate type status reason createdAt")
-        .lean(),
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .populate("user", "name email employeeId")
+      .select("user startDate endDate type status reason createdAt approvedBy remarks")
+      .lean(),
 
+      // Asset Requests - ONLY pending status
       AssetRequest.find({
         companyCode: companyCode,
+        status: "pending"
       })
-        .sort({ createdAt: -1 })
-        .limit(10)
-        .populate("user", "name email employeeId")
-        .select("user assetName requestType status reason adminComments createdAt")
-        .lean(),
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .populate("user", "name email employeeId")
+      .populate("approvedBy", "name email")
+      .select("user assetName asset assetType requestType status reason adminComments createdAt approvedBy")
+      .lean(),
 
+      // Tasks - Created by OR assigned to owner
       Task.find({
-        createdBy: ownerId,
         companyCode: companyCode,
+        $or: [
+          { createdBy: ownerId },
+          { assigneeId: ownerId }
+        ]
       })
-        .sort({ createdAt: -1 })
-        .limit(10)
-        .populate("assigneeId", "name email")
-        .select("name description priority status dueDate assigneeId createdAt")
-        .lean(),
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .populate("assigneeId", "name email")
+      .populate("createdBy", "name email")
+      .select("name description priority status dueDate assigneeId createdBy createdAt")
+      .lean(),
 
       Meeting.find({
         companyCode: companyCode,
       })
-        .sort({ date: -1, createdAt: -1 })
-        .limit(10)
-        .populate("createdBy", "name email")
-        .select("title description date time status createdBy attendees createdAt")
-        .lean(),
-
-      Holiday.find({
-        companyCode: companyCode,
-        date: { $gte: new Date(new Date().setMonth(new Date().getMonth() - 1)) },
-      })
-        .sort({ date: 1 })
-        .limit(20)
-        .select("title date description")
-        .lean(),
+      .sort({ date: -1, createdAt: -1 })
+      .limit(10)
+      .populate("createdBy", "name email")
+      .populate("attendees", "name email")
+      .select("title description date time status createdBy attendees createdAt")
+      .lean(),
     ]);
 
     const presentCount = todayAttendance.filter((a) => a.status === "PRESENT").length;
@@ -292,12 +308,18 @@ const getOwnerDashboard = async (companyCode, ownerId) => {
       monthly: monthlyStats,
     };
 
+    console.log("📊 Owner Dashboard Data:", {
+      leaveCount: leaveRequests.length,
+      assetCount: assetRequests.length,
+      taskCount: ownerTasks.length,
+      meetingCount: meetings.length
+    });
+
     const recentActivity = formatOwnerActivities(
       leaveRequests,
       assetRequests,
       ownerTasks,
-      meetings,
-      holidays
+      meetings
     );
 
     return {
@@ -306,7 +328,6 @@ const getOwnerDashboard = async (companyCode, ownerId) => {
       assets: assetRequests,
       tasks: ownerTasks,
       meetings: meetings,
-      holidays: holidays,
       recentActivity: recentActivity.slice(0, 10),
     };
   } catch (error) {
@@ -324,8 +345,9 @@ const getClientDashboard = async (userId, companyCode) => {
       .sort({ updatedAt: -1 })
       .limit(10)
       .populate("createdBy", "name email")
+      .populate("assigneeId", "name email")
       .select(
-        "name description priority status dueDate updatedAt createdAt createdBy"
+        "name description priority status dueDate updatedAt createdAt createdBy assigneeId"
       )
       .lean();
 
@@ -336,6 +358,8 @@ const getClientDashboard = async (userId, companyCode) => {
       priority: task.priority,
       date: task.updatedAt || task.createdAt,
       description: task.description,
+      createdBy: task.createdBy?.name,
+      assignee: task.assigneeId?.name,
     }));
 
     return {
@@ -353,8 +377,7 @@ const formatEmployeeActivities = (
   leaves,
   assets,
   tasks,
-  meetings,
-  holidays
+  meetings
 ) => {
   const activities = [];
 
@@ -371,25 +394,37 @@ const formatEmployeeActivities = (
   }
 
   leaves.forEach((leave) => {
-    activities.push({
-      type: "leave",
-      title: `Leave Request ${leave.status}`,
-      status: leave.status,
-      date: leave.createdAt,
-      details: `${leave.type} leave from ${new Date(
-        leave.startDate
-      ).toLocaleDateString()} to ${new Date(leave.endDate).toLocaleDateString()}`,
-    });
+    if (leave.user) {
+      activities.push({
+        type: "leave",
+        title: `Leave Request ${leave.status}`,
+        status: leave.status,
+        date: leave.createdAt,
+        userName: leave.user.name,
+        userEmail: leave.user.email,
+        employeeId: leave.user.employeeId,
+        details: `${leave.type} leave from ${new Date(
+          leave.startDate
+        ).toLocaleDateString()} to ${new Date(leave.endDate).toLocaleDateString()}`,
+        reason: leave.reason,
+      });
+    }
   });
 
   assets.forEach((asset) => {
-    activities.push({
-      type: "asset",
-      title: `Asset Request ${asset.status}`,
-      status: asset.status,
-      date: asset.createdAt,
-      details: `${asset.assetName} (${asset.requestType})`,
-    });
+    if (asset.user) {
+      activities.push({
+        type: "asset",
+        title: `Asset Request ${asset.status}`,
+        status: asset.status,
+        date: asset.createdAt,
+        userName: asset.user.name,
+        userEmail: asset.user.email,
+        employeeId: asset.user.employeeId,
+        details: `${asset.assetName} (${asset.requestType})`,
+        reason: asset.reason,
+      });
+    }
   });
 
   tasks.forEach((task) => {
@@ -402,6 +437,8 @@ const formatEmployeeActivities = (
       details: `Due: ${
         task.dueDate ? new Date(task.dueDate).toLocaleDateString() : "No due date"
       }`,
+      assignedTo: task.assigneeId?.name,
+      createdBy: task.createdBy?.name,
     });
   });
 
@@ -411,52 +448,58 @@ const formatEmployeeActivities = (
       title: `Meeting: ${meeting.title}`,
       date: meeting.date || meeting.createdAt,
       details: `${meeting.time}`,
-    });
-  });
-
-  holidays.forEach((holiday) => {
-    activities.push({
-      type: "holiday",
-      title: `Holiday: ${holiday.title}`,
-      date: holiday.date,
-      details: holiday.description,
+      createdBy: meeting.createdBy?.name,
     });
   });
 
   return activities.sort((a, b) => new Date(b.date) - new Date(a.date));
 };
 
-const formatOwnerActivities = (leaves, assets, tasks, meetings, holidays) => {
+const formatOwnerActivities = (leaves, assets, tasks, meetings) => {
   const activities = [];
 
   leaves.forEach((leave) => {
-    activities.push({
-      type: "leave_request",
-      title: `Leave Request - ${leave.status}`,
-      user: leave.user?.name || "Unknown",
-      status: leave.status,
-      date: leave.createdAt,
-      details: `${leave.type} leave request`,
-    });
+    if (leave.user) {
+      activities.push({
+        type: "leave_request",
+        title: `Leave Request - ${leave.status}`,
+        userName: leave.user.name,
+        userEmail: leave.user.email,
+        employeeId: leave.user.employeeId,
+        status: leave.status,
+        date: leave.createdAt,
+        details: `${leave.type} leave from ${new Date(
+          leave.startDate
+        ).toLocaleDateString()} to ${new Date(leave.endDate).toLocaleDateString()}`,
+        reason: leave.reason,
+      });
+    }
   });
 
   assets.forEach((asset) => {
-    activities.push({
-      type: "asset_request",
-      title: `Asset Request - ${asset.status}`,
-      user: asset.user?.name || "Unknown",
-      status: asset.status,
-      date: asset.createdAt,
-      details: `${asset.assetName} request`,
-    });
+    if (asset.user) {
+      activities.push({
+        type: "asset_request",
+        title: `Asset Request - ${asset.status}`,
+        userName: asset.user.name,
+        userEmail: asset.user.email,
+        employeeId: asset.user.employeeId,
+        status: asset.status,
+        date: asset.createdAt,
+        details: `${asset.assetName} (${asset.requestType})`,
+        reason: asset.reason,
+      });
+    }
   });
 
   tasks.forEach((task) => {
     activities.push({
-      type: "task_created",
-      title: `Task Created: ${task.name}`,
+      type: "task",
+      title: `Task: ${task.name}`,
       assignedTo: task.assigneeId?.name || "Unassigned",
+      createdBy: task.createdBy?.name,
       status: task.status,
+      priority: task.priority,
       date: task.createdAt,
       details: `Priority: ${task.priority}`,
     });
@@ -464,20 +507,11 @@ const formatOwnerActivities = (leaves, assets, tasks, meetings, holidays) => {
 
   meetings.forEach((meeting) => {
     activities.push({
-      type: "meeting_scheduled",
-      title: `Meeting Scheduled: ${meeting.title}`,
+      type: "meeting",
+      title: `Meeting: ${meeting.title}`,
       createdBy: meeting.createdBy?.name || "Unknown",
-      date: meeting.createdAt,
-      details: `${new Date(meeting.date).toLocaleDateString()} at ${meeting.time}`,
-    });
-  });
-
-  holidays.forEach((holiday) => {
-    activities.push({
-      type: "holiday",
-      title: `Upcoming Holiday: ${holiday.title}`,
-      date: holiday.date,
-      details: holiday.description,
+      date: meeting.date || meeting.createdAt,
+      details: `${meeting.time}`,
     });
   });
 
