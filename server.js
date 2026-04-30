@@ -284,7 +284,7 @@ const markDailyAbsent = async () => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
-    const tomorrow = new Date(today);
+    const tomorrow = new Date(today); 
     tomorrow.setDate(tomorrow.getDate() + 1);
     
     // Get all users
@@ -394,6 +394,9 @@ app.use((req, res, next) => {
   next();
 });
 
+
+const dashboardRoutes = require('./HR-CDS/routes/dashboardRoutes.js');
+
 // ==================== ROUTES ====================
 // ✅ Clean routes without duplicates
 app.use("/api/auth", require("./routes/authRoutes.js"));
@@ -412,6 +415,9 @@ app.use("/api/clientsservice", require("./HR-CDS/routes/clientRoutes.js"));
 // 🔥 IMPORTANT: यहाँ clientTasks routes mount किए गए हैं
 // यह सुनिश्चित करता है कि /api/tasks/... endpoints काम करेंगे
 app.use("/api/tasks", require("./HR-CDS/routes/clientTask.js"));
+
+
+app.use('/api/dashboard', dashboardRoutes);
 
 app.use('/api/menu-access', require("./routes/menuAccess.js"));
 app.use('/api/menu-items', require("./routes/menuItems.js"));
