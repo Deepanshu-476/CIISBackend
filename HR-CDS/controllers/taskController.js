@@ -1307,37 +1307,41 @@ exports.updateStatus = async (req, res) => {
       });
     }
 
-    // Simple authorization - check if user is in assignedUsers
-    const isAuthorized = task.assignedUsers.some(userId => 
+    const isCreator = task.createdBy.toString() === req.user._id.toString();
+    const isAssignedUser = task.assignedUsers.some(userId => 
       userId.toString() === req.user._id.toString()
     );
 
-    if (!isAuthorized) {
+    if (!isCreator && !isAssignedUser) {
       return res.status(403).json({ 
         success: false,
-        error: 'You are not assigned to this task' 
+        error: 'You are not authorized to update this task status' 
       });
     }
 
-    // Update status
+    const oldOverallStatus = task.overallStatus;
+
+    // Update assigned user's own status only when the updater is assigned.
     const statusIndex = task.statusByUser.findIndex(s => 
       s.user && s.user.toString() === req.user._id.toString()
     );
 
     const oldStatus = statusIndex !== -1 ? task.statusByUser[statusIndex].status : 'pending';
 
-    if (statusIndex === -1) {
-      task.statusByUser.push({
-        user: req.user._id,
-        status: status,
-        updatedAt: new Date(),
-        remarks: remarks
-      });
-    } else {
-      task.statusByUser[statusIndex].status = status;
-      task.statusByUser[statusIndex].updatedAt = new Date();
-      if (remarks) {
-        task.statusByUser[statusIndex].remarks = remarks;
+    if (isAssignedUser) {
+      if (statusIndex === -1) {
+        task.statusByUser.push({
+          user: req.user._id,
+          status: status,
+          updatedAt: new Date(),
+          remarks: remarks
+        });
+      } else {
+        task.statusByUser[statusIndex].status = status;
+        task.statusByUser[statusIndex].updatedAt = new Date();
+        if (remarks) {
+          task.statusByUser[statusIndex].remarks = remarks;
+        }
       }
     }
 
@@ -1345,32 +1349,28 @@ exports.updateStatus = async (req, res) => {
     task.statusHistory.push({
       status: status,
       changedBy: req.user._id,
-      remarks: remarks || `Status changed from ${oldStatus} to ${status}`
+      remarks: remarks || (
+        isCreator
+          ? `Overall status changed from ${oldOverallStatus} to ${status}`
+          : `Status changed from ${oldStatus} to ${status}`
+      )
     });
 
-    // Simple overall status update
-    if (status === 'completed') {
-      // Check if all assigned users have completed
-      const allUsersCompleted = task.assignedUsers.every(assignedUserId => {
-        const userStatus = task.statusByUser.find(s => 
-          s.user && s.user.toString() === assignedUserId.toString()
-        );
-        return userStatus && userStatus.status === 'completed';
-      });
-      
-      if (allUsersCompleted) {
-        task.overallStatus = 'completed';
+    // Overall status is controlled only by the task creator.
+    if (isCreator) {
+      task.overallStatus = status;
+
+      if (status === 'completed') {
         task.completionDate = new Date();
-      } else {
-        task.overallStatus = 'in-progress';
+      } else if (oldOverallStatus === 'completed') {
+        task.completionDate = null;
       }
-    } else if (status === 'in-progress') {
-      task.overallStatus = 'in-progress';
-    } else if (status === 'overdue') {
-      task.overallStatus = 'overdue';
-      task.markedOverdueAt = new Date();
-    } else {
-      task.overallStatus = 'pending';
+
+      if (status === 'overdue') {
+        task.markedOverdueAt = new Date();
+      } else {
+        task.markedOverdueAt = null;
+      }
     }
 
     // Save task
@@ -1379,6 +1379,7 @@ exports.updateStatus = async (req, res) => {
     // Populate for notifications
     await task.populate('createdBy', 'name email');
     const updatedUser = await User.findById(req.user._id).select('name role email');
+    const previousStatusForLog = isCreator ? oldOverallStatus : oldStatus;
 
     // 🔹 Create notification for task creator
     await createNotification(
@@ -1387,7 +1388,7 @@ exports.updateStatus = async (req, res) => {
       `${updatedUser.name} updated task "${task.title}" status to ${status}`,
       'status_updated',
       task._id,
-      { oldStatus, newStatus: status, updatedBy: updatedUser.name }
+      { oldStatus: previousStatusForLog, newStatus: status, updatedBy: updatedUser.name }
     );
 
     // 🔹 Create activity log
@@ -1395,14 +1396,14 @@ exports.updateStatus = async (req, res) => {
       req.user,
       'status_updated',
       task._id,
-      `Updated task status from ${oldStatus} to ${status}`,
-      { status: oldStatus },
+      `Updated task status from ${previousStatusForLog} to ${status}`,
+      { status: previousStatusForLog },
       { status: status, remarks },
       req
     );
 
     // 🔹 Send email notification
-    await sendTaskStatusUpdateEmail(task, updatedUser, oldStatus, status);
+    await sendTaskStatusUpdateEmail(task, updatedUser, previousStatusForLog, status);
 
     res.json({ 
       success: true,
