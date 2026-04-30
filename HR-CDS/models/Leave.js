@@ -21,6 +21,9 @@ const historySchema = new mongoose.Schema({
     trim: true,
     default: ''
   },
+
+
+
   at: {
     type: Date,
     default: Date.now
@@ -74,6 +77,14 @@ const leaveSchema = new mongoose.Schema({
     default: '',
     maxlength: 500
   },
+
+  companyCode: {
+    type: String,
+    required: true,
+    index: true,
+    default: ''
+  },
+  
   history: [historySchema],
   
   // For offline sync

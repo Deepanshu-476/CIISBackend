@@ -73,6 +73,7 @@ exports.applyLeave = async (req, res) => {
       status: 'Pending',
       approvedBy: null,
       remarks: '',
+      companyCode: req.user.companyCode,
       history: [
         {
           action: 'applied',
