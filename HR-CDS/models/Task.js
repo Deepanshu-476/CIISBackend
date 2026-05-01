@@ -117,9 +117,8 @@ const taskSchema = new mongoose.Schema(
       enum: ["low", "medium", "high"],
       default: "medium",
     },
-    
 
-    // ✅ ADD THIS - COMPANY CODE FIELD
+    // ✅ COMPANY CODE FIELD
     companyCode: {
       type: String,
       required: true,
@@ -140,8 +139,8 @@ const taskSchema = new mongoose.Schema(
     isSnoozed: {
       type: Boolean,
       default: false
-    }
-,
+    },
+    
     files: [fileSchema],
     voiceNote: {
       filename: String,
@@ -172,10 +171,13 @@ const taskSchema = new mongoose.Schema(
       default: "pending",
     },
 
+    // ✅ FIXED: taskFor field with proper enum and default
     taskFor: {
       type: String,
-      
-      default: "self"
+      enum: ["self", "others", "client"],  // Valid values
+      default: "others",  // Changed from "self" to "others"
+      required: false,
+      index: true  // Add index for better performance
     },
 
     isRecurring: { type: Boolean, default: false },

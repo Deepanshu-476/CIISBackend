@@ -70,25 +70,14 @@ const getEmployeeDashboard = async (userId, companyCode) => {
     const todayEnd = new Date();
     todayEnd.setHours(23, 59, 59, 999);
 
-    // Debug: Check counts
-    const leaveCount = await Leave.countDocuments({ 
-      user: userId, 
-      companyCode: companyCode 
-    });
-    const taskCount = await Task.countDocuments({ 
-      assigneeId: userId, 
-      companyCode: companyCode 
-    });
-    const assetCount = await AssetRequest.countDocuments({ 
-      user: userId, 
-      companyCode: companyCode 
-    });
-    
-    console.log("📊 Employee Data Counts:", { leaveCount, taskCount, assetCount });
-
-
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    
+    // Convert userId to ObjectId if it's a string
+    const userObjectId = typeof userId === 'string' 
+      ? new mongoose.Types.ObjectId(userId) 
+      : userId;
+    
     const [
       todayAttendance,
       leaveRequests,
@@ -124,22 +113,24 @@ const getEmployeeDashboard = async (userId, companyCode) => {
         .select("user assetName requestType status reason adminComments createdAt")
         .lean(),
 
+      // ✅ FIXED: Case insensitive taskFor with debug
       Task.find({
-        assignedUsers: userId,
+        assignedUsers: { $in: [userObjectId] },
         companyCode: companyCode,
+        taskFor: { $in: ["others", "Others", "other", "Other"] }
       })
         .sort({ createdAt: -1 })
         .limit(10)
         .populate("assignedUsers", "name email")
         .populate("createdBy", "name email")
-        .select("name description priority status dueDate createdAt assigneeId createdBy")
+        .select("title description priority dueDateTime createdAt updatedAt assignedUsers createdBy overallStatus statusHistory taskFor isActive")
         .lean(),
 
       Meeting.find({
-          companyCode: companyCode,
-          attendees: userId, 
-          date: { $gte: today }   // ✅ past meetings remove
-        })
+        companyCode: companyCode,
+        attendees: userId, 
+        date: { $gte: today }
+      })
         .sort({ date: -1, time: -1 })
         .limit(10)
         .populate("createdBy", "name email")
@@ -147,12 +138,15 @@ const getEmployeeDashboard = async (userId, companyCode) => {
         .lean(),
     ]);
 
-    console.log("📊 Employee Found Data:", {
-      leaves: leaveRequests.length,
-      assets: assetRequests.length,
-      tasks: assignedTasks.length,
-      meetings: meetings.length
-    });
+    // ✅ Debug log
+    console.log("📊 Employee Tasks Found:", assignedTasks.length);
+    console.log("📊 Employee Tasks Details:", assignedTasks.map(t => ({
+      title: t.title,
+      taskFor: t.taskFor,
+      status: t.overallStatus,
+      isActive: t.isActive,
+      assignedUsers: t.assignedUsers
+    })));
 
     const attendanceStatus = todayAttendance
       ? {
@@ -206,6 +200,21 @@ const getOwnerDashboard = async (companyCode, ownerId) => {
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    
+    // 🔍 DEBUG: Check all tasks first
+    const allTasksInCompany = await Task.find({
+      companyCode: companyCode
+    }).lean();
+    
+    console.log("🔍 ALL TASKS IN COMPANY:", allTasksInCompany.map(t => ({
+      id: t._id,
+      title: t.title,
+      taskFor: t.taskFor,
+      overallStatus: t.overallStatus,
+      isActive: t.isActive,
+      companyCode: t.companyCode
+    })));
+    
     const [
       allEmployees,
       todayAttendance,
@@ -215,6 +224,7 @@ const getOwnerDashboard = async (companyCode, ownerId) => {
       ownerTasks,
       meetings
     ] = await Promise.all([
+    
       User.find({
         companyCode: companyCode,
         companyRole: "employee",
@@ -240,11 +250,10 @@ const getOwnerDashboard = async (companyCode, ownerId) => {
           },
         },
       ]),
-
-      // ✅ FIX: Show ALL leaves (remove status filter)
+      
       Leave.find({
         companyCode: companyCode,
-        status: "Pending"   // ✅ only pending show
+        status: "Pending"
       })
       .sort({ createdAt: -1 })
       .limit(10)
@@ -252,7 +261,6 @@ const getOwnerDashboard = async (companyCode, ownerId) => {
       .select("user startDate endDate type status reason createdAt approvedBy remarks")
       .lean(),
 
-      // Asset Requests - ONLY pending status
       AssetRequest.find({
         companyCode: companyCode,
         status: "pending"
@@ -264,25 +272,23 @@ const getOwnerDashboard = async (companyCode, ownerId) => {
       .select("user assetName asset assetType requestType status reason adminComments createdAt approvedBy")
       .lean(),
 
-      // Tasks - Created by OR assigned to owner
+      // ✅ FIXED: Include isActive check and better filtering
       Task.find({
         companyCode: companyCode,
-        $or: [
-          { createdBy: ownerId },
-          { assignedUsers: ownerId }
-        ]
+        taskFor: { $in: ["others", "Others", "other", "Other"] },
+        isActive: { $ne: false } // Include if not explicitly false
       })
       .sort({ createdAt: -1 })
       .limit(10)
       .populate("assignedUsers", "name email")
       .populate("createdBy", "name email")
-      .select("name description priority status dueDate assigneeId createdBy createdAt")
+      .select("title description priority dueDateTime createdAt updatedAt assignedUsers createdBy overallStatus statusHistory taskFor isActive")
       .lean(),
 
-     Meeting.find({
-      companyCode: companyCode,
-      date: { $gte: today }
-    })
+      Meeting.find({
+        companyCode: companyCode,
+        date: { $gte: today }
+      })
       .sort({ date: -1, createdAt: -1 })
       .limit(10)
       .populate("createdBy", "name email")
@@ -290,6 +296,14 @@ const getOwnerDashboard = async (companyCode, ownerId) => {
       .select("title description date time status createdBy attendees createdAt")
       .lean(),
     ]);
+    
+    console.log("🔍 OWNER TASKS AFTER QUERY:", ownerTasks.length);
+    console.log("🔍 OWNER TASKS DETAILS:", ownerTasks.map(t => ({
+      title: t.title,
+      taskFor: t.taskFor,
+      overallStatus: t.overallStatus,
+      isActive: t.isActive
+    })));
 
     const presentCount = todayAttendance.filter((a) => a.status === "PRESENT").length;
     const lateCount = todayAttendance.filter((a) => a.status === "LATE").length;
@@ -348,25 +362,26 @@ const getClientDashboard = async (userId, companyCode) => {
     const clientTasks = await Task.find({
       clientId: userId,
       companyCode: companyCode,
+      taskFor: { $in: ["others", "Others"] }
     })
       .sort({ updatedAt: -1 })
       .limit(10)
       .populate("createdBy", "name email")
       .populate("assignedUsers", "name email")
       .select(
-        "name description priority status dueDate updatedAt createdAt createdBy assigneeId"
+        "title description priority overallStatus dueDateTime updatedAt createdAt createdBy assignedUsers taskFor"
       )
       .lean();
 
     const recentActivity = clientTasks.map((task) => ({
       type: "task_update",
-      title: task.name,
-      status: task.status,
+      title: task.title,
+      status: task.overallStatus,
       priority: task.priority,
       date: task.updatedAt || task.createdAt,
       description: task.description,
       createdBy: task.createdBy?.name,
-      assignee: task.assigneeId?.name,
+      assignee: task.assignedUsers?.map(u => u.name).join(", "),
     }));
 
     return {
@@ -379,9 +394,6 @@ const getClientDashboard = async (userId, companyCode) => {
   }
 };
 
-const now = new Date();                  // ✅ ADD THIS
-const TWELVE_HOURS = 12 * 60 * 60 * 1000;
-
 const formatEmployeeActivities = (
   attendance,
   leaves,
@@ -389,6 +401,8 @@ const formatEmployeeActivities = (
   tasks,
   meetings
 ) => {
+  const now = new Date();                  
+  const TWELVE_HOURS = 12 * 60 * 60 * 1000;
   const activities = [];
 
   if (attendance && attendance.status !== "NOT_CLOCKED_IN") {
@@ -403,8 +417,7 @@ const formatEmployeeActivities = (
     });
   }
 
-    leaves.forEach((leave) => {
-    // 🔥 Skip approved leaves older than 12 hours
+  leaves.forEach((leave) => {
     if (
       leave.status.toLowerCase() === "approved" &&
       now - new Date(leave.createdAt) > TWELVE_HOURS
@@ -429,13 +442,12 @@ const formatEmployeeActivities = (
   });
 
   assets.forEach((asset) => {
-      // 🔥 Skip approved assets older than 12 hours
-      if (
-        asset.status.toLowerCase() === "approved" &&
-        now - new Date(asset.createdAt) > TWELVE_HOURS
-      ) {
-        return;
-      }
+    if (
+      asset.status.toLowerCase() === "approved" &&
+      now - new Date(asset.createdAt) > TWELVE_HOURS
+    ) {
+      return;
+    }
     if (asset.user) {
       activities.push({
         type: "asset",
@@ -452,15 +464,32 @@ const formatEmployeeActivities = (
   });
 
   tasks.forEach((task) => {
+    // Skip completed tasks
+    if (task.overallStatus === "completed") {
+      return;
+    }
+    
+    // Skip if task is inactive
+    if (task.isActive === false) {
+      return;
+    }
+    
+    let dueDateText = "No due date";
+    if (task.dueDateTime) {
+      try {
+        dueDateText = new Date(task.dueDateTime).toLocaleDateString();
+      } catch(e) {
+        dueDateText = "Invalid date";
+      }
+    }
+    
     activities.push({
       type: "task",
-      title: `Task: ${task.name}`,
-      status: task.status,
+      title: `Task: ${task.title}`,
+      status: task.overallStatus,
       priority: task.priority,
       date: task.updatedAt || task.createdAt,
-      details: `Due: ${
-        task.dueDate ? new Date(task.dueDate).toLocaleDateString() : "No due date"
-      }`,
+      details: `Due: ${dueDateText}`,
       assignedTo: task.assignedUsers?.map(u => u.name).join(", "),
       createdBy: task.createdBy?.name,
     });
@@ -516,36 +545,57 @@ const formatOwnerActivities = (leaves, assets, tasks, meetings) => {
     }
   });
 
+  const now = new Date();
+  const TWELVE_HOURS = 12 * 60 * 60 * 1000;
+
   tasks.forEach((task) => {
-
-  // ✅ Task show
-  activities.push({
-    type: "task",
-    title: `Task: ${task.name}`,
-    status: task.status,
-    priority: task.priority,
-    date: task.updatedAt || task.createdAt,   // ✅ FIX
-    details: `Due: ${
-      task.dueDate ? new Date(task.dueDate).toLocaleDateString() : "No due date"
-    }`,
-    assignedTo: task.assignedUsers?.map(u => u.name).join(", "),
-    createdBy: task.createdBy?.name,
-  });
-
-  // 🔥 NEW: status change show
-  if (task.statusHistory && task.statusHistory.length > 0) {
-    task.statusHistory.forEach((history) => {
-      activities.push({
-        type: "task_status",
-        title: `Status Changed`,
-        status: history.status,
-        date: history.changedAt || history.createdAt,
-        details: history.remarks || `Status changed to ${history.status}`,
-      });
+    // Skip completed tasks older than 12 hours
+    if (
+      task.overallStatus === "completed" &&
+      now - new Date(task.updatedAt || task.createdAt) > TWELVE_HOURS
+    ) {
+      return;
+    }
+    
+    // Skip if task is inactive
+    if (task.isActive === false) {
+      return;
+    }
+    
+    let dueDateText = "No due date";
+    if (task.dueDateTime) {
+      try {
+        dueDateText = new Date(task.dueDateTime).toLocaleDateString();
+      } catch(e) {
+        dueDateText = "Invalid date";
+      }
+    }
+    
+    // Show task
+    activities.push({
+      type: "task",
+      title: `Task: ${task.title}`,
+      status: task.overallStatus,
+      priority: task.priority,
+      date: task.updatedAt || task.createdAt,
+      details: `Due: ${dueDateText}`,
+      assignedTo: task.assignedUsers?.map(u => u.name).join(", "),
+      createdBy: task.createdBy?.name,
     });
-  }
 
-});
+    // Show status changes
+    if (task.statusHistory && task.statusHistory.length > 0) {
+      task.statusHistory.forEach((history) => {
+        activities.push({
+          type: "task_status",
+          title: `Status Changed`,
+          status: history.status,
+          date: history.changedAt || history.createdAt,
+          details: history.remarks || `Status changed to ${history.status}`,
+        });
+      });
+    }
+  });
 
   meetings.forEach((meeting) => {
     activities.push({
