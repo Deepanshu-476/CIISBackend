@@ -30,6 +30,11 @@ const createNotification = async (userId, title, message, type, relatedTask = nu
 // 🔹 Helper to create activity logs
 const createActivityLog = async (user, action, task, description, oldValues = null, newValues = null, req = null) => {
   try {
+    if (!user || !user._id) {
+      console.error("❌ Invalid user in activity log:", user);
+      return; // 🚫 crash रोक देगा
+    }
+
     await ActivityLog.create({
       user: user._id,
       action,
@@ -330,17 +335,15 @@ exports.getTasks = async (req, res) => {
 
     const groupIds = userGroups.map(group => group._id);
 
-    const filter = {
-        $or: [
-          { assignedUsers: req.user._id },
-          { assignedGroups: { $in: groupIds } },
-          { 
-            createdBy: req.user._id,
-            taskFor: 'self'
-          }
-        ],
-        isActive: true
-      };
+   const filter = {
+      companyCode: req.user.companyCode,   // ✅ ADD THIS
+      $or: [
+        { assignedUsers: req.user._id },
+        { assignedGroups: { $in: groupIds } },
+        { createdBy: req.user._id, taskFor: 'self' }
+      ],
+      isActive: true
+    };
 
       if (period === "today") {
 
@@ -419,13 +422,11 @@ exports.getMyTasks = async (req, res) => {
     const groupIds = userGroups.map(group => group._id);
 
     const filter = {
+      companyCode: req.user.companyCode,   // ✅ ADD THIS
       $or: [
         { assignedUsers: req.user._id },
         { assignedGroups: { $in: groupIds } },
-        { 
-          createdBy: req.user._id,
-          taskFor: 'self'
-        }
+        { createdBy: req.user._id, taskFor: 'self' }
       ],
       isActive: true
     };
@@ -581,6 +582,7 @@ exports.getAssignedTasks = async (req, res) => {
 
     // Only show tasks created for others by current user
     const filter = { 
+      companyCode: req.user.companyCode,   // ✅ ADD THIS
       createdBy: req.user._id,
       taskFor: 'others',
       isActive: true
@@ -728,6 +730,7 @@ exports.createTaskForSelf = async (req, res) => {
       whatsappNumber,
       priorityDays,
       priority: priority || "medium",
+      companyCode: req.user.companyCode,
       assignedUsers: finalAssignedUsers,
       assignedGroups: finalAssignedGroups,
       statusByUser,
@@ -1004,6 +1007,7 @@ exports.createTaskForOthers = async (req, res) => {
       whatsappNumber,
       priorityDays,
       priority: priority || "medium",
+       companyCode: req.user.companyCode, 
       assignedUsers: parsedUsers,
       assignedGroups: parsedGroups,
       statusByUser,
@@ -1229,7 +1233,7 @@ exports.deleteTask = async (req, res) => {
     const { taskId } = req.params;
 
     // ✅ Get current user
-    const currentUser = await User.findById(req.user.id).lean();
+    const currentUser = await User.findById(req.user.id);
     if (!currentUser) {
       return res.status(403).json({ 
         success: false,
@@ -1257,11 +1261,11 @@ exports.deleteTask = async (req, res) => {
 
     // Soft delete by setting isActive to false
     task.isActive = false;
-    await task.save();
+    await Task.findByIdAndUpdate(taskId, { isActive: false });
 
     // 🔹 Create activity log
     await createActivityLog(
-      currentUser,
+      { _id: currentUser._id },
       'task_deleted',
       taskId,
       `Deleted task: ${taskTitle}`,
@@ -1279,7 +1283,7 @@ exports.deleteTask = async (req, res) => {
     console.error('❌ Error deleting task:', error);
     res.status(500).json({ 
       success: false,
-      error: 'Failed to delete task' 
+      error: error.message
     });
   }
 };
@@ -1840,6 +1844,7 @@ exports.getTaskStatusCounts = async (req, res) => {
     const baseFilter = {
       ...dateFilter,
       isActive: true,
+      companyCode: req.user.companyCode,
       $or: [
         { assignedUsers: req.user._id },
         { assignedGroups: { $in: groupIds } },
@@ -1988,6 +1993,7 @@ exports.getUserDetailedAnalytics = async (req, res) => {
     const baseFilter = {
       ...dateFilter,
       isActive: true,
+      companyCode: req.user.companyCode, 
       $or: [
         { assignedUsers: userId },
         { assignedGroups: { $in: groupIds } },
@@ -2213,6 +2219,7 @@ exports.getUserTaskStats = async (req, res) => {
     const baseFilter = {
       ...dateFilter,
       isActive: true,
+      companyCode: req.user.companyCode,
       $or: [
         { assignedUsers: userId },
         { assignedGroups: { $in: groupIds } },
