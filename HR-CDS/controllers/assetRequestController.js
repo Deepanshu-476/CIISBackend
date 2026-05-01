@@ -214,12 +214,12 @@ exports.requestAsset = async (req, res) => {
         success: false, 
         error: 'Asset not found in your company' 
       });
-    }
+    } 
 
-    if (asset.status !== 'Available') {
+    if (asset.quantity <= 0) {
       return res.status(400).json({ 
         success: false, 
-        error: `Asset is not available (Current status: ${asset.status})` 
+        error: `Asset is out of stock` 
       });
     }
 
@@ -441,12 +441,24 @@ exports.updateRequestStatus = async (req, res) => {
     const { status, adminComment } = req.body;
     
     const validStatuses = ['approved', 'rejected', 'completed'];
-    if (!validStatuses.includes(status)) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Invalid status' 
-      });
-    }
+          // ✅ allow comment-only update
+      if (!status && !adminComment) {
+        return res.status(400).json({
+          success: false,
+          error: 'Status or comment required'
+        });
+      }
+
+      // ✅ validate only if status comes
+      if (status) {
+        const validStatuses = ['approved', 'rejected', 'completed'];
+        if (!validStatuses.includes(status)) {
+          return res.status(400).json({
+            success: false,
+            error: 'Invalid status'
+          });
+        }
+      } 
 
     const request = await AssetRequest.findOne({
       _id: id,
@@ -463,7 +475,7 @@ exports.updateRequestStatus = async (req, res) => {
     }
 
     // If approving, check if asset is still available
-    if (status === 'approved' && request.asset.status !== 'Available') {
+    if (status === 'approved' && request.asset.quantity <= 0) {
       return res.status(400).json({ 
         success: false, 
         error: `Asset is no longer available (Current: ${request.asset.status})` 
@@ -471,8 +483,24 @@ exports.updateRequestStatus = async (req, res) => {
     }
 
     // Update request
-    request.status = status;
-    request.adminComment = adminComment || '';
+   // ✅ only update status if provided
+      if (status) {
+        request.status = status;
+      }
+
+      // ✅ main fix (IMPORTANT)
+      // ✅ ensure array exists
+        if (!request.adminComments) {
+          request.adminComments = [];
+        }
+
+        if (adminComment) {
+          request.adminComments.push({
+            text: adminComment,
+            addedBy: req.user._id,
+            addedAt: new Date()
+          });
+        }
     request.decisionDate = new Date();
     request.approvedBy = req.user._id;
 
