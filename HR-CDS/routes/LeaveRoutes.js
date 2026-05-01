@@ -13,7 +13,7 @@ router.use(authMiddleware.protect);
 // 📋 User Routes
 router.post('/apply', 
   [
-    body('type').isIn(['Casual', 'Sick', 'Paid', 'Unpaid', 'Other']).withMessage('Invalid leave type'),
+    body('type').isIn(['Casual', 'Sick', 'Paid', 'Unpaid', 'Halfday', 'Other']).withMessage('Invalid leave type'),
     body('reason').trim().notEmpty().withMessage('Reason is required').isLength({ max: 500 }).withMessage('Reason must be less than 500 characters'),
     body('startDate').isISO8601().withMessage('Invalid start date format'),
     body('endDate').isISO8601().withMessage('Invalid end date format'),
@@ -25,7 +25,7 @@ router.post('/apply',
 router.get('/status',  // ← This is GET /leaves/status
   [
     query('status').optional().isIn(['Pending', 'Approved', 'Rejected', 'Cancelled', 'All']).withMessage('Invalid status'),
-    query('type').optional().isIn(['Casual', 'Sick', 'Paid', 'Unpaid', 'Other', 'all']).withMessage('Invalid type'),
+    query('type').optional().isIn(['Casual', 'Sick', 'Paid', 'Unpaid', 'Halfday', 'Other', 'all']).withMessage('Invalid type'),
     query('date').optional().isISO8601().withMessage('Invalid date format'),
     query('year').optional().isInt({ min: 2000, max: 2100 }).withMessage('Invalid year'),
     query('month').optional().isInt({ min: 1, max: 12 }).withMessage('Invalid month'),
@@ -81,7 +81,7 @@ router.get('/department/:department',
   [
     param('department').trim().notEmpty().withMessage('Department is required'),
     query('status').optional().isIn(['Pending', 'Approved', 'Rejected', 'Cancelled', 'All']).withMessage('Invalid status value'),
-    query('type').optional().isIn(['Casual', 'Sick', 'Paid', 'Unpaid', 'Other', 'all']).withMessage('Invalid type value'),
+    query('type').optional().isIn(['Casual', 'Sick', 'Paid', 'Unpaid', 'Halfday', 'Other', 'all']).withMessage('Invalid type value'),
     query('date').optional().isISO8601().withMessage('Invalid date format'),
     validateRequest
   ],
