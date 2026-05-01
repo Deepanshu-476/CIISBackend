@@ -1410,6 +1410,7 @@ exports.getLeaveBalance = async (req, res) => {
       Sick: { maxDays: 10, description: 'For health issues' },
       Paid: { maxDays: 20, description: 'Earned leave with pay' },
       Unpaid: { maxDays: 30, description: 'Leave without pay' },
+      Halfday: { maxDays: 1, description: 'Half day leave' },
       Other: { maxDays: 5, description: 'Other leave types' }
     };
     

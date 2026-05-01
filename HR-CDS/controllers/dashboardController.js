@@ -86,6 +86,9 @@ const getEmployeeDashboard = async (userId, companyCode) => {
     
     console.log("📊 Employee Data Counts:", { leaveCount, taskCount, assetCount });
 
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
     const [
       todayAttendance,
       leaveRequests,
@@ -133,9 +136,10 @@ const getEmployeeDashboard = async (userId, companyCode) => {
         .lean(),
 
       Meeting.find({
-        companyCode: companyCode,
-        attendees: userId,
-      })
+          companyCode: companyCode,
+          attendees: userId, 
+          date: { $gte: today }   // ✅ past meetings remove
+        })
         .sort({ date: -1, time: -1 })
         .limit(10)
         .populate("createdBy", "name email")
@@ -200,6 +204,8 @@ const getOwnerDashboard = async (companyCode, ownerId) => {
     monthEnd.setDate(0);
     monthEnd.setHours(23, 59, 59, 999);
 
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
     const [
       allEmployees,
       todayAttendance,
@@ -238,7 +244,7 @@ const getOwnerDashboard = async (companyCode, ownerId) => {
       // ✅ FIX: Show ALL leaves (remove status filter)
       Leave.find({
         companyCode: companyCode,
-        // ✅ REMOVED: status: "Pending"
+        status: "Pending"   // ✅ only pending show
       })
       .sort({ createdAt: -1 })
       .limit(10)
@@ -273,9 +279,10 @@ const getOwnerDashboard = async (companyCode, ownerId) => {
       .select("name description priority status dueDate assigneeId createdBy createdAt")
       .lean(),
 
-      Meeting.find({
-        companyCode: companyCode,
-      })
+     Meeting.find({
+      companyCode: companyCode,
+      date: { $gte: today }
+    })
       .sort({ date: -1, createdAt: -1 })
       .limit(10)
       .populate("createdBy", "name email")
@@ -372,6 +379,9 @@ const getClientDashboard = async (userId, companyCode) => {
   }
 };
 
+const now = new Date();                  // ✅ ADD THIS
+const TWELVE_HOURS = 12 * 60 * 60 * 1000;
+
 const formatEmployeeActivities = (
   attendance,
   leaves,
@@ -393,7 +403,14 @@ const formatEmployeeActivities = (
     });
   }
 
-  leaves.forEach((leave) => {
+    leaves.forEach((leave) => {
+    // 🔥 Skip approved leaves older than 12 hours
+    if (
+      leave.status.toLowerCase() === "approved" &&
+      now - new Date(leave.createdAt) > TWELVE_HOURS
+    ) {
+      return;
+    }
     if (leave.user) {
       activities.push({
         type: "leave",
@@ -412,6 +429,13 @@ const formatEmployeeActivities = (
   });
 
   assets.forEach((asset) => {
+      // 🔥 Skip approved assets older than 12 hours
+      if (
+        asset.status.toLowerCase() === "approved" &&
+        now - new Date(asset.createdAt) > TWELVE_HOURS
+      ) {
+        return;
+      }
     if (asset.user) {
       activities.push({
         type: "asset",
