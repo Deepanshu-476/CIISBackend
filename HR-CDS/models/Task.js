@@ -118,6 +118,15 @@ const taskSchema = new mongoose.Schema(
       default: "medium",
     },
     
+
+    // ✅ ADD THIS - COMPANY CODE FIELD
+    companyCode: {
+      type: String,
+      required: true,
+      index: true,
+      default: ''
+    },
+
     assignedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     assignedGroups: [{
       type: mongoose.Schema.Types.ObjectId,
