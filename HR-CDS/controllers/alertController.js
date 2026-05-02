@@ -2,51 +2,75 @@ const Alert = require('../models/alertModel');
 const User = require('../../models/User');
 const Group = require('../models/Group');
 
-
 const getAlerts = async (req, res) => {
   try {
     const userId = req.user?._id;
     const userRole = req.user?.role?.toLowerCase();
-    
-    let query = {};
+    const companyId = req.user.company;
+
+    let query = {
+      company: companyId
+    };
     
     // If user is not admin/hr/manager, show only assigned alerts
     if (userRole && !['admin', 'hr', 'manager'].includes(userRole)) {
-
       const userGroups = await Group.find({ members: userId }).select('_id');
       const userGroupIds = userGroups.map(group => group._id);
       
-      query = {
-        $or: [
-          { assignedUsers: { $in: [userId] } },
-          { assignedGroups: { $in: userGroupIds } },
-          { assignedUsers: { $size: 0 } }, // No specific users assigned (public)
-          { assignedGroups: { $size: 0 } }  // No specific groups assigned (public)
-        ]
-      };
+      query.$or = [
+        { assignedUsers: { $in: [userId] } },
+        { assignedGroups: { $in: userGroupIds } },
+        { assignedUsers: { $size: 0 } },
+        { assignedGroups: { $size: 0 } }
+      ];
     }
     
     const alerts = await Alert.find(query)
       .populate('assignedUsers', 'name email')
       .populate('assignedGroups', 'name')
       .populate('createdBy', 'name email')
+      .populate('readBy', 'name email') 
       .sort({ createdAt: -1 });
-    
+
+    // Get all users for seen/not seen status
+    const users = await User.find({ company: companyId }).select('_id name email');
+
+    const alertsWithStatus = alerts.map(alert => {
+      const seenIds = alert.readBy.map(u => u._id.toString());
+
+      const seen = [];
+      const notSeen = [];
+
+      users.forEach(user => {
+        if (seenIds.includes(user._id.toString())) {
+          seen.push(user);
+        } else {
+          notSeen.push(user);
+        }
+      });
+
+      return {
+        ...alert.toObject(),
+        seenByUsers: seen,
+        notSeenUsers: notSeen
+      };
+    });
+
+    // Response
     res.json({
       success: true,
-      count: alerts.length,
-      alerts
+      count: alertsWithStatus.length,
+      alerts: alertsWithStatus
     });
   } catch (error) {
-    console.error('Error fetching alerts:', error);
-    res.status(500).json({ 
-      success: false, 
+    console.error('Error getting alerts:', error);
+    res.status(500).json({
+      success: false,
       message: 'Server error',
-      error: error.message 
+      error: error.message
     });
   }
 };
-
 
 const getUnreadCount = async (req, res) => {
   try {
@@ -54,6 +78,7 @@ const getUnreadCount = async (req, res) => {
     const userRole = req.user?.role?.toLowerCase();
     
     let query = {
+      company: req.user.company,
       readBy: { $ne: userId }
     };
     
@@ -90,27 +115,21 @@ const getUnreadCount = async (req, res) => {
 const addAlert = async (req, res) => {
   try {
     const { type, message, assignedUsers = [], assignedGroups = [] } = req.body;
+
     const createdBy = req.user._id;
-    
-    // Validate required fields
-    if (!message || !message.trim()) {
-      return res.status(400).json({
-        success: false,
-        message: 'Alert message is required'
-      });
-    }
-    
-    // Create alert
+    const companyId = req.user.company;
+
     const alert = new Alert({
       type: type || 'info',
       message: message.trim(),
-      assignedUsers: Array.isArray(assignedUsers) ? assignedUsers : [],
-      assignedGroups: Array.isArray(assignedGroups) ? assignedGroups : [],
-      createdBy
+      assignedUsers,
+      assignedGroups,
+      createdBy,
+      company: companyId
     });
-    
+
     await alert.save();
-    
+
     res.status(201).json({
       success: true,
       message: 'Alert created successfully',
@@ -214,11 +233,11 @@ const markAsRead = async (req, res) => {
     }
     
     // Check if user has already marked as read
-    if (!alert.readBy.includes(userId)) {
+    if (!alert.readBy.some(id => id.toString() === userId.toString())) {
       alert.readBy.push(userId);
       await alert.save();
     }
-    
+
     res.json({
       success: true,
       message: 'Alert marked as read'
@@ -232,7 +251,9 @@ const markAsRead = async (req, res) => {
     });
   }
 };
+
 console.log("✅ alertController.js loaded successfully");
+
 module.exports = {
   getAlerts,
   addAlert,

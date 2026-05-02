@@ -10,35 +10,29 @@ const alertSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+
+  // ✅ ADD THIS
+  company: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    required: true
+  },
+
   assignedUsers: [
-    { 
-      type: mongoose.Schema.Types.ObjectId, 
-      ref: 'User',
-      default: [] 
-    }
+    { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: [] }
   ],
   assignedGroups: [
-    { 
-      type: mongoose.Schema.Types.ObjectId, 
-      ref: 'Group',
-      default: [] 
-    }
+    { type: mongoose.Schema.Types.ObjectId, ref: 'Group', default: [] }
   ],
   readBy: [
-    { 
-      type: mongoose.Schema.Types.ObjectId, 
-      ref: 'User',
-      default: [] 
-    }
+    { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: [] }
   ],
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
   }
-}, { 
-  timestamps: true 
-});
+}, { timestamps: true });
 
 // Add index for better performance
 alertSchema.index({ assignedUsers: 1 });
