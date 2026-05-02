@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 const Attendance = require("../models/Attendance");
 const Leave = require("../models/Leave");
 const AssetRequest = require("../models/AssetRequest");
-const Task = require("../models/ClientTask");
+const Task = require("../models/Task");
 const Meeting = require("../models/Meeting");
 const Holiday = require("../models/Holiday");
 const User = require("../../models/User");
@@ -545,57 +545,33 @@ const formatOwnerActivities = (leaves, assets, tasks, meetings) => {
     }
   });
 
+ tasks.forEach((task) => {
+
   const now = new Date();
   const TWELVE_HOURS = 12 * 60 * 60 * 1000;
 
-  tasks.forEach((task) => {
-    // Skip completed tasks older than 12 hours
-    if (
-      task.overallStatus === "completed" &&
-      now - new Date(task.updatedAt || task.createdAt) > TWELVE_HOURS
-    ) {
-      return;
-    }
-    
-    // Skip if task is inactive
-    if (task.isActive === false) {
-      return;
-    }
-    
-    let dueDateText = "No due date";
-    if (task.dueDateTime) {
-      try {
-        dueDateText = new Date(task.dueDateTime).toLocaleDateString();
-      } catch(e) {
-        dueDateText = "Invalid date";
-      }
-    }
-    
-    // Show task
-    activities.push({
-      type: "task",
-      title: `Task: ${task.title}`,
-      status: task.overallStatus,
-      priority: task.priority,
-      date: task.updatedAt || task.createdAt,
-      details: `Due: ${dueDateText}`,
-      assignedTo: task.assignedUsers?.map(u => u.name).join(", "),
-      createdBy: task.createdBy?.name,
-    });
+  // ❌ remove completed after 12h
+  if (
+    task.overallStatus === "completed" &&
+    now - new Date(task.updatedAt || task.createdAt) > TWELVE_HOURS
+  ) {
+    return;
+  }
 
-    // Show status changes
-    if (task.statusHistory && task.statusHistory.length > 0) {
-      task.statusHistory.forEach((history) => {
-        activities.push({
-          type: "task_status",
-          title: `Status Changed`,
-          status: history.status,
-          date: history.changedAt || history.createdAt,
-          details: history.remarks || `Status changed to ${history.status}`,
-        });
-      });
-    }
+  if (task.isActive === false) return;
+
+  activities.push({
+    type: "task",
+    title: task.title, // ✅ remove "Task:"
+    status: task.overallStatus,
+    date: task.updatedAt || task.createdAt,
+
+    // ✅ ADD THIS (IMPORTANT)
+    assignedTo: task.assignedUsers?.map(u => u.name).join(", "),
+    createdBy: task.createdBy?.name,
   });
+
+});
 
   meetings.forEach((meeting) => {
     activities.push({
