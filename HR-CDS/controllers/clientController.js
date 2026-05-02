@@ -905,7 +905,7 @@ const addClient = async (req, res) => {
     await session.commitTransaction();
     console.log('✅ Transaction committed successfully');
 
-    // Send welcome email with auto-generated password
+    // Send welcome email with auto-generated password (don't await - don't block response)
     sendWelcomeEmail(cleanEmail, cleanClientName, cleanCompanyName, autoPassword, cleanCompanyCode)
       .then(result => {
         if (result.success) {
