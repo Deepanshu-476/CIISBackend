@@ -15,6 +15,20 @@ const DEFAULT_CLIENT_DEPARTMENT_ID = '69ae555c9a1e47e80a40204c';
 // Default job role ID for clients
 const DEFAULT_CLIENT_JOB_ROLE_ID = '69ae559b9a1e47e80a4020a2';
 
+const normalizeCompanyCode = (companyCode) => companyCode?.trim().toUpperCase();
+const normalizeEmail = (email) => email?.trim().toLowerCase();
+const normalizeName = (value) => value?.trim();
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const sendConflict = (res, message, field, extra = {}) => {
+  return res.status(409).json({
+    success: false,
+    message,
+    field,
+    ...extra
+  });
+};
+
 // Helper function to get welcome email template
 const getWelcomeEmailTemplate = (name, company, email, password, loginUrl) => {
   const currentYear = new Date().getFullYear();
@@ -361,15 +375,24 @@ const getWelcomeEmailTemplate = (name, company, email, password, loginUrl) => {
 };
 
 // Helper function to send welcome email using email service
-const sendWelcomeEmail = async (email, name, company, password) => {
+const getCompanyLoginUrl = (companyCode) => {
+  const normalizedCompanyCode = companyCode?.trim();
+  if (!normalizedCompanyCode) {
+    return 'https://cds.ciisnetwork.in/login';
+  }
+
+  return `https://cds.ciisnetwork.in/company/${normalizedCompanyCode}/login`;
+};
+
+const sendWelcomeEmail = async (email, name, company, password, companyCode) => {
   console.log('📧 ====== SENDING WELCOME EMAIL ======');
   console.log(`📧 To: ${email}`);
   console.log(`📧 Name: ${name}`);
   console.log(`📧 Company: ${company}`);
+  console.log(`📧 Company Code: ${companyCode || 'N/A'}`);
   console.log(`📧 Auto-generated password: ${password}`);
   
-  const loginUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-  const fullLoginUrl = `${loginUrl}/login`;
+  const fullLoginUrl = getCompanyLoginUrl(companyCode);
   
   try {
     // Get the email template
@@ -386,6 +409,7 @@ const sendWelcomeEmail = async (email, name, company, password) => {
         headers: {
           'X-Email-Type': 'client-welcome',
           'X-Company': company,
+          'X-Company-Code': companyCode || '',
           'X-User-Email': email
         }
       }
@@ -609,23 +633,25 @@ const addClient = async (req, res) => {
       });
     }
 
+    const cleanCompanyCode = normalizeCompanyCode(companyCode);
+    const cleanClientName = normalizeName(client);
+    const cleanCompanyName = normalizeName(company);
+    const cleanCity = normalizeName(city);
+
     // Check if client already exists for this company
     const existingClient = await Client.findOne({
-      client: client.trim(),
-      companyCode: companyCode.trim().toUpperCase()
+      client: { $regex: `^${escapeRegExp(cleanClientName)}$`, $options: 'i' },
+      companyCode: cleanCompanyCode
     }).session(session);
 
     if (existingClient) {
       console.warn('⚠️ Client already exists:', existingClient._id);
       await session.abortTransaction();
-      return res.status(400).json({
-        success: false,
-        message: 'Client already exists for this company'
-      });
+      return sendConflict(res, 'This client already exists for this company.', 'client');
     }
 
     // Check if email is already in use (if email provided)
-    let cleanEmail = email ? email.trim().toLowerCase() : '';
+    let cleanEmail = normalizeEmail(email) || '';
     if (cleanEmail) {
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (!emailRegex.test(cleanEmail)) {
@@ -641,15 +667,32 @@ const addClient = async (req, res) => {
       if (existingUser) {
         console.warn('⚠️ Email already in use:', cleanEmail);
         await session.abortTransaction();
-        return res.status(409).json({
-          success: false,
-          message: "Email already in use"
-        });
+        return sendConflict(res, 'This email is already registered. Please use another email.', 'email');
+      }
+
+      const existingClientEmail = await Client.findOne({ email: cleanEmail }).session(session);
+      if (existingClientEmail) {
+        console.warn('⚠️ Client email already in use:', cleanEmail);
+        await session.abortTransaction();
+        return sendConflict(res, 'This email is already used by another client.', 'email');
       }
     } else {
       // Generate email if not provided
-      cleanEmail = `${client.toLowerCase().replace(/[^a-z0-9]/g, '')}@${companyCode.toLowerCase()}.com`;
+      cleanEmail = `${cleanClientName.toLowerCase().replace(/[^a-z0-9]/g, '')}@${cleanCompanyCode.toLowerCase()}.com`;
       console.log('🔍 Generated email:', cleanEmail);
+
+      const existingGeneratedEmail = await User.findOne({ email: cleanEmail }).session(session);
+      const existingGeneratedClientEmail = await Client.findOne({ email: cleanEmail }).session(session);
+      if (existingGeneratedEmail || existingGeneratedClientEmail) {
+        console.warn('⚠️ Generated email already in use:', cleanEmail);
+        await session.abortTransaction();
+        return sendConflict(
+          res,
+          `Generated email ${cleanEmail} already exists. Please enter a unique client email manually.`,
+          'email',
+          { generatedEmail: cleanEmail }
+        );
+      }
     }
 
     // Validate services exist if provided
@@ -658,7 +701,7 @@ const addClient = async (req, res) => {
       if (serviceNames.length > 0) {
         const existingServices = await Service.find({ 
           servicename: { $in: serviceNames },
-          companyCode: companyCode.trim().toUpperCase()
+          companyCode: cleanCompanyCode
         }).session(session);
         
         if (existingServices.length !== serviceNames.length) {
@@ -708,7 +751,7 @@ const addClient = async (req, res) => {
     // Get company ID from companyCode
     console.log('🔍 Finding company with code:', companyCode);
     
-    const companyExists = await Company.findOne({ companyCode: companyCode.trim().toUpperCase() }).session(session);
+    const companyExists = await Company.findOne({ companyCode: cleanCompanyCode }).session(session);
     if (!companyExists) {
       console.error('❌ Company not found with code:', companyCode);
       await session.abortTransaction();
@@ -747,7 +790,7 @@ const addClient = async (req, res) => {
       department: DEFAULT_CLIENT_DEPARTMENT_ID,
       jobRole: DEFAULT_CLIENT_JOB_ROLE_ID,
       company: companyExists._id,
-      companyCode: companyCode.trim().toUpperCase(),
+      companyCode: cleanCompanyCode,
       employeeId,
       phone: phone?.trim() || '',
       address: address?.trim() || '',
@@ -766,8 +809,8 @@ const addClient = async (req, res) => {
       additionalDetails: JSON.stringify({
         clientId: null, // Will update after client creation
         isClientRepresentative: true,
-        companyName: company,
-        city: city
+        companyName: cleanCompanyName,
+        city: cleanCity
       }),
       fatherName: '',
       motherName: '',
@@ -795,10 +838,10 @@ const addClient = async (req, res) => {
 
     // Create new client
     const newClient = new Client({
-      client: client.trim(),
-      company: company.trim(),
-      city: city.trim(),
-      companyCode: companyCode.trim().toUpperCase(),
+      client: cleanClientName,
+      company: cleanCompanyName,
+      city: cleanCity,
+      companyCode: cleanCompanyCode,
       projectManager: cleanProjectManagers,
       services: services || [],
       status: status || 'Active',
@@ -836,7 +879,7 @@ const addClient = async (req, res) => {
     console.log('✅ Transaction committed successfully');
 
     // Send welcome email with auto-generated password (don't await - don't block response)
-    sendWelcomeEmail(cleanEmail, client, company, autoPassword)
+    sendWelcomeEmail(cleanEmail, cleanClientName, cleanCompanyName, autoPassword, cleanCompanyCode)
       .then(result => {
         if (result.success) {
           console.log('✅ Welcome email sent successfully');
@@ -869,10 +912,11 @@ const addClient = async (req, res) => {
     
     if (error.code === 11000) {
       console.error('❌ Duplicate key error:', error.keyValue);
-      return res.status(400).json({
-        success: false,
-        message: 'Client already exists for this company'
-      });
+      if (error.keyValue?.email) {
+        return sendConflict(res, 'This email is already registered. Please use another email.', 'email');
+      }
+
+      return sendConflict(res, 'This client already exists for this company.', 'client');
     }
     
     if (error.name === 'ValidationError') {
@@ -973,7 +1017,7 @@ const updateClient = async (req, res) => {
     if (client !== undefined && companyCode !== undefined) {
       const duplicateClient = await Client.findOne({
         _id: { $ne: id },
-        client: client.trim(),
+        client: { $regex: `^${escapeRegExp(client.trim())}$`, $options: 'i' },
         companyCode: companyCode.trim().toUpperCase()
       });
 
@@ -1011,6 +1055,36 @@ const updateClient = async (req, res) => {
       }
     }
 
+    if (email !== undefined) {
+      const cleanEmail = normalizeEmail(email) || '';
+      if (cleanEmail) {
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(cleanEmail)) {
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid email format',
+            field: 'email'
+          });
+        }
+
+        if (cleanEmail !== existingClient.email) {
+          const duplicateClientEmail = await Client.findOne({
+            _id: { $ne: id },
+            email: cleanEmail
+          });
+
+          if (duplicateClientEmail) {
+            return sendConflict(res, 'This email is already used by another client.', 'email');
+          }
+
+          const duplicateUserEmail = await User.findOne({ email: cleanEmail });
+          if (duplicateUserEmail) {
+            return sendConflict(res, 'This email is already registered. Please use another email.', 'email');
+          }
+        }
+      }
+    }
+
     // Build update object
     const updateData = {};
     
@@ -1028,7 +1102,7 @@ const updateClient = async (req, res) => {
     if (services !== undefined) updateData.services = services;
     if (status !== undefined) updateData.status = status;
     if (progress !== undefined) updateData.progress = progress;
-    if (email !== undefined) updateData.email = email.trim().toLowerCase();
+    if (email !== undefined) updateData.email = normalizeEmail(email) || '';
     if (phone !== undefined) updateData.phone = phone.trim();
     if (address !== undefined) updateData.address = address.trim();
     if (description !== undefined) updateData.description = description.trim();
@@ -1053,10 +1127,11 @@ const updateClient = async (req, res) => {
     console.error('❌ Error updating client:', error);
     
     if (error.code === 11000) {
-      return res.status(400).json({
-        success: false,
-        message: 'Client name already exists for this company'
-      });
+      if (error.keyValue?.email) {
+        return sendConflict(res, 'This email is already registered. Please use another email.', 'email');
+      }
+
+      return sendConflict(res, 'Client name already exists for this company.', 'client');
     }
     
     if (error.name === 'ValidationError') {
