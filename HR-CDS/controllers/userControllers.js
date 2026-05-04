@@ -557,12 +557,13 @@ exports.updateUser = async (req, res) => {
     }
     
     // For self-update (non-super_admin), restrict sensitive fields
-    if (isSelfUpdate && !isSuperAdmin) {
-      const restrictedForSelf = ['jobRole', 'department', 'employeeId', 'companyRole', 'salary', 'employeeType'];
-      restrictedForSelf.forEach(field => {
-        delete updateData[field];
-      });
-    }
+    // For self-update (non-super_admin), restrict limited fields only
+      if (isSelfUpdate && !isSuperAdmin) {
+        const restrictedForSelf = ['employeeId', 'companyRole', 'salary', 'employeeType'];
+        restrictedForSelf.forEach(field => {
+          delete updateData[field];
+        });
+      }
 
     // Validate department if being updated
     if (updateData.department) {
