@@ -74,12 +74,21 @@ const clientSchema = new mongoose.Schema({
     type: String,
     trim: true,
     maxlength: [500, 'Notes cannot exceed 500 characters']
+  },
+    subscription: {
+    type: [{
+      startDate: Date,
+      endDate: Date,
+      status: {
+        type: String,
+        enum: ['Active', 'Expired'],
+        default: 'Active'
+      }
+    }],
+    default: []
   }
-}, {
-  timestamps: true,
-  toJSON: { virtuals: true },
-  toObject: { virtuals: true }
-});
+  
+}, { timestamps: true });
 
 // Indexes for better query performance
 clientSchema.index({ client: 1, companyCode: 1 }, { unique: true }); // Unique client per company
@@ -98,6 +107,7 @@ clientSchema.index({
   email: 'text',
   description: 'text',
   notes: 'text'
+  
 });
 
 // Virtual for progress percentage

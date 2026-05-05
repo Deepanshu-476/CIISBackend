@@ -441,15 +441,13 @@ const getAllClients = async (req, res) => {
       status,
       projectManager,
       service,
-      companyCode // Add companyCode filter
+      companyCode
     } = req.query;
 
     console.log('🔍 Parsed query params:', { page, limit, sortBy, sortOrder, search, status, projectManager, service, companyCode });
 
-    // Build filter object
     const filter = {};
     
-    // ✅ Add companyCode filter (mandatory)
     if (!companyCode) {
       console.warn('⚠️ No companyCode provided in request');
       return res.status(400).json({
@@ -470,7 +468,6 @@ const getAllClients = async (req, res) => {
       filter.services = service;
     }
     
-    // Enhanced search functionality
     if (search && search.trim()) {
       const searchRegex = new RegExp(search.trim(), 'i');
       filter.$or = [
@@ -484,7 +481,6 @@ const getAllClients = async (req, res) => {
       console.log('🔍 Search filter:', filter.$or);
     }
 
-    // Sort options
     const sortOptions = {};
     const validSortFields = ['client', 'company', 'city', 'status', 'createdAt', 'updatedAt'];
     
@@ -495,7 +491,6 @@ const getAllClients = async (req, res) => {
     }
     console.log('🔍 Sort options:', sortOptions);
 
-    // Execute query with pagination
     const skip = (parseInt(page) - 1) * parseInt(limit);
     console.log('🔍 Pagination - skip:', skip, 'limit:', limit);
     
@@ -578,7 +573,8 @@ const addClient = async (req, res) => {
       phone,
       address,
       description,
-      notes
+      notes,
+      subscription  
     } = req.body;
 
     console.log('🔍 Processing client data:', {
@@ -589,7 +585,8 @@ const addClient = async (req, res) => {
       projectManager,
       services,
       email,
-      phone
+      phone,
+      subscription: subscription  // ✅ YEH CHECK KARNE KE LIYE
     });
 
     // Validation
@@ -764,9 +761,7 @@ const addClient = async (req, res) => {
 
     // Generate password from client name
     const generatePassword = (name) => {
-      // Remove special characters and spaces, convert to lowercase
       const baseName = name.toLowerCase().replace(/[^a-z0-9]/g, '');
-      // Add random numbers for security
       const randomNum = Math.floor(1000 + Math.random() * 9000);
       return `${baseName}@${randomNum}`;
     };
@@ -774,7 +769,6 @@ const addClient = async (req, res) => {
     const autoPassword = generatePassword(client);
     console.log('🔍 Generated auto password for user');
     
-
     // Generate employee ID for user
     const employeeId = `CLT${Date.now()}${Math.floor(Math.random() * 1000)}`;
     console.log('🔍 Generated employee ID:', employeeId);
@@ -794,8 +788,8 @@ const addClient = async (req, res) => {
       employeeId,
       phone: phone?.trim() || '',
       address: address?.trim() || '',
-      gender: 'other', // Default value
-      maritalStatus: 'single', // Default value
+      gender: 'other',
+      maritalStatus: 'single',
       dob: null,
       salary: null,
       accountNumber: '',
@@ -803,11 +797,11 @@ const addClient = async (req, res) => {
       bankName: '',
       bankHolderName: '',
       employeeType: 'client', 
-      companyRole: 'client', // Set companyRole  to indicate this is a client user
+      companyRole: 'client',
       properties: [],
       propertyOwned: '',
       additionalDetails: JSON.stringify({
-        clientId: null, // Will update after client creation
+        clientId: null,
         isClientRepresentative: true,
         companyName: cleanCompanyName,
         city: cleanCity
@@ -835,8 +829,21 @@ const addClient = async (req, res) => {
     const cleanProjectManagers = projectManager
       .filter(manager => manager && typeof manager === 'string' && manager.trim().length > 0)
       .map(manager => manager.trim());
+    
+    // ✅ SUBSCRIPTION ARRAY BANANE KA SAHI TARIKA
+    let subscriptionArray = [];
+    if (subscription && Array.isArray(subscription) && subscription.length > 0) {
+      subscriptionArray = subscription.map(sub => ({
+        startDate: new Date(sub.startDate),
+        endDate: new Date(sub.endDate),
+        status: sub.status || 'Active'
+      }));
+      console.log('✅ Subscription array created:', subscriptionArray);
+    } else {
+      console.log('⚠️ No subscription data received, keeping empty array');
+    }
 
-    // Create new client
+    // Create new client with subscription
     const newClient = new Client({
       client: cleanClientName,
       company: cleanCompanyName,
@@ -851,12 +858,14 @@ const addClient = async (req, res) => {
       address: address ? address.trim() : '',
       description: description ? description.trim() : '',
       notes: notes ? notes.trim() : '',
-      userId: createdUser._id // Link to the created user
+      subscription: subscriptionArray,  // ✅ YEH SAVE HOGA
+      userId: createdUser._id
     });
 
-    console.log('🔍 Creating client with data:', newClient);
+    console.log('🔍 Creating client with subscription:', subscriptionArray);
     await newClient.save({ session });
-    console.log('✅ Client created successfully:', newClient._id);
+    console.log('✅ Client created successfully with ID:', newClient._id);
+    console.log('✅ Client subscription saved:', newClient.subscription);
 
     // Update user's additionalDetails with client ID
     const updatedAdditionalDetails = JSON.parse(createdUser.additionalDetails || '{}');
@@ -867,7 +876,7 @@ const addClient = async (req, res) => {
       { 
         $set: { 
           'additionalDetails': JSON.stringify(updatedAdditionalDetails),
-          employeeType: newClient._id.toString() // Store client ID in employeeType
+          employeeType: newClient._id.toString()
         } 
       },
       { session }
@@ -878,7 +887,7 @@ const addClient = async (req, res) => {
     await session.commitTransaction();
     console.log('✅ Transaction committed successfully');
 
-    // Send welcome email with auto-generated password (don't await - don't block response)
+    // Send welcome email with auto-generated password
     sendWelcomeEmail(cleanEmail, cleanClientName, cleanCompanyName, autoPassword, cleanCompanyCode)
       .then(result => {
         if (result.success) {
@@ -902,7 +911,7 @@ const addClient = async (req, res) => {
           employeeId: createdUser.employeeId,
           name: createdUser.name,
           email: createdUser.email,
-          autoPassword: autoPassword // Include in response so admin can share with client
+          autoPassword: autoPassword
         }
       }
     });
@@ -915,7 +924,6 @@ const addClient = async (req, res) => {
       if (error.keyValue?.email) {
         return sendConflict(res, 'This email is already registered. Please use another email.', 'email');
       }
-
       return sendConflict(res, 'This client already exists for this company.', 'client');
     }
     
@@ -957,7 +965,9 @@ const updateClient = async (req, res) => {
       phone,
       address,
       description,
-      notes
+      notes,
+      subscriptionStartDate,
+      subscriptionEndDate
     } = req.body;
 
     // Find client
@@ -985,7 +995,6 @@ const updateClient = async (req, res) => {
       errors.push('City cannot be empty');
     }
     
-    // ✅ Add companyCode validation
     if (companyCode !== undefined && (!companyCode || companyCode.trim().length === 0)) {
       errors.push('Company code cannot be empty');
     }
@@ -1107,6 +1116,18 @@ const updateClient = async (req, res) => {
     if (address !== undefined) updateData.address = address.trim();
     if (description !== undefined) updateData.description = description.trim();
     if (notes !== undefined) updateData.notes = notes.trim();
+    
+    // Handle subscription update
+    if (subscriptionStartDate && subscriptionEndDate) {
+      updateData.subscription = [
+        {
+          startDate: new Date(subscriptionStartDate),
+          endDate: new Date(subscriptionEndDate),
+          status: 'Active'
+        }
+      ];
+      console.log('🔍 Updating subscription:', updateData.subscription);
+    }
 
     console.log('🔍 Update data:', updateData);
 
@@ -1281,7 +1302,6 @@ const addProjectManager = async (req, res) => {
       });
     }
 
-    // Add the project manager
     await client.addProjectManager(managerName);
     console.log('✅ Project manager added to client:', id);
 
@@ -1315,7 +1335,6 @@ const removeProjectManager = async (req, res) => {
       });
     }
 
-    // Remove the project manager
     await client.removeProjectManager(managerName);
     console.log('✅ Project manager removed from client:', id);
 
@@ -1368,6 +1387,51 @@ const getClientsByCompany = async (req, res) => {
   }
 };
 
+const extendClientSubscription = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { days = 30 } = req.body;
+
+    const client = await Client.findById(id);
+
+    if (!client) {
+      return res.status(404).json({ message: "Client not found" });
+    }
+
+    const now = new Date();
+
+    let startDate = now;
+
+    if (client.subscription.length > 0) {
+      const last = client.subscription[client.subscription.length - 1];
+
+      if (new Date(last.endDate) > now) {
+        startDate = new Date(last.endDate);
+      }
+    }
+
+    const endDate = new Date(startDate);
+    endDate.setDate(endDate.getDate() + days);
+
+    client.subscription.push({
+      startDate,
+      endDate,
+      status: 'Active'
+    });
+
+    await client.save();
+
+    res.json({
+      success: true,
+      message: "Subscription extended successfully",
+      data: client
+    });
+
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 module.exports = {
   getAllClients,
   getClientById,
@@ -1379,7 +1443,8 @@ module.exports = {
   getManagerStats,
   addProjectManager,
   removeProjectManager,
-  getClientsByCompany
+  getClientsByCompany,
+  extendClientSubscription
 };
 
 console.log("✅ clientController.js loaded successfully with auto-user creation and email integration");
