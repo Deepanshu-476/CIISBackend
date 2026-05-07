@@ -107,6 +107,7 @@ router.get('/user/:userId/stats', protect, taskController.getUserTaskStats);
 router.get('/users-with-counts', protect, taskController.getUsersWithTaskCounts);
 router.get('/department-users-with-counts', protect, taskController.getDepartmentUsersWithTaskCounts);
 // ✅ GET USER TASKS WITH FILTERS (Open for all authenticated users)
+router.get('/user/:userId/all-tasks', protect, taskController.getUserAllTasksPaginated);
 router.get('/user/:userId/tasks', protect, taskController.getUserTasks);
 
 // ==================== OVERDUE TASK ROUTES ====================
