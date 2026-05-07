@@ -1,4 +1,5 @@
 const Task = require('../models/Task');
+const ClientTask = require('../models/ClientTask');
 const User = require('../../models/User');
 const Group = require('../models/Group');
 const Notification = require('../models/Notification');
@@ -10,6 +11,68 @@ const path = require('path');
 const sharp = require('sharp');
 
 // ==================== HELPER FUNCTIONS ====================
+
+const parsePositiveInt = (value, fallback, max = 100) => {
+  const parsed = parseInt(value, 10);
+  if (Number.isNaN(parsed) || parsed < 1) return fallback;
+  return Math.min(parsed, max);
+};
+
+const getTaskDateRange = ({period = 'today', fromDate, toDate}) => {
+  const now = new Date();
+  if (fromDate || toDate) {
+    const range = {};
+    if (fromDate) {
+      const start = new Date(fromDate);
+      if (!Number.isNaN(start.getTime())) {
+        start.setHours(0, 0, 0, 0);
+        range.$gte = start;
+      }
+    }
+    if (toDate) {
+      const end = new Date(toDate);
+      if (!Number.isNaN(end.getTime())) {
+        end.setHours(23, 59, 59, 999);
+        range.$lte = end;
+      }
+    }
+    return Object.keys(range).length ? range : null;
+  }
+
+  if (period === 'all') return null;
+
+  if (period === 'week') {
+    const start = new Date(now);
+    start.setDate(now.getDate() - now.getDay());
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    end.setHours(23, 59, 59, 999);
+    return {$gte: start, $lte: end};
+  }
+
+  if (period === 'month') {
+    return {
+      $gte: new Date(now.getFullYear(), now.getMonth(), 1),
+      $lte: new Date(now.getFullYear(), now.getMonth() + 1, 1),
+    };
+  }
+
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  return {$gte: start, $lt: end};
+};
+
+const addDateValueFilter = (filter, fields, range) => {
+  if (!range) return filter;
+  return {
+    ...filter,
+    $and: [
+      ...(filter.$and || []),
+      {$or: fields.map(field => ({[field]: range}))},
+    ],
+  };
+};
 
 // 🔹 Helper to create notifications
 const createNotification = async (userId, title, message, type, relatedTask = null, metadata = null) => {
@@ -2735,6 +2798,196 @@ exports.getUserTasks = async (req, res) => {
     res.status(500).json({ 
       success: false,
       error: 'Failed to fetch user tasks' 
+    });
+  }
+};
+
+// ✅ FAST PAGINATED USER TASKS FOR MOBILE COMPANY ALL TASK
+exports.getUserAllTasksPaginated = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const {
+      period = 'today',
+      status = 'all',
+      priority = 'all',
+      search = '',
+      fromDate = '',
+      toDate = '',
+    } = req.query;
+    const page = parsePositiveInt(req.query.page, 1);
+    const limit = parsePositiveInt(req.query.limit, 10, 50);
+    const fetchLimit = page * limit;
+
+    const targetUser = await User.findById(userId).select('name email').lean();
+    if (!targetUser) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+      });
+    }
+
+    const userGroups = await Group.find({
+      members: userId,
+      isActive: true,
+    }).select('_id').lean();
+    const groupIds = userGroups.map(group => group._id);
+    const dateRange = getTaskDateRange({period, fromDate, toDate});
+    const cleanSearch = String(search || '').trim();
+    const cleanPriority = String(priority || 'all').toLowerCase();
+    const cleanStatus = String(status || 'all').toLowerCase();
+    const statusList = cleanStatus === 'all'
+      ? []
+      : cleanStatus.split(',').map(item => item.trim()).filter(Boolean);
+
+    let personalFilter = {
+      isActive: true,
+      $or: [
+        {assignedUsers: userId},
+        {assignedGroups: {$in: groupIds}},
+        {createdBy: userId},
+      ],
+    };
+    personalFilter = addDateValueFilter(personalFilter, ['dueDateTime', 'createdAt'], dateRange);
+
+    if (cleanPriority !== 'all') personalFilter.priority = cleanPriority;
+    if (cleanSearch) {
+      personalFilter.$and = [
+        ...(personalFilter.$and || []),
+        {
+          $or: [
+            {title: {$regex: cleanSearch, $options: 'i'}},
+            {description: {$regex: cleanSearch, $options: 'i'}},
+          ],
+        },
+      ];
+    }
+    if (statusList.length && !statusList.includes('overdue')) {
+      personalFilter.$and = [
+        ...(personalFilter.$and || []),
+        {
+          $or: [
+            {overallStatus: {$in: statusList}},
+            {statusByUser: {$elemMatch: {user: userId, status: {$in: statusList}}}},
+          ],
+        },
+      ];
+    }
+    if (statusList.includes('overdue')) {
+      personalFilter.dueDateTime = {$lt: new Date()};
+      personalFilter.overallStatus = {$nin: ['completed', 'cancelled']};
+    }
+
+    let clientFilter = {
+      $or: [
+        {assigneeId: userId},
+        {assignee: userId.toString()},
+        {assignee: targetUser.name},
+        {assignee: targetUser.email},
+      ],
+    };
+    clientFilter = addDateValueFilter(clientFilter, ['dueDate', 'createdAt'], dateRange);
+
+    if (cleanPriority !== 'all') {
+      clientFilter.priority = new RegExp(`^${cleanPriority}$`, 'i');
+    }
+    if (cleanSearch) {
+      clientFilter.$and = [
+        ...(clientFilter.$and || []),
+        {
+          $or: [
+            {name: {$regex: cleanSearch, $options: 'i'}},
+            {description: {$regex: cleanSearch, $options: 'i'}},
+          ],
+        },
+      ];
+    }
+    if (statusList.length && !statusList.includes('overdue')) {
+      clientFilter.status = {$in: statusList};
+    }
+    if (statusList.includes('overdue')) {
+      clientFilter.dueDate = {$lt: new Date()};
+      clientFilter.completed = {$ne: true};
+    }
+
+    const [personalTotal, clientTotal, personalTasks, clientTasks] = await Promise.all([
+      Task.countDocuments(personalFilter),
+      ClientTask.countDocuments(clientFilter),
+      Task.find(personalFilter)
+        .populate('assignedUsers', 'name email')
+        .populate('createdBy', 'name email')
+        .populate('assignedGroups', 'name description')
+        .sort({createdAt: -1})
+        .limit(fetchLimit)
+        .lean(),
+      ClientTask.find(clientFilter)
+        .populate('clientId', 'name email company phone')
+        .sort({createdAt: -1})
+        .limit(fetchLimit)
+        .lean(),
+    ]);
+
+    const personalFormatted = personalTasks.map(task => {
+      const userStatus = task.statusByUser?.find(item => item.user && item.user.toString() === userId);
+      return {
+        ...task,
+        userStatus: userStatus?.status || task.overallStatus || 'pending',
+        userStatusRemarks: userStatus?.remarks,
+        userStatusUpdatedAt: userStatus?.updatedAt,
+        source: 'personal',
+      };
+    });
+
+    const clientFormatted = clientTasks.map(task => ({
+      _id: task._id,
+      title: task.name,
+      name: task.name,
+      description: task.description || task.name,
+      dueDate: task.dueDate,
+      dueDateTime: task.dueDate,
+      completed: task.completed,
+      status: task.completed ? 'completed' : task.status || 'pending',
+      priority: String(task.priority || 'Medium').toLowerCase(),
+      clientName: task.clientId?.name || 'Unknown Client',
+      clientId: task.clientId,
+      clientEmail: task.clientId?.email,
+      clientCompany: task.clientId?.company,
+      files: task.files || [],
+      remarks: task.remarks || [],
+      activityLogs: task.activityLogs || [],
+      createdAt: task.createdAt,
+      updatedAt: task.updatedAt,
+      service: task.service,
+      assignee: task.assignee,
+      source: 'assigned',
+    }));
+
+    const mergedTasks = [...personalFormatted, ...clientFormatted]
+      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+    const start = (page - 1) * limit;
+    const tasks = mergedTasks.slice(start, start + limit);
+    const total = personalTotal + clientTotal;
+
+    return res.json({
+      success: true,
+      userId,
+      filters: {period, status, priority, search, fromDate, toDate},
+      tasks,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.max(1, Math.ceil(total / limit)),
+        hasNext: page * limit < total,
+        hasPrev: page > 1,
+      },
+      total,
+    });
+  } catch (error) {
+    console.error('❌ Error in getUserAllTasksPaginated:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch paginated user tasks',
+      message: error.message,
     });
   }
 };
