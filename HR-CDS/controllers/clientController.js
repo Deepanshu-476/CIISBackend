@@ -8,7 +8,9 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const mongoose = require('mongoose');
 const Company = require('../../models/Company');
-const emailService = require('../../services/emailService'); // Import email service
+const emailService = require('../../services/emailService'); 
+const multer = require('multer');
+const path = require('path');// Import email service
 
 // Default department ID for clients
 const DEFAULT_CLIENT_DEPARTMENT_ID = '69ae555c9a1e47e80a40204c';
@@ -404,6 +406,22 @@ const sendWelcomeEmail = async (email, name, company, password) => {
     return { success: false, error: error.message };
   }
 };
+
+// ================= UPLOAD RECEIPT STORAGE =================
+
+const storage = multer.diskStorage({
+
+  destination: (req, file, cb) => {
+    cb(null, 'uploads/receipts');
+  },
+
+  filename: (req, file, cb) => {
+    cb(null, Date.now() + path.extname(file.originalname));
+  }
+
+});
+
+const upload = multer({ storage });
 
 const getAllClients = async (req, res) => {
   console.log('🔍 getAllClients called with query:', req.query);
@@ -896,6 +914,7 @@ const addClient = async (req, res) => {
   }
 };
 
+// ✅ UPDATED updateClient function with subscription handling
 const updateClient = async (req, res) => {
   console.log('🔍 updateClient called with id:', req.params.id, 'body:', req.body);
   try {
@@ -913,7 +932,8 @@ const updateClient = async (req, res) => {
       phone,
       address,
       description,
-      notes
+      notes,
+      subscription  // ✅ ADDED: subscription field
     } = req.body;
 
     // Find client
@@ -1034,7 +1054,29 @@ const updateClient = async (req, res) => {
     if (description !== undefined) updateData.description = description.trim();
     if (notes !== undefined) updateData.notes = notes.trim();
 
-    console.log('🔍 Update data:', updateData);
+    // ✅ ✅ ✅ CRITICAL FIX: Handle subscription update
+    if (subscription !== undefined) {
+      console.log('🔍 Updating subscription:', JSON.stringify(subscription, null, 2));
+      
+      if (Array.isArray(subscription) && subscription.length > 0) {
+        // Format dates properly
+        const formattedSubscription = subscription.map(sub => ({
+          startDate: sub.startDate ? new Date(sub.startDate) : null,
+          endDate: sub.endDate ? new Date(sub.endDate) : null,
+          status: sub.status || 'Active',
+          planName: sub.planName || '',
+          amount: sub.amount || 0
+        }));
+        updateData.subscription = formattedSubscription;
+        console.log('✅ Formatted subscription:', JSON.stringify(formattedSubscription, null, 2));
+      } else if (subscription !== null && subscription.length === 0) {
+        // If empty array sent, clear subscription
+        updateData.subscription = [];
+        console.log('✅ Clearing subscription');
+      }
+    }
+
+    console.log('🔍 Final update data:', JSON.stringify(updateData, null, 2));
 
     // Update client
     const updatedClient = await Client.findByIdAndUpdate(
@@ -1044,6 +1086,8 @@ const updateClient = async (req, res) => {
     );
 
     console.log('✅ Client updated successfully:', updatedClient._id);
+    console.log('✅ Updated subscription:', updatedClient.subscription);
+    
     res.json({
       success: true,
       message: 'Client updated successfully',
@@ -1293,6 +1337,396 @@ const getClientsByCompany = async (req, res) => {
   }
 };
 
+const renewSubscription = async (req, res) => { 
+  try { 
+    const { startDate, endDate } = req.body; 
+    const client = await Client.findById(req.params.id); 
+    if (!client) { 
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Client not found' 
+      }); 
+    } 
+    if (!client.subscription) { 
+      client.subscription = []; 
+    } 
+    client.subscription.push({
+      startDate: new Date(startDate),
+      endDate: new Date(endDate),
+      status: 'Active',
+      renewedAt: new Date()
+    });
+    await client.save();
+    
+    // ================= EMAIL TO CLIENT ================= //
+    try { 
+      if (client.email) { 
+        await emailService.sendEmail( 
+          client.email, 
+          'Subscription Renewed Successfully', 
+          `<h2>Your plan has been renewed successfully.</h2>
+           <p><strong>Start Date:</strong> ${startDate}</p>
+           <p><strong>End Date:</strong> ${endDate}</p>
+           <p>Thank you for staying with us.</p>` 
+        ); 
+      } 
+    } catch (emailError) { 
+      console.log('Renewal email error:', emailError.message); 
+    } 
+    
+    res.status(200).json({ 
+      success: true, 
+      message: 'Subscription renewed successfully', 
+      data: client 
+    }); 
+  } catch (error) { 
+    console.log('Renew Subscription Error:', error); 
+    res.status(500).json({ 
+      success: false, 
+      message: 'Renewal failed' 
+    }); 
+  } 
+};
+
+// ================= UPLOAD PAYMENT RECEIPT =================
+
+const uploadReceipt = async (req, res) => {
+  try {
+    const clientId = req.params.id;
+    const { amount, transactionId, startDate, endDate } = req.body;
+    const receiptFile = req.file;
+
+    // Validate required fields
+    if (!amount) {
+      return res.status(400).json({
+        success: false,
+        message: 'Amount is required'
+      });
+    }
+
+    if (!transactionId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Transaction ID is required'
+      });
+    }
+
+    if (!receiptFile) {
+      return res.status(400).json({
+        success: false,
+        message: 'Receipt file is required'
+      });
+    }
+
+    // Validate amount is a positive number
+    const numericAmount = parseFloat(amount);
+    if (isNaN(numericAmount) || numericAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please enter a valid amount greater than 0'
+      });
+    }
+
+    // Find client
+    const client = await Client.findById(clientId);
+    if (!client) {
+      return res.status(404).json({
+        success: false,
+        message: 'Client not found'
+      });
+    }
+
+    // Check if client has a paymentReceipts array (create if not exists)
+    if (!client.paymentReceipts) {
+      client.paymentReceipts = [];
+    }
+
+    // Create receipt data object
+    const receiptData = {
+      amount: numericAmount,
+      transactionId: transactionId.trim(),
+      receiptImage: receiptFile.path,
+      receiptFilename: receiptFile.filename,
+      receiptOriginalName: receiptFile.originalname,
+      receiptSize: receiptFile.size,
+      receiptMimeType: receiptFile.mimetype,
+      uploadDate: new Date(),
+      status: 'Pending',
+      clientName: client.client,
+      clientEmail: client.email,
+      companyCode: client.companyCode,
+      renewStartDate: startDate, 
+      renewEndDate: endDate
+    };
+
+    if (startDate && endDate) { 
+      if (!client.subscription) { 
+        client.subscription = []; 
+      } 
+      client.subscription.push({ 
+        startDate, 
+        endDate, 
+        status: 'Active', 
+        renewedAt: new Date(), 
+        paymentStatus: 'Pending' 
+      }); 
+    }  
+
+    // Add to client's paymentReceipts array
+    client.paymentReceipts.push(receiptData);
+    await client.save();
+
+    console.log(`✅ Receipt saved for client ${client.client} (${clientId})`);
+
+    try { 
+      if (client.email) { 
+        await emailService.sendEmail( 
+          client.email, 
+          'Subscription Renewal Request Submitted', 
+          `<h2>Your renewal request has been submitted successfully.</h2>
+           <p><strong>Amount:</strong> ₹${numericAmount}</p>
+           <p><strong>Transaction ID:</strong> ${transactionId}</p>
+           <p><strong>Start Date:</strong> ${startDate}</p>
+           <p><strong>End Date:</strong> ${endDate}</p>
+           <p>Your payment is currently under verification.</p>` 
+        ); 
+        console.log('✅ Renewal email sent to client'); 
+      } 
+    } catch (emailError) { 
+      console.log('❌ Client renewal email failed:', emailError.message); 
+    }
+
+    // Send email notification to owner(s)
+    try {
+      // Get owner/company email from company record
+      const Company = require('../../models/Company');
+      const company = await Company.findOne({ companyCode: client.companyCode });
+      
+      let ownerEmail = 'owner@gmail.com'; // Default fallback
+      
+      if (company && company.email) {
+        ownerEmail = company.email;
+      }
+      
+      // Also get all admin users
+      const adminUsers = await User.find({ 
+        role: { $in: ['admin', 'superadmin', 'owner'] },
+        companyCode: client.companyCode
+      }).select('email name');
+      
+      const adminEmails = adminUsers.map(admin => admin.email);
+      const allRecipients = [ownerEmail, ...adminEmails];
+      const uniqueRecipients = [...new Set(allRecipients)]; // Remove duplicates
+      
+      // Prepare email content
+      const emailHtml = `
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>New Subscription Payment Receipt Uploaded</title>
+            <style>
+                body {
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                    line-height: 1.6;
+                    color: #333;
+                    background-color: #f4f7fb;
+                    margin: 0;
+                    padding: 20px;
+                }
+                .email-container {
+                    max-width: 600px;
+                    margin: 0 auto;
+                    background: white;
+                    border-radius: 16px;
+                    overflow: hidden;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+                }
+                .email-header {
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    padding: 30px;
+                    text-align: center;
+                    color: white;
+                }
+                .email-header h1 {
+                    margin: 0;
+                    font-size: 24px;
+                }
+                .email-body {
+                    padding: 30px;
+                }
+                .info-card {
+                    background: #f8fafc;
+                    border-radius: 12px;
+                    padding: 20px;
+                    margin: 20px 0;
+                    border-left: 4px solid #3b82f6;
+                }
+                .info-row {
+                    display: flex;
+                    padding: 10px 0;
+                    border-bottom: 1px solid #e2e8f0;
+                }
+                .info-label {
+                    flex: 0 0 120px;
+                    font-weight: 600;
+                    color: #4a5568;
+                }
+                .info-value {
+                    flex: 1;
+                    color: #2d3748;
+                }
+                .status-badge {
+                    display: inline-block;
+                    padding: 4px 12px;
+                    background: #fef3c7;
+                    color: #92400e;
+                    border-radius: 20px;
+                    font-size: 12px;
+                    font-weight: 600;
+                }
+                .button {
+                    display: inline-block;
+                    background: #3b82f6;
+                    color: white;
+                    text-decoration: none;
+                    padding: 12px 24px;
+                    border-radius: 8px;
+                    margin-top: 20px;
+                }
+                .footer {
+                    background: #f8fafc;
+                    padding: 20px;
+                    text-align: center;
+                    font-size: 12px;
+                    color: #718096;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="email-container">
+                <div class="email-header">
+                    <h1>💰 New Payment Receipt Uploaded</h1>
+                    <p>Subscription Renewal Request</p>
+                </div>
+                
+                <div class="email-body">
+                    <h2>Payment Details</h2>
+                    
+                    <div class="info-card">
+                        <div class="info-row">
+                            <div class="info-label">Client Name:</div>
+                            <div class="info-value"><strong>${client.client}</strong></div>
+                        </div>
+                        <div class="info-row">
+                            <div class="info-label">Company:</div>
+                            <div class="info-value">${client.company}</div>
+                        </div>
+                        <div class="info-row">
+                            <div class="info-label">Email:</div>
+                            <div class="info-value">${client.email || 'Not provided'}</div>
+                        </div>
+                        <div class="info-row">
+                            <div class="info-label">Phone:</div>
+                            <div class="info-value">${client.phone || 'Not provided'}</div>
+                        </div>
+                        <div class="info-row">
+                            <div class="info-label">Amount:</div>
+                            <div class="info-value"><strong>₹${numericAmount.toLocaleString('en-IN')}</strong></div>
+                        </div>
+                        <div class="info-row">
+                            <div class="info-label">Transaction ID:</div>
+                            <div class="info-value"><code>${transactionId}</code></div>
+                        </div>
+                        <div class="info-row">
+                            <div class="info-label">Upload Date:</div>
+                            <div class="info-value">${new Date().toLocaleString('en-IN')}</div>
+                        </div>
+                        <div class="info-row">
+                            <div class="info-label">Status:</div>
+                            <div class="info-value"><span class="status-badge">⏳ Pending Verification</span></div>
+                        </div>
+                    </div>
+                    
+                    <div style="background: #fef3c7; padding: 15px; border-radius: 8px; margin: 20px 0;">
+                        <strong>⚠️ Action Required:</strong>
+                        <p style="margin: 10px 0 0 0;">Please verify the payment receipt and update the subscription status for this client.</p>
+                    </div>
+                    
+                    <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/admin/clients/${clientId}" class="button">
+                        View Client Details →
+                    </a>
+                </div>
+                
+                <div class="footer">
+                    <p>CIIS NETWORK - Subscription Management System</p>
+                    <p>This is an automated notification. Please do not reply to this email.</p>
+                </div>
+            </div>
+        </body>
+        </html>
+      `;
+      
+      // Send emails to all recipients
+      const emailPromises = uniqueRecipients.map(recipient => 
+        emailService.sendEmail(
+          recipient,
+          `🔔 Payment Receipt Uploaded - ${client.client} (${client.company})`,
+          emailHtml,
+          {
+            priority: 'high',
+            referenceId: `payment-receipt-${clientId}-${Date.now()}`,
+            headers: {
+              'X-Email-Type': 'payment-receipt',
+              'X-Client-Id': clientId,
+              'X-Transaction-Id': transactionId
+            }
+          }
+        )
+      );
+      
+      await Promise.all(emailPromises);
+      console.log(`✅ Payment receipt notification emails sent to ${uniqueRecipients.length} recipients`);
+      
+    } catch (emailError) {
+      console.error('⚠️ Error sending email notifications:', emailError);
+      // Don't fail the request if email fails
+    }
+    
+    // Return success response
+    res.status(200).json({
+      success: true,
+      message: 'Receipt uploaded successfully! Owner has been notified.',
+      data: {
+        receiptId: receiptData._id || 'pending',
+        transactionId: transactionId,
+        amount: numericAmount,
+        uploadDate: receiptData.uploadDate,
+        status: 'pending',
+        receiptPath: receiptFile.path
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Receipt Upload Error:', error);
+    
+    // Clean up uploaded file if there's an error
+    if (req.file && req.file.path) {
+      const fs = require('fs');
+      fs.unlink(req.file.path, (err) => {
+        if (err) console.error('Error deleting file:', err);
+        else console.log('Deleted uploaded file due to error');
+      });
+    }
+    
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to upload receipt. Please try again.'
+    });
+  }
+};
+
 module.exports = {
   getAllClients,
   getClientById,
@@ -1304,7 +1738,10 @@ module.exports = {
   getManagerStats,
   addProjectManager,
   removeProjectManager,
-  getClientsByCompany
+  getClientsByCompany,
+  uploadReceipt,
+  renewSubscription,
+  upload
 };
 
 console.log("✅ clientController.js loaded successfully with auto-user creation and email integration");

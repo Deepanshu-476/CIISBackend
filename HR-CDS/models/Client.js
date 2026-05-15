@@ -74,7 +74,130 @@ const clientSchema = new mongoose.Schema({
     type: String,
     trim: true,
     maxlength: [500, 'Notes cannot exceed 500 characters']
-  }
+  },
+
+  subscription: [
+    {
+      planName: {
+        type: String,
+        trim: true
+      },
+
+      startDate: {
+        type: Date
+      },
+
+      endDate: {
+        type: Date
+      },
+
+      amount: {
+        type: Number,
+        default: 0
+      },
+
+      status: {
+        type: String,
+        enum: ['Active', 'Expired', 'Pending'],
+        default: 'Active'
+      }
+    }
+  ],
+
+  reminder5DaysSent: {
+    type: Boolean,
+    default: false
+  },
+
+  reminder3DaysSent: {
+    type: Boolean,
+    default: false
+  },
+
+  expiredMailSent: {
+    type: Boolean,
+    default: false
+  },
+
+  // UPDATED PAYMENT RECEIPTS SCHEMA
+  paymentReceipts: [
+    {
+      amount: {
+        type: Number,
+        required: true
+      },
+
+      transactionId: {
+        type: String,
+        required: true,
+        trim: true
+      },
+
+      receiptImage: {
+        type: String,
+        required: true
+      },
+      
+      receiptFilename: {
+        type: String
+      },
+
+      receiptOriginalName: {
+        type: String
+      },
+
+      receiptSize: {
+        type: Number
+      },
+
+      receiptMimeType: {
+        type: String
+      },
+
+      uploadDate: {
+        type: Date,
+        default: Date.now
+      },
+
+      uploadedAt: {
+        type: Date,
+        default: Date.now
+      },
+
+      status: {
+        type: String,
+        enum: ['Pending', 'Approved', 'Rejected'],
+        default: 'Pending'
+      },
+
+      verifiedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+      },
+
+      verifiedAt: {
+        type: Date
+      },
+
+      notes: {
+        type: String,
+        trim: true
+      },
+
+      clientName: {
+        type: String
+      },
+
+      clientEmail: {
+        type: String
+      },
+
+      companyCode: {
+        type: String
+      }
+    }
+  ]
+
 }, {
   timestamps: true,
   toJSON: { virtuals: true },
@@ -82,13 +205,15 @@ const clientSchema = new mongoose.Schema({
 });
 
 // Indexes for better query performance
-clientSchema.index({ client: 1, companyCode: 1 }, { unique: true }); // Unique client per company
+clientSchema.index({ client: 1, companyCode: 1 }, { unique: true });
 clientSchema.index({ companyCode: 1 });
 clientSchema.index({ status: 1 });
 clientSchema.index({ city: 1 });
 clientSchema.index({ 'projectManager': 1 });
 clientSchema.index({ 'services': 1 });
 clientSchema.index({ createdAt: -1 });
+clientSchema.index({ 'paymentReceipts.status': 1 });
+clientSchema.index({ 'paymentReceipts.uploadDate': -1 });
 
 // Text index for search functionality
 clientSchema.index({
@@ -110,6 +235,19 @@ clientSchema.virtual('progressPercentage').get(function() {
 // Virtual for display purposes
 clientSchema.virtual('primaryProjectManager').get(function() {
   return this.projectManager && this.projectManager.length > 0 ? this.projectManager[0] : 'Not assigned';
+});
+
+// Virtual for pending payment receipts
+clientSchema.virtual('pendingPaymentReceipts').get(function() {
+  return this.paymentReceipts ? this.paymentReceipts.filter(r => r.status === 'Pending') : [];
+});
+
+// Virtual for total pending amount
+clientSchema.virtual('totalPendingAmount').get(function() {
+  if (!this.paymentReceipts) return 0;
+  return this.paymentReceipts
+    .filter(r => r.status === 'Pending')
+    .reduce((sum, r) => sum + (r.amount || 0), 0);
 });
 
 // Static method to get client statistics with companyCode filter
@@ -201,6 +339,25 @@ clientSchema.statics.getManagerStats = async function(companyCode = null) {
   return stats;
 };
 
+// Static method to get payment statistics
+clientSchema.statics.getPaymentStats = async function(companyCode = null) {
+  const matchStage = companyCode ? { companyCode } : {};
+  
+  const stats = await this.aggregate([
+    { $match: matchStage },
+    { $unwind: '$paymentReceipts' },
+    {
+      $group: {
+        _id: '$paymentReceipts.status',
+        totalAmount: { $sum: '$paymentReceipts.amount' },
+        count: { $sum: 1 }
+      }
+    }
+  ]);
+  
+  return stats;
+};
+
 // Instance method to update progress
 clientSchema.methods.updateProgress = function(completed, total) {
   const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
@@ -222,6 +379,51 @@ clientSchema.methods.removeProjectManager = function(managerName) {
   if (index > -1) {
     this.projectManager.splice(index, 1);
   }
+  return this.save();
+};
+
+// Instance method to add payment receipt
+clientSchema.methods.addPaymentReceipt = function(receiptData) {
+  if (!this.paymentReceipts) {
+    this.paymentReceipts = [];
+  }
+  this.paymentReceipts.push(receiptData);
+  return this.save();
+};
+
+// Instance method to verify payment receipt
+clientSchema.methods.verifyPaymentReceipt = function(receiptId, userId, status, notes = '') {
+  const receipt = this.paymentReceipts.id(receiptId);
+  if (!receipt) {
+    throw new Error('Receipt not found');
+  }
+  
+  receipt.status = status;
+  receipt.verifiedBy = userId;
+  receipt.verifiedAt = new Date();
+  if (notes) receipt.notes = notes;
+  
+  return this.save();
+};
+
+// Instance method to update or add subscription
+clientSchema.methods.updateSubscription = function(subscriptionData) {
+  if (!this.subscription) {
+    this.subscription = [];
+  }
+  
+  // If subscriptionData is provided and has startDate and endDate
+  if (subscriptionData && subscriptionData.startDate && subscriptionData.endDate) {
+    // Add new subscription entry
+    this.subscription.push({
+      startDate: new Date(subscriptionData.startDate),
+      endDate: new Date(subscriptionData.endDate),
+      amount: subscriptionData.amount || 0,
+      status: subscriptionData.status || 'Active',
+      planName: subscriptionData.planName || ''
+    });
+  }
+  
   return this.save();
 };
 
@@ -271,6 +473,15 @@ clientSchema.pre('save', function(next) {
     this.progress = '0/0 (0%)';
   }
   
+  // Set client name and email in payment receipts
+  if (this.paymentReceipts && this.paymentReceipts.length > 0) {
+    this.paymentReceipts.forEach(receipt => {
+      if (!receipt.clientName) receipt.clientName = this.client;
+      if (!receipt.clientEmail) receipt.clientEmail = this.email;
+      if (!receipt.companyCode) receipt.companyCode = this.companyCode;
+    });
+  }
+  
   next();
 });
 
@@ -303,6 +514,16 @@ clientSchema.pre('findOneAndUpdate', function(next) {
       error.name = 'ValidationError';
       return next(error);
     }
+  }
+  
+  // Handle subscription update
+  if (update.subscription && Array.isArray(update.subscription)) {
+    // Ensure each subscription has proper date objects
+    update.subscription = update.subscription.map(sub => ({
+      ...sub,
+      startDate: sub.startDate ? new Date(sub.startDate) : sub.startDate,
+      endDate: sub.endDate ? new Date(sub.endDate) : sub.endDate
+    }));
   }
   
   next();
