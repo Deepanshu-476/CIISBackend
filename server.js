@@ -6,6 +6,7 @@ const path = require("path");
 const schedule = require('node-schedule');
 const http = require('http');
 const socketIo = require('socket.io');
+require('./services/subscriptionReminderService');
 
 dotenv.config();
 
@@ -386,7 +387,7 @@ app.use(cookieParser());
 // ✅ Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+app.use("/api/uploads", express.static(path.join(__dirname, "uploads")));
 
 // ✅ Request logging middleware (for debugging)
 app.use((req, res, next) => {

@@ -672,22 +672,37 @@ exports.login = async (req, res) => {
       tempToken,
       expiresAt: new Date(Date.now() + 5 * 60 * 1000) // 5 minutes
     });
+try {
 
-    // ✅ Send OTP via email
-    await emailService.sendEmail(
-      user.email,
-      "🔐 Login Verification OTP",
-      `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-          <h2 style="color: #2563eb;">Login Verification</h2>
-          <p>Hello ${user.name},</p>
-          <p>Your OTP for login verification is:</p>
-          <h1 style="font-size: 36px; letter-spacing: 8px; background: #f3f4f6; padding: 20px; text-align: center; border-radius: 8px;">${otp}</h1>
-          <p>This OTP is valid for 5 minutes.</p>
-          <p>If you didn't attempt to login, please ignore this email.</p>
-        </div>
-      `
-    );
+  await emailService.sendEmail(
+    user.email,
+    "🔐 Login Verification OTP",
+    `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <h2 style="color: #2563eb;">Login Verification</h2>
+
+        <p>Hello ${user.name},</p>
+
+        <p>Your OTP for login verification is:</p>
+
+        <h1 style="font-size: 36px; letter-spacing: 8px; background: #f3f4f6; padding: 20px; text-align: center; border-radius: 8px;">
+          ${otp}
+        </h1>
+
+        <p>This OTP is valid for 5 minutes.</p>
+
+      </div>
+    `
+  );
+
+  console.log(`✅ OTP sent to ${user.email}`);
+
+} catch (emailError) {
+
+  console.log("❌ Email sending failed:", emailError.message);
+
+  console.log("🔐 LOGIN OTP:", otp);
+}
 
     console.log(`✅ OTP sent to ${user.email} for login verification`);
 

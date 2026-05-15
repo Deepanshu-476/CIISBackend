@@ -1,6 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const auth = require('../../middleware/authMiddleware');
+const path = require('path');
+const fs = require('fs');
 
 const serviceController = require('../controllers/services');
 const {
@@ -14,7 +16,10 @@ const {
   getManagerStats,
   addProjectManager,
   removeProjectManager,
-  getClientsByCompany
+  getClientsByCompany,
+  uploadReceipt,
+  renewSubscription,
+  upload
 } = require('../controllers/clientController');
 
 // ✅ Service Routes
@@ -32,13 +37,106 @@ router.get('/', getAllClients);
 router.post('/', addClient);
 router.get('/company/:companyCode', getClientsByCompany);
 
-// ✅ ID routes - these should come last
+// ================= PAYMENT RECEIPT UPLOAD =================
+router.post('/upload-receipt/:id', upload.single('receipt'), uploadReceipt);
+
+// ================= SUBSCRIPTION RENEW ================= //
+router.patch('/renew-subscription/:id', renewSubscription);
+
+// ✅ ID routes - ALWAYS LAST
 router.get('/:id', getClientById);
 router.put('/:id', updateClient);
 router.patch('/:id/progress', updateClientProgress);
 router.patch('/:id/add-manager', addProjectManager);
 router.patch('/:id/remove-manager', removeProjectManager);
 router.delete('/:id', deleteClient);
+
+// ================= GET RECEIPT IMAGE =================
+// ✅ API to serve receipt images
+router.get('/receipt-image/:filename', (req, res) => {
+  try {
+    const { filename } = req.params;
+    
+    // Security: Prevent directory traversal attacks
+    const safeFilename = path.basename(filename);
+    const imagePath = path.join(__dirname, '../uploads/receipts', safeFilename);
+    
+    // Check if file exists
+    if (fs.existsSync(imagePath)) {
+      // Send file with appropriate headers
+      res.sendFile(imagePath, (err) => {
+        if (err) {
+          console.error('Error sending file:', err);
+          res.status(500).json({
+            success: false,
+            message: 'Error serving image'
+          });
+        }
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        message: 'Receipt image not found'
+      });
+    }
+  } catch (error) {
+    console.error('Error serving receipt image:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error serving image'
+    });
+  }
+});
+
+// ✅ Alternative: Get receipt by client ID and receipt ID
+router.get('/client/:clientId/receipt/:receiptId', async (req, res) => {
+  try {
+    const { clientId, receiptId } = req.params;
+    const Client = require('../models/Client');
+    
+    const client = await Client.findById(clientId);
+    if (!client) {
+      return res.status(404).json({
+        success: false,
+        message: 'Client not found'
+      });
+    }
+    
+    const receipt = client.paymentReceipts.id(receiptId);
+    if (!receipt || !receipt.receiptImage) {
+      return res.status(404).json({
+        success: false,
+        message: 'Receipt not found'
+      });
+    }
+    
+    const imagePath = receipt.receiptImage;
+    const fullPath = path.join(__dirname, '..', imagePath);
+    
+    if (fs.existsSync(fullPath)) {
+      res.sendFile(fullPath, (err) => {
+        if (err) {
+          console.error('Error sending file:', err);
+          res.status(500).json({
+            success: false,
+            message: 'Error serving image'
+          });
+        }
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        message: 'Receipt image file not found'
+      });
+    }
+  } catch (error) {
+    console.error('Error serving receipt:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error serving receipt'
+    });
+  }
+});
 
 // ==================== 🧪 TEST ROUTES ====================
 
