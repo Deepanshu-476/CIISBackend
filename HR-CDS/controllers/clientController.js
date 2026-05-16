@@ -290,10 +290,10 @@ const getWelcomeEmailTemplate = (name, company, email, password, loginUrl) => {
                         <div class="credential-value">${password}</div>
                     </div>
                     
-                    <div class="credential-item">
-                        <div class="credential-label">Login URL:</div>
-                        <div class="credential-value">${loginUrl}</div>
-                    </div>
+                    // <div class="credential-item">
+                    //     <div class="credential-label">Login URL:</div>
+                    //     <div class="credential-value">${loginUrl}</div>
+                    // </div>
                 </div>
                 
                 <div class="important-note">
