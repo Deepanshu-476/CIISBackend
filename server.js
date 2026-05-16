@@ -409,7 +409,7 @@ app.use("/api/alerts", require("./HR-CDS/routes/alertRoutes.js"));
 app.use("/api/groups", require("./HR-CDS/routes/groupRoutes.js"));
 app.use("/api/projects", require("./HR-CDS/routes/projectRoutes.js"));
 app.use("/api/clientsservice", require("./HR-CDS/routes/clientRoutes.js"));
-
+app.use("/api/chat", require("./HR-CDS/chat/routes/chatRoutes"));
 // 🔥 IMPORTANT: यहाँ clientTasks routes mount किए गए हैं
 // यह सुनिश्चित करता है कि /api/tasks/... endpoints काम करेंगे
 app.use("/api/tasks", require("./HR-CDS/routes/clientTask.js"));
