@@ -117,7 +117,15 @@ const taskSchema = new mongoose.Schema(
       enum: ["low", "medium", "high"],
       default: "medium",
     },
-    
+
+    // ✅ COMPANY CODE FIELD
+    companyCode: {
+      type: String,
+      required: true,
+      index: true,
+      default: ''
+    },
+
     assignedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     assignedGroups: [{
       type: mongoose.Schema.Types.ObjectId,
