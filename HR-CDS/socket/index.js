@@ -5,6 +5,8 @@ const { leaveHandlers } = require('../socket/handlers/leaveHandlers');
 const notificationHandlers = require('../socket/handlers/notificationHandlers');
 // const taskHandlers = require('../socket/handlers/');
 // const attendanceHandlers = require('../socket/handlers/');
+const chatSocket = require("../chat/socket/chatSocket");
+
 
 const initializeSocket = (io) => {
   console.log('🔄 Initializing Socket.IO...');
@@ -21,6 +23,9 @@ const initializeSocket = (io) => {
     // Register all handlers
     leaveHandlers(io, socket);
     notificationHandlers(io, socket);
+
+    chatSocket(io, socket);
+
     // taskHandlers(io, socket);
     // attendanceHandlers(io, socket);
   });

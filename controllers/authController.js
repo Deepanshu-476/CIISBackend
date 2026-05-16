@@ -1261,20 +1261,37 @@ exports.superAdminLogin = async (req, res) => {
     });
 
     // Send OTP Email
-    await emailService.sendEmail(
-      user.email,
-      "🔐 Super Admin Login OTP",
-      `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-          <h2 style="color: #dc2626;">Super Admin Login Verification</h2>
-          <p>Hello ${user.name},</p>
-          <p>Your OTP for <strong>Super Admin Panel Login</strong> is:</p>
-          <h1 style="font-size: 36px; letter-spacing: 8px; background: #f3f4f6; padding: 20px; text-align: center; border-radius: 8px;">${otp}</h1>
-          <p>This OTP is valid for 5 minutes.</p>
-          <p>If you didn't attempt this login, please contact support immediately.</p>
-        </div>
-      `
-    );
+   try {
+
+  await emailService.sendEmail(
+    user.email,
+    "🔐 Super Admin Login OTP",
+    `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <h2 style="color: #dc2626;">Super Admin Login Verification</h2>
+
+        <p>Hello ${user.name},</p>
+
+        <p>Your OTP for <strong>Super Admin Panel Login</strong> is:</p>
+
+        <h1 style="font-size: 36px; letter-spacing: 8px; background: #f3f4f6; padding: 20px; text-align: center; border-radius: 8px;">
+          ${otp}
+        </h1>
+
+        <p>This OTP is valid for 5 minutes.</p>
+
+      </div>
+    `
+  );
+
+  console.log(`✅ SuperAdmin OTP sent to ${user.email}`);
+
+} catch (emailError) {
+
+  console.log("❌ SuperAdmin email failed:", emailError.message);
+
+  console.log("🔐 SUPERADMIN OTP:", otp);
+}
 
     console.log(`✅ SuperAdmin OTP sent to ${user.email}`);
 
