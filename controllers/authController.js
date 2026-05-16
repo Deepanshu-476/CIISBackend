@@ -672,37 +672,44 @@ exports.login = async (req, res) => {
       tempToken,
       expiresAt: new Date(Date.now() + 5 * 60 * 1000) // 5 minutes
     });
-try {
+    try {
+      const emailResult = await emailService.sendEmail(
+        user.email,
+        "🔐 Login Verification OTP",
+        `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+            <h2 style="color: #2563eb;">Login Verification</h2>
 
-  await emailService.sendEmail(
-    user.email,
-    "🔐 Login Verification OTP",
-    `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <h2 style="color: #2563eb;">Login Verification</h2>
+            <p>Hello ${user.name},</p>
 
-        <p>Hello ${user.name},</p>
+            <p>Your OTP for login verification is:</p>
 
-        <p>Your OTP for login verification is:</p>
+            <h1 style="font-size: 36px; letter-spacing: 8px; background: #f3f4f6; padding: 20px; text-align: center; border-radius: 8px;">
+              ${otp}
+            </h1>
 
-        <h1 style="font-size: 36px; letter-spacing: 8px; background: #f3f4f6; padding: 20px; text-align: center; border-radius: 8px;">
-          ${otp}
-        </h1>
+            <p>This OTP is valid for 5 minutes.</p>
 
-        <p>This OTP is valid for 5 minutes.</p>
+          </div>
+        `
+      );
 
-      </div>
-    `
-  );
+      if (!emailResult?.success) {
+        throw new Error(emailResult?.error || "Email service failed");
+      }
 
-  console.log(`✅ OTP sent to ${user.email}`);
+      console.log(`✅ OTP sent to ${user.email}`);
 
-} catch (emailError) {
+    } catch (emailError) {
+      await LoginOTP.deleteOne({ tempToken });
+      console.error("❌ Email sending failed:", emailError.message);
 
-  console.log("❌ Email sending failed:", emailError.message);
-
-  console.log("🔐 LOGIN OTP:", otp);
-}
+      return res.status(503).json({
+        success: false,
+        message: "Email service is not configured. Please contact administrator.",
+        errorCode: "EMAIL_SERVICE_NOT_CONFIGURED"
+      });
+    }
 
     console.log(`✅ OTP sent to ${user.email} for login verification`);
 
@@ -972,7 +979,7 @@ exports.resendLoginOTP = async (req, res) => {
     });
 
     // ✅ Send OTP email
-    await emailService.sendEmail(
+    const emailResult = await emailService.sendEmail(
       email,
       "🔐 New Login OTP",
       `
@@ -986,6 +993,15 @@ exports.resendLoginOTP = async (req, res) => {
         </div>
       `
     );
+
+    if (!emailResult?.success) {
+      await LoginOTP.deleteOne({ tempToken });
+      return res.status(503).json({
+        success: false,
+        message: "Email service is not configured. Please contact administrator.",
+        errorCode: "EMAIL_SERVICE_NOT_CONFIGURED"
+      });
+    }
 
     return res.json({
       success: true,
