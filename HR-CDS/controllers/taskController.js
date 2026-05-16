@@ -74,6 +74,11 @@ const addDateValueFilter = (filter, fields, range) => {
   };
 };
 
+const getRequestCompanyCode = (req, user = null) => {
+  const companyCode = req.user?.companyCode || user?.companyCode || user?.company?.companyCode;
+  return typeof companyCode === 'string' ? companyCode.trim().toUpperCase() : companyCode;
+};
+
 // 🔹 Helper to create notifications
 const createNotification = async (userId, title, message, type, relatedTask = null, metadata = null) => {
   try {
@@ -700,6 +705,14 @@ exports.createTaskForSelf = async (req, res) => {
     console.log('📅 Received dueDateTime from frontend:', dueDateTime);
     console.log('📅 Type of dueDateTime:', typeof dueDateTime);
 
+    const companyCode = getRequestCompanyCode(req);
+    if (!companyCode) {
+      return res.status(400).json({
+        success: false,
+        error: 'Company code is missing. Please login again.'
+      });
+    }
+
     const files = (req.files?.files || []).map((f) => ({
       filename: f.filename,
       originalName: f.originalname,
@@ -797,6 +810,7 @@ exports.createTaskForSelf = async (req, res) => {
       files,
       voiceNote,
       createdBy: req.user._id,
+      companyCode,
       isRecurring: false,
       taskFor: 'self',
       statusHistory: [{
@@ -888,6 +902,14 @@ exports.createTaskForOthers = async (req, res) => {
       id: currentUser._id,
       name: currentUser.name
     });
+
+    const companyCode = getRequestCompanyCode(req, currentUser);
+    if (!companyCode) {
+      return res.status(400).json({
+        success: false,
+        error: 'Company code is missing. Please login again.'
+      });
+    }
 
     // Parse assigned users
     let parsedUsers = [];
@@ -1073,6 +1095,7 @@ exports.createTaskForOthers = async (req, res) => {
       files,
       voiceNote,
       createdBy: currentUser._id,
+      companyCode,
       isRecurring: false,
       taskFor: 'others',
       statusHistory: [{

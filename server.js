@@ -6,9 +6,10 @@ const path = require("path");
 const schedule = require('node-schedule');
 const http = require('http');
 const socketIo = require('socket.io');
-require('./services/subscriptionReminderService');
 
 dotenv.config();
+
+require('./services/subscriptionReminderService');
 
 const app = express();
 
@@ -26,6 +27,18 @@ const Task = require("./HR-CDS/models/Task");
 const Notification = require("./HR-CDS/models/Notification");
 const Attendance = require("./HR-CDS/models/Attendance");
 const User = require("./models/User");
+require("./models/Company");
+
+const getTaskCompanyCode = (task) => {
+  const companyCode =
+    task.companyCode ||
+    task.createdBy?.companyCode ||
+    task.createdBy?.company?.companyCode ||
+    task.assignedUsers?.find((user) => user?.companyCode)?.companyCode ||
+    task.assignedUsers?.find((user) => user?.company?.companyCode)?.company?.companyCode;
+
+  return typeof companyCode === 'string' ? companyCode.trim().toUpperCase() : companyCode;
+};
 
 // ==================== SOCKET.IO INITIALIZATION ====================
 // Initialize Socket.IO
@@ -87,8 +100,8 @@ const checkAndMarkOverdueTasks = async () => {
         }
       ]
     })
-    .populate('assignedUsers', 'name email')
-    .populate('createdBy', 'name email');
+    .populate('assignedUsers', 'name email companyCode company')
+    .populate('createdBy', 'name email companyCode company');
     
     console.log(`📊 Found ${overdueTasks.length} tasks to check for overdue...`);
     
@@ -100,6 +113,15 @@ const checkAndMarkOverdueTasks = async () => {
         const wasUpdated = task.checkAndMarkOverdue();
         
         if (wasUpdated) {
+          if (!task.companyCode) {
+            const companyCode = getTaskCompanyCode(task);
+            if (!companyCode) {
+              console.error(`❌ Cannot mark task ${task._id} overdue: companyCode is missing`);
+              continue;
+            }
+            task.companyCode = companyCode;
+          }
+
           await task.save();
           markedCount++;
           

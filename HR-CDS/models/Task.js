@@ -121,9 +121,10 @@ const taskSchema = new mongoose.Schema(
     // ✅ COMPANY CODE FIELD
     companyCode: {
       type: String,
-      required: true,
+      required: [true, "Company code is required"],
+      trim: true,
+      uppercase: true,
       index: true,
-      default: ''
     },
 
     assignedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
