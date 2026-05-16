@@ -6,6 +6,7 @@ const path = require("path");
 const schedule = require('node-schedule');
 const http = require('http');
 const socketIo = require('socket.io');
+require('./services/subscriptionReminderService');
 
 dotenv.config();
 
@@ -386,7 +387,7 @@ app.use(cookieParser());
 // ✅ Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+app.use("/api/uploads", express.static(path.join(__dirname, "uploads")));
 
 // ✅ Request logging middleware (for debugging)
 app.use((req, res, next) => {
@@ -408,7 +409,7 @@ app.use("/api/alerts", require("./HR-CDS/routes/alertRoutes.js"));
 app.use("/api/groups", require("./HR-CDS/routes/groupRoutes.js"));
 app.use("/api/projects", require("./HR-CDS/routes/projectRoutes.js"));
 app.use("/api/clientsservice", require("./HR-CDS/routes/clientRoutes.js"));
-
+app.use("/api/chat", require("./HR-CDS/chat/routes/chatRoutes"));
 // 🔥 IMPORTANT: यहाँ clientTasks routes mount किए गए हैं
 // यह सुनिश्चित करता है कि /api/tasks/... endpoints काम करेंगे
 app.use("/api/tasks", require("./HR-CDS/routes/clientTask.js"));
