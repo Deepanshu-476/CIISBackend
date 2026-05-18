@@ -122,12 +122,12 @@ const getEmployeeDashboard = async (userId, companyCode) => {
         .lean(),
 
       Task.find({
-        assigneeId: userId,
+        assignedUsers: userId,
         companyCode: companyCode,
       })
         .sort({ createdAt: -1 })
         .limit(10)
-        .populate("assigneeId", "name email")
+        .populate("assignedUsers", "name email")
         .populate("createdBy", "name email")
         .select("name description priority status dueDate createdAt assigneeId createdBy")
         .lean(),
@@ -263,12 +263,12 @@ const getOwnerDashboard = async (companyCode, ownerId) => {
         companyCode: companyCode,
         $or: [
           { createdBy: ownerId },
-          { assigneeId: ownerId }
+          { assignedUsers: ownerId }
         ]
       })
       .sort({ createdAt: -1 })
       .limit(10)
-      .populate("assigneeId", "name email")
+      .populate("assignedUsers", "name email")
       .populate("createdBy", "name email")
       .select("name description priority status dueDate assigneeId createdBy createdAt")
       .lean(),
@@ -345,7 +345,7 @@ const getClientDashboard = async (userId, companyCode) => {
       .sort({ updatedAt: -1 })
       .limit(10)
       .populate("createdBy", "name email")
-      .populate("assigneeId", "name email")
+      .populate("assignedUsers", "name email")
       .select(
         "name description priority status dueDate updatedAt createdAt createdBy assigneeId"
       )
@@ -433,11 +433,11 @@ const formatEmployeeActivities = (
       title: `Task: ${task.name}`,
       status: task.status,
       priority: task.priority,
-      date: task.createdAt,
+      date: task.updatedAt || task.createdAt,
       details: `Due: ${
         task.dueDate ? new Date(task.dueDate).toLocaleDateString() : "No due date"
       }`,
-      assignedTo: task.assigneeId?.name,
+      assignedTo: task.assignedUsers?.map(u => u.name).join(", "),
       createdBy: task.createdBy?.name,
     });
   });
@@ -493,17 +493,35 @@ const formatOwnerActivities = (leaves, assets, tasks, meetings) => {
   });
 
   tasks.forEach((task) => {
-    activities.push({
-      type: "task",
-      title: `Task: ${task.name}`,
-      assignedTo: task.assigneeId?.name || "Unassigned",
-      createdBy: task.createdBy?.name,
-      status: task.status,
-      priority: task.priority,
-      date: task.createdAt,
-      details: `Priority: ${task.priority}`,
-    });
+
+  // ✅ Task show
+  activities.push({
+    type: "task",
+    title: `Task: ${task.name}`,
+    status: task.status,
+    priority: task.priority,
+    date: task.updatedAt || task.createdAt,   // ✅ FIX
+    details: `Due: ${
+      task.dueDate ? new Date(task.dueDate).toLocaleDateString() : "No due date"
+    }`,
+    assignedTo: task.assignedUsers?.map(u => u.name).join(", "),
+    createdBy: task.createdBy?.name,
   });
+
+  // 🔥 NEW: status change show
+  if (task.statusHistory && task.statusHistory.length > 0) {
+    task.statusHistory.forEach((history) => {
+      activities.push({
+        type: "task_status",
+        title: `Status Changed`,
+        status: history.status,
+        date: history.changedAt || history.createdAt,
+        details: history.remarks || `Status changed to ${history.status}`,
+      });
+    });
+  }
+
+});
 
   meetings.forEach((meeting) => {
     activities.push({
