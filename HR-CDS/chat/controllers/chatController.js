@@ -77,9 +77,21 @@ exports.sendMessage = async (req, res) => {
     try {
 
         const {
-            conversationId,
+    conversationId,
             text
         } = req.body;
+
+        let file = "";
+        let fileType = "";
+
+        if (req.file) {
+
+            file =
+            `/uploads/chat/${req.file.filename}`;
+
+            fileType =
+            req.file.mimetype;
+        }
 
         const message = await Message.create({
 
@@ -90,6 +102,9 @@ exports.sendMessage = async (req, res) => {
             sender: req.user.id,
 
             text,
+
+            file,
+            fileType,
 
             seenBy: [req.user.id]
         });
