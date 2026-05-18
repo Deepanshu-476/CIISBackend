@@ -75,134 +75,20 @@ const clientSchema = new mongoose.Schema({
     trim: true,
     maxlength: [500, 'Notes cannot exceed 500 characters']
   },
-
-  subscription: [
-    {
-      planName: {
-        type: String,
-        trim: true
-      },
-
-      startDate: {
-        type: Date
-      },
-
-      endDate: {
-        type: Date
-      },
-
-      amount: {
-        type: Number,
-        default: 0
-      },
-
+    subscription: {
+    type: [{
+      startDate: Date,
+      endDate: Date,
       status: {
         type: String,
-        enum: ['Active', 'Expired', 'Pending'],
+        enum: ['Active', 'Expired'],
         default: 'Active'
       }
-    }
-  ],
-
-  reminder5DaysSent: {
-    type: Boolean,
-    default: false
-  },
-
-  reminder3DaysSent: {
-    type: Boolean,
-    default: false
-  },
-
-  expiredMailSent: {
-    type: Boolean,
-    default: false
-  },
-
-  // UPDATED PAYMENT RECEIPTS SCHEMA
-  paymentReceipts: [
-    {
-      amount: {
-        type: Number,
-        required: true
-      },
-
-      transactionId: {
-        type: String,
-        required: true,
-        trim: true
-      },
-
-      receiptImage: {
-        type: String,
-        required: true
-      },
-      
-      receiptFilename: {
-        type: String
-      },
-
-      receiptOriginalName: {
-        type: String
-      },
-
-      receiptSize: {
-        type: Number
-      },
-
-      receiptMimeType: {
-        type: String
-      },
-
-      uploadDate: {
-        type: Date,
-        default: Date.now
-      },
-
-      uploadedAt: {
-        type: Date,
-        default: Date.now
-      },
-
-      status: {
-        type: String,
-        enum: ['Pending', 'Approved', 'Rejected'],
-        default: 'Pending'
-      },
-
-      verifiedBy: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User'
-      },
-
-      verifiedAt: {
-        type: Date
-      },
-
-      notes: {
-        type: String,
-        trim: true
-      },
-
-      clientName: {
-        type: String
-      },
-
-      clientEmail: {
-        type: String
-      },
-
-      companyCode: {
-        type: String
-      }
-    }
-  ]
-
-}, {
-  timestamps: true,
-  toJSON: { virtuals: true },
-  toObject: { virtuals: true }
-});
+    }],
+    default: []
+  }
+  
+}, { timestamps: true });
 
 // Indexes for better query performance
 clientSchema.index({ client: 1, companyCode: 1 }, { unique: true });
@@ -223,6 +109,7 @@ clientSchema.index({
   email: 'text',
   description: 'text',
   notes: 'text'
+  
 });
 
 // Virtual for progress percentage

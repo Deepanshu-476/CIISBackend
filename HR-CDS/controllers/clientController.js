@@ -17,6 +17,20 @@ const DEFAULT_CLIENT_DEPARTMENT_ID = '69ae555c9a1e47e80a40204c';
 // Default job role ID for clients
 const DEFAULT_CLIENT_JOB_ROLE_ID = '69ae559b9a1e47e80a4020a2';
 
+const normalizeCompanyCode = (companyCode) => companyCode?.trim().toUpperCase();
+const normalizeEmail = (email) => email?.trim().toLowerCase();
+const normalizeName = (value) => value?.trim();
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const sendConflict = (res, message, field, extra = {}) => {
+  return res.status(409).json({
+    success: false,
+    message,
+    field,
+    ...extra
+  });
+};
+
 // Helper function to get welcome email template
 const getWelcomeEmailTemplate = (name, company, email, password, loginUrl) => {
   const currentYear = new Date().getFullYear();
@@ -363,15 +377,24 @@ const getWelcomeEmailTemplate = (name, company, email, password, loginUrl) => {
 };
 
 // Helper function to send welcome email using email service
-const sendWelcomeEmail = async (email, name, company, password) => {
+const getCompanyLoginUrl = (companyCode) => {
+  const normalizedCompanyCode = companyCode?.trim();
+  if (!normalizedCompanyCode) {
+    return 'https://cds.ciisnetwork.in/login';
+  }
+
+  return `https://cds.ciisnetwork.in/company/${normalizedCompanyCode}/login`;
+};
+
+const sendWelcomeEmail = async (email, name, company, password, companyCode) => {
   console.log('📧 ====== SENDING WELCOME EMAIL ======');
   console.log(`📧 To: ${email}`);
   console.log(`📧 Name: ${name}`);
   console.log(`📧 Company: ${company}`);
+  console.log(`📧 Company Code: ${companyCode || 'N/A'}`);
   console.log(`📧 Auto-generated password: ${password}`);
   
-  const loginUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-  const fullLoginUrl = `${loginUrl}/login`;
+  const fullLoginUrl = getCompanyLoginUrl(companyCode);
   
   try {
     // Get the email template
@@ -388,6 +411,7 @@ const sendWelcomeEmail = async (email, name, company, password) => {
         headers: {
           'X-Email-Type': 'client-welcome',
           'X-Company': company,
+          'X-Company-Code': companyCode || '',
           'X-User-Email': email
         }
       }
@@ -435,15 +459,13 @@ const getAllClients = async (req, res) => {
       status,
       projectManager,
       service,
-      companyCode // Add companyCode filter
+      companyCode
     } = req.query;
 
     console.log('🔍 Parsed query params:', { page, limit, sortBy, sortOrder, search, status, projectManager, service, companyCode });
 
-    // Build filter object
     const filter = {};
     
-    // ✅ Add companyCode filter (mandatory)
     if (!companyCode) {
       console.warn('⚠️ No companyCode provided in request');
       return res.status(400).json({
@@ -464,7 +486,6 @@ const getAllClients = async (req, res) => {
       filter.services = service;
     }
     
-    // Enhanced search functionality
     if (search && search.trim()) {
       const searchRegex = new RegExp(search.trim(), 'i');
       filter.$or = [
@@ -478,7 +499,6 @@ const getAllClients = async (req, res) => {
       console.log('🔍 Search filter:', filter.$or);
     }
 
-    // Sort options
     const sortOptions = {};
     const validSortFields = ['client', 'company', 'city', 'status', 'createdAt', 'updatedAt'];
     
@@ -489,7 +509,6 @@ const getAllClients = async (req, res) => {
     }
     console.log('🔍 Sort options:', sortOptions);
 
-    // Execute query with pagination
     const skip = (parseInt(page) - 1) * parseInt(limit);
     console.log('🔍 Pagination - skip:', skip, 'limit:', limit);
     
@@ -572,7 +591,8 @@ const addClient = async (req, res) => {
       phone,
       address,
       description,
-      notes
+      notes,
+      subscription  
     } = req.body;
 
     console.log('🔍 Processing client data:', {
@@ -583,7 +603,8 @@ const addClient = async (req, res) => {
       projectManager,
       services,
       email,
-      phone
+      phone,
+      subscription: subscription  // ✅ YEH CHECK KARNE KE LIYE
     });
 
     // Validation
@@ -627,23 +648,25 @@ const addClient = async (req, res) => {
       });
     }
 
+    const cleanCompanyCode = normalizeCompanyCode(companyCode);
+    const cleanClientName = normalizeName(client);
+    const cleanCompanyName = normalizeName(company);
+    const cleanCity = normalizeName(city);
+
     // Check if client already exists for this company
     const existingClient = await Client.findOne({
-      client: client.trim(),
-      companyCode: companyCode.trim().toUpperCase()
+      client: { $regex: `^${escapeRegExp(cleanClientName)}$`, $options: 'i' },
+      companyCode: cleanCompanyCode
     }).session(session);
 
     if (existingClient) {
       console.warn('⚠️ Client already exists:', existingClient._id);
       await session.abortTransaction();
-      return res.status(400).json({
-        success: false,
-        message: 'Client already exists for this company'
-      });
+      return sendConflict(res, 'This client already exists for this company.', 'client');
     }
 
     // Check if email is already in use (if email provided)
-    let cleanEmail = email ? email.trim().toLowerCase() : '';
+    let cleanEmail = normalizeEmail(email) || '';
     if (cleanEmail) {
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (!emailRegex.test(cleanEmail)) {
@@ -659,15 +682,32 @@ const addClient = async (req, res) => {
       if (existingUser) {
         console.warn('⚠️ Email already in use:', cleanEmail);
         await session.abortTransaction();
-        return res.status(409).json({
-          success: false,
-          message: "Email already in use"
-        });
+        return sendConflict(res, 'This email is already registered. Please use another email.', 'email');
+      }
+
+      const existingClientEmail = await Client.findOne({ email: cleanEmail }).session(session);
+      if (existingClientEmail) {
+        console.warn('⚠️ Client email already in use:', cleanEmail);
+        await session.abortTransaction();
+        return sendConflict(res, 'This email is already used by another client.', 'email');
       }
     } else {
       // Generate email if not provided
-      cleanEmail = `${client.toLowerCase().replace(/[^a-z0-9]/g, '')}@${companyCode.toLowerCase()}.com`;
+      cleanEmail = `${cleanClientName.toLowerCase().replace(/[^a-z0-9]/g, '')}@${cleanCompanyCode.toLowerCase()}.com`;
       console.log('🔍 Generated email:', cleanEmail);
+
+      const existingGeneratedEmail = await User.findOne({ email: cleanEmail }).session(session);
+      const existingGeneratedClientEmail = await Client.findOne({ email: cleanEmail }).session(session);
+      if (existingGeneratedEmail || existingGeneratedClientEmail) {
+        console.warn('⚠️ Generated email already in use:', cleanEmail);
+        await session.abortTransaction();
+        return sendConflict(
+          res,
+          `Generated email ${cleanEmail} already exists. Please enter a unique client email manually.`,
+          'email',
+          { generatedEmail: cleanEmail }
+        );
+      }
     }
 
     // Validate services exist if provided
@@ -676,7 +716,7 @@ const addClient = async (req, res) => {
       if (serviceNames.length > 0) {
         const existingServices = await Service.find({ 
           servicename: { $in: serviceNames },
-          companyCode: companyCode.trim().toUpperCase()
+          companyCode: cleanCompanyCode
         }).session(session);
         
         if (existingServices.length !== serviceNames.length) {
@@ -726,7 +766,7 @@ const addClient = async (req, res) => {
     // Get company ID from companyCode
     console.log('🔍 Finding company with code:', companyCode);
     
-    const companyExists = await Company.findOne({ companyCode: companyCode.trim().toUpperCase() }).session(session);
+    const companyExists = await Company.findOne({ companyCode: cleanCompanyCode }).session(session);
     if (!companyExists) {
       console.error('❌ Company not found with code:', companyCode);
       await session.abortTransaction();
@@ -739,9 +779,7 @@ const addClient = async (req, res) => {
 
     // Generate password from client name
     const generatePassword = (name) => {
-      // Remove special characters and spaces, convert to lowercase
       const baseName = name.toLowerCase().replace(/[^a-z0-9]/g, '');
-      // Add random numbers for security
       const randomNum = Math.floor(1000 + Math.random() * 9000);
       return `${baseName}@${randomNum}`;
     };
@@ -749,7 +787,6 @@ const addClient = async (req, res) => {
     const autoPassword = generatePassword(client);
     console.log('🔍 Generated auto password for user');
     
-
     // Generate employee ID for user
     const employeeId = `CLT${Date.now()}${Math.floor(Math.random() * 1000)}`;
     console.log('🔍 Generated employee ID:', employeeId);
@@ -765,12 +802,12 @@ const addClient = async (req, res) => {
       department: DEFAULT_CLIENT_DEPARTMENT_ID,
       jobRole: DEFAULT_CLIENT_JOB_ROLE_ID,
       company: companyExists._id,
-      companyCode: companyCode.trim().toUpperCase(),
+      companyCode: cleanCompanyCode,
       employeeId,
       phone: phone?.trim() || '',
       address: address?.trim() || '',
-      gender: 'other', // Default value
-      maritalStatus: 'single', // Default value
+      gender: 'other',
+      maritalStatus: 'single',
       dob: null,
       salary: null,
       accountNumber: '',
@@ -778,14 +815,14 @@ const addClient = async (req, res) => {
       bankName: '',
       bankHolderName: '',
       employeeType: 'client', 
-      companyRole: 'client', // Set companyRole  to indicate this is a client user
+      companyRole: 'client',
       properties: [],
       propertyOwned: '',
       additionalDetails: JSON.stringify({
-        clientId: null, // Will update after client creation
+        clientId: null,
         isClientRepresentative: true,
-        companyName: company,
-        city: city
+        companyName: cleanCompanyName,
+        city: cleanCity
       }),
       fatherName: '',
       motherName: '',
@@ -810,13 +847,26 @@ const addClient = async (req, res) => {
     const cleanProjectManagers = projectManager
       .filter(manager => manager && typeof manager === 'string' && manager.trim().length > 0)
       .map(manager => manager.trim());
+    
+    // ✅ SUBSCRIPTION ARRAY BANANE KA SAHI TARIKA
+    let subscriptionArray = [];
+    if (subscription && Array.isArray(subscription) && subscription.length > 0) {
+      subscriptionArray = subscription.map(sub => ({
+        startDate: new Date(sub.startDate),
+        endDate: new Date(sub.endDate),
+        status: sub.status || 'Active'
+      }));
+      console.log('✅ Subscription array created:', subscriptionArray);
+    } else {
+      console.log('⚠️ No subscription data received, keeping empty array');
+    }
 
-    // Create new client
+    // Create new client with subscription
     const newClient = new Client({
-      client: client.trim(),
-      company: company.trim(),
-      city: city.trim(),
-      companyCode: companyCode.trim().toUpperCase(),
+      client: cleanClientName,
+      company: cleanCompanyName,
+      city: cleanCity,
+      companyCode: cleanCompanyCode,
       projectManager: cleanProjectManagers,
       services: services || [],
       status: status || 'Active',
@@ -826,12 +876,14 @@ const addClient = async (req, res) => {
       address: address ? address.trim() : '',
       description: description ? description.trim() : '',
       notes: notes ? notes.trim() : '',
-      userId: createdUser._id // Link to the created user
+      subscription: subscriptionArray,  // ✅ YEH SAVE HOGA
+      userId: createdUser._id
     });
 
-    console.log('🔍 Creating client with data:', newClient);
+    console.log('🔍 Creating client with subscription:', subscriptionArray);
     await newClient.save({ session });
-    console.log('✅ Client created successfully:', newClient._id);
+    console.log('✅ Client created successfully with ID:', newClient._id);
+    console.log('✅ Client subscription saved:', newClient.subscription);
 
     // Update user's additionalDetails with client ID
     const updatedAdditionalDetails = JSON.parse(createdUser.additionalDetails || '{}');
@@ -842,7 +894,7 @@ const addClient = async (req, res) => {
       { 
         $set: { 
           'additionalDetails': JSON.stringify(updatedAdditionalDetails),
-          employeeType: newClient._id.toString() // Store client ID in employeeType
+          employeeType: newClient._id.toString()
         } 
       },
       { session }
@@ -853,8 +905,8 @@ const addClient = async (req, res) => {
     await session.commitTransaction();
     console.log('✅ Transaction committed successfully');
 
-    // Send welcome email with auto-generated password (don't await - don't block response)
-    sendWelcomeEmail(cleanEmail, client, company, autoPassword)
+    // Send welcome email with auto-generated password
+    sendWelcomeEmail(cleanEmail, cleanClientName, cleanCompanyName, autoPassword, cleanCompanyCode)
       .then(result => {
         if (result.success) {
           console.log('✅ Welcome email sent successfully');
@@ -877,7 +929,7 @@ const addClient = async (req, res) => {
           employeeId: createdUser.employeeId,
           name: createdUser.name,
           email: createdUser.email,
-          autoPassword: autoPassword // Include in response so admin can share with client
+          autoPassword: autoPassword
         }
       }
     });
@@ -887,10 +939,10 @@ const addClient = async (req, res) => {
     
     if (error.code === 11000) {
       console.error('❌ Duplicate key error:', error.keyValue);
-      return res.status(400).json({
-        success: false,
-        message: 'Client already exists for this company'
-      });
+      if (error.keyValue?.email) {
+        return sendConflict(res, 'This email is already registered. Please use another email.', 'email');
+      }
+      return sendConflict(res, 'This client already exists for this company.', 'client');
     }
     
     if (error.name === 'ValidationError') {
@@ -933,7 +985,8 @@ const updateClient = async (req, res) => {
       address,
       description,
       notes,
-      subscription  // ✅ ADDED: subscription field
+      subscriptionStartDate,
+      subscriptionEndDate
     } = req.body;
 
     // Find client
@@ -961,7 +1014,6 @@ const updateClient = async (req, res) => {
       errors.push('City cannot be empty');
     }
     
-    // ✅ Add companyCode validation
     if (companyCode !== undefined && (!companyCode || companyCode.trim().length === 0)) {
       errors.push('Company code cannot be empty');
     }
@@ -993,7 +1045,7 @@ const updateClient = async (req, res) => {
     if (client !== undefined && companyCode !== undefined) {
       const duplicateClient = await Client.findOne({
         _id: { $ne: id },
-        client: client.trim(),
+        client: { $regex: `^${escapeRegExp(client.trim())}$`, $options: 'i' },
         companyCode: companyCode.trim().toUpperCase()
       });
 
@@ -1031,6 +1083,36 @@ const updateClient = async (req, res) => {
       }
     }
 
+    if (email !== undefined) {
+      const cleanEmail = normalizeEmail(email) || '';
+      if (cleanEmail) {
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(cleanEmail)) {
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid email format',
+            field: 'email'
+          });
+        }
+
+        if (cleanEmail !== existingClient.email) {
+          const duplicateClientEmail = await Client.findOne({
+            _id: { $ne: id },
+            email: cleanEmail
+          });
+
+          if (duplicateClientEmail) {
+            return sendConflict(res, 'This email is already used by another client.', 'email');
+          }
+
+          const duplicateUserEmail = await User.findOne({ email: cleanEmail });
+          if (duplicateUserEmail) {
+            return sendConflict(res, 'This email is already registered. Please use another email.', 'email');
+          }
+        }
+      }
+    }
+
     // Build update object
     const updateData = {};
     
@@ -1048,11 +1130,23 @@ const updateClient = async (req, res) => {
     if (services !== undefined) updateData.services = services;
     if (status !== undefined) updateData.status = status;
     if (progress !== undefined) updateData.progress = progress;
-    if (email !== undefined) updateData.email = email.trim().toLowerCase();
+    if (email !== undefined) updateData.email = normalizeEmail(email) || '';
     if (phone !== undefined) updateData.phone = phone.trim();
     if (address !== undefined) updateData.address = address.trim();
     if (description !== undefined) updateData.description = description.trim();
     if (notes !== undefined) updateData.notes = notes.trim();
+    
+    // Handle subscription update
+    if (subscriptionStartDate && subscriptionEndDate) {
+      updateData.subscription = [
+        {
+          startDate: new Date(subscriptionStartDate),
+          endDate: new Date(subscriptionEndDate),
+          status: 'Active'
+        }
+      ];
+      console.log('🔍 Updating subscription:', updateData.subscription);
+    }
 
     // ✅ ✅ ✅ CRITICAL FIX: Handle subscription update
     if (subscription !== undefined) {
@@ -1097,10 +1191,11 @@ const updateClient = async (req, res) => {
     console.error('❌ Error updating client:', error);
     
     if (error.code === 11000) {
-      return res.status(400).json({
-        success: false,
-        message: 'Client name already exists for this company'
-      });
+      if (error.keyValue?.email) {
+        return sendConflict(res, 'This email is already registered. Please use another email.', 'email');
+      }
+
+      return sendConflict(res, 'Client name already exists for this company.', 'client');
     }
     
     if (error.name === 'ValidationError') {
@@ -1250,7 +1345,6 @@ const addProjectManager = async (req, res) => {
       });
     }
 
-    // Add the project manager
     await client.addProjectManager(managerName);
     console.log('✅ Project manager added to client:', id);
 
@@ -1284,7 +1378,6 @@ const removeProjectManager = async (req, res) => {
       });
     }
 
-    // Remove the project manager
     await client.removeProjectManager(managerName);
     console.log('✅ Project manager removed from client:', id);
 
@@ -1337,393 +1430,48 @@ const getClientsByCompany = async (req, res) => {
   }
 };
 
-const renewSubscription = async (req, res) => { 
-  try { 
-    const { startDate, endDate } = req.body; 
-    const client = await Client.findById(req.params.id); 
-    if (!client) { 
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Client not found' 
-      }); 
-    } 
-    if (!client.subscription) { 
-      client.subscription = []; 
-    } 
-    client.subscription.push({
-      startDate: new Date(startDate),
-      endDate: new Date(endDate),
-      status: 'Active',
-      renewedAt: new Date()
-    });
-    await client.save();
-    
-    // ================= EMAIL TO CLIENT ================= //
-    try { 
-      if (client.email) { 
-        await emailService.sendEmail( 
-          client.email, 
-          'Subscription Renewed Successfully', 
-          `<h2>Your plan has been renewed successfully.</h2>
-           <p><strong>Start Date:</strong> ${startDate}</p>
-           <p><strong>End Date:</strong> ${endDate}</p>
-           <p>Thank you for staying with us.</p>` 
-        ); 
-      } 
-    } catch (emailError) { 
-      console.log('Renewal email error:', emailError.message); 
-    } 
-    
-    res.status(200).json({ 
-      success: true, 
-      message: 'Subscription renewed successfully', 
-      data: client 
-    }); 
-  } catch (error) { 
-    console.log('Renew Subscription Error:', error); 
-    res.status(500).json({ 
-      success: false, 
-      message: 'Renewal failed' 
-    }); 
-  } 
-};
-
-// ================= UPLOAD PAYMENT RECEIPT =================
-
-const uploadReceipt = async (req, res) => {
+const extendClientSubscription = async (req, res) => {
   try {
-    const clientId = req.params.id;
-    const { amount, transactionId, startDate, endDate } = req.body;
-    const receiptFile = req.file;
+    const { id } = req.params;
+    const { days = 30 } = req.body;
 
-    // Validate required fields
-    if (!amount) {
-      return res.status(400).json({
-        success: false,
-        message: 'Amount is required'
-      });
-    }
+    const client = await Client.findById(id);
 
-    if (!transactionId) {
-      return res.status(400).json({
-        success: false,
-        message: 'Transaction ID is required'
-      });
-    }
-
-    if (!receiptFile) {
-      return res.status(400).json({
-        success: false,
-        message: 'Receipt file is required'
-      });
-    }
-
-    // Validate amount is a positive number
-    const numericAmount = parseFloat(amount);
-    if (isNaN(numericAmount) || numericAmount <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please enter a valid amount greater than 0'
-      });
-    }
-
-    // Find client
-    const client = await Client.findById(clientId);
     if (!client) {
-      return res.status(404).json({
-        success: false,
-        message: 'Client not found'
-      });
+      return res.status(404).json({ message: "Client not found" });
     }
 
-    // Check if client has a paymentReceipts array (create if not exists)
-    if (!client.paymentReceipts) {
-      client.paymentReceipts = [];
+    const now = new Date();
+
+    let startDate = now;
+
+    if (client.subscription.length > 0) {
+      const last = client.subscription[client.subscription.length - 1];
+
+      if (new Date(last.endDate) > now) {
+        startDate = new Date(last.endDate);
+      }
     }
 
-    // Create receipt data object
-    const receiptData = {
-      amount: numericAmount,
-      transactionId: transactionId.trim(),
-      receiptImage: receiptFile.path,
-      receiptFilename: receiptFile.filename,
-      receiptOriginalName: receiptFile.originalname,
-      receiptSize: receiptFile.size,
-      receiptMimeType: receiptFile.mimetype,
-      uploadDate: new Date(),
-      status: 'Pending',
-      clientName: client.client,
-      clientEmail: client.email,
-      companyCode: client.companyCode,
-      renewStartDate: startDate, 
-      renewEndDate: endDate
-    };
+    const endDate = new Date(startDate);
+    endDate.setDate(endDate.getDate() + days);
 
-    if (startDate && endDate) { 
-      if (!client.subscription) { 
-        client.subscription = []; 
-      } 
-      client.subscription.push({ 
-        startDate, 
-        endDate, 
-        status: 'Active', 
-        renewedAt: new Date(), 
-        paymentStatus: 'Pending' 
-      }); 
-    }  
+    client.subscription.push({
+      startDate,
+      endDate,
+      status: 'Active'
+    });
 
-    // Add to client's paymentReceipts array
-    client.paymentReceipts.push(receiptData);
     await client.save();
 
-    console.log(`✅ Receipt saved for client ${client.client} (${clientId})`);
-
-    try { 
-      if (client.email) { 
-        await emailService.sendEmail( 
-          client.email, 
-          'Subscription Renewal Request Submitted', 
-          `<h2>Your renewal request has been submitted successfully.</h2>
-           <p><strong>Amount:</strong> ₹${numericAmount}</p>
-           <p><strong>Transaction ID:</strong> ${transactionId}</p>
-           <p><strong>Start Date:</strong> ${startDate}</p>
-           <p><strong>End Date:</strong> ${endDate}</p>
-           <p>Your payment is currently under verification.</p>` 
-        ); 
-        console.log('✅ Renewal email sent to client'); 
-      } 
-    } catch (emailError) { 
-      console.log('❌ Client renewal email failed:', emailError.message); 
-    }
-
-    // Send email notification to owner(s)
-    try {
-      // Get owner/company email from company record
-      const Company = require('../../models/Company');
-      const company = await Company.findOne({ companyCode: client.companyCode });
-      
-      let ownerEmail = 'owner@gmail.com'; // Default fallback
-      
-      if (company && company.email) {
-        ownerEmail = company.email;
-      }
-      
-      // Also get all admin users
-      const adminUsers = await User.find({ 
-        role: { $in: ['admin', 'superadmin', 'owner'] },
-        companyCode: client.companyCode
-      }).select('email name');
-      
-      const adminEmails = adminUsers.map(admin => admin.email);
-      const allRecipients = [ownerEmail, ...adminEmails];
-      const uniqueRecipients = [...new Set(allRecipients)]; // Remove duplicates
-      
-      // Prepare email content
-      const emailHtml = `
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>New Subscription Payment Receipt Uploaded</title>
-            <style>
-                body {
-                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-                    line-height: 1.6;
-                    color: #333;
-                    background-color: #f4f7fb;
-                    margin: 0;
-                    padding: 20px;
-                }
-                .email-container {
-                    max-width: 600px;
-                    margin: 0 auto;
-                    background: white;
-                    border-radius: 16px;
-                    overflow: hidden;
-                    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-                }
-                .email-header {
-                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                    padding: 30px;
-                    text-align: center;
-                    color: white;
-                }
-                .email-header h1 {
-                    margin: 0;
-                    font-size: 24px;
-                }
-                .email-body {
-                    padding: 30px;
-                }
-                .info-card {
-                    background: #f8fafc;
-                    border-radius: 12px;
-                    padding: 20px;
-                    margin: 20px 0;
-                    border-left: 4px solid #3b82f6;
-                }
-                .info-row {
-                    display: flex;
-                    padding: 10px 0;
-                    border-bottom: 1px solid #e2e8f0;
-                }
-                .info-label {
-                    flex: 0 0 120px;
-                    font-weight: 600;
-                    color: #4a5568;
-                }
-                .info-value {
-                    flex: 1;
-                    color: #2d3748;
-                }
-                .status-badge {
-                    display: inline-block;
-                    padding: 4px 12px;
-                    background: #fef3c7;
-                    color: #92400e;
-                    border-radius: 20px;
-                    font-size: 12px;
-                    font-weight: 600;
-                }
-                .button {
-                    display: inline-block;
-                    background: #3b82f6;
-                    color: white;
-                    text-decoration: none;
-                    padding: 12px 24px;
-                    border-radius: 8px;
-                    margin-top: 20px;
-                }
-                .footer {
-                    background: #f8fafc;
-                    padding: 20px;
-                    text-align: center;
-                    font-size: 12px;
-                    color: #718096;
-                }
-            </style>
-        </head>
-        <body>
-            <div class="email-container">
-                <div class="email-header">
-                    <h1>💰 New Payment Receipt Uploaded</h1>
-                    <p>Subscription Renewal Request</p>
-                </div>
-                
-                <div class="email-body">
-                    <h2>Payment Details</h2>
-                    
-                    <div class="info-card">
-                        <div class="info-row">
-                            <div class="info-label">Client Name:</div>
-                            <div class="info-value"><strong>${client.client}</strong></div>
-                        </div>
-                        <div class="info-row">
-                            <div class="info-label">Company:</div>
-                            <div class="info-value">${client.company}</div>
-                        </div>
-                        <div class="info-row">
-                            <div class="info-label">Email:</div>
-                            <div class="info-value">${client.email || 'Not provided'}</div>
-                        </div>
-                        <div class="info-row">
-                            <div class="info-label">Phone:</div>
-                            <div class="info-value">${client.phone || 'Not provided'}</div>
-                        </div>
-                        <div class="info-row">
-                            <div class="info-label">Amount:</div>
-                            <div class="info-value"><strong>₹${numericAmount.toLocaleString('en-IN')}</strong></div>
-                        </div>
-                        <div class="info-row">
-                            <div class="info-label">Transaction ID:</div>
-                            <div class="info-value"><code>${transactionId}</code></div>
-                        </div>
-                        <div class="info-row">
-                            <div class="info-label">Upload Date:</div>
-                            <div class="info-value">${new Date().toLocaleString('en-IN')}</div>
-                        </div>
-                        <div class="info-row">
-                            <div class="info-label">Status:</div>
-                            <div class="info-value"><span class="status-badge">⏳ Pending Verification</span></div>
-                        </div>
-                    </div>
-                    
-                    <div style="background: #fef3c7; padding: 15px; border-radius: 8px; margin: 20px 0;">
-                        <strong>⚠️ Action Required:</strong>
-                        <p style="margin: 10px 0 0 0;">Please verify the payment receipt and update the subscription status for this client.</p>
-                    </div>
-                    
-                    <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/admin/clients/${clientId}" class="button">
-                        View Client Details →
-                    </a>
-                </div>
-                
-                <div class="footer">
-                    <p>CIIS NETWORK - Subscription Management System</p>
-                    <p>This is an automated notification. Please do not reply to this email.</p>
-                </div>
-            </div>
-        </body>
-        </html>
-      `;
-      
-      // Send emails to all recipients
-      const emailPromises = uniqueRecipients.map(recipient => 
-        emailService.sendEmail(
-          recipient,
-          `🔔 Payment Receipt Uploaded - ${client.client} (${client.company})`,
-          emailHtml,
-          {
-            priority: 'high',
-            referenceId: `payment-receipt-${clientId}-${Date.now()}`,
-            headers: {
-              'X-Email-Type': 'payment-receipt',
-              'X-Client-Id': clientId,
-              'X-Transaction-Id': transactionId
-            }
-          }
-        )
-      );
-      
-      await Promise.all(emailPromises);
-      console.log(`✅ Payment receipt notification emails sent to ${uniqueRecipients.length} recipients`);
-      
-    } catch (emailError) {
-      console.error('⚠️ Error sending email notifications:', emailError);
-      // Don't fail the request if email fails
-    }
-    
-    // Return success response
-    res.status(200).json({
+    res.json({
       success: true,
-      message: 'Receipt uploaded successfully! Owner has been notified.',
-      data: {
-        receiptId: receiptData._id || 'pending',
-        transactionId: transactionId,
-        amount: numericAmount,
-        uploadDate: receiptData.uploadDate,
-        status: 'pending',
-        receiptPath: receiptFile.path
-      }
+      message: "Subscription extended successfully",
+      data: client
     });
-    
+
   } catch (error) {
-    console.error('❌ Receipt Upload Error:', error);
-    
-    // Clean up uploaded file if there's an error
-    if (req.file && req.file.path) {
-      const fs = require('fs');
-      fs.unlink(req.file.path, (err) => {
-        if (err) console.error('Error deleting file:', err);
-        else console.log('Deleted uploaded file due to error');
-      });
-    }
-    
-    res.status(500).json({
-      success: false,
-      message: error.message || 'Failed to upload receipt. Please try again.'
-    });
+    res.status(500).json({ message: error.message });
   }
 };
 
@@ -1739,9 +1487,7 @@ module.exports = {
   addProjectManager,
   removeProjectManager,
   getClientsByCompany,
-  uploadReceipt,
-  renewSubscription,
-  upload
+  extendClientSubscription
 };
 
 console.log("✅ clientController.js loaded successfully with auto-user creation and email integration");
