@@ -30,6 +30,11 @@ const messageSchema = new mongoose.Schema(
         default: ""
     },
 
+    fileType: {
+            type: String,
+            default: ""
+        },
+
     seenBy: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: "User"

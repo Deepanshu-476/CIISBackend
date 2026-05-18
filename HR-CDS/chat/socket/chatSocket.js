@@ -62,8 +62,7 @@ socket.on(
         ).emit(
             "chat:unread-update",
             {
-                senderId: socket.userId,
-                count: 1
+                senderId: socket.userId
             }
         );
 

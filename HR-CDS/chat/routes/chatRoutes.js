@@ -12,6 +12,11 @@ const {
 const authMiddleware =
 require("../../middlewares/auth");
 
+const upload =
+require(
+    "../middleware/upload"
+);
+
 
 // USERS
 router.get(
@@ -33,6 +38,7 @@ router.post(
 router.post(
     "/message",
     authMiddleware,
+    upload.single("file"),
     sendMessage
 );
 
