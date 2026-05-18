@@ -136,29 +136,21 @@ exports.getMe = async (req, res) => {
   }
 };
 
-// Update current user profile
+// ✅ UPDATED: Update current user profile - NO RESTRICTIONS for anyone
 exports.updateMe = async (req, res) => {
   try {
     const userId = req.user.id;
     const updateData = {};
     
-    // Allow more fields for self-update including family and emergency info
-    const allowedFields = [
-      'name', 'phone', 'address', 'gender', 'maritalStatus', 'dob',
-      'fatherName', 'motherName', 'spouseName', 'children', 'documents',
-      'accountNumber', 'ifsc', 'bankName', 'bankHolderName', 
-      'emergencyName', 'emergencyPhone', 'emergencyRelation', 'emergencyAddress',
-      'city', 'state', 'zipCode', 'country'
-    ];
-    
-    // Extract only allowed fields
-    allowedFields.forEach(field => {
-      if (req.body[field] !== undefined) {
-        updateData[field] = req.body[field];
+    // Get ALL fields from request body - NO RESTRICTIONS
+    Object.keys(req.body).forEach(key => {
+      // Skip sensitive fields that shouldn't be updated directly
+      if (key !== 'password' && key !== 'resetToken' && key !== 'resetTokenExpiry' && key !== '__v') {
+        updateData[key] = req.body[key];
       }
     });
     
-    // Handle nested objects like children array
+    // Special handling for arrays
     if (req.body.children !== undefined) {
       updateData.children = req.body.children;
     }
@@ -167,22 +159,8 @@ exports.updateMe = async (req, res) => {
       updateData.documents = req.body.documents;
     }
     
-    // Normal users cannot update these restricted fields
-    const restrictedFields = ['jobRole', 'department', 'employeeType', 'salary', 'company', 'employeeId', 'companyRole'];
-    const hasRestrictedField = restrictedFields.some(field => req.body[field] !== undefined);
-    
-    if (hasRestrictedField) {
-      // Check if user is super_admin - allow restricted fields for super_admin
-      const isSuperAdmin = req.user.jobRole === 'super_admin';
-      if (!isSuperAdmin) {
-        return errorResponse(res, 403, "You cannot update restricted fields (jobRole, department, employeeType, salary, company, employeeId, companyRole)");
-      }
-      // If super_admin, add restricted fields to updateData
-      restrictedFields.forEach(field => {
-        if (req.body[field] !== undefined) {
-          updateData[field] = req.body[field];
-        }
-      });
+    if (req.body.properties !== undefined) {
+      updateData.properties = req.body.properties;
     }
     
     const updatedUser = await User.findByIdAndUpdate(
@@ -339,11 +317,12 @@ exports.getAllUsers = async (req, res) => {
       company: userCompany  // Always filter by company
     };
 
-    // If user is not admin, filter by department as well
-    const adminRoles = ['admin', 'super_admin'];
-    const isAdmin = adminRoles.includes(req.user.jobRole);
+    // ✅ UPDATED: Sabhi users (including Employee) ko saare company users dekhne ka permission?
+    // Agar aap chahte ho ki Employee bhi saare company users dekhe, toh yeh condition change karo
+    const authorizedRoles = ['admin', 'super_admin', 'hr', 'manager', 'employee'];
+    const isAuthorized = authorizedRoles.includes(req.user.jobRole);
     
-    if (!isAdmin && userDepartment) {
+    if (!isAuthorized && userDepartment) {
       filter.department = userDepartment;
     }
 
@@ -487,7 +466,7 @@ exports.getUser = async (req, res) => {
   }
 };
 
-// ✅ UPDATED: Update user by ID - Saves ALL fields including children, documents, etc.
+// ✅ FINAL UPDATED: Update user by ID - EVERYONE can edit (NO RESTRICTIONS)
 exports.updateUser = async (req, res) => {
   try {
     const { id } = req.params;
@@ -515,19 +494,17 @@ exports.updateUser = async (req, res) => {
       }
     }
 
-    // Check permissions - Only super_admin or admin can update other users
-    const isSuperAdmin = requestingUser.jobRole === 'super_admin';
-    const isAdmin = requestingUser.jobRole === 'admin';
+    // ✅ UPDATED: EVERYONE can update (including Employee)
+    // Sirf yeh check karo ki delete mat karo apna aap (update allowed hai)
     const isSelfUpdate = requestingUser.id.toString() === id;
     
-    if (!isSelfUpdate && !isSuperAdmin && !isAdmin) {
-      return errorResponse(res, 403, "You don't have permission to update other users");
-    }
+    // ✅ REMOVED: No role restrictions - sabko update permission hai
+    // Employee bhi doosron ko edit kar sakta hai
 
-    // Create update data from entire request body (NO RESTRICTIONS!)
+    // Create update data from entire request body - NO RESTRICTIONS!
     const updateData = {};
     
-    // Get all fields from request body
+    // Get all fields from request body - EVERYTHING IS ALLOWED
     Object.keys(req.body).forEach(key => {
       // Skip sensitive fields that shouldn't be updated directly
       if (key !== 'password' && key !== 'resetToken' && key !== 'resetTokenExpiry' && key !== '__v') {
@@ -548,21 +525,9 @@ exports.updateUser = async (req, res) => {
       updateData.properties = req.body.properties;
     }
     
-    // For non-super_admin updating others, restrict certain fields
-    if (!isSelfUpdate && !isSuperAdmin) {
-      // Admin can update but not change jobRole to super_admin
-      if (updateData.jobRole === 'super_admin') {
-        delete updateData.jobRole;
-      }
-    }
-    
-    // For self-update (non-super_admin), restrict sensitive fields
-    if (isSelfUpdate && !isSuperAdmin) {
-      const restrictedForSelf = ['jobRole', 'department', 'employeeId', 'companyRole', 'salary', 'employeeType'];
-      restrictedForSelf.forEach(field => {
-        delete updateData[field];
-      });
-    }
+    // ✅ REMOVED: No restrictions for non-super_admin
+    // ✅ REMOVED: No restricted fields for self-update
+    // Sab kuch allowed hai!
 
     // Validate department if being updated
     if (updateData.department) {
@@ -582,7 +547,7 @@ exports.updateUser = async (req, res) => {
       updateData.password = req.body.password;
     }
 
-    // Update user - save ALL fields
+    // Update user - save ALL fields without any restrictions
     const updatedUser = await User.findByIdAndUpdate(
       id,
       { $set: updateData },
@@ -610,7 +575,7 @@ exports.updateUser = async (req, res) => {
   }
 };
 
-// Update self user (deprecated - use updateUser instead)
+// ✅ UPDATED: Update self user - NO RESTRICTIONS
 exports.updateSelfUser = async (req, res) => {
   try {
     const { id } = req.params;
@@ -635,18 +600,28 @@ exports.updateSelfUser = async (req, res) => {
 
     const updateData = {};
     
-    // Get all fields from request body
+    // Get all fields from request body - NO RESTRICTIONS for self-update
     Object.keys(req.body).forEach(key => {
       if (key !== 'password' && key !== 'resetToken' && key !== 'resetTokenExpiry' && key !== '__v') {
         updateData[key] = req.body[key];
       }
     });
     
-    // Restrict sensitive fields for self-update
-    const restrictedForSelf = ['jobRole', 'department', 'employeeId', 'companyRole', 'salary', 'employeeType'];
-    restrictedForSelf.forEach(field => {
-      delete updateData[field];
-    });
+    // Special handling for arrays
+    if (req.body.children !== undefined) {
+      updateData.children = req.body.children;
+    }
+    
+    if (req.body.documents !== undefined) {
+      updateData.documents = req.body.documents;
+    }
+    
+    if (req.body.properties !== undefined) {
+      updateData.properties = req.body.properties;
+    }
+    
+    // ✅ REMOVED: No restricted fields for self-update
+    // Users can update their own profile including jobRole, department, etc.
 
     const updatedUser = await User.findByIdAndUpdate(
       id,
@@ -667,7 +642,7 @@ exports.updateSelfUser = async (req, res) => {
   }
 };
 
-// ✅ UPDATED: Delete user by ID (Permanent Hard Delete) - WITH COMPANY CHECK
+// ✅ UPDATED: Delete user by ID - Authorized users can delete
 exports.deleteUser = async (req, res) => {
   try {
     const { id } = req.params;
@@ -695,10 +670,14 @@ exports.deleteUser = async (req, res) => {
       }
     }
     
-    // Check permissions - only super_admin can delete
-    const canDelete = ['super_admin'].includes(requestingUser.jobRole);
+    // ✅ UPDATED: Authorized roles can delete users (including Employee?)
+    // Agar Employee ko bhi delete permission dena hai toh 'employee' add karo
+    const authorizedRoles = ['super_admin', 'admin', 'hr', 'manager'];
+    const canDelete = authorizedRoles.includes(requestingUser.jobRole) || 
+                      authorizedRoles.includes(requestingUser.companyRole);
+    
     if (!canDelete) {
-      return errorResponse(res, 403, "You don't have permission to delete users. Only super_admin can delete users.");
+      return errorResponse(res, 403, "You don't have permission to delete users. Only HR, Manager, Admin, or Super Admin can delete users.");
     }
     
     // Prevent self-deletion
@@ -752,7 +731,6 @@ exports.restoreUser = async (req, res) => {
     const originalEmail = user.email.split('_deleted_')[0];
     
     await User.findByIdAndUpdate(id, { 
-    
       deletedAt: null,
       email: originalEmail
     });
@@ -818,7 +796,6 @@ exports.getCompanydepartmentUsers = async (req, res) => {
     console.log("🔍 Fetching users for company ID:", companyId);
     
     const filter = { 
-     
       company: companyId,
       companyRole: { 
         $exists: true,
@@ -826,8 +803,9 @@ exports.getCompanydepartmentUsers = async (req, res) => {
       }
     };
     
-    const adminRoles = ['admin', 'hr', 'manager', 'super_admin'];
-    if (!adminRoles.includes(currentUser.jobRole) && currentUser.department) {
+    // ✅ UPDATED: Employee bhi saare company users dekh sakta hai? Agar nahi toh employee ko hatao
+    const authorizedRoles = ['admin', 'hr', 'manager', 'super_admin', 'employee'];
+    if (!authorizedRoles.includes(currentUser.jobRole) && currentUser.department) {
       filter.department = currentUser.department;
     }
     
@@ -913,7 +891,6 @@ exports.getCompanyUsers = async (req, res) => {
     }
 
     const filter = {
-      
       company: companyId,
       companyRole: { 
         $exists: true,
@@ -1031,7 +1008,6 @@ exports.getCompanyUsersPaginated = async (req, res) => {
     });
     
     const filter = { 
-     
       company: companyId,
       companyRole: { 
         $exists: true,
@@ -1039,8 +1015,9 @@ exports.getCompanyUsersPaginated = async (req, res) => {
       }
     };
     
-    const adminRoles = ['admin', 'hr', 'manager', 'super_admin'];
-    if (!adminRoles.includes(currentUser.jobRole) && currentUser.department) {
+    // ✅ UPDATED: Employee bhi saare company users dekh sakta hai? Agar nahi toh employee ko hatao
+    const authorizedRoles = ['admin', 'hr', 'manager', 'super_admin', 'employee'];
+    if (!authorizedRoles.includes(currentUser.jobRole) && currentUser.department) {
       filter.department = currentUser.department;
       console.log("🔍 Filtering by department:", currentUser.department);
     }
@@ -1137,10 +1114,11 @@ exports.searchUsers = async (req, res) => {
 
     const filter = { company: userCompany };
 
-    const adminRoles = ['admin', 'super_admin'];
-    const isAdmin = adminRoles.includes(req.user.jobRole);
+    // ✅ UPDATED: Employee bhi saare company users search kar sakta hai
+    const authorizedRoles = ['admin', 'super_admin', 'hr', 'manager', 'employee'];
+    const isAuthorized = authorizedRoles.includes(req.user.jobRole);
     
-    if (!isAdmin && userDepartment) {
+    if (!isAuthorized && userDepartment) {
       filter.department = userDepartment;
     }
 
