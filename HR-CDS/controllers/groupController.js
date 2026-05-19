@@ -35,10 +35,17 @@ exports.createGroup = async (req, res) => {
       }
     }
 
+    const uniqueMembers = Array.from(
+      new Set([
+        ...validMembers.map((id) => id.toString()),
+        req.user._id.toString()
+      ])
+    ).map((id) => id);
+
     const group = await Group.create({
       name,
       description,
-      members: validMembers,
+      members: uniqueMembers,
       createdBy: req.user._id
     });
 
@@ -61,8 +68,11 @@ exports.createGroup = async (req, res) => {
 exports.getGroups = async (req, res) => {
   try {
     const groups = await Group.find({
-      createdBy: req.user._id,
-      isActive: true
+      isActive: true,
+      $or: [
+        { createdBy: req.user._id },
+        { members: req.user._id }
+      ]
     })
     .populate('members', 'name role email')
     .sort({ createdAt: -1 });
@@ -85,8 +95,11 @@ exports.getGroupById = async (req, res) => {
 
     const group = await Group.findOne({
       _id: groupId,
-      createdBy: req.user._id,
-      isActive: true
+      isActive: true,
+      $or: [
+        { createdBy: req.user._id },
+        { members: req.user._id }
+      ]
     }).populate('members', 'name role email');
 
     if (!group) {

@@ -35,7 +35,51 @@ const chatSocket = (io, socket) => {
 
 
 
-   // SEND MESSAGE
+// JOIN A CONVERSATION ROOM
+    socket.on(
+        "chat:join-conversation",
+        (data) => {
+            if (!data || !data.conversationId) {
+                return;
+            }
+
+            socket.join(`conversation:${data.conversationId}`);
+            console.log(
+                "✅ JOINED CONVERSATION ROOM:",
+                `conversation:${data.conversationId}`
+            );
+        }
+    );
+
+    socket.on(
+        "chat:leave-conversation",
+        (data) => {
+            if (!data || !data.conversationId) {
+                return;
+            }
+
+            socket.leave(`conversation:${data.conversationId}`);
+            console.log(
+                "⛔ LEFT CONVERSATION ROOM:",
+                `conversation:${data.conversationId}`
+            );
+        }
+    );
+
+    socket.on(
+        "chat:join-conversations",
+        (data) => {
+            if (!data || !Array.isArray(data.conversationIds)) {
+                return;
+            }
+
+            data.conversationIds.forEach((conversationId) => {
+                socket.join(`conversation:${conversationId}`);
+            });
+        }
+    );
+
+    // SEND MESSAGE
 socket.on(
     "chat:send-message",
     async (data) => {
@@ -45,26 +89,36 @@ socket.on(
             data
         );
 
+        const room = data.conversationId
+            ? `conversation:${data.conversationId}`
+            : `user:${data.receiverId}`;
+
         console.log(
             "📤 SENDING TO ROOM:",
-            `user:${data.receiverId}`
+            room
         );
 
-        io.to(
-            `user:${data.receiverId}`
-        ).emit(
+        io.to(room).emit(
             "chat:receive-message",
             data
         );
 
-        io.to(
-            `user:${data.receiverId}`
-        ).emit(
-            "chat:unread-update",
-            {
-                senderId: socket.userId
-            }
-        );
+        if (data.conversationId) {
+            socket.to(room).emit(
+                "chat:unread-update",
+                {
+                    senderId: socket.userId,
+                    conversationId: data.conversationId
+                }
+            );
+        } else if (data.receiverId) {
+            socket.to(`user:${data.receiverId}`).emit(
+                "chat:unread-update",
+                {
+                    senderId: socket.userId
+                }
+            );
+        }
 
         console.log(
             "✅ MESSAGE EMITTED"
@@ -77,13 +131,15 @@ socket.on(
     socket.on(
         "chat:typing",
         (data) => {
+            const room = data.conversationId
+                ? `conversation:${data.conversationId}`
+                : `user:${data.receiverId}`;
 
-            socket.to(
-                `user:${data.receiverId}`
-            ).emit(
+            socket.to(room).emit(
                 "chat:typing",
                 {
-                    senderId: socket.userId
+                    senderId: socket.userId,
+                    conversationId: data.conversationId
                 }
             );
         }
@@ -95,13 +151,15 @@ socket.on(
     socket.on(
         "chat:stop-typing",
         (data) => {
+            const room = data.conversationId
+                ? `conversation:${data.conversationId}`
+                : `user:${data.receiverId}`;
 
-            socket.to(
-                `user:${data.receiverId}`
-            ).emit(
+            socket.to(room).emit(
                 "chat:stop-typing",
                 {
-                    senderId: socket.userId
+                    senderId: socket.userId,
+                    conversationId: data.conversationId
                 }
             );
         }

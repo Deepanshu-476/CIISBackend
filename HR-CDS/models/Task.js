@@ -117,16 +117,6 @@ const taskSchema = new mongoose.Schema(
       enum: ["low", "medium", "high"],
       default: "medium",
     },
-<<<<<<< HEAD
-
-    // ✅ COMPANY CODE FIELD
-    companyCode: {
-      type: String,
-      required: [true, "Company code is required"],
-      trim: true,
-      uppercase: true,
-      index: true,
-=======
     
 
     // ✅ ADD THIS - COMPANY CODE FIELD
@@ -135,7 +125,6 @@ const taskSchema = new mongoose.Schema(
       required: true,
       index: true,
       default: ''
->>>>>>> 5fadf61 (showing leave in recent activity)
     },
 
     assignedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
