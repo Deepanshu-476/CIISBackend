@@ -1,4 +1,3 @@
-// clientController.js
 const Client = require('../models/Client');
 const Service = require('../models/Service');
 const User = require('../../models/User');
@@ -10,7 +9,7 @@ const mongoose = require('mongoose');
 const Company = require('../../models/Company');
 const emailService = require('../../services/emailService'); 
 const multer = require('multer');
-const path = require('path');// Import email service
+const path = require('path');
 
 // Default department ID for clients
 const DEFAULT_CLIENT_DEPARTMENT_ID = '69ae555c9a1e47e80a40204c';
@@ -305,11 +304,6 @@ const getWelcomeEmailTemplate = (name, company, email, password, loginUrl) => {
                         <div class="credential-label">Password:</div>
                         <div class="credential-value">${password}</div>
                     </div>
-                    
-                    // <div class="credential-item">
-                    //     <div class="credential-label">Login URL:</div>
-                    //     <div class="credential-value">${loginUrl}</div>
-                    // </div>
                 </div>
                 
                 <div class="important-note">
@@ -397,10 +391,8 @@ const sendWelcomeEmail = async (email, name, company, password, companyCode) => 
   const fullLoginUrl = getCompanyLoginUrl(companyCode);
   
   try {
-    // Get the email template
     const emailHtml = getWelcomeEmailTemplate(name, company, email, password, fullLoginUrl);
     
-    // Send email using the email service
     const result = await emailService.sendEmail(
       email,
       `🎉 Welcome to CIIS NETWORK - Your Account Has Been Created (${company})`,
@@ -426,26 +418,9 @@ const sendWelcomeEmail = async (email, name, company, password, companyCode) => 
     return result;
   } catch (error) {
     console.error('❌ Error sending welcome email:', error);
-    // Don't throw - email failure shouldn't break client creation
     return { success: false, error: error.message };
   }
 };
-
-// ================= UPLOAD RECEIPT STORAGE =================
-
-const storage = multer.diskStorage({
-
-  destination: (req, file, cb) => {
-    cb(null, 'uploads/receipts');
-  },
-
-  filename: (req, file, cb) => {
-    cb(null, Date.now() + path.extname(file.originalname));
-  }
-
-});
-
-const upload = multer({ storage });
 
 const getAllClients = async (req, res) => {
   console.log('🔍 getAllClients called with query:', req.query);
@@ -462,8 +437,6 @@ const getAllClients = async (req, res) => {
       companyCode
     } = req.query;
 
-    console.log('🔍 Parsed query params:', { page, limit, sortBy, sortOrder, search, status, projectManager, service, companyCode });
-
     const filter = {};
     
     if (!companyCode) {
@@ -474,7 +447,6 @@ const getAllClients = async (req, res) => {
       });
     }
     filter.companyCode = companyCode.toUpperCase();
-    console.log('🔍 Filter with companyCode:', filter.companyCode);
     
     if (status && status !== 'All') filter.status = status;
     
@@ -496,7 +468,6 @@ const getAllClients = async (req, res) => {
         { description: searchRegex },
         { 'projectManager': { $regex: searchRegex } }
       ];
-      console.log('🔍 Search filter:', filter.$or);
     }
 
     const sortOptions = {};
@@ -507,10 +478,8 @@ const getAllClients = async (req, res) => {
     } else {
       sortOptions.createdAt = -1;
     }
-    console.log('🔍 Sort options:', sortOptions);
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
-    console.log('🔍 Pagination - skip:', skip, 'limit:', limit);
     
     const [clients, total] = await Promise.all([
       Client.find(filter)
@@ -520,8 +489,6 @@ const getAllClients = async (req, res) => {
         .lean(),
       Client.countDocuments(filter)
     ]);
-
-    console.log(`✅ Found ${clients.length} clients out of ${total} total`);
 
     res.json({
       success: true,
@@ -557,7 +524,6 @@ const getClientById = async (req, res) => {
       });
     }
 
-    console.log('✅ Client found:', client._id);
     res.json({
       success: true,
       data: client
@@ -604,7 +570,7 @@ const addClient = async (req, res) => {
       services,
       email,
       phone,
-      subscription: subscription  // ✅ YEH CHECK KARNE KE LIYE
+      subscription: subscription
     });
 
     // Validation
@@ -652,6 +618,9 @@ const addClient = async (req, res) => {
     const cleanClientName = normalizeName(client);
     const cleanCompanyName = normalizeName(company);
     const cleanCity = normalizeName(city);
+    const cleanProjectManagers = projectManager
+      .filter(manager => manager && typeof manager === 'string' && manager.trim().length > 0)
+      .map(manager => manager.trim());
 
     // Check if client already exists for this company
     const existingClient = await Client.findOne({
@@ -736,7 +705,6 @@ const addClient = async (req, res) => {
     }
 
     // Check if default department exists
-    console.log('🔍 Checking default department:', DEFAULT_CLIENT_DEPARTMENT_ID);
     const departmentExists = await Department.findById(DEFAULT_CLIENT_DEPARTMENT_ID).session(session);
     if (!departmentExists) {
       console.error('❌ Default department not found:', DEFAULT_CLIENT_DEPARTMENT_ID);
@@ -747,10 +715,8 @@ const addClient = async (req, res) => {
         departmentId: DEFAULT_CLIENT_DEPARTMENT_ID
       });
     }
-    console.log('✅ Default department found');
 
     // Check if default job role exists
-    console.log('🔍 Checking default job role:', DEFAULT_CLIENT_JOB_ROLE_ID);
     const jobRoleExists = await JobRole.findById(DEFAULT_CLIENT_JOB_ROLE_ID).session(session);
     if (!jobRoleExists) {
       console.error('❌ Default job role not found:', DEFAULT_CLIENT_JOB_ROLE_ID);
@@ -761,11 +727,8 @@ const addClient = async (req, res) => {
         jobRoleId: DEFAULT_CLIENT_JOB_ROLE_ID
       });
     }
-    console.log('✅ Default job role found');
 
     // Get company ID from companyCode
-    console.log('🔍 Finding company with code:', companyCode);
-    
     const companyExists = await Company.findOne({ companyCode: cleanCompanyCode }).session(session);
     if (!companyExists) {
       console.error('❌ Company not found with code:', companyCode);
@@ -775,7 +738,6 @@ const addClient = async (req, res) => {
         message: "Company not found"
       });
     }
-    console.log('✅ Company found:', companyExists._id);
 
     // Generate password from client name
     const generatePassword = (name) => {
@@ -785,11 +747,9 @@ const addClient = async (req, res) => {
     };
 
     const autoPassword = generatePassword(client);
-    console.log('🔍 Generated auto password for user');
     
     // Generate employee ID for user
     const employeeId = `CLT${Date.now()}${Math.floor(Math.random() * 1000)}`;
-    console.log('🔍 Generated employee ID:', employeeId);
 
     // Get current user from request (if authenticated)
     const currentUserId = req.user?.id || null;
@@ -836,29 +796,20 @@ const addClient = async (req, res) => {
       createdBy: currentUserId
     };
 
-    console.log('🔍 Creating user with data:', { ...userData, password: '[HIDDEN]' });
-
-    // Create user in session
     const createdUsers = await User.create([userData], { session });
     const createdUser = createdUsers[0];
     console.log('✅ User created successfully:', createdUser._id);
 
-    // Clean project managers
-    const cleanProjectManagers = projectManager
-      .filter(manager => manager && typeof manager === 'string' && manager.trim().length > 0)
-      .map(manager => manager.trim());
-    
-    // ✅ SUBSCRIPTION ARRAY BANANE KA SAHI TARIKA
+    // Prepare subscription array with price
     let subscriptionArray = [];
     if (subscription && Array.isArray(subscription) && subscription.length > 0) {
       subscriptionArray = subscription.map(sub => ({
         startDate: new Date(sub.startDate),
         endDate: new Date(sub.endDate),
+        price: sub.price || 0,
         status: sub.status || 'Active'
       }));
-      console.log('✅ Subscription array created:', subscriptionArray);
-    } else {
-      console.log('⚠️ No subscription data received, keeping empty array');
+      console.log('✅ Subscription array created with prices:', subscriptionArray);
     }
 
     // Create new client with subscription
@@ -876,11 +827,10 @@ const addClient = async (req, res) => {
       address: address ? address.trim() : '',
       description: description ? description.trim() : '',
       notes: notes ? notes.trim() : '',
-      subscription: subscriptionArray,  // ✅ YEH SAVE HOGA
+      subscription: subscriptionArray,
       userId: createdUser._id
     });
 
-    console.log('🔍 Creating client with subscription:', subscriptionArray);
     await newClient.save({ session });
     console.log('✅ Client created successfully with ID:', newClient._id);
     console.log('✅ Client subscription saved:', newClient.subscription);
@@ -899,13 +849,10 @@ const addClient = async (req, res) => {
       },
       { session }
     );
-    console.log('✅ User updated with client reference');
 
-    // Commit transaction
     await session.commitTransaction();
-    console.log('✅ Transaction committed successfully');
 
-    // Send welcome email with auto-generated password (don't await - don't block response)
+    // Send welcome email
     sendWelcomeEmail(cleanEmail, cleanClientName, cleanCompanyName, autoPassword, cleanCompanyCode)
       .then(result => {
         if (result.success) {
@@ -918,7 +865,6 @@ const addClient = async (req, res) => {
         console.error('❌ Unexpected error in email sending:', err);
       });
 
-    console.log('✅ Client and user created successfully');
     res.status(201).json({
       success: true,
       message: 'Client added successfully. User account created with auto-generated password.',
@@ -962,13 +908,11 @@ const addClient = async (req, res) => {
     });
   } finally {
     session.endSession();
-    console.log('🔍 Database session ended');
   }
 };
 
-// ✅ UPDATED updateClient function with subscription handling
 const updateClient = async (req, res) => {
-  console.log('🔍 updateClient called with id:', req.params.id, 'body:', req.body);
+  console.log('🔍 updateClient called with id:', req.params.id);
   try {
     const { id } = req.params;
     const {
@@ -985,11 +929,9 @@ const updateClient = async (req, res) => {
       address,
       description,
       notes,
-      subscriptionStartDate,
-      subscriptionEndDate
+      subscription
     } = req.body;
 
-    // Find client
     const existingClient = await Client.findById(id);
     if (!existingClient) {
       console.warn('⚠️ Client not found for update:', id);
@@ -999,7 +941,6 @@ const updateClient = async (req, res) => {
       });
     }
 
-    // Validation
     const errors = [];
     
     if (client !== undefined && (!client || client.trim().length === 0)) {
@@ -1041,7 +982,6 @@ const updateClient = async (req, res) => {
       });
     }
 
-    // Check if client name already exists for this company (if updating client name)
     if (client !== undefined && companyCode !== undefined) {
       const duplicateClient = await Client.findOne({
         _id: { $ne: id },
@@ -1058,7 +998,6 @@ const updateClient = async (req, res) => {
       }
     }
 
-    // Validate services if being updated
     if (services !== undefined) {
       const serviceNames = services.filter(s => s && typeof s === 'string' && s.trim().length > 0);
       if (serviceNames.length > 0) {
@@ -1113,7 +1052,6 @@ const updateClient = async (req, res) => {
       }
     }
 
-    // Build update object
     const updateData = {};
     
     if (client !== undefined) updateData.client = client.trim();
@@ -1136,43 +1074,24 @@ const updateClient = async (req, res) => {
     if (description !== undefined) updateData.description = description.trim();
     if (notes !== undefined) updateData.notes = notes.trim();
     
-    // Handle subscription update
-    if (subscriptionStartDate && subscriptionEndDate) {
-      updateData.subscription = [
-        {
-          startDate: new Date(subscriptionStartDate),
-          endDate: new Date(subscriptionEndDate),
-          status: 'Active'
-        }
-      ];
-      console.log('🔍 Updating subscription:', updateData.subscription);
-    }
-
-    // ✅ ✅ ✅ CRITICAL FIX: Handle subscription update
     if (subscription !== undefined) {
-      console.log('🔍 Updating subscription:', JSON.stringify(subscription, null, 2));
+      console.log('🔍 Updating subscription with price:', JSON.stringify(subscription, null, 2));
       
       if (Array.isArray(subscription) && subscription.length > 0) {
-        // Format dates properly
         const formattedSubscription = subscription.map(sub => ({
           startDate: sub.startDate ? new Date(sub.startDate) : null,
           endDate: sub.endDate ? new Date(sub.endDate) : null,
-          status: sub.status || 'Active',
-          planName: sub.planName || '',
-          amount: sub.amount || 0
+          price: sub.price || 0,
+          status: sub.status || 'Active'
         }));
         updateData.subscription = formattedSubscription;
-        console.log('✅ Formatted subscription:', JSON.stringify(formattedSubscription, null, 2));
+        console.log('✅ Formatted subscription with prices:', JSON.stringify(formattedSubscription, null, 2));
       } else if (subscription !== null && subscription.length === 0) {
-        // If empty array sent, clear subscription
         updateData.subscription = [];
         console.log('✅ Clearing subscription');
       }
     }
 
-    console.log('🔍 Final update data:', JSON.stringify(updateData, null, 2));
-
-    // Update client
     const updatedClient = await Client.findByIdAndUpdate(
       id,
       updateData,
@@ -1194,7 +1113,6 @@ const updateClient = async (req, res) => {
       if (error.keyValue?.email) {
         return sendConflict(res, 'This email is already registered. Please use another email.', 'email');
       }
-
       return sendConflict(res, 'Client name already exists for this company.', 'client');
     }
     
@@ -1216,13 +1134,12 @@ const updateClient = async (req, res) => {
 };
 
 const updateClientProgress = async (req, res) => {
-  console.log('🔍 updateClientProgress called with id:', req.params.id, 'body:', req.body);
+  console.log('🔍 updateClientProgress called with id:', req.params.id);
   try {
     const { id } = req.params;
     const { completed, total } = req.body;
 
     if (completed === undefined || total === undefined) {
-      console.warn('⚠️ Missing completed or total values');
       return res.status(400).json({
         success: false,
         message: 'Completed and total values are required'
@@ -1231,7 +1148,6 @@ const updateClientProgress = async (req, res) => {
 
     const client = await Client.findById(id);
     if (!client) {
-      console.warn('⚠️ Client not found:', id);
       return res.status(404).json({
         success: false,
         message: 'Client not found'
@@ -1239,7 +1155,6 @@ const updateClientProgress = async (req, res) => {
     }
 
     await client.updateProgress(parseInt(completed), parseInt(total));
-    console.log('✅ Progress updated for client:', id);
 
     res.json({
       success: true,
@@ -1270,7 +1185,6 @@ const deleteClient = async (req, res) => {
       });
     }
 
-    console.log('✅ Client deleted successfully:', id);
     res.json({
       success: true,
       message: 'Client deleted successfully',
@@ -1292,7 +1206,6 @@ const getClientStats = async (req, res) => {
     const { companyCode } = req.query;
     
     const stats = await Client.getStats(companyCode);
-    console.log('✅ Client stats:', stats);
     
     res.json({
       success: true,
@@ -1314,7 +1227,6 @@ const getManagerStats = async (req, res) => {
     const { companyCode } = req.query;
     
     const stats = await Client.getManagerStats(companyCode);
-    console.log('✅ Manager stats:', stats);
     
     res.json({
       success: true,
@@ -1331,14 +1243,13 @@ const getManagerStats = async (req, res) => {
 };
 
 const addProjectManager = async (req, res) => {
-  console.log('🔍 addProjectManager called with id:', req.params.id, 'body:', req.body);
+  console.log('🔍 addProjectManager called with id:', req.params.id);
   const { id } = req.params;
   const { managerName } = req.body;
 
   try {
     const client = await Client.findById(id);
     if (!client) {
-      console.warn('⚠️ Client not found:', id);
       return res.status(404).json({
         success: false,
         message: 'Client not found'
@@ -1346,7 +1257,6 @@ const addProjectManager = async (req, res) => {
     }
 
     await client.addProjectManager(managerName);
-    console.log('✅ Project manager added to client:', id);
 
     res.json({
       success: true,
@@ -1364,14 +1274,13 @@ const addProjectManager = async (req, res) => {
 };
 
 const removeProjectManager = async (req, res) => {
-  console.log('🔍 removeProjectManager called with id:', req.params.id, 'body:', req.body);
+  console.log('🔍 removeProjectManager called with id:', req.params.id);
   const { id } = req.params;
   const { managerName } = req.body;
 
   try {
     const client = await Client.findById(id);
     if (!client) {
-      console.warn('⚠️ Client not found:', id);
       return res.status(404).json({
         success: false,
         message: 'Client not found'
@@ -1379,7 +1288,6 @@ const removeProjectManager = async (req, res) => {
     }
 
     await client.removeProjectManager(managerName);
-    console.log('✅ Project manager removed from client:', id);
 
     res.json({
       success: true,
@@ -1396,14 +1304,12 @@ const removeProjectManager = async (req, res) => {
   }
 };
 
-// Get clients by company code
 const getClientsByCompany = async (req, res) => {
   console.log('🔍 getClientsByCompany called with companyCode:', req.params.companyCode);
   try {
     const { companyCode } = req.params;
     
     if (!companyCode) {
-      console.warn('⚠️ No companyCode provided');
       return res.status(400).json({
         success: false,
         message: 'Company code is required'
@@ -1414,7 +1320,6 @@ const getClientsByCompany = async (req, res) => {
       companyCode: companyCode.toUpperCase() 
     }).sort({ client: 1 });
 
-    console.log(`✅ Found ${clients.length} clients for company ${companyCode}`);
     res.json({
       success: true,
       data: clients,
@@ -1433,7 +1338,7 @@ const getClientsByCompany = async (req, res) => {
 const extendClientSubscription = async (req, res) => {
   try {
     const { id } = req.params;
-    const { days = 30 } = req.body;
+    const { days = 30, price = 0 } = req.body;
 
     const client = await Client.findById(id);
 
@@ -1459,6 +1364,7 @@ const extendClientSubscription = async (req, res) => {
     client.subscription.push({
       startDate,
       endDate,
+      price: price,
       status: 'Active'
     });
 
@@ -1489,5 +1395,3 @@ module.exports = {
   getClientsByCompany,
   extendClientSubscription
 };
-
-console.log("✅ clientController.js loaded successfully with auto-user creation and email integration");
