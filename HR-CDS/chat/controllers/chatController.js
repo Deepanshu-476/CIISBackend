@@ -1,6 +1,7 @@
 const Conversation = require("../models/Conversation");
 const Message = require("../models/Message");
 const User = require("../../../models/User");
+const Group = require("../../models/Group");
 
 
 // CREATE CONVERSATION
@@ -70,6 +71,82 @@ exports.createConversation = async (req, res) => {
 };
 
 
+// CREATE GROUP CONVERSATION
+exports.createGroupConversation = async (req, res) => {
+
+    try {
+
+        const { groupId } = req.body;
+
+        const group = await Group.findOne({
+            _id: groupId,
+            isActive: true
+        });
+
+        if (!group) {
+            return res.status(404).json({
+                success: false,
+                message: "Group not found"
+            });
+        }
+
+        const memberIds = (group.members || []).map((member) =>
+            member.toString()
+        );
+
+        if (
+            group.createdBy.toString() !== req.user.id.toString() &&
+            !memberIds.includes(req.user.id.toString())
+        ) {
+            return res.status(403).json({
+                success: false,
+                message: "You are not a member of this group"
+            });
+        }
+
+        const members = Array.from(new Set([
+            group.createdBy.toString(),
+            ...memberIds
+        ]));
+
+        let conversation = await Conversation.findOne({
+            companyId: req.user.company,
+            isGroup: true,
+            groupId
+        });
+
+        if (!conversation) {
+            conversation = await Conversation.create({
+                companyId: req.user.company,
+                members,
+                isGroup: true,
+                groupId,
+                groupName: group.name,
+                admins: [group.createdBy]
+            });
+        } else {
+            conversation.members = members;
+            conversation.groupName = group.name;
+            await conversation.save();
+        }
+
+        res.status(200).json({
+            success: true,
+            conversation
+        });
+
+    } catch (error) {
+
+        console.log(error);
+
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
+
 // SEND MESSAGE
 exports.sendMessage = async (req, res) => {
 
@@ -89,6 +166,8 @@ exports.sendMessage = async (req, res) => {
             sender: req.user.id,
 
             text,
+
+            file: req.file ? `/api/uploads/tasks/${req.file.filename}` : "",
 
             seenBy: [req.user.id]
         });

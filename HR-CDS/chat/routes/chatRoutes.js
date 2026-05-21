@@ -4,6 +4,7 @@ const router = express.Router();
 
 const {
     createConversation,
+    createGroupConversation,
     sendMessage,
     getMessages,
     getCompanyUsers
@@ -11,6 +12,7 @@ const {
 
 const authMiddleware =
 require("../../middlewares/auth");
+const upload = require("../../../utils/multer");
 
 
 // USERS
@@ -29,10 +31,19 @@ router.post(
 );
 
 
+// CREATE GROUP CONVERSATION
+router.post(
+    "/conversation/group",
+    authMiddleware,
+    createGroupConversation
+);
+
+
 // SEND MESSAGE
 router.post(
     "/message",
     authMiddleware,
+    upload.single("file"),
     sendMessage
 );
 

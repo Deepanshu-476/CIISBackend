@@ -18,6 +18,12 @@ const conversationSchema = new mongoose.Schema(
         default: false
     },
 
+    groupId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Group",
+        default: null
+    },
+
     groupName: {
         type: String,
         default: ""
