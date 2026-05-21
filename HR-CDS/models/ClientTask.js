@@ -30,7 +30,6 @@ const clienttaskSchema = new mongoose.Schema({
     type: String,
     trim: true,
     default: '',
-    index: true
   },
   assigneeId: {
     type: mongoose.Schema.Types.ObjectId,

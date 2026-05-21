@@ -39,22 +39,38 @@ const handleFileUpload = upload.single('pdfFile');
 // ==========================================
 // 📌 HELPER FUNCTIONS
 // ==========================================
+const normalizeRole = (value = "") => value.toString().trim().toLowerCase().replace(/[_\s]+/g, "-");
+
+const isProjectAdmin = (user = {}) => {
+  const roles = [user.role, user.jobRole, user.companyRole].map(normalizeRole);
+  return roles.some(role => ["admin", "super-admin", "superadmin", "owner"].includes(role));
+};
+
 const hasProjectAccess = (project, userId, userRole) => {
   // Super admin and admin have full access
-  if (userRole === 'super-admin' || userRole === 'admin') {
+  if (isProjectAdmin({ role: userRole })) {
     return true;
   }
   
   // Check if user is in project users array
   const isUserInProject = project.users.some(user => 
-    user._id.toString() === userId.toString()
+    idsEqual(user, userId)
   );
   
   // Check if user created the project
-  const isCreator = project.createdBy?._id?.toString() === userId.toString();
+  const isCreator = idsEqual(project.createdBy, userId);
   
   return isUserInProject || isCreator;
 };
+
+const idsEqual = (left, right) => {
+  if (!left || !right) return false;
+  const leftId = left._id || left.id || left;
+  const rightId = right._id || right.id || right;
+  return leftId.toString() === rightId.toString();
+};
+
+const isTaskAssignedToUser = (task, userId) => idsEqual(task.assignedTo, userId);
 
 // ==========================================
 // 📌 NOTIFICATION CONTROLLERS
@@ -166,7 +182,7 @@ exports.listProjects = async (req, res) => {
     let query = {};
     
     // If not admin/super-admin, only show projects user is part of
-    if (req.user.role !== 'admin' && req.user.role !== 'super-admin') {
+    if (!isProjectAdmin(req.user)) {
       query.users = req.user.id;
       console.log("Non-admin query:", query);
     } else {
@@ -450,8 +466,7 @@ exports.deleteProject = async (req, res) => {
     }
 
     // Check access - only admin/super-admin or creator can delete
-    const canDelete = req.user.role === 'admin' || 
-                     req.user.role === 'super-admin' ||
+    const canDelete = isProjectAdmin(req.user) ||
                      project.createdBy?.toString() === req.user.id;
     
     if (!canDelete) {
@@ -875,6 +890,13 @@ exports.updateTaskStatus = async (req, res) => {
       return res.status(404).json({ 
         success: false, 
         message: "Task not found" 
+      });
+    }
+
+    if (!isTaskAssignedToUser(task, req.user.id)) {
+      return res.status(403).json({
+        success: false,
+        message: "Only the assigned user can update this task status"
       });
     }
 

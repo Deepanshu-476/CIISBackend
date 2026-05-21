@@ -13,7 +13,7 @@ const userSchema = new mongoose.Schema({
   },
   
   companyCode: {
-    type: String,
+    type: String, 
     required: [true, "Company code is required"],
     index: true
   },
