@@ -117,14 +117,14 @@ const taskSchema = new mongoose.Schema(
       enum: ["low", "medium", "high"],
       default: "medium",
     },
+    
 
-    // ✅ COMPANY CODE FIELD
+    // ✅ ADD THIS - COMPANY CODE FIELD
     companyCode: {
       type: String,
-      required: [true, "Company code is required"],
-      trim: true,
-      uppercase: true,
+      required: true,
       index: true,
+      default: ''
     },
 
     assignedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],

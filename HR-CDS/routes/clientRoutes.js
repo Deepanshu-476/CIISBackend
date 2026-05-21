@@ -17,9 +17,7 @@ const {
   addProjectManager,
   removeProjectManager,
   getClientsByCompany,
-  uploadReceipt,
-  renewSubscription,
-  upload
+  extendClientSubscription
 } = require('../controllers/clientController');
 
 // ✅ Service Routes
@@ -32,18 +30,16 @@ router.delete('/services/:id', serviceController.deleteService);
 router.get('/stats', getClientStats);
 router.get('/manager-stats', getManagerStats);
 
-// ✅ Client Routes
+// normal routes
+router.get('/company/:companyCode', getClientsByCompany);
 router.get('/', getAllClients);
 router.post('/', addClient);
-router.get('/company/:companyCode', getClientsByCompany);
 
-// ================= PAYMENT RECEIPT UPLOAD =================
-router.post('/upload-receipt/:id', upload.single('receipt'), uploadReceipt);
 
-// ================= SUBSCRIPTION RENEW ================= //
-router.patch('/renew-subscription/:id', renewSubscription);
+// ✅ EXTEND ROUTE
+router.post('/:id/extend-subscription', extendClientSubscription);
 
-// ✅ ID routes - ALWAYS LAST
+// ✅ ID ROUTES (SABSE LAST)
 router.get('/:id', getClientById);
 router.put('/:id', updateClient);
 router.patch('/:id/progress', updateClientProgress);
@@ -186,7 +182,7 @@ router.get('/test/system-check', async (req, res) => {
       systemHealth: {
         databaseConnected: true,
         modelsLoaded: true,
-        companyCodeField: 'companyCode' in Client.schema.paths,
+        companyCodeFieldExists: Client.schema.paths.hasOwnProperty('companyCode'),
         dataIntegrity: clientsWithCompanyCode > 0
       },
       recommendations: clientsWithCompanyCode === 0 ? [
@@ -298,8 +294,8 @@ router.post('/test/create-test-client', async (req, res) => {
       },
       cleanupInstructions: {
         note: 'This is a test client. Delete it after testing.',
-        deleteEndpoint: `DELETE /api/clients/${testClient._id}`,
-        viewEndpoint: `GET /api/clients/${testClient._id}`
+        deleteEndpoint: `/api/clients/${testClient._id}`,
+        viewEndpoint: `/api/clients/${testClient._id}`
       }
     });
   } catch (error) {
@@ -325,6 +321,9 @@ router.post('/test/bulk-test-clients', async (req, res) => {
         message: 'Company code is required'
       });
     }
+    
+    // Ensure count is within limits
+    const validCount = Math.min(Math.max(1, parseInt(count)), 5);
     
     // Client templates
     const clientTemplates = [
@@ -374,21 +373,30 @@ router.post('/test/bulk-test-clients', async (req, res) => {
       ['James Anderson', 'Maria Thomas']
     ];
     
+    // Services options
+    const serviceOptions = [
+      ['Web Development', 'Consulting', 'Support'],
+      ['Mobile App', 'Cloud Services', 'Security'],
+      ['Data Analytics', 'AI Solutions', 'Support']
+    ];
+    
     // Create test clients
     const testClients = [];
     const timestamp = Date.now();
     
-    for (let i = 1; i <= Math.min(count, 5); i++) {
-      const template = clientTemplates[i % clientTemplates.length];
-      const managers = projectManagers[i % projectManagers.length];
+    for (let i = 1; i <= validCount; i++) {
+      const templateIndex = (i - 1) % clientTemplates.length;
+      const template = clientTemplates[templateIndex];
+      const managers = projectManagers[templateIndex];
+      const services = serviceOptions[templateIndex % serviceOptions.length];
       
-      const testClient = {
+      const testClientData = {
         client: `TEST ${i}: ${template.client}`,
         company: template.company,
         city: template.city,
         companyCode: companyCode.toUpperCase(),
         projectManager: managers,
-        services: ['Web Development', 'Consulting', 'Support'],
+        services: services,
         status: template.status,
         progress: template.progress,
         email: `client${i}@testcompany.com`,
@@ -401,7 +409,7 @@ router.post('/test/bulk-test-clients', async (req, res) => {
         testIndex: i
       };
       
-      testClients.push(testClient);
+      testClients.push(testClientData);
     }
     
     // Insert all test clients
@@ -432,7 +440,7 @@ router.post('/test/bulk-test-clients', async (req, res) => {
       })),
       cleanupInstructions: {
         note: 'These are test clients. Clean them up after testing.',
-        deleteAllEndpoint: `DELETE /api/clients/test/cleanup-test-clients?companyCode=${companyCode}`,
+        deleteAllEndpoint: `/api/clients/test/cleanup-test-clients?companyCode=${companyCode}`,
         individualDeleteEndpoint: 'DELETE /api/clients/{clientId}'
       }
     });
@@ -452,7 +460,7 @@ router.delete('/test/cleanup-test-clients', async (req, res) => {
     const Client = require('../models/Client');
     const Service = require('../models/Service');
     
-    const { companyCode } = req.query;
+    const { companyCode, deleteServices = 'false' } = req.query;
     
     if (!companyCode) {
       return res.status(400).json({
@@ -467,11 +475,14 @@ router.delete('/test/cleanup-test-clients', async (req, res) => {
       isTestData: true
     });
     
-    // Delete test services (optional)
-    const serviceResult = await Service.deleteMany({
-      companyCode: companyCode.toUpperCase(),
-      isTestData: true
-    });
+    // Delete test services only if requested
+    let serviceResult = { deletedCount: 0 };
+    if (deleteServices === 'true') {
+      serviceResult = await Service.deleteMany({
+        companyCode: companyCode.toUpperCase(),
+        isTestData: true
+      });
+    }
     
     res.status(200).json({
       success: true,
@@ -501,6 +512,19 @@ router.get('/test/company-filter-test', async (req, res) => {
     // Get all unique company codes
     const companyCodes = await Client.distinct('companyCode');
     
+    if (companyCodes.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: 'No company codes found to test',
+        totalUniqueCompanyCodes: 0,
+        testResults: [],
+        securityAssessment: {
+          overallSecurity: 'N/A',
+          message: 'No data to test security'
+        }
+      });
+    }
+    
     // Test each company code
     const testResults = [];
     
@@ -512,7 +536,7 @@ router.get('/test/company-filter-test', async (req, res) => {
       }).countDocuments();
       
       // Try to access clients from other company (should not see if properly isolated)
-      const otherCompanyCode = companyCodes.find(code => code !== companyCode && code);
+      const otherCompanyCode = companyCodes.find(code => code && code !== companyCode);
       let canSeeOtherCompanyData = false;
       
       if (otherCompanyCode) {
@@ -525,13 +549,13 @@ router.get('/test/company-filter-test', async (req, res) => {
       testResults.push({
         companyCode,
         clientsInCompany,
-        canSeeOtherCompanyData,
+        canSeeOtherCompanyData: canSeeOtherCompanyData ? 'Yes (possible issue)' : 'No',
         securityLevel: canSeeOtherCompanyData ? '⚠️ LOW' : '✅ HIGH'
       });
     }
     
     // Overall assessment
-    const securityIssues = testResults.filter(r => r.canSeeOtherCompanyData).length;
+    const securityIssues = testResults.filter(r => r.canSeeOtherCompanyData === 'Yes (possible issue)').length;
     
     res.status(200).json({
       success: true,
@@ -579,8 +603,8 @@ router.get('/test/model-schema', async (req, res) => {
       const schemaType = schemaPaths[path];
       fields[path] = {
         type: schemaType.instance,
-        required: schemaType.isRequired || false,
-        default: schemaType.defaultValue,
+        required: !!schemaType.isRequired,
+        default: schemaType.defaultValue !== undefined ? String(schemaType.defaultValue) : null,
         ref: schemaType.options?.ref || null,
         isImportant: importantFields.includes(path)
       };
@@ -588,6 +612,7 @@ router.get('/test/model-schema', async (req, res) => {
     
     // Check for important fields
     const missingFields = importantFields.filter(field => !(field in fields));
+    const existingImportantFields = importantFields.filter(field => field in fields);
     
     // Get sample data stats
     const totalClients = await Client.countDocuments();
@@ -607,6 +632,7 @@ router.get('/test/model-schema', async (req, res) => {
           required: fields[field]?.required
         })),
         missingImportantFields: missingFields,
+        existingImportantFields: existingImportantFields,
         companyCodeFieldInfo: fields.companyCode || 'Not found'
       },
       databaseStats: {
@@ -618,12 +644,13 @@ router.get('/test/model-schema', async (req, res) => {
         companyCodeCoverage: totalClients > 0 ? Math.round((clientsWithCompanyCode / totalClients) * 100) : 0
       },
       recommendations: missingFields.length > 0 ? [
-        `Add missing fields: ${missingFields.join(', ')}`,
-        'Ensure companyCode is required for all clients',
+        `⚠️ Add missing fields to schema: ${missingFields.join(', ')}`,
+        'Ensure companyCode validation is properly configured',
         'Add indexes for frequently queried fields'
       ] : [
         '✅ All important fields exist in schema',
-        'Consider adding validation for companyCode format'
+        'Consider adding validation for companyCode format',
+        'Add indexes on companyCode for better query performance'
       ]
     });
   } catch (error) {
@@ -693,85 +720,96 @@ router.post('/test/validation-test', async (req, res) => {
         },
         shouldPass: false,
         expectedError: 'At least one project manager is required'
-      },
-      {
-        name: 'Duplicate client for same company',
-        data: {
-          client: 'Duplicate Test',
-          company: 'Test Company',
-          city: 'Test City',
-          companyCode: 'DUP01',
-          projectManager: ['Manager One'],
-          services: []
-        },
-        shouldPass: false, // Should fail on second attempt
-        expectedError: 'Client already exists for this company'
       }
     ];
     
     const results = [];
+    let validationFailed = false;
+    
+    // Create a test for duplicate client
+    const duplicateTestData = {
+      name: 'Duplicate client for same company',
+      data: {
+        client: 'Duplicate Test',
+        company: 'Test Company',
+        city: 'Test City',
+        companyCode: 'DUP01',
+        projectManager: ['Manager One'],
+        services: []
+      },
+      shouldPass: false,
+      expectedError: 'Client already exists for this company'
+    };
     
     for (const testCase of testCases) {
       try {
-        // For duplicate test, create first then try duplicate
-        if (testCase.name === 'Duplicate client for same company') {
-          // Create first client
-          const firstClient = new Client({
-            ...testCase.data,
-            isTestData: true,
-            testValidation: true
-          });
-          await firstClient.save();
-          
-          // Try to create duplicate
-          try {
-            const duplicateClient = new Client({
-              ...testCase.data,
-              isTestData: true,
-              testValidation: true
-            });
-            await duplicateClient.save();
-            results.push({
-              test: testCase.name,
-              passed: false,
-              expected: 'Should fail',
-              actual: 'Passed (unexpected)',
-              error: 'Did not catch duplicate'
-            });
-          } catch (error) {
-            results.push({
-              test: testCase.name,
-              passed: testCase.shouldPass === false,
-              expected: testCase.expectedError,
-              actual: error.message,
-              error: null
-            });
-          }
-        } else {
-          const testClient = new Client({
-            ...testCase.data,
-            isTestData: true,
-            testValidation: true
-          });
-          
-          await testClient.save();
-          results.push({
-            test: testCase.name,
-            passed: testCase.shouldPass === true,
-            expected: 'Should pass',
-            actual: 'Passed',
-            error: null
-          });
-        }
+        const testClient = new Client({
+          ...testCase.data,
+          isTestData: true,
+          testValidation: true
+        });
+        
+        await testClient.save();
+        results.push({
+          test: testCase.name,
+          passed: testCase.shouldPass === true,
+          expected: 'Should pass',
+          actual: 'Passed',
+          error: null
+        });
       } catch (error) {
         results.push({
           test: testCase.name,
           passed: testCase.shouldPass === false,
-          expected: testCase.expectedError,
+          expected: testCase.expectedError || 'Error',
           actual: error.message,
           error: error.code === 11000 ? 'Duplicate key error' : error.message
         });
       }
+    }
+    
+    // Test duplicate client separately
+    try {
+      // Create first client
+      const firstClient = new Client({
+        ...duplicateTestData.data,
+        isTestData: true,
+        testValidation: true
+      });
+      await firstClient.save();
+      
+      // Try to create duplicate
+      try {
+        const duplicateClient = new Client({
+          ...duplicateTestData.data,
+          isTestData: true,
+          testValidation: true
+        });
+        await duplicateClient.save();
+        results.push({
+          test: duplicateTestData.name,
+          passed: false,
+          expected: 'Should fail',
+          actual: 'Passed (unexpected)',
+          error: 'Did not catch duplicate'
+        });
+      } catch (error) {
+        results.push({
+          test: duplicateTestData.name,
+          passed: true,
+          expected: duplicateTestData.expectedError,
+          actual: error.message,
+          error: null
+        });
+      }
+    } catch (error) {
+      results.push({
+        test: duplicateTestData.name,
+        passed: false,
+        expected: duplicateTestData.expectedError,
+        actual: error.message,
+        error: error.message
+      });
     }
     
     // Cleanup test data
@@ -788,12 +826,20 @@ router.post('/test/validation-test', async (req, res) => {
         totalTests,
         passedTests,
         failedTests: totalTests - passedTests,
-        successRate: Math.round((passedTests / totalTests) * 100)
+        successRate: totalTests > 0 ? Math.round((passedTests / totalTests) * 100) : 0
       },
-      assessment: passedTests === totalTests ? '✅ All tests passed' : '⚠️ Some tests failed'
+      assessment: passedTests === totalTests && totalTests > 0 ? '✅ All tests passed' : '⚠️ Some tests failed'
     });
   } catch (error) {
     console.error('❌ Validation test error:', error);
+    // Clean up any leftover test data
+    try {
+      const Client = require('../models/Client');
+      await Client.deleteMany({ testValidation: true });
+    } catch (cleanupError) {
+      console.error('Cleanup error:', cleanupError);
+    }
+    
     res.status(500).json({
       success: false,
       message: 'Validation test failed',

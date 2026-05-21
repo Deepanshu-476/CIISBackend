@@ -90,6 +90,14 @@ const getUserCompanyCode = async (userId) => {
   }
 };
 
+// ✅ UPDATED: Check if user can access/update attendance (Everyone can now)
+const canAccessAttendance = (requestingUser, targetCompanyCode) => {
+  const userCompanyCode = requestingUser.companyCode || (requestingUser.company ? requestingUser.company.companyCode : null);
+  
+  // Everyone can access as long as same company
+  return userCompanyCode === targetCompanyCode;
+};
+
 // Clock In
 const clockIn = async (req, res) => {
   try {
@@ -342,12 +350,15 @@ const getTodayStatus = async (req, res) => {
   }
 };
 
-// 🔥 FIXED: Get Attendance List for User with ALL TIME support (with ALL dates)
+// ✅ UPDATED: Get Attendance List for User (Everyone can view)
 const getAttendanceList = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
     const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     const { month, year } = req.query;
+    
+    // Get target user from params (if provided, for admin view)
+    const targetUserId = req.params.userId || userId;
     
     if (!userCompanyCode) {
       return res.status(400).json({ 
@@ -355,8 +366,16 @@ const getAttendanceList = async (req, res) => {
       });
     }
     
+    // Check if target user belongs to same company
+    const targetUser = await User.findById(targetUserId).select('companyCode');
+    if (!targetUser || targetUser.companyCode !== userCompanyCode) {
+      return res.status(403).json({ 
+        message: "Access denied. User belongs to different company." 
+      });
+    }
+    
     let query = { 
-      user: userId,
+      user: targetUserId,
       companyCode: userCompanyCode
     };
     
@@ -369,7 +388,7 @@ const getAttendanceList = async (req, res) => {
       isAllTime = true;
       
       // Get user's join date from database
-      const user = await User.findById(userId).select('createdAt');
+      const user = await User.findById(targetUserId).select('createdAt');
       const userJoinDate = user?.createdAt || new Date(2020, 0, 1);
       
       startDate = new Date(userJoinDate);
@@ -443,12 +462,12 @@ const getAttendanceList = async (req, res) => {
         const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
 
         return {
-          _id: `absent_${userId}_${date.toISOString().split('T')[0]}`,
+          _id: `absent_${targetUserId}_${date.toISOString().split('T')[0]}`,
           user: {
-            _id: userId,
-            name: req.user.name || 'User',
-            email: req.user.email,
-            employeeType: req.user.employeeType,
+            _id: targetUserId,
+            name: targetUser?.name || 'User',
+            email: targetUser?.email,
+            employeeType: targetUser?.employeeType,
             companyCode: userCompanyCode
           },
           date: date,
@@ -489,11 +508,11 @@ const getAttendanceList = async (req, res) => {
   }
 };
 
-// Get All Users Attendance (Admin)
+// ✅ UPDATED: Get All Users Attendance (Everyone can view)
 const getAllUsersAttendance = async (req, res) => {
   try {
     const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
-    const { date } = req.query;
+    const { date, userId } = req.query;
     
     if (!userCompanyCode) {
       return res.status(400).json({ 
@@ -502,6 +521,11 @@ const getAllUsersAttendance = async (req, res) => {
     }
     
     let filter = { companyCode: userCompanyCode };
+    
+    // If specific user requested, filter by user
+    if (userId && isValidObjectId(userId)) {
+      filter.user = userId;
+    }
 
     if (date) {
       const start = new Date(date);
@@ -538,7 +562,7 @@ const getAllUsersAttendance = async (req, res) => {
   }
 };
 
-// Update Attendance Record (Admin)
+// ✅ UPDATED: Update Attendance Record (Everyone can update)
 const updateAttendanceRecord = async (req, res) => {
   try {
     const { id } = req.params;
@@ -567,6 +591,8 @@ const updateAttendanceRecord = async (req, res) => {
         message: "Access denied. Record belongs to different company." 
       });
     }
+    
+    // ✅ REMOVED: No role restrictions - everyone can update attendance
     
     if (updateData.inTime) {
       record.inTime = new Date(updateData.inTime);
@@ -711,7 +737,7 @@ const updateAttendanceRecord = async (req, res) => {
   }
 };
 
-// Create Manual Attendance (Admin)
+// ✅ UPDATED: Create Manual Attendance (Everyone can create)
 const createManualAttendance = async (req, res) => {
   try {
     const { user, date, inTime, outTime, status, lateBy, earlyLeave, overTime, notes } = req.body;
@@ -738,6 +764,7 @@ const createManualAttendance = async (req, res) => {
       });
     }
     
+    // ✅ UPDATED: Only check company, no role restrictions
     if (userExists.companyCode !== userCompanyCode) {
       return res.status(403).json({ 
         message: "Cannot create attendance for user from different company" 
@@ -814,7 +841,7 @@ const createManualAttendance = async (req, res) => {
   }
 };
 
-// Delete Attendance Record (Admin)
+// ✅ UPDATED: Delete Attendance Record (Everyone can delete)
 const deleteAttendanceRecord = async (req, res) => {
   try {
     const { id } = req.params;
@@ -843,6 +870,7 @@ const deleteAttendanceRecord = async (req, res) => {
         });
       }
       
+      // ✅ REMOVED: No role restrictions - everyone can delete
       await Attendance.findByIdAndDelete(id);
       
       return res.status(200).json({ 
@@ -869,7 +897,7 @@ const deleteAttendanceRecord = async (req, res) => {
   }
 };
 
-// Get Attendance by User ID (Admin)
+// ✅ UPDATED: Get Attendance by User ID (Everyone can view)
 const getAttendanceByUser = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -895,6 +923,7 @@ const getAttendanceByUser = async (req, res) => {
       });
     }
     
+    // ✅ UPDATED: Only check company, no role restrictions
     if (user.companyCode !== userCompanyCode) {
       return res.status(403).json({ 
         message: "Cannot access attendance for user from different company" 
