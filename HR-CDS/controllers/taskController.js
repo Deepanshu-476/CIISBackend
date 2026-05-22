@@ -468,7 +468,7 @@ exports.getTasks = async (req, res) => {
 // ✅ GET MY TASKS (only tasks assigned to logged-in user) - FIXED VERSION
 exports.getMyTasks = async (req, res) => {
   try {
-    const { search, status, period } = req.query;
+    const { search, status, period, fromDate, toDate } = req.query;
     
     console.log('📅 Received period:', period);
 
@@ -499,93 +499,16 @@ exports.getMyTasks = async (req, res) => {
       isActive: true
     };
 
-    // FIXED: Time period filter
-    if (period && period !== 'all') {
-      const now = new Date();
-      
-      // Set to start of day in local timezone
-      const startOfDay = new Date(now);
-      startOfDay.setHours(0, 0, 0, 0);
-      
-      const endOfDay = new Date(now);
-      endOfDay.setHours(23, 59, 59, 999);
-      
-      let startDate, endDate;
+   
+    const dateRange = getTaskDateRange({
+  period,
+  fromDate,
+  toDate
+});
 
-      switch (period) {
-        case 'today':
-          startDate = new Date(startOfDay);
-          endDate = new Date(endOfDay);
-          break;
-        
-        case 'yesterday':
-          startDate = new Date(startOfDay);
-          startDate.setDate(startDate.getDate() - 1);
-          endDate = new Date(endOfDay);
-          endDate.setDate(endDate.getDate() - 1);
-          break;
-        
-        case 'this-week':
-          // Get first day of week (Sunday)
-          startDate = new Date(startOfDay);
-          startDate.setDate(startDate.getDate() - startDate.getDay());
-          endDate = new Date(endOfDay);
-          break;
-        
-        case 'last-week':
-          // Get first day of last week
-          startDate = new Date(startOfDay);
-          startDate.setDate(startDate.getDate() - startDate.getDay() - 7);
-          endDate = new Date(startDate);
-          endDate.setDate(endDate.getDate() + 6);
-          endDate.setHours(23, 59, 59, 999);
-          break;
-        
-        case 'this-month':
-          startDate = new Date(now.getFullYear(), now.getMonth(), 1);
-          startDate.setHours(0, 0, 0, 0);
-          endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-          endDate.setHours(23, 59, 59, 999);
-          break;
-        
-        case 'last-month':
-          startDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-          startDate.setHours(0, 0, 0, 0);
-          endDate = new Date(now.getFullYear(), now.getMonth(), 0);
-          endDate.setHours(23, 59, 59, 999);
-          break;
-        
-        case 'last-7-days':
-          startDate = new Date(startOfDay);
-          startDate.setDate(startDate.getDate() - 7);
-          endDate = new Date(endOfDay);
-          break;
-        
-        case 'last-30-days':
-          startDate = new Date(startOfDay);
-          startDate.setDate(startDate.getDate() - 30);
-          endDate = new Date(endOfDay);
-          break;
-        
-        default:
-          console.log('❌ Unknown period:', period);
-          break;
-      }
-
-      if (startDate && endDate) {
-        console.log('📅 Filtering by date range:', { 
-          period, 
-          startDate: startDate.toISOString(), 
-          endDate: endDate.toISOString() 
-        });
-        
-        // FIXED: Filter by createdAt date range
-        filter.createdAt = {
-          $gte: startDate,
-          $lte: endDate
-        };
-      }
-    }
+if (dateRange) {
+  filter.createdAt = dateRange;
+}
 
     // Add search functionality
     if (search) {
