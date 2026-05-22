@@ -328,7 +328,7 @@ clientSchema.pre('findOneAndUpdate', function(next) {
     // Remove duplicates
     update.projectManager = [...new Set(update.projectManager)];
     
-    // Ensure projectManager has at least one valid entry
+    // Ensure projectManager has at least one valid entry 
     if (update.projectManager.length === 0) {
       const error = new Error('At least one valid project manager is required');
       error.name = 'ValidationError';
