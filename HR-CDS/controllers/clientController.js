@@ -618,9 +618,6 @@ const addClient = async (req, res) => {
     const cleanClientName = normalizeName(client);
     const cleanCompanyName = normalizeName(company);
     const cleanCity = normalizeName(city);
-    const cleanProjectManagers = projectManager
-      .filter(manager => manager && typeof manager === 'string' && manager.trim().length > 0)
-      .map(manager => manager.trim());
 
     // Check if client already exists for this company
     const existingClient = await Client.findOne({
@@ -729,6 +726,8 @@ const addClient = async (req, res) => {
     }
 
     // Get company ID from companyCode
+    console.log('🔍 Finding company with code:', companyCode);
+    
     const companyExists = await Company.findOne({ companyCode: cleanCompanyCode }).session(session);
     if (!companyExists) {
       console.error('❌ Company not found with code:', companyCode);
@@ -852,7 +851,7 @@ const addClient = async (req, res) => {
 
     await session.commitTransaction();
 
-    // Send welcome email
+    // Send welcome email with auto-generated password (don't await - don't block response)
     sendWelcomeEmail(cleanEmail, cleanClientName, cleanCompanyName, autoPassword, cleanCompanyCode)
       .then(result => {
         if (result.success) {
@@ -1052,6 +1051,7 @@ const updateClient = async (req, res) => {
       }
     }
 
+    // Build update object
     const updateData = {};
     
     if (client !== undefined) updateData.client = client.trim();
@@ -1392,6 +1392,7 @@ module.exports = {
   getManagerStats,
   addProjectManager,
   removeProjectManager,
-  getClientsByCompany,
-  extendClientSubscription
+  getClientsByCompany
 };
+
+console.log("✅ clientController.js loaded successfully with auto-user creation and email integration");
