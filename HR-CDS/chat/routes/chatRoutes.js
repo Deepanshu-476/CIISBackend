@@ -1,30 +1,21 @@
 const express = require("express");
-
 const router = express.Router();
 
 const {
     createConversation,
     createGroupConversation,
-<<<<<<< HEAD
-=======
-    getConversations,
-    getConversation,
->>>>>>> c90a0774f0eba0543411d3f8ac3340a510b9b9af
     sendMessage,
     getMessages,
     getCompanyUsers,
-    getCompanyGroups
+    getCompanyGroups,
+    getConversations,  // Added missing import
+    getConversation    // Added missing import
 } = require("../controllers/chatController");
 
-const authMiddleware =
-require("../../middlewares/auth");
+const authMiddleware = require("../../middlewares/auth");
+
+// Fixed: Removed duplicate upload import and used correct path
 const upload = require("../../../utils/multer");
-
-const upload =
-require(
-    "../middleware/upload"
-);
-
 
 // USERS
 router.get(
@@ -32,7 +23,6 @@ router.get(
     authMiddleware,
     getCompanyUsers
 );
-
 
 // GET ALL CONVERSATIONS
 router.get(
@@ -55,13 +45,6 @@ router.post(
     createConversation
 );
 
-// CREATE OR OPEN GROUP CONVERSATION
-router.post(
-    "/conversation/group",
-    authMiddleware,
-    createGroupConversation
-);
-
 // GET USER GROUPS
 router.get(
     "/groups",
@@ -69,13 +52,12 @@ router.get(
     getCompanyGroups
 );
 
-// CREATE GROUP CONVERSATION
+// CREATE GROUP CONVERSATION (Removed duplicate route - keeping one)
 router.post(
     "/conversation/group",
     authMiddleware,
     createGroupConversation
 );
-
 
 // SEND MESSAGE
 router.post(
@@ -85,7 +67,6 @@ router.post(
     sendMessage
 );
 
-
 // GET MESSAGES
 router.get(
     "/messages/:id",
@@ -93,10 +74,8 @@ router.get(
     getMessages
 );
 
-
 // TEST
 router.get("/test", (req, res) => {
-
     res.json({
         success: true,
         message: "Chat API Working"

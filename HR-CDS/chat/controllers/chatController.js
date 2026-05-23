@@ -2,10 +2,6 @@ const Conversation = require("../models/Conversation");
 const Message = require("../models/Message");
 const User = require("../../../models/User");
 const Group = require("../../models/Group");
-<<<<<<< HEAD
-=======
-
->>>>>>> c90a0774f0eba0543411d3f8ac3340a510b9b9af
 
 
 // CREATE CONVERSATION
@@ -77,91 +73,44 @@ exports.createConversation = async (req, res) => {
 
 // CREATE GROUP CONVERSATION
 exports.createGroupConversation = async (req, res) => {
-<<<<<<< HEAD
-
-    try {
-
-        const { groupId } = req.body;
-
-        const group = await Group.findOne({
-            _id: groupId,
-            isActive: true
-        });
-
-        if (!group) {
-=======
     try {
         const { groupId } = req.body;
 
         const group = await Group.findById(groupId);
 
         if (!group || !group.isActive) {
->>>>>>> c90a0774f0eba0543411d3f8ac3340a510b9b9af
             return res.status(404).json({
                 success: false,
                 message: "Group not found"
             });
         }
 
-<<<<<<< HEAD
-        const memberIds = (group.members || []).map((member) =>
-            member.toString()
-        );
-
-        if (
-            group.createdBy.toString() !== req.user.id.toString() &&
-            !memberIds.includes(req.user.id.toString())
-        ) {
-=======
         const isMember = group.members.some(
             (member) => member.toString() === req.user.id
         );
 
         if (!isMember) {
->>>>>>> c90a0774f0eba0543411d3f8ac3340a510b9b9af
             return res.status(403).json({
                 success: false,
                 message: "You are not a member of this group"
             });
         }
 
-<<<<<<< HEAD
-        const members = Array.from(new Set([
-            group.createdBy.toString(),
-            ...memberIds
-        ]));
-
         let conversation = await Conversation.findOne({
             companyId: req.user.company,
-            isGroup: true,
-=======
-        let conversation = await Conversation.findOne({
-            companyId: req.user.company,
->>>>>>> c90a0774f0eba0543411d3f8ac3340a510b9b9af
             groupId
         });
 
         if (!conversation) {
             conversation = await Conversation.create({
                 companyId: req.user.company,
-<<<<<<< HEAD
-                members,
-                isGroup: true,
-                groupId,
-=======
                 groupId,
                 members: group.members,
                 isGroup: true,
->>>>>>> c90a0774f0eba0543411d3f8ac3340a510b9b9af
                 groupName: group.name,
                 admins: [group.createdBy]
             });
         } else {
-<<<<<<< HEAD
-            conversation.members = members;
-            conversation.groupName = group.name;
-            await conversation.save();
-=======
             let needsUpdate = false;
 
             const currentMemberIds = group.members.map((member) => member.toString());
@@ -186,20 +135,12 @@ exports.createGroupConversation = async (req, res) => {
             if (needsUpdate) {
                 await conversation.save();
             }
->>>>>>> c90a0774f0eba0543411d3f8ac3340a510b9b9af
         }
 
         res.status(200).json({
             success: true,
             conversation
         });
-<<<<<<< HEAD
-
-    } catch (error) {
-
-        console.log(error);
-
-=======
     } catch (error) {
         console.log(error);
         res.status(500).json({
@@ -283,7 +224,6 @@ exports.getCompanyGroups = async (req, res) => {
         });
     } catch (error) {
         console.log(error);
->>>>>>> c90a0774f0eba0543411d3f8ac3340a510b9b9af
         res.status(500).json({
             success: false,
             message: error.message
@@ -338,14 +278,8 @@ exports.sendMessage = async (req, res) => {
             conversationId,
             sender: req.user.id,
             text,
-<<<<<<< HEAD
-
-            file: req.file ? `/api/uploads/tasks/${req.file.filename}` : "",
-
-=======
             file,
             fileType,
->>>>>>> c90a0774f0eba0543411d3f8ac3340a510b9b9af
             seenBy: [req.user.id]
         });
 
