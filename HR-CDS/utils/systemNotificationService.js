@@ -361,4 +361,57 @@ exports.notifyDirectUsers = async ({userIds, ...notification}) =>
     ...notification,
   });
 
+exports.notifyEmailRecipients = async ({
+  emails,
+  title,
+  message,
+  targetPath = '/ciisUser/user-dashboard',
+  type = 'email_notification',
+  company = null,
+  data = {},
+  priority = 'medium',
+  push = true,
+}) => {
+  const emailList = (Array.isArray(emails) ? emails : String(emails || '').split(','))
+    .map(email => String(email || '').trim().toLowerCase())
+    .filter(Boolean);
+
+  const uniqueEmails = [...new Set(emailList)];
+  if (!uniqueEmails.length || !title) return [];
+
+  const companyId = getId(company);
+  const users = await User.find({
+    email: {$in: uniqueEmails},
+    isActive: true,
+    ...(companyId && mongoose.Types.ObjectId.isValid(companyId) ? {company: companyId} : {}),
+  }).select('_id email company');
+
+  logNotificationDebug('email-recipients:resolved-users', {
+    emailCount: uniqueEmails.length,
+    userCount: users.length,
+    emails: uniqueEmails,
+    users: users.map(user => ({
+      userId: user._id.toString(),
+      email: user.email,
+    })),
+  });
+
+  if (!users.length) return [];
+
+  return exports.sendSystemNotification({
+    recipients: users.map(user => user._id),
+    targetPath,
+    type,
+    title,
+    message: message || `You have a new email update: ${title}`,
+    company: companyId || users[0]?.company,
+    data: {
+      emailSubject: title,
+      ...data,
+    },
+    priority,
+    push,
+  });
+};
+
 exports.getCompanyId = getCompanyId;

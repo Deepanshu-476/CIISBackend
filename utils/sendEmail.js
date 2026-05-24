@@ -1,6 +1,25 @@
 const nodemailer = require('nodemailer');
+const {notifyEmailRecipients} = require('../HR-CDS/utils/systemNotificationService');
 
-const sendEmail = async (to, subject, html) => {
+const notifyEmailSent = ({to, subject, options = {}}) => {
+  if (options.skipNotification) return;
+
+  notifyEmailRecipients({
+    emails: to,
+    title: options.notificationTitle || subject,
+    message: options.notificationMessage || `You have a new email update: ${subject}`,
+    targetPath: options.notificationTargetPath || options.targetPath || '/ciisUser/user-dashboard',
+    type: options.notificationType || 'email_notification',
+    company: options.company,
+    data: options.notificationData || {},
+    priority: options.notificationPriority || 'medium',
+    push: options.notificationPush !== false,
+  }).catch(error => {
+    console.error('❌ Email notification failed:', error.message);
+  });
+};
+
+const sendEmail = async (to, subject, html, options = {}) => {
   try {
     // Validate inputs
     if (!to || !subject || !html) {
@@ -43,6 +62,7 @@ const sendEmail = async (to, subject, html) => {
     });
 
     console.log(`✅ Email sent to ${to} | Message ID: ${info.messageId}`);
+    notifyEmailSent({to, subject, options});
     return { success: true, messageId: info.messageId };
 
   } catch (error) {
@@ -225,7 +245,9 @@ const sendLeaveStatusEmail = async (userEmail, userName, leaveId, status, remark
   const subject = `Leave Request ${status} - ID: ${leaveId}`;
   const html = emailTemplates.leaveStatusUpdate(userName, leaveId, status, remarks, updatedBy);
   
-  return await sendEmail(userEmail, subject, html);
+  return await sendEmail(userEmail, subject, html, {
+    skipNotification: true,
+  });
 };
 
 // Helper function to send leave applied email
@@ -233,7 +255,13 @@ const sendLeaveAppliedEmail = async (userEmail, userName, leaveId, type, startDa
   const subject = `Leave Application Submitted - ID: ${leaveId}`;
   const html = emailTemplates.leaveApplied(userName, leaveId, type, startDate, endDate);
   
-  return await sendEmail(userEmail, subject, html);
+  return await sendEmail(userEmail, subject, html, {
+    notificationType: 'leave_applied',
+    notificationTargetPath: '/ciisUser/my-leaves',
+    notificationMessage: `Your ${type} leave application has been submitted`,
+    notificationData: {leaveId, leaveType: type, startDate, endDate},
+    notificationPriority: 'high',
+  });
 };
 
 // Helper function to send leave deleted email
@@ -241,7 +269,9 @@ const sendLeaveDeletedEmail = async (userEmail, userName, leaveId) => {
   const subject = `Leave Request Deleted - ID: ${leaveId}`;
   const html = emailTemplates.leaveDeleted(userName, leaveId);
   
-  return await sendEmail(userEmail, subject, html);
+  return await sendEmail(userEmail, subject, html, {
+    skipNotification: true,
+  });
 };
 
 module.exports = {
