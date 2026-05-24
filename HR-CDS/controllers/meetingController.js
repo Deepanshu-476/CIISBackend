@@ -53,7 +53,9 @@ const createMeeting = async (req, res) => {
           <p><b>Date:</b> ${new Date(date).toDateString()}</p>
           <p><b>Time:</b> ${time}</p>
         `;
-        await sendEmail(emp.email, `📅 Meeting Scheduled: ${title}`, html);
+        await sendEmail(emp.email, `📅 Meeting Scheduled: ${title}`, html, {
+          skipNotification: true,
+        });
       }
     }
 

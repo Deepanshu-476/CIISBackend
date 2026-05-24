@@ -105,7 +105,13 @@ const sendAssetRequestSubmittedEmail = async ({ to, userName, assetName, reason,
     ]
   });
 
-  return sendEmail(to, `Asset Request Submitted - ${assetName}`, html);
+  return sendEmail(to, `Asset Request Submitted - ${assetName}`, html, {
+    notificationType: 'asset_requested',
+    notificationTargetPath: '/ciisUser/my-assets',
+    notificationMessage: `Your asset request for ${assetName} has been submitted`,
+    notificationData: {requestId, assetName},
+    notificationPriority: 'medium',
+  });
 };
 
 const sendAssetRequestAdminEmail = async ({ recipients, requesterName, assetName, reason, expectedReturnDate, requestId }) => {
@@ -128,7 +134,9 @@ const sendAssetRequestAdminEmail = async ({ recipients, requesterName, assetName
     ]
   });
 
-  return sendEmail(recipients, `New Asset Request - ${assetName}`, html);
+  return sendEmail(recipients, `New Asset Request - ${assetName}`, html, {
+    skipNotification: true,
+  });
 };
 
 const sendAssetRequestStatusEmail = async ({ to, userName, assetName, status, adminComment, requestId, approverName }) => {
@@ -151,7 +159,9 @@ const sendAssetRequestStatusEmail = async ({ to, userName, assetName, status, ad
     ]
   });
 
-  return sendEmail(to, `Asset Request ${statusLabel} - ${assetName}`, html);
+  return sendEmail(to, `Asset Request ${statusLabel} - ${assetName}`, html, {
+    skipNotification: true,
+  });
 };
 
 // ✅ USER: Get available company assets for dropdown

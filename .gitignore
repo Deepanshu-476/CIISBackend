@@ -1,4 +1,7 @@
 node_modules/
 logs/
 uploads/
-.env/
+.env/node_modules/
+.env
+firebase.json
+dist/

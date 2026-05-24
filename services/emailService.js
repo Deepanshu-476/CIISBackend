@@ -2,6 +2,7 @@
 
 const nodemailer = require('nodemailer');
 const { getCompanyRegistrationEmailTemplate } = require('../utils/emailTemplates/companyRegistration');
+const {notifyEmailRecipients} = require('../HR-CDS/utils/systemNotificationService');
 
 class EmailService {
   constructor() {
@@ -52,6 +53,7 @@ class EmailService {
         if (process.env.NODE_ENV === 'development') {
           console.log('📧 [DEV MODE] Email would be sent:', { to, subject });
           console.log('📧 [DEV MODE] Email HTML preview available at: /dev-email-preview');
+          this.notifyEmailSent(to, subject, options);
           return { 
             success: true, 
             messageId: `dev-${Date.now()}`,
@@ -83,6 +85,7 @@ class EmailService {
       const info = await this.transporter.sendMail(mailOptions);
       
       console.log(`✅ Email sent successfully to ${to} | Message ID: ${info.messageId}`);
+      this.notifyEmailSent(to, subject, options);
       
       return {
         success: true,
@@ -114,6 +117,24 @@ class EmailService {
     }
   }
 
+  notifyEmailSent(to, subject, options = {}) {
+    if (options.skipNotification) return;
+
+    notifyEmailRecipients({
+      emails: to,
+      title: options.notificationTitle || subject,
+      message: options.notificationMessage || `You have a new email update: ${subject}`,
+      targetPath: options.notificationTargetPath || options.targetPath || '/ciisUser/user-dashboard',
+      type: options.notificationType || 'email_notification',
+      company: options.company,
+      data: options.notificationData || {},
+      priority: options.notificationPriority || 'medium',
+      push: options.notificationPush !== false,
+    }).catch(error => {
+      console.error('❌ Email notification failed:', error.message);
+    });
+  }
+
   async sendCompanyRegistrationEmails(companyData, ownerData) {
     const results = {
       companyEmail: null,
@@ -135,6 +156,10 @@ class EmailService {
           {
             priority: 'high',
             referenceId: `company-reg-${companyData.companyCode}-${Date.now()}`,
+            notificationType: 'email_notification',
+            notificationTargetPath: '/ciisUser/user-dashboard',
+            notificationMessage: `Company registration for ${companyData.companyName} is complete. Please check your email for details.`,
+            notificationPriority: 'high',
             headers: {
               'X-Company-Code': companyData.companyCode,
               'X-Email-Type': 'company-registration'
@@ -155,6 +180,10 @@ class EmailService {
           {
             priority: 'high',
             referenceId: `owner-reg-${companyData.companyCode}-${Date.now()}`,
+            notificationType: 'email_notification',
+            notificationTargetPath: '/ciisUser/user-dashboard',
+            notificationMessage: `Your Super Admin account for ${companyData.companyName} has been created. Please check your email for login details.`,
+            notificationPriority: 'high',
             headers: {
               'X-Company-Code': companyData.companyCode,
               'X-User-Role': 'super_admin',

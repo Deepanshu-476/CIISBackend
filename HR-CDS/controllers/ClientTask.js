@@ -126,7 +126,9 @@ const notifyClientTaskCompleted = async ({ task, actor, req }) => {
         <p>Service: ${task.service || '-'}</p>
         <p>Completed at: ${task.completedAt ? new Date(task.completedAt).toLocaleString('en-IN') : new Date().toLocaleString('en-IN')}</p>
       `;
-      await sendEmail(client.email, `Task Completed: ${taskName}`, html);
+      await sendEmail(client.email, `Task Completed: ${taskName}`, html, {
+        skipNotification: true,
+      });
       console.log('[CLIENT TASK NOTIFICATION] email-sent', {
         taskId: task._id,
         email: client.email,
@@ -305,7 +307,13 @@ const addClientRemarkWithImages = async (req, res) => {
       if (client && client.email) {
         const subject = `New remark on your task: ${task.name || task.title}`;
         const html = `<p>Hello ${client.name || 'Client'},</p><p>${currentUser?.name || 'A user'} added a remark on task "${task.name || task.title}".</p><p>Remark: ${text || ''}</p><p>View details in your portal.</p>`;
-        await sendEmail(client.email, subject, html);
+        await sendEmail(client.email, subject, html, {
+          notificationType: 'task_remark_added',
+          notificationTargetPath: '/ciisUser/ClientDashboard',
+          notificationMessage: `${currentUser?.name || 'A user'} added a remark on "${task.name || task.title}"`,
+          notificationData: {taskId: task._id, remarkId: addedRemark._id, source: 'client_task'},
+          notificationPriority: 'medium',
+        });
       }
     } catch (emailErr) {
       console.error('Error sending client email for remark:', emailErr);
@@ -425,7 +433,13 @@ const addClientRemark = async (req, res) => {
         if (client && client.email) {
           const subject = `New remark on your task: ${task.name || task.title}`;
           const html = `<p>Hello ${client.name || 'Client'},</p><p>${currentUser?.name || 'A user'} added a remark on task "${task.name || task.title}".</p><p>Remark: ${text || ''}</p><p>View details in your portal.</p>`;
-          await sendEmail(client.email, subject, html);
+          await sendEmail(client.email, subject, html, {
+            notificationType: 'task_remark_added',
+            notificationTargetPath: '/ciisUser/ClientDashboard',
+            notificationMessage: `${currentUser?.name || 'A user'} added a remark on "${task.name || task.title}"`,
+            notificationData: {taskId: task._id, remarkId: addedRemark._id, source: 'client_task'},
+            notificationPriority: 'medium',
+          });
         }
       } catch (emailErr) {
         console.error('Error sending client email for remark:', emailErr);
@@ -1292,7 +1306,13 @@ const addTask = async (req, res) => {
       if (client && client.email) {
         const subject = `New Task Created: ${task.name}`;
         const html = `<p>Hello ${client.client || client.name || 'Client'},</p><p>A new task "${task.name}" has been created for your project/service.</p><p>Details: ${task.description || ''}</p>`;
-        await sendEmail(client.email, subject, html);
+        await sendEmail(client.email, subject, html, {
+          notificationType: 'task_client',
+          notificationTargetPath: '/ciisUser/ClientDashboard',
+          notificationMessage: `New task created: ${task.name}`,
+          notificationData: {taskId: task._id, source: 'client_task'},
+          notificationPriority: 'high',
+        });
       }
     } catch (emailErr) {
       console.error('Error sending client email for new task:', emailErr);
@@ -1414,7 +1434,13 @@ const updateTask = async (req, res) => {
         if (client && client.email) {
           const subject = `Task Updated: ${task.name}`;
           const html = `<p>Hello ${client.client || client.name || 'Client'},</p><p>The task "${task.name}" has been updated: ${changes.join(', ')}.</p>`;
-          await sendEmail(client.email, subject, html);
+          await sendEmail(client.email, subject, html, {
+            notificationType: 'task_client',
+            notificationTargetPath: '/ciisUser/ClientDashboard',
+            notificationMessage: `Task updated: ${task.name}`,
+            notificationData: {taskId: task._id, source: 'client_task'},
+            notificationPriority: 'medium',
+          });
         }
       } catch (emailErr) {
         console.error('Error sending client email for task update:', emailErr);
