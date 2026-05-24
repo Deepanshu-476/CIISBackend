@@ -35,6 +35,27 @@ const messageSchema = new mongoose.Schema(
             default: ""
         },
 
+    deletedFor: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User"
+    }],
+
+    deletedForEveryone: {
+        type: Boolean,
+        default: false
+    },
+
+    isForwarded: {
+        type: Boolean,
+        default: false
+    },
+
+    originalMessage: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Message",
+        default: null
+    },
+
     seenBy: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: "User"

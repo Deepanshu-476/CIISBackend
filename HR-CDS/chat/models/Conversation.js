@@ -13,11 +13,6 @@ const conversationSchema = new mongoose.Schema(
         ref: "User"
     }],
 
-    groupId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "Group"
-    },
-
     isGroup: {
         type: Boolean,
         default: false

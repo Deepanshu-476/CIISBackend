@@ -51,20 +51,6 @@ const emitLeaveEvents = {
         timestamp: new Date()
       });
 
-      // User ko personally bhejo
-      if (leave.user && leave.user._id) {
-        io.to(`user:${leave.user._id}`).emit('notification:new', {
-          type: 'leave_status_changed',
-          title: `Leave ${newStatus}`,
-          message: `Your leave has been ${newStatus}`,
-          data: { 
-            leaveId: leave._id, 
-            status: newStatus,
-            oldStatus: oldStatus
-          }
-        });
-      }
-
       console.log(`📢 Emitted leave:status_changed for leave ${leave._id}`);
     } catch (error) {
       console.error('❌ Error in leaveStatusChanged event:', error);

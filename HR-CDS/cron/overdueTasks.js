@@ -1,8 +1,8 @@
 const cron = require('node-cron');
 const Task = require('../models/Task');
-const Notification = require('../models/Notification');
 const User = require('../../models/User');
 const moment = require('moment');
+const {notifyDirectUsers} = require('../utils/systemNotificationService');
 
 // Run every 30 minutes to check for overdue tasks
 cron.schedule('*/30 * * * *', async () => {
@@ -29,17 +29,19 @@ cron.schedule('*/30 * * * *', async () => {
     for (const task of newlyOverdueTasks) {
       for (const userId of task.assignedUsers) {
         try {
-          await Notification.create({
-            user: userId._id,
+          await notifyDirectUsers({
+            userIds: [userId._id],
+            targetPath: '/ciisUser/task-management',
             title: 'Task Marked as Overdue',
             message: `Task "${task.title}" has been automatically marked as overdue.`,
             type: 'task_overdue',
-            relatedTask: task._id,
-            metadata: {
+            data: {
+              taskId: task._id,
               dueDate: task.dueDateTime,
               taskTitle: task.title,
               markedAt: new Date()
-            }
+            },
+            priority: 'high',
           });
           
           notificationsSent++;

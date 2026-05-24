@@ -2,6 +2,7 @@ const Attendance = require("../models/Attendance");
 const User = require("../../models/User");
 const Company = require("../../models/Company");
 const mongoose = require("mongoose");
+const {notifyPageUsers, getCompanyId} = require("../utils/systemNotificationService");
 
 // Helper function: Format duration in HH:MM:SS
 const formatDuration = (ms) => {
@@ -98,6 +99,65 @@ const canAccessAttendance = (requestingUser, targetCompanyCode) => {
   return userCompanyCode === targetCompanyCode;
 };
 
+const notifyEmployeeAttendancePage = async ({
+  req,
+  userId,
+  type,
+  title,
+  message,
+  attendanceId,
+  status,
+  time,
+  extraData = {},
+}) => {
+  try {
+    const companyId = getCompanyId(req.user);
+    console.log('[ATTENDANCE NOTIFICATION] dispatch', {
+      at: new Date().toISOString(),
+      companyId,
+      actor: userId?.toString(),
+      type,
+      targetPath: '/ciisUser/emp-attendance',
+      message,
+    });
+
+    await notifyPageUsers({
+      companyId,
+      targetPath: '/ciisUser/emp-attendance',
+      targetScreen: 'Employee Attendance',
+      excludeUserIds: [userId],
+      type,
+      title,
+      message,
+      actor: userId,
+      data: {
+        attendanceId,
+        userId,
+        userName: req.user.name,
+        status,
+        time,
+        targetPath: '/ciisUser/emp-attendance',
+        targetScreen: 'Employee Attendance',
+        ...extraData,
+      },
+      priority: 'medium',
+    });
+
+    console.log('[ATTENDANCE NOTIFICATION] dispatched', {
+      at: new Date().toISOString(),
+      companyId,
+      actor: userId?.toString(),
+      type,
+    });
+  } catch (error) {
+    console.error('[ATTENDANCE NOTIFICATION] failed', {
+      at: new Date().toISOString(),
+      message: error.message,
+      stack: error.stack,
+    });
+  }
+};
+
 // Clock In
 const clockIn = async (req, res) => {
   try {
@@ -173,6 +233,17 @@ const clockIn = async (req, res) => {
           select: "companyCode companyName"
         }
       });
+
+    await notifyEmployeeAttendancePage({
+      req,
+      userId,
+      type: 'attendance_clock_in',
+      title: 'Employee Clock In',
+      message: `${req.user.name || 'An employee'} clocked in at ${formatTime(now)}`,
+      attendanceId: newRecord._id,
+      status,
+      time: now,
+    });
 
     res.status(200).json({
       message: "Clocked in successfully",
@@ -277,6 +348,20 @@ const clockOut = async (req, res) => {
           select: "companyCode companyName"
         }
       });
+
+    await notifyEmployeeAttendancePage({
+      req,
+      userId,
+      type: 'attendance_clock_out',
+      title: 'Employee Clock Out',
+      message: `${req.user.name || 'An employee'} clocked out at ${formatTime(now)}`,
+      attendanceId: record._id,
+      status: record.status,
+      time: now,
+      extraData: {
+        totalTime: record.totalTime,
+      },
+    });
 
     res.status(200).json({
       message: "Clocked out successfully",

@@ -1,106 +1,39 @@
 const express = require("express");
-
 const router = express.Router();
 
 const {
-    createConversation,
-    createGroupConversation,
-<<<<<<< HEAD
-=======
-    getConversations,
-    getConversation,
->>>>>>> c90a0774f0eba0543411d3f8ac3340a510b9b9af
-    sendMessage,
-    getMessages,
-    getCompanyUsers,
-    getCompanyGroups
+  createConversation,
+  createGroupConversation,
+  getConversations,
+  getConversation,
+  sendMessage,
+  getMessages,
+  getCompanyUsers,
+  getCompanyGroups,
+  deleteMessageForMe,
+  deleteMessageForEveryone,
+  forwardMessage,
+  markMessageSeen,
 } = require("../controllers/chatController");
 
-const authMiddleware =
-require("../../middlewares/auth");
-const upload = require("../../../utils/multer");
+const authMiddleware = require("../../middlewares/auth");
+const upload = require("../middleware/upload");
 
-const upload =
-require(
-    "../middleware/upload"
-);
+router.get("/users", authMiddleware, getCompanyUsers);
+router.get("/conversations", authMiddleware, getConversations);
+router.get("/conversation/:id", authMiddleware, getConversation);
+router.post("/conversation", authMiddleware, createConversation);
+router.post("/conversation/group", authMiddleware, createGroupConversation);
+router.get("/groups", authMiddleware, getCompanyGroups);
+router.post("/message", authMiddleware, upload.single("file"), sendMessage);
+router.get("/messages/:id", authMiddleware, getMessages);
+router.patch("/message/:messageId/delete-for-me", authMiddleware, deleteMessageForMe);
+router.patch("/message/:messageId/delete-for-everyone", authMiddleware, deleteMessageForEveryone);
+router.post("/message/:messageId/forward", authMiddleware, forwardMessage);
+router.patch("/message/:messageId/seen", authMiddleware, markMessageSeen);
 
-
-// USERS
-router.get(
-    "/users",
-    authMiddleware,
-    getCompanyUsers
-);
-
-
-// GET ALL CONVERSATIONS
-router.get(
-    "/conversations",
-    authMiddleware,
-    getConversations
-);
-
-// GET A SINGLE CONVERSATION
-router.get(
-    "/conversation/:id",
-    authMiddleware,
-    getConversation
-);
-
-// CREATE PRIVATE CONVERSATION
-router.post(
-    "/conversation",
-    authMiddleware,
-    createConversation
-);
-
-// CREATE OR OPEN GROUP CONVERSATION
-router.post(
-    "/conversation/group",
-    authMiddleware,
-    createGroupConversation
-);
-
-// GET USER GROUPS
-router.get(
-    "/groups",
-    authMiddleware,
-    getCompanyGroups
-);
-
-// CREATE GROUP CONVERSATION
-router.post(
-    "/conversation/group",
-    authMiddleware,
-    createGroupConversation
-);
-
-
-// SEND MESSAGE
-router.post(
-    "/message",
-    authMiddleware,
-    upload.single("file"),
-    sendMessage
-);
-
-
-// GET MESSAGES
-router.get(
-    "/messages/:id",
-    authMiddleware,
-    getMessages
-);
-
-
-// TEST
 router.get("/test", (req, res) => {
-
-    res.json({
-        success: true,
-        message: "Chat API Working"
-    });
+  res.json({success: true, message: "Chat API Working"});
 });
 
 module.exports = router;

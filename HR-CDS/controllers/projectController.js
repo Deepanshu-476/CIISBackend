@@ -2,6 +2,7 @@ const { Project, TASK_STATUS, PROJECT_STATUS, PRIORITY_LEVELS, NOTIFICATION_TYPE
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
+const {notifyDirectUsers} = require("../utils/systemNotificationService");
 
 // Configure storage for file uploads
 const storage = multer.diskStorage({
@@ -338,6 +339,20 @@ exports.createProject = async (req, res) => {
       };
 
       await project.addNotification(notification);
+
+      await notifyDirectUsers({
+        userIds: usersArray.filter(userId => userId !== req.user.id),
+        targetPath: '/ciisUser/project',
+        type: 'project_created',
+        title: 'New Project Created',
+        message: `${req.user.name} added you to project "${projectName}"`,
+        actor: req.user.id,
+        data: {
+          projectId: project._id,
+          projectName,
+        },
+        priority: priority?.toLowerCase() || 'medium',
+      });
 
       console.log("✅ Project created successfully:", project._id);
 
@@ -706,6 +721,22 @@ exports.addTask = async (req, res) => {
 
       await project.addNotification(notification);
 
+      await notifyDirectUsers({
+        userIds: [assignedTo].filter(Boolean),
+        targetPath: '/ciisUser/project',
+        type: 'project_task_assigned',
+        title: 'New Project Task',
+        message: `${req.user.name} assigned you task "${title}" in project "${project.projectName}"`,
+        actor: req.user.id,
+        data: {
+          projectId: project._id,
+          taskId: project.tasks[project.tasks.length - 1]._id,
+          title,
+          projectName: project.projectName,
+        },
+        priority: priority?.toLowerCase() || 'medium',
+      });
+
       console.log("✅ Task added successfully");
 
       res.status(201).json({
@@ -926,6 +957,23 @@ exports.updateTaskStatus = async (req, res) => {
     };
 
     await project.addNotification(notification);
+
+    await notifyDirectUsers({
+      userIds: [project.createdBy].filter(userId => !idsEqual(userId, req.user.id)),
+      targetPath: '/ciisUser/adminproject',
+      type: 'project_task_status_changed',
+      title: 'Project Task Updated',
+      message: `${req.user.name} changed "${task.title}" status from ${oldStatus} to ${status}${remark ? ': ' + remark : ''}`,
+      actor: req.user.id,
+      data: {
+        projectId: project._id,
+        taskId: task._id,
+        oldStatus,
+        newStatus: status,
+        remark,
+      },
+      priority: 'medium',
+    });
 
     console.log("✅ Task status updated successfully");
 

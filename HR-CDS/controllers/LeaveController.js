@@ -11,14 +11,9 @@ const {
   sendLeaveDeletedEmail 
 } = require('../../utils/sendEmail');
 
-// ✅ IMPORT notification helper
-const { 
-  sendNotification, 
-  notifyCompanyOwners 
-} = require('../../HR-CDS/utils/notificationHelper');
-
 // ✅ IMPORT socket emit events
 const { emitLeaveEvents } = require('../socket/handlers/leaveHandlers');
+const {notifyPageUsers, notifyDirectUsers} = require('../utils/systemNotificationService');
 
 // 🔹 Apply for Leave (User)
 exports.applyLeave = async (req, res) => {
@@ -113,11 +108,14 @@ exports.applyLeave = async (req, res) => {
 
     // ✅ 🔔 SEND NOTIFICATION TO COMPANY OWNERS/ADMINS
     try {
-      await notifyCompanyOwners({
+      await notifyPageUsers({
         companyId: user.company || user.companyId,
+        targetPath: '/ciisUser/emp-leaves',
+        excludeUserIds: [user._id],
         type: 'leave_applied',
         title: 'New Leave Application',
-        message: `${user.name} has applied for ${type} leave from ${new Date(startDate).toLocaleDateString()} to ${new Date(endDate).toLocaleDateString()}`,
+        message: `${user.name} applied for ${type} leave`,
+        actor: user._id,
         data: {
           leaveId: leave._id,
           userId: user._id,
@@ -128,8 +126,9 @@ exports.applyLeave = async (req, res) => {
           days,
           reason
         },
-        excludeUser: user._id
+        priority: 'high'
       });
+
       console.log('✅ Notification sent to company owners');
     } catch (notifError) {
       console.error('❌ Failed to send notification to owners:', notifError.message);
@@ -560,18 +559,20 @@ exports.updateLeaveStatus = async (req, res) => {
 
     // Populate approvedBy for response
     await leave.populate('approvedBy', 'name email');
+    const statusMessage = status === 'Approved' ? 'approved' :
+                         status === 'Rejected' ? 'rejected' :
+                         status === 'Cancelled' ? 'cancelled' : 'updated';
 
     // ✅ 🔔 SEND NOTIFICATION TO THE USER
     try {
-      const statusMessage = status === 'Approved' ? 'approved' : 
-                           status === 'Rejected' ? 'rejected' : 
-                           status === 'Cancelled' ? 'cancelled' : 'updated';
-      
-      await sendNotification({
-        recipient: leave.user._id,
+      await notifyDirectUsers({
+        userIds: [leave.user._id],
+        targetPath: '/ciisUser/my-leaves',
         type: 'leave_status_changed',
         title: `Leave ${status}`,
-        message: `Your ${leave.type} leave request from ${new Date(leave.startDate).toLocaleDateString()} to ${new Date(leave.endDate).toLocaleDateString()} has been ${statusMessage}${remarks ? ': ' + remarks : ''}`,
+        message: `${currentUser.name || 'Admin'} ${statusMessage} your ${leave.type} leave${remarks ? ': ' + remarks : ''}`,
+        actor: currentUser._id,
+        company: leave.user.company || leave.user.companyId,
         data: {
           leaveId: leave._id,
           userId: leave.user._id,
@@ -582,16 +583,11 @@ exports.updateLeaveStatus = async (req, res) => {
           endDate: leave.endDate,
           days: leave.days,
           reason: leave.reason,
-          remarks,
-          approvedBy: {
-            id: currentUser._id,
-            name: currentUser.name,
-            email: currentUser.email
-          }
+          remarks
         },
         priority: 'high'
       });
-      
+
       console.log(`✅ Status change notification sent to ${leave.user.name}`);
     } catch (notifError) {
       console.error('❌ Failed to send notification to user:', notifError.message);
@@ -716,11 +712,14 @@ exports.deleteLeave = async (req, res) => {
 
     // ✅ 🔔 SEND NOTIFICATION TO USER BEFORE DELETING
     try {
-      await sendNotification({
-        recipient: leave.user._id,
+      await notifyDirectUsers({
+        userIds: [leave.user._id],
+        targetPath: '/ciisUser/my-leaves',
         type: 'leave_deleted',
         title: 'Leave Deleted',
         message: `Your ${leave.type} leave request from ${new Date(leave.startDate).toLocaleDateString()} to ${new Date(leave.endDate).toLocaleDateString()} has been deleted by ${req.user?.name || 'Owner'}`,
+        actor: userId,
+        company: leave.user.company || leave.user.companyId,
         data: {
           leaveId: leave._id,
           userId: leave.user._id,

@@ -3,6 +3,7 @@ const AssetRequest = require('../models/AssetRequest');
 const CompanyAsset = require('../../models/CompanyAsset');
 const User = require('../../models/User');
 const { sendNotification, notifyCompanyOwners } = require('../../HR-CDS/utils/notificationHelper');
+const {notifyPageUsers, notifyDirectUsers} = require('../utils/systemNotificationService');
 const { sendEmail } = require('../../utils/sendEmail');
 
 const formatDate = (date) => {
@@ -293,6 +294,26 @@ exports.requestAsset = async (req, res) => {
 
     // 🔔 NOTIFY ADMINS / OWNERS
 try {
+  await notifyPageUsers({
+    companyId: req.user.company || req.user.companyId,
+    targetPath: '/ciisUser/emp-assets',
+    excludeUserIds: [req.user._id],
+    type: 'asset_requested',
+    title: 'New Asset Request',
+    message: `${req.user.name} requested asset: ${asset.name}`,
+    actor: req.user._id,
+    data: {
+      requestId: newRequest._id,
+      assetId: asset._id,
+      assetName: asset.name,
+      userId: req.user._id,
+      userName: req.user.name,
+      reason,
+      expectedReturnDate
+    },
+    priority: 'high'
+  });
+
   await notifyCompanyOwners({
     companyId: req.user.company || req.user.companyId,
     type: 'asset_requested',
@@ -544,6 +565,24 @@ exports.updateRequestStatus = async (req, res) => {
 
     // 🔔 NOTIFY USER ABOUT STATUS CHANGE
 try {
+  await notifyDirectUsers({
+    userIds: [request.user?._id || request.user],
+    targetPath: '/ciisUser/my-assets',
+    type: 'asset_request_status',
+    title: `Asset Request ${titleCase(status || 'Updated')}`,
+    message: `${req.user.name || 'Admin'} ${status ? `marked your request for "${request.asset.name}" as ${status}` : `commented on your request for "${request.asset.name}"`}${adminComment ? ': ' + adminComment : ''}`,
+    actor: req.user._id,
+    data: {
+      requestId: request._id,
+      assetId: request.asset._id,
+      assetName: request.asset.name,
+      status,
+      adminComment,
+      approvedBy: req.user._id
+    },
+    priority: 'high'
+  });
+
   await sendNotification({
     recipient: request.user?._id || request.user,
     type: 'asset_request_status',

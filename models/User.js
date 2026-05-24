@@ -170,6 +170,36 @@ const userSchema = new mongoose.Schema({
     ref: "User"
   },
 
+  // ==================== NOTIFICATION PREFERENCES ====================
+  notificationPreferences: {
+    push: {
+      type: Boolean,
+      default: true
+    },
+    web: {
+      type: Boolean,
+      default: true
+    },
+    email: {
+      type: Boolean,
+      default: false
+    },
+    channels: {
+      taskAssigned: { type: Boolean, default: true }, // personal assigned tasks
+      taskClient: { type: Boolean, default: true }, // client tasks
+      leave: { type: Boolean, default: true },
+      assets: { type: Boolean, default: true },
+      projects: { type: Boolean, default: true },
+      chats: { type: Boolean, default: true },
+      attendance: { type: Boolean, default: true }
+    },
+    // Quiet hours in HH:mm (24h) format, null means no quiet hours
+    quietHours: {
+      start: { type: String, default: null },
+      end: { type: String, default: null }
+    }
+  },
+
   // Add to your User schema
 assets: [{
   type: mongoose.Schema.Types.ObjectId,

@@ -1,5 +1,5 @@
-const Notification = require('../models/Notification');
 const User = require('../../models/User');
+const {sendSystemNotification} = require('./systemNotificationService');
 
 /**
  * Send notification to a user
@@ -19,6 +19,22 @@ exports.sendNotification = async ({
     }
 
     const notificationData = {
+      recipients: [recipient],
+      type,
+      title,
+      message,
+      data,
+      priority,
+      targetPath: data?.targetPath || '',
+    };
+
+    // Save to database if required
+    if (saveToDb) {
+      const notifications = await sendSystemNotification(notificationData);
+      return notifications[0] || null;
+    }
+
+    return {
       recipient,
       type,
       title,
@@ -26,23 +42,8 @@ exports.sendNotification = async ({
       data,
       priority,
       isRead: false,
-      createdAt: new Date()
+      createdAt: new Date(),
     };
-
-    // Save to database if required
-    if (saveToDb) {
-      const notification = new Notification(notificationData);
-      await notification.save();
-      
-      // Emit socket event if socket.io is available
-      if (global.io) {
-        global.io.to(`user_${recipient}`).emit('new_notification', notification);
-      }
-      
-      return notification;
-    }
-
-    return notificationData;
 
   } catch (error) {
     console.error('❌ Error sending notification:', error);

@@ -1,6 +1,7 @@
 const Group = require('../models/Group');
 const Task = require('../models/Task');
 const User = require('../../models/User');
+const {notifyDirectUsers} = require('../utils/systemNotificationService');
 
 // Create a new group
 exports.createGroup = async (req, res) => {
@@ -51,6 +52,21 @@ exports.createGroup = async (req, res) => {
 
     // Populate member details for response
     await group.populate('members', 'name role email');
+
+    notifyDirectUsers({
+      userIds: uniqueMembers.filter(memberId => memberId !== req.user._id.toString()),
+      targetPath: '/ciisUser/manage-groups',
+      type: 'group_member_added',
+      title: 'Added to Group',
+      message: `${req.user.name || 'Admin'} added you to group "${name}"`,
+      actor: req.user._id,
+      company: req.user.company,
+      data: {
+        groupId: group._id,
+        groupName: name,
+      },
+      priority: 'medium',
+    }).catch(error => console.error('Group create notification failed:', error.message));
 
     res.status(201).json({
       success: true,
@@ -158,6 +174,8 @@ exports.updateGroup = async (req, res) => {
       }
     }
 
+    const previousMembers = (group.members || []).map(member => member.toString());
+
     // Update group
     if (name) group.name = name;
     if (description !== undefined) group.description = description;
@@ -165,6 +183,24 @@ exports.updateGroup = async (req, res) => {
 
     await group.save();
     await group.populate('members', 'name role email');
+
+    const currentMembers = (group.members || []).map(member => member._id?.toString() || member.toString());
+    const addedMembers = currentMembers.filter(memberId => !previousMembers.includes(memberId) && memberId !== req.user._id.toString());
+
+    notifyDirectUsers({
+      userIds: addedMembers,
+      targetPath: '/ciisUser/manage-groups',
+      type: 'group_member_added',
+      title: 'Added to Group',
+      message: `${req.user.name || 'Admin'} added you to group "${group.name}"`,
+      actor: req.user._id,
+      company: req.user.company,
+      data: {
+        groupId: group._id,
+        groupName: group.name,
+      },
+      priority: 'medium',
+    }).catch(error => console.error('Group update notification failed:', error.message));
 
     res.json({
       success: true,
@@ -262,6 +298,21 @@ exports.addMembersToGroup = async (req, res) => {
     group.members.push(...newMembers);
     await group.save();
     await group.populate('members', 'name role email');
+
+    notifyDirectUsers({
+      userIds: newMembers,
+      targetPath: '/ciisUser/manage-groups',
+      type: 'group_member_added',
+      title: 'Added to Group',
+      message: `${req.user.name || 'Admin'} added you to group "${group.name}"`,
+      actor: req.user._id,
+      company: req.user.company,
+      data: {
+        groupId: group._id,
+        groupName: group.name,
+      },
+      priority: 'medium',
+    }).catch(error => console.error('Group add-member notification failed:', error.message));
 
     res.json({
       success: true,

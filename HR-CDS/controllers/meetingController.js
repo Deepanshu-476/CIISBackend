@@ -2,7 +2,7 @@ const Meeting = require("../models/Meeting");
 const MeetingView = require("../models/MeetingView");
 const User = require("../../models/User");
 const { sendEmail } = require("../../utils/sendEmail");
-const Notification = require("../../HR-CDS/models/Notification");
+const {notifyDirectUsers} = require("../utils/systemNotificationService");
 
 /**
  * 🟢 Create Meeting (Admin)
@@ -26,28 +26,24 @@ const createMeeting = async (req, res) => {
     });
 
     // create MeetingView & send mail
+    await notifyDirectUsers({
+      userIds: attendees,
+      targetPath: '/ciisUser/employee-meeting',
+      type: 'meeting_created',
+      title: 'New Meeting Scheduled',
+      message: `${req.user?.name || 'Admin'} scheduled "${title}" on ${new Date(date).toDateString()} at ${time}`,
+      actor: req.user?._id || createdBy,
+      data: {
+        meetingId: meeting._id,
+        title,
+        date,
+        time,
+      },
+      priority: 'high',
+    });
+
     for (const empId of attendees) {
       await MeetingView.create({ meetingId: meeting._id, userId: empId });
-      // ✅ ADD THIS BLOCK (notification)
-      const notification = await Notification.create({
-        recipient: empId, // 👈 IMPORTANT (userId nahi)
-        title: "New Meeting Scheduled",
-        message: `Meeting "${title}" on ${new Date(date).toDateString()} at ${time}`,
-        type: "meeting"
-      });
-
-      // ✅ SOCKET EMIT
-      if (global.io) {
-        global.io.to(`user:${empId.toString()}`).emit("new_notification", notification);
-      }
-
-      // ✅ UNREAD COUNT
-      const unreadCount = await Notification.countDocuments({
-        recipient: empId,
-        isRead: false
-      });
-
-      global.io.to(`user:${empId.toString()}`).emit("notification:unread_count", unreadCount);
       const emp = await User.findById(empId);
       if (emp && emp.email) {
         const html = `

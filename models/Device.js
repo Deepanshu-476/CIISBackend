@@ -6,8 +6,11 @@ const deviceSchema = new mongoose.Schema({
     ref: 'User'
   },
   deviceToken: String,
+  platform: String,
+  notificationPermission: String,
   userAgent: String,
   ipAddress: String,
+  updatedAt: Date,
   createdAt: {
     type: Date,
     default: Date.now
