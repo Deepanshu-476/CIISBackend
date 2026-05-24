@@ -72,6 +72,12 @@ exports.markAsRead = async (req, res) => {
       data: notification
     });
 
+    if (global.io) {
+      const count = await Notification.countDocuments({recipient: userId, isRead: false});
+      global.io.to(`user:${userId}`).emit('notification:unread_count', count);
+      global.io.to(`user_${userId}`).emit('notification:unread_count', count);
+    }
+
   } catch (error) {
     console.error('❌ Error marking notification as read:', error);
     res.status(500).json({
@@ -90,6 +96,11 @@ exports.markAllAsRead = async (req, res) => {
       { recipient: userId, isRead: false },
       { isRead: true }
     );
+
+    if (global.io) {
+      global.io.to(`user:${userId}`).emit('notification:unread_count', 0);
+      global.io.to(`user_${userId}`).emit('notification:unread_count', 0);
+    }
 
     res.status(200).json({
       success: true,

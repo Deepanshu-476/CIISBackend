@@ -21,22 +21,27 @@ const notificationSchema = new mongoose.Schema({
     required: true
   },
   data: {
-    leaveId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Leave'
-    },
-    userId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User'
-    },
-    oldStatus: String,
-    newStatus: String,
-    leaveType: String,
-    startDate: Date,
-    endDate: Date,
-    days: Number,
-    reason: String,
-    appliedBy: String
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
+  },
+  targetPath: {
+    type: String,
+    default: ''
+  },
+  targetScreen: {
+    type: String,
+    default: ''
+  },
+  actor: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
+  company: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    default: null,
+    index: true
   },
   isRead: {
     type: Boolean,

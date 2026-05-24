@@ -9,6 +9,7 @@ const { sendEmail } = require('../../utils/sendEmail');
 const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
+const {notifyDirectUsers, notifyPageUsers} = require('../utils/systemNotificationService');
 
 // ==================== HELPER FUNCTIONS ====================
 
@@ -82,13 +83,19 @@ const getRequestCompanyCode = (req, user = null) => {
 // 🔹 Helper to create notifications
 const createNotification = async (userId, title, message, type, relatedTask = null, metadata = null) => {
   try {
-    await Notification.create({
-      user: userId,
+    const data = {
+      ...(metadata || {}),
+      ...(relatedTask ? {taskId: relatedTask, relatedTask} : {}),
+    };
+
+    await notifyDirectUsers({
+      userIds: [userId],
+      targetPath: metadata?.targetPath || '/ciisUser/task-management',
       title,
       message,
       type,
-      relatedTask,
-      metadata
+      data,
+      priority: metadata?.priority === 'high' ? 'high' : 'medium',
     });
   } catch (error) {
     console.error('❌ Error creating notification:', error);
@@ -1115,6 +1122,39 @@ exports.createTaskForOthers = async (req, res) => {
     await task.populate("createdBy", "name email");
 
     // Create notifications for all assigned users (not creator)
+    await notifyDirectUsers({
+      userIds: uniqueAssignedUsers,
+      targetPath: '/ciisUser/task-management',
+      type: 'task_assigned',
+      title: 'New Task Assigned',
+      message: `${currentUser.name} assigned you task "${title}"`,
+      actor: currentUser._id,
+      company: currentUser.company,
+      data: {
+        taskId: task._id,
+        title,
+        priority,
+        dueDateTime: parsedDueDateTime,
+        assignedBy: currentUser.name,
+      },
+      priority: priority || 'medium',
+    });
+
+    // Also notify company-all-task page owners about new task
+    try {
+      await notifyPageUsers({
+        companyId: currentUser.company || req.user.companyCode,
+        targetPath: '/ciisUser/company-all-task',
+        type: 'task_assigned',
+        title: 'New Task Created',
+        message: `${currentUser.name} created task "${title}" for assigned users`,
+        data: { taskId: task._id },
+        priority: 'medium'
+      });
+    } catch (err) {
+      console.error('Error notifying company-all-task owners for new task:', err);
+    }
+
     for (const userId of uniqueAssignedUsers) {
       await createNotification(
         userId,
@@ -1472,6 +1512,40 @@ exports.updateStatus = async (req, res) => {
     const previousStatusForLog = isCreator ? oldOverallStatus : oldStatus;
 
     // 🔹 Create notification for task creator
+    if (!isCreator) {
+      await notifyDirectUsers({
+        userIds: [task.createdBy._id],
+        targetPath: '/ciisUser/admin-task-create',
+        type: 'task_status_updated',
+        title: 'Task Status Updated',
+        message: `${updatedUser.name} updated "${task.title}" status to ${status}${remarks ? ': ' + remarks : ''}`,
+        actor: req.user._id,
+        data: {
+          taskId: task._id,
+          oldStatus: previousStatusForLog,
+          newStatus: status,
+          remarks,
+          updatedBy: updatedUser.name,
+        },
+        priority: 'high',
+      });
+
+      // Also notify company-all-task page owners
+      try {
+        await notifyPageUsers({
+          companyId: task.companyCode || req.user.companyCode || updatedUser.company,
+          targetPath: '/ciisUser/company-all-task',
+          type: 'status_updated',
+          title: 'Task Status Updated',
+          message: `${updatedUser.name} updated task "${task.title}" status to ${status}`,
+          data: { taskId: task._1d },
+          priority: 'high'
+        });
+      } catch (npErr) {
+        console.error('Error notifying company-all-task owners for status update:', npErr);
+      }
+    }
+
     await createNotification(
       task.createdBy._id,
       'Task Status Updated',
@@ -1596,6 +1670,53 @@ exports.addRemark = async (req, res) => {
     await task.populate('remarks.user', 'name role email avatar');
 
     const addedRemark = task.remarks[task.remarks.length - 1];
+
+    const actorId = req.user._id.toString();
+    const assignedRecipients = (task.assignedUsers || [])
+      .map(userId => userId.toString())
+      .filter(userId => userId !== actorId);
+    const creatorRecipient = task.createdBy.toString() !== actorId ? [task.createdBy] : [];
+    const remarkPayload = {
+      type: 'task_remark_added',
+      title: 'Task Remark Added',
+      message: `${req.user.name || 'User'} added a remark on "${task.title}"`,
+      actor: req.user._id,
+      data: {
+        taskId: task._id,
+        remarkId: addedRemark._id,
+        text: text || '',
+        hasImage: !!imagePath,
+      },
+      priority: 'medium',
+    };
+
+    await Promise.all([
+      notifyDirectUsers({
+        userIds: assignedRecipients,
+        targetPath: '/ciisUser/task-management',
+        ...remarkPayload,
+      }),
+      notifyDirectUsers({
+        userIds: creatorRecipient,
+        targetPath: '/ciisUser/admin-task-create',
+        ...remarkPayload,
+      }),
+    ]);
+
+    // Notify company-all-task owners about remark
+    try {
+      await notifyPageUsers({
+        companyId: task.companyCode || req.user.companyCode || task.company,
+        targetPath: '/ciisUser/company-all-task',
+        type: 'task_remark_added',
+        title: 'Task Remark Added',
+        message: `${req.user.name || 'User'} added a remark on "${task.title}"`,
+        data: { taskId: task._id, remarkId: addedRemark._id },
+        priority: 'medium'
+      });
+    } catch (npErr) {
+      console.error('Error notifying company-all-task owners for remark:', npErr);
+    }
 
     res.json({
       success: true,

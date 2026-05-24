@@ -6,7 +6,7 @@ const notificationHandlers = (io, socket) => {
   // Mark notification as read
   socket.on('notification:markRead', async (notificationId, callback) => {
     try {
-      const Notification = require('../../HR-CDS/models/Notification');
+      const Notification = require('../../models/Notification');
       
       await Notification.findOneAndUpdate(
         { _id: notificationId, recipient: socket.userId },
@@ -36,7 +36,7 @@ const notificationHandlers = (io, socket) => {
   // Mark all notifications as read
   socket.on('notification:markAllRead', async (callback) => {
     try {
-      const Notification = require('../../HR-CDS/models/Notification');
+      const Notification = require('../../models/Notification');
       
       await Notification.updateMany(
         { recipient: socket.userId, isRead: false },
@@ -59,7 +59,7 @@ const notificationHandlers = (io, socket) => {
   // Get unread count
   socket.on('notification:getUnreadCount', async (callback) => {
     try {
-      const Notification = require('../../HR-CDS/models/Notification');
+      const Notification = require('../../models/Notification');
       
       const count = await Notification.countDocuments({
         recipient: socket.userId,

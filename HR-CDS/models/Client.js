@@ -55,6 +55,12 @@ const clientSchema = new mongoose.Schema({
     lowercase: true,
     sparse: true
   },
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null,
+    index: true
+  },
   phone: {
     type: String,
     trim: true
