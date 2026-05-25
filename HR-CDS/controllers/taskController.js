@@ -75,6 +75,13 @@ const addDateValueFilter = (filter, fields, range) => {
   };
 };
 
+const getLocalDateStart = (value = new Date()) => {
+  const date = value instanceof Date ? new Date(value) : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  date.setHours(0, 0, 0, 0);
+  return date;
+};
+
 const getRequestCompanyCode = (req, user = null) => {
   const companyCode = req.user?.companyCode || user?.companyCode || user?.company?.companyCode;
   return typeof companyCode === 'string' ? companyCode.trim().toUpperCase() : companyCode;
@@ -2983,7 +2990,7 @@ exports.getUserAllTasksPaginated = async (req, res) => {
       clientFilter.status = {$in: statusList};
     }
     if (statusList.includes('overdue')) {
-      clientFilter.dueDate = {$lt: new Date()};
+      clientFilter.dueDate = {$lt: getLocalDateStart()};
       clientFilter.completed = {$ne: true};
     }
 
