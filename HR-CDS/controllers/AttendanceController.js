@@ -13,9 +13,83 @@ const formatDuration = (ms) => {
   return `${hours}:${minutes}:${seconds}`;
 };
 
+const ATTENDANCE_TIME_ZONE = 'Asia/Kolkata';
+const INDIA_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const toValidDate = value => {
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const getIndiaDateParts = (value = new Date()) => {
+  const date = toValidDate(value) || new Date();
+  const shifted = new Date(date.getTime() + INDIA_OFFSET_MS);
+  return {
+    year: shifted.getUTCFullYear(),
+    monthIndex: shifted.getUTCMonth(),
+    day: shifted.getUTCDate(),
+    hour: shifted.getUTCHours(),
+    minute: shifted.getUTCMinutes(),
+  };
+};
+
+const indiaDateTimeToUtc = (year, monthIndex, day, hour = 0, minute = 0, second = 0, millisecond = 0) =>
+  new Date(Date.UTC(year, monthIndex, day, hour, minute, second, millisecond) - INDIA_OFFSET_MS);
+
+const getIndiaDayStart = (value = new Date()) => {
+  const {year, monthIndex, day} = getIndiaDateParts(value);
+  return indiaDateTimeToUtc(year, monthIndex, day);
+};
+
+const getIndiaDayEnd = (value = new Date()) => {
+  const {year, monthIndex, day} = getIndiaDateParts(value);
+  return indiaDateTimeToUtc(year, monthIndex, day, 23, 59, 59, 999);
+};
+
+const getIndiaDayRange = value => ({
+  start: getIndiaDayStart(value),
+  end: getIndiaDayEnd(value),
+});
+
+const parseIndiaDateOnly = value => {
+  if (typeof value === 'string') {
+    const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (match) {
+      return indiaDateTimeToUtc(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    }
+  }
+  return getIndiaDayStart(value);
+};
+
+const getIndiaThreshold = (value, hour, minute = 0) => {
+  const {year, monthIndex, day} = getIndiaDateParts(value);
+  return indiaDateTimeToUtc(year, monthIndex, day, hour, minute);
+};
+
+const getIndiaMinutesSinceMidnight = value => {
+  const {hour, minute} = getIndiaDateParts(value);
+  return (hour * 60) + minute;
+};
+
+const formatIndiaDateKey = value => {
+  const {year, monthIndex, day} = getIndiaDateParts(value);
+  return `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+};
+
+const addIndiaDays = (value, days) => new Date(value.getTime() + (days * DAY_MS));
+
 // Helper function: Format time to readable string
 const formatTime = (date) => {
-  return date ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "";
+  const validDate = toValidDate(date);
+  return validDate
+    ? validDate.toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+      timeZone: ATTENDANCE_TIME_ZONE,
+    })
+    : "";
 };
 
 // Check if ID is a valid MongoDB ObjectId
@@ -43,10 +117,8 @@ const findAttendanceRecord = async (id, updateData = {}) => {
       throw new Error("User not found");
     }
     
-    const searchDate = new Date(dateStr);
-    searchDate.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(searchDate);
-    endOfDay.setHours(23, 59, 59, 999);
+    const searchDate = parseIndiaDateOnly(dateStr);
+    const endOfDay = getIndiaDayEnd(searchDate);
     
     let record = await Attendance.findOne({
       user: userId,
@@ -171,12 +243,11 @@ const clockIn = async (req, res) => {
     }
     
     const now = new Date();
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    const {start: todayStart, end: todayEnd} = getIndiaDayRange(now);
 
     const alreadyIn = await Attendance.findOne({ 
       user: userId, 
-      date: { $gte: todayStart } 
+      date: { $gte: todayStart, $lte: todayEnd } 
     });
     
     if (alreadyIn) {
@@ -185,17 +256,10 @@ const clockIn = async (req, res) => {
       });
     }
 
-    const halfDayThreshold = new Date(now);
-    halfDayThreshold.setHours(10, 0, 0, 0);
-    
-    const lateThresholdEnd = new Date(now);
-    lateThresholdEnd.setHours(9, 30, 0, 0);
-    
-    const lateThresholdStart = new Date(now);
-    lateThresholdStart.setHours(9, 10, 0, 0);
-    
-    const shiftStart = new Date(now);
-    shiftStart.setHours(9, 0, 0, 0);
+    const halfDayThreshold = getIndiaThreshold(now, 10, 0);
+    const lateThresholdEnd = getIndiaThreshold(now, 9, 30);
+    const lateThresholdStart = getIndiaThreshold(now, 9, 10);
+    const shiftStart = getIndiaThreshold(now, 9, 0);
 
     const lateBy = now > shiftStart ? formatDuration(now - shiftStart) : "00:00:00";
 
@@ -269,12 +333,11 @@ const clockOut = async (req, res) => {
     const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     
     const now = new Date();
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    const {start: todayStart, end: todayEnd} = getIndiaDayRange(now);
 
     const record = await Attendance.findOne({ 
       user: userId, 
-      date: { $gte: todayStart } 
+      date: { $gte: todayStart, $lte: todayEnd } 
     });
 
     if (!record || record.outTime) {
@@ -283,8 +346,7 @@ const clockOut = async (req, res) => {
       });
     }
 
-    const shiftEnd = new Date(now);
-    shiftEnd.setHours(19, 0, 0, 0);
+    const shiftEnd = getIndiaThreshold(now, 19, 0);
 
     const totalMs = now - new Date(record.inTime);
     const totalHours = totalMs / (1000 * 60 * 60);
@@ -296,14 +358,9 @@ const clockOut = async (req, res) => {
     record.earlyLeave = now < shiftEnd ? formatDuration(shiftEnd - now) : "00:00:00";
 
     const loginTime = new Date(record.inTime);
-    const halfDayThreshold = new Date(loginTime);
-    halfDayThreshold.setHours(10, 0, 0, 0);
-    
-    const lateThresholdEnd = new Date(loginTime);
-    lateThresholdEnd.setHours(9, 30, 0, 0);
-    
-    const lateThresholdStart = new Date(loginTime);
-    lateThresholdStart.setHours(9, 10, 0, 0);
+    const halfDayThreshold = getIndiaThreshold(loginTime, 10, 0);
+    const lateThresholdEnd = getIndiaThreshold(loginTime, 9, 30);
+    const lateThresholdStart = getIndiaThreshold(loginTime, 9, 10);
 
     if (loginTime >= halfDayThreshold) {
       record.status = "HALFDAY";
@@ -388,10 +445,7 @@ const getTodayStatus = async (req, res) => {
     const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     
     const now = new Date();
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    const todayEnd = new Date();
-    todayEnd.setHours(23, 59, 59, 999);
+    const {start: todayStart, end: todayEnd} = getIndiaDayRange(now);
 
     const today = await Attendance.findOne({ 
       user: userId, 
@@ -400,11 +454,8 @@ const getTodayStatus = async (req, res) => {
 
     if (!today) {
       const currentTime = new Date();
-      const endOfDay = new Date();
-      endOfDay.setHours(23, 59, 59, 999);
-      
-      const absentThreshold = new Date();
-      absentThreshold.setHours(10, 0, 0, 0);
+      const endOfDay = getIndiaDayEnd(currentTime);
+      const absentThreshold = getIndiaThreshold(currentTime, 10, 0);
       
       if (currentTime >= absentThreshold && currentTime <= endOfDay) {
         return res.status(200).json({
@@ -476,11 +527,8 @@ const getAttendanceList = async (req, res) => {
       const user = await User.findById(targetUserId).select('createdAt');
       const userJoinDate = user?.createdAt || new Date(2020, 0, 1);
       
-      startDate = new Date(userJoinDate);
-      startDate.setHours(0, 0, 0, 0);
-      
-      endDate = new Date();
-      endDate.setHours(23, 59, 59, 999);
+      startDate = getIndiaDayStart(userJoinDate);
+      endDate = getIndiaDayEnd(new Date());
       
       query.date = { $gte: startDate, $lte: endDate };
       
@@ -490,23 +538,20 @@ const getAttendanceList = async (req, res) => {
       const queryMonth = parseInt(month);
       const queryYear = parseInt(year);
       
-      startDate = new Date(queryYear, queryMonth, 1);
-      startDate.setHours(0, 0, 0, 0);
-
-      endDate = new Date(queryYear, queryMonth + 1, 0);
-      endDate.setHours(23, 59, 59, 999);
+      startDate = indiaDateTimeToUtc(queryYear, queryMonth, 1);
+      endDate = indiaDateTimeToUtc(queryYear, queryMonth + 1, 0, 23, 59, 59, 999);
       
       query.date = { $gte: startDate, $lte: endDate };
     }
 
     // Generate ALL dates from startDate to endDate
-    const currentDate = new Date(startDate);
+    let currentDate = new Date(startDate);
     while (currentDate <= endDate) {
       allDates.push(new Date(currentDate));
-      currentDate.setDate(currentDate.getDate() + 1);
+      currentDate = addIndiaDays(currentDate, 1);
     }
 
-    console.log(`📅 Generating ${allDates.length} dates from ${startDate.toDateString()} to ${endDate.toDateString()}`);
+    console.log(`📅 Generating ${allDates.length} dates from ${formatIndiaDateKey(startDate)} to ${formatIndiaDateKey(endDate)}`);
 
     // Fetch attendance records
     const list = await Attendance.find(query)
@@ -523,14 +568,13 @@ const getAttendanceList = async (req, res) => {
     // Create map of existing records
     const existingRecordsMap = {};
     list.forEach(record => {
-      const recordDate = new Date(record.date);
-      const dateKey = `${recordDate.getFullYear()}-${recordDate.getMonth()}-${recordDate.getDate()}`;
+      const dateKey = formatIndiaDateKey(record.date);
       existingRecordsMap[dateKey] = record;
     });
 
     // Create complete list with placeholders for ALL dates
     const completeList = allDates.map(date => {
-      const dateKey = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+      const dateKey = formatIndiaDateKey(date);
 
       if (existingRecordsMap[dateKey]) {
         // Return actual record
@@ -543,11 +587,11 @@ const getAttendanceList = async (req, res) => {
         };
       } else {
         // Create placeholder record for missing date
-        const dayOfWeek = date.getDay();
+        const dayOfWeek = new Date(date.getTime() + INDIA_OFFSET_MS).getUTCDay();
         const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
 
         return {
-          _id: `absent_${targetUserId}_${date.toISOString().split('T')[0]}`,
+          _id: `absent_${targetUserId}_${dateKey}`,
           user: {
             _id: targetUserId,
             name: targetUser?.name || 'User',
@@ -579,8 +623,8 @@ const getAttendanceList = async (req, res) => {
 
     res.status(200).json({
       message: isAllTime 
-        ? `All time attendance records fetched successfully from ${startDate.toDateString()} to ${endDate.toDateString()}` 
-        : `Attendance records fetched for ${new Date(parseInt(year), parseInt(month)).toLocaleString('default', { month: 'long', year: 'numeric' })}`,
+        ? `All time attendance records fetched successfully from ${formatIndiaDateKey(startDate)} to ${formatIndiaDateKey(endDate)}` 
+        : `Attendance records fetched for ${indiaDateTimeToUtc(parseInt(year), parseInt(month), 1).toLocaleString('default', { month: 'long', year: 'numeric', timeZone: ATTENDANCE_TIME_ZONE })}`,
       data: completeList
     });
 
@@ -613,10 +657,7 @@ const getAllUsersAttendance = async (req, res) => {
     }
 
     if (date) {
-      const start = new Date(date);
-      start.setHours(0, 0, 0, 0);
-      const end = new Date(date);
-      end.setHours(23, 59, 59, 999);
+      const {start, end} = getIndiaDayRange(parseIndiaDateOnly(date));
       filter.date = { $gte: start, $lte: end };
     }
 
@@ -682,8 +723,7 @@ const updateAttendanceRecord = async (req, res) => {
     if (updateData.inTime) {
       record.inTime = new Date(updateData.inTime);
       
-      const shiftStart = new Date(record.inTime);
-      shiftStart.setHours(9, 0, 0, 0);
+      const shiftStart = getIndiaThreshold(record.inTime, 9, 0);
       
       if (record.inTime > shiftStart) {
         record.lateBy = formatDuration(record.inTime - shiftStart);
@@ -692,9 +732,7 @@ const updateAttendanceRecord = async (req, res) => {
       }
       
       const loginTime = record.inTime;
-      const hour = loginTime.getHours();
-      const minute = loginTime.getMinutes();
-      const totalMinutes = (hour * 60) + minute;
+      const totalMinutes = getIndiaMinutesSinceMidnight(loginTime);
       
       if (totalMinutes >= 600) {
         record.status = "HALFDAY";
@@ -715,8 +753,7 @@ const updateAttendanceRecord = async (req, res) => {
         const totalMs = record.outTime - record.inTime;
         record.totalTime = formatDuration(totalMs);
         
-        const shiftEnd = new Date(record.outTime);
-        shiftEnd.setHours(19, 0, 0, 0);
+        const shiftEnd = getIndiaThreshold(record.outTime, 19, 0);
         
         record.overTime = record.outTime > shiftEnd ? 
           formatDuration(record.outTime - shiftEnd) : "00:00:00";
@@ -725,14 +762,9 @@ const updateAttendanceRecord = async (req, res) => {
         
         const totalHours = totalMs / (1000 * 60 * 60);
         const loginTime = record.inTime;
-        const halfDayThreshold = new Date(loginTime);
-        halfDayThreshold.setHours(10, 0, 0, 0);
-        
-        const lateThresholdEnd = new Date(loginTime);
-        lateThresholdEnd.setHours(9, 30, 0, 0);
-        
-        const lateThresholdStart = new Date(loginTime);
-        lateThresholdStart.setHours(9, 10, 0, 0);
+        const halfDayThreshold = getIndiaThreshold(loginTime, 10, 0);
+        const lateThresholdEnd = getIndiaThreshold(loginTime, 9, 30);
+        const lateThresholdStart = getIndiaThreshold(loginTime, 9, 10);
         
         if (loginTime >= halfDayThreshold) {
           record.status = "HALFDAY";
@@ -787,7 +819,7 @@ const updateAttendanceRecord = async (req, res) => {
     }
     
     if (updateData.date !== undefined) {
-      record.date = new Date(updateData.date);
+      record.date = parseIndiaDateOnly(updateData.date);
     }
     
     if (!record.companyCode) {
@@ -856,10 +888,8 @@ const createManualAttendance = async (req, res) => {
       });
     }
     
-    const existingDate = new Date(date);
-    existingDate.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(existingDate);
-    endOfDay.setHours(23, 59, 59, 999);
+    const existingDate = parseIndiaDateOnly(date);
+    const endOfDay = getIndiaDayEnd(existingDate);
     
     const existingAttendance = await Attendance.findOne({
       user,
@@ -886,7 +916,7 @@ const createManualAttendance = async (req, res) => {
     
     const attendance = new Attendance({
       user,
-      date: new Date(date),
+      date: existingDate,
       inTime: inTime ? new Date(inTime) : null,
       outTime: outTime ? new Date(outTime) : null,
       status: status ? status.toUpperCase() : "ABSENT",
@@ -1021,10 +1051,7 @@ const getAttendanceByUser = async (req, res) => {
     };
     
     if (date) {
-      const start = new Date(date);
-      start.setHours(0, 0, 0, 0);
-      const end = new Date(date);
-      end.setHours(23, 59, 59, 999);
+      const {start, end} = getIndiaDayRange(parseIndiaDateOnly(date));
       query.date = { $gte: start, $lte: end };
     }
     
@@ -1058,10 +1085,8 @@ const getAttendanceByUser = async (req, res) => {
 // Mark Daily Absent (Cron Job)
 const markDailyAbsent = async () => {
   try {
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    const todayEnd = new Date();
-    todayEnd.setHours(23, 59, 59, 999);
+    const nowForDay = new Date();
+    const {start: todayStart, end: todayEnd} = getIndiaDayRange(nowForDay);
     
     const companies = await Company.find({ isActive: true });
     
@@ -1079,8 +1104,7 @@ const markDailyAbsent = async () => {
         
         if (!existingAttendance) {
           const now = new Date();
-          const absentThreshold = new Date();
-          absentThreshold.setHours(10, 0, 0, 0);
+          const absentThreshold = getIndiaThreshold(now, 10, 0);
           
           if (now >= absentThreshold) {
             const absentRecord = new Attendance({
@@ -1118,10 +1142,8 @@ const getAttendanceStats = async (req, res) => {
     let matchStage = { companyCode: userCompanyCode };
     
     if (startDate && endDate) {
-      const start = new Date(startDate);
-      start.setHours(0, 0, 0, 0);
-      const end = new Date(endDate);
-      end.setHours(23, 59, 59, 999);
+      const start = parseIndiaDateOnly(startDate);
+      const end = getIndiaDayEnd(parseIndiaDateOnly(endDate));
       
       matchStage.date = { $gte: start, $lte: end };
     }
