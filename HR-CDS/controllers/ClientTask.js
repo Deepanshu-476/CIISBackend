@@ -28,6 +28,62 @@ const isClientTaskOverdue = task => {
   return Boolean(dueDate && cutoff && dueDate < cutoff);
 };
 
+const getClientTaskDueDateRange = period => {
+  if (!period || period === 'all') return null;
+
+  const now = new Date();
+  const startDate = getLocalDateStart(now);
+  if (!startDate) return null;
+  const endDate = new Date(startDate);
+
+  switch (period) {
+    case 'today':
+      endDate.setDate(startDate.getDate() + 1);
+      break;
+    case 'yesterday':
+      startDate.setDate(startDate.getDate() - 1);
+      endDate.setDate(endDate.getDate());
+      break;
+    case 'this-week':
+      startDate.setDate(startDate.getDate() - startDate.getDay());
+      endDate.setTime(startDate.getTime());
+      endDate.setDate(startDate.getDate() + 7);
+      break;
+    case 'last-week':
+      startDate.setDate(startDate.getDate() - startDate.getDay() - 7);
+      endDate.setTime(startDate.getTime());
+      endDate.setDate(startDate.getDate() + 7);
+      break;
+    case 'this-month':
+      startDate.setDate(1);
+      endDate.setTime(startDate.getTime());
+      endDate.setMonth(startDate.getMonth() + 1);
+      break;
+    case 'last-month':
+      startDate.setMonth(startDate.getMonth() - 1, 1);
+      endDate.setTime(startDate.getTime());
+      endDate.setMonth(startDate.getMonth() + 1);
+      break;
+    default:
+      return null;
+  }
+
+  return { $gte: startDate, $lt: endDate };
+};
+
+const addDueDateCondition = (filter, condition) => {
+  if (!condition) return;
+
+  if (filter.dueDate) {
+    filter.$and = filter.$and || [];
+    filter.$and.push({ dueDate: filter.dueDate }, { dueDate: condition });
+    delete filter.dueDate;
+    return;
+  }
+
+  filter.dueDate = condition;
+};
+
 const addClientActivityLogHelper = async (task, logData, req = null) => {
   try {
     const { action, description, user, userName } = logData;
@@ -931,7 +987,7 @@ const getAssignedToMeTasks = async (req, res) => {
         filter.completed = false;
       } else if (status === 'overdue') {
         filter.completed = false;
-        filter.dueDate = { $lt: getClientTaskOverdueCutoff() };
+        addDueDateCondition(filter, { $lt: getClientTaskOverdueCutoff() });
       }
     }
 
@@ -946,49 +1002,9 @@ const getAssignedToMeTasks = async (req, res) => {
       });
     }
 
-    if (period && period !== 'all') {
-      const now = new Date();
-      let startDate = new Date();
-      let endDate = new Date();
-      
-      switch(period) {
-        case 'today':
-          startDate.setHours(0, 0, 0, 0);
-          endDate.setHours(23, 59, 59, 999);
-          filter.createdAt = { $gte: startDate, $lte: endDate };
-          break;
-        case 'yesterday':
-          startDate.setDate(startDate.getDate() - 1);
-          startDate.setHours(0, 0, 0, 0);
-          endDate.setDate(endDate.getDate() - 1);
-          endDate.setHours(23, 59, 59, 999);
-          filter.createdAt = { $gte: startDate, $lte: endDate };
-          break;
-        case 'this-week':
-          startDate.setDate(startDate.getDate() - startDate.getDay());
-          startDate.setHours(0, 0, 0, 0);
-          filter.createdAt = { $gte: startDate };
-          break;
-        case 'last-week':
-          startDate.setDate(startDate.getDate() - startDate.getDay() - 7);
-          startDate.setHours(0, 0, 0, 0);
-          endDate.setDate(endDate.getDate() - endDate.getDay() - 1);
-          endDate.setHours(23, 59, 59, 999);
-          filter.createdAt = { $gte: startDate, $lte: endDate };
-          break;
-        case 'this-month':
-          startDate.setDate(1);
-          startDate.setHours(0, 0, 0, 0);
-          filter.createdAt = { $gte: startDate };
-          break;
-        case 'last-month':
-          startDate.setMonth(startDate.getMonth() - 1, 1);
-          startDate.setHours(0, 0, 0, 0);
-          endDate.setMonth(endDate.getMonth(), 0);
-          endDate.setHours(23, 59, 59, 999);
-          filter.createdAt = { $gte: startDate, $lte: endDate };
-          break;
-      }
+    const dueDateRange = getClientTaskDueDateRange(period);
+    if (dueDateRange) {
+      addDueDateCondition(filter, dueDateRange);
     }
 
     const tasks = await Task.find(filter)

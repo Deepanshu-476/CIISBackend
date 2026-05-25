@@ -82,6 +82,23 @@ const getLocalDateStart = (value = new Date()) => {
   return date;
 };
 
+const normalizeTaskStatus = status => {
+  if (!status) return 'pending';
+  const value = String(status).toLowerCase().trim();
+  const map = {
+    'in progress': 'in-progress',
+    inprogress: 'in-progress',
+    'in-progress': 'in-progress',
+    'on hold': 'onhold',
+    onhold: 'onhold',
+    're open': 'reopen',
+    're-open': 'reopen',
+    cancelled: 'cancelled',
+    canceled: 'cancelled',
+  };
+  return map[value] || value;
+};
+
 const getRequestCompanyCode = (req, user = null) => {
   const companyCode = req.user?.companyCode || user?.companyCode || user?.company?.companyCode;
   return typeof companyCode === 'string' ? companyCode.trim().toUpperCase() : companyCode;
@@ -2298,7 +2315,14 @@ exports.getUserDetailedAnalytics = async (req, res) => {
 exports.getUserTaskStats = async (req, res) => {
   try {
     const { userId } = req.params;
-    const { period = 'today' } = req.query;
+    const {
+      period = 'today',
+      status = 'all',
+      priority = 'all',
+      search = '',
+      fromDate = '',
+      toDate = '',
+    } = req.query;
 
     const currentUser = await User.findById(req.user.id).lean();
     if (!currentUser) {
@@ -2326,40 +2350,15 @@ exports.getUserTaskStats = async (req, res) => {
     }).select('_id').lean();
     const groupIds = userGroups.map(group => group._id);
 
-    // Date range calculation
-    let dateFilter = {};
-    const now = new Date();
-    
-    switch (period) {
-      case 'today':
-        dateFilter.createdAt = {
-          $gte: new Date(now.getFullYear(), now.getMonth(), now.getDate()),
-          $lte: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
-        };
-        break;
-      case 'week':
-        const dayOfWeek = now.getDay();
-        dateFilter.createdAt = {
-          $gte: new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek),
-          $lte: new Date(now.getFullYear(), now.getMonth(), now.getDate() + (6 - dayOfWeek) + 1)
-        };
-        break;
-      case 'month':
-        dateFilter.createdAt = {
-          $gte: new Date(now.getFullYear(), now.getMonth(), 1),
-          $lte: new Date(now.getFullYear(), now.getMonth() + 1, 1)
-        };
-        break;
-      default:
-        dateFilter.createdAt = {
-          $gte: new Date(now.getFullYear(), now.getMonth(), now.getDate()),
-          $lte: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
-        };
-    }
+    const dateRange = getTaskDateRange({period, fromDate, toDate});
+    const cleanSearch = String(search || '').trim();
+    const cleanPriority = String(priority || 'all').toLowerCase();
+    const cleanStatus = String(status || 'all').toLowerCase();
+    const statusList = cleanStatus === 'all'
+      ? []
+      : cleanStatus.split(',').map(item => item.trim()).filter(Boolean);
 
-    // Base filter for user tasks
-    const baseFilter = {
-      ...dateFilter,
+    let baseFilter = {
       isActive: true,
       companyCode: req.user.companyCode,
       $or: [
@@ -2368,12 +2367,75 @@ exports.getUserTaskStats = async (req, res) => {
         { createdBy: userId }
       ]
     };
+    baseFilter = addDateValueFilter(baseFilter, ['dueDateTime', 'createdAt'], dateRange);
 
-    // Get all tasks for this user
-    const tasks = await Task.find(baseFilter)
+    if (cleanPriority !== 'all') baseFilter.priority = cleanPriority;
+    if (cleanSearch) {
+      baseFilter.$and = [
+        ...(baseFilter.$and || []),
+        {
+          $or: [
+            {title: {$regex: cleanSearch, $options: 'i'}},
+            {description: {$regex: cleanSearch, $options: 'i'}},
+          ],
+        },
+      ];
+    }
+    if (statusList.length && !statusList.includes('overdue')) {
+      baseFilter.$and = [
+        ...(baseFilter.$and || []),
+        {
+          $or: [
+            {overallStatus: {$in: statusList}},
+            {statusByUser: {$elemMatch: {user: userId, status: {$in: statusList}}}},
+          ],
+        },
+      ];
+    }
+    if (statusList.includes('overdue')) {
+      baseFilter.dueDateTime = {$lt: getLocalDateStart()};
+      baseFilter.overallStatus = {$nin: ['completed', 'cancelled']};
+    }
+
+    let clientFilter = {
+      $or: [
+        {assigneeId: userId},
+        {assignee: userId.toString()},
+        {assignee: targetUser.name},
+        {assignee: targetUser.email},
+      ],
+    };
+    clientFilter = addDateValueFilter(clientFilter, ['dueDate', 'createdAt'], dateRange);
+
+    if (cleanPriority !== 'all') {
+      clientFilter.priority = new RegExp(`^${cleanPriority}$`, 'i');
+    }
+    if (cleanSearch) {
+      clientFilter.$and = [
+        ...(clientFilter.$and || []),
+        {
+          $or: [
+            {name: {$regex: cleanSearch, $options: 'i'}},
+            {description: {$regex: cleanSearch, $options: 'i'}},
+          ],
+        },
+      ];
+    }
+    if (statusList.length && !statusList.includes('overdue')) {
+      clientFilter.status = {$in: statusList};
+    }
+    if (statusList.includes('overdue')) {
+      clientFilter.dueDate = {$lt: getLocalDateStart()};
+      clientFilter.completed = {$ne: true};
+    }
+
+    const [tasks, clientTasks] = await Promise.all([
+      Task.find(baseFilter)
       .populate('assignedUsers', 'name email')
       .populate('createdBy', 'name email')
-      .lean();
+        .lean(),
+      ClientTask.find(clientFilter).lean(),
+    ]);
 
     // Calculate statistics
     const statusCounts = {
@@ -2382,7 +2444,10 @@ exports.getUserTaskStats = async (req, res) => {
       completed: 0,
       approved: 0,
       rejected: 0,
-      overdue: 0
+      overdue: 0,
+      onhold: 0,
+      reopen: 0,
+      cancelled: 0
     };
 
     tasks.forEach(task => {
@@ -2391,20 +2456,42 @@ exports.getUserTaskStats = async (req, res) => {
         s.user && s.user.toString() === userId
       );
 
-      const status = userStatus?.status || 'pending';
-
-      if (statusCounts[status] !== undefined) {
-        statusCounts[status]++;
+      let taskStatus = normalizeTaskStatus(userStatus?.status || task.overallStatus || task.status || 'pending');
+      const dueDate = getLocalDateStart(task.dueDateTime);
+      const today = getLocalDateStart();
+      if (
+        dueDate &&
+        today &&
+        dueDate < today &&
+        !['completed', 'cancelled'].includes(taskStatus)
+      ) {
+        taskStatus = 'overdue';
       }
 
-      // Check overdue
-      if (task.dueDateTime && new Date(task.dueDateTime) < new Date() && 
-          status !== 'completed') {
-        statusCounts.overdue++;
+      if (statusCounts[taskStatus] !== undefined) {
+        statusCounts[taskStatus]++;
       }
     });
 
-    const totalTasks = tasks.length;
+    clientTasks.forEach(task => {
+      let taskStatus = task.completed ? 'completed' : normalizeTaskStatus(task.status || 'pending');
+      const dueDate = getLocalDateStart(task.dueDate);
+      const today = getLocalDateStart();
+      if (
+        dueDate &&
+        today &&
+        dueDate < today &&
+        !['completed', 'cancelled'].includes(taskStatus)
+      ) {
+        taskStatus = 'overdue';
+      }
+
+      if (statusCounts[taskStatus] !== undefined) {
+        statusCounts[taskStatus]++;
+      }
+    });
+
+    const totalTasks = tasks.length + clientTasks.length;
 
     // Calculate percentages
     const calculatePercentage = (count) => 
@@ -2439,6 +2526,18 @@ exports.getUserTaskStats = async (req, res) => {
         overdue: {
           count: statusCounts.overdue,
           percentage: calculatePercentage(statusCounts.overdue)
+        },
+        onHold: {
+          count: statusCounts.onhold,
+          percentage: calculatePercentage(statusCounts.onhold)
+        },
+        reopen: {
+          count: statusCounts.reopen,
+          percentage: calculatePercentage(statusCounts.reopen)
+        },
+        cancelled: {
+          count: statusCounts.cancelled,
+          percentage: calculatePercentage(statusCounts.cancelled)
         }
       },
       tasksSummary: {
@@ -2450,7 +2549,8 @@ exports.getUserTaskStats = async (req, res) => {
         ).length,
         groupTasks: tasks.filter(task => 
           task.assignedGroups && task.assignedGroups.length > 0
-        ).length
+        ).length,
+        clientAssigned: clientTasks.length
       }
     });
 
