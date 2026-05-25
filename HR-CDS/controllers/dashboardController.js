@@ -7,6 +7,17 @@ const Meeting = require("../models/Meeting");
 const Holiday = require("../models/Holiday");
 const User = require("../../models/User");
 
+const formatIndiaTime = value => {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "Asia/Kolkata",
+  });
+};
+
 const getDashboardActivity = async (req, res) => {
   try {
     // ✅ USE companyRole instead of jobRole
@@ -388,7 +399,7 @@ const formatEmployeeActivities = (
       status: attendance.status,
       date: attendance.date,
       details: attendance.inTime
-        ? `Clocked in at ${new Date(attendance.inTime).toLocaleTimeString()}`
+        ? `Clocked in at ${formatIndiaTime(attendance.inTime)}`
         : null,
     });
   }

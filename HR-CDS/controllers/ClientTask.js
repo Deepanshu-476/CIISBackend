@@ -12,6 +12,22 @@ console.log("✅ ClientTask.js loading...");
 
 // ===== HELPER FUNCTIONS =====
 
+const getLocalDateStart = (value = new Date()) => {
+  const date = value instanceof Date ? new Date(value) : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  date.setHours(0, 0, 0, 0);
+  return date;
+};
+
+const getClientTaskOverdueCutoff = () => getLocalDateStart(new Date());
+
+const isClientTaskOverdue = task => {
+  if (!task?.dueDate || task.completed) return false;
+  const dueDate = getLocalDateStart(task.dueDate);
+  const cutoff = getClientTaskOverdueCutoff();
+  return Boolean(dueDate && cutoff && dueDate < cutoff);
+};
+
 const addClientActivityLogHelper = async (task, logData, req = null) => {
   try {
     const { action, description, user, userName } = logData;
@@ -915,8 +931,7 @@ const getAssignedToMeTasks = async (req, res) => {
         filter.completed = false;
       } else if (status === 'overdue') {
         filter.completed = false;
-        filter.status = 'overdue';
-        filter.dueDate = { $lt: new Date() };
+        filter.dueDate = { $lt: getClientTaskOverdueCutoff() };
       }
     }
 
@@ -982,9 +997,6 @@ const getAssignedToMeTasks = async (req, res) => {
 
     const groupedTasks = {};
     let overdueCount = 0;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
     tasks.forEach(task => {
       let taskStatus = 'pending';
       if (task.completed) {
@@ -993,13 +1005,9 @@ const getAssignedToMeTasks = async (req, res) => {
         taskStatus = 'in-progress';
       }
       
-      const dueDate = task.dueDate ? new Date(task.dueDate) : null;
-      if (dueDate) {
-        dueDate.setHours(0, 0, 0, 0);
-        if (!task.completed && dueDate < today) {
-          taskStatus = 'overdue';
-          overdueCount++;
-        }
+      if (isClientTaskOverdue(task)) {
+        taskStatus = 'overdue';
+        overdueCount++;
       }
 
       const groupDate = task.dueDate || task.createdAt;
@@ -1198,15 +1206,8 @@ const getClientTasks = async (req, res) => {
     const completedTasks = tasks.filter(t => t.completed).length;
     const pendingTasks = totalTasks - completedTasks;
     
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
     const overdueTasks = tasks.filter(t => {
-      const dueDate = t.dueDate ? new Date(t.dueDate) : null;
-      if (dueDate) {
-        dueDate.setHours(0, 0, 0, 0);
-        return !t.completed && dueDate < today;
-      }
-      return false;
+      return isClientTaskOverdue(t);
     }).length;
 
     res.json({
@@ -1581,7 +1582,7 @@ const getTaskStats = async (req, res) => {
                   $and: [
                     { $eq: ['$completed', false] },
                     { $ne: ['$dueDate', null] },
-                    { $lt: ['$dueDate', new Date()] }
+                    { $lt: ['$dueDate', getClientTaskOverdueCutoff()] }
                   ]
                 },
                 1,
