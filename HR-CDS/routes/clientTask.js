@@ -113,6 +113,7 @@ router.get('/test', (req, res) => {
 
 // Logged-in user's assigned client tasks
 router.get('/assigned-to-me', authMiddleware, taskController.getAssignedToMeTasks);
+router.get('/assigned-to-me/stats', authMiddleware, taskController.getAssignedToMeTaskStats);
 
 // NEW: Selected employee's assigned client tasks
 router.get('/user/:userId/assigned-tasks', authMiddleware, taskController.getAssignedTasksByUserId);

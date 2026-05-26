@@ -5,6 +5,13 @@ const path = require('path');
 
 let firebaseAdmin = null;
 let firebaseReady = false;
+let firebaseStatus = {
+  ready: false,
+  source: null,
+  reason: 'not-initialized',
+  attemptedPaths: [],
+  projectId: null,
+};
 
 const logPushDebug = (label, payload = {}) => {
   console.log(`[FCM DEBUG] ${label}`, {
@@ -16,11 +23,25 @@ const logPushDebug = (label, payload = {}) => {
 const loadFirebaseAdmin = () => {
   if (firebaseReady) return firebaseAdmin;
   firebaseReady = true;
+  firebaseStatus = {
+    ready: false,
+    source: null,
+    reason: 'initializing',
+    attemptedPaths: [],
+    projectId: null,
+  };
 
   try {
     firebaseAdmin = require('firebase-admin');
 
     if (firebaseAdmin.apps.length) {
+      firebaseStatus = {
+        ready: true,
+        source: 'existing-app',
+        reason: null,
+        attemptedPaths: [],
+        projectId: firebaseAdmin.app().options?.projectId || null,
+      };
       logPushDebug('firebase-admin:reuse-existing-app');
       return firebaseAdmin;
     }
@@ -30,6 +51,13 @@ const loadFirebaseAdmin = () => {
       firebaseAdmin.initializeApp({
         credential: firebaseAdmin.credential.cert(credentials),
       });
+      firebaseStatus = {
+        ready: true,
+        source: 'FIREBASE_SERVICE_ACCOUNT_JSON',
+        reason: null,
+        attemptedPaths: [],
+        projectId: credentials.project_id,
+      };
       logPushDebug('firebase-admin:initialized-env-json', {
         projectId: credentials.project_id,
         clientEmail: credentials.client_email,
@@ -37,32 +65,38 @@ const loadFirebaseAdmin = () => {
       return firebaseAdmin;
     }
 
-    if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-      const credentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-      if (fs.existsSync(credentialsPath)) {
-        firebaseAdmin.initializeApp({
-          credential: firebaseAdmin.credential.applicationDefault(),
-        });
-        logPushDebug('firebase-admin:initialized-application-default', {
-          credentialsPath,
-        });
-        return firebaseAdmin;
-      }
+    const cleanPath = value => String(value || '').trim().replace(/^['"]|['"]$/g, '');
+    const addPath = (paths, value) => {
+      const cleaned = cleanPath(value);
+      if (!cleaned) return;
+      const resolved = path.isAbsolute(cleaned) ? cleaned : path.resolve(__dirname, '../..', cleaned);
+      if (!paths.includes(resolved)) paths.push(resolved);
+    };
 
-      console.warn('[FCM DEBUG] firebase-admin:skip-invalid-google-credentials-path', {
-        at: new Date().toISOString(),
-        credentialsPath,
-      });
-    }
+    const credentialPaths = [];
+    addPath(credentialPaths, process.env.GOOGLE_APPLICATION_CREDENTIALS);
+    addPath(credentialPaths, path.join(__dirname, '../../firebase.json'));
+    addPath(credentialPaths, path.join(process.cwd(), 'firebase.json'));
 
-    const localServiceAccountPath = path.join(__dirname, '../../firebase.json');
-    if (fs.existsSync(localServiceAccountPath)) {
-      const credentials = JSON.parse(fs.readFileSync(localServiceAccountPath, 'utf8'));
+    firebaseStatus.attemptedPaths = credentialPaths;
+
+    for (const credentialsPath of credentialPaths) {
+      if (!fs.existsSync(credentialsPath)) continue;
+
+      const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
       firebaseAdmin.initializeApp({
         credential: firebaseAdmin.credential.cert(credentials),
+        projectId: credentials.project_id,
       });
-      logPushDebug('firebase-admin:initialized-local-file', {
-        path: localServiceAccountPath,
+      firebaseStatus = {
+        ready: true,
+        source: credentialsPath,
+        reason: null,
+        attemptedPaths: credentialPaths,
+        projectId: credentials.project_id,
+      };
+      logPushDebug('firebase-admin:initialized-file', {
+        path: credentialsPath,
         projectId: credentials.project_id,
         clientEmail: credentials.client_email,
       });
@@ -70,13 +104,27 @@ const loadFirebaseAdmin = () => {
     }
 
     firebaseAdmin = null;
+    firebaseStatus = {
+      ready: false,
+      source: null,
+      reason: 'missing-credentials-file',
+      attemptedPaths: credentialPaths,
+      projectId: null,
+    };
     console.warn('[FCM DEBUG] firebase-admin:disabled-missing-credentials', {
       at: new Date().toISOString(),
-      localServiceAccountPath,
+      attemptedPaths: credentialPaths,
     });
     return null;
   } catch (error) {
     firebaseAdmin = null;
+    firebaseStatus = {
+      ready: false,
+      source: null,
+      reason: error.message,
+      attemptedPaths: firebaseStatus.attemptedPaths,
+      projectId: null,
+    };
     console.warn('[FCM DEBUG] firebase-admin:disabled-error', {
       at: new Date().toISOString(),
       message: error.message,
@@ -84,6 +132,11 @@ const loadFirebaseAdmin = () => {
     });
     return null;
   }
+};
+
+exports.getFirebasePushStatus = () => {
+  loadFirebaseAdmin();
+  return firebaseStatus;
 };
 
 const stringifyData = data =>

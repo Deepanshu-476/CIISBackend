@@ -19,13 +19,21 @@ const getLocalDateStart = (value = new Date()) => {
   return date;
 };
 
-const getClientTaskOverdueCutoff = () => getLocalDateStart(new Date());
+const getClientTaskOverdueCutoff = () => new Date();
 
 const isClientTaskOverdue = task => {
   if (!task?.dueDate || task.completed) return false;
-  const dueDate = getLocalDateStart(task.dueDate);
-  const cutoff = getClientTaskOverdueCutoff();
-  return Boolean(dueDate && cutoff && dueDate < cutoff);
+  const status = String(task.status || 'pending').trim().toLowerCase();
+  if (status === 'overdue') return true;
+  if (status !== 'pending') return false;
+  const dueDate = new Date(task.dueDate);
+  return !Number.isNaN(dueDate.getTime()) && dueDate < new Date();
+};
+
+const parseClientDueDate = value => {
+  if (!value) return null;
+  const date = value instanceof Date ? new Date(value) : new Date(String(value));
+  return Number.isNaN(date.getTime()) ? null : date;
 };
 
 const getClientTaskDueDateRange = period => {
@@ -84,15 +92,52 @@ const addDueDateCondition = (filter, condition) => {
   filter.dueDate = condition;
 };
 
+const getAssignedClientTaskFilter = async (currentUser) => {
+  const companyCode = currentUser?.companyCode ? String(currentUser.companyCode).trim().toUpperCase() : '';
+  const clientFilter = companyCode ? { companyCode } : {};
+  const clients = await Client.find(clientFilter).select('_id').lean();
+  const clientIds = clients.map(client => client._id);
+
+  return {
+    clientId: { $in: clientIds },
+    $or: [
+      { assigneeId: currentUser.id || currentUser._id },
+      { assignee: currentUser.id?.toString() },
+      { assignee: currentUser._id?.toString() },
+      { assignee: currentUser.name },
+      { assignee: currentUser.email }
+    ].filter(Boolean)
+  };
+};
+
+const calculateClientAssignedStats = tasks => {
+  const total = tasks.length;
+  const completed = tasks.filter(task => task.completed || task.status === 'completed').length;
+  const overdue = tasks.filter(task => !task.completed && isClientTaskOverdue(task)).length;
+  const inProgress = tasks.filter(task => !task.completed && !isClientTaskOverdue(task) && task.status === 'in-progress').length;
+  const pending = tasks.filter(task => !task.completed && !isClientTaskOverdue(task) && task.status !== 'in-progress').length;
+  const percentage = count => total > 0 ? Math.round((count / total) * 100) : 0;
+
+  return {
+    total,
+    completed: { count: completed, percentage: percentage(completed) },
+    pending: { count: pending, percentage: percentage(pending) },
+    inProgress: { count: inProgress, percentage: percentage(inProgress) },
+    overdue: { count: overdue, percentage: percentage(overdue) }
+  };
+};
+
 const addClientActivityLogHelper = async (task, logData, req = null) => {
   try {
-    const { action, description, user, userName } = logData;
+    const { action, description, user, userName, oldValues, newValues } = logData;
     
     const activityLog = {
       action: action || 'update',
       description: description || 'Task updated',
       user: user || null,
       userName: userName || 'System',
+      oldValues,
+      newValues,
       ipAddress: req?.ip || req?.connection?.remoteAddress || req?.socket?.remoteAddress,
       userAgent: req?.get('User-Agent'),
       createdAt: new Date()
@@ -834,6 +879,8 @@ const updateAssignedTaskStatus = async (req, res) => {
 
     // Check if user is authorized to update this task
     const isAssignedToUser = 
+      task.assigneeId?.toString() === currentUser.id?.toString() ||
+      task.assigneeId?.toString() === currentUser._id?.toString() ||
       task.assignee === currentUser.id?.toString() ||
       task.assignee === currentUser._id?.toString() ||
       task.assignee === currentUser.name ||
@@ -880,8 +927,10 @@ const updateAssignedTaskStatus = async (req, res) => {
     // Log status change if status actually changed
     if (previousStatus !== task.status) {
       await addClientActivityLogHelper(task, {
-        action: 'status_changed',
+        action: 'status_updated',
         description: `Status changed from "${previousStatus}" to "${task.status}"`,
+        oldValues: {status: previousStatus},
+        newValues: {status: task.status},
         user: currentUser?.id || currentUser?._id,
         userName: currentUser?.name || currentUser?.username || 'System'
       }, req);
@@ -967,14 +1016,7 @@ const getAssignedToMeTasks = async (req, res) => {
 
     const { status, search, period } = req.query;
     
-    let filter = {
-      $or: [
-        { assignee: currentUser.id?.toString() },
-        { assignee: currentUser._id?.toString() },
-        { assignee: currentUser.name },
-        { assignee: currentUser.email }
-      ].filter(Boolean)
-    };
+    let filter = await getAssignedClientTaskFilter(currentUser);
 
     if (status && status !== 'all' && status !== '') {
       if (status === 'completed') {
@@ -1089,6 +1131,68 @@ const getAssignedToMeTasks = async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to fetch assigned tasks',
+      message: error.message
+    });
+  }
+};
+
+const getAssignedToMeTaskStats = async (req, res) => {
+  try {
+    const currentUser = req.user;
+
+    if (!currentUser) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not authenticated'
+      });
+    }
+
+    const { status, search, period } = req.query;
+    let filter = await getAssignedClientTaskFilter(currentUser);
+
+    if (status && status !== 'all' && status !== '') {
+      if (status === 'completed') {
+        filter.completed = true;
+      } else if (status === 'pending') {
+        filter.completed = false;
+        filter.status = 'pending';
+      } else if (status === 'in-progress') {
+        filter.status = 'in-progress';
+        filter.completed = false;
+      } else if (status === 'overdue') {
+        filter.completed = false;
+        addDueDateCondition(filter, { $lt: getClientTaskOverdueCutoff() });
+      }
+    }
+
+    if (search && search.trim() !== '') {
+      filter.$and = filter.$and || [];
+      filter.$and.push({
+        $or: [
+          { name: { $regex: search, $options: 'i' } },
+          { service: { $regex: search, $options: 'i' } },
+          { description: { $regex: search, $options: 'i' } }
+        ]
+      });
+    }
+
+    const dueDateRange = getClientTaskDueDateRange(period);
+    if (dueDateRange) {
+      addDueDateCondition(filter, dueDateRange);
+    }
+
+    const tasks = await Task.find(filter).select('completed status dueDate').lean();
+
+    return res.json({
+      success: true,
+      view: 'client',
+      stats: calculateClientAssignedStats(tasks)
+    });
+  } catch (error) {
+    console.error('❌ Error in getAssignedToMeTaskStats:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch client task stats',
       message: error.message
     });
   }
@@ -1253,8 +1357,9 @@ const getClientTasks = async (req, res) => {
 const addTask = async (req, res) => {
   try {
     const { clientId, service } = req.params;
-    const { name, dueDate, assignee, priority, description } = req.body;
+    const { name, dueDate, dueDateTime, assignee, priority, description } = req.body;
     const currentUser = req.user;
+    const parsedDueDate = parseClientDueDate(dueDateTime || dueDate);
 
     if (!name || name.trim().length === 0) {
       return res.status(400).json({
@@ -1283,7 +1388,7 @@ const addTask = async (req, res) => {
       service,
       name: name.trim(),
       description: description || name.trim(),
-      dueDate: dueDate || null,
+      dueDate: parsedDueDate,
       assignee: assignee || '',
       priority: priority || 'Medium',
       status: 'pending',
@@ -1405,9 +1510,14 @@ const updateTask = async (req, res) => {
       } else if (key === 'assignee' && oldValue !== newValue) {
         changes.push(`assignee from "${oldValue}" to "${newValue}"`);
         task[key] = newValue;
-      } else if (key === 'dueDate' && JSON.stringify(oldValue) !== JSON.stringify(newValue)) {
-        changes.push(`due date from "${oldValue}" to "${newValue}"`);
-        task[key] = newValue;
+      } else if ((key === 'dueDate' || key === 'dueDateTime') && newValue !== undefined) {
+        const parsedDueDate = parseClientDueDate(newValue);
+        const oldTime = oldValue ? new Date(oldValue).getTime() : null;
+        const newTime = parsedDueDate ? parsedDueDate.getTime() : null;
+        if (oldTime !== newTime) {
+          changes.push(`due date from "${oldValue}" to "${parsedDueDate}"`);
+        }
+        task.dueDate = parsedDueDate;
       } else if (updates[key] !== undefined) {
         task[key] = updates[key];
       }
@@ -1721,6 +1831,7 @@ module.exports = {
   deleteTask,
   getTaskStats,
   getAssignedToMeTasks,
+  getAssignedToMeTaskStats,
   updateAssignedTaskStatus,
   debugActivityLogs,
   getAssignedTasksByUserId
