@@ -622,6 +622,7 @@ const addClient = async (req, res) => {
     const cleanClientName = normalizeName(client);
     const cleanCompanyName = normalizeName(company);
     const cleanCity = normalizeName(city);
+    const cleanProjectManagers = projectManager.map(manager => normalizeName(manager));
 
     // Check if client already exists for this company
     const existingClient = await Client.findOne({
@@ -1385,6 +1386,64 @@ const extendClientSubscription = async (req, res) => {
   }
 };
 
+const renewClientSubscription = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { startDate, endDate, price, extraTasks = 0, benefits = '' } = req.body;
+
+    const client = await Client.findById(id);
+
+    if (!client) {
+      return res.status(404).json({ success: false, message: "Client not found" });
+    }
+
+    // Push new subscription to array
+    client.subscription.push({
+      startDate: new Date(startDate),
+      endDate: new Date(endDate),
+      price: price ? parseFloat(price) : 0,
+      status: 'Active',
+      extraTasks: extraTasks ? parseInt(extraTasks) : 0,
+      benefits: benefits || ''
+    });
+
+    await client.save();
+
+    res.json({
+      success: true,
+      message: "Subscription renewed successfully",
+      data: client
+    });
+
+  } catch (error) {
+    console.error('Error renewing subscription:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const removeClientSubscription = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const client = await Client.findById(id);
+
+    if (!client) {
+      return res.status(404).json({ success: false, message: "Client not found" });
+    }
+
+    client.subscription = [];
+    await client.save();
+
+    res.json({
+      success: true,
+      message: "Subscription removed successfully",
+      data: client
+    });
+  } catch (error) {
+    console.error('Error removing subscription:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   getAllClients,
   getClientById,
@@ -1397,7 +1456,9 @@ module.exports = {
   addProjectManager,
   removeProjectManager,
   getClientsByCompany,
-  extendClientSubscription
+  extendClientSubscription,
+  renewClientSubscription,
+  removeClientSubscription
 };
 
 console.log("✅ clientController.js loaded successfully with auto-user creation and email integration");
