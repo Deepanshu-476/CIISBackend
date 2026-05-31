@@ -54,6 +54,14 @@ const clienttaskSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  timeSpent: {
+    type: Number,
+    default: 0
+  },
+  inProgressSince: {
+    type: Date,
+    default: null
+  },
   files: [{
     filename: String,
     originalName: String,

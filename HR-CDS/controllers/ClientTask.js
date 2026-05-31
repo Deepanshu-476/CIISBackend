@@ -12,6 +12,19 @@ console.log("✅ ClientTask.js loading...");
 
 // ===== HELPER FUNCTIONS =====
 
+const formatDuration = (seconds) => {
+  if (!seconds || seconds <= 0) return '0s';
+  const hrs = Math.floor(seconds / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+  
+  const parts = [];
+  if (hrs > 0) parts.push(`${hrs}h`);
+  if (mins > 0) parts.push(`${mins}m`);
+  if (secs > 0 || parts.length === 0) parts.push(`${secs}s`);
+  return parts.join(' ');
+};
+
 const getLocalDateStart = (value = new Date()) => {
   const date = value instanceof Date ? new Date(value) : new Date(value);
   if (Number.isNaN(date.getTime())) return null;
@@ -896,39 +909,72 @@ const updateAssignedTaskStatus = async (req, res) => {
 
     const previousStatus = task.status;
     const previousCompleted = task.completed;
+    const now = new Date();
 
-    // Handle status updates based on the provided status
-    if (status === 'completed' || completed === true) {
+    // Determine target status
+    let targetStatus = status;
+    if (completed === true) {
+      targetStatus = 'completed';
+    } else if (!status && previousStatus === 'overdue' && !completed) {
+      targetStatus = 'in-progress';
+    }
+
+    // Stop timer if moving away from in-progress
+    let elapsedSeconds = 0;
+    if (previousStatus === 'in-progress' && targetStatus !== 'in-progress') {
+      if (task.inProgressSince) {
+        elapsedSeconds = Math.max(0, Math.floor((now - new Date(task.inProgressSince)) / 1000));
+        task.timeSpent = (task.timeSpent || 0) + elapsedSeconds;
+        task.inProgressSince = null;
+        console.log(`   Timer stopped. Session duration: ${elapsedSeconds}s. Total: ${task.timeSpent}s`);
+      }
+    }
+
+    // Start timer if moving to in-progress
+    if (targetStatus === 'in-progress' && previousStatus !== 'in-progress') {
+      task.inProgressSince = now;
+      console.log(`   Timer started at ${now.toISOString()}`);
+    }
+
+    // Update status and completion fields
+    if (targetStatus === 'completed') {
       task.completed = true;
-      task.completedAt = new Date();
+      task.completedAt = now;
       task.status = 'completed';
       console.log(`   Task marked as completed`);
-    } else if (status === 'in-progress') {
+    } else if (targetStatus === 'in-progress') {
       task.completed = false;
       task.status = 'in-progress';
-      console.log(`   Task marked as in-progress (from ${previousStatus})`);
-    } else if (status === 'pending') {
+      console.log(`   Task marked as in-progress`);
+    } else if (targetStatus === 'pending') {
       task.completed = false;
       task.status = 'pending';
-      console.log(`   Task marked as pending (from ${previousStatus})`);
-    } else if (status === 'overdue') {
+      console.log(`   Task marked as pending`);
+    } else if (targetStatus === 'overdue') {
       task.completed = false;
       task.status = 'overdue';
-      console.log(`   Task marked as overdue (from ${previousStatus})`);
-    }
-    
-    // Handle case where we're updating an overdue task to in-progress
-    if (!status && previousStatus === 'overdue' && !completed) {
+      console.log(`   Task marked as overdue`);
+    } else if (targetStatus === 'onhold') {
       task.completed = false;
-      task.status = 'in-progress';
-      console.log(`   Task automatically moved from overdue to in-progress`);
+      task.status = 'onhold';
+      console.log(`   Task marked as onhold`);
+    } else if (status) {
+      task.completed = false;
+      task.status = status;
     }
 
     // Log status change if status actually changed
     if (previousStatus !== task.status) {
+      let logDescription = `Status changed from "${previousStatus}" to "${task.status}"`;
+      if (elapsedSeconds > 0) {
+        logDescription += ` (Timer stopped. Session duration: ${formatDuration(elapsedSeconds)}, Total time: ${formatDuration(task.timeSpent)})`;
+      } else if (task.status === 'in-progress') {
+        logDescription += ` (Timer started)`;
+      }
+
       await addClientActivityLogHelper(task, {
         action: 'status_updated',
-        description: `Status changed from "${previousStatus}" to "${task.status}"`,
+        description: logDescription,
         oldValues: {status: previousStatus},
         newValues: {status: task.status},
         user: currentUser?.id || currentUser?._id,
@@ -1281,7 +1327,15 @@ const getTasksByClientService = async (req, res) => {
       });
     }
 
-    const tasks = await Task.find({ clientId, service })
+    const filter = { clientId, service };
+    if (req.query.startDate && req.query.endDate) {
+      filter.createdAt = {
+        $gte: new Date(req.query.startDate),
+        $lte: new Date(req.query.endDate)
+      };
+    }
+
+    const tasks = await Task.find(filter)
       .sort({ completed: 1, dueDate: 1, createdAt: -1 });
 
     res.json({
@@ -1309,6 +1363,13 @@ const getClientTasks = async (req, res) => {
     if (completed !== undefined) filter.completed = completed === 'true';
     if (assignee) filter.assignee = assignee;
     if (priority) filter.priority = priority;
+
+    if (req.query.startDate && req.query.endDate) {
+      filter.createdAt = {
+        $gte: new Date(req.query.startDate),
+        $lte: new Date(req.query.endDate)
+      };
+    }
 
     const tasks = await Task.find(filter)
       .populate('remarks.user', 'name email')
@@ -1357,7 +1418,7 @@ const getClientTasks = async (req, res) => {
 const addTask = async (req, res) => {
   try {
     const { clientId, service } = req.params;
-    const { name, dueDate, dueDateTime, assignee, priority, description } = req.body;
+    const { name, dueDate, dueDateTime, assignee, assigneeId, priority, description } = req.body;
     const currentUser = req.user;
     const parsedDueDate = parseClientDueDate(dueDateTime || dueDate);
 
@@ -1383,6 +1444,14 @@ const addTask = async (req, res) => {
       });
     }
 
+    let resolvedAssigneeId = assigneeId || null;
+    if (!resolvedAssigneeId && assignee) {
+      const user = await User.findOne({ name: assignee });
+      if (user) {
+        resolvedAssigneeId = user._id;
+      }
+    }
+
     const task = new Task({
       clientId,
       service,
@@ -1390,6 +1459,7 @@ const addTask = async (req, res) => {
       description: description || name.trim(),
       dueDate: parsedDueDate,
       assignee: assignee || '',
+      assigneeId: resolvedAssigneeId,
       priority: priority || 'Medium',
       status: 'pending',
       completed: false,
@@ -1478,8 +1548,11 @@ const updateTask = async (req, res) => {
 
     const changes = [];
     const previousCompleted = task.completed;
+    const previousStatus = task.status;
+    const now = new Date();
     
-    Object.keys(updates).forEach(key => {
+    // Loop using for...of to support async await in the loop
+    for (const key of Object.keys(updates)) {
       const oldValue = task[key];
       let newValue = updates[key];
       
@@ -1492,9 +1565,26 @@ const updateTask = async (req, res) => {
       } else if (key === 'status' && oldValue !== newValue) {
         changes.push(`status from "${oldValue}" to "${newValue}"`);
         task[key] = newValue;
+        
+        // Stop timer if moving away from in-progress
+        if (oldValue === 'in-progress') {
+          if (task.inProgressSince) {
+            const elapsed = Math.max(0, Math.floor((now - new Date(task.inProgressSince)) / 1000));
+            task.timeSpent = (task.timeSpent || 0) + elapsed;
+            task.inProgressSince = null;
+            changes.push(`timer stopped (session duration: ${formatDuration(elapsed)}, total: ${formatDuration(task.timeSpent)})`);
+          }
+        }
+        
+        // Start timer if moving to in-progress
+        if (newValue === 'in-progress') {
+          task.inProgressSince = now;
+          changes.push(`timer started`);
+        }
+
         if (newValue === 'completed') {
           task.completed = true;
-          task.completedAt = task.completedAt || new Date();
+          task.completedAt = task.completedAt || now;
         } else if (oldValue === 'completed') {
           task.completed = false;
           task.completedAt = null;
@@ -1502,13 +1592,30 @@ const updateTask = async (req, res) => {
       } else if (key === 'completed' && oldValue !== newValue) {
         changes.push(`completed from "${oldValue}" to "${newValue}"`);
         task.completed = !!newValue;
-        task.completedAt = task.completed ? (task.completedAt || new Date()) : null;
+        task.completedAt = task.completed ? (task.completedAt || now) : null;
+        
+        // Stop timer if completing
+        if (task.completed && task.status === 'in-progress' && task.inProgressSince) {
+          const elapsed = Math.max(0, Math.floor((now - new Date(task.inProgressSince)) / 1000));
+          task.timeSpent = (task.timeSpent || 0) + elapsed;
+          task.inProgressSince = null;
+          changes.push(`timer stopped (session duration: ${formatDuration(elapsed)}, total: ${formatDuration(task.timeSpent)})`);
+        }
+        
         task.status = task.completed ? 'completed' : 'pending';
       } else if (key === 'priority' && oldValue !== newValue) {
         changes.push(`priority from "${oldValue}" to "${newValue}"`);
         task[key] = newValue;
       } else if (key === 'assignee' && oldValue !== newValue) {
         changes.push(`assignee from "${oldValue}" to "${newValue}"`);
+        task[key] = newValue;
+        
+        // Resolve assigneeId
+        if (updates.assigneeId === undefined) {
+          const user = await User.findOne({ name: newValue });
+          task.assigneeId = user ? user._id : null;
+        }
+      } else if (key === 'assigneeId' && oldValue !== newValue) {
         task[key] = newValue;
       } else if ((key === 'dueDate' || key === 'dueDateTime') && newValue !== undefined) {
         const parsedDueDate = parseClientDueDate(newValue);
@@ -1521,7 +1628,7 @@ const updateTask = async (req, res) => {
       } else if (updates[key] !== undefined) {
         task[key] = updates[key];
       }
-    });
+    }
 
     if (changes.length > 0) {
       await addClientActivityLogHelper(task, {
@@ -1603,14 +1710,31 @@ const toggleTaskCompletion = async (req, res) => {
     }
 
     const previousCompleted = task.completed;
+    const previousStatus = task.status;
+    const now = new Date();
+    
+    let elapsedSeconds = 0;
+    if (previousStatus === 'in-progress') {
+      if (task.inProgressSince) {
+        elapsedSeconds = Math.max(0, Math.floor((now - new Date(task.inProgressSince)) / 1000));
+        task.timeSpent = (task.timeSpent || 0) + elapsedSeconds;
+        task.inProgressSince = null;
+      }
+    }
+
     task.completed = !task.completed;
-    task.completedAt = task.completed ? new Date() : null;
+    task.completedAt = task.completed ? now : null;
     task.status = task.completed ? 'completed' : 'pending';
     
     const action = task.completed ? 'completed' : 'reopened';
+    let logDescription = `Task ${action}`;
+    if (elapsedSeconds > 0) {
+      logDescription += ` (Timer stopped. Session duration: ${formatDuration(elapsedSeconds)}, Total time: ${formatDuration(task.timeSpent)})`;
+    }
+
     await addClientActivityLogHelper(task, {
       action: action,
-      description: `Task ${action}`,
+      description: logDescription,
       user: currentUser?.id || currentUser?._id,
       userName: currentUser?.name || currentUser?.username || 'System'
     }, req);
