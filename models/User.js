@@ -17,6 +17,18 @@ const userSchema = new mongoose.Schema({
     required: [true, "Company code is required"],
     index: true
   },
+
+  // ==================== BRANCH FIELD (NEW) ====================
+  branch: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Branch",
+    index: true
+  },
+  
+  branchCode: {
+    type: String, 
+    index: true
+  },
   
   // ==================== CORE FIELDS ====================
   name: {
