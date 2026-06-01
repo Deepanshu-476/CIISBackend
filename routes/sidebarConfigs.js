@@ -2,7 +2,27 @@
 const express = require('express');
 const router = express.Router();
 const SidebarConfig = require('../models/SidebarConfig');
+const Company = require('../models/Company');
 const mongoose = require('mongoose');
+
+const getRouteKey = item => {
+  const rawPath = String(item?.path || item?.id || '');
+  return rawPath.split('/').filter(Boolean).pop();
+};
+
+const filterMenuItemsByCompanyAccess = async (companyId, menuItems) => {
+  const company = await Company.findById(companyId).select('allowedPages');
+  const allowedPages = Array.isArray(company?.allowedPages) ? company.allowedPages : [];
+
+  if (allowedPages.length === 0) return menuItems;
+
+  const allowedSet = new Set(allowedPages.map(page => String(page).trim()).filter(Boolean));
+  return menuItems.filter(item => (
+    allowedSet.has(item.id) ||
+    allowedSet.has(item.path) ||
+    allowedSet.has(getRouteKey(item))
+  ));
+};
 
 // ✅ GET all sidebar configs
 router.get('/', async (req, res) => {
@@ -107,6 +127,15 @@ router.post('/', async (req, res) => {
       });
     }
     
+    const allowedMenuItems = await filterMenuItemsByCompanyAccess(companyId, menuItems);
+
+    if (allowedMenuItems.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Selected menu items are not allowed for this company'
+      });
+    }
+
     // Check if config already exists
     const existingConfig = await SidebarConfig.findOne({
       companyId,
@@ -127,7 +156,7 @@ router.post('/', async (req, res) => {
       companyId,
       departmentId,
       role,
-      menuItems,
+      menuItems: allowedMenuItems,
       // createdBy और updatedBy को null रहने दें
     });
     
@@ -185,10 +214,28 @@ router.put('/:id', async (req, res) => {
       });
     }
     
+    const existingConfig = await SidebarConfig.findById(id).select('companyId');
+
+    if (!existingConfig) {
+      return res.status(404).json({
+        success: false,
+        message: 'Configuration not found'
+      });
+    }
+
+    const allowedMenuItems = await filterMenuItemsByCompanyAccess(existingConfig.companyId, menuItems);
+
+    if (allowedMenuItems.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Selected menu items are not allowed for this company'
+      });
+    }
+
     const updatedConfig = await SidebarConfig.findByIdAndUpdate(
       id,
       {
-        menuItems,
+        menuItems: allowedMenuItems,
         updatedAt: Date.now()
       },
       { 
@@ -197,13 +244,6 @@ router.put('/:id', async (req, res) => {
       }
     ).populate('companyId', 'companyName')
      .populate('departmentId', 'name');
-    
-    if (!updatedConfig) {
-      return res.status(404).json({
-        success: false,
-        message: 'Configuration not found'
-      });
-    }
     
     res.json({
       success: true,

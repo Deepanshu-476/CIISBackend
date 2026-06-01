@@ -822,7 +822,7 @@ exports.verifyLoginOTP = async (req, res) => {
     const user = await User.findOne({ email })
       .select("-password -loginAttempts -lockUntil")
       .populate("department", "name")
-      .populate("company", "companyName companyCode logo companyEmail companyPhone companyAddress");
+      .populate("company", "companyName companyCode logo companyEmail companyPhone companyAddress isActive subscriptionExpiry allowedPages loginUrl dbIdentifier");
 
     if (!user) {
       return res.status(404).json({
@@ -865,6 +865,9 @@ exports.verifyLoginOTP = async (req, res) => {
       logo: user.company.logo,
       isActive: user.company.isActive,
       subscriptionExpiry: user.company.subscriptionExpiry,
+      allowedPages: user.company.allowedPages || [],
+      loginUrl: user.company.loginUrl,
+      dbIdentifier: user.company.dbIdentifier,
     } : null;
 
     // ✅ Prepare response
