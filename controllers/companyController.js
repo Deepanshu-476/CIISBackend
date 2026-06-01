@@ -373,7 +373,9 @@ exports.createCompany = async (req, res) => {
         loginUrl: frontendLoginUrl,
         apiLoginUrl: apiLoginUrl,
         dbIdentifier: dbIdentifier,
-        isActive: true,
+        isActive: false,
+        deactivatedAt: new Date(),
+        allowedPages: [],
       };
 
       const company = await Company.create([companyData], { session });
@@ -405,10 +407,8 @@ exports.createCompany = async (req, res) => {
       const loginToken = crypto.randomBytes(32).toString("hex");
       createdCompany.loginToken = loginToken;
       
-      // ✅ 6. SET SUBSCRIPTION EXPIRY (30 days from now)
-      const subscriptionExpiry = new Date();
-      subscriptionExpiry.setDate(subscriptionExpiry.getDate() + 30);
-      createdCompany.subscriptionExpiry = subscriptionExpiry;
+      // ✅ 6. KEEP SUBSCRIPTION PENDING UNTIL SUPER ADMIN ACTIVATES ACCESS
+      createdCompany.subscriptionExpiry = null;
       
       await createdCompany.save({ session });
 
@@ -460,7 +460,7 @@ exports.createCompany = async (req, res) => {
       // ✅ 8. SUCCESS RESPONSE
       return res.status(201).json({
         success: true,
-        message: "Company registered successfully! 🎉 Check your email for login credentials.",
+        message: "Company registered successfully! Activate company access before owner login.",
         company: {
           id: createdCompany._id,
           companyName: createdCompany.companyName,
@@ -475,6 +475,7 @@ exports.createCompany = async (req, res) => {
           dbIdentifier: createdCompany.dbIdentifier,
           isActive: createdCompany.isActive,
           subscriptionExpiry: createdCompany.subscriptionExpiry,
+          allowedPages: createdCompany.allowedPages,
           createdAt: createdCompany.createdAt,
         },
         owner: {
@@ -495,7 +496,7 @@ exports.createCompany = async (req, res) => {
           timestamp: new Date().toISOString(),
           transactionId: createdCompany._id.toString(),
           companyCode: companyCode,
-          stepsCompleted: ["company_creation", "owner_creation", "token_generation", "email_queued"]
+          stepsCompleted: ["company_creation", "owner_creation", "token_generation", "pending_access_activation", "email_queued"]
         }
       });
 
@@ -610,6 +611,7 @@ exports.getAllCompanies = async (req, res) => {
     const companies = await Company.find({})
       .select(
         "_id companyName companyEmail companyAddress companyPhone ownerName logo companyDomain loginToken isActive deactivatedAt subscriptionExpiry createdAt updatedAt companyCode dbIdentifier loginUrl"
+          + " allowedPages accessConfiguredAt accessUpdatedBy"
       )
       .sort({ createdAt: -1 });
 
@@ -918,6 +920,110 @@ exports.updateCompany = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to update company",
+    });
+  }
+};
+
+// =============================
+// UPDATE COMPANY ACCESS
+// =============================
+
+exports.updateCompanyAccess = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      allowedPages = [],
+      activeDays = 30,
+      isActive = true,
+      subscriptionExpiry,
+      updatedBy,
+    } = req.body;
+
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid company id",
+      });
+    }
+
+    if (!Array.isArray(allowedPages) || allowedPages.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Please select at least one page for this company",
+      });
+    }
+
+    const cleanAllowedPages = [...new Set(
+      allowedPages
+        .map(page => String(page || "").trim())
+        .filter(Boolean)
+    )];
+
+    const days = Number(activeDays);
+    const computedExpiry = subscriptionExpiry
+      ? new Date(subscriptionExpiry)
+      : new Date(Date.now() + Math.max(1, Number.isFinite(days) ? days : 30) * 24 * 60 * 60 * 1000);
+
+    if (Number.isNaN(computedExpiry.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid subscription expiry date",
+      });
+    }
+
+    const updateData = {
+      allowedPages: cleanAllowedPages,
+      subscriptionExpiry: computedExpiry,
+      isActive: Boolean(isActive),
+      deactivatedAt: isActive ? null : new Date(),
+      accessConfiguredAt: new Date(),
+    };
+
+    if (updatedBy && isValidObjectId(updatedBy)) {
+      updateData.accessUpdatedBy = updatedBy;
+    }
+
+    const company = await Company.findByIdAndUpdate(
+      id,
+      { $set: updateData },
+      { new: true, runValidators: true }
+    ).select("-loginToken");
+
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: "Company not found",
+      });
+    }
+
+    if (company.isActive) {
+      await User.updateMany(
+        { company: id, companyRole: "Owner" },
+        {
+          isActive: true,
+          $unset: { lockUntil: 1 },
+        }
+      );
+    } else {
+      await User.updateMany(
+        { company: id },
+        {
+          isActive: false,
+          lockUntil: Date.now() + 365 * 24 * 60 * 60 * 1000,
+        }
+      );
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: company.isActive ? "Company access activated successfully" : "Company access saved as inactive",
+      company,
+    });
+  } catch (err) {
+    console.error("❌ Update company access error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update company access",
     });
   }
 };

@@ -54,6 +54,14 @@ const clienttaskSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  timeSpent: {
+    type: Number,
+    default: 0
+  },
+  inProgressSince: {
+    type: Date,
+    default: null
+  },
   files: [{
     filename: String,
     originalName: String,
@@ -81,6 +89,8 @@ const clienttaskSchema = new mongoose.Schema({
     user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     userName: String,
     description: String,
+    oldValues: mongoose.Schema.Types.Mixed,
+    newValues: mongoose.Schema.Types.Mixed,
     ipAddress: String,
     userAgent: String,
     createdAt: { type: Date, default: Date.now }
@@ -106,11 +116,9 @@ clienttaskSchema.index({ 'remarks.createdAt': -1 });
 // Virtual for checking if task is overdue
 clienttaskSchema.virtual('isOverdue').get(function() {
   if (!this.dueDate || this.completed) return false;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
   const dueDate = new Date(this.dueDate);
-  dueDate.setHours(0, 0, 0, 0);
-  return dueDate < today;
+  if (Number.isNaN(dueDate.getTime())) return false;
+  return dueDate < new Date();
 });
 
 // Pre-save middleware

@@ -7,6 +7,14 @@ const { uploadRemarkImage } = require('../middlewares/uploadMiddleware');
 
 // ==================== TASK ROUTES ====================
 
+// Clean task-management APIs used by the employee task page.
+router.get('/personal', protect, taskController.getPersonalTasks);
+router.get('/personal/stats', protect, taskController.getPersonalTaskStats);
+router.get('/assigned-to-me', protect, taskController.getAssignedToMeTasks);
+router.get('/assigned-to-me/stats', protect, taskController.getAssignedToMeTaskStats);
+router.get('/all', protect, taskController.getAllMyTaskViews);
+router.get('/all/stats', protect, taskController.getAllMyTaskStats);
+
 // ✅ GET ALL TASKS (Public for all authenticated users)
 router.get('/', protect, taskController.getTasks);
 

@@ -9,6 +9,7 @@ const meetingSchema = new mongoose.Schema({
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   attendees: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   companyCode: { type: String, required: true }, // 👈 ADD THIS
+  link: { type: String, default: "" },
   
 });
 
