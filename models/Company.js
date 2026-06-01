@@ -99,6 +99,22 @@ const companySchema = new mongoose.Schema(
       type: Date,
       default: () => new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
     },
+
+    allowedPages: {
+      type: [String],
+      default: [],
+    },
+
+    accessConfiguredAt: {
+      type: Date,
+      default: null,
+    },
+
+    accessUpdatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
   },
   { timestamps: true }
 );

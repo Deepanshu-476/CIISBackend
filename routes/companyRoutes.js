@@ -32,6 +32,9 @@ router.get("/:id/stats", companyController.getCompanyStats);
 // ✅ GET COMPANY USERS
 router.get("/:id/users", companyController.getCompanyUsers);
 
+// ✅ UPDATE COMPANY PAGE ACCESS / ACTIVATION
+router.patch("/:id/access", companyController.updateCompanyAccess);
+
 // ✅ GET COMPANY BY ID
 router.get("/:id", companyController.getCompanyById);
 
