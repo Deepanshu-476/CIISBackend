@@ -4,6 +4,7 @@ const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const sendEmail = require("../utils/sendEmail");
 const Department = require("../models/Department");
+const Branch = require("../models/Branch");
 const crypto = require("crypto");
 const mongoose = require("mongoose");
 const { validateRequest } = require("../middleware/validation");
@@ -122,7 +123,16 @@ exports.companyLogin = async (req, res) => {
     }
 
     const cleanEmail = email.toLowerCase().trim();
-    const cleanCompanyCode = companyCode.toLowerCase().trim();
+    const rawCompanyCode = companyCode.toLowerCase().trim();
+
+    // Support companyCode-branchCode format
+    let cleanCompanyCode = rawCompanyCode;
+    let expectedBranchCode = null;
+    if (rawCompanyCode.includes("-")) {
+      const parts = rawCompanyCode.split("-");
+      cleanCompanyCode = parts[0];
+      expectedBranchCode = parts.slice(1).join("-").toUpperCase();
+    }
 
     // ✅ Find company first
     const company = await Company.findOne({
@@ -162,15 +172,22 @@ exports.companyLogin = async (req, res) => {
     }
 
     // ✅ Find user with company association
-    const user = await User.findOne({
+    const userQuery = {
       email: cleanEmail,
       $or: [
         { companyCode: company.companyCode },
         { company: company._id }
       ]
-    })
+    };
+
+    if (expectedBranchCode) {
+      userQuery.branchCode = expectedBranchCode;
+    }
+
+    const user = await User.findOne(userQuery)
       .select("+password +isActive +loginAttempts +lockUntil")
       .populate("department", "name")
+      .populate("branch", "name branchCode")
       .populate("company", "companyName companyCode logo")
 
     if (!user) {
@@ -310,6 +327,7 @@ exports.register = async (req, res) => {
       jobRole,
       company, 
       companyCode, 
+      branch, // NEW: Branch ID
       phone, address, gender, maritalStatus, dob, salary,
       accountNumber, ifsc, bankName, bankHolderName,
       employeeType, properties, propertyOwned, additionalDetails,
@@ -390,6 +408,26 @@ exports.register = async (req, res) => {
       return errorResponse(res, 403, "Company subscription has expired", "SUBSCRIPTION_EXPIRED");
     }
 
+    // Validate or Auto-assign Branch
+    let cleanBranch = branch;
+    let cleanBranchCode = null;
+
+    if (branch) {
+      const branchExists = await Branch.findById(branch).session(session);
+      if (!branchExists) {
+        await session.abortTransaction();
+        return errorResponse(res, 404, "Branch not found", "BRANCH_NOT_FOUND");
+      }
+      cleanBranchCode = branchExists.branchCode;
+    } else {
+      // Fallback: Default to Company's Default Branch (HQ)
+      const defaultBranch = await Branch.findOne({ company: company, isDefault: true }).session(session);
+      if (defaultBranch) {
+        cleanBranch = defaultBranch._id;
+        cleanBranchCode = defaultBranch.branchCode;
+      }
+    }
+
     // Generate employee ID
     const employeeId = `EMP${Date.now()}${Math.floor(Math.random() * 1000)}`;
 
@@ -402,6 +440,8 @@ exports.register = async (req, res) => {
       jobRole,
       company,
       companyCode,
+      branch: cleanBranch,
+      branchCode: cleanBranchCode,
       employeeId,
       phone: phone?.trim(),
       address: address?.trim(),
@@ -495,6 +535,7 @@ exports.login = async (req, res) => {
     const user = await User.findOne({ email: cleanEmail })
       .select("+password +isActive +loginAttempts +lockUntil")
       .populate("department", "name")
+      .populate("branch", "name branchCode")
       .populate("company", "companyName companyCode isActive subscriptionExpiry logo companyEmail companyPhone companyAddress dbIdentifier loginUrl");
 
     if (!user) {
@@ -550,7 +591,14 @@ exports.login = async (req, res) => {
     }
 
     // ✅ Use companyCode if provided, otherwise use companyIdentifier
-    const providedCompanyCode = companyCode || companyIdentifier;
+    const rawCompanyCode = companyCode || companyIdentifier;
+    let providedCompanyCode = rawCompanyCode;
+    let expectedBranchCode = null;
+    if (rawCompanyCode && typeof rawCompanyCode === "string" && rawCompanyCode.includes("-")) {
+      const parts = rawCompanyCode.split("-");
+      providedCompanyCode = parts[0];
+      expectedBranchCode = parts.slice(1).join("-").toUpperCase();
+    }
     
     // ✅ VALIDATE COMPANY CODE IF PROVIDED
     if (providedCompanyCode) {
@@ -636,6 +684,19 @@ exports.login = async (req, res) => {
           providedCode: providedCompanyCode,
           expectedCode: userCompanyCode.toUpperCase(),
           userCompany: company?.companyName || "Unknown",
+        });
+      }
+
+      // ✅ Branch validation
+      if (expectedBranchCode && user.branchCode !== expectedBranchCode) {
+        console.log("❌ Branch mismatch for login:", {
+          expected: expectedBranchCode,
+          actual: user.branchCode
+        });
+        return res.status(403).json({
+          success: false,
+          message: `Access denied. You do not belong to branch '${expectedBranchCode}'`,
+          errorCode: "BRANCH_MISMATCH"
         });
       }
 
