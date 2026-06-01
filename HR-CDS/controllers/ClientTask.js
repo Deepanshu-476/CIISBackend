@@ -794,7 +794,6 @@ const updateAssignedTaskStatus = async (req, res) => {
     const previousStatus = task.status;
     const previousCompleted = task.completed;
 
-    // Handle status updates based on the provided status
     if (status === 'completed' || completed === true) {
       task.completed = true;
       task.completedAt = new Date();
