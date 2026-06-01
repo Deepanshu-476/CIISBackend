@@ -819,6 +819,7 @@ const addClientActivityLog = async (req, res) => {
   }
 };
 
+
 const getClientTaskActivityLogs = async (req, res) => {
   try {
     const { taskId } = req.params;
