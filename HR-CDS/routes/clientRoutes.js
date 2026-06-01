@@ -17,7 +17,9 @@ const {
   addProjectManager,
   removeProjectManager,
   getClientsByCompany,
-  extendClientSubscription
+  extendClientSubscription,
+  renewClientSubscription,
+  removeClientSubscription
 } = require('../controllers/clientController');
 
 // ✅ Service Routes
@@ -38,6 +40,8 @@ router.post('/', addClient);
 
 // ✅ EXTEND ROUTE
 router.post('/:id/extend-subscription', extendClientSubscription);
+router.patch('/renew-subscription/:id', renewClientSubscription);
+router.delete('/subscription/:id', removeClientSubscription);
 
 // ✅ ID ROUTES (SABSE LAST)
 router.get('/:id', getClientById);

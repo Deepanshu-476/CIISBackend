@@ -1,6 +1,7 @@
 const express = require("express");
 const {
   createMeeting,
+  updateMeeting,
   getUserMeetings,
   markAsViewed,
   getViewStatus,
@@ -12,6 +13,9 @@ const router = express.Router();
 
 // 🟢 Create new meeting (Admin)
 router.post("/create", createMeeting);
+
+// 🟢 Update existing meeting (Admin)
+router.put("/:meetingId", updateMeeting);
 
 router.delete("/:meetingId", deleteMeeting);
 

@@ -2,58 +2,212 @@ const Meeting = require("../models/Meeting");
 const MeetingView = require("../models/MeetingView");
 const User = require("../../models/User");
 const { sendEmail } = require("../../utils/sendEmail");
-const {notifyDirectUsers} = require("../utils/systemNotificationService");
+const { notifyDirectUsers } = require("../utils/systemNotificationService");
+const { scheduleMeetingReminder, cancelMeetingReminder } = require("../../services/meetingSchedulerService");
 
 /**
- * 🟢 Create Meeting (Admin)
+ * 🟢 Create Meeting (Admin) - Supports Single Date or Array of Dates
  */
 const createMeeting = async (req, res) => {
   try {
-    const { title, description, date, time, recurring, attendees, createdBy, companyCode } = req.body;
+    const { title, description, date, dates, time, recurring, attendees, createdBy, companyCode, link } = req.body;
 
-    if (!title || !date || !time || !Array.isArray(attendees))
+    if (!title || (!date && (!Array.isArray(dates) || dates.length === 0)) || !time || !Array.isArray(attendees))
       return res.status(400).json({ error: "Missing required fields" });
 
-    const meeting = await Meeting.create({
-      title,
-      description,
-      date,
-      time,
-      recurring,
-      createdBy,
-      attendees,
-      companyCode,
-    });
+    // Determine the list of dates to schedule meetings for
+    let datesToCreate = [];
+    if (Array.isArray(dates) && dates.length > 0) {
+      datesToCreate = dates;
+    } else if (date) {
+      datesToCreate = [date];
+    }
 
-    // create MeetingView & send mail
+    const createdMeetings = [];
+
+    for (const d of datesToCreate) {
+      const meeting = await Meeting.create({
+        title,
+        description,
+        date: new Date(d),
+        time,
+        recurring,
+        createdBy,
+        attendees,
+        companyCode,
+        link: link || ""
+      });
+
+      createdMeetings.push(meeting);
+
+      // 1. Schedule 1-hour email reminder
+      scheduleMeetingReminder(meeting);
+
+      // 2. Create MeetingView records
+      for (const empId of attendees) {
+        await MeetingView.create({ meetingId: meeting._id, userId: empId });
+      }
+
+      // 3. Send system notification
+      await notifyDirectUsers({
+        userIds: attendees,
+        targetPath: '/ciisUser/employee-meeting',
+        type: 'meeting_created',
+        title: 'New Meeting Scheduled',
+        message: `${req.user?.name || 'Admin'} scheduled "${title}" on ${new Date(d).toDateString()} at ${time}`,
+        actor: req.user?._id || createdBy,
+        data: {
+          meetingId: meeting._id,
+          title,
+          date: d,
+          time,
+        },
+        priority: 'high',
+      });
+
+      // 4. Send immediate scheduling email
+      for (const empId of attendees) {
+        const emp = await User.findById(empId);
+        if (emp && emp.email) {
+          const joinText = link ? `<p><b>Join Meeting Link:</b> <a href="${link}" target="_blank" rel="noopener noreferrer">${link}</a></p>` : "";
+          const html = `
+            <h3>📅 New Meeting Scheduled</h3>
+            <p>Hi ${emp.name || 'Team Member'},</p>
+            <p>You have been invited to a new meeting scheduled by the Admin team.</p>
+            <p><b>Title:</b> ${title}</p>
+            <p><b>Description:</b> ${description || "-"}</p>
+            <p><b>Date:</b> ${new Date(d).toDateString()}</p>
+            <p><b>Time:</b> ${time}</p>
+            ${joinText}
+            <p>See you there!</p>
+          `;
+          await sendEmail(emp.email, `📅 Meeting Scheduled: ${title}`, html, {
+            skipNotification: true,
+          });
+        }
+      }
+
+      // 5. Create matching Auto-Task inside the Task Board (Create for Others workflow)
+      try {
+        const Task = require("../models/Task");
+        const statusByUser = attendees.map((uid) => ({
+          user: uid,
+          status: "pending",
+        }));
+        
+        // Combine date and time for task due date
+        const taskDueDateTime = new Date(d);
+        const [hours, minutes] = time.split(':').map(Number);
+        taskDueDateTime.setHours(hours, minutes, 0, 0);
+
+        const joinText = link ? `\n\nClickable Joining Link: ${link}` : "";
+
+        await Task.create({
+          title: `Meeting: ${title}`,
+          description: `Auto-generated task for scheduled meeting "${title}".\nAgenda/Description: ${description || "No agenda details provided."}${joinText}`,
+          dueDateTime: taskDueDateTime,
+          priority: "medium",
+          companyCode: companyCode || req.user?.companyCode || "",
+          assignedUsers: attendees,
+          statusByUser,
+          createdBy: createdBy || req.user?._id,
+          taskFor: 'others',
+          statusHistory: [{
+            status: 'pending',
+            changedBy: createdBy || req.user?._id,
+            remarks: `Task automatically generated on meeting creation`
+          }]
+        });
+        console.log(`[MeetingAutoTask] Created matching task "Meeting: ${title}" successfully.`);
+      } catch (taskError) {
+        console.error("Failed to create auto-task for meeting:", taskError);
+      }
+    }
+
+    res.json({ success: true, meetings: createdMeetings, meeting: createdMeetings[0] });
+  } catch (err) {
+    console.error("Create Meeting Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * 🟢 Update Meeting (Admin)
+ */
+const updateMeeting = async (req, res) => {
+  try {
+    const { meetingId } = req.params;
+    const { title, description, date, time, recurring, attendees, link, companyCode } = req.body;
+
+    const meeting = await Meeting.findById(meetingId);
+    if (!meeting) {
+      return res.status(404).json({ error: "Meeting not found" });
+    }
+
+    // Cancel old reminder job
+    cancelMeetingReminder(meetingId);
+
+    // Update meeting details
+    meeting.title = title || meeting.title;
+    meeting.description = description !== undefined ? description : meeting.description;
+    meeting.date = date ? new Date(date) : meeting.date;
+    meeting.time = time || meeting.time;
+    meeting.recurring = recurring || meeting.recurring;
+    meeting.attendees = attendees || meeting.attendees;
+    meeting.link = link !== undefined ? link : meeting.link;
+    meeting.companyCode = companyCode || meeting.companyCode;
+
+    await meeting.save();
+
+    // Re-schedule reminder job
+    scheduleMeetingReminder(meeting);
+
+    // Update MeetingViews (add views for new attendees if not exists)
+    const existingViews = await MeetingView.find({ meetingId });
+    const existingUserIds = existingViews.map(v => v.userId.toString());
+
+    for (const attendeeId of meeting.attendees) {
+      const attendeeIdStr = attendeeId.toString();
+      if (!existingUserIds.includes(attendeeIdStr)) {
+        await MeetingView.create({ meetingId, userId: attendeeId });
+      }
+    }
+
+    // Direct user update notification
     await notifyDirectUsers({
-      userIds: attendees,
+      userIds: meeting.attendees,
       targetPath: '/ciisUser/employee-meeting',
-      type: 'meeting_created',
-      title: 'New Meeting Scheduled',
-      message: `${req.user?.name || 'Admin'} scheduled "${title}" on ${new Date(date).toDateString()} at ${time}`,
-      actor: req.user?._id || createdBy,
+      type: 'meeting_updated',
+      title: 'Meeting Details Updated',
+      message: `${req.user?.name || 'Admin'} updated meeting "${meeting.title}" to ${new Date(meeting.date).toDateString()} at ${meeting.time}`,
+      actor: req.user?._id || meeting.createdBy,
       data: {
         meetingId: meeting._id,
-        title,
-        date,
-        time,
+        title: meeting.title,
+        date: meeting.date,
+        time: meeting.time,
       },
       priority: 'high',
     });
 
-    for (const empId of attendees) {
-      await MeetingView.create({ meetingId: meeting._id, userId: empId });
+    // Send immediate email updates to all attendees
+    for (const empId of meeting.attendees) {
       const emp = await User.findById(empId);
       if (emp && emp.email) {
+        const joinText = meeting.link ? `<p><b>Join Meeting Link:</b> <a href="${meeting.link}" target="_blank" rel="noopener noreferrer">${meeting.link}</a></p>` : "";
         const html = `
-          <h3>📅 New Meeting Scheduled</h3>
-          <p><b>Title:</b> ${title}</p>
-          <p><b>Description:</b> ${description || "-"}</p>
-          <p><b>Date:</b> ${new Date(date).toDateString()}</p>
-          <p><b>Time:</b> ${time}</p>
+          <h3>📅 Meeting Details Updated</h3>
+          <p>Hi ${emp.name || 'Team Member'},</p>
+          <p>Please note that the details of your scheduled meeting <b>"${meeting.title}"</b> have been updated.</p>
+          <p><b>New Details:</b></p>
+          <p><b>Title:</b> ${meeting.title}</p>
+          <p><b>Description:</b> ${meeting.description || "-"}</p>
+          <p><b>Date:</b> ${new Date(meeting.date).toDateString()}</p>
+          <p><b>Time:</b> ${meeting.time}</p>
+          ${joinText}
+          <p>See you there!</p>
         `;
-        await sendEmail(emp.email, `📅 Meeting Scheduled: ${title}`, html, {
+        await sendEmail(emp.email, `📅 Meeting Details Updated: ${meeting.title}`, html, {
           skipNotification: true,
         });
       }
@@ -61,7 +215,7 @@ const createMeeting = async (req, res) => {
 
     res.json({ success: true, meeting });
   } catch (err) {
-    console.error("Create Meeting Error:", err);
+    console.error("Update Meeting Error:", err);
     res.status(500).json({ error: err.message });
   }
 };
@@ -71,11 +225,11 @@ const createMeeting = async (req, res) => {
  */
 const getUserMeetings = async (req, res) => {
   try {
-    const { companyCode } = req.query; // 👈 ADD THIS
+    const { companyCode } = req.query;
 
     const userMeetings = await Meeting.find({
       attendees: req.params.userId,
-      ...(companyCode && { companyCode }) // 👈 ADD FILTER
+      ...(companyCode && { companyCode })
     }).sort({ date: 1 });
 
     const views = await MeetingView.find({ userId: req.params.userId });
@@ -142,7 +296,7 @@ const getAllMeetings = async (req, res) => {
     console.error("Get All Meetings Error:", error);
     res.status(500).json({ error: error.message });
   }
-}
+};
 
 /**
  * ❌ Delete Meeting (Admin)
@@ -155,9 +309,12 @@ const deleteMeeting = async (req, res) => {
       return res.status(400).json({ error: "Meeting ID required" });
     }
 
+    // Cancel scheduled reminder job
+    cancelMeetingReminder(meetingId);
+
     await Meeting.findByIdAndDelete(meetingId);
 
-    // Related views bhi delete karo
+    // Related views also delete
     await MeetingView.deleteMany({ meetingId });
 
     res.json({ success: true, message: "Meeting deleted successfully" });
@@ -170,6 +327,7 @@ const deleteMeeting = async (req, res) => {
 
 module.exports = {
   createMeeting,
+  updateMeeting,
   getUserMeetings,
   markAsViewed,
   getViewStatus,

@@ -94,6 +94,14 @@ const clientSchema = new mongoose.Schema({
         type: String,
         enum: ['Active', 'Expired'],
         default: 'Active'
+      },
+      extraTasks: {
+        type: Number,
+        default: 0
+      },
+      benefits: {
+        type: String,
+        default: ''
       }
     }],
     default: []
@@ -255,7 +263,9 @@ clientSchema.methods.updateSubscription = function(subscriptionData) {
       startDate: new Date(subscriptionData.startDate),
       endDate: new Date(subscriptionData.endDate),
       price: subscriptionData.price || 0,
-      status: subscriptionData.status || 'Active'
+      status: subscriptionData.status || 'Active',
+      extraTasks: subscriptionData.extraTasks || 0,
+      benefits: subscriptionData.benefits || ''
     });
   }
   
@@ -348,7 +358,9 @@ clientSchema.pre('findOneAndUpdate', function(next) {
       startDate: sub.startDate ? new Date(sub.startDate) : sub.startDate,
       endDate: sub.endDate ? new Date(sub.endDate) : sub.endDate,
       price: sub.price || 0,
-      status: sub.status || 'Active'
+      status: sub.status || 'Active',
+      extraTasks: sub.extraTasks || 0,
+      benefits: sub.benefits || ''
     }));
   }
   

@@ -94,6 +94,7 @@ const io = socketIo(server, {
     origin: (origin, callback) => {
       const allowedOrigins = [
         "https://cds.ciisnetwork.in",
+        "https://backendcds.ciisnetwork.in",
         "http://localhost:5173",
         "http://localhost:5174", 
         "http://localhost:5175",
@@ -506,20 +507,37 @@ setTimeout(async () => {
 
 // ==================== CORS CONFIGURATION ====================
 const allowedOrigins = [
-  "http://localhost:5173",
-  "https://cds.ciisnetwork.in"
+  "https://cds.ciisnetwork.in",
+  "https://backendcds.ciisnetwork.in"
 ];
 
-app.use(cors({
+const isAllowedOrigin = (origin) => {
+  if (!origin) return true;
+  if (allowedOrigins.includes(origin)) return true;
+
+  try {
+    const { hostname } = new URL(origin);
+    return hostname === "localhost" || hostname === "127.0.0.1";
+  } catch {
+    return false;
+  }
+};
+
+const corsOptions = {
   origin: function (origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
+    if (isAllowedOrigin(origin)) {
       callback(null, true);
     } else {
+      console.log(`❌ CORS blocked: ${origin}`);
       callback(new Error("Not allowed by CORS"));
     }
   },
-  credentials: true
-}));
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"]
+};
+
+app.use(cors(corsOptions));
 
 
 
@@ -715,6 +733,14 @@ const PORT = process.env.PORT || 3000;
 
 // Use server.listen instead of app.listen
 server.listen(PORT, () => {
+  // Initialize meeting scheduler on startup
+  try {
+    const { initMeetingScheduler } = require("./services/meetingSchedulerService");
+    initMeetingScheduler();
+  } catch (err) {
+    console.error("Failed to initialize meeting scheduler:", err);
+  }
+
   console.log(`
 🚀 ====================================
 ✅ Server running on port ${PORT}
