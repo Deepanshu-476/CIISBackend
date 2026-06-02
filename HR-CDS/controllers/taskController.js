@@ -192,7 +192,7 @@ const groupTasksByDate = (tasks, dateField = 'createdAt', serialKey = 'serialNo'
     let dateValue = task[dateField] || task.createdAt;
     if (dateField === 'source-aware') {
       const source = String(task.__taskSource || task.taskSource || '').toLowerCase();
-      dateValue = source === 'client' ? (task.dueDate || task.dueDateTime || task.createdAt) : (task.createdAt || task.dueDateTime);
+      dateValue = source === 'client' ? (task.dueDate || task.dueDateTime || task.createdAt) : (task.dueDateTime || task.dueDate || task.createdAt);
     }
     const dateKey = dateValue ? moment(dateValue).format('DD-MM-YYYY') : 'No Date';
     if (!grouped[dateKey]) grouped[dateKey] = [];
@@ -1133,18 +1133,17 @@ const filterUserTasks = (tasks, query) => {
 
     // 4. Period filter
     if (period && period !== 'all') {
-      const taskDates = [t.dueDateTime || t.dueDate, t.createdAt].map(d => d ? new Date(d) : null).filter(Boolean);
-      if (taskDates.length === 0) return false;
+      const dateToFilter = t.dueDateTime || t.dueDate || t.createdAt;
+      const taskDate = dateToFilter ? new Date(dateToFilter) : null;
+      if (!taskDate || Number.isNaN(taskDate.getTime())) return false;
 
       const today = new Date();
       today.setHours(0, 0, 0, 0);
 
       if (period === 'today') {
-        const isToday = taskDates.some(d => {
-          const temp = new Date(d);
-          temp.setHours(0, 0, 0, 0);
-          return temp.getTime() === today.getTime();
-        });
+        const temp = new Date(taskDate);
+        temp.setHours(0, 0, 0, 0);
+        const isToday = temp.getTime() === today.getTime();
         if (!isToday) return false;
       } else if (period === 'week') {
         const startOfThisWeek = new Date(today);
@@ -1156,7 +1155,7 @@ const filterUserTasks = (tasks, query) => {
         endOfThisWeek.setDate(endOfThisWeek.getDate() + 6);
         endOfThisWeek.setHours(23, 59, 59, 999);
 
-        const isThisWeek = taskDates.some(d => d >= startOfThisWeek && d <= endOfThisWeek);
+        const isThisWeek = taskDate >= startOfThisWeek && taskDate <= endOfThisWeek;
         if (!isThisWeek) return false;
       } else if (period === 'overdue') {
         const isOverdue = isTaskOverdueForStatus(t.dueDateTime || t.dueDate, t.userStatus);
@@ -1341,15 +1340,16 @@ exports.getUserAllTasksPaginated = async (req, res) => {
     const allTasks = await queryAllUserTasks(userId, req.user.companyCode);
     const filtered = filterUserTasks(allTasks, req.query);
 
-    // Sort by newest first
-    filtered.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+    // Sort by task date first so meeting auto-tasks appear on their scheduled date,
+    // not on the date when the meeting/task was created.
+    const sortedFiltered = sortTasksNewestFirst(filtered);
 
     // Paginate
-    const total = filtered.length;
+    const total = sortedFiltered.length;
     const pages = Math.max(1, Math.ceil(total / limit));
     const safePage = Math.min(page, pages);
     const start = (safePage - 1) * limit;
-    const tasks = filtered.slice(start, start + limit);
+    const tasks = sortedFiltered.slice(start, start + limit);
 
     // Calculate unified stats on the ENTIRE list of filtered tasks
     const counts = {
