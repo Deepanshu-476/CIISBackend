@@ -30,6 +30,11 @@ const sidebarConfigSchema = new mongoose.Schema({
     ref: 'Company',
     required: true
   },
+  branchId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Branch',
+    required: false // Optional for backward compatibility before migration
+  },
   departmentId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Department',
@@ -59,10 +64,10 @@ const sidebarConfigSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Index
+// Index including branchId for unique configurations
 sidebarConfigSchema.index(
-  { companyId: 1, departmentId: 1, role: 1 },
-  { unique: true, name: 'unique_sidebar_config' }
+  { companyId: 1, branchId: 1, departmentId: 1, role: 1 },
+  { unique: true, name: 'unique_sidebar_config_branch' }
 );
 
 module.exports = mongoose.model('SidebarConfig', sidebarConfigSchema);

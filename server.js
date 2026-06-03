@@ -503,6 +503,14 @@ setTimeout(async () => {
   console.log('🚀 Server started, running initial checks...');
   await runDbJobWithRetry('Initial overdue tasks check', checkAndMarkOverdueTasks);
   await runDbJobWithRetry('Initial past absent records check', markPastAbsentRecords);
+  
+  // Run multi-branch database backfill migration script
+  try {
+    const backfillBranchSupport = require("./scripts/backfillBranchSupport");
+    await runDbJobWithRetry('Multi-branch database backfill migration', backfillBranchSupport);
+  } catch (migError) {
+    console.error("❌ Failed to trigger multi-branch data migration:", migError.message);
+  }
 }, 10000);
 
 // ==================== CORS CONFIGURATION ====================
@@ -600,6 +608,7 @@ app.use('/api/cmeeting', require("./HR-CDS/routes/clientMeetingRoutes.js"));
 app.use('/api/sidebar', require("./routes/sidebarConfigs.js"));
 app.use('/api/company-assets', require('./routes/companyAssetRoutes'));
 app.use("/api/holidays", require("./HR-CDS/routes/Holiday.js"));
+app.use('/api/branches', require('./routes/branchRoutes.js'));
 
 // ==================== API ENDPOINTS ====================
 
