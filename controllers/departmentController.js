@@ -40,7 +40,7 @@ exports.createDepartment = async (req, res) => {
     console.log("User department from req.user:", req.user?.department);
     console.log("User jobRole from req.user:", req.user?.jobRole);
     
-    const { name, description } = req.body;
+    const { name, description, branch } = req.body;
     const createdBy = req.user ? req.user.id : null;
 
     if (!createdBy) {
@@ -61,17 +61,6 @@ exports.createDepartment = async (req, res) => {
       console.log("❌ ERROR: User not found in database for ID:", createdBy);
       return errorResponse(res, 400, "User not found");
     }
-
-    // console.log("✅ User found in database:", {
-    //   id: user._id,
-    //   name: user.name,
-    //   email: user.email,
-    //   role: user.role,
-    //   department: user.department,
-    //   jobRole: user.jobRole,
-    //   company: user.company,
-    //   companyCode: user.companyCode
-    // });
 
     // Check if user has company
     if (!user.company) {
@@ -116,6 +105,25 @@ exports.createDepartment = async (req, res) => {
       return errorResponse(res, 409, "Department already exists in this company");
     }
 
+    // Determine branch and branchCode
+    let branchId = branch || null;
+    let branchCodeVal = "";
+    
+    if (branchId) {
+      const Branch = require("../models/Branch");
+      const branchObj = await Branch.findById(branchId);
+      if (branchObj) {
+        branchCodeVal = branchObj.branchCode;
+      }
+    } else {
+      const Branch = require("../models/Branch");
+      const defaultBranch = await Branch.findOne({ company: companyId, isDefault: true });
+      if (defaultBranch) {
+        branchId = defaultBranch._id;
+        branchCodeVal = defaultBranch.branchCode;
+      }
+    }
+
     console.log("✅ No duplicate found. Creating department...");
     
     const department = await Department.create({
@@ -123,6 +131,8 @@ exports.createDepartment = async (req, res) => {
       description,
       company: companyId,
       companyCode,
+      branch: branchId,
+      branchCode: branchCodeVal,
       createdBy
     });
 
@@ -157,7 +167,7 @@ exports.getAllDepartments = async (req, res) => {
     console.log("👤 Request user from middleware:", req.user);
     console.log("📝 Request query params:", req.query);
     
-    const { company } = req.query;
+    const { company, branch } = req.query;
     
     if (!req.user) {
       console.log("❌ ERROR: No req.user - User not authenticated");
@@ -206,12 +216,17 @@ exports.getAllDepartments = async (req, res) => {
     } else {
       console.log("👑 User is SUPER ADMIN - NO company filter (will get all)");
     }
+
+    if (branch) {
+      query.branch = branch;
+    }
     
     console.log("📊 Final query for database:", query);
     console.log("🔍 Fetching departments from database...");
     
     const departments = await Department.find(query)
       .populate('createdBy', 'name email')
+      .populate('branch', 'name branchCode')
       .sort({ createdAt: -1 });
 
     console.log("✅ Departments found:", departments.length);
@@ -327,13 +342,23 @@ exports.updateDepartment = async (req, res) => {
       delete updateData.companyCode;
     }
 
+    // Handle branch update if passed
+    if (updateData.branch) {
+      const Branch = require("../models/Branch");
+      const branchObj = await Branch.findById(updateData.branch);
+      if (branchObj) {
+        updateData.branchCode = branchObj.branchCode;
+      }
+    }
+
     console.log("📝 Updating department with data:", updateData);
     
     const updatedDepartment = await Department.findByIdAndUpdate(
       id,
       updateData,
       { new: true, runValidators: true }
-    ).populate('createdBy', 'name email');
+    ).populate('createdBy', 'name email')
+     .populate('branch', 'name branchCode');
 
     console.log("✅ Department updated successfully:", updatedDepartment);
     console.log("========================================");
@@ -461,6 +486,7 @@ exports.getDepartmentsByCompany = async (req, res) => {
     console.log("👤 Request user:", req.user);
     
     const { companyId } = req.params;
+    const { branch } = req.query;
     
     if (!req.user) {
       console.log("❌ ERROR: User not authenticated");
@@ -487,6 +513,10 @@ exports.getDepartmentsByCompany = async (req, res) => {
       isActive: true,
       company: companyId 
     };
+
+    if (branch) {
+      query.branch = branch;
+    }
     
     console.log("Base query:", query);
     
@@ -511,7 +541,8 @@ exports.getDepartmentsByCompany = async (req, res) => {
     
     console.log("🔍 Fetching departments with query:", query);
     const departments = await Department.find(query)
-      .select('name description')
+      .populate('branch', 'name branchCode')
+      .select('name description branch')
       .sort({ name: 1 });
 
     console.log("✅ Departments found:", departments.length);
