@@ -102,7 +102,7 @@ const createMeeting = async (req, res) => {
 
         const joinText = link ? `\n\nClickable Joining Link: ${link}` : "";
 
-        await Task.create({
+        const task = await Task.create({
           title: `Meeting: ${title}`,
           description: `Auto-generated task for scheduled meeting "${title}".\nAgenda/Description: ${description || "No agenda details provided."}${joinText}`,
           dueDateTime: taskDueDateTime,
@@ -118,6 +118,30 @@ const createMeeting = async (req, res) => {
             remarks: `Task automatically generated on meeting creation`
           }]
         });
+
+        const actorId = createdBy || req.user?._id;
+        const taskNotificationUsers = attendees
+          .map(uid => uid?.toString?.() || String(uid))
+          .filter(uid => uid && uid !== actorId?.toString?.());
+
+        if (taskNotificationUsers.length) {
+          await notifyDirectUsers({
+            userIds: taskNotificationUsers,
+            targetPath: '/ciisUser/task-management',
+            type: 'task_assigned',
+            title: 'New Meeting Task Assigned',
+            message: `Meeting task "${title}" has been added to your task board`,
+            actor: actorId,
+            data: {
+              taskId: task._id,
+              meetingId: meeting._id,
+              title: `Meeting: ${title}`,
+              dueDateTime: taskDueDateTime,
+              targetPath: '/ciisUser/task-management',
+            },
+            priority: 'high',
+          });
+        }
         console.log(`[MeetingAutoTask] Created matching task "Meeting: ${title}" successfully.`);
       } catch (taskError) {
         console.error("Failed to create auto-task for meeting:", taskError);
