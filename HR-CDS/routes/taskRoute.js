@@ -13,6 +13,7 @@ router.get('/personal', protect, taskController.getPersonalTasks);
 router.get('/personal/stats', protect, taskController.getPersonalTaskStats);
 router.get('/assigned-to-me', protect, taskController.getAssignedToMeTasks);
 router.get('/assigned-to-me/stats', protect, taskController.getAssignedToMeTaskStats);
+router.get('/project-assigned', protect, taskController.getAssignedProjectTasks);
 router.get('/assigned', protect, taskController.getAssignedTasks);
 router.get('/all', protect, taskController.getAllMyTaskViews);
 router.get('/all/stats', protect, taskController.getAllMyTaskStats);
