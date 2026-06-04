@@ -11,7 +11,7 @@ const companySchema = new mongoose.Schema(
       trim: true,
       minlength: [2, "Company name must be at least 2 characters"],
       maxlength: [100, "Company name cannot exceed 100 characters"],
-    },
+    }, 
 
     companyEmail: {
       type: String,
