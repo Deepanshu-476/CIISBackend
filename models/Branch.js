@@ -19,8 +19,8 @@ const branchSchema = new mongoose.Schema(
       required: [true, "Branch code is required"],
       uppercase: true,
       trim: true,
-      minlength: [2, "Branch code must be at least 2 characters"],
-      maxlength: [10, "Branch code cannot exceed 10 characters"],
+      minlength: [5, "Branch code must be at least 5 characters"],
+      maxlength: [20, "Branch code cannot exceed 20 characters"],
     },
 
     company: {
