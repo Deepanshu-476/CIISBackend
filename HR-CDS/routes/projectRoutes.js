@@ -34,10 +34,7 @@ router.put("/:id", protect, [
 router.delete("/:id", protect, projectController.deleteProject);
 
 // ==================== TASK CRUD ROUTES ====================
-router.post("/:id/tasks", protect, [
-  check("title").notEmpty().withMessage("Task title is required"),
-  check("assignedTo").notEmpty().withMessage("Assigned user is required")
-], projectController.addTask);
+router.post("/:id/tasks", protect, projectController.addTask);
 
 router.patch("/:id/tasks/:taskId", protect, projectController.updateTask);
 router.delete("/:id/tasks/:taskId", protect, projectController.deleteTask);
@@ -48,6 +45,7 @@ router.patch("/:projectId/tasks/:taskId/status", protect, [
 ], projectController.updateTaskStatus);
 
 router.get("/:projectId/tasks/:taskId/activity", protect, projectController.getTaskActivityLogs);
+router.get("/:projectId/tasks/:taskId/remarks", protect, projectController.getTaskRemarks);
 router.post("/:projectId/tasks/:taskId/remarks", protect, [
   check("text").notEmpty().withMessage("Remark text is required")
 ], projectController.addRemark);
