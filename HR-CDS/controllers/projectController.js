@@ -3,6 +3,8 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const {notifyDirectUsers} = require("../utils/systemNotificationService");
+const { sendEmail } = require("../../utils/sendEmail");
+const User = require("../../models/User");
 
 // Configure storage for file uploads
 const storage = multer.diskStorage({
@@ -21,10 +23,11 @@ const storage = multer.diskStorage({
 
 // File filter
 const fileFilter = (req, file, cb) => {
-  if (file.mimetype === 'application/pdf') {
+  const allowedTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+  if (allowedTypes.includes(file.mimetype)) {
     cb(null, true);
   } else {
-    cb(new Error('Only PDF files are allowed'), false);
+    cb(new Error('Only PDF or image files are allowed'), false);
   }
 };
 
@@ -72,6 +75,27 @@ const idsEqual = (left, right) => {
 };
 
 const isTaskAssignedToUser = (task, userId) => idsEqual(task.assignedTo, userId);
+
+const sendProjectTaskAssignmentEmail = async ({ user, actorName, taskTitle, projectName, dueDate }) => {
+  if (!user?.email) return;
+
+  const dueText = dueDate ? new Date(dueDate).toLocaleString("en-IN") : "No due date";
+  const subject = `New Project Task Assigned: ${taskTitle}`;
+  const html = `<div style="font-family: Arial, sans-serif; padding: 20px; color: #222;">
+    <h2>New Project Task Assigned</h2>
+    <p>Hello <strong>${user.name || "User"}</strong>,</p>
+    <p><strong>${actorName || "Team"}</strong> assigned you a project task.</p>
+    <p><strong>Project:</strong> ${projectName}</p>
+    <p><strong>Task:</strong> ${taskTitle}</p>
+    <p><strong>Due:</strong> ${dueText}</p>
+  </div>`;
+
+  try {
+    await sendEmail(user.email, subject, html, { skipNotification: true });
+  } catch (error) {
+    console.error("Project task assignment email failed:", error.message);
+  }
+};
 
 // ==========================================
 // 📌 NOTIFICATION CONTROLLERS
@@ -678,15 +702,17 @@ exports.addTask = async (req, res) => {
       }
 
       // Create task
+      const safeTitle = title?.trim() || "Untitled Task";
       const task = {
-        title,
-        description,
-        assignedTo,
-        dueDate,
+        title: safeTitle,
+        description: description?.trim() || "",
         priority: priority?.toLowerCase(),
         status: status?.toLowerCase() || 'pending',
         createdBy: req.user.id
       };
+
+      if (assignedTo) task.assignedTo = assignedTo;
+      if (dueDate) task.dueDate = dueDate;
 
       // Handle file upload
       if (req.file) {
@@ -699,7 +725,7 @@ exports.addTask = async (req, res) => {
       // Add activity log
       const activityLog = {
         type: "creation",
-        description: `Task "${title}" was created`,
+        description: `Task "${safeTitle}" was created`,
         performedBy: req.user.id
       };
 
@@ -709,40 +735,54 @@ exports.addTask = async (req, res) => {
       project.tasks.push(task);
       await project.save();
 
-      // Add notification for assigned user
-      const notification = {
-        title: "New Task Assigned",
-        message: `You have been assigned task "${title}" in project "${project.projectName}"`,
-        type: "task_assigned",
-        relatedTo: "task",
-        referenceId: project.tasks[project.tasks.length - 1]._id,
-        createdBy: req.user.id
-      };
+      const createdTask = project.tasks[project.tasks.length - 1];
 
-      await project.addNotification(notification);
+      if (assignedTo) {
+        const assignedUser = await User.findById(assignedTo).select("name email").lean();
 
-      await notifyDirectUsers({
-        userIds: [assignedTo].filter(Boolean),
-        targetPath: '/ciisUser/project',
-        type: 'project_task_assigned',
-        title: 'New Project Task',
-        message: `${req.user.name} assigned you task "${title}" in project "${project.projectName}"`,
-        actor: req.user.id,
-        data: {
-          projectId: project._id,
-          taskId: project.tasks[project.tasks.length - 1]._id,
-          title,
+        // Add notification for assigned user
+        const notification = {
+          title: "New Task Assigned",
+          message: `You have been assigned task "${safeTitle}" in project "${project.projectName}"`,
+          type: "task_assigned",
+          relatedTo: "task",
+          referenceId: createdTask._id,
+          createdBy: req.user.id
+        };
+
+        await project.addNotification(notification);
+
+        await notifyDirectUsers({
+          userIds: [assignedTo],
+          targetPath: '/ciisUser/task-management',
+          type: 'project_task_assigned',
+          title: 'New Project Task',
+          message: `${req.user.name} assigned you task "${safeTitle}" in project "${project.projectName}"`,
+          actor: req.user.id,
+          data: {
+            projectId: project._id,
+            taskId: createdTask._id,
+            title: safeTitle,
+            projectName: project.projectName,
+          },
+          priority: priority?.toLowerCase() || 'medium',
+        });
+
+        await sendProjectTaskAssignmentEmail({
+          user: assignedUser,
+          actorName: req.user.name,
+          taskTitle: safeTitle,
           projectName: project.projectName,
-        },
-        priority: priority?.toLowerCase() || 'medium',
-      });
+          dueDate: createdTask.dueDate
+        });
+      }
 
       console.log("✅ Task added successfully");
 
       res.status(201).json({
         success: true,
         message: "Task added successfully",
-        task: project.tasks[project.tasks.length - 1]
+        task: createdTask
       });
     });
   } catch (error) {
@@ -787,14 +827,49 @@ exports.updateTask = async (req, res) => {
       });
     }
 
+    const hadAssignedToField = Object.prototype.hasOwnProperty.call(updateData, "assignedTo");
+    const previousAssignedTo = task.assignedTo ? task.assignedTo.toString() : "";
+    const nextAssignedTo = updateData.assignedTo ? updateData.assignedTo.toString() : "";
+    const assignmentChanged = hadAssignedToField && nextAssignedTo && previousAssignedTo !== nextAssignedTo;
+    const safeTitle = updateData.title?.trim() || task.title || "Untitled Task";
+    let newlyAssignedUser = null;
+
+    if (assignmentChanged) {
+      newlyAssignedUser = await User.findById(nextAssignedTo).select("name email").lean();
+    }
+
     // Update task fields
     Object.keys(updateData).forEach(key => {
-      if (key === 'priority' || key === 'status') {
-        task[key] = updateData[key].toLowerCase();
-      } else if (key !== '_id') {
-        task[key] = updateData[key];
+      if (key === '_id') return;
+
+      if (key === 'assignedTo') {
+        task.assignedTo = updateData[key] || undefined;
+        return;
       }
+
+      if (key === 'dueDate') {
+        task.dueDate = updateData[key] || undefined;
+        return;
+      }
+
+      if (key === 'title') {
+        task.title = updateData[key]?.trim() || "Untitled Task";
+        return;
+      }
+
+      if (key === 'description') {
+        task.description = updateData[key]?.trim() || "";
+        return;
+      }
+
+      if (key === 'priority' || key === 'status') {
+        if (updateData[key]) task[key] = updateData[key].toLowerCase();
+        return;
+      }
+
+      task[key] = updateData[key];
     });
+    task.updatedAt = new Date();
 
     // Add activity log
     task.activityLogs.push({
@@ -803,7 +878,53 @@ exports.updateTask = async (req, res) => {
       performedBy: req.user.id
     });
 
+    if (assignmentChanged) {
+      const assigneeName = newlyAssignedUser?.name || "user";
+
+      task.activityLogs.push({
+        type: "assignment",
+        description: `Task was assigned to ${assigneeName}`,
+        performedBy: req.user.id,
+        newValue: assigneeName
+      });
+
+      project.notifications.push({
+        title: "New Task Assigned",
+        message: `You have been assigned task "${safeTitle}" in project "${project.projectName}"`,
+        type: "task_assigned",
+        relatedTo: "task",
+        referenceId: task._id,
+        createdBy: req.user.id
+      });
+    }
+
     await project.save();
+
+    if (assignmentChanged) {
+      await notifyDirectUsers({
+        userIds: [nextAssignedTo],
+        targetPath: '/ciisUser/task-management',
+        type: 'project_task_assigned',
+        title: 'New Project Task',
+        message: `${req.user.name} assigned you task "${safeTitle}" in project "${project.projectName}"`,
+        actor: req.user.id,
+        data: {
+          projectId: project._id,
+          taskId: task._id,
+          title: safeTitle,
+          projectName: project.projectName,
+        },
+        priority: task.priority || 'medium',
+      });
+
+      await sendProjectTaskAssignmentEmail({
+        user: newlyAssignedUser,
+        actorName: req.user.name,
+        taskTitle: safeTitle,
+        projectName: project.projectName,
+        dueDate: task.dueDate
+      });
+    }
 
     console.log("✅ Task updated successfully");
 
@@ -933,6 +1054,7 @@ exports.updateTaskStatus = async (req, res) => {
 
     const oldStatus = task.status;
     task.status = status.toLowerCase();
+    task.updatedAt = new Date();
 
     // Add activity log
     task.activityLogs.push({
@@ -958,9 +1080,12 @@ exports.updateTaskStatus = async (req, res) => {
 
     await project.addNotification(notification);
 
+    const statusNotificationUsers = [project.createdBy, task.assignedTo]
+      .filter(userId => userId && !idsEqual(userId, req.user.id));
+
     await notifyDirectUsers({
-      userIds: [project.createdBy].filter(userId => !idsEqual(userId, req.user.id)),
-      targetPath: '/ciisUser/adminproject',
+      userIds: statusNotificationUsers,
+      targetPath: '/ciisUser/task-management',
       type: 'project_task_status_changed',
       title: 'Project Task Updated',
       message: `${req.user.name} changed "${task.title}" status from ${oldStatus} to ${status}${remark ? ': ' + remark : ''}`,
@@ -1034,7 +1159,9 @@ exports.getTaskActivityLogs = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      activityLogs: task.activityLogs
+      activityLogs: task.activityLogs,
+      logs: task.activityLogs,
+      data: task.activityLogs
     });
   } catch (error) {
     console.error("❌ Error fetching activity logs:", error);
@@ -1048,6 +1175,49 @@ exports.getTaskActivityLogs = async (req, res) => {
 // ==========================================
 // 📌 REMARKS CONTROLLERS
 // ==========================================
+exports.getTaskRemarks = async (req, res) => {
+  try {
+    const { projectId, taskId } = req.params;
+
+    const project = await Project.findById(projectId)
+      .populate('tasks.remarks.createdBy', 'name email');
+
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        message: "Project not found"
+      });
+    }
+
+    if (!hasProjectAccess(project, req.user.id, req.user.role)) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied to view remarks"
+      });
+    }
+
+    const task = project.tasks.id(taskId);
+    if (!task) {
+      return res.status(404).json({
+        success: false,
+        message: "Task not found"
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      remarks: task.remarks || [],
+      data: task.remarks || []
+    });
+  } catch (error) {
+    console.error("❌ Error fetching project task remarks:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching remarks"
+    });
+  }
+};
+
 exports.addRemark = async (req, res) => {
   try {
     const { projectId, taskId } = req.params;
@@ -1094,6 +1264,7 @@ exports.addRemark = async (req, res) => {
       text,
       createdBy: req.user.id
     });
+    task.updatedAt = new Date();
 
     // Add activity log
     task.activityLogs.push({

@@ -2,6 +2,7 @@
 const Task = require('../models/Task');
 const ClientTask = require('../models/ClientTask');
 const Client = require('../models/Client');
+const { Project } = require('../models/Project');
 const User = require('../../models/User');
 const Group = require('../models/Group');
 const Notification = require('../models/Notification');
@@ -150,9 +151,9 @@ const calculateUnifiedTaskStats = (tasks, userId) => {
       const userStatusEntry = task.statusByUser?.find(s => 
         (s.user?._id || s.user)?.toString() === userId.toString()
       );
-      status = userStatusEntry?.status || task.overallStatus || 'pending';
+      status = userStatusEntry?.status || task.status || task.overallStatus || 'pending';
     } else {
-      status = task.overallStatus || 'pending';
+      status = task.status || task.overallStatus || 'pending';
     }
 
     status = normalizeTaskStatus(status);
@@ -192,7 +193,13 @@ const groupTasksByDate = (tasks, dateField = 'createdAt', serialKey = 'serialNo'
     let dateValue = task[dateField] || task.createdAt;
     if (dateField === 'source-aware') {
       const source = String(task.__taskSource || task.taskSource || '').toLowerCase();
-      dateValue = source === 'client' ? (task.dueDate || task.dueDateTime || task.createdAt) : (task.dueDateTime || task.dueDate || task.createdAt);
+      if (source === 'client') {
+        dateValue = task.dueDate || task.dueDateTime || task.createdAt;
+      } else if (source === 'project') {
+        dateValue = task.lastActivityAt || task.updatedAt || task.createdAt;
+      } else {
+        dateValue = task.dueDateTime || task.dueDate || task.createdAt;
+      }
     }
     const dateKey = dateValue ? moment(dateValue).format('DD-MM-YYYY') : 'No Date';
     if (!grouped[dateKey]) grouped[dateKey] = [];
@@ -220,9 +227,14 @@ const groupTasksByDate = (tasks, dateField = 'createdAt', serialKey = 'serialNo'
 
 const getTaskSortDate = task => {
   const source = String(task.__taskSource || task.taskSource || '').toLowerCase();
-  const dateValue = source === 'client'
-    ? (task.dueDate || task.dueDateTime || task.createdAt)
-    : (task.dueDateTime || task.dueDate || task.createdAt);
+  let dateValue;
+  if (source === 'client') {
+    dateValue = task.dueDate || task.dueDateTime || task.createdAt;
+  } else if (source === 'project') {
+    dateValue = task.lastActivityAt || task.updatedAt || task.createdAt;
+  } else {
+    dateValue = task.dueDateTime || task.dueDate || task.createdAt;
+  }
   const date = new Date(dateValue || 0);
   return Number.isNaN(date.getTime()) ? 0 : date.getTime();
 };
@@ -456,6 +468,81 @@ const fetchAssignedClientTaskList = async (req) => {
   });
 };
 
+const normalizeProjectTaskStatus = status => {
+  const normalized = normalizeTaskStatus(status || 'pending');
+  if (normalized === 'in-progress') return 'in-progress';
+  if (normalized === 'onhold') return 'onhold';
+  return normalized;
+};
+
+const getProjectTaskAssignedBy = (task, project) => {
+  const creationLog = (task.activityLogs || []).find(log => log.type === 'creation');
+  return task.createdBy || creationLog?.performedBy || project.createdBy;
+};
+
+const fetchAssignedProjectTaskList = async (req) => {
+  const currentUserId = (req.user._id || req.user.id).toString();
+
+  const projects = await Project.find({ 'tasks.assignedTo': currentUserId })
+    .select('projectName description createdBy users tasks createdAt updatedAt')
+    .populate('createdBy', 'name email')
+    .populate('tasks.assignedTo', 'name email')
+    .populate('tasks.createdBy', 'name email')
+    .populate('tasks.activityLogs.performedBy', 'name email')
+    .lean();
+
+  const tasks = [];
+
+  projects.forEach(project => {
+    (project.tasks || []).forEach(task => {
+      const assignedTo = task.assignedTo?._id || task.assignedTo;
+      const isAssignedToMe = assignedTo?.toString() === currentUserId;
+      if (!isAssignedToMe) return;
+
+      const status = normalizeProjectTaskStatus(task.status);
+      const lastActivityAt = task.updatedAt || task.createdAt || project.updatedAt || project.createdAt;
+      const assignedBy = getProjectTaskAssignedBy(task, project);
+
+      tasks.push({
+        _id: task._id,
+        projectId: project._id,
+        title: task.title || 'Untitled Project Task',
+        name: task.title || 'Untitled Project Task',
+        description: task.description || project.description || '',
+        dueDate: task.dueDate,
+        dueDateTime: task.dueDate,
+        priority: String(task.priority || 'medium').toLowerCase(),
+        status,
+        userStatus: status,
+        assignedTo: task.assignedTo,
+        createdBy: assignedBy,
+        assignedBy,
+        assignedByName: assignedBy?.name || assignedBy?.email || 'Unknown',
+        assignedToName: task.assignedTo?.name || 'Unknown',
+        assignedToEmail: task.assignedTo?.email || '',
+        projectName: project.projectName,
+        projectTaskId: task._id,
+        files: task.pdfFile?.path ? [{
+          filename: task.pdfFile.filename,
+          originalName: task.pdfFile.filename,
+          path: task.pdfFile.path
+        }] : [],
+        remarks: task.remarks || [],
+        activityLogs: task.activityLogs || [],
+        createdAt: task.createdAt || project.createdAt,
+        updatedAt: task.updatedAt || project.updatedAt,
+        lastActivityAt,
+        source: 'project',
+        taskSource: 'project',
+        __taskSource: 'project',
+        isOverdue: isTaskOverdueForStatus(task.dueDate, status)
+      });
+    });
+  });
+
+  return tasks;
+};
+
 const applyCleanListFilters = (tasks, req) => {
   const { status, search, period, fromDate, toDate } = req.query;
   const range = getCleanTaskDateRange({ period, fromDate, toDate });
@@ -468,7 +555,11 @@ const applyCleanListFilters = (tasks, req) => {
       if (!searchHaystack.includes(query)) return false;
     }
     if (range) {
-      const dateVal = new Date(t.dueDateTime || t.dueDate || t.createdAt);
+      const source = String(t.__taskSource || t.taskSource || '').toLowerCase();
+      const sourceDate = source === 'project'
+        ? (t.lastActivityAt || t.updatedAt || t.createdAt)
+        : (t.dueDateTime || t.dueDate || t.createdAt);
+      const dateVal = new Date(sourceDate);
       if (isNaN(dateVal.getTime())) return false;
       if (range.$gte && dateVal < range.$gte) return false;
       if (range.$lte && dateVal > range.$lte) return false;
@@ -525,14 +616,24 @@ exports.getAssignedToMeTasks = async (req, res) => {
   }
 };
 
+exports.getAssignedProjectTasks = async (req, res) => {
+  try {
+    const list = await fetchAssignedProjectTaskList(req);
+    return sendCleanTaskList(res, applyCleanListFilters(list, req), 'project', 'source-aware');
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+};
+
 exports.getAllMyTaskViews = async (req, res) => {
   try {
-    const [personal, assigned, client] = await Promise.all([
+    const [personal, assigned, client, project] = await Promise.all([
       fetchPersonalTaskList(req),
       fetchAssignedToMeTaskList(req),
-      fetchAssignedClientTaskList(req)
+      fetchAssignedClientTaskList(req),
+      fetchAssignedProjectTaskList(req)
     ]);
-    const list = applyCleanListFilters([...personal, ...assigned, ...client], req);
+    const list = applyCleanListFilters([...personal, ...assigned, ...client, ...project], req);
     return sendCleanTaskList(res, list, 'all', 'source-aware', req);
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
@@ -559,12 +660,13 @@ exports.getAssignedToMeTaskStats = async (req, res) => {
 
 exports.getAllMyTaskStats = async (req, res) => {
   try {
-    const [personal, assigned, client] = await Promise.all([
+    const [personal, assigned, client, project] = await Promise.all([
       fetchPersonalTaskList(req),
       fetchAssignedToMeTaskList(req),
-      fetchAssignedClientTaskList(req)
+      fetchAssignedClientTaskList(req),
+      fetchAssignedProjectTaskList(req)
     ]);
-    const list = applyCleanListFilters([...personal, ...assigned, ...client], req);
+    const list = applyCleanListFilters([...personal, ...assigned, ...client, ...project], req);
     return res.json({ success: true, view: 'all', stats: calculateUnifiedTaskStats(list) });
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
@@ -962,11 +1064,12 @@ exports.getAssignableUsers = async (req, res) => {
 
 exports.getTaskStatusCounts = async (req, res) => {
   try {
-    const [personal, assigned] = await Promise.all([
+    const [personal, assigned, project] = await Promise.all([
       fetchPersonalTaskList(req),
-      fetchAssignedToMeTaskList(req)
+      fetchAssignedToMeTaskList(req),
+      fetchAssignedProjectTaskList(req)
     ]);
-    const list = applyCleanListFilters([...personal, ...assigned], req);
+    const list = applyCleanListFilters([...personal, ...assigned, ...project], req);
     res.json({ success: true, statistics: calculateUnifiedTaskStats(list) });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -1031,7 +1134,7 @@ const queryAllUserTasks = async (userId, companyCode) => {
   const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
   const companyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : companyCode;
 
-  const [personalTasks, clientTasks] = await Promise.all([
+  const [personalTasks, clientTasks, projectTasks] = await Promise.all([
     Task.find({
       isActive: true,
       companyCode: companyFilter,
@@ -1043,7 +1146,15 @@ const queryAllUserTasks = async (userId, companyCode) => {
         { assigneeId: userId },
         { assignee: userId.toString() }
       ]
-    }).populate('clientId', 'name email company phone companyCode').sort({ createdAt: -1 }).lean()
+    }).populate('clientId', 'name email company phone companyCode').sort({ createdAt: -1 }).lean(),
+
+    Project.find({ 'tasks.assignedTo': userId })
+      .select('projectName description createdBy tasks createdAt updatedAt')
+      .populate('createdBy', 'name email')
+      .populate('tasks.assignedTo', 'name email')
+      .populate('tasks.createdBy', 'name email')
+      .populate('tasks.activityLogs.performedBy', 'name email')
+      .lean()
   ]);
 
   const personalFormatted = personalTasks.map(t => {
@@ -1093,7 +1204,55 @@ const queryAllUserTasks = async (userId, companyCode) => {
     };
   });
 
-  return [...personalFormatted, ...clientFormatted];
+  const projectFormatted = [];
+  projectTasks.forEach(project => {
+    (project.tasks || []).forEach(task => {
+      const assignedTo = task.assignedTo?._id || task.assignedTo;
+      const targetUserId = userId.toString();
+      const isAssignedToUser = assignedTo?.toString() === targetUserId;
+      if (!isAssignedToUser) return;
+
+      const projectStatus = normalizeProjectTaskStatus(task.status);
+      const isOverdue = isTaskOverdueForStatus(task.dueDate, projectStatus);
+      const displayStatus = isOverdue ? 'overdue' : projectStatus;
+      const assignedBy = getProjectTaskAssignedBy(task, project);
+
+      projectFormatted.push({
+        _id: task._id,
+        projectId: project._id,
+        title: task.title || 'Untitled Project Task',
+        description: task.description || project.description || '',
+        dueDate: task.dueDate,
+        dueDateTime: task.dueDate,
+        priority: String(task.priority || 'medium').toLowerCase(),
+        status: displayStatus,
+        userStatus: projectStatus,
+        projectName: project.projectName,
+        projectTaskId: task._id,
+        createdBy: assignedBy,
+        assignedTo: task.assignedTo,
+        assignedBy,
+        assignedByName: assignedBy?.name || assignedBy?.email || 'Unknown',
+        assignedToName: task.assignedTo?.name || 'Unknown',
+        assignedToEmail: task.assignedTo?.email || '',
+        files: task.pdfFile?.path ? [{
+          filename: task.pdfFile.filename,
+          originalName: task.pdfFile.filename,
+          path: task.pdfFile.path
+        }] : [],
+        remarks: task.remarks || [],
+        activityLogs: task.activityLogs || [],
+        createdAt: task.createdAt || project.createdAt,
+        updatedAt: task.updatedAt || project.updatedAt,
+        lastActivityAt: task.updatedAt || task.createdAt || project.updatedAt || project.createdAt,
+        source: 'project',
+        taskSource: 'project',
+        __taskSource: 'project'
+      });
+    });
+  });
+
+  return [...personalFormatted, ...clientFormatted, ...projectFormatted];
 };
 
 const filterUserTasks = (tasks, query) => {
@@ -1107,6 +1266,7 @@ const filterUserTasks = (tasks, query) => {
         t.title,
         t.description,
         t.clientName,
+        t.projectName,
         t._id?.toString()
       ].map(v => String(v || '').toLowerCase()).join(' ');
 
@@ -1133,7 +1293,10 @@ const filterUserTasks = (tasks, query) => {
 
     // 4. Period filter
     if (period && period !== 'all') {
-      const dateToFilter = t.dueDateTime || t.dueDate || t.createdAt;
+      const source = String(t.__taskSource || t.taskSource || '').toLowerCase();
+      const dateToFilter = source === 'project'
+        ? (t.lastActivityAt || t.updatedAt || t.createdAt)
+        : (t.dueDateTime || t.dueDate || t.createdAt);
       const taskDate = dateToFilter ? new Date(dateToFilter) : null;
       if (!taskDate || Number.isNaN(taskDate.getTime())) return false;
 
