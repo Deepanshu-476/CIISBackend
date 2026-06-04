@@ -2,7 +2,7 @@
 const mongoose = require("mongoose");
 const validator = require("validator");
 
-const companySchema = new mongoose.Schema(
+const companySchema = new mongoose.Schema( 
   {
     companyName: {
       type: String,
