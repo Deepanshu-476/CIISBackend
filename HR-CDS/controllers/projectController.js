@@ -2,6 +2,7 @@ const { Project, TASK_STATUS, PROJECT_STATUS, PRIORITY_LEVELS, NOTIFICATION_TYPE
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
+const sharp = require("sharp");
 const {notifyDirectUsers} = require("../utils/systemNotificationService");
 const { sendEmail } = require("../../utils/sendEmail");
 const User = require("../../models/User");
@@ -1228,10 +1229,10 @@ exports.addRemark = async (req, res) => {
     console.log("Task:", taskId);
     console.log("Added by:", req.user.id);
 
-    if (!text || text.trim() === "") {
+    if ((!text || text.trim() === "") && !req.file) {
       return res.status(400).json({ 
         success: false, 
-        message: "Remark text is required" 
+        message: "Remark text or image is required" 
       });
     }
 
@@ -1259,10 +1260,25 @@ exports.addRemark = async (req, res) => {
       });
     }
 
+    let imgPath = null;
+    if (req.file) {
+      const uploadDir = path.join(__dirname, '../../uploads/remarks');
+      if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+      const filename = `remark_${Date.now()}_${req.user.id}.jpg`;
+      const savePath = path.join(uploadDir, filename);
+      imgPath = `remarks/${filename}`;
+
+      await sharp(req.file.buffer)
+        .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality: 80 })
+        .toFile(savePath);
+    }
+
     // Add remark
     task.remarks.push({
-      text,
-      createdBy: req.user.id
+      text: text || "",
+      createdBy: req.user.id,
+      image: imgPath || undefined
     });
     task.updatedAt = new Date();
 

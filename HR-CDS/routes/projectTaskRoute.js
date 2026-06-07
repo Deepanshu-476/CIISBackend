@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const projectTaskController = require('../controllers/projectTaskController');
 const { protect } = require('../../middleware/authMiddleware'); 
+const { uploadRemarkImage } = require('../middlewares/uploadMiddleware');
 const upload = require('../../utils/multer'); 
 
 const uploadFields = upload.fields([
@@ -17,6 +18,6 @@ router.delete('/:id/tasks/:taskId', protect, projectTaskController.deleteTask);
 router.patch('/:projectId/tasks/:taskId/status', protect, projectTaskController.updateTaskStatus);
 router.get('/:projectId/tasks/:taskId/activity', protect, projectTaskController.getTaskActivityLogs);
 router.get('/:projectId/tasks/:taskId/remarks', protect, projectTaskController.getTaskRemarks);
-router.post('/:projectId/tasks/:taskId/remarks', protect, projectTaskController.addRemark);
+router.post('/:projectId/tasks/:taskId/remarks', protect, uploadRemarkImage, projectTaskController.addRemark);
 
 module.exports = router;

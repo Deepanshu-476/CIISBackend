@@ -3,6 +3,8 @@ const express = require('express');
 const router = express.Router();
 const SidebarConfig = require('../models/SidebarConfig');
 const Company = require('../models/Company');
+const Department = require('../models/Department');
+const Branch = require('../models/Branch');
 const mongoose = require('mongoose');
 
 const getRouteKey = item => {
@@ -28,6 +30,16 @@ const filterMenuItemsByCompanyAccess = async (companyId, menuItems) => {
 router.get('/', async (req, res) => {
   try {
     const { companyId, branchId, departmentId, role } = req.query;
+    
+    if (companyId && !mongoose.Types.ObjectId.isValid(companyId)) {
+      return res.json({ success: true, count: 0, data: [] });
+    }
+    if (branchId && !mongoose.Types.ObjectId.isValid(branchId)) {
+      return res.json({ success: true, count: 0, data: [] });
+    }
+    if (departmentId && !mongoose.Types.ObjectId.isValid(departmentId)) {
+      return res.json({ success: true, count: 0, data: [] });
+    }
     
     let query = {};
     if (companyId) query.companyId = companyId;
@@ -65,6 +77,16 @@ router.get('/config', async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'Company, department and role are required'
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(companyId) || 
+        !mongoose.Types.ObjectId.isValid(departmentId) || 
+        (branchId && !mongoose.Types.ObjectId.isValid(branchId))) {
+      return res.json({
+        success: true,
+        message: 'No configuration found',
+        data: null
       });
     }
     
@@ -298,6 +320,16 @@ router.get('/user-config', async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'Company, department and role are required'
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(companyId) || 
+        !mongoose.Types.ObjectId.isValid(departmentId) || 
+        (branchId && !mongoose.Types.ObjectId.isValid(branchId))) {
+      return res.json({
+        success: true,
+        message: 'No custom configuration found',
+        data: null
       });
     }
     
