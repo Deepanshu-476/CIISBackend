@@ -279,6 +279,7 @@ exports.sendPushToUsers = async ({userIds, title, body, data = {}}) => {
         priority: 'high',
         notification: {
           sound: 'default',
+          channelId: 'ciis_high_priority',
         },
       },
       apns: {
