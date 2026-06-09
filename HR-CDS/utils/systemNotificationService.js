@@ -19,6 +19,8 @@ const ROUTE_TARGETS = {
   '/ciisUser/client-meeting': {screen: 'Client Meeting', aliases: ['client-meeting']},
   '/ciisUser/emp-client': {screen: 'Client', aliases: ['emp-client', 'client-management']},
   '/ciisUser/chat': {screen: 'Chat', aliases: ['chat']},
+  '/ciisUser/contact-support': {screen: 'Support Center', aliases: ['contact-support', 'support-center', 'support']},
+  '/ciisUser/support-operations': {screen: 'Support Operations', aliases: ['support-operations', 'support-admin', 'support-management']},
   '/ciisUser/manage-groups': {screen: 'Manage Groups', aliases: ['manage-groups', 'groups']},
   '/ciisUser/project': {screen: 'Project', aliases: ['project', 'projects']},
   '/ciisUser/adminproject': {screen: 'Admin Project', aliases: ['admin-projects', 'adminproject']},

@@ -38,6 +38,15 @@ const departmentSchema = new mongoose.Schema({
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User"
+  },
+  supportHead: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    index: true
+  },
+  supportHeadName: {
+    type: String,
+    trim: true
   }
 }, {
   timestamps: true

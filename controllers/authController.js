@@ -1,5 +1,6 @@
 const User = require("../models/User");
 const Company = require("../models/Company");
+const Client = require("../HR-CDS/models/Client");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const sendEmail = require("../utils/sendEmail");
@@ -34,6 +35,134 @@ const LOCK_TIME = 15 * 60 * 1000; // 15 minutes
 // Helper function to generate OTP
 const generateOTP = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
+};
+
+const DEFAULT_CLIENT_DEPARTMENT_ID = "69ae555c9a1e47e80a40204c";
+const DEFAULT_CLIENT_JOB_ROLE_ID = "69ae559b9a1e47e80a4020a2";
+
+const resolveCompanyScope = async (companyIdentifier) => {
+  if (!companyIdentifier || typeof companyIdentifier !== "string") return null;
+
+  const rawIdentifier = companyIdentifier.trim();
+  if (!rawIdentifier) return null;
+
+  const baseIdentifier = rawIdentifier.includes("-")
+    ? rawIdentifier.split("-")[0]
+    : rawIdentifier;
+
+  const cleanIdentifier = baseIdentifier.trim();
+  if (!cleanIdentifier) return null;
+
+  const company = await Company.findOne({
+    $or: [
+      { companyCode: cleanIdentifier.toUpperCase() },
+      { dbIdentifier: cleanIdentifier.toLowerCase() },
+      { loginUrl: { $regex: cleanIdentifier.replace(/[^a-z0-9]/gi, ".*"), $options: "i" } }
+    ]
+  }).select("_id companyCode");
+
+  if (!company) {
+    return { companyCode: cleanIdentifier.toUpperCase(), companyId: null };
+  }
+
+  return {
+    companyCode: company.companyCode,
+    companyId: company._id
+  };
+};
+
+const buildUserCompanyFilter = (companyScope) => {
+  if (!companyScope) return {};
+
+  return {
+    $or: [
+      { companyCode: companyScope.companyCode },
+      ...(companyScope.companyId ? [{ company: companyScope.companyId }] : [])
+    ]
+  };
+};
+
+const findClientPasswordAccount = async (cleanEmail, companyScope, includePassword = false) => {
+  const userQuery = {
+    email: cleanEmail,
+    ...buildUserCompanyFilter(companyScope)
+  };
+
+  let userLookup = User.findOne(userQuery);
+  if (includePassword) userLookup = userLookup.select("+password");
+
+  const user = await userLookup;
+  if (user) return { user, client: null };
+
+  const clientQuery = { email: cleanEmail };
+  if (companyScope?.companyCode) clientQuery.companyCode = companyScope.companyCode;
+
+  const client = await Client.findOne(clientQuery);
+  if (!client) return { user: null, client: null };
+
+  const linkedUserQueries = [];
+  if (client.userId) linkedUserQueries.push({ _id: client.userId });
+  linkedUserQueries.push(
+    { email: cleanEmail, companyCode: client.companyCode, companyRole: "client" },
+    { email: cleanEmail, companyCode: client.companyCode, employeeType: client._id.toString() }
+  );
+
+  let linkedUserLookup = User.findOne({ $or: linkedUserQueries });
+  if (includePassword) linkedUserLookup = linkedUserLookup.select("+password");
+
+  const linkedUser = await linkedUserLookup;
+  if (linkedUser && !client.userId) {
+    client.userId = linkedUser._id;
+    await client.save();
+  }
+
+  return { user: linkedUser, client };
+};
+
+const createClientUserForPasswordReset = async (client, newPassword, companyScope) => {
+  const company = await Company.findOne({
+    $or: [
+      ...(companyScope?.companyId ? [{ _id: companyScope.companyId }] : []),
+      { companyCode: client.companyCode }
+    ]
+  }).select("_id companyCode");
+
+  if (!company) {
+    throw new Error(`Company not found for client ${client._id}`);
+  }
+
+  const createdUser = await User.create({
+    name: client.client,
+    email: client.email,
+    password: newPassword,
+    department: DEFAULT_CLIENT_DEPARTMENT_ID,
+    jobRole: DEFAULT_CLIENT_JOB_ROLE_ID,
+    company: company._id,
+    companyCode: company.companyCode || client.companyCode,
+    employeeId: `CLT${Date.now()}${Math.floor(Math.random() * 1000)}`,
+    phone: client.phone || "",
+    address: client.address || "",
+    gender: "other",
+    maritalStatus: "single",
+    employeeType: client._id.toString(),
+    companyRole: "client",
+    properties: [],
+    propertyOwned: "",
+    additionalDetails: JSON.stringify({
+      clientId: client._id,
+      isClientRepresentative: true,
+      companyName: client.company,
+      city: client.city
+    }),
+    isActive: true,
+    isVerified: false,
+    verificationToken: crypto.randomBytes(32).toString("hex")
+  });
+
+  client.userId = createdUser._id;
+  await client.save();
+
+  return await User.findById(createdUser._id).select("+password");
 };
 
 // Helper function to track login attempts
@@ -1085,30 +1214,44 @@ exports.resendLoginOTP = async (req, res) => {
 // ✅ Enhanced Forgot Password with OTP
 exports.forgotPassword = async (req, res) => {
   try {
-    const { email } = req.body;
+    const { email, companyCode, companyIdentifier } = req.body;
+    const cleanEmail = email?.trim().toLowerCase();
 
-    const user = await User.findOne({ email });
-    if (!user) {
+    if (!cleanEmail) {
+      return res.status(400).json({ message: 'Email is required.' });
+    }
+
+    const companyScope = await resolveCompanyScope(companyCode || companyIdentifier);
+    const { user, client } = await findClientPasswordAccount(cleanEmail, companyScope);
+    if (!user && !client) {
       return res.status(404).json({ message: 'No account found with this email.' });
     }
 
     const otp = generateOTP();
+    const otpScope = { email: cleanEmail };
 
-    await OTP.deleteMany({ email });
+    if (companyScope?.companyCode) {
+      otpScope.companyCode = companyScope.companyCode;
+    } else if (client?.companyCode) {
+      otpScope.companyCode = client.companyCode;
+    }
+
+    await OTP.deleteMany(otpScope);
 
     await OTP.create({
-      email,
+      email: cleanEmail,
+      companyCode: otpScope.companyCode,
       otp,
       expiresAt: new Date(Date.now() + 5 * 60 * 1000)
     });
 
     await emailService.sendEmail(
-      email,
+      cleanEmail,
       "🔐 Password Reset OTP",
       `
         <div style="font-family: Arial; padding:20px;">
           <h2 style="color:#2563eb;">Password Reset OTP</h2>
-          <p>Hello ${user.name},</p>
+          <p>Hello ${user?.name || client?.client || 'User'},</p>
           <p>Your OTP is:</p>
           <h1 style="letter-spacing:4px;">${otp}</h1>
           <p>This OTP is valid for 5 minutes.</p>
@@ -1651,9 +1794,21 @@ exports.resendSuperAdminOTP = async (req, res) => {
 // ✅ Reset Password with OTP
 exports.resetPassword = async (req, res) => {
   try {
-    const { email, otp, newPassword } = req.body;
+    const { email, otp, newPassword, companyCode, companyIdentifier } = req.body;
+    const cleanEmail = email?.trim().toLowerCase();
 
-    const otpRecord = await OTP.findOne({ email, otp });
+    if (!cleanEmail || !otp || !newPassword) {
+      return res.status(400).json({ message: 'Email, OTP and new password are required' });
+    }
+
+    const companyScope = await resolveCompanyScope(companyCode || companyIdentifier);
+    const otpQuery = { email: cleanEmail, otp };
+
+    if (companyScope?.companyCode) {
+      otpQuery.companyCode = companyScope.companyCode;
+    }
+
+    const otpRecord = await OTP.findOne(otpQuery);
 
     if (!otpRecord)
       return res.status(400).json({ message: 'Invalid OTP' });
@@ -1661,12 +1816,21 @@ exports.resetPassword = async (req, res) => {
     if (otpRecord.expiresAt < new Date())
       return res.status(400).json({ message: 'OTP expired' });
 
-    const user = await User.findOne({ email });
+    const account = await findClientPasswordAccount(cleanEmail, companyScope, true);
+    let user = account.user;
+    let createdClientUser = false;
+
+    if (!user && account.client) {
+      user = await createClientUserForPasswordReset(account.client, newPassword, companyScope);
+      createdClientUser = true;
+    }
+
     if (!user)
       return res.status(404).json({ message: 'User not found' });
 
-    // Check if new password is same as old
-    const isSamePassword = await bcrypt.compare(newPassword, user.password);
+    const isSamePassword = !createdClientUser && user.password
+      ? await bcrypt.compare(newPassword, user.password)
+      : false;
     if (isSamePassword) {
       return res.status(400).json({ 
         success: false,
@@ -1674,17 +1838,21 @@ exports.resetPassword = async (req, res) => {
       });
     }
 
-    // Hash new password
-    const salt = await bcrypt.genSalt(10);
-    user.password = await bcrypt.hash(newPassword, salt);
-    user.passwordChangedAt = Date.now();
-    await user.save();
+    if (!createdClientUser) {
+      // User model hashes modified passwords in its pre-save hook.
+      user.password = newPassword;
+      user.passwordChangedAt = Date.now();
+      await user.save();
+    }
 
-    await OTP.deleteMany({ email });
+    await OTP.deleteMany(otpRecord.companyCode
+      ? { email: cleanEmail, companyCode: otpRecord.companyCode }
+      : { email: cleanEmail }
+    );
 
     // Send confirmation email
     emailService.sendEmail(
-      email,
+      cleanEmail,
       "✅ Password Reset Successful",
       `
         <div style="font-family: Arial; padding:20px;">

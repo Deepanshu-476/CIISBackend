@@ -795,6 +795,8 @@ exports.getCompanydepartmentUsers = async (req, res) => {
     
     console.log("🔍 Fetching users for company ID:", companyId);
     
+    const requestedDepartment = req.query.department || req.query.departmentId;
+
     const filter = { 
       company: companyId,
       companyRole: { 
@@ -802,10 +804,14 @@ exports.getCompanydepartmentUsers = async (req, res) => {
         $not: /^client$/i 
       }
     };
+
+    if (requestedDepartment) {
+      filter.department = requestedDepartment;
+    }
     
     // ✅ UPDATED: Employee bhi saare company users dekh sakta hai? Agar nahi toh employee ko hatao
     const authorizedRoles = ['admin', 'hr', 'manager', 'super_admin', 'employee'];
-    if (!authorizedRoles.includes(currentUser.jobRole) && currentUser.department) {
+    if (!requestedDepartment && !authorizedRoles.includes(currentUser.jobRole) && currentUser.department) {
       filter.department = currentUser.department;
     }
     
