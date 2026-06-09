@@ -279,14 +279,13 @@ exports.sendPushToUsers = async ({userIds, title, body, data = {}}) => {
         priority: 'high',
         notification: {
           sound: 'default',
-          clickAction: 'OPEN_CIIS_NOTIFICATION',
+          channelId: 'ciis_high_priority',
         },
       },
       apns: {
         payload: {
           aps: {
             sound: 'default',
-            category: 'OPEN_CIIS_NOTIFICATION',
           },
         },
       },

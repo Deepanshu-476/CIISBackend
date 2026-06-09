@@ -45,7 +45,15 @@ const isClientTaskOverdue = task => {
 
 const parseClientDueDate = value => {
   if (!value) return null;
-  const date = value instanceof Date ? new Date(value) : new Date(String(value));
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  let dateStr = String(value).trim();
+  // If it's a local datetime string without offset (e.g. 2026-06-04T19:01)
+  if (dateStr.includes('T') && !/Z|[+-]\d{2}:?\d{2}$/i.test(dateStr)) {
+    dateStr = `${dateStr}+05:30`;
+  }
+  const date = new Date(dateStr);
   return Number.isNaN(date.getTime()) ? null : date;
 };
 

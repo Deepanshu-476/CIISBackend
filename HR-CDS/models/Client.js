@@ -105,6 +105,23 @@ const clientSchema = new mongoose.Schema({
       }
     }],
     default: []
+  },
+  paymentReceipts: {
+    type: [{
+      amount: Number,
+      transactionId: String,
+      receiptImage: String,
+      uploadDate: {
+        type: Date,
+        default: Date.now
+      },
+      status: {
+        type: String,
+        enum: ['Pending', 'Approved', 'Rejected'],
+        default: 'Pending'
+      }
+    }],
+    default: []
   }
 }, { timestamps: true });
 
