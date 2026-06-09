@@ -49,6 +49,7 @@ const RemarkSchema = new Schema(
     text: { type: String, required: true },
     createdAt: { type: Date, default: Date.now },
     createdBy: { type: Schema.Types.ObjectId, ref: "User" },
+    image: { type: String }
   },
   { _id: true }
 );

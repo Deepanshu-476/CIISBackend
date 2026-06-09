@@ -3,6 +3,7 @@ const router = express.Router();
 const projectController = require("../controllers/projectController");
 const { protect, authorize } = require('../../middleware/authMiddleware');
 const { check } = require("express-validator");
+const { uploadRemarkImage } = require('../middlewares/uploadMiddleware');
 
 // ==================== NOTIFICATION ROUTES ====================
 router.get("/notifications", protect, projectController.getUserNotifications);
@@ -46,9 +47,7 @@ router.patch("/:projectId/tasks/:taskId/status", protect, [
 
 router.get("/:projectId/tasks/:taskId/activity", protect, projectController.getTaskActivityLogs);
 router.get("/:projectId/tasks/:taskId/remarks", protect, projectController.getTaskRemarks);
-router.post("/:projectId/tasks/:taskId/remarks", protect, [
-  check("text").notEmpty().withMessage("Remark text is required")
-], projectController.addRemark);
+router.post("/:projectId/tasks/:taskId/remarks", protect, uploadRemarkImage, projectController.addRemark);
 
 // ==================== DEBUG/UTILITY ROUTES ====================
 router.get("/:id/users", protect, projectController.getProjectUsers);

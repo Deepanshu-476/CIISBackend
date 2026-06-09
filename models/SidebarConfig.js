@@ -21,6 +21,21 @@ const menuItemSchema = new mongoose.Schema({
   category: {
     type: String,
     default: 'main'
+  },
+  notificationAccess: {
+    scope: {
+      type: String,
+      enum: ['company', 'branch', 'department'],
+      default: 'company'
+    },
+    branchIds: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Branch'
+    }],
+    departmentIds: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Department'
+    }]
   }
 });
 

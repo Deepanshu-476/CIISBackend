@@ -1444,6 +1444,47 @@ const removeClientSubscription = async (req, res) => {
   }
 };
 
+const uploadClientReceipt = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { amount, transactionId } = req.body;
+
+    const client = await Client.findById(id);
+    if (!client) {
+      return res.status(404).json({ success: false, message: 'Client not found' });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'Receipt image file is required' });
+    }
+
+    const receiptImage = `uploads/receipts/${req.file.filename}`;
+
+    if (!client.paymentReceipts) {
+      client.paymentReceipts = [];
+    }
+
+    client.paymentReceipts.push({
+      amount: amount ? parseFloat(amount) : 0,
+      transactionId: transactionId || '',
+      receiptImage,
+      uploadDate: new Date(),
+      status: 'Pending'
+    });
+
+    await client.save();
+
+    res.json({
+      success: true,
+      message: 'Receipt uploaded successfully',
+      data: client
+    });
+  } catch (error) {
+    console.error('Error uploading client receipt:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   getAllClients,
   getClientById,
@@ -1458,7 +1499,8 @@ module.exports = {
   getClientsByCompany,
   extendClientSubscription,
   renewClientSubscription,
-  removeClientSubscription
+  removeClientSubscription,
+  uploadClientReceipt
 };
 
 console.log("✅ clientController.js loaded successfully with auto-user creation and email integration");
