@@ -9,7 +9,7 @@ class EmailService {
     this.transporter = null;
     this.initializeTransporter();
   }
- 
+
   initializeTransporter() {
     // Check if email credentials are configured
     if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
