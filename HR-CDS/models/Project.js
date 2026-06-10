@@ -49,6 +49,7 @@ const RemarkSchema = new Schema(
     text: { type: String, required: true },
     createdAt: { type: Date, default: Date.now },
     createdBy: { type: Schema.Types.ObjectId, ref: "User" },
+    image: { type: String }
   },
   { _id: true }
 );
@@ -58,9 +59,9 @@ const RemarkSchema = new Schema(
 ========================= */
 const TaskSchema = new Schema(
   {
-    title: { type: String, required: true, trim: true },
+    title: { type: String, trim: true, default: "Untitled Task" },
     description: { type: String, trim: true },
-    assignedTo: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    assignedTo: { type: Schema.Types.ObjectId, ref: "User" },
     dueDate: { type: Date },
     priority: { type: String, enum: PRIORITY_LEVELS, default: "medium" },
     status: { type: String, enum: TASK_STATUS, default: "pending" },

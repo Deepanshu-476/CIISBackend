@@ -19,8 +19,27 @@ const {
   getClientsByCompany,
   extendClientSubscription,
   renewClientSubscription,
-  removeClientSubscription
+  removeClientSubscription,
+  uploadClientReceipt
 } = require('../controllers/clientController');
+
+const multer = require('multer');
+const receiptStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = path.join(__dirname, '../uploads/receipts');
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    cb(null, `receipt_${Date.now()}_${path.basename(file.originalname)}`);
+  }
+});
+const uploadReceipt = multer({
+  storage: receiptStorage,
+  limits: { fileSize: 10 * 1024 * 1024 }
+});
 
 // ✅ Service Routes
 router.get('/services', serviceController.getAllServices);
@@ -42,14 +61,7 @@ router.post('/', addClient);
 router.post('/:id/extend-subscription', extendClientSubscription);
 router.patch('/renew-subscription/:id', renewClientSubscription);
 router.delete('/subscription/:id', removeClientSubscription);
-
-// ✅ ID ROUTES (SABSE LAST)
-router.get('/:id', getClientById);
-router.put('/:id', updateClient);
-router.patch('/:id/progress', updateClientProgress);
-router.patch('/:id/add-manager', addProjectManager);
-router.patch('/:id/remove-manager', removeProjectManager);
-router.delete('/:id', deleteClient);
+router.post('/upload-receipt/:id', uploadReceipt.single('receipt'), uploadClientReceipt);
 
 // ================= GET RECEIPT IMAGE =================
 // ✅ API to serve receipt images
@@ -851,5 +863,13 @@ router.post('/test/validation-test', async (req, res) => {
     });
   }
 });
+
+// ✅ ID ROUTES (SABSE LAST)
+router.get('/:id', getClientById);
+router.put('/:id', updateClient);
+router.patch('/:id/progress', updateClientProgress);
+router.patch('/:id/add-manager', addProjectManager);
+router.patch('/:id/remove-manager', removeProjectManager);
+router.delete('/:id', deleteClient);
 
 module.exports = router;

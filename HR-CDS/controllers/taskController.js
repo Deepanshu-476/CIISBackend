@@ -1,6 +1,8 @@
+// controllers/taskController.js
 const Task = require('../models/Task');
 const ClientTask = require('../models/ClientTask');
 const Client = require('../models/Client');
+const { Project } = require('../models/Project');
 const User = require('../../models/User');
 const Group = require('../models/Group');
 const Notification = require('../models/Notification');
@@ -10,30 +12,31 @@ const { sendEmail } = require('../../utils/sendEmail');
 const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
-const {notifyDirectUsers, notifyPageUsers} = require('../utils/systemNotificationService');
+const { notifyDirectUsers, notifyPageUsers } = require('../utils/systemNotificationService');
 
-// ==================== HELPER FUNCTIONS ====================
+/* ==========================================================================
+   1. CORE HELPERS & UTILITIES
+   ========================================================================== */
 
 const parsePositiveInt = (value, fallback, max = 100) => {
   const parsed = parseInt(value, 10);
-  if (Number.isNaN(parsed) || parsed < 1) return fallback;
+  if (isNaN(parsed) || parsed < 1) return fallback;
   return Math.min(parsed, max);
 };
 
-const getTaskDateRange = ({period = 'today', fromDate, toDate}) => {
-  const now = new Date();
+const getCleanTaskDateRange = ({ period = 'all', fromDate, toDate }) => {
   if (fromDate || toDate) {
     const range = {};
     if (fromDate) {
       const start = new Date(fromDate);
-      if (!Number.isNaN(start.getTime())) {
+      if (!isNaN(start.getTime())) {
         start.setHours(0, 0, 0, 0);
         range.$gte = start;
       }
     }
     if (toDate) {
       const end = new Date(toDate);
-      if (!Number.isNaN(end.getTime())) {
+      if (!isNaN(end.getTime())) {
         end.setHours(23, 59, 59, 999);
         range.$lte = end;
       }
@@ -43,49 +46,70 @@ const getTaskDateRange = ({period = 'today', fromDate, toDate}) => {
 
   if (period === 'all') return null;
 
-  if (period === 'week') {
-    const start = new Date(now);
-    start.setDate(now.getDate() - now.getDay());
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(start);
-    end.setDate(start.getDate() + 6);
-    end.setHours(23, 59, 59, 999);
-    return {$gte: start, $lte: end};
+  const now = new Date();
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+  switch (period) {
+    case 'today':
+      return { $gte: startOfDay, $lte: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999) };
+    case 'yesterday': {
+      const start = new Date(startOfDay);
+      start.setDate(start.getDate() - 1);
+      const end = new Date(start);
+      end.setHours(23, 59, 59, 999);
+      return { $gte: start, $lte: end };
+    }
+    case 'this-week':
+    case 'week': {
+      const start = new Date(startOfDay);
+      start.setDate(startOfDay.getDate() - startOfDay.getDay());
+      const end = new Date(start);
+      end.setDate(start.getDate() + 6);
+      end.setHours(23, 59, 59, 999);
+      return { $gte: start, $lte: end };
+    }
+    case 'last-week': {
+      const start = new Date(startOfDay);
+      start.setDate(startOfDay.getDate() - startOfDay.getDay() - 7);
+      const end = new Date(start);
+      end.setDate(start.getDate() + 6);
+      end.setHours(23, 59, 59, 999);
+      return { $gte: start, $lte: end };
+    }
+    case 'this-month':
+    case 'month':
+      return {
+        $gte: new Date(now.getFullYear(), now.getMonth(), 1),
+        $lte: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999)
+      };
+    case 'last-month':
+      return {
+        $gte: new Date(now.getFullYear(), now.getMonth() - 1, 1),
+        $lte: new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999)
+      };
+    case '7days': {
+      const start = new Date(startOfDay);
+      start.setDate(start.getDate() - 7);
+      return { $gte: start, $lte: now };
+    }
+    case '30days': {
+      const start = new Date(startOfDay);
+      start.setDate(start.getDate() - 30);
+      return { $gte: start, $lte: now };
+    }
+    case '90days': {
+      const start = new Date(startOfDay);
+      start.setDate(start.getDate() - 90);
+      return { $gte: start, $lte: now };
+    }
+    default:
+      return null;
   }
-
-  if (period === 'month') {
-    return {
-      $gte: new Date(now.getFullYear(), now.getMonth(), 1),
-      $lte: new Date(now.getFullYear(), now.getMonth() + 1, 1),
-    };
-  }
-
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-  return {$gte: start, $lt: end};
-};
-
-const addDateValueFilter = (filter, fields, range) => {
-  if (!range) return filter;
-  return {
-    ...filter,
-    $and: [
-      ...(filter.$and || []),
-      {$or: fields.map(field => ({[field]: range}))},
-    ],
-  };
-};
-
-const getLocalDateStart = (value = new Date()) => {
-  const date = value instanceof Date ? new Date(value) : new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  date.setHours(0, 0, 0, 0);
-  return date;
 };
 
 const normalizeTaskStatus = status => {
   if (!status) return 'pending';
-  const value = String(status).toLowerCase().trim();
+  const val = String(status).toLowerCase().trim();
   const map = {
     'in progress': 'in-progress',
     inprogress: 'in-progress',
@@ -95,232 +119,151 @@ const normalizeTaskStatus = status => {
     're open': 'reopen',
     're-open': 'reopen',
     cancelled: 'cancelled',
-    canceled: 'cancelled',
+    canceled: 'cancelled'
   };
-  return map[value] || value;
-};
-
-const getCleanTaskDateRange = ({period, fromDate, toDate}) => {
-  if (fromDate || toDate) {
-    const range = {};
-    if (fromDate) {
-      const start = new Date(fromDate);
-      if (!Number.isNaN(start.getTime())) {
-        start.setHours(0, 0, 0, 0);
-        range.$gte = start;
-      }
-    }
-    if (toDate) {
-      const end = new Date(toDate);
-      if (!Number.isNaN(end.getTime())) {
-        end.setHours(23, 59, 59, 999);
-        range.$lte = end;
-      }
-    }
-    return Object.keys(range).length ? range : null;
-  }
-
-  if (!period || period === 'all') return null;
-
-  const today = getLocalDateStart();
-  const startOfThisWeek = new Date(today);
-  const day = startOfThisWeek.getDay();
-  const diffToMonday = day === 0 ? -6 : 1 - day;
-  startOfThisWeek.setDate(startOfThisWeek.getDate() + diffToMonday);
-
-  const endOfThisWeek = new Date(startOfThisWeek);
-  endOfThisWeek.setDate(endOfThisWeek.getDate() + 6);
-  endOfThisWeek.setHours(23, 59, 59, 999);
-
-  switch (period) {
-    case 'today': {
-      const end = new Date(today);
-      end.setHours(23, 59, 59, 999);
-      return {$gte: today, $lte: end};
-    }
-    case 'yesterday': {
-      const start = new Date(today);
-      start.setDate(start.getDate() - 1);
-      const end = new Date(start);
-      end.setHours(23, 59, 59, 999);
-      return {$gte: start, $lte: end};
-    }
-    case 'this-week':
-      return {$gte: startOfThisWeek, $lte: endOfThisWeek};
-    case 'last-week': {
-      const start = new Date(startOfThisWeek);
-      start.setDate(start.getDate() - 7);
-      const end = new Date(startOfThisWeek);
-      end.setMilliseconds(-1);
-      return {$gte: start, $lte: end};
-    }
-    case 'this-month':
-      return {
-        $gte: new Date(today.getFullYear(), today.getMonth(), 1),
-        $lt: new Date(today.getFullYear(), today.getMonth() + 1, 1),
-      };
-    case 'last-month':
-      return {
-        $gte: new Date(today.getFullYear(), today.getMonth() - 1, 1),
-        $lt: new Date(today.getFullYear(), today.getMonth(), 1),
-      };
-    default:
-      return null;
-  }
-};
-
-const getUserStatusForTask = (task, userId) => {
-  const statusEntry = task.statusByUser?.find(entry => {
-    const entryUser = entry.user?._id || entry.user;
-    return entryUser && entryUser.toString() === userId.toString();
-  });
-
-  return normalizeTaskStatus(statusEntry?.status || task.overallStatus || 'pending');
+  return map[val] || val;
 };
 
 const isTaskOverdueForStatus = (dueDateTime, status) => {
   if (!dueDateTime) return false;
   if (status === 'overdue') return true;
-
   const dueDate = new Date(dueDateTime);
-  if (Number.isNaN(dueDate.getTime())) return false;
-
-  return dueDate < new Date() && status === 'pending';
+  if (isNaN(dueDate.getTime())) return false;
+  return dueDate < new Date() && !['completed', 'cancelled', 'approved'].includes(status);
 };
 
-const getClientTaskStatus = task => {
-  if (task.completed) return 'completed';
-  const status = normalizeTaskStatus(task.status || 'pending');
-  if (isTaskOverdueForStatus(task.dueDate, status)) return 'overdue';
-  return status;
-};
-
-const calculateUnifiedTaskStats = tasks => {
+const calculateUnifiedTaskStats = (tasks, userId) => {
   const counts = {
     pending: 0,
     'in-progress': 0,
     completed: 0,
+    approved: 0,
+    rejected: 0,
+    onhold: 0,
+    reopen: 0,
+    cancelled: 0,
     overdue: 0
   };
 
   tasks.forEach(task => {
-    const status = normalizeTaskStatus(task.status || 'pending');
-    if (status === 'completed') counts.completed++;
-    else if (status === 'overdue') counts.overdue++;
-    else if (status === 'in-progress') counts['in-progress']++;
-    else counts.pending++;
+    let status = 'pending';
+    if (userId) {
+      const userStatusEntry = task.statusByUser?.find(s => 
+        (s.user?._id || s.user)?.toString() === userId.toString()
+      );
+      status = userStatusEntry?.status || task.status || task.overallStatus || 'pending';
+    } else {
+      status = task.status || task.overallStatus || 'pending';
+    }
+
+    status = normalizeTaskStatus(status);
+
+    if (isTaskOverdueForStatus(task.dueDateTime || task.dueDate, status)) {
+      status = 'overdue';
+    }
+
+    if (counts[status] !== undefined) {
+      counts[status]++;
+    } else {
+      counts.pending++;
+    }
   });
 
   const total = tasks.length;
-  const percentage = count => total > 0 ? Math.round((count / total) * 100) : 0;
+  const pct = count => total > 0 ? Math.round((count / total) * 100) : 0;
 
   return {
     total,
-    pending: {count: counts.pending, percentage: percentage(counts.pending)},
-    inProgress: {count: counts['in-progress'], percentage: percentage(counts['in-progress'])},
-    completed: {count: counts.completed, percentage: percentage(counts.completed)},
-    overdue: {count: counts.overdue, percentage: percentage(counts.overdue)}
+    pending: { count: counts.pending, percentage: pct(counts.pending) },
+    inProgress: { count: counts['in-progress'], percentage: pct(counts['in-progress']) },
+    completed: { count: counts.completed, percentage: pct(counts.completed) },
+    approved: { count: counts.approved, percentage: pct(counts.approved) },
+    rejected: { count: counts.rejected, percentage: pct(counts.rejected) },
+    onHold: { count: counts.onhold, percentage: pct(counts.onhold) },
+    reopen: { count: counts.reopen, percentage: pct(counts.reopen) },
+    cancelled: { count: counts.cancelled, percentage: pct(counts.cancelled) },
+    overdue: { count: counts.overdue, percentage: pct(counts.overdue) }
   };
 };
 
-const normalizeUserTaskForList = (task, userId, source) => {
-  const status = getUserStatusForTask(task, userId);
-  const effectiveStatus = isTaskOverdueForStatus(task.dueDateTime, status) ? 'overdue' : status;
+const groupTasksByDate = (tasks, dateField = 'createdAt', serialKey = 'serialNo') => {
+  const grouped = {};
 
-  return {
-    ...task,
-    title: task.title,
-    dueDate: task.dueDateTime,
-    dueDateTime: task.dueDateTime,
-    status: effectiveStatus,
-    taskSource: source,
-    __taskSource: source,
-  };
-};
-
-const normalizeClientTaskForList = task => {
-  const status = getClientTaskStatus(task);
-  const client = task.clientId || {};
-
-  return {
-    _id: task._id,
-    title: task.name,
-    name: task.name,
-    description: task.description || task.name,
-    dueDate: task.dueDate,
-    dueDateTime: task.dueDate,
-    completed: task.completed,
-    status,
-    priority: (task.priority || 'Medium').toLowerCase(),
-    clientName: client.client || client.name || client.company || 'Unknown Client',
-    clientId: task.clientId,
-    clientEmail: client.email,
-    clientCompany: client.company,
-    files: task.files || [],
-    remarks: task.remarks || [],
-    activityLogs: task.activityLogs || [],
-    createdAt: task.createdAt,
-    service: task.service,
-    assignee: task.assignee,
-    taskSource: 'client',
-    __taskSource: 'client',
-    isOverdue: status === 'overdue'
-  };
-};
-
-const getTaskDateValue = (task, fields = []) => {
-  for (const field of fields) {
-    const value = task?.[field];
-    if (value) return value;
-  }
-  return task?.createdAt || task?.dueDateTime || task?.dueDate;
-};
-
-const getSourceAwareDateValue = task => {
-  const source = String(task?.__taskSource || task?.taskSource || '').toLowerCase();
-  if (source === 'client') {
-    return task?.dueDate || task?.dueDateTime || task?.createdAt;
-  }
-  return task?.createdAt || task?.dueDateTime || task?.dueDate;
-};
-
-const applyCleanListFilters = (tasks, req, options = {}) => {
-  const {status, search, period, fromDate, toDate} = req.query;
-  const dateFields = options.dateFields || [options.dateField || 'createdAt'];
-  const sourceAwareDate = Boolean(options.sourceAwareDate);
-  const range = getCleanTaskDateRange({period, fromDate, toDate});
-  const query = search ? String(search).trim().toLowerCase() : '';
-
-  return tasks.filter(task => {
-    if (status && status !== 'all' && normalizeTaskStatus(task.status) !== normalizeTaskStatus(status)) {
-      return false;
+  tasks.forEach(task => {
+    let dateValue = task[dateField] || task.createdAt;
+    if (dateField === 'source-aware') {
+      const source = String(task.__taskSource || task.taskSource || '').toLowerCase();
+      if (source === 'client') {
+        dateValue = task.dueDate || task.dueDateTime || task.createdAt;
+      } else if (source === 'project') {
+        dateValue = task.lastActivityAt || task.updatedAt || task.createdAt;
+      } else {
+        dateValue = task.dueDateTime || task.dueDate || task.createdAt;
+      }
     }
-
-    if (query) {
-      const searchable = [
-        task.title,
-        task.name,
-        task.description,
-        task.priority,
-        task.clientName,
-        task.clientCompany,
-        task.service
-      ].map(value => String(value || '').toLowerCase());
-
-      if (!searchable.some(value => value.includes(query))) return false;
-    }
-
-    if (range) {
-      const dateValue = sourceAwareDate ? getSourceAwareDateValue(task) : getTaskDateValue(task, dateFields);
-      const date = new Date(dateValue);
-      if (Number.isNaN(date.getTime())) return false;
-      if (range.$gte && date < range.$gte) return false;
-      if (range.$lte && date > range.$lte) return false;
-      if (range.$lt && date >= range.$lt) return false;
-    }
-
-    return true;
+    const dateKey = dateValue ? moment(dateValue).format('DD-MM-YYYY') : 'No Date';
+    if (!grouped[dateKey]) grouped[dateKey] = [];
+    grouped[dateKey].push(task);
   });
+
+  const sortedKeys = Object.keys(grouped).sort((a, b) => {
+    if (a === 'No Date') return 1;
+    if (b === 'No Date') return -1;
+    return moment(b, 'DD-MM-YYYY').toDate() - moment(a, 'DD-MM-YYYY').toDate();
+  });
+
+  const sortedGrouped = {};
+  sortedKeys.forEach(dateKey => {
+    sortedGrouped[dateKey] = grouped[dateKey]
+      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+      .map((task, index) => ({
+        ...task,
+        [serialKey]: index + 1
+      }));
+  });
+
+  return sortedGrouped;
+};
+
+const getTaskSortDate = task => {
+  const source = String(task.__taskSource || task.taskSource || '').toLowerCase();
+  let dateValue;
+  if (source === 'client') {
+    dateValue = task.dueDate || task.dueDateTime || task.createdAt;
+  } else if (source === 'project') {
+    dateValue = task.lastActivityAt || task.updatedAt || task.createdAt;
+  } else {
+    dateValue = task.dueDateTime || task.dueDate || task.createdAt;
+  }
+  const date = new Date(dateValue || 0);
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+};
+
+const sortTasksNewestFirst = tasks => {
+  return [...tasks].sort((a, b) => {
+    const dateDiff = getTaskSortDate(b) - getTaskSortDate(a);
+    if (dateDiff !== 0) return dateDiff;
+    return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
+  });
+};
+
+const paginateTasks = (tasks, req) => {
+  const page = parsePositiveInt(req.query.page, 1);
+  const limit = parsePositiveInt(req.query.limit, 10, 100);
+  const total = tasks.length;
+  const pages = Math.max(1, Math.ceil(total / limit));
+  const safePage = Math.min(page, pages);
+  const start = (safePage - 1) * limit;
+
+  return {
+    page: safePage,
+    limit,
+    total,
+    pages,
+    hasNext: safePage * limit < total,
+    hasPrev: safePage > 1,
+    tasks: tasks.slice(start, start + limit)
+  };
 };
 
 const getRequestCompanyCode = (req, user = null) => {
@@ -328,36 +271,28 @@ const getRequestCompanyCode = (req, user = null) => {
   return typeof companyCode === 'string' ? companyCode.trim().toUpperCase() : companyCode;
 };
 
-// 🔹 Helper to create notifications
 const createNotification = async (userId, title, message, type, relatedTask = null, metadata = null) => {
   try {
-    const data = {
-      ...(metadata || {}),
-      ...(relatedTask ? {taskId: relatedTask, relatedTask} : {}),
-    };
-
     await notifyDirectUsers({
       userIds: [userId],
       targetPath: metadata?.targetPath || '/ciisUser/task-management',
       title,
       message,
       type,
-      data,
-      priority: metadata?.priority === 'high' ? 'high' : 'medium',
+      data: {
+        ...(metadata || {}),
+        ...(relatedTask ? { taskId: relatedTask, relatedTask } : {})
+      },
+      priority: metadata?.priority === 'high' ? 'high' : 'medium'
     });
   } catch (error) {
     console.error('❌ Error creating notification:', error);
   }
 };
 
-// 🔹 Helper to create activity logs
 const createActivityLog = async (user, action, task, description, oldValues = null, newValues = null, req = null) => {
   try {
-    if (!user || !user._id) {
-      console.error("❌ Invalid user in activity log:", user);
-      return; // 🚫 crash रोक देगा
-    }
-
+    if (!user || !user._id) return;
     await ActivityLog.create({
       user: user._id,
       action,
@@ -373,2723 +308,1104 @@ const createActivityLog = async (user, action, task, description, oldValues = nu
   }
 };
 
-// 🔹 Helper to group tasks by date
-const groupTasksByDate = (tasks, dateField = 'createdAt', serialKey = 'serialNo') => {
-  const grouped = {};
-  const sourceAwareDate = dateField === 'source-aware';
-
-  tasks.forEach(task => {
-    const dateValue = sourceAwareDate
-      ? getSourceAwareDateValue(task)
-      : getTaskDateValue(task, Array.isArray(dateField) ? dateField : [dateField]);
-    const dateKey = dateValue ? moment(dateValue).format('DD-MM-YYYY') : 'No Date';
-    if (!grouped[dateKey]) grouped[dateKey] = [];
-    grouped[dateKey].push(task);
-  });
-
-  const sortedKeys = Object.keys(grouped).sort((a, b) =>
-    a === 'No Date' ? 1 : b === 'No Date' ? -1 :
-    moment(b, 'DD-MM-YYYY').toDate() - moment(a, 'DD-MM-YYYY').toDate()
-  );
-
-  const sortedGrouped = {};
-  sortedKeys.forEach(dateKey => {
-    sortedGrouped[dateKey] = grouped[dateKey]
-      .sort((a, b) => new Date(sourceAwareDate ? getSourceAwareDateValue(b) : getTaskDateValue(b, Array.isArray(dateField) ? dateField : [dateField])) - new Date(sourceAwareDate ? getSourceAwareDateValue(a) : getTaskDateValue(a, Array.isArray(dateField) ? dateField : [dateField])))
-      .map((task, index) => ({
-        ...task,
-        [serialKey]: index + 1
-      }));
-  });
-
-  return sortedGrouped;
-};
-
-// 🔹 Enrich tasks with name/role for status info
 const enrichStatusInfo = async (tasks) => {
   if (!tasks || tasks.length === 0) return tasks;
 
   const userIds = [];
   tasks.forEach(task => {
-    if (task.statusByUser && Array.isArray(task.statusByUser)) {
-      task.statusByUser.forEach(status => {
-        if (status.user) userIds.push(status.user.toString());
-      });
-    }
+    task.statusByUser?.forEach(s => {
+      if (s.user) userIds.push(s.user.toString());
+    });
   });
 
   if (userIds.length === 0) return tasks;
 
-  const uniqueUserIds = [...new Set(userIds)];
-  const users = await User.find({ _id: { $in: uniqueUserIds } }).select('name role email').lean();
+  const users = await User.find({ _id: { $in: [...new Set(userIds)] } }).select('name role email').lean();
   const userMap = {};
-  users.forEach(u => {
-    userMap[u._id.toString()] = u;
-  });
+  users.forEach(u => { userMap[u._id.toString()] = u; });
 
   return tasks.map(task => {
-    if (!task.statusByUser || !Array.isArray(task.statusByUser)) {
-      return task.toObject ? task.toObject() : task;
-    }
-
-    const newStatusInfo = task.statusByUser.map(status => {
-      const userObj = userMap[status.user.toString()];
-      const base = {
-        userId: status.user,
-        name: userObj?.name || 'Unknown',
-        role: userObj?.role || 'N/A',
-        email: userObj?.email || 'N/A',
-        status: status.status,
+    if (!task.statusByUser) return task;
+    const info = task.statusByUser.map(s => {
+      const u = userMap[s.user.toString()];
+      return {
+        userId: s.user,
+        name: u?.name || 'Unknown',
+        role: u?.role || 'N/A',
+        email: u?.email || 'N/A',
+        status: s.status,
+        ...(s.status === 'approved' && { approvedByUser: `${u?.name} (${u?.role})` }),
+        ...(s.status === 'rejected' && { rejectedByUser: `${u?.name} (${u?.role})` })
       };
-
-      if (status.status === 'approved') {
-        base.approvedByUser = `${userObj.name} (${userObj.role})`;
-      } else if (status.status === 'rejected') {
-        base.rejectedByUser = `${userObj.name} (${userObj.role})`;
-      }
-
-      return base;
     });
+    return { ...task, statusInfo: info };
+  });
+};
 
+const sendTaskCreationEmail = async (task, assignedUsers) => {
+  try {
+    for (const u of assignedUsers) {
+      const subject = `🎯 New Task Assigned: ${task.title}`;
+      const html = `<div style="font-family: Arial; padding: 20px;">
+        <h2>New Task Assigned</h2>
+        <p>Hello <strong>${u.name}</strong>,</p>
+        <p>You have been assigned a new task: <strong>${task.title}</strong></p>
+        <p>Priority: ${task.priority.toUpperCase()}</p>
+        <p>Assigned By: ${task.createdBy.name}</p>
+      </div>`;
+      await sendEmail(u.email, subject, html, { skipNotification: true });
+    }
+  } catch (err) {
+    console.error('❌ Email failed:', err);
+  }
+};
+
+const sendTaskStatusUpdateEmail = async (task, updatedUser, oldStatus, newStatus) => {
+  try {
+    const subject = `🔄 Task Status Updated: ${task.title}`;
+    const html = `<div style="font-family: Arial; padding: 20px;">
+      <h2>Task Status Updated</h2>
+      <p>Hello <strong>${task.createdBy.name}</strong>,</p>
+      <p><strong>${updatedUser.name}</strong> has updated the task status:</p>
+      <p>Task: ${task.title}</p>
+      <p>Status: ${oldStatus.toUpperCase()} → ${newStatus.toUpperCase()}</p>
+    </div>`;
+    await sendEmail(task.createdBy.email, subject, html, { skipNotification: true });
+  } catch (err) {
+    console.error('❌ Email failed:', err);
+  }
+};
+
+/* ==========================================================================
+   2. REUSABLE BUSINESS LOGIC
+   ========================================================================== */
+
+const fetchPersonalTaskList = async (req) => {
+  const companyCode = req.user.companyCode;
+  const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
+  const companyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : companyCode;
+
+  const tasks = await Task.find({
+    companyCode: companyFilter,
+    createdBy: req.user._id,
+    taskFor: 'self',
+    isActive: true
+  }).populate('assignedUsers', 'name email').populate('createdBy', 'name email').sort({ createdAt: -1 }).lean();
+
+  const enriched = await enrichStatusInfo(tasks);
+  return enriched.map(t => ({ ...t, status: normalizeTaskStatus(t.overallStatus), taskSource: 'self', __taskSource: 'self' }));
+};
+
+const fetchAssignedToMeTaskList = async (req) => {
+  const currentUserId = req.user._id || req.user.id;
+  const groups = await Group.find({ members: currentUserId, isActive: true }).select('_id').lean();
+  const groupIds = groups.map(g => g._id);
+
+  const companyCode = req.user.companyCode;
+  const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
+  const companyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : companyCode;
+
+  const tasks = await Task.find({
+    companyCode: companyFilter,
+    isActive: true,
+    taskFor: 'others',
+    createdBy: { $ne: currentUserId },
+    $or: [
+      { assignedUsers: currentUserId },
+      { assignedGroups: { $in: groupIds } }
+    ]
+  }).populate('assignedUsers', 'name email').populate('createdBy', 'name email').sort({ createdAt: -1 }).lean();
+
+  const enriched = await enrichStatusInfo(tasks);
+  return enriched.map(t => {
+    const userEntry = t.statusByUser?.find(s => (s.user?._id || s.user)?.toString() === currentUserId.toString());
+    const status = userEntry?.status || t.overallStatus || 'pending';
+    return { ...t, status: normalizeTaskStatus(status), taskSource: 'assigned', __taskSource: 'assigned' };
+  });
+};
+
+const fetchAssignedClientTaskList = async (req) => {
+  const companyCode = getRequestCompanyCode(req);
+  const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
+  const companyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : companyCode;
+
+  const clients = await Client.find(companyFilter ? { companyCode: companyFilter } : {}).select('_id').lean();
+  const clientIds = clients.map(c => c._id);
+  const currentUser = req.user;
+
+  const tasks = await ClientTask.find({
+    clientId: { $in: clientIds },
+    $or: [
+      { assigneeId: currentUser._id },
+      { assignee: currentUser.id?.toString() },
+      { assignee: currentUser._id?.toString() },
+      { assignee: currentUser.name },
+      { assignee: currentUser.email }
+    ].filter(Boolean)
+  }).populate('clientId', 'client name email company phone companyCode').sort({ createdAt: -1 }).lean();
+
+  return tasks.map(t => {
+    const status = t.completed ? 'completed' : normalizeTaskStatus(t.status || 'pending');
     return {
-      ...(task.toObject ? task.toObject() : task),
-      statusInfo: newStatusInfo
+      _id: t._id,
+      title: t.name,
+      name: t.name,
+      description: t.description || t.name,
+      dueDate: t.dueDate,
+      dueDateTime: t.dueDate,
+      completed: t.completed,
+      status,
+      priority: (t.priority || 'Medium').toLowerCase(),
+      clientName: t.clientId?.client || t.clientId?.name || 'Unknown Client',
+      clientId: t.clientId,
+      files: t.files || [],
+      remarks: t.remarks || [],
+      createdAt: t.createdAt,
+      taskSource: 'client',
+      __taskSource: 'client',
+      isOverdue: isTaskOverdueForStatus(t.dueDate, status)
     };
   });
 };
 
-// 🔹 Get all users (no restrictions)
-const getAllAssignableUsers = async (req) => {
-  console.log('👤 Getting all active users');
-
-  const loggedInUser = await User.findById(req.user.id).lean();
-
-  if (!loggedInUser) {
-    console.log('🚫 User not found');
-    return [];
-  }
-
-  // Get all active users except self
-  const users = await User.find({
-    isActive: true,
-    _id: { $ne: loggedInUser._id }
-  })
-  .select('_id name email role jobRole properties')
-  .lean();
-
-  console.log('✅ All active users found:', users.length);
-
-  return users;
+const normalizeProjectTaskStatus = status => {
+  const normalized = normalizeTaskStatus(status || 'pending');
+  if (normalized === 'in-progress') return 'in-progress';
+  if (normalized === 'onhold') return 'onhold';
+  return normalized;
 };
 
-// 🔹 Get all groups (no restrictions)
-const getAllAssignableGroups = async (req) => {
-  // Get all active groups
-  const groups = await Group.find({
-    isActive: true
-  })
-  .populate('members', 'name role email')
-  .select('name description members')
-  .lean();
-
-  return groups;
+const getProjectTaskAssignedBy = (task, project) => {
+  const creationLog = (task.activityLogs || []).find(log => log.type === 'creation');
+  return task.createdBy || creationLog?.performedBy || project.createdBy;
 };
 
-// 🔹 Send email notification for task creation
-const sendTaskCreationEmail = async (task, assignedUsers) => {
-  try {
-    for (const user of assignedUsers) {
-      const emailSubject = `🎯 New Task Assigned: ${task.title}`;
-      const emailHtml = `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
-          <div style="text-align: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 8px 8px 0 0; color: white;">
-            <h1 style="margin: 0; font-size: 24px;">New Task Assigned</h1>
-          </div>
-          
-          <div style="padding: 20px;">
-            <p>Hello <strong>${user.name}</strong>,</p>
-            <p>You have been assigned a new task. Here are the details:</p>
-            
-            <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 15px 0; border-left: 4px solid #667eea;">
-              <h3 style="margin-top: 0; color: #333;">${task.title}</h3>
-              ${task.description ? `<p style="margin: 10px 0;"><strong>Description:</strong> ${task.description}</p>` : ''}
-              <p style="margin: 5px 0;"><strong>Priority:</strong> <span style="color: ${
-                task.priority === 'high' ? '#dc3545' : 
-                task.priority === 'medium' ? '#ffc107' : '#28a745'
-              };">${task.priority.toUpperCase()}</span></p>
-              ${task.dueDateTime ? `<p style="margin: 5px 0;"><strong>Due Date:</strong> ${moment(task.dueDateTime).format('DD MMM YYYY, hh:mm A')}</p>` : ''}
-              ${task.priorityDays ? `<p style="margin: 5px 0;"><strong>Priority Days:</strong> ${task.priorityDays}</p>` : ''}
-              <p style="margin: 5px 0;"><strong>Assigned By:</strong> ${task.createdBy.name}</p>
-            </div>
-            
-            <div style="background: #e7f3ff; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #1976d2;">
-              <p style="margin: 0; font-weight: bold;">📋 Action Required:</p>
-              <p style="margin: 10px 0 0 0;">Please login to your dashboard to view the complete task details and update the status.</p>
-            </div>
-            
-            <div style="text-align: center; margin: 25px 0;">
-              <a href="https://cds.ciisnetwork.in/login"
-                 style="background: #667eea; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
-                View Task Dashboard
-              </a>
-            </div>
-          </div>
-          
-          <div style="border-top: 1px solid #e0e0e0; padding-top: 15px; text-align: center; color: #666; font-size: 12px;">
-            <p>This is an automated notification. Please do not reply to this email.</p>
-            <p>© ${new Date().getFullYear()} Ciis Task Management System</p>
-          </div>
-        </div>
-      `;
+const fetchAssignedProjectTaskList = async (req) => {
+  const currentUserId = (req.user._id || req.user.id).toString();
 
-      await sendEmail(user.email, emailSubject, emailHtml, {
-        skipNotification: true,
+  const projects = await Project.find({ 'tasks.assignedTo': currentUserId })
+    .select('projectName description createdBy users tasks createdAt updatedAt')
+    .populate('createdBy', 'name email')
+    .populate('tasks.assignedTo', 'name email')
+    .populate('tasks.createdBy', 'name email')
+    .populate('tasks.activityLogs.performedBy', 'name email')
+    .lean();
+
+  const tasks = [];
+
+  projects.forEach(project => {
+    (project.tasks || []).forEach(task => {
+      const assignedTo = task.assignedTo?._id || task.assignedTo;
+      const isAssignedToMe = assignedTo?.toString() === currentUserId;
+      if (!isAssignedToMe) return;
+
+      const status = normalizeProjectTaskStatus(task.status);
+      const lastActivityAt = task.updatedAt || task.createdAt || project.updatedAt || project.createdAt;
+      const assignedBy = getProjectTaskAssignedBy(task, project);
+
+      tasks.push({
+        _id: task._id,
+        projectId: project._id,
+        title: task.title || 'Untitled Project Task',
+        name: task.title || 'Untitled Project Task',
+        description: task.description || project.description || '',
+        dueDate: task.dueDate,
+        dueDateTime: task.dueDate,
+        priority: String(task.priority || 'medium').toLowerCase(),
+        status,
+        userStatus: status,
+        assignedTo: task.assignedTo,
+        createdBy: assignedBy,
+        assignedBy,
+        assignedByName: assignedBy?.name || assignedBy?.email || 'Unknown',
+        assignedToName: task.assignedTo?.name || 'Unknown',
+        assignedToEmail: task.assignedTo?.email || '',
+        projectName: project.projectName,
+        projectTaskId: task._id,
+        files: task.pdfFile?.path ? [{
+          filename: task.pdfFile.filename,
+          originalName: task.pdfFile.filename,
+          path: task.pdfFile.path
+        }] : [],
+        remarks: task.remarks || [],
+        activityLogs: task.activityLogs || [],
+        createdAt: task.createdAt || project.createdAt,
+        updatedAt: task.updatedAt || project.updatedAt,
+        lastActivityAt,
+        source: 'project',
+        taskSource: 'project',
+        __taskSource: 'project',
+        isOverdue: isTaskOverdueForStatus(task.dueDate, status)
       });
-      console.log(`✅ Task creation email sent to: ${user.email}`);
-    }
-  } catch (emailError) {
-    console.error('❌ Failed to send task creation email:', emailError);
-  }
-};
-
-// 🔹 Send email notification for task status update
-const sendTaskStatusUpdateEmail = async (task, updatedUser, oldStatus, newStatus) => {
-  try {
-    const emailSubject = `🔄 Task Status Updated: ${task.title}`;
-    
-    let statusColor = '#666';
-    let statusEmoji = '📝';
-    
-    switch (newStatus) {
-      case 'completed':
-        statusColor = '#28a745';
-        statusEmoji = '✅';
-        break;
-      case 'in-progress':
-        statusColor = '#ffc107';
-        statusEmoji = '🔄';
-        break;
-      case 'overdue':
-        statusColor = '#dc3545';
-        statusEmoji = '⚠️';
-        break;
-      case 'pending':
-        statusColor = '#6c757d';
-        statusEmoji = '⏳';
-        break;
-    }
-
-    const emailHtml = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
-        <div style="text-align: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 8px 8px 0 0; color: white;">
-          <h1 style="margin: 0; font-size: 24px;">Task Status Updated</h1>
-        </div>
-        
-        <div style="padding: 20px;">
-          <p>Hello <strong>${task.createdBy.name}</strong>,</p>
-          <p><strong>${updatedUser.name}</strong> has updated the status of the following task:</p>
-          
-          <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 15px 0; border-left: 4px solid ${statusColor};">
-            <h3 style="margin-top: 0; color: #333;">${task.title}</h3>
-            <div style="display: flex; align-items: center; gap: 10px; margin: 10px 0;">
-              <span style="font-size: 20px;">${statusEmoji}</span>
-              <div>
-                <p style="margin: 0; font-weight: bold; color: ${statusColor};">Status: ${newStatus.toUpperCase()}</p>
-                <p style="margin: 5px 0 0 0; font-size: 12px; color: #666;">
-                  Previous: ${oldStatus.toUpperCase()} → New: ${newStatus.toUpperCase()}
-                </p>
-              </div>
-            </div>
-            ${task.description ? `<p style="margin: 10px 0;"><strong>Description:</strong> ${task.description}</p>` : ''}
-            <p style="margin: 5px 0;"><strong>Updated By:</strong> ${updatedUser.name} (${updatedUser.role})</p>
-            <p style="margin: 5px 0;"><strong>Updated At:</strong> ${moment().format('DD MMM YYYY, hh:mm A')}</p>
-          </div>
-
-          ${newStatus === 'completed' ? `
-            <div style="background: #d4edda; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #28a745;">
-              <p style="margin: 0; font-weight: bold; color: #155724;">🎉 Task Completed!</p>
-              <p style="margin: 10px 0 0 0;">Great work! The task has been successfully completed.</p>
-            </div>
-          ` : ''}
-          
-          ${newStatus === 'overdue' ? `
-            <div style="background: #f8d7da; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #dc3545;">
-              <p style="margin: 0; font-weight: bold; color: #721c24;">⚠️ Task Overdue!</p>
-              <p style="margin: 10px 0 0 0;">Attention required: This task is now overdue.</p>
-            </div>
-          ` : ''}
-          
-          <div style="text-align: center; margin: 25px 0;">
-            <a href="https://cds.ciisnetwork.in/login" 
-               style="background: #667eea; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
-              View Task Dashboard
-            </a>
-          </div>
-        </div>
-        
-        <div style="border-top: 1px solid #e0e0e0; padding-top: 15px; text-align: center; color: #666; font-size: 12px;">
-          <p>This is an automated notification. Please do not reply to this email.</p>
-          <p>© ${new Date().getFullYear()} Ciis Task Management System</p>
-        </div>
-      </div>
-    `;
-
-    await sendEmail(task.createdBy.email, emailSubject, emailHtml, {
-      skipNotification: true,
     });
-    console.log(`✅ Task status update email sent to: ${task.createdBy.email}`);
-  } catch (emailError) {
-    console.error('❌ Failed to send task status update email:', emailError);
-  }
+  });
+
+  return tasks;
 };
 
-// ==================== MAIN CONTROLLER FUNCTIONS ====================
+const applyCleanListFilters = (tasks, req) => {
+  const { status, search, period, fromDate, toDate } = req.query;
+  const range = getCleanTaskDateRange({ period, fromDate, toDate });
+  const query = search ? String(search).trim().toLowerCase() : '';
 
-const getCurrentUserOrFail = async (req, res) => {
-  const user = await User.findById(req.user.id || req.user._id).lean();
-  if (!user) {
-    res.status(401).json({
-      success: false,
-      error: 'User not found'
-    });
-    return null;
-  }
-  return user;
-};
-
-const getUserGroupIds = async userId => {
-  const userGroups = await Group.find({
-    members: userId,
-    isActive: true
-  }).select('_id').lean();
-
-  return userGroups.map(group => group._id);
-};
-
-const fetchPersonalTaskList = async req => {
-  const currentUserId = req.user._id || req.user.id;
-  const tasks = await Task.find({
-    companyCode: req.user.companyCode,
-    createdBy: currentUserId,
-    taskFor: 'self',
-    isActive: true
-  })
-    .populate('assignedUsers', 'name email')
-    .populate('assignedGroups', 'name description')
-    .populate('createdBy', 'name email')
-    .sort({createdAt: -1})
-    .lean();
-
-  const enriched = await enrichStatusInfo(tasks);
-  return enriched.map(task => normalizeUserTaskForList(task, currentUserId, 'self'));
-};
-
-const fetchAssignedToMeTaskList = async req => {
-  const currentUserId = req.user._id || req.user.id;
-  const groupIds = await getUserGroupIds(currentUserId);
-  const tasks = await Task.find({
-    companyCode: req.user.companyCode,
-    isActive: true,
-    taskFor: 'others',
-    createdBy: {$ne: currentUserId},
-    $or: [
-      {assignedUsers: currentUserId},
-      {assignedGroups: {$in: groupIds}}
-    ]
-  })
-    .populate('assignedUsers', 'name email')
-    .populate('assignedGroups', 'name description')
-    .populate('createdBy', 'name email')
-    .sort({createdAt: -1})
-    .lean();
-
-  const enriched = await enrichStatusInfo(tasks);
-  return enriched.map(task => normalizeUserTaskForList(task, currentUserId, 'assigned'));
-};
-
-const fetchAssignedClientTaskList = async req => {
-  const companyCode = getRequestCompanyCode(req);
-  const clientFilter = companyCode ? {companyCode} : {};
-  const clients = await Client.find(clientFilter).select('_id').lean();
-  const clientIds = clients.map(client => client._id);
-  const currentUser = req.user;
-
-  const filter = {
-    clientId: {$in: clientIds},
-    $or: [
-      {assigneeId: currentUser._id || currentUser.id},
-      {assignee: currentUser.id?.toString()},
-      {assignee: currentUser._id?.toString()},
-      {assignee: currentUser.name},
-      {assignee: currentUser.email}
-    ].filter(Boolean)
-  };
-
-  const tasks = await ClientTask.find(filter)
-    .populate('clientId', 'client name email company phone companyCode')
-    .sort({createdAt: -1})
-    .lean();
-
-  return tasks.map(normalizeClientTaskForList);
-};
-
-const sendCleanTaskList = (res, tasks, view, dateField = ['dueDateTime', 'dueDate', 'createdAt']) => {
-  const groupedTasks = groupTasksByDate(tasks, dateField, 'serialNo');
-  return res.json({
-    success: true,
-    view,
-    groupedTasks,
-    tasks,
-    stats: calculateUnifiedTaskStats(tasks),
-    count: tasks.length
+  return tasks.filter(t => {
+    if (status && status !== 'all' && normalizeTaskStatus(t.status) !== normalizeTaskStatus(status)) return false;
+    if (query) {
+      const searchHaystack = [t.title, t.name, t.description, t.clientName, t.service].map(v => String(v || '').toLowerCase()).join(' ');
+      if (!searchHaystack.includes(query)) return false;
+    }
+    if (range) {
+      const source = String(t.__taskSource || t.taskSource || '').toLowerCase();
+      const sourceDate = source === 'project'
+        ? (t.lastActivityAt || t.updatedAt || t.createdAt)
+        : (t.dueDateTime || t.dueDate || t.createdAt);
+      const dateVal = new Date(sourceDate);
+      if (isNaN(dateVal.getTime())) return false;
+      if (range.$gte && dateVal < range.$gte) return false;
+      if (range.$lte && dateVal > range.$lte) return false;
+    }
+    return true;
   });
 };
 
+const sendCleanTaskList = (res, tasks, view, dateField = 'createdAt', req = null) => {
+  const sortedTasks = sortTasksNewestFirst(tasks);
+  const pagination = req ? paginateTasks(sortedTasks, req) : null;
+  const responseTasks = pagination ? pagination.tasks : sortedTasks;
+
+  return res.json({
+    success: true,
+    view,
+    groupedTasks: groupTasksByDate(responseTasks, dateField, 'serialNo'),
+    tasks: responseTasks,
+    stats: calculateUnifiedTaskStats(sortedTasks),
+    count: responseTasks.length,
+    total: sortedTasks.length,
+    ...(pagination ? {
+      pagination: {
+        page: pagination.page,
+        limit: pagination.limit,
+        total: pagination.total,
+        pages: pagination.pages,
+        hasNext: pagination.hasNext,
+        hasPrev: pagination.hasPrev
+      }
+    } : {})
+  });
+};
+
+/* ==========================================================================
+   3. TASK CONTROLLER EXPORTS
+   ========================================================================== */
+
 exports.getPersonalTasks = async (req, res) => {
   try {
-    if (!await getCurrentUserOrFail(req, res)) return;
-    const tasks = applyCleanListFilters(await fetchPersonalTaskList(req), req, {dateFields: ['createdAt']});
-    return sendCleanTaskList(res, tasks, 'personal', ['createdAt']);
-  } catch (error) {
-    console.error('❌ Error fetching personal tasks:', error);
-    return res.status(500).json({success: false, error: 'Failed to get personal tasks'});
+    const list = await fetchPersonalTaskList(req);
+    return sendCleanTaskList(res, applyCleanListFilters(list, req), 'personal', 'createdAt');
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
   }
 };
 
 exports.getAssignedToMeTasks = async (req, res) => {
   try {
-    if (!await getCurrentUserOrFail(req, res)) return;
-    const tasks = applyCleanListFilters(await fetchAssignedToMeTaskList(req), req, {dateFields: ['createdAt']});
-    return sendCleanTaskList(res, tasks, 'assigned', ['createdAt']);
-  } catch (error) {
-    console.error('❌ Error fetching assigned-to-me tasks:', error);
-    return res.status(500).json({success: false, error: 'Failed to get assigned tasks'});
+    const list = await fetchAssignedToMeTaskList(req);
+    return sendCleanTaskList(res, applyCleanListFilters(list, req), 'assigned', 'createdAt');
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+exports.getAssignedProjectTasks = async (req, res) => {
+  try {
+    const list = await fetchAssignedProjectTaskList(req);
+    return sendCleanTaskList(res, applyCleanListFilters(list, req), 'project', 'source-aware');
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
   }
 };
 
 exports.getAllMyTaskViews = async (req, res) => {
   try {
-    if (!await getCurrentUserOrFail(req, res)) return;
-    const [personal, assigned, client] = await Promise.all([
+    const [personal, assigned, client, project] = await Promise.all([
       fetchPersonalTaskList(req),
       fetchAssignedToMeTaskList(req),
-      fetchAssignedClientTaskList(req)
+      fetchAssignedClientTaskList(req),
+      fetchAssignedProjectTaskList(req)
     ]);
-
-    const tasks = applyCleanListFilters([...personal, ...assigned, ...client], req, {sourceAwareDate: true});
-    return sendCleanTaskList(res, tasks, 'all', 'source-aware');
-  } catch (error) {
-    console.error('❌ Error fetching all task views:', error);
-    return res.status(500).json({success: false, error: 'Failed to get all tasks'});
+    const list = applyCleanListFilters([...personal, ...assigned, ...client, ...project], req);
+    return sendCleanTaskList(res, list, 'all', 'source-aware', req);
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
   }
 };
 
 exports.getPersonalTaskStats = async (req, res) => {
   try {
-    if (!await getCurrentUserOrFail(req, res)) return;
-    const tasks = applyCleanListFilters(await fetchPersonalTaskList(req), req, {dateFields: ['createdAt']});
-    return res.json({success: true, view: 'personal', stats: calculateUnifiedTaskStats(tasks)});
-  } catch (error) {
-    console.error('❌ Error fetching personal task stats:', error);
-    return res.status(500).json({success: false, error: 'Failed to get personal task stats'});
+    const list = applyCleanListFilters(await fetchPersonalTaskList(req), req);
+    return res.json({ success: true, view: 'personal', stats: calculateUnifiedTaskStats(list) });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
   }
 };
 
 exports.getAssignedToMeTaskStats = async (req, res) => {
   try {
-    if (!await getCurrentUserOrFail(req, res)) return;
-    const tasks = applyCleanListFilters(await fetchAssignedToMeTaskList(req), req, {dateFields: ['createdAt']});
-    return res.json({success: true, view: 'assigned', stats: calculateUnifiedTaskStats(tasks)});
-  } catch (error) {
-    console.error('❌ Error fetching assigned task stats:', error);
-    return res.status(500).json({success: false, error: 'Failed to get assigned task stats'});
+    const list = applyCleanListFilters(await fetchAssignedToMeTaskList(req), req);
+    return res.json({ success: true, view: 'assigned', stats: calculateUnifiedTaskStats(list) });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
   }
 };
 
 exports.getAllMyTaskStats = async (req, res) => {
   try {
-    if (!await getCurrentUserOrFail(req, res)) return;
-    const [personal, assigned, client] = await Promise.all([
+    const [personal, assigned, client, project] = await Promise.all([
       fetchPersonalTaskList(req),
       fetchAssignedToMeTaskList(req),
-      fetchAssignedClientTaskList(req)
+      fetchAssignedClientTaskList(req),
+      fetchAssignedProjectTaskList(req)
     ]);
-    const tasks = applyCleanListFilters([...personal, ...assigned, ...client], req, {sourceAwareDate: true});
-    return res.json({success: true, view: 'all', stats: calculateUnifiedTaskStats(tasks)});
-  } catch (error) {
-    console.error('❌ Error fetching all task stats:', error);
-    return res.status(500).json({success: false, error: 'Failed to get all task stats'});
+    const list = applyCleanListFilters([...personal, ...assigned, ...client, ...project], req);
+    return res.json({ success: true, view: 'all', stats: calculateUnifiedTaskStats(list) });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
   }
 };
 
-// ✅ GET ALL TASKS (assigned to or created by user)
 exports.getTasks = async (req, res) => {
-  const { status, search, period = "today" } = req.query;
-  
   try {
-    // Get current user details
-    const currentUser = await User.findById(req.user.id).lean();
-    if (!currentUser) {
-      return res.status(401).json({ 
-        success: false,
-        error: 'User not found' 
-      });
-    }
-
-    // Get user's groups to include group-assigned tasks
-    const userGroups = await Group.find({ 
-      members: req.user._id,
-      isActive: true 
-    }).select('_id').lean();
-
-    const groupIds = userGroups.map(group => group._id);
-
-   const filter = {
-      companyCode: req.user.companyCode,   // ✅ ADD THIS
-      $or: [
-        { assignedUsers: req.user._id },
-        { assignedGroups: { $in: groupIds } },
-        { createdBy: req.user._id, taskFor: 'self' }
-      ],
-      isActive: true
-    };
-
-      if (period === "today") {
-
-        const today = new Date();
-        today.setHours(0,0,0,0);
-
-        const tomorrow = new Date(today);
-        tomorrow.setDate(today.getDate()+1);
-
-        filter.createdAt = {
-          $gte: today,
-          $lt: tomorrow
-        };
-
-      }
-
-    if (status) {
-      filter['statusByUser.status'] = status;
-      filter['statusByUser.user'] = req.user._id;
-    }
-
-    // Add search functionality
-    if (search) {
-      filter.$or = [
-        ...(filter.$or || []),
-        { title: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } }
-      ];
-    }
-
-    const tasks = await Task.find(filter)
-      .populate('assignedUsers', 'name email')
-      .populate('assignedGroups', 'name description')
-      .populate('createdBy', 'name email')
-      .sort({ dueDateTime: 1, createdAt: -1 })
-      .lean();
-
-    const enriched = await enrichStatusInfo(tasks);
-    const grouped = groupTasksByDate(enriched, 'createdAt', 'serialNo');
-    
-    res.json({ 
-      success: true,
-      groupedTasks: grouped
-    });
-  } catch (error) {
-    console.error('❌ Error fetching tasks:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to get tasks' 
-    });
+    const [personal, assigned] = await Promise.all([
+      fetchPersonalTaskList(req),
+      fetchAssignedToMeTaskList(req)
+    ]);
+    const list = applyCleanListFilters([...personal, ...assigned], req);
+    return res.json({ success: true, groupedTasks: groupTasksByDate(list, 'createdAt', 'serialNo') });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
   }
 };
 
-// ✅ GET MY TASKS (only tasks assigned to logged-in user) - FIXED VERSION
 exports.getMyTasks = async (req, res) => {
   try {
-    const { search, status, period, fromDate, toDate } = req.query;
-    
-    console.log('📅 Received period:', period);
-
-    // Get current user details
-    const currentUser = await User.findById(req.user.id).lean();
-    if (!currentUser) {
-      return res.status(401).json({ 
-        success: false,
-        error: 'User not found' 
-      });
-    }
-
-    // Get user's groups to include group-assigned tasks
-    const userGroups = await Group.find({ 
-      members: req.user._id,
-      isActive: true 
-    }).select('_id').lean();
-
-    const groupIds = userGroups.map(group => group._id);
-
-    const filter = {
-      companyCode: req.user.companyCode,   // ✅ ADD THIS
-      $or: [
-        { assignedUsers: req.user._id },
-        { assignedGroups: { $in: groupIds } },
-        { createdBy: req.user._id, taskFor: 'self' }
-      ],
-      isActive: true
-    };
-
-   
-    const dateRange = getTaskDateRange({
-  period,
-  fromDate,
-  toDate
-});
-
-if (dateRange) {
-  filter.createdAt = dateRange;
-}
-
-    // Add search functionality
-    if (search) {
-      filter.$or = [
-        ...filter.$or,
-        { title: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } }
-      ];
-    }
-
-    // console.log('🔍 Final filter:', JSON.stringify(filter, null, 2));
-
-    let tasks = await Task.find(filter)
-      .populate('assignedUsers', 'name email')
-      .populate('assignedGroups', 'name description')
-      .populate('createdBy', 'name email')
-      .sort({ createdAt: -1 }) // Sort by createdAt descending (newest first)
-      .lean();
-
-   
-
-    // Apply status filter (client-side filtering)
-    if (status && status !== 'all') {
-      tasks = tasks.filter(task => {
-        const userStatus = task.statusByUser?.find(
-          statusObj => statusObj.user && statusObj.user.toString() === req.user._id.toString()
-        );
-        return userStatus && userStatus.status === status;
-      });
-      console.log('📊 Tasks after status filter:', tasks.length);
-    }
-
-    const enriched = await enrichStatusInfo(tasks);
-    const grouped = groupTasksByDate(enriched, 'createdAt', 'mySerialNo');
-    
-    res.json({ 
-      success: true,
-      groupedTasks: grouped
-    });
-  } catch (error) {
-    console.error('❌ Error fetching my tasks:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to get your tasks' 
-    });
+    const list = await fetchAssignedToMeTaskList(req);
+    const filtered = applyCleanListFilters(list, req);
+    return res.json({ success: true, groupedTasks: groupTasksByDate(filtered, 'createdAt', 'mySerialNo') });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
   }
 };
 
-// ✅ GET ASSIGNED TASKS (tasks created by logged-in user for others)
 exports.getAssignedTasks = async (req, res) => {
   try {
-    const { search, status } = req.query;
-
-    // Get current user details
-    const currentUser = await User.findById(req.user.id).lean();
-    if (!currentUser) {
-      return res.status(401).json({ 
-        success: false,
-        error: 'User not found' 
-      });
-    }
-
-    // Only show tasks created for others by current user
-    const filter = { 
-      companyCode: req.user.companyCode,   // ✅ ADD THIS
-      createdBy: req.user._id,
+    const currentUserId = req.user._id || req.user.id;
+    const tasks = await Task.find({
+      companyCode: req.user.companyCode,
+      createdBy: currentUserId,
       taskFor: 'others',
       isActive: true
-    };
-
-    // Add status filter
-    if (status && status !== 'all') {
-      filter['statusByUser.status'] = status;
-    }
-
-    // Add search functionality
-    if (search) {
-      filter.$or = [
-        { title: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } }
-      ];
-    }
-
-    const tasks = await Task.find(filter)
-      .populate('assignedUsers', 'name role email')
-      .populate('assignedGroups', 'name description')
-      .populate('createdBy', 'name email')
-      .sort({ dueDateTime: 1, createdAt: -1 })
-      .lean();
+    }).populate('assignedUsers', 'name role email').populate('createdBy', 'name email').sort({ createdAt: -1 }).lean();
 
     const enriched = await enrichStatusInfo(tasks);
-    const grouped = groupTasksByDate(enriched, 'createdAt', 'assignedSerialNo');
-    
-    res.json({ 
-      success: true,
-      groupedTasks: grouped
-    });
-  } catch (error) {
-    console.error('❌ Error fetching assigned tasks:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to get assigned tasks' 
-    });
+    const mapped = enriched.map(t => ({ ...t, status: normalizeTaskStatus(t.overallStatus) }));
+    const filtered = applyCleanListFilters(mapped, req);
+
+    return res.json({ success: true, groupedTasks: groupTasksByDate(filtered, 'createdAt', 'assignedSerialNo') });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
   }
 };
 
-// ✅ CREATE TASK FOR SELF
-exports.createTaskForSelf = async (req, res) => {
-  try {
-    const {
-      title,
-      description,
-      dueDateTime,
-      whatsappNumber,
-      priorityDays,
-      priority
-    } = req.body;
-
-    console.log('📅 Received dueDateTime from frontend:', dueDateTime);
-    console.log('📅 Type of dueDateTime:', typeof dueDateTime);
-
-    const companyCode = getRequestCompanyCode(req);
-    if (!companyCode) {
-      return res.status(400).json({
-        success: false,
-        error: 'Company code is missing. Please login again.'
-      });
-    }
-
-    const files = (req.files?.files || []).map((f) => ({
-      filename: f.filename,
-      originalName: f.originalname,
-      path: f.path,
-      uploadedBy: req.user._id
-    }));
-
-    const voiceNote = req.files?.voiceNote?.[0] ? {
-      filename: req.files.voiceNote[0].filename,
-      originalName: req.files.voiceNote[0].originalname,
-      path: req.files.voiceNote[0].path,
-      uploadedBy: req.user._id
-    } : null;
-
-    // Date validation
-    let parsedDueDateTime = null;
-    
-    if (dueDateTime) {
-      try {
-        // Handle different date formats
-        if (typeof dueDateTime === 'string') {
-          // If it's already a Date string from frontend (like "2026-01-13T04:37")
-          if (dueDateTime.includes('T')) {
-            // Add seconds if missing
-            const dateStr = dueDateTime.includes(':') && dueDateTime.split(':').length === 2 
-              ? `${dueDateTime}:00` 
-              : dueDateTime;
-            
-            parsedDueDateTime = new Date(dateStr);
-          } else {
-            // Try parsing as Date object
-            parsedDueDateTime = new Date(dueDateTime);
-          }
-        } else {
-          parsedDueDateTime = new Date(dueDateTime);
-        }
-
-        // Check if date is valid
-        if (isNaN(parsedDueDateTime.getTime())) {
-          console.error('❌ Invalid date after parsing:', dueDateTime);
-          return res.status(400).json({ 
-            success: false,
-            error: 'Invalid date format provided' 
-          });
-        }
-
-        console.log('📅 Parsed dueDateTime:', parsedDueDateTime);
-        console.log('📅 ISO String:', parsedDueDateTime.toISOString());
-        console.log('📅 Local String:', parsedDueDateTime.toLocaleString());
-
-        // Time comparison with buffer
-        const now = new Date();
-        const timeBuffer = 5 * 60 * 1000; // 5 minutes in milliseconds
-        
-        console.log('📅 Current time:', now);
-        console.log('📅 Time difference:', parsedDueDateTime - now);
-        
-        if (parsedDueDateTime < new Date(now.getTime() - timeBuffer)) {
-          return res.status(400).json({ 
-            success: false,
-            error: 'Due date cannot be in the past. Please select a future date and time.' 
-          });
-        }
-
-      } catch (dateError) {
-        console.error('❌ Date parsing error:', dateError);
-        return res.status(400).json({ 
-          success: false,
-          error: 'Invalid date format. Please use a valid date and time.' 
-        });
-      }
-    }
-
-    // For self-task, assign ONLY to current user
-    const finalAssignedUsers = [req.user._id.toString()];
-    const finalAssignedGroups = [];
-
-    // Create status tracking ONLY for self
-    const statusByUser = [{
-      user: req.user._id,
-      status: "pending",
-    }];
-
-    // Create the task with parsed date
-    const task = await Task.create({
-      title,
-      description,
-      dueDateTime: parsedDueDateTime,
-      whatsappNumber,
-      priorityDays,
-      priority: priority || "medium",
-      companyCode: req.user.companyCode,
-      assignedUsers: finalAssignedUsers,
-      assignedGroups: finalAssignedGroups,
-      statusByUser,
-      files,
-      voiceNote,
-      createdBy: req.user._id,
-      companyCode,
-      isRecurring: false,
-      taskFor: 'self',
-      statusHistory: [{
-        status: 'pending',
-        changedBy: req.user._id,
-        remarks: 'Task created for self'
-      }]
-    });
-
-    // Populate task data
-    await task.populate("assignedUsers", "name role email");
-    await task.populate("createdBy", "name email");
-
-    // ✅ SEND EMAIL HERE
-      const assignedUsersData = await User.find({
-          _id: { $in: task.assignedUsers }
-        }).select("name email");
-
-        if (assignedUsersData.length > 0) {
-          await sendTaskCreationEmail(task, assignedUsersData);
-        }
-
-    // Create notification for self
-    await createNotification(
-      req.user._id,
-      'Self Task Created',
-      `You created a task for yourself: ${title}`,
-      'task_created',
-      task._id,
-      { priority, dueDateTime: parsedDueDateTime, selfAssigned: true }
-    );
-
-    // Create activity log
-    await createActivityLog(
-      req.user,
-      'self_task_created',
-      task._id,
-      `Created self task: ${title}`,
-      null,
-      { title, description, priority, dueDateTime: parsedDueDateTime },
-      req
-    );
-
-    res.status(201).json({
-      success: true,
-      task: {
-        ...task.toObject(),
-        taskFor: task.taskFor || 'self',
-      },
-      message: 'Self task created successfully'
-    });
-
-  } catch (error) {
-    console.error("❌ Error creating self task:", error);
-    res.status(500).json({ 
-      success: false,
-      error: error.message || "Internal Server Error" 
-    });
+const handleTaskCreation = async (req, res, isSelf) => {
+  const { title, description, dueDateTime, whatsappNumber, priorityDays, priority, assignedUsers, assignedGroups } = req.body;
+  const companyCode = getRequestCompanyCode(req);
+  
+  if (!companyCode) {
+    return res.status(400).json({ success: false, error: 'Company code is missing. Please login again.' });
   }
-};
 
-// ✅ CREATE TASK FOR OTHERS - WITHOUT RESTRICTIONS
-exports.createTaskForOthers = async (req, res) => {
-  try {
-    const {
-      title,
-      description,
-      dueDateTime,
-      whatsappNumber,
-      priorityDays,
-      priority,
-      assignedUsers,
-      assignedGroups
-    } = req.body;
+  let parsedUsers = isSelf ? [req.user._id.toString()] : [];
+  if (!isSelf && assignedUsers && assignedUsers !== 'null') {
+    parsedUsers = typeof assignedUsers === 'string' ? JSON.parse(assignedUsers) : assignedUsers;
+  }
 
-    console.log('📅 Received dueDateTime for others:', dueDateTime);
+  const parsedGroups = !isSelf && assignedGroups && assignedGroups !== 'null' ? 
+    (typeof assignedGroups === 'string' ? JSON.parse(assignedGroups) : assignedGroups) : [];
 
-    // ✅ Get current user's details
-    const currentUser = await User.findById(req.user.id).lean();
-    
-    if (!currentUser) {
-      return res.status(401).json({ 
-        success: false,
-        error: 'User not found' 
-      });
-    }
+  const files = (req.files?.files || []).map(f => ({ filename: f.filename, originalName: f.originalname, path: f.path, uploadedBy: req.user._id }));
+  const voiceNote = req.files?.voiceNote?.[0] ? { filename: req.files.voiceNote[0].filename, originalName: req.files.voiceNote[0].originalname, path: req.files.voiceNote[0].path, uploadedBy: req.user._id } : null;
 
-    console.log('👤 Current User:', {
-      id: currentUser._id,
-      name: currentUser.name
-    });
+  let parsedDue = null;
+  if (dueDateTime) {
+    parsedDue = new Date(dueDateTime);
+    if (isNaN(parsedDue.getTime())) return res.status(400).json({ success: false, error: 'Invalid due date format' });
+  }
 
-    const companyCode = getRequestCompanyCode(req, currentUser);
-    if (!companyCode) {
-      return res.status(400).json({
-        success: false,
-        error: 'Company code is missing. Please login again.'
-      });
-    }
+  const statusByUser = parsedUsers.map(uid => ({ user: uid, status: 'pending' }));
 
-    // Parse assigned users
-    let parsedUsers = [];
-    
-    if (assignedUsers && assignedUsers !== 'null') {
-      try {
-        parsedUsers = JSON.parse(assignedUsers);
-        
-        // Ensure it's an array
-        if (!Array.isArray(parsedUsers)) {
-          parsedUsers = [parsedUsers];
-        }
-        
-        // Check if users exist and are active (NO DEPARTMENT/COMPANY CHECKS)
-        const assignedUsersData = await User.find({
-          _id: { $in: parsedUsers },
-          isActive: true
-        }).select('_id name email').lean();
+  const task = await Task.create({
+    title,
+    description,
+    dueDateTime: parsedDue,
+    whatsappNumber,
+    priorityDays,
+    priority: priority || 'medium',
+    companyCode,
+    assignedUsers: parsedUsers,
+    assignedGroups: parsedGroups,
+    statusByUser,
+    files,
+    voiceNote,
+    createdBy: req.user._id,
+    taskFor: isSelf ? 'self' : 'others',
+    statusHistory: [{ status: 'pending', changedBy: req.user._id, remarks: isSelf ? 'Self task created' : 'Task assigned to others' }]
+  });
 
-        console.log('✅ Found assigned users:', assignedUsersData);
+  await task.populate('assignedUsers', 'name role email');
+  await task.populate('createdBy', 'name email');
 
-        // Check if all requested users were found
-        if (assignedUsersData.length !== parsedUsers.length) {
-          const foundIds = assignedUsersData.map(u => u._id.toString());
-          const missingIds = parsedUsers.filter(id => !foundIds.includes(id));
-          
-          return res.status(400).json({ 
-            success: false,
-            error: `Some users not found or inactive: ${missingIds.join(', ')}` 
-          });
-        }
-
-      } catch (parseError) {
-        console.error('❌ Error parsing assignedUsers:', parseError);
-        return res.status(400).json({ 
-          success: false,
-          error: 'Invalid assignedUsers format' 
-        });
-      }
-    }
-
-    // ✅ Prevent self-assignment
-    const currentUserId = currentUser._id.toString();
-    if (parsedUsers.includes(currentUserId)) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'You cannot assign task to yourself in "Create for Others". Use "Create for Self" instead.' 
-      });
-    }
-
-    // ✅ Validate that at least one user or group is assigned
-    const parsedGroups = assignedGroups && assignedGroups !== 'null' ? JSON.parse(assignedGroups) : [];
-    
-    if (parsedUsers.length === 0 && parsedGroups.length === 0) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'At least one user or group must be assigned' 
-      });
-    }
-
-    // ✅ Validate groups (if any) - NO RESTRICTIONS
-    if (parsedGroups.length > 0) {
-      const groups = await Group.find({
-        _id: { $in: parsedGroups },
-        isActive: true,
-      }).populate('members', '_id name email').lean();
-
-      if (groups.length !== parsedGroups.length) {
-        return res.status(400).json({
-          success: false,
-          error: "Some groups are invalid",
-        });
-      }
-    }
-
-    // Date parsing and validation
-    let parsedDueDateTime = null;
-    
-    if (dueDateTime) {
-      try {
-        if (typeof dueDateTime === 'string') {
-          if (dueDateTime.includes('T')) {
-            const dateStr = dueDateTime.includes(':') && dueDateTime.split(':').length === 2 
-              ? `${dueDateTime}:00` 
-              : dueDateTime;
-            
-            parsedDueDateTime = new Date(dateStr);
-          } else {
-            parsedDueDateTime = new Date(dueDateTime);
-          }
-        } else {
-          parsedDueDateTime = new Date(dueDateTime);
-        }
-
-        if (isNaN(parsedDueDateTime.getTime())) {
-          console.error('❌ Invalid date for others:', dueDateTime);
-          return res.status(400).json({ 
-            success: false,
-            error: 'Invalid date format provided' 
-          });
-        }
-
-        // Time buffer for validation
-        const now = new Date();
-        const timeBuffer = 5 * 60 * 1000;
-        
-        if (parsedDueDateTime < new Date(now.getTime() - timeBuffer)) {
-          return res.status(400).json({ 
-            success: false,
-            error: 'Due date cannot be in the past. Please select a future date and time.' 
-          });
-        }
-
-      } catch (dateError) {
-        console.error('❌ Date parsing error for others:', dateError);
-        return res.status(500).json({ 
-          success: false,
-          error: 'Internal server error' 
-        });
-      }
-    }
-
-    // Collect all assigned users (direct + group members)
-    const allAssignedUsers = [...new Set([...parsedUsers])];
-
-    if (parsedGroups.length > 0) {
-      const groupsWithMembers = await Group.find({
-        _id: { $in: parsedGroups },
-      }).populate("members", "_id name email").lean();
-
-      groupsWithMembers.forEach((group) => {
-        group.members.forEach((member) => {
-          allAssignedUsers.push(member._id.toString());
-        });
-      });
-    }
-
-    // Remove duplicates and ensure creator is NOT included
-    const uniqueAssignedUsers = [...new Set(allAssignedUsers)].filter(userId => 
-      userId !== currentUserId
-    );
-
-    // Check if after filtering we still have users
-    if (uniqueAssignedUsers.length === 0) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'No valid users found to assign task to' 
-      });
-    }
-
-    // Create status tracking ONLY for assigned users (not creator)
-    const statusByUser = uniqueAssignedUsers.map((uid) => ({
-      user: uid,
-      status: "pending",
-    }));
-
-    // Process files
-    const files = (req.files?.files || []).map((f) => ({
-      filename: f.filename,
-      originalName: f.originalname,
-      path: f.path,
-      uploadedBy: currentUser._id
-    }));
-
-    const voiceNote = req.files?.voiceNote?.[0] ? {
-      filename: req.files.voiceNote[0].filename,
-      originalName: req.files.voiceNote[0].originalname,
-      path: req.files.voiceNote[0].path,
-      uploadedBy: currentUser._id
-    } : null;
-
-    // Create the task with parsed date
-    const task = await Task.create({
-      title,
-      description,
-      dueDateTime: parsedDueDateTime,
-      whatsappNumber,
-      priorityDays,
-      priority: priority || "medium",
-       companyCode: req.user.companyCode, 
-      assignedUsers: parsedUsers,
-      assignedGroups: parsedGroups,
-      statusByUser,
-      files,
-      voiceNote,
-      createdBy: currentUser._id,
-      companyCode,
-      isRecurring: false,
-      taskFor: 'others',
-      statusHistory: [{
-        status: 'pending',
-        changedBy: currentUser._id,
-        remarks: 'Task created and assigned to others'
-      }]
-    });
-
-    // Populate task data for email
-    await task.populate("assignedUsers", "name role email");
-    await task.populate("assignedGroups", "name description");
-    await task.populate("createdBy", "name email");
-
-    // Create notifications for all assigned users (not creator)
+  if (task.assignedUsers?.length > 0) {
+    await sendTaskCreationEmail(task, task.assignedUsers);
+    const targetUsers = task.assignedUsers.map(u => u._id.toString()).filter(id => id !== req.user._id.toString());
     await notifyDirectUsers({
-      userIds: uniqueAssignedUsers,
+      userIds: targetUsers,
       targetPath: '/ciisUser/task-management',
       type: 'task_assigned',
       title: 'New Task Assigned',
-      message: `${currentUser.name} assigned you task "${title}"`,
-      actor: currentUser._id,
-      company: currentUser.company,
-      data: {
-        taskId: task._id,
-        title,
-        priority,
-        dueDateTime: parsedDueDateTime,
-        assignedBy: currentUser.name,
-      },
-      priority: priority || 'medium',
-    });
-
-    // Also notify company-all-task page owners about new task
-    try {
-      await notifyPageUsers({
-        companyId: currentUser.company || req.user.companyCode,
-        targetPath: '/ciisUser/company-all-task',
-        type: 'task_assigned',
-        title: 'New Task Created',
-        message: `${currentUser.name} created task "${title}" for assigned users`,
-        data: { taskId: task._id },
-        priority: 'medium'
-      });
-    } catch (err) {
-      console.error('Error notifying company-all-task owners for new task:', err);
-    }
-
-    for (const userId of uniqueAssignedUsers) {
-      await createNotification(
-        userId,
-        'New Task Assigned',
-        `You have been assigned a new task: ${title}`,
-        'task_assigned',
-        task._id,
-        { priority, dueDateTime: parsedDueDateTime, assignedBy: currentUser.name }
-      );
-    }
-
-    // Create activity log
-    await createActivityLog(
-      currentUser,
-      'task_created_for_others',
-      task._id,
-      `Created task for others: ${title}`,
-      null,
-      { 
-        title, 
-        description, 
-        priority, 
-        dueDateTime: parsedDueDateTime,
-        assignedUsers: uniqueAssignedUsers,
-        assignedGroups: parsedGroups 
-      },
-      req
-    );
-
-    // Send email notifications to all assigned users (not creator) 
-    if (task.assignedUsers && task.assignedUsers.length > 0) {
-      await sendTaskCreationEmail(task, task.assignedUsers);
-    }
-
-    res.status(201).json({
-      success: true,
-      task: {
-        ...task.toObject(),
-        taskFor: task.taskFor || 'others',
-      },
-      message: 'Task created successfully for others'
-    });
-
-  } catch (error) {
-    console.error("❌ Error creating task for others:", error);
-    res.status(500).json({ 
-      success: false,
-      error: error.message || "Internal Server Error" 
+      message: `${req.user.name} assigned you task "${title}"`,
+      data: { taskId: task._id, title, priority, dueDateTime: parsedDue },
+      priority: priority || 'medium'
     });
   }
+
+  await createActivityLog(req.user, isSelf ? 'self_task_created' : 'task_created_for_others', task._id, `Created task: ${title}`, null, task.toObject(), req);
+
+  return res.status(201).json({ success: true, task, message: 'Task created successfully' });
 };
 
-// ✅ UPDATE TASK - WITHOUT RESTRICTIONS
+exports.createTaskForSelf = (req, res) => handleTaskCreation(req, res, true);
+exports.createTaskForOthers = (req, res) => handleTaskCreation(req, res, false);
+exports.createTask = (req, res) => {
+  const isSelf = !req.body.assignedUsers || JSON.parse(req.body.assignedUsers || '[]').length === 0;
+  return handleTaskCreation(req, res, isSelf);
+};
+
 exports.updateTask = async (req, res) => {
   try {
     const { taskId } = req.params;
-    const updateData = req.body;
-
-    // ✅ Get current user
-    const currentUser = await User.findById(req.user.id).lean();
-    if (!currentUser) {
-      return res.status(403).json({ 
-        success: false,
-        error: 'User not found' 
-      });
-    }
-
     const task = await Task.findById(taskId);
-    if (!task) {
-      return res.status(404).json({ 
-        success: false,
-        error: 'Task not found' 
-      });
+    if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
+    if (task.createdBy.toString() !== req.user._id.toString()) return res.status(403).json({ success: false, error: 'Not authorized' });
+
+    const oldTask = task.toObject();
+
+    if (req.files?.files) {
+      task.files.push(...req.files.files.map(f => ({ filename: f.filename, originalName: f.originalname, path: f.path, uploadedBy: req.user._id })));
+    }
+    if (req.files?.voiceNote?.[0]) {
+      task.voiceNote = { filename: req.files.voiceNote[0].filename, originalName: req.files.voiceNote[0].originalname, path: req.files.voiceNote[0].path, uploadedBy: req.user._id };
     }
 
-    // Check authorization - only creator can update
-    if (task.createdBy.toString() !== currentUser._id.toString()) {
-      return res.status(403).json({ 
-        success: false,
-        error: 'Only task creator can update this task' 
-      });
-    }
-
-    const oldTask = { ...task.toObject() };
-
-    // Handle file updates
-    if (req.files) {
-      if (req.files.files) {
-        const newFiles = req.files.files.map((f) => ({
-          filename: f.filename,
-          originalName: f.originalname,
-          path: f.path,
-          uploadedBy: req.user._id
-        }));
-        task.files.push(...newFiles);
-      }
-
-      if (req.files.voiceNote) {
-        task.voiceNote = {
-          filename: req.files.voiceNote[0].filename,
-          originalName: req.files.voiceNote[0].originalname,
-          path: req.files.voiceNote[0].path,
-          uploadedBy: req.user._id
-        };
-      }
-    }
-
-    // Safe JSON parsing for assignedUsers and assignedGroups
-    let assignedUsers = [];
-    let assignedGroups = [];
-
-    if (updateData.assignedUsers) {
-      if (typeof updateData.assignedUsers === 'string') {
-        assignedUsers = updateData.assignedUsers !== 'null' ? JSON.parse(updateData.assignedUsers) : [];
-      } else {
-        assignedUsers = updateData.assignedUsers;
-      }
-    }
-
-    if (updateData.assignedGroups) {
-      if (typeof updateData.assignedGroups === 'string') {
-        assignedGroups = updateData.assignedGroups !== 'null' ? JSON.parse(updateData.assignedGroups) : [];
-      } else {
-        assignedGroups = updateData.assignedGroups;
-      }
-    }
-
-    // Update other fields with null checks
-    const allowedFields = ['title', 'description', 'dueDateTime', 'whatsappNumber', 'priorityDays', 'priority'];
-    allowedFields.forEach(field => {
-      if (updateData[field] !== undefined && updateData[field] !== null && updateData[field] !== 'null') {
-        task[field] = updateData[field];
-      }
+    const fields = ['title', 'description', 'dueDateTime', 'whatsappNumber', 'priorityDays', 'priority'];
+    fields.forEach(f => {
+      if (req.body[f] !== undefined && req.body[f] !== 'null') task[f] = req.body[f];
     });
 
-    // Update assigned users and groups if provided - NO DEPARTMENT/COMPANY CHECKS
-    if (assignedUsers.length > 0) {
-      // Just check if users exist and are active
-      const assignedUsersData = await User.find({
-        _id: { $in: assignedUsers },
-        isActive: true
-      }).select('_id name email').lean();
-
-      if (assignedUsersData.length !== assignedUsers.length) {
-        return res.status(400).json({ 
-          success: false,
-          error: 'Some users not found or inactive' 
-        });
-      }
-
-      task.assignedUsers = assignedUsers;
-    }
-
-    if (assignedGroups.length > 0) {
-      // Just check if groups exist and are active
-      const groups = await Group.find({
-        _id: { $in: assignedGroups },
-        isActive: true,
-      }).lean();
-
-      if (groups.length !== assignedGroups.length) {
-        return res.status(400).json({
-          success: false,
-          error: "Some groups are invalid",
-        });
-      }
-
-      task.assignedGroups = assignedGroups;
+    if (req.body.assignedUsers) {
+      task.assignedUsers = typeof req.body.assignedUsers === 'string' ? JSON.parse(req.body.assignedUsers) : req.body.assignedUsers;
+      task.statusByUser = task.assignedUsers.map(uid => ({ user: uid, status: 'pending' }));
     }
 
     await task.save();
+    await createActivityLog(req.user, 'task_updated', task._id, `Updated task details`, oldTask, task.toObject(), req);
 
-    // 🔹 Create activity log
-    await createActivityLog(
-      currentUser,
-      'task_updated',
-      task._id,
-      `Updated task: ${task.title}`,
-      oldTask,
-      task.toObject(),
-      req
-    );
-
-    res.json({ 
-      success: true, 
-      message: 'Task updated successfully',
-      task 
-    });
-
-  } catch (error) {
-    console.error('❌ Error updating task:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to update task' 
-    });
+    res.json({ success: true, message: 'Task updated successfully', task });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
-// ✅ DELETE TASK
 exports.deleteTask = async (req, res) => {
   try {
     const { taskId } = req.params;
-
-    // ✅ Get current user
-    const currentUser = await User.findById(req.user.id);
-    if (!currentUser) {
-      return res.status(403).json({ 
-        success: false,
-        error: 'User not found' 
-      });
-    }
-
     const task = await Task.findById(taskId);
-    if (!task) {
-      return res.status(404).json({ 
-        success: false,
-        error: 'Task not found' 
-      });
-    }
+    if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
+    if (task.createdBy.toString() !== req.user._id.toString()) return res.status(403).json({ success: false, error: 'Not authorized' });
 
-    // Check authorization - only creator can delete
-    if (task.createdBy.toString() !== currentUser._id.toString()) {
-      return res.status(403).json({ 
-        success: false,
-        error: 'Only task creator can delete this task' 
-      });
-    }
-
-    const taskTitle = task.title;
-
-    // Soft delete by setting isActive to false
     task.isActive = false;
-    await Task.findByIdAndUpdate(taskId, { isActive: false });
+    await task.save();
 
-    // 🔹 Create activity log
-    await createActivityLog(
-      { _id: currentUser._id },
-      'task_deleted',
-      taskId,
-      `Deleted task: ${taskTitle}`,
-      task.toObject(),
-      null,
-      req
-    );
-
-    res.json({ 
-      success: true, 
-      message: 'Task deleted successfully' 
-    });
-
-  } catch (error) {
-    console.error('❌ Error deleting task:', error);
-    res.status(500).json({ 
-      success: false,
-      error: error.message
-    });
+    await createActivityLog(req.user, 'task_deleted', taskId, `Deleted task: ${task.title}`, task.toObject(), null, req);
+    res.json({ success: true, message: 'Task deleted successfully' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
-// ✅ UPDATE TASK STATUS
 exports.updateStatus = async (req, res) => {
   try {
     const { taskId } = req.params;
     const { status, remarks } = req.body;
 
-    // Basic validation
-    if (!status) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'Status is required' 
-      });
-    }
-
-    // Find task without population first
     const task = await Task.findById(taskId);
-    if (!task) {
-      return res.status(404).json({ 
-        success: false,
-        error: 'Task not found' 
-      });
+    if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
+
+    const currentUserId = (req.user._id || req.user.id).toString();
+    const userCompanyCode = getRequestCompanyCode(req);
+
+    const isCreator = task.createdBy.toString() === currentUserId;
+    const isAssigned = task.assignedUsers.some(uid => uid.toString() === currentUserId);
+
+    // Group check
+    const userGroups = await Group.find({ members: req.user._id, isActive: true }).select('_id').lean();
+    const groupIds = userGroups.map(g => g._id.toString());
+    const isGroupAssigned = task.assignedGroups?.some(gid => groupIds.includes(gid.toString()));
+
+    // Company check (fallback)
+    const isSameCompany = task.companyCode && userCompanyCode && 
+      task.companyCode.toUpperCase() === userCompanyCode.toUpperCase();
+
+    if (!isCreator && !isAssigned && !isGroupAssigned && !isSameCompany) {
+      return res.status(403).json({ success: false, error: 'Not authorized' });
     }
 
-    const isCreator = task.createdBy.toString() === req.user._id.toString();
-    const isAssignedUser = task.assignedUsers.some(userId => 
-      userId.toString() === req.user._id.toString()
-    );
+    const oldStatusEntry = task.statusByUser.find(s => s.user?.toString() === currentUserId);
+    const oldStatus = oldStatusEntry?.status || 'pending';
 
-    if (!isCreator && !isAssignedUser) {
-      return res.status(403).json({ 
-        success: false,
-        error: 'You are not authorized to update this task status' 
-      });
-    }
-
-    const oldOverallStatus = task.overallStatus;
-
-    // Update assigned user's own status only when the updater is assigned.
-    const statusIndex = task.statusByUser.findIndex(s => 
-      s.user && s.user.toString() === req.user._id.toString()
-    );
-
-    const oldStatus = statusIndex !== -1 ? task.statusByUser[statusIndex].status : 'pending';
-
-    if (isAssignedUser) {
-      if (statusIndex === -1) {
-        task.statusByUser.push({
-          user: req.user._id,
-          status: status,
-          updatedAt: new Date(),
-          remarks: remarks
-        });
+    const updateUserStatusInList = (targetUserId, newStatus, userRemarks) => {
+      const idx = task.statusByUser.findIndex(s => s.user?.toString() === targetUserId.toString());
+      if (idx === -1) {
+        task.statusByUser.push({ user: targetUserId, status: newStatus, updatedAt: new Date(), remarks: userRemarks });
       } else {
-        task.statusByUser[statusIndex].status = status;
-        task.statusByUser[statusIndex].updatedAt = new Date();
-        if (remarks) {
-          task.statusByUser[statusIndex].remarks = remarks;
-        }
+        task.statusByUser[idx].status = newStatus;
+        task.statusByUser[idx].updatedAt = new Date();
+        if (userRemarks) task.statusByUser[idx].remarks = userRemarks;
       }
-    }
+    };
 
-    // Add to status history
-    task.statusHistory.push({
-      status: status,
-      changedBy: req.user._id,
-      remarks: remarks || (
-        isCreator
-          ? `Overall status changed from ${oldOverallStatus} to ${status}`
-          : `Status changed from ${oldStatus} to ${status}`
-      )
-    });
-
-    // Overall status is controlled only by the task creator.
-    if (isCreator) {
+    if (task.taskFor === 'self') {
+      const targetUserId = task.createdBy.toString();
+      updateUserStatusInList(targetUserId, status, remarks);
       task.overallStatus = status;
-
       if (status === 'completed') {
         task.completionDate = new Date();
-      } else if (oldOverallStatus === 'completed') {
+      } else {
         task.completionDate = null;
       }
+    } else {
+      const isUpdaterAssignee = isAssigned || isGroupAssigned;
+      if (isUpdaterAssignee) {
+        updateUserStatusInList(currentUserId, status, remarks);
 
-      if (status === 'overdue') {
-        task.markedOverdueAt = new Date();
+        if (status === 'completed') {
+          let allCompleted = true;
+          if (task.assignedUsers && task.assignedUsers.length > 0) {
+            for (const uid of task.assignedUsers) {
+              const entry = task.statusByUser.find(s => s.user?.toString() === uid.toString());
+              if (!entry || !['completed', 'approved', 'cancelled'].includes(entry.status)) {
+                allCompleted = false;
+                break;
+              }
+            }
+          }
+          if (allCompleted) {
+            task.overallStatus = 'completed';
+            task.completionDate = new Date();
+          } else if (['pending', 'overdue'].includes(task.overallStatus)) {
+            task.overallStatus = 'in-progress';
+          }
+        } else if (status === 'in-progress') {
+          if (['pending', 'overdue'].includes(task.overallStatus)) {
+            task.overallStatus = 'in-progress';
+          }
+        } else {
+          if (isCreator) {
+            task.overallStatus = status;
+            if (status === 'completed') task.completionDate = new Date();
+          }
+        }
       } else {
-        task.markedOverdueAt = null;
+        task.overallStatus = status;
+        if (status === 'completed') {
+          task.completionDate = new Date();
+        } else {
+          task.completionDate = null;
+        }
+
+        const targetStatus = status === 'reopen' ? 'pending' : status;
+        if (task.assignedUsers && task.assignedUsers.length > 0) {
+          task.assignedUsers.forEach(uid => {
+            updateUserStatusInList(uid, targetStatus, remarks || 'Updated by administrator');
+          });
+        }
+        task.statusByUser.forEach(s => {
+          s.status = targetStatus;
+          s.updatedAt = new Date();
+          if (remarks) s.remarks = remarks;
+        });
       }
     }
 
-    // Save task
-    await task.save();
+    task.statusHistory.push({ status, changedBy: req.user._id, remarks: remarks || `Status changed from ${oldStatus} to ${status}` });
 
-    // Populate for notifications
+    await task.save();
     await task.populate('createdBy', 'name email');
     const updatedUser = await User.findById(req.user._id).select('name role email');
-    const previousStatusForLog = isCreator ? oldOverallStatus : oldStatus;
 
-    // 🔹 Create notification for task creator
     if (!isCreator) {
-      await notifyDirectUsers({
-        userIds: [task.createdBy._id],
-        targetPath: '/ciisUser/admin-task-create',
-        type: 'task_status_updated',
-        title: 'Task Status Updated',
-        message: `${updatedUser.name} updated "${task.title}" status to ${status}${remarks ? ': ' + remarks : ''}`,
-        actor: req.user._id,
-        data: {
-          taskId: task._id,
-          oldStatus: previousStatusForLog,
-          newStatus: status,
-          remarks,
-          updatedBy: updatedUser.name,
-        },
-        priority: 'high',
-      });
-
-      // Also notify company-all-task page owners
-      try {
-        await notifyPageUsers({
-          companyId: task.companyCode || req.user.companyCode || updatedUser.company,
-          targetPath: '/ciisUser/company-all-task',
-          type: 'status_updated',
-          title: 'Task Status Updated',
-          message: `${updatedUser.name} updated task "${task.title}" status to ${status}`,
-          data: { taskId: task._1d },
-          priority: 'high'
-        });
-      } catch (npErr) {
-        console.error('Error notifying company-all-task owners for status update:', npErr);
-      }
+      await createNotification(task.createdBy._id, 'Task Status Updated', `${updatedUser.name} updated task status to ${status}`, 'status_updated', task._id);
+      await sendTaskStatusUpdateEmail(task, updatedUser, oldStatus, status);
     }
 
-    await createNotification(
-      task.createdBy._id,
-      'Task Status Updated',
-      `${updatedUser.name} updated task "${task.title}" status to ${status}`,
-      'status_updated',
-      task._id,
-      { oldStatus: previousStatusForLog, newStatus: status, updatedBy: updatedUser.name }
-    );
-
-    // 🔹 Create activity log
-    await createActivityLog(
-      req.user,
-      'status_updated',
-      task._id,
-      `Updated task status from ${previousStatusForLog} to ${status}`,
-      { status: previousStatusForLog },
-      { status: status, remarks },
-      req
-    );
-
-    // 🔹 Send email notification
-    await sendTaskStatusUpdateEmail(task, updatedUser, previousStatusForLog, status);
-
-    res.json({ 
-      success: true,
-      message: '✅ Status updated successfully',
-      data: {
-        taskId: task._id,
-        newStatus: status,
-        overallStatus: task.overallStatus
-      }
-    });
-
-  } catch (error) {
-    console.error('💥 Error in updateStatus:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Internal server error',
-      ...(process.env.NODE_ENV === 'development' && { details: error.message })
-    });
+    await createActivityLog(req.user, 'status_updated', task._id, `Updated task status to ${status}`, { status: oldStatus }, { status, remarks }, req);
+    res.json({ success: true, message: 'Status updated successfully', data: { taskId, newStatus: status, overallStatus: task.overallStatus } });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
-// ✅ ADD REMARK TO TASK
 exports.addRemark = async (req, res) => {
   try {
     const { taskId } = req.params;
     const { text } = req.body;
 
-    // Check if we have either text or image
-    if (!text && !req.file) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'Remark text or image is required' 
-      });
-    }
-
     const task = await Task.findById(taskId);
-    if (!task) return res.status(404).json({ 
-      success: false,
-      error: 'Task not found' 
-    });
+    if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
 
-    const isAuthorized =
-      task.assignedUsers.some(userId => userId.toString() === req.user._id.toString()) ||
-      task.createdBy.toString() === req.user._id.toString();
+    let imgPath = null;
+    if (req.file) {
+      const uploadDir = path.join(__dirname, '../../uploads/remarks');
+      if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+      const filename = `remark_${Date.now()}_${req.user._id}.jpg`;
+      const savePath = path.join(uploadDir, filename);
+      imgPath = `remarks/${filename}`;
 
-    if (!isAuthorized) return res.status(403).json({ 
-      success: false,
-      error: 'Not authorized to add remarks' 
-    });
-
-    let imagePath = null;
-
-    // Handle image upload + compression
-   if (req.file) {
-  try {
-
-    const uploadDir = path.join(__dirname, "../../uploads/remarks");
-
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
+      await sharp(req.file.buffer).resize(1200, 1200, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 80 }).toFile(savePath);
     }
 
-    const filename = `remark_${Date.now()}_${req.user._id}.jpg`;
-
-    const savePath = path.join(uploadDir, filename);
-
-    imagePath = `remarks/${filename}`;
-
-    console.log("Saving image at:", savePath);
-
-    await sharp(req.file.buffer)
-      .resize(1200, 1200, {
-        fit: "inside",
-        withoutEnlargement: true
-      })
-      .jpeg({
-        quality: 80,
-        progressive: true
-      })
-      .toFile(savePath);
-
-  } catch (err) {
-    console.error("Image upload error:", err);
-  }
-}
-
-    // Create remark object
-    const newRemark = {
-      user: req.user._id,
-      text: text || '',
-      image: imagePath,
-      createdAt: new Date()
-    };
-
-    // Add remark to task
-    task.remarks.push(newRemark);
+    const remark = { user: req.user._id, text: text || '', image: imgPath, createdAt: new Date() };
+    task.remarks.push(remark);
     await task.save();
 
-    // Populate the newly added remark for response
     await task.populate('remarks.user', 'name role email avatar');
-
-    const addedRemark = task.remarks[task.remarks.length - 1];
-
-    const actorId = req.user._id.toString();
-    const assignedRecipients = (task.assignedUsers || [])
-      .map(userId => userId.toString())
-      .filter(userId => userId !== actorId);
-    const creatorRecipient = task.createdBy.toString() !== actorId ? [task.createdBy] : [];
-    const remarkPayload = {
-      type: 'task_remark_added',
-      title: 'Task Remark Added',
-      message: `${req.user.name || 'User'} added a remark on "${task.title}"`,
-      actor: req.user._id,
-      data: {
-        taskId: task._id,
-        remarkId: addedRemark._id,
-        text: text || '',
-        hasImage: !!imagePath,
-      },
-      priority: 'medium',
-    };
-
-    await Promise.all([
-      notifyDirectUsers({
-        userIds: assignedRecipients,
-        targetPath: '/ciisUser/task-management',
-        ...remarkPayload,
-      }),
-      notifyDirectUsers({
-        userIds: creatorRecipient,
-        targetPath: '/ciisUser/admin-task-create',
-        ...remarkPayload,
-      }),
-    ]);
-
-    // Notify company-all-task owners about remark
-    try {
-      await notifyPageUsers({
-        companyId: task.companyCode || req.user.companyCode || task.company,
-        targetPath: '/ciisUser/company-all-task',
-        type: 'task_remark_added',
-        title: 'Task Remark Added',
-        message: `${req.user.name || 'User'} added a remark on "${task.title}"`,
-        data: { taskId: task._id, remarkId: addedRemark._id },
-        priority: 'medium'
-      });
-    } catch (npErr) {
-      console.error('Error notifying company-all-task owners for remark:', npErr);
-    }
-
-    res.json({
-      success: true,
-      message: "Remark added successfully",
-      remark: addedRemark,
-    });
-
-  } catch (error) {
-    console.error("❌ Error adding remark:", error);
-    
-    // Clean up uploaded files if error occurs
-    if (imagePath && fs.existsSync(imagePath)) {
-      fs.unlinkSync(imagePath);
-    }
-    
-    res.status(500).json({ 
-      success: false,
-      error: "Failed to add remark" 
-    });
+    res.json({ success: true, message: 'Remark added successfully', remark: task.remarks[task.remarks.length - 1] });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
-// ✅ GET TASK REMARKS
 exports.getRemarks = async (req, res) => {
   try {
-    const { taskId } = req.params;
-
-    const task = await Task.findById(taskId)
-      .populate('remarks.user', 'name role email avatar')
-      .select('remarks');
-
-    if (!task) {
-      return res.status(404).json({ 
-        success: false,
-        error: 'Task not found' 
-      });
-    }
-
-    // Sort remarks by creation date (newest first)
-    const sortedRemarks = task.remarks.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-
-    res.json({ 
-      success: true, 
-      remarks: sortedRemarks 
-    });
-
-  } catch (error) {
-    console.error('❌ Error fetching remarks:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to fetch remarks' 
-    });
+    const task = await Task.findById(req.params.taskId).populate('remarks.user', 'name role email avatar').select('remarks');
+    if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
+    res.json({ success: true, remarks: task.remarks.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)) });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
-// ✅ GET USER NOTIFICATIONS
 exports.getNotifications = async (req, res) => {
   try {
-    const { unreadOnly = false } = req.query;
-
     const filter = { user: req.user._id };
-    if (unreadOnly === 'true') {
-      filter.isRead = false;
-    }
-
-    const notifications = await Notification.find(filter)
-      .populate('relatedTask')
-      .sort({ createdAt: -1 })
-      .lean();
-
-    const unreadCount = await Notification.countDocuments({ 
-      user: req.user._id, 
-      isRead: false 
-    });
-
-    res.json({
-      success: true,
-      notifications,
-      unreadCount
-    });
-
-  } catch (error) {
-    console.error('❌ Error fetching notifications:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to fetch notifications' 
-    });
+    if (req.query.unreadOnly === 'true') filter.isRead = false;
+    const notifications = await Notification.find(filter).populate('relatedTask').sort({ createdAt: -1 }).lean();
+    const unreadCount = await Notification.countDocuments({ user: req.user._id, isRead: false });
+    res.json({ success: true, notifications, unreadCount });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
-// ✅ MARK NOTIFICATION AS READ
 exports.markNotificationAsRead = async (req, res) => {
   try {
-    const { notificationId } = req.params;
-
-    const notification = await Notification.findOneAndUpdate(
-      { _id: notificationId, user: req.user._id },
-      { 
-        isRead: true,
-        readAt: new Date()
-      },
-      { new: true }
-    );
-
-    if (!notification) {
-      return res.status(404).json({ 
-        success: false,
-        error: 'Notification not found' 
-      });
-    }
-
-    res.json({ 
-      success: true, 
-      message: 'Notification marked as read',
-      notification 
-    });
-
-  } catch (error) {
-    console.error('❌ Error marking notification as read:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to mark notification as read' 
-    });
+    const notification = await Notification.findOneAndUpdate({ _id: req.params.notificationId, user: req.user._id }, { isRead: true, readAt: new Date() }, { new: true });
+    res.json({ success: true, notification });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
-// ✅ MARK ALL NOTIFICATIONS AS READ
 exports.markAllNotificationsAsRead = async (req, res) => {
   try {
-    await Notification.updateMany(
-      { user: req.user._id, isRead: false },
-      { 
-        isRead: true,
-        readAt: new Date()
-      }
-    );
-
-    res.json({ 
-      success: true, 
-      message: 'All notifications marked as read'
-    });
-
-  } catch (error) {
-    console.error('❌ Error marking all notifications as read:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to mark all notifications as read' 
-    });
+    await Notification.updateMany({ user: req.user._id, isRead: false }, { isRead: true, readAt: new Date() });
+    res.json({ success: true, message: 'All notifications marked as read' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
-// ✅ GET ACTIVITY LOGS FOR TASK
 exports.getTaskActivityLogs = async (req, res) => {
   try {
-    const { taskId } = req.params;
-
-    const task = await Task.findById(taskId);
-    if (!task) {
-      return res.status(404).json({ 
-        success: false,
-        error: 'Task not found' 
-      });
-    }
-
-    // 🔥 REMOVE THE AUTHORIZATION CHECK COMPLETELY
-    // किसी को भी activity logs देखने दो
-
-    const logs = await ActivityLog.find({ task: taskId })
-      .populate('user', 'name role email')
-      .sort({ createdAt: -1 })
-      .lean();
-
-    res.json({
-      success: true,
-      logs
-    });
-
-  } catch (error) {
-    console.error('❌ Error fetching activity logs:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to fetch activity logs' 
-    });
+    const logs = await ActivityLog.find({ task: req.params.taskId }).populate('user', 'name role email').sort({ createdAt: -1 }).lean();
+    res.json({ success: true, logs });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
-// ✅ GET USER ACTIVITY TIMELINE - WITHOUT RESTRICTIONS
 exports.getUserActivityTimeline = async (req, res) => {
   try {
-    const { userId } = req.params;
-
-    // Get current user
-    const currentUser = await User.findById(req.user.id).lean();
-    if (!currentUser) {
-      return res.status(401).json({ 
-        success: false,
-        error: 'User not found' 
-      });
-    }
-
-    // Check if target user exists
-    const targetUser = await User.findById(userId).lean();
-    if (!targetUser) {
-      return res.status(404).json({ 
-        success: false,
-        error: 'User not found' 
-      });
-    }
-
-    // 🔴 REMOVED: No access restrictions - any user can view any timeline
-
-    const logs = await ActivityLog.find({ user: userId })
-      .populate('task', 'title')
-      .populate('user', 'name role email')
-      .sort({ createdAt: -1 })
-      .lean();
-
-    res.json({
-      success: true,
-      logs
-    });
-
-  } catch (error) {
-    console.error('❌ Error fetching activity timeline:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to fetch activity timeline' 
-    });
+    const logs = await ActivityLog.find({ user: req.params.userId }).populate('task', 'title').populate('user', 'name role email').sort({ createdAt: -1 }).lean();
+    res.json({ success: true, logs });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
-// ✅ GET ASSIGNABLE USERS AND GROUPS - WITHOUT RESTRICTIONS
 exports.getAssignableUsers = async (req, res) => {
   try {
-    console.log('🔑 Token user:', req.user);
-
-    // ✅ Get current user
-    const currentUser = await User.findById(req.user.id).lean();
-
-    if (!currentUser) {
-      return res.status(401).json({
-        success: false,
-        message: 'User not found'
-      });
-    }
-
-    console.log('👤 Current user from DB:', currentUser);
-
-    // Get all active users except self
-    const users = await User.find({
-      isActive: true,
-      _id: { $ne: currentUser._id }
-    })
-    .select('_id name email role jobRole')
-    .lean();
-
-    // Get all active groups
-    const groups = await Group.find({
-      isActive: true
-    })
-    .populate('members', 'name role email')
-    .select('name description members')
-    .lean();
-
-    res.json({
-      success: true,
-      users,
-      groups
-    });
-
-  } catch (error) {
-    console.error('❌ Error fetching assignable data:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch assignable data.'
-    });
+    const users = await User.find({ isActive: true, _id: { $ne: req.user._id } }).select('_id name email role jobRole').lean();
+    const groups = await Group.find({ isActive: true }).populate('members', 'name role email').select('name description members').lean();
+    res.json({ success: true, users, groups });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
-// ✅ GET TASK STATUS COUNTS
 exports.getTaskStatusCounts = async (req, res) => {
   try {
-    const { period = 'today' } = req.query;
-
-    // Get current user
-    const currentUser = await User.findById(req.user.id).lean();
-    if (!currentUser) {
-      return res.status(401).json({ 
-        success: false,
-        error: 'User not found' 
-      });
-    }
-
-    // Get user's groups
-    const userGroups = await Group.find({ 
-      members: req.user._id,
-      isActive: true 
-    }).select('_id').lean();
-    const groupIds = userGroups.map(group => group._id);
-
-    // Date range calculation
-    let dateFilter = {};
-    const now = new Date();
-    
-    switch (period) {
-      case 'today':
-        dateFilter.createdAt = {
-          $gte: new Date(now.getFullYear(), now.getMonth(), now.getDate()),
-          $lte: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
-        };
-        break;
-      case 'week':
-        const dayOfWeek = now.getDay();
-        dateFilter.createdAt = {
-          $gte: new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek),
-          $lte: new Date(now.getFullYear(), now.getMonth(), now.getDate() + (6 - dayOfWeek) + 1)
-        };
-        break;
-      case 'month':
-        dateFilter.createdAt = {
-          $gte: new Date(now.getFullYear(), now.getMonth(), 1),
-          $lte: new Date(now.getFullYear(), now.getMonth() + 1, 1)
-        };
-        break;
-      default:
-        dateFilter.createdAt = {
-          $gte: new Date(now.getFullYear(), now.getMonth(), now.getDate()),
-          $lte: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
-        };
-    }
-
-    // Base filter
-    const baseFilter = {
-      ...dateFilter,
-      isActive: true,
-      companyCode: req.user.companyCode,
-      $or: [
-        { assignedUsers: req.user._id },
-        { assignedGroups: { $in: groupIds } },
-        { 
-          createdBy: req.user._id,
-          taskFor: 'self'
-        }
-      ]
-    };
-
-    const tasks = await Task.find(baseFilter).lean();
-
-    // Calculate statistics
-    let total = 0;
-    const statusCounts = {
-      pending: 0,
-      'in-progress': 0,
-      completed: 0,
-      approved: 0,
-      rejected: 0,
-      onhold: 0,
-      reopen: 0,
-      cancelled: 0,
-      overdue: 0
-    };
-
-    tasks.forEach(task => {
-      total++;
-      const userStatus = task.statusByUser?.find(s => 
-        s.user && s.user.toString() === req.user._id.toString()
-      );
-      
-      const status = userStatus ? userStatus.status : 'pending';
-      
-      if (statusCounts[status] !== undefined) {
-        statusCounts[status]++;
-      }
-
-      // Check overdue
-      if (task.dueDateTime && new Date(task.dueDateTime) < new Date()) {
-        if (['pending', 'in-progress', 'reopen', 'onhold'].includes(status)) {
-          statusCounts.overdue++;
-        }
-      }
-    });
-
-    // Calculate percentages
-    const calculatePercentage = (count) => total > 0 ? Math.round((count / total) * 100) : 0;
-
-    res.json({
-      success: true,
-      statistics: {
-        total,
-        pending: { count: statusCounts.pending, percentage: calculatePercentage(statusCounts.pending) },
-        inProgress: { count: statusCounts['in-progress'], percentage: calculatePercentage(statusCounts['in-progress']) },
-        completed: { count: statusCounts.completed, percentage: calculatePercentage(statusCounts.completed) },
-        approved: { count: statusCounts.approved, percentage: calculatePercentage(statusCounts.approved) },
-        rejected: { count: statusCounts.rejected, percentage: calculatePercentage(statusCounts.rejected) },
-        onHold: { count: statusCounts.onhold, percentage: calculatePercentage(statusCounts.onhold) },
-        reopen: { count: statusCounts.reopen, percentage: calculatePercentage(statusCounts.reopen) },
-        cancelled: { count: statusCounts.cancelled, percentage: calculatePercentage(statusCounts.cancelled) },
-        overdue: { count: statusCounts.overdue, percentage: calculatePercentage(statusCounts.overdue) }
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Error fetching task statistics:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to fetch task statistics' 
-    });
+    const [personal, assigned, project] = await Promise.all([
+      fetchPersonalTaskList(req),
+      fetchAssignedToMeTaskList(req),
+      fetchAssignedProjectTaskList(req)
+    ]);
+    const list = applyCleanListFilters([...personal, ...assigned, ...project], req);
+    res.json({ success: true, statistics: calculateUnifiedTaskStats(list) });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
-// ✅ GET USER DETAILED ANALYTICS - WITHOUT RESTRICTIONS
 exports.getUserDetailedAnalytics = async (req, res) => {
   try {
-    const currentUser = await User.findById(req.user.id).lean();
-    if (!currentUser) {
-      return res.status(401).json({ 
-        success: false,
-        error: 'User not found' 
-      });
-    }
-
     const { userId } = req.params;
-    const { startDate, endDate, period = 'all' } = req.query;
+    const { period = 'all' } = req.query;
+    const dateRange = getCleanTaskDateRange({ period });
 
-    // Get target user details
-    const targetUser = await User.findById(userId)
-      .select('name email role employeeType joiningDate')
-      .lean();
+    const targetUser = await User.findById(userId).select('name email role employeeType joiningDate').lean();
+    if (!targetUser) return res.status(404).json({ success: false, error: 'User not found' });
 
-    if (!targetUser) {
-      return res.status(404).json({ 
-        success: false,
-        error: 'User not found' 
-      });
-    }
+    const groups = await Group.find({ members: userId, isActive: true }).select('_id').lean();
+    const groupIds = groups.map(g => g._id);
 
-    // 🔴 REMOVED: No access restrictions - any user can view any user's analytics
-
-    // Date range setup
-    let dateFilter = {};
-    if (startDate && endDate) {
-      dateFilter.createdAt = {
-        $gte: new Date(startDate),
-        $lte: new Date(endDate)
-      };
-    } else {
-      // Auto date range based on period
-      const now = new Date();
-      switch (period) {
-        case 'today':
-          dateFilter.createdAt = {
-            $gte: new Date(now.getFullYear(), now.getMonth(), now.getDate()),
-            $lte: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
-          };
-          break;
-        case 'week':
-          const weekStart = new Date(now);
-          weekStart.setDate(now.getDate() - now.getDay());
-          dateFilter.createdAt = {
-            $gte: weekStart,
-            $lte: now
-          };
-          break;
-        case 'month':
-          dateFilter.createdAt = {
-            $gte: new Date(now.getFullYear(), now.getMonth(), 1),
-            $lte: now
-          };
-          break;
-        // 'all' - no date filter
-      }
-    }
-
-    // Get user's groups for group tasks
-    const userGroups = await Group.find({ 
-      members: userId,
-      isActive: true 
-    }).select('_id').lean();
-    const groupIds = userGroups.map(group => group._id);
-
-    // Base filter for tasks involving this user
-    const baseFilter = {
-      ...dateFilter,
+    const filter = {
       isActive: true,
-      companyCode: req.user.companyCode, 
-      $or: [
-        { assignedUsers: userId },
-        { assignedGroups: { $in: groupIds } },
-        { createdBy: userId }
-      ]
+      companyCode: req.user.companyCode,
+      $or: [{ assignedUsers: userId }, { assignedGroups: { $in: groupIds } }, { createdBy: userId }]
     };
+    if (dateRange) filter.createdAt = dateRange;
 
-    // Get all relevant tasks
-    const tasks = await Task.find(baseFilter)
-      .populate('assignedUsers', 'name role email')
-      .populate('createdBy', 'name role email')
-      .populate('assignedGroups', 'name description')
-      .sort({ createdAt: -1 })
-      .lean();
+    const tasks = await Task.find(filter).populate('assignedUsers', 'name role email').populate('createdBy', 'name role email').sort({ createdAt: -1 }).lean();
 
-    // Comprehensive analysis
-    const analysis = {
-      userInfo: targetUser,
-      
-      // Basic counts
-      summary: {
-        totalInvolved: tasks.length,
-        assigned: tasks.filter(task => 
-          task.assignedUsers?.some(u => u._id.toString() === userId)
-        ).length,
-        created: tasks.filter(task => 
-          task.createdBy && task.createdBy._id.toString() === userId
-        ).length,
-        groupTasks: tasks.filter(task => 
-          task.assignedGroups && task.assignedGroups.length > 0 &&
-          !task.assignedUsers?.some(u => u._id.toString() === userId)
-        ).length
-      },
-
-      // Status analysis for assigned tasks
-      statusAnalysis: {
-        pending: 0,
-        'in-progress': 0,
-        completed: 0,
-        approved: 0,
-        rejected: 0,
-        overdue: 0
-      },
-
-      // Priority analysis
-      priorityAnalysis: {
-        high: 0,
-        medium: 0, 
-        low: 0
-      },
-
-      // Performance metrics
-      performance: {
-        completionRate: 0,
-        avgCompletionTime: 0,
-        efficiency: 0
-      },
-
-      // Timeline (last 30 days)
-      timeline: {},
-      
-      // Recent activities
-      recentTasks: tasks.slice(0, 10).map(task => ({
-        _id: task._id,
-        title: task.title,
-        type: task.createdBy && task.createdBy._id.toString() === userId ? 
-              'created' : 'assigned',
-        status: task.statusByUser?.find(s => s.user && s.user.toString() === userId)?.status || 'pending',
-        priority: task.priority,
-        dueDate: task.dueDateTime,
-        createdAt: task.createdAt
-      }))
-    };
-
-    // Process each task for detailed analysis
-    let totalCompletionTime = 0;
-    let completedCount = 0;
-
-    tasks.forEach(task => {
-      const userStatus = task.statusByUser?.find(s => 
-        s.user && s.user.toString() === userId
-      );
-
-      const status = userStatus?.status || 'pending';
-
-      // Status counts
-      if (analysis.statusAnalysis[status] !== undefined) {
-        analysis.statusAnalysis[status]++;
-      }
-
-      // Priority counts  
-      if (task.priority && analysis.priorityAnalysis[task.priority] !== undefined) {
-        analysis.priorityAnalysis[task.priority]++;
-      }
-
-      // Overdue check
-      if (task.dueDateTime && new Date(task.dueDateTime) < new Date() && 
-          status !== 'completed') {
-        analysis.statusAnalysis.overdue++;
-      }
-
-      // Completion time calculation
-      if (status === 'completed' && userStatus?.updatedAt && task.createdAt) {
-        const completionTime = new Date(userStatus.updatedAt) - new Date(task.createdAt);
-        totalCompletionTime += completionTime;
-        completedCount++;
-      }
-
-      // Timeline data (group by date)
-      const dateKey = new Date(task.createdAt).toISOString().split('T')[0];
-      if (!analysis.timeline[dateKey]) {
-        analysis.timeline[dateKey] = {
-          date: dateKey,
-          tasks: 0,
-          completed: 0
-        };
-      }
-      analysis.timeline[dateKey].tasks++;
-      if (status === 'completed') {
-        analysis.timeline[dateKey].completed++;
-      }
-    });
-
-    // Calculate performance metrics
-    const totalAssigned = analysis.summary.assigned + analysis.summary.groupTasks;
-    analysis.performance.completionRate = totalAssigned > 0 ?
-      Math.round((analysis.statusAnalysis.completed / totalAssigned) * 100) : 0;
-    
-    analysis.performance.avgCompletionTime = completedCount > 0 ?
-      Math.round(totalCompletionTime / (completedCount * 1000 * 60 * 60 * 24)) : 0; // in days
-
-    analysis.performance.efficiency = totalAssigned > 0 ?
-      Math.round(((analysis.statusAnalysis.completed + analysis.statusAnalysis['in-progress'] * 0.5) / totalAssigned) * 100) : 0;
-
-    // Convert timeline to array
-    analysis.timelineArray = Object.values(analysis.timeline)
-      .sort((a, b) => new Date(a.date) - new Date(b.date))
-      .slice(-30); // Last 30 days
+    const recentTasks = tasks.slice(0, 10).map(t => ({
+      _id: t._id,
+      title: t.title,
+      type: t.createdBy?._id.toString() === userId ? 'created' : 'assigned',
+      status: t.statusByUser?.find(s => s.user?.toString() === userId)?.status || 'pending',
+      priority: t.priority,
+      dueDate: t.dueDateTime,
+      createdAt: t.createdAt
+    }));
 
     res.json({
       success: true,
-      userAnalytics: analysis,
-      dateRange: {
-        start: startDate || 'beginning',
-        end: endDate || 'now',
-        period
+      userAnalytics: {
+        userInfo: targetUser,
+        summary: {
+          totalInvolved: tasks.length,
+          assigned: tasks.filter(t => t.assignedUsers?.some(u => u._id.toString() === userId)).length,
+          created: tasks.filter(t => t.createdBy?._id.toString() === userId).length,
+          groupTasks: tasks.filter(t => t.assignedGroups?.length > 0).length
+        },
+        statusAnalysis: calculateUnifiedTaskStats(tasks, userId),
+        recentTasks
       }
     });
-
-  } catch (error) {
-    console.error('❌ Error in user detailed analytics:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to fetch user analytics' 
-    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
-// ✅ GET USER TASK STATISTICS - WITHOUT RESTRICTIONS
+const queryAllUserTasks = async (userId, companyCode) => {
+  const groups = await Group.find({ members: userId, isActive: true }).select('_id').lean();
+  const groupIds = groups.map(g => g._id);
+
+  // Use base company code regex for security and compatibility
+  const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
+  const companyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : companyCode;
+
+  const [personalTasks, clientTasks, projectTasks] = await Promise.all([
+    Task.find({
+      isActive: true,
+      companyCode: companyFilter,
+      $or: [{ assignedUsers: userId }, { assignedGroups: { $in: groupIds } }, { createdBy: userId }]
+    }).populate('assignedUsers', 'name email').populate('createdBy', 'name email').sort({ createdAt: -1 }).lean(),
+    
+    ClientTask.find({
+      $or: [
+        { assigneeId: userId },
+        { assignee: userId.toString() }
+      ]
+    }).populate('clientId', 'name email company phone companyCode').sort({ createdAt: -1 }).lean(),
+
+    Project.find({ 'tasks.assignedTo': userId })
+      .select('projectName description createdBy tasks createdAt updatedAt')
+      .populate('createdBy', 'name email')
+      .populate('tasks.assignedTo', 'name email')
+      .populate('tasks.createdBy', 'name email')
+      .populate('tasks.activityLogs.performedBy', 'name email')
+      .lean()
+  ]);
+
+  const personalFormatted = personalTasks.map(t => {
+    const userStatus = normalizeTaskStatus(
+      t.statusByUser?.find(item => item.user?.toString() === userId.toString())?.status || t.overallStatus || 'pending'
+    );
+    const createdById = (t.createdBy?._id || t.createdBy)?.toString();
+    const taskSource = createdById === userId.toString() ? 'self' : 'assigned';
+    const isOverdue = isTaskOverdueForStatus(t.dueDateTime || t.dueDate, userStatus);
+    const displayStatus = isOverdue ? 'overdue' : userStatus;
+
+    return {
+      ...t,
+      title: t.title || 'Untitled Task',
+      description: t.description || '',
+      dueDate: t.dueDateTime || t.dueDate,
+      dueDateTime: t.dueDateTime || t.dueDate,
+      priority: String(t.priority || 'Medium').toLowerCase(),
+      status: displayStatus,
+      userStatus,
+      source: taskSource,
+      taskSource,
+      __taskSource: taskSource
+    };
+  });
+
+  const clientFormatted = clientTasks.map(t => {
+    const clientStatus = t.completed ? 'completed' : normalizeTaskStatus(t.status || 'pending');
+    const isOverdue = isTaskOverdueForStatus(t.dueDate, clientStatus);
+    const displayStatus = isOverdue ? 'overdue' : clientStatus;
+
+    return {
+      _id: t._id,
+      title: t.name || 'Untitled Task',
+      description: t.description || t.name || '',
+      dueDate: t.dueDate,
+      dueDateTime: t.dueDate,
+      completed: t.completed,
+      priority: String(t.priority || 'Medium').toLowerCase(),
+      status: displayStatus,
+      userStatus: clientStatus,
+      clientName: t.clientId?.name || 'Unknown Client',
+      createdAt: t.createdAt,
+      source: 'client',
+      taskSource: 'client',
+      __taskSource: 'client'
+    };
+  });
+
+  const projectFormatted = [];
+  projectTasks.forEach(project => {
+    (project.tasks || []).forEach(task => {
+      const assignedTo = task.assignedTo?._id || task.assignedTo;
+      const targetUserId = userId.toString();
+      const isAssignedToUser = assignedTo?.toString() === targetUserId;
+      if (!isAssignedToUser) return;
+
+      const projectStatus = normalizeProjectTaskStatus(task.status);
+      const isOverdue = isTaskOverdueForStatus(task.dueDate, projectStatus);
+      const displayStatus = isOverdue ? 'overdue' : projectStatus;
+      const assignedBy = getProjectTaskAssignedBy(task, project);
+
+      projectFormatted.push({
+        _id: task._id,
+        projectId: project._id,
+        title: task.title || 'Untitled Project Task',
+        description: task.description || project.description || '',
+        dueDate: task.dueDate,
+        dueDateTime: task.dueDate,
+        priority: String(task.priority || 'medium').toLowerCase(),
+        status: displayStatus,
+        userStatus: projectStatus,
+        projectName: project.projectName,
+        projectTaskId: task._id,
+        createdBy: assignedBy,
+        assignedTo: task.assignedTo,
+        assignedBy,
+        assignedByName: assignedBy?.name || assignedBy?.email || 'Unknown',
+        assignedToName: task.assignedTo?.name || 'Unknown',
+        assignedToEmail: task.assignedTo?.email || '',
+        files: task.pdfFile?.path ? [{
+          filename: task.pdfFile.filename,
+          originalName: task.pdfFile.filename,
+          path: task.pdfFile.path
+        }] : [],
+        remarks: task.remarks || [],
+        activityLogs: task.activityLogs || [],
+        createdAt: task.createdAt || project.createdAt,
+        updatedAt: task.updatedAt || project.updatedAt,
+        lastActivityAt: task.updatedAt || task.createdAt || project.updatedAt || project.createdAt,
+        source: 'project',
+        taskSource: 'project',
+        __taskSource: 'project'
+      });
+    });
+  });
+
+  return [...personalFormatted, ...clientFormatted, ...projectFormatted];
+};
+
+const filterUserTasks = (tasks, query) => {
+  const { period, search, status, priority } = query;
+
+  return tasks.filter(t => {
+    // 1. Search filter
+    if (search && search.trim()) {
+      const q = search.trim().toLowerCase();
+      const textToSearch = [
+        t.title,
+        t.description,
+        t.clientName,
+        t.projectName,
+        t._id?.toString()
+      ].map(v => String(v || '').toLowerCase()).join(' ');
+
+      if (!textToSearch.includes(q)) return false;
+    }
+
+    // 2. Status filter
+    if (status && status !== 'all') {
+      const queryStatus = normalizeTaskStatus(status);
+      if (queryStatus === 'overdue') {
+        const isOverdue = isTaskOverdueForStatus(t.dueDateTime || t.dueDate, t.userStatus);
+        if (!isOverdue && t.status !== 'overdue') return false;
+      } else {
+        if (normalizeTaskStatus(t.status) !== queryStatus && normalizeTaskStatus(t.userStatus) !== queryStatus) {
+          return false;
+        }
+      }
+    }
+
+    // 3. Priority filter
+    if (priority && priority !== 'all') {
+      if (t.priority !== priority.toLowerCase()) return false;
+    }
+
+    // 4. Period filter
+    if (period && period !== 'all') {
+      const source = String(t.__taskSource || t.taskSource || '').toLowerCase();
+      const dateToFilter = source === 'project'
+        ? (t.lastActivityAt || t.updatedAt || t.createdAt)
+        : (t.dueDateTime || t.dueDate || t.createdAt);
+      const taskDate = dateToFilter ? new Date(dateToFilter) : null;
+      if (!taskDate || Number.isNaN(taskDate.getTime())) return false;
+
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      if (period === 'today') {
+        const temp = new Date(taskDate);
+        temp.setHours(0, 0, 0, 0);
+        const isToday = temp.getTime() === today.getTime();
+        if (!isToday) return false;
+      } else if (period === 'week') {
+        const startOfThisWeek = new Date(today);
+        const day = startOfThisWeek.getDay();
+        const diffToMonday = day === 0 ? -6 : 1 - day;
+        startOfThisWeek.setDate(startOfThisWeek.getDate() + diffToMonday);
+
+        const endOfThisWeek = new Date(startOfThisWeek);
+        endOfThisWeek.setDate(endOfThisWeek.getDate() + 6);
+        endOfThisWeek.setHours(23, 59, 59, 999);
+
+        const isThisWeek = taskDate >= startOfThisWeek && taskDate <= endOfThisWeek;
+        if (!isThisWeek) return false;
+      } else if (period === 'overdue') {
+        const isOverdue = isTaskOverdueForStatus(t.dueDateTime || t.dueDate, t.userStatus);
+        if (!isOverdue) return false;
+      }
+    }
+
+    return true;
+  });
+};
+
 exports.getUserTaskStats = async (req, res) => {
   try {
     const { userId } = req.params;
-    const {
-      period = 'today',
-      status = 'all',
-      priority = 'all',
-      search = '',
-      fromDate = '',
-      toDate = '',
-    } = req.query;
+    const allTasks = await queryAllUserTasks(userId, req.user.companyCode);
+    const filtered = filterUserTasks(allTasks, req.query);
 
-    const currentUser = await User.findById(req.user.id).lean();
-    if (!currentUser) {
-      return res.status(401).json({ 
-        success: false,
-        error: 'User not found' 
-      });
-    }
-
-    // Get target user
-    const targetUser = await User.findById(userId).lean();
-    if (!targetUser) {
-      return res.status(404).json({ 
-        success: false,
-        error: 'User not found' 
-      });
-    }
-
-    // 🔴 REMOVED: No access restrictions - any user can view any user's stats
-
-    // Get user's groups for group tasks
-    const userGroups = await Group.find({ 
-      members: userId,
-      isActive: true 
-    }).select('_id').lean();
-    const groupIds = userGroups.map(group => group._id);
-
-    const dateRange = getTaskDateRange({period, fromDate, toDate});
-    const cleanSearch = String(search || '').trim();
-    const cleanPriority = String(priority || 'all').toLowerCase();
-    const cleanStatus = String(status || 'all').toLowerCase();
-    const statusList = cleanStatus === 'all'
-      ? []
-      : cleanStatus.split(',').map(item => item.trim()).filter(Boolean);
-
-    let baseFilter = {
-      isActive: true,
-      companyCode: req.user.companyCode,
-      $or: [
-        { assignedUsers: userId },
-        { assignedGroups: { $in: groupIds } },
-        { createdBy: userId }
-      ]
-    };
-    baseFilter = addDateValueFilter(baseFilter, ['dueDateTime', 'createdAt'], dateRange);
-
-    if (cleanPriority !== 'all') baseFilter.priority = cleanPriority;
-    if (cleanSearch) {
-      baseFilter.$and = [
-        ...(baseFilter.$and || []),
-        {
-          $or: [
-            {title: {$regex: cleanSearch, $options: 'i'}},
-            {description: {$regex: cleanSearch, $options: 'i'}},
-          ],
-        },
-      ];
-    }
-    if (statusList.length && !statusList.includes('overdue')) {
-      baseFilter.$and = [
-        ...(baseFilter.$and || []),
-        {
-          $or: [
-            {overallStatus: {$in: statusList}},
-            {statusByUser: {$elemMatch: {user: userId, status: {$in: statusList}}}},
-          ],
-        },
-      ];
-    }
-    if (statusList.includes('overdue')) {
-      baseFilter.dueDateTime = {$lt: getLocalDateStart()};
-      baseFilter.overallStatus = {$nin: ['completed', 'cancelled']};
-    }
-
-    let clientFilter = {
-      $or: [
-        {assigneeId: userId},
-        {assignee: userId.toString()},
-        {assignee: targetUser.name},
-        {assignee: targetUser.email},
-      ],
-    };
-    clientFilter = addDateValueFilter(clientFilter, ['dueDate', 'createdAt'], dateRange);
-
-    if (cleanPriority !== 'all') {
-      clientFilter.priority = new RegExp(`^${cleanPriority}$`, 'i');
-    }
-    if (cleanSearch) {
-      clientFilter.$and = [
-        ...(clientFilter.$and || []),
-        {
-          $or: [
-            {name: {$regex: cleanSearch, $options: 'i'}},
-            {description: {$regex: cleanSearch, $options: 'i'}},
-          ],
-        },
-      ];
-    }
-    if (statusList.length && !statusList.includes('overdue')) {
-      clientFilter.status = {$in: statusList};
-    }
-    if (statusList.includes('overdue')) {
-      clientFilter.dueDate = {$lt: getLocalDateStart()};
-      clientFilter.completed = {$ne: true};
-    }
-
-    const [tasks, clientTasks] = await Promise.all([
-      Task.find(baseFilter)
-      .populate('assignedUsers', 'name email')
-      .populate('createdBy', 'name email')
-        .lean(),
-      ClientTask.find(clientFilter).lean(),
-    ]);
-
-    // Calculate statistics
-    const statusCounts = {
+    const counts = {
+      total: filtered.length,
       pending: 0,
       'in-progress': 0,
       completed: 0,
-      approved: 0,
-      rejected: 0,
       overdue: 0,
-      onhold: 0,
-      reopen: 0,
-      cancelled: 0
+      onhold: 0
     };
 
-    tasks.forEach(task => {
-      // Find user's status in this task
-      const userStatus = task.statusByUser?.find(s => 
-        s.user && s.user.toString() === userId
-      );
-
-      let taskStatus = normalizeTaskStatus(userStatus?.status || task.overallStatus || task.status || 'pending');
-      const dueDate = getLocalDateStart(task.dueDateTime);
-      const today = getLocalDateStart();
-      if (
-        dueDate &&
-        today &&
-        dueDate < today &&
-        !['completed', 'cancelled'].includes(taskStatus)
-      ) {
-        taskStatus = 'overdue';
-      }
-
-      if (statusCounts[taskStatus] !== undefined) {
-        statusCounts[taskStatus]++;
+    filtered.forEach(task => {
+      const status = task.status;
+      if (counts[status] !== undefined) {
+        counts[status] += 1;
+      } else if (status === 'pending') {
+        counts.pending += 1;
       }
     });
 
-    clientTasks.forEach(task => {
-      let taskStatus = task.completed ? 'completed' : normalizeTaskStatus(task.status || 'pending');
-      const dueDate = getLocalDateStart(task.dueDate);
-      const today = getLocalDateStart();
-      if (
-        dueDate &&
-        today &&
-        dueDate < today &&
-        !['completed', 'cancelled'].includes(taskStatus)
-      ) {
-        taskStatus = 'overdue';
-      }
-
-      if (statusCounts[taskStatus] !== undefined) {
-        statusCounts[taskStatus]++;
-      }
+    const total = filtered.length;
+    const toStat = (count) => ({
+      count,
+      percentage: total > 0 ? Math.round((count / total) * 100) : 0
     });
 
-    const totalTasks = tasks.length + clientTasks.length;
+    const statusCounts = {
+      total: total,
+      pending: toStat(counts.pending),
+      inProgress: toStat(counts['in-progress']),
+      completed: toStat(counts.completed),
+      overdue: toStat(counts.overdue),
+      onhold: toStat(counts.onhold)
+    };
 
-    // Calculate percentages
-    const calculatePercentage = (count) => 
-      totalTasks > 0 ? Math.round((count / totalTasks) * 100) : 0;
-
-    res.json({
-      success: true,
-      userId,
-      period,
-      statusCounts: {
-        total: totalTasks,
-        pending: {
-          count: statusCounts.pending,
-          percentage: calculatePercentage(statusCounts.pending)
-        },
-        inProgress: {
-          count: statusCounts['in-progress'],
-          percentage: calculatePercentage(statusCounts['in-progress'])
-        },
-        completed: {
-          count: statusCounts.completed,
-          percentage: calculatePercentage(statusCounts.completed)
-        },
-        approved: {
-          count: statusCounts.approved,
-          percentage: calculatePercentage(statusCounts.approved)
-        },
-        rejected: {
-          count: statusCounts.rejected,
-          percentage: calculatePercentage(statusCounts.rejected)
-        },
-        overdue: {
-          count: statusCounts.overdue,
-          percentage: calculatePercentage(statusCounts.overdue)
-        },
-        onHold: {
-          count: statusCounts.onhold,
-          percentage: calculatePercentage(statusCounts.onhold)
-        },
-        reopen: {
-          count: statusCounts.reopen,
-          percentage: calculatePercentage(statusCounts.reopen)
-        },
-        cancelled: {
-          count: statusCounts.cancelled,
-          percentage: calculatePercentage(statusCounts.cancelled)
-        }
-      },
-      tasksSummary: {
-        assigned: tasks.filter(task => 
-          task.assignedUsers?.some(u => u._id.toString() === userId)
-        ).length,
-        created: tasks.filter(task => 
-          task.createdBy && task.createdBy._id.toString() === userId
-        ).length,
-        groupTasks: tasks.filter(task => 
-          task.assignedGroups && task.assignedGroups.length > 0
-        ).length,
-        clientAssigned: clientTasks.length
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Error in getUserTaskStats:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to fetch user task statistics' 
-    });
+    res.json({ success: true, userId, statusCounts });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
-// ✅ GET ALL USERS WITH THEIR TASK COUNTS (NO RESTRICTIONS)
 exports.getUsersWithTaskCounts = async (req, res) => {
   try {
     const currentUser = await User.findById(req.user.id).lean();
-    if (!currentUser) {
-      return res.status(401).json({ 
-        success: false,
-        error: 'User not found' 
-      });
-    }
+    const users = await User.find({ isActive: true, company: currentUser.company }).select('name email role employeeType company companyCode').lean();
 
-    const { period = 'all', employeeType } = req.query;
+    // Use base company code regex for security and compatibility
+    const companyCode = req.user.companyCode;
+    const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
+    const companyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : companyCode;
 
-    // 🔴 FIXED: Filter users by current user's company
-    const userFilter = { 
-      isActive: true,
-      company: currentUser.company // Add this line
-    };
-    
-    if (employeeType && employeeType !== 'all') {
-      userFilter.employeeType = employeeType;
-    }
-
-    // Agar company field nahi hai to usi department/team ke users dikhao
-    // Isse pehle check karein ki company field exists karti hai ya nahi
-    if (!currentUser.company) {
-      // Alternative: Agar company field nahi hai to role-based filtering
-      // Ya fir sath ke users dikhayein
-      delete userFilter.company;
-      // Ya fir error throw karein
-      // return res.status(400).json({ 
-      //   success: false, 
-      //   error: 'Company information not found' 
-      // });
-    }
-
-    const users = await User.find(userFilter)
-      .select('name email role employeeType company')
-      .lean();
-
-    // Rest of the code remains same...
-    let dateFilter = {};
-    if (period !== 'all') {
-      const now = new Date();
-      switch (period) {
-        case 'today':
-          dateFilter.createdAt = {
-            $gte: new Date(now.getFullYear(), now.getMonth(), now.getDate()),
-            $lte: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
-          };
-          break;
-        case 'week':
-          const dayOfWeek = now.getDay();
-          dateFilter.createdAt = {
-            $gte: new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek),
-            $lte: new Date(now.getFullYear(), now.getMonth(), now.getDate() + (6 - dayOfWeek) + 1)
-          };
-          break;
-        case 'month':
-          dateFilter.createdAt = {
-            $gte: new Date(now.getFullYear(), now.getMonth(), 1),
-            $lte: new Date(now.getFullYear(), now.getMonth() + 1, 1)
-          };
-          break;
-      }
-    }
-
-    // Get users with their task counts
     const usersWithCounts = await Promise.all(
-      users.map(async (user) => {
-        const userGroups = await Group.find({ 
-          members: user._id,
+      users.map(async (u) => {
+        const groups = await Group.find({ members: u._id, isActive: true }).select('_id').lean();
+        const groupIds = groups.map(g => g._id);
+
+        const tasks = await Task.find({
           isActive: true,
-          company: currentUser.company // Groups bhi company-based filter karein
-        }).select('_id').lean();
-        
-        const groupIds = userGroups.map(group => group._id);
+          companyCode: companyFilter,
+          $or: [{ assignedUsers: u._id }, { assignedGroups: { $in: groupIds } }, { createdBy: u._id }]
+        }).lean();
 
-        // Tasks bhi company-based filter karein
-        const taskFilter = {
-          ...dateFilter,
-          isActive: true,
-          company: currentUser.company, // Add company filter for tasks
-          $or: [
-            { assignedUsers: user._id },
-            { assignedGroups: { $in: groupIds } },
-            { createdBy: user._id }
-          ]
-        };
-
-        const userTasks = await Task.find(taskFilter).lean();
-
-        const statusCounts = {
-          pending: 0,
-          'in-progress': 0,
-          completed: 0
-        };
-
-        userTasks.forEach(task => {
-          const userStatus = task.statusByUser?.find(s => 
-            s.user && s.user.toString() === user._id.toString()
-          );
-          const status = userStatus?.status || 'pending';
-          if (statusCounts[status] !== undefined) {
-            statusCounts[status]++;
-          }
-        });
-
-        const totalTasks = userTasks.length;
-        const completedCount = statusCounts.completed;
-        const completionRate = totalTasks > 0 ? 
-          Math.round((completedCount / totalTasks) * 100) : 0;
+        const stats = calculateUnifiedTaskStats(tasks, u._id);
 
         return {
-          ...user,
+          ...u,
           taskStats: {
-            total: totalTasks,
-            pending: statusCounts.pending,
-            inProgress: statusCounts['in-progress'],
-            completed: completedCount,
-            completionRate: completionRate
+            total: stats.total,
+            pending: stats.pending.count,
+            inProgress: stats.inProgress.count,
+            completed: stats.completed.count,
+            completionRate: stats.completed.percentage
           }
         };
       })
@@ -3097,1138 +1413,274 @@ exports.getUsersWithTaskCounts = async (req, res) => {
 
     res.json({
       success: true,
-      period,
-      employeeType: employeeType || 'all',
-      company: currentUser.company, // Add company info in response
       users: usersWithCounts,
       summary: {
         totalUsers: usersWithCounts.length,
-        totalTasks: usersWithCounts.reduce((sum, user) => sum + user.taskStats.total, 0),
-        averageCompletionRate: Math.round(
-          usersWithCounts.reduce((sum, user) => sum + user.taskStats.completionRate, 0) / 
-          Math.max(usersWithCounts.length, 1)
-        )
+        totalTasks: usersWithCounts.reduce((sum, item) => sum + item.taskStats.total, 0),
+        averageCompletionRate: Math.round(usersWithCounts.reduce((sum, item) => sum + item.taskStats.completionRate, 0) / Math.max(usersWithCounts.length, 1))
       }
     });
-
-  } catch (error) {
-    console.error('❌ Error in getUsersWithTaskCounts:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to fetch users with task counts' 
-    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 };
-
-
-
-
 
 exports.getDepartmentUsersWithTaskCounts = async (req, res) => {
   try {
     const currentUser = await User.findById(req.user.id).lean();
-    if (!currentUser) {
-      return res.status(401).json({ 
-        success: false,
-        error: 'User not found' 
-      });
-    }
+    const users = await User.find({ isActive: true, company: currentUser.company, department: currentUser.department }).select('name email role employeeType company department companyCode').lean();
 
-    // Get current user's company and department
-    const userCompanyId = currentUser.company;
-    const userDepartmentId = currentUser.department;
+    // Use base company code regex for security and compatibility
+    const companyCode = req.user.companyCode;
+    const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
+    const companyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : companyCode;
 
-    if (!userCompanyId || !userDepartmentId) {
-      return res.status(400).json({
-        success: false,
-        error: 'User company or department not found'
-      });
-    }
-
-    const { period = 'all', employeeType } = req.query;
-
-    // 🔴 UPDATED: Filter users by same company AND same department
-    const userFilter = { 
-      isActive: true,
-      
-    };
-    
-    if (employeeType && employeeType !== 'all') {
-      userFilter.employeeType = employeeType;
-    }
-
-    // Exclude the current user if needed (optional)
-    // userFilter._id = { $ne: currentUser._id };
-
-    const users = await User.find(userFilter)
-      .select('name email role employeeType department company')
-      .lean();
-
-    // Date filter for tasks
-    let dateFilter = {};
-    if (period !== 'all') {
-      const now = new Date();
-      switch (period) {
-        case 'today':
-          dateFilter.createdAt = {
-            $gte: new Date(now.getFullYear(), now.getMonth(), now.getDate()),
-            $lte: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
-          };
-          break;
-        case 'week':
-          const dayOfWeek = now.getDay();
-          dateFilter.createdAt = {
-            $gte: new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek),
-            $lte: new Date(now.getFullYear(), now.getMonth(), now.getDate() + (6 - dayOfWeek) + 1)
-          };
-          break;
-        case 'month':
-          dateFilter.createdAt = {
-            $gte: new Date(now.getFullYear(), now.getMonth(), 1),
-            $lte: new Date(now.getFullYear(), now.getMonth() + 1, 1)
-          };
-          break;
-      }
-    }
-
-    // Get users with their task counts
     const usersWithCounts = await Promise.all(
-      users.map(async (user) => {
-        const userGroups = await Group.find({ 
-          members: user._id,
-          isActive: true 
-        }).select('_id').lean();
-        
-        const groupIds = userGroups.map(group => group._id);
+      users.map(async (u) => {
+        const groups = await Group.find({ members: u._id, isActive: true }).select('_id').lean();
+        const groupIds = groups.map(g => g._id);
 
-        const taskFilter = {
-          ...dateFilter,
+        const tasks = await Task.find({
           isActive: true,
-          $or: [
-            { assignedUsers: user._id },
-            { assignedGroups: { $in: groupIds } },
-            { createdBy: user._id }
-          ]
-        };
+          companyCode: companyFilter,
+          $or: [{ assignedUsers: u._id }, { assignedGroups: { $in: groupIds } }, { createdBy: u._id }]
+        }).lean();
 
-        const userTasks = await Task.find(taskFilter).lean();
-
-        const statusCounts = {
-          pending: 0,
-          'in-progress': 0,
-          completed: 0
-        };
-
-        userTasks.forEach(task => {
-          const userStatus = task.statusByUser?.find(s => 
-            s.user && s.user.toString() === user._id.toString()
-          );
-          const status = userStatus?.status || 'pending';
-          if (statusCounts[status] !== undefined) {
-            statusCounts[status]++;
-          }
-        });
-
-        const totalTasks = userTasks.length;
-        const completedCount = statusCounts.completed;
-        const completionRate = totalTasks > 0 ? 
-          Math.round((completedCount / totalTasks) * 100) : 0;
+        const stats = calculateUnifiedTaskStats(tasks, u._id);
 
         return {
-          ...user,
+          ...u,
           taskStats: {
-            total: totalTasks,
-            pending: statusCounts.pending,
-            inProgress: statusCounts['in-progress'],
-            completed: completedCount,
-            completionRate: completionRate
+            total: stats.total,
+            pending: stats.pending.count,
+            inProgress: stats.inProgress.count,
+            completed: stats.completed.count,
+            completionRate: stats.completed.percentage
           }
         };
       })
     );
 
-    res.json({
-      success: true,
-      period,
-      employeeType: employeeType || 'all',
-      users: usersWithCounts,
-      summary: {
-        totalUsers: usersWithCounts.length,
-        totalTasks: usersWithCounts.reduce((sum, user) => sum + user.taskStats.total, 0),
-        averageCompletionRate: Math.round(
-          usersWithCounts.reduce((sum, user) => sum + user.taskStats.completionRate, 0) / 
-          Math.max(usersWithCounts.length, 1)
-        )
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Error in getUsersWithTaskCounts:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to fetch users with task counts' 
-    });
+    res.json({ success: true, users: usersWithCounts });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 };
-// ✅ GET USER TASKS WITH FILTERS - WITHOUT RESTRICTIONS
+
 exports.getUserTasks = async (req, res) => {
   try {
     const { userId } = req.params;
-    const { status, search, period = 'today' } = req.query;
+    const groups = await Group.find({ members: userId, isActive: true }).select('_id').lean();
+    const groupIds = groups.map(g => g._id);
 
-    const currentUser = await User.findById(req.user.id).lean();
-    if (!currentUser) {
-      return res.status(401).json({ 
-        success: false,
-        error: 'User not found' 
-      });
-    }
-
-    // Get target user
-    const targetUser = await User.findById(userId).lean();
-    if (!targetUser) {
-      return res.status(404).json({ 
-        success: false,
-        error: 'User not found' 
-      });
-    }
-
-    // 🔴 REMOVED: No access restrictions - any user can view any user's tasks
-
-    // Get user's groups
-    const userGroups = await Group.find({ 
-      members: userId,
-      isActive: true 
-    }).select('_id').lean();
-    const groupIds = userGroups.map(group => group._id);
-
-    // Date filter
-    let dateFilter = {};
-    if (period !== 'today') {
-      const now = new Date();
-      switch (period) {
-        case 'today':
-          dateFilter.createdAt = {
-            $gte: new Date(now.getFullYear(), now.getMonth(), now.getDate()),
-            $lte: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
-          };
-          break;
-        case 'week':
-          const dayOfWeek = now.getDay();
-          dateFilter.createdAt = {
-            $gte: new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek),
-            $lte: new Date(now.getFullYear(), now.getMonth(), now.getDate() + (6 - dayOfWeek) + 1)
-          };
-          break;
-        case 'month':
-          dateFilter.createdAt = {
-            $gte: new Date(now.getFullYear(), now.getMonth(), 1),
-            $lte: new Date(now.getFullYear(), now.getMonth() + 1, 1)
-          };
-          break;
-      }
-    }
-
-    // Build filter
-    const filter = {
-      ...dateFilter,
+    const tasks = await Task.find({
       isActive: true,
-      $or: [
-        { assignedUsers: userId },
-        { assignedGroups: { $in: groupIds } },
-        { createdBy: userId }
-      ]
-    };
+      $or: [{ assignedUsers: userId }, { assignedGroups: { $in: groupIds } }, { createdBy: userId }]
+    }).populate('assignedUsers', 'name email').populate('createdBy', 'name email').sort({ createdAt: -1 }).lean();
 
-    // Add status filter
-    if (status && status !== 'all') {
-      filter['statusByUser.status'] = status;
-      filter['statusByUser.user'] = userId;
-    }
-
-    // Add search filter
-    if (search) {
-      filter.$or = [
-        ...filter.$or,
-        { title: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } }
-      ];
-    }
-
-    const tasks = await Task.find(filter)
-      .populate('assignedUsers', 'name email')
-      .populate('createdBy', 'name email')
-      .populate('assignedGroups', 'name description')
-      .sort({ createdAt: -1 })
-      .lean();
-
-    // Enhance tasks with user-specific status
-    const enhancedTasks = tasks.map(task => {
-      const userStatus = task.statusByUser?.find(s => 
-        s.user && s.user.toString() === userId
-      );
-      
+    const enhanced = tasks.map(t => {
+      const userStatus = t.statusByUser?.find(s => s.user?.toString() === userId);
       return {
-        ...task,
+        ...t,
         userStatus: userStatus?.status || 'pending',
         userStatusRemarks: userStatus?.remarks,
         userStatusUpdatedAt: userStatus?.updatedAt
       };
     });
 
-    res.json({
-      success: true,
-      userId,
-      filters: { status, search, period },
-      tasks: enhancedTasks,
-      total: enhancedTasks.length
-    });
-
-  } catch (error) {
-    console.error('❌ Error in getUserTasks:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to fetch user tasks' 
-    });
+    res.json({ success: true, userId, tasks: enhanced, total: enhanced.length });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
-// ✅ FAST PAGINATED USER TASKS FOR MOBILE COMPANY ALL TASK
 exports.getUserAllTasksPaginated = async (req, res) => {
   try {
     const { userId } = req.params;
-    const {
-      period = 'today',
-      status = 'all',
-      priority = 'all',
-      search = '',
-      fromDate = '',
-      toDate = '',
-    } = req.query;
     const page = parsePositiveInt(req.query.page, 1);
     const limit = parsePositiveInt(req.query.limit, 10, 50);
-    const fetchLimit = page * limit;
 
-    const targetUser = await User.findById(userId).select('name email').lean();
-    if (!targetUser) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found',
-      });
-    }
+    const allTasks = await queryAllUserTasks(userId, req.user.companyCode);
+    const filtered = filterUserTasks(allTasks, req.query);
 
-    const userGroups = await Group.find({
-      members: userId,
-      isActive: true,
-    }).select('_id').lean();
-    const groupIds = userGroups.map(group => group._id);
-    const dateRange = getTaskDateRange({period, fromDate, toDate});
-    const cleanSearch = String(search || '').trim();
-    const cleanPriority = String(priority || 'all').toLowerCase();
-    const cleanStatus = String(status || 'all').toLowerCase();
-    const statusList = cleanStatus === 'all'
-      ? []
-      : cleanStatus.split(',').map(item => item.trim()).filter(Boolean);
+    // Sort by task date first so meeting auto-tasks appear on their scheduled date,
+    // not on the date when the meeting/task was created.
+    const sortedFiltered = sortTasksNewestFirst(filtered);
 
-    let personalFilter = {
-      isActive: true,
-      $or: [
-        {assignedUsers: userId},
-        {assignedGroups: {$in: groupIds}},
-        {createdBy: userId},
-      ],
-    };
-    personalFilter = addDateValueFilter(personalFilter, ['dueDateTime', 'createdAt'], dateRange);
+    // Paginate
+    const total = sortedFiltered.length;
+    const pages = Math.max(1, Math.ceil(total / limit));
+    const safePage = Math.min(page, pages);
+    const start = (safePage - 1) * limit;
+    const tasks = sortedFiltered.slice(start, start + limit);
 
-    if (cleanPriority !== 'all') personalFilter.priority = cleanPriority;
-    if (cleanSearch) {
-      personalFilter.$and = [
-        ...(personalFilter.$and || []),
-        {
-          $or: [
-            {title: {$regex: cleanSearch, $options: 'i'}},
-            {description: {$regex: cleanSearch, $options: 'i'}},
-          ],
-        },
-      ];
-    }
-    if (statusList.length && !statusList.includes('overdue')) {
-      personalFilter.$and = [
-        ...(personalFilter.$and || []),
-        {
-          $or: [
-            {overallStatus: {$in: statusList}},
-            {statusByUser: {$elemMatch: {user: userId, status: {$in: statusList}}}},
-          ],
-        },
-      ];
-    }
-    if (statusList.includes('overdue')) {
-      personalFilter.dueDateTime = {$lt: new Date()};
-      personalFilter.overallStatus = {$nin: ['completed', 'cancelled']};
-    }
-
-    let clientFilter = {
-      $or: [
-        {assigneeId: userId},
-        {assignee: userId.toString()},
-        {assignee: targetUser.name},
-        {assignee: targetUser.email},
-      ],
-    };
-    clientFilter = addDateValueFilter(clientFilter, ['dueDate', 'createdAt'], dateRange);
-
-    if (cleanPriority !== 'all') {
-      clientFilter.priority = new RegExp(`^${cleanPriority}$`, 'i');
-    }
-    if (cleanSearch) {
-      clientFilter.$and = [
-        ...(clientFilter.$and || []),
-        {
-          $or: [
-            {name: {$regex: cleanSearch, $options: 'i'}},
-            {description: {$regex: cleanSearch, $options: 'i'}},
-          ],
-        },
-      ];
-    }
-    if (statusList.length && !statusList.includes('overdue')) {
-      clientFilter.status = {$in: statusList};
-    }
-    if (statusList.includes('overdue')) {
-      clientFilter.dueDate = {$lt: getLocalDateStart()};
-      clientFilter.completed = {$ne: true};
-    }
-
-    const [personalTotal, clientTotal, personalTasks, clientTasks] = await Promise.all([
-      Task.countDocuments(personalFilter),
-      ClientTask.countDocuments(clientFilter),
-      Task.find(personalFilter)
-        .populate('assignedUsers', 'name email')
-        .populate('createdBy', 'name email')
-        .populate('assignedGroups', 'name description')
-        .sort({createdAt: -1})
-        .limit(fetchLimit)
-        .lean(),
-      ClientTask.find(clientFilter)
-        .populate('clientId', 'name email company phone')
-        .sort({createdAt: -1})
-        .limit(fetchLimit)
-        .lean(),
-    ]);
-
-    const personalFormatted = personalTasks.map(task => {
-      const userStatus = task.statusByUser?.find(item => item.user && item.user.toString() === userId);
-      return {
-        ...task,
-        userStatus: userStatus?.status || task.overallStatus || 'pending',
-        userStatusRemarks: userStatus?.remarks,
-        userStatusUpdatedAt: userStatus?.updatedAt,
-        source: 'personal',
-      };
-    });
-
-    const clientFormatted = clientTasks.map(task => ({
-      _id: task._id,
-      title: task.name,
-      name: task.name,
-      description: task.description || task.name,
-      dueDate: task.dueDate,
-      dueDateTime: task.dueDate,
-      completed: task.completed,
-      status: task.completed ? 'completed' : task.status || 'pending',
-      priority: String(task.priority || 'Medium').toLowerCase(),
-      clientName: task.clientId?.name || 'Unknown Client',
-      clientId: task.clientId,
-      clientEmail: task.clientId?.email,
-      clientCompany: task.clientId?.company,
-      files: task.files || [],
-      remarks: task.remarks || [],
-      activityLogs: task.activityLogs || [],
-      createdAt: task.createdAt,
-      updatedAt: task.updatedAt,
-      service: task.service,
-      assignee: task.assignee,
-      source: 'assigned',
-    }));
-
-    const mergedTasks = [...personalFormatted, ...clientFormatted]
-      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
-    const start = (page - 1) * limit;
-    const tasks = mergedTasks.slice(start, start + limit);
-    const total = personalTotal + clientTotal;
-
-    return res.json({
-      success: true,
-      userId,
-      filters: {period, status, priority, search, fromDate, toDate},
-      tasks,
-      pagination: {
-        page,
-        limit,
-        total,
-        pages: Math.max(1, Math.ceil(total / limit)),
-        hasNext: page * limit < total,
-        hasPrev: page > 1,
-      },
-      total,
-    });
-  } catch (error) {
-    console.error('❌ Error in getUserAllTasksPaginated:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch paginated user tasks',
-      message: error.message,
-    });
-  }
-};
-
-// ✅ GET OVERDUE TASKS FOR LOGGED-IN USER
-exports.getOverdueTasks = async (req, res) => {
-  try {
-    // Get current user
-    const currentUser = await User.findById(req.user.id).lean();
-    if (!currentUser) {
-      return res.status(401).json({ 
-        success: false,
-        error: 'User not found' 
-      });
-    }
-
-    // Get user's groups for group-assigned tasks
-    const userGroups = await Group.find({ 
-      members: req.user._id,
-      isActive: true 
-    }).select('_id').lean();
-
-    const groupIds = userGroups.map(group => group._id);
-    const now = new Date();
-
-    // Find tasks that should be overdue for this user
-    const filter = {
-      $or: [
-        { assignedUsers: req.user._id },
-        { assignedGroups: { $in: groupIds } },
-        { 
-          createdBy: req.user._id,
-          taskFor: 'self'
-        }
-      ],
-      isActive: true,
-      dueDateTime: { $lt: now },
-      $or: [
-        { 
-          'statusByUser': {
-            $elemMatch: {
-              user: req.user._id,
-              status: { $in: ['pending', 'in-progress', 'reopen', 'onhold'] }
-            }
-          }
-        },
-        { 
-          assignedUsers: req.user._id,
-          'statusByUser.user': { $ne: req.user._id }
-        }
-      ]
+    // Calculate unified stats on the ENTIRE list of filtered tasks
+    const counts = {
+      total: total,
+      pending: 0,
+      'in-progress': 0,
+      completed: 0,
+      overdue: 0,
+      onhold: 0
     };
 
-    let tasks = await Task.find(filter)
-      .populate('assignedUsers', 'name email')
-      .populate('assignedGroups', 'name description')
-      .populate('createdBy', 'name email')
-      .sort({ dueDateTime: 1, createdAt: -1 })
-      .lean();
-
-    // Mark tasks as overdue in database
-    const overdueTasks = [];
-    
-    for (const task of tasks) {
-      const taskDoc = await Task.findById(task._id);
-      if (taskDoc) {
-        // Check if user's status needs to be marked overdue
-        const userStatus = taskDoc.statusByUser.find(
-          s => s.user && s.user.toString() === req.user._id.toString()
-        );
-        
-        if (!userStatus) {
-          // User doesn't have status entry, create one
-          taskDoc.statusByUser.push({
-            user: req.user._id,
-            status: 'overdue',
-            updatedAt: new Date(),
-            remarks: 'Automatically marked as overdue'
-          });
-          
-          // Add to status history
-          taskDoc.statusHistory.push({
-            status: 'overdue',
-            changedBy: req.user._id,
-            changedByType: 'user',
-            remarks: 'Automatically marked as overdue due to passed deadline',
-            changedAt: new Date()
-          });
-          
-          await taskDoc.save();
-          overdueTasks.push(taskDoc.toObject());
-          
-        } else if (['pending', 'in-progress', 'reopen', 'onhold'].includes(userStatus.status)) {
-          // User's status can be marked overdue
-          const oldStatus = userStatus.status;
-          userStatus.status = 'overdue';
-          userStatus.updatedAt = new Date();
-          userStatus.remarks = 'Automatically marked as overdue';
-          
-          // Add to status history
-          taskDoc.statusHistory.push({
-            status: 'overdue',
-            changedBy: req.user._id,
-            changedByType: 'user',
-            remarks: `Automatically marked as overdue from ${oldStatus}`,
-            changedAt: new Date()
-          });
-          
-          // Update overall status if needed
-          if (taskDoc.overallStatus !== 'overdue') {
-            taskDoc.overallStatus = 'overdue';
-            taskDoc.markedOverdueAt = new Date();
-            taskDoc.overdueReason = 'Automatic overdue detection';
-          }
-          
-          await taskDoc.save();
-          overdueTasks.push(taskDoc.toObject());
-          
-          // Create notification
-          await createNotification(
-            req.user._id,
-            'Task Marked as Overdue',
-            `Task "${taskDoc.title}" has been automatically marked as overdue`,
-            'task_overdue',
-            taskDoc._id,
-            { 
-              dueDate: taskDoc.dueDateTime,
-              oldStatus,
-              markedAt: new Date()
-            }
-          );
-        } else if (userStatus.status === 'overdue') {
-          // Already overdue
-          overdueTasks.push(taskDoc.toObject());
-        }
+    filtered.forEach(task => {
+      const status = task.status;
+      if (counts[status] !== undefined) {
+        counts[status] += 1;
+      } else if (status === 'pending') {
+        counts.pending += 1;
       }
-    }
+    });
 
-    const enriched = await enrichStatusInfo(overdueTasks);
-    const grouped = groupTasksByDate(enriched, 'dueDateTime', 'overdueSerialNo');
-    
+    const toStat = (count) => ({
+      count,
+      percentage: total > 0 ? Math.round((count / total) * 100) : 0
+    });
+
+    const calculatedStats = {
+      total: total,
+      pending: toStat(counts.pending),
+      inProgress: toStat(counts['in-progress']),
+      completed: toStat(counts.completed),
+      overdue: toStat(counts.overdue),
+      onhold: toStat(counts.onhold)
+    };
+
     res.json({
       success: true,
-      overdueTasks: grouped,
-      count: overdueTasks.length,
-      asOf: new Date(),
-      message: `Found ${overdueTasks.length} overdue task(s)`
+      userId,
+      tasks,
+      pagination: {
+        page: safePage,
+        limit,
+        total,
+        pages,
+        hasNext: safePage * limit < total,
+        hasPrev: safePage > 1
+      },
+      statusCounts: calculatedStats
     });
-
-  } catch (error) {
-    console.error('❌ Error fetching overdue tasks:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to fetch overdue tasks',
-      details: error.message 
-    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
-// ✅ GET USER OVERDUE TASKS - WITHOUT RESTRICTIONS
+exports.getOverdueTasks = async (req, res) => {
+  try {
+    const list = await fetchAssignedToMeTaskList(req);
+    const overdue = list.filter(t => isTaskOverdueForStatus(t.dueDateTime, t.status));
+    res.json({ success: true, overdueTasks: groupTasksByDate(overdue, 'dueDateTime', 'overdueSerialNo'), count: overdue.length });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
 exports.getUserOverdueTasks = async (req, res) => {
   try {
     const { userId } = req.params;
+    const groups = await Group.find({ members: userId, isActive: true }).select('_id').lean();
+    const groupIds = groups.map(g => g._id);
 
-    const currentUser = await User.findById(req.user.id).lean();
-    if (!currentUser) {
-      return res.status(401).json({ 
-        success: false,
-        error: 'User not found' 
-      });
-    }
-
-    // Get target user
-    const targetUser = await User.findById(userId).lean();
-    if (!targetUser) {
-      return res.status(404).json({ 
-        success: false,
-        error: 'User not found' 
-      });
-    }
-
-    // 🔴 REMOVED: No access restrictions
-
-    // Get user's groups for group-assigned tasks
-    const userGroups = await Group.find({ 
-      members: userId,
-      isActive: true 
-    }).select('_id').lean();
-
-    const groupIds = userGroups.map(group => group._id);
-    const now = new Date();
-
-    const filter = {
-      $or: [
-        { assignedUsers: userId },
-        { assignedGroups: { $in: groupIds } },
-        { createdBy: userId }
-      ],
+    const tasks = await Task.find({
       isActive: true,
-      dueDateTime: { $lt: now },
-      $or: [
-        { 
-          'statusByUser': {
-            $elemMatch: {
-              user: userId,
-              status: { $in: ['pending', 'in-progress', 'reopen', 'onhold'] }
-            }
-          }
-        },
-        { 
-          assignedUsers: userId,
-          'statusByUser.user': { $ne: userId }
-        }
-      ]
-    };
+      dueDateTime: { $lt: new Date() },
+      overallStatus: { $nin: ['completed', 'cancelled', 'approved'] },
+      $or: [{ assignedUsers: userId }, { assignedGroups: { $in: groupIds } }, { createdBy: userId }]
+    }).populate('assignedUsers', 'name email').populate('createdBy', 'name email').sort({ dueDateTime: 1 }).lean();
 
-    const tasks = await Task.find(filter)
-      .populate('assignedUsers', 'name email')
-      .populate('assignedGroups', 'name description')
-      .populate('createdBy', 'name email')
-      .sort({ dueDateTime: 1, createdAt: -1 })
-      .lean();
-
-    const enriched = await enrichStatusInfo(tasks);
-    const grouped = groupTasksByDate(enriched, 'dueDateTime', 'overdueSerialNo');
-    
-    res.json({
-      success: true,
-      userId,
-      overdueTasks: grouped,
-      count: tasks.length,
-      asOf: new Date()
-    });
-
-  } catch (error) {
-    console.error('❌ Error fetching user overdue tasks:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to fetch user overdue tasks' 
-    });
+    res.json({ success: true, userId, overdueTasks: groupTasksByDate(tasks, 'dueDateTime', 'overdueSerialNo'), count: tasks.length });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
-// ✅ MANUALLY MARK TASK AS OVERDUE
 exports.markTaskAsOverdue = async (req, res) => {
   try {
     const { taskId } = req.params;
-    const { remarks } = req.body;
-
-    // Get current user
-    const currentUser = await User.findById(req.user.id).lean();
-    if (!currentUser) {
-      return res.status(401).json({ 
-        success: false,
-        error: 'User not found' 
-      });
-    }
-
     const task = await Task.findById(taskId);
-    if (!task) {
-      return res.status(404).json({ 
-        success: false,
-        error: 'Task not found' 
-      });
-    }
+    if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
 
-    // Check if user is authorized
-    const isAuthorized = 
-      task.assignedUsers.some(userId => userId.toString() === req.user._id.toString()) ||
-      task.createdBy.toString() === req.user._id.toString();
-
-    if (!isAuthorized) {
-      return res.status(403).json({ 
-        success: false,
-        error: 'Not authorized to mark this task as overdue' 
-      });
-    }
-
-    // Check if task is already overdue
-    if (task.overallStatus === 'overdue') {
-      return res.status(400).json({ 
-        success: false,
-        error: 'Task is already marked as overdue' 
-      });
-    }
-
-    // Check if due date has passed
-    if (task.dueDateTime && new Date(task.dueDateTime) >= new Date()) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'Task due date has not passed yet' 
-      });
-    }
-
-    // Mark user's status as overdue
-    const wasMarked = task.markUserStatusOverdue(req.user._id, remarks);
-    
-    if (!wasMarked) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'Task cannot be marked as overdue' 
-      });
-    }
-
+    task.overallStatus = 'overdue';
+    task.markedOverdueAt = new Date();
+    task.statusHistory.push({ status: 'overdue', changedBy: req.user._id, remarks: 'Manually marked overdue' });
     await task.save();
 
-    // Create notifications for all assigned users
-    const assignedUserIds = task.assignedUsers.map(id => id.toString());
-    
-    for (const userId of assignedUserIds) {
-      await createNotification(
-        userId,
-        'Task Marked as Overdue',
-        `Task "${task.title}" has been marked as overdue by ${req.user.name}`,
-        'task_overdue_manual',
-        task._id,
-        { markedBy: req.user.name, remarks }
-      );
-    }
-
-    // Create activity log
-    await createActivityLog(
-      req.user,
-      'task_marked_overdue',
-      task._id,
-      `Manually marked task as overdue: ${task.title}`,
-      { status: task.overallStatus },
-      { status: 'overdue', remarks },
-      req
-    );
-
-    res.json({
-      success: true,
-      message: '✅ Task marked as overdue successfully',
-      task: {
-        _id: task._id,
-        title: task.title,
-        overallStatus: task.overallStatus,
-        markedOverdueAt: task.markedOverdueAt
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Error marking task as overdue:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to mark task as overdue' 
-    });
+    res.json({ success: true, message: 'Task marked as overdue successfully', task });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
-// ✅ UPDATE ALL OVERDUE TASKS (FOR CRON)
 exports.updateAllOverdueTasks = async (req, res) => {
   try {
-    const currentUser = await User.findById(req.user.id).lean();
-    if (!currentUser) {
-      return res.status(401).json({ 
-        success: false,
-        error: 'User not found' 
-      });
-    }
-
     const now = new Date();
-    const overdueTasks = await Task.find({
-      dueDateTime: { $lt: now },
-      isActive: true,
-      $or: [
-        { overallStatus: { $in: ['pending', 'in-progress', 'reopen', 'onhold'] } },
-        { 
-          'statusByUser.status': { $in: ['pending', 'in-progress', 'reopen', 'onhold'] }
-        }
-      ]
-    });
-
-    let updated = 0;
-    let alreadyOverdue = 0;
-    let skipped = 0;
-
-    for (const task of overdueTasks) {
-      try {
-        const wasUpdated = task.checkAndMarkOverdue();
-        if (wasUpdated) {
-          await task.save();
-          updated++;
-        } else {
-          if (task.overallStatus === 'overdue') {
-            alreadyOverdue++;
-          } else {
-            skipped++;
-          }
-        }
-      } catch (taskError) {
-        console.error(`Error updating task ${task._id}:`, taskError);
-      }
-    }
-
-    // Create activity log
-    await createActivityLog(
-      currentUser,
-      'update_all_overdue',
-      null,
-      `Updated all overdue tasks: ${updated} updated, ${alreadyOverdue} already overdue, ${skipped} skipped`,
-      null,
-      { updated, alreadyOverdue, skipped },
-      req
+    const result = await Task.updateMany(
+      { dueDateTime: { $lt: now }, overallStatus: { $in: ['pending', 'in-progress', 'reopen', 'onhold'] }, isActive: true },
+      { $set: { overallStatus: 'overdue', markedOverdueAt: now } }
     );
-
-    res.json({
-      success: true,
-      message: `✅ Updated ${updated} tasks as overdue`,
-      results: { updated, alreadyOverdue, skipped, total: overdueTasks.length },
-      timestamp: new Date()
-    });
-
-  } catch (error) {
-    console.error('❌ Error updating all overdue tasks:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to update overdue tasks' 
-    });
+    res.json({ success: true, message: `Updated overdue tasks`, count: result.modifiedCount });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
-// ✅ GET OVERDUE SUMMARY - WITHOUT RESTRICTIONS
 exports.getOverdueSummary = async (req, res) => {
   try {
     const userId = req.params.userId || req.user._id;
-    const { period = '30days' } = req.query;
+    const groups = await Group.find({ members: userId, isActive: true }).select('_id').lean();
+    const groupIds = groups.map(g => g._id);
 
-    // Get current user
-    const currentUser = await User.findById(req.user.id).lean();
-    if (!currentUser) {
-      return res.status(401).json({ 
-        success: false,
-        error: 'User not found' 
-      });
-    }
-
-    // If requesting other user's summary
-    if (userId !== req.user._id.toString()) {
-      const targetUser = await User.findById(userId).lean();
-      if (!targetUser) {
-        return res.status(404).json({ 
-          success: false,
-          error: 'User not found' 
-        });
-      }
-      
-      // 🔴 REMOVED: No access restrictions
-    }
-
-    // Calculate date range
-    const now = new Date();
-    let startDate = new Date();
-    
-    switch (period) {
-      case '7days':
-        startDate.setDate(now.getDate() - 7);
-        break;
-      case '30days':
-        startDate.setDate(now.getDate() - 30);
-        break;
-      case '90days':
-        startDate.setDate(now.getDate() - 90);
-        break;
-      default:
-        startDate.setDate(now.getDate() - 30);
-    }
-
-    // Get user's groups
-    const userGroups = await Group.find({ 
-      members: userId,
-      isActive: true 
-    }).select('_id').lean();
-    const groupIds = userGroups.map(group => group._id);
-
-    const filter = {
-      $or: [
-        { assignedUsers: userId },
-        { assignedGroups: { $in: groupIds } },
-        { createdBy: userId }
-      ],
+    const tasks = await Task.find({
       isActive: true,
-      dueDateTime: { 
-        $gte: startDate,
-        $lt: now 
-      },
-      $or: [
-        { overallStatus: 'overdue' },
-        { 
-          dueDateTime: { $lt: now },
-          overallStatus: { $in: ['pending', 'in-progress', 'reopen', 'onhold'] }
-        }
-      ]
-    };
-
-    const tasks = await Task.find(filter)
-      .populate('assignedUsers', 'name email')
-      .populate('createdBy', 'name email')
-      .sort({ dueDateTime: 1 })
-      .lean();
-
-    // Categorize tasks
-    const summary = {
-      total: tasks.length,
-      alreadyOverdue: 0,
-      potentialOverdue: 0,
-      byPriority: {
-        high: 0,
-        medium: 0,
-        low: 0
-      },
-      byDuration: {
-        lessThan1Day: 0,
-        '1-3Days': 0,
-        '4-7Days': 0,
-        moreThan7Days: 0
-      },
-      tasks: []
-    };
-
-    tasks.forEach(task => {
-      const isAlreadyOverdue = task.overallStatus === 'overdue';
-      
-      if (isAlreadyOverdue) {
-        summary.alreadyOverdue++;
-      } else {
-        summary.potentialOverdue++;
-      }
-
-      // Count by priority
-      if (task.priority && summary.byPriority[task.priority] !== undefined) {
-        summary.byPriority[task.priority]++;
-      }
-
-      // Calculate overdue duration
-      if (task.dueDateTime) {
-        const dueDate = new Date(task.dueDateTime);
-        const diffDays = Math.floor((now - dueDate) / (1000 * 60 * 60 * 24));
-        
-        if (diffDays < 1) summary.byDuration.lessThan1Day++;
-        else if (diffDays <= 3) summary.byDuration['1-3Days']++;
-        else if (diffDays <= 7) summary.byDuration['4-7Days']++;
-        else summary.byDuration.moreThan7Days++;
-      }
-
-      // Add task to summary
-      summary.tasks.push({
-        _id: task._id,
-        title: task.title,
-        dueDateTime: task.dueDateTime,
-        priority: task.priority,
-        overallStatus: task.overallStatus,
-        isOverdue: isAlreadyOverdue,
-        overdueDays: task.dueDateTime ? 
-          Math.floor((now - new Date(task.dueDateTime)) / (1000 * 60 * 60 * 24)) : null
-      });
-    });
-
-    // Calculate percentages
-    summary.overdueRate = summary.total > 0 ? 
-      Math.round((summary.alreadyOverdue / summary.total) * 100) : 0;
-    
-    summary.potentialOverdueRate = summary.total > 0 ? 
-      Math.round((summary.potentialOverdue / summary.total) * 100) : 0;
+      dueDateTime: { $lt: new Date() },
+      overallStatus: 'overdue',
+      $or: [{ assignedUsers: userId }, { assignedGroups: { $in: groupIds } }, { createdBy: userId }]
+    }).lean();
 
     res.json({
       success: true,
       userId,
-      period,
-      dateRange: {
-        start: startDate,
-        end: now
-      },
-      summary
+      summary: {
+        total: tasks.length,
+        alreadyOverdue: tasks.length,
+        potentialOverdue: 0,
+        byPriority: {
+          high: tasks.filter(t => t.priority === 'high').length,
+          medium: tasks.filter(t => t.priority === 'medium').length,
+          low: tasks.filter(t => t.priority === 'low').length
+        }
+      }
     });
-
-  } catch (error) {
-    console.error('❌ Error fetching overdue summary:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to fetch overdue summary' 
-    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
-// ✅ QUICK STATUS UPDATE
 exports.quickStatusUpdate = async (req, res) => {
   req.body.remarks = 'Quick status update';
   return exports.updateStatus(req, res);
 };
 
-// ✅ ALIAS FOR TASK STATISTICS
 exports.getTaskStatistics = exports.getTaskStatusCounts;
 
-// ✅ SNOOZE TASK
 exports.snoozeTask = async (req, res) => {
   try {
     const { taskId } = req.params;
     const { snoozeUntil } = req.body;
 
-    // Get current user
-    const currentUser = await User.findById(req.user.id).lean();
-    if (!currentUser) {
-      return res.status(401).json({ 
-        success: false,
-        error: 'User not found' 
-      });
-    }
-
     const task = await Task.findById(taskId);
-    if (!task) {
-      return res.status(404).json({ success: false, error: 'Task not found' });
-    }
-
-    // Authorization
-    const allowed =
-      task.assignedUsers.some(u => u.toString() === req.user._id.toString()) ||
-      task.createdBy.toString() === req.user._id.toString();
-
-    if (!allowed) {
-      return res.status(403).json({ success: false, error: 'Not authorized' });
-    }
+    if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
 
     task.snoozedUntil = new Date(snoozeUntil);
     task.isSnoozed = true;
-
     await task.save();
 
-    await createActivityLog(
-      currentUser,
-      'task_snoozed',
-      task._id,
-      `Task snoozed until ${moment(snoozeUntil).format('DD MMM YYYY')}`,
-      null,
-      { snoozedUntil },
-      req
-    );
-
-    res.json({
-      success: true,
-      message: 'Task snoozed successfully',
-      snoozedUntil: task.snoozedUntil
-    });
-
+    res.json({ success: true, message: 'Task snoozed successfully', snoozedUntil: task.snoozedUntil });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, error: 'Failed to snooze task' });
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 
 module.exports = exports;
-console.log("✅ taskController.js loaded successfully");
+console.log('✅ taskController.js loaded successfully');
