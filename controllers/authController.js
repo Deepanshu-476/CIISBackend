@@ -237,7 +237,7 @@ exports.companyLogin = async (req, res) => {
     // ✅ Generate OTP for login verification
     const otp = generateOTP();
     const tempToken = jwt.sign(
-      { 
+      {              
         email: user.email,
         userId: user._id,
         purpose: 'login-verification',
