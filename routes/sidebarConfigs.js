@@ -3,6 +3,8 @@ const express = require('express');
 const router = express.Router();
 const SidebarConfig = require('../models/SidebarConfig');
 const Company = require('../models/Company');
+const Department = require('../models/Department');
+const Branch = require('../models/Branch');
 const mongoose = require('mongoose');
 
 const getRouteKey = item => {
@@ -27,15 +29,27 @@ const filterMenuItemsByCompanyAccess = async (companyId, menuItems) => {
 // ✅ GET all sidebar configs
 router.get('/', async (req, res) => {
   try {
-    const { companyId, departmentId, role } = req.query;
+    const { companyId, branchId, departmentId, role } = req.query;
+    
+    if (companyId && !mongoose.Types.ObjectId.isValid(companyId)) {
+      return res.json({ success: true, count: 0, data: [] });
+    }
+    if (branchId && !mongoose.Types.ObjectId.isValid(branchId)) {
+      return res.json({ success: true, count: 0, data: [] });
+    }
+    if (departmentId && !mongoose.Types.ObjectId.isValid(departmentId)) {
+      return res.json({ success: true, count: 0, data: [] });
+    }
     
     let query = {};
     if (companyId) query.companyId = companyId;
+    if (branchId) query.branchId = branchId;
     if (departmentId) query.departmentId = departmentId;
     if (role) query.role = role;
     
     const configs = await SidebarConfig.find(query)
       .populate('companyId', 'companyName companyCode')
+      .populate('branchId', 'name branchCode')
       .populate('departmentId', 'name')
       .sort({ createdAt: -1 });
     
@@ -57,7 +71,7 @@ router.get('/', async (req, res) => {
 // ✅ GET config for specific combination
 router.get('/config', async (req, res) => {
   try {
-    const { companyId, departmentId, role } = req.query;
+    const { companyId, branchId, departmentId, role } = req.query;
     
     if (!companyId || !departmentId || !role) {
       return res.status(400).json({
@@ -65,13 +79,23 @@ router.get('/config', async (req, res) => {
         message: 'Company, department and role are required'
       });
     }
+
+    if (!mongoose.Types.ObjectId.isValid(companyId) || 
+        !mongoose.Types.ObjectId.isValid(departmentId) || 
+        (branchId && !mongoose.Types.ObjectId.isValid(branchId))) {
+      return res.json({
+        success: true,
+        message: 'No configuration found',
+        data: null
+      });
+    }
     
-    const config = await SidebarConfig.findOne({
-      companyId,
-      departmentId,
-      role
-    })
+    const query = { companyId, departmentId, role };
+    if (branchId) query.branchId = branchId;
+    
+    const config = await SidebarConfig.findOne(query)
     .populate('companyId', 'companyName')
+    .populate('branchId', 'name branchCode')
     .populate('departmentId', 'name');
     
     if (!config) {
@@ -100,9 +124,9 @@ router.get('/config', async (req, res) => {
 // ✅ CREATE new sidebar config
 router.post('/', async (req, res) => {
   try {
-    const { companyId, departmentId, role, menuItems } = req.body;
+    const { companyId, branchId, departmentId, role, menuItems } = req.body;
     
-    console.log('Creating config:', { companyId, departmentId, role, menuItemsCount: menuItems?.length });
+    console.log('Creating config:', { companyId, branchId, departmentId, role, menuItemsCount: menuItems?.length });
     
     // Validate required fields
     if (!companyId || !departmentId || !role || !menuItems) {
@@ -137,11 +161,10 @@ router.post('/', async (req, res) => {
     }
 
     // Check if config already exists
-    const existingConfig = await SidebarConfig.findOne({
-      companyId,
-      departmentId,
-      role
-    });
+    const query = { companyId, departmentId, role };
+    if (branchId) query.branchId = branchId;
+
+    const existingConfig = await SidebarConfig.findOne(query);
     
     if (existingConfig) {
       return res.status(409).json({ 
@@ -154,10 +177,10 @@ router.post('/', async (req, res) => {
     // Create new config
     const newConfig = new SidebarConfig({
       companyId,
+      branchId: branchId || null,
       departmentId,
       role,
       menuItems: allowedMenuItems,
-      // createdBy और updatedBy को null रहने दें
     });
     
     const savedConfig = await newConfig.save();
@@ -291,7 +314,7 @@ router.delete('/:id', async (req, res) => {
 // ✅ Get user's sidebar config
 router.get('/user-config', async (req, res) => {
   try {
-    const { companyId, departmentId, role } = req.query;
+    const { companyId, branchId, departmentId, role } = req.query;
     
     if (!companyId || !departmentId || !role) {
       return res.status(400).json({
@@ -299,12 +322,21 @@ router.get('/user-config', async (req, res) => {
         message: 'Company, department and role are required'
       });
     }
+
+    if (!mongoose.Types.ObjectId.isValid(companyId) || 
+        !mongoose.Types.ObjectId.isValid(departmentId) || 
+        (branchId && !mongoose.Types.ObjectId.isValid(branchId))) {
+      return res.json({
+        success: true,
+        message: 'No custom configuration found',
+        data: null
+      });
+    }
     
-    const config = await SidebarConfig.findOne({
-      companyId,
-      departmentId,
-      role
-    });
+    const query = { companyId, departmentId, role };
+    if (branchId) query.branchId = branchId;
+    
+    const config = await SidebarConfig.findOne(query);
     
     if (!config) {
       return res.json({

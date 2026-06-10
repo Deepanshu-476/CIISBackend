@@ -1,5 +1,6 @@
 const Company = require("../models/Company");
 const User = require("../models/User");
+const Branch = require("../models/Branch");
 const crypto = require("crypto");
 const mongoose = require("mongoose");
 const multer = require('multer');
@@ -382,10 +383,27 @@ exports.createCompany = async (req, res) => {
       createdCompany = company[0];
       companyCreated = true;
 
-      // ✅ 4. CREATE OWNER USER
+      // ✅ Autocreate Default Branch for this new company inside transaction
+      const defaultBranchData = {
+        name: "Head Office",
+        branchCode: `${companyCode}-HQ`,
+        company: createdCompany._id,
+        companyCode: companyCode,
+        address: companyAddress.trim(),
+        phone: trimmedPhone,
+        isDefault: true,
+        isActive: true
+      };
+
+      const defaultBranch = await Branch.create([defaultBranchData], { session });
+      const createdBranch = defaultBranch[0];
+
+      // ✅ 4. CREATE OWNER USER linked to Default Branch
       const ownerUser = await User.create([{
         company: createdCompany._id,
         companyCode: companyCode,
+        branch: createdBranch._id,
+        branchCode: createdBranch.branchCode,
         name: ownerName.trim(),
         email: lowerOwnerEmail,
         password: ownerPassword,

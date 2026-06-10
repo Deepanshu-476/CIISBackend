@@ -21,6 +21,16 @@ const departmentSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
+  branch: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Branch",
+    index: true
+  },
+  branchCode: {
+    type: String,
+    trim: true,
+    index: true
+  },
   isActive: {
     type: Boolean,
     default: true
@@ -28,6 +38,15 @@ const departmentSchema = new mongoose.Schema({
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User"
+  },
+  supportHead: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    index: true
+  },
+  supportHeadName: {
+    type: String,
+    trim: true
   }
 }, {
   timestamps: true

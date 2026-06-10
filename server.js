@@ -503,6 +503,14 @@ setTimeout(async () => {
   console.log('🚀 Server started, running initial checks...');
   await runDbJobWithRetry('Initial overdue tasks check', checkAndMarkOverdueTasks);
   await runDbJobWithRetry('Initial past absent records check', markPastAbsentRecords);
+  
+  // Run multi-branch database backfill migration script
+  try {
+    const backfillBranchSupport = require("./scripts/backfillBranchSupport");
+    await runDbJobWithRetry('Multi-branch database backfill migration', backfillBranchSupport);
+  } catch (migError) {
+    console.error("❌ Failed to trigger multi-branch data migration:", migError.message);
+  }
 }, 10000);
 
 // ==================== CORS CONFIGURATION ====================
@@ -587,6 +595,14 @@ app.use("/api/chat", require("./HR-CDS/chat/routes/chatRoutes"));
 // यह सुनिश्चित करता है कि /api/tasks/... endpoints काम करेंगे
 app.use("/api/tasks", require("./HR-CDS/routes/clientTask.js"));
 
+// split task routes
+app.use("/api/tasks/self", require("./HR-CDS/routes/selfTaskRoute.js"));
+app.use("/api/tasks/assigned", require("./HR-CDS/routes/assignedTaskRoute.js"));
+app.use("/api/tasks/client-tasks", require("./HR-CDS/routes/clientTaskRoute.js"));
+app.use("/api/tasks/project", require("./HR-CDS/routes/projectTaskRoute.js"));
+app.use("/api/tasks/all", require("./HR-CDS/routes/allTaskRoute.js"));
+
+
 
 app.use('/api/dashboard', dashboardRoutes);
 
@@ -600,6 +616,8 @@ app.use('/api/cmeeting', require("./HR-CDS/routes/clientMeetingRoutes.js"));
 app.use('/api/sidebar', require("./routes/sidebarConfigs.js"));
 app.use('/api/company-assets', require('./routes/companyAssetRoutes'));
 app.use("/api/holidays", require("./HR-CDS/routes/Holiday.js"));
+app.use('/api/branches', require('./routes/branchRoutes.js'));
+app.use('/api/support', require('./routes/supportRoutes.js'));
 
 // ==================== API ENDPOINTS ====================
 
