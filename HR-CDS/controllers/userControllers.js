@@ -64,8 +64,8 @@ const validateUserData = (data, isUpdate = false) => {
     errors.push("Invalid email format");
   }
 
-  // Job role validation - include super_admin
-  if (data.jobRole && !['super_admin', 'admin', 'user', 'hr', 'manager'].includes(data.jobRole)) {
+  // Job role validation only checks type; free-form job titles are allowed
+  if (data.jobRole && typeof data.jobRole !== 'string') {
     errors.push("Invalid job role");
   }
 
@@ -535,11 +535,6 @@ exports.updateUser = async (req, res) => {
       if (!departmentExists) {
         return errorResponse(res, 404, "Department not found");
       }
-    }
-
-    // Validate job role if being updated
-    if (updateData.jobRole && !['super_admin', 'admin', 'user', 'hr', 'manager'].includes(updateData.jobRole)) {
-      return errorResponse(res, 400, "Invalid job role");
     }
 
     // Handle password update separately

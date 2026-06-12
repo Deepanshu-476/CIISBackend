@@ -11,8 +11,7 @@ const serviceSchema = new mongoose.Schema({
     type: String,
     required: [true, 'Service name is required'],
     trim: true,
-    maxlength: [100, 'Service name cannot exceed 100 characters'],
-    lowercase: true
+    maxlength: [100, 'Service name cannot exceed 100 characters']
   }
 }, {
   timestamps: true
@@ -27,7 +26,7 @@ serviceSchema.pre('save', function(next) {
     this.companyCode = this.companyCode.trim().toUpperCase();
   }
   if (this.servicename) {
-    this.servicename = this.servicename.trim().toLowerCase();
+    this.servicename = this.servicename.trim();
   }
   next();
 });

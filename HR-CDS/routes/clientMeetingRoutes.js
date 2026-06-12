@@ -10,7 +10,11 @@ const {
   getMeetingsByStatus,
   updateMeetingStatus,
   getMeetingStats,
-  searchMeetings
+  searchMeetings,
+  markAsViewed,
+  markAttendance,
+  getViewStatus,
+  getMeetingHistory
 } = require('../controllers/clientMeetingController');
 
 // Basic CRUD routes
@@ -18,9 +22,13 @@ router.get('/', getMeetings);
 router.get('/stats', getMeetingStats);
 router.get('/today', getTodayMeetings);
 router.get('/search', searchMeetings);
+router.get('/history', getMeetingHistory);
 router.get('/status/:status', getMeetingsByStatus);
-router.get('/:id', getMeeting);
+router.get('/view-status/:meetingId', getViewStatus);
 router.post('/create', createMeeting);
+router.post('/mark-viewed', markAsViewed);
+router.post('/attendance', markAttendance);
+router.get('/:id', getMeeting);
 router.put('/:id', updateMeeting);
 router.patch('/:id/status', updateMeetingStatus);
 router.delete('/:id', deleteMeeting);
