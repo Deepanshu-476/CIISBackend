@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 
 const serviceController = require('../controllers/services');
+const serviceEnquiryController = require('../controllers/serviceEnquiryController');
 const {
   getAllClients,
   getClientById,
@@ -46,6 +47,10 @@ router.get('/services', serviceController.getAllServices);
 router.post('/services', serviceController.addService);
 router.put('/services/:id', serviceController.updateService);
 router.delete('/services/:id', serviceController.deleteService);
+
+router.get('/service-enquiries', serviceEnquiryController.getServiceEnquiries);
+router.post('/service-enquiries', serviceEnquiryController.createServiceEnquiry);
+router.patch('/service-enquiries/:id/status', serviceEnquiryController.updateServiceEnquiryStatus);
 
 // ✅ Client Stats Routes
 router.get('/stats', getClientStats);
