@@ -142,16 +142,42 @@ exports.createGroupConversation = async (req, res) => {
 exports.getConversations = async (req, res) => {
   try {
     const userId = getUserId(req);
+
+    // Fetch all active groups where the user is a member
+    const activeUserGroups = await Group.find({
+      members: userId,
+      isActive: true,
+    }).select("_id");
+    const activeGroupIds = new Set(activeUserGroups.map(g => g._id.toString()));
+
     const conversations = await Conversation.find({
       companyId: req.user.company,
       members: userId,
     })
-      .populate("members", "name email profileImage companyRole")
+      .populate("members", "name email profileImage companyRole isActive")
       .populate("admins", "name email profileImage")
       .sort({updatedAt: -1});
 
+    // Filter conversations based on:
+    // 1. If group chat, the user must still be a member of that active group
+    // 2. If direct chat, the other participant must be active
+    const activeConversations = conversations.filter(conversation => {
+      if (conversation.isGroup) {
+        if (!conversation.groupId) return false;
+        return activeGroupIds.has(conversation.groupId.toString());
+      } else {
+        const otherMember = conversation.members.find(
+          m => m._id.toString() !== userId.toString()
+        );
+        if (otherMember && otherMember.isActive === false) {
+          return false;
+        }
+        return true;
+      }
+    });
+
     const conversationsWithMeta = await Promise.all(
-      conversations.map(conversation => withConversationMeta(conversation, userId, req.user.company))
+      activeConversations.map(conversation => withConversationMeta(conversation, userId, req.user.company))
     );
 
     res.status(200).json({success: true, conversations: conversationsWithMeta});
@@ -183,10 +209,7 @@ exports.getConversation = async (req, res) => {
 exports.getCompanyGroups = async (req, res) => {
   try {
     const groups = await Group.find({
-      $or: [
-        {members: getUserId(req)},
-        {createdBy: getUserId(req)},
-      ],
+      members: getUserId(req),
       isActive: true,
     })
       .select("name description members createdBy")
@@ -346,6 +369,7 @@ exports.getCompanyUsers = async (req, res) => {
       company: req.user.company,
       _id: {$ne: req.user.id},
       isActive: true,
+      companyRole: { $not: /^client$/i },
     }).select("name email profileImage companyRole");
 
     res.status(200).json({success: true, users});
