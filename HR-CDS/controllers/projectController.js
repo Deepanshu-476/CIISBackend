@@ -1030,14 +1030,6 @@ exports.updateTaskStatus = async (req, res) => {
       });
     }
 
-    // Check project access
-    if (!hasProjectAccess(project, req.user.id, req.user.role)) {
-      return res.status(403).json({ 
-        success: false, 
-        message: "Access denied to update task status" 
-      });
-    }
-
     const task = project.tasks.id(taskId);
     if (!task) {
       return res.status(404).json({ 
@@ -1046,10 +1038,25 @@ exports.updateTaskStatus = async (req, res) => {
       });
     }
 
-    if (!isTaskAssignedToUser(task, req.user.id)) {
+    const isAssignedUser = isTaskAssignedToUser(task, req.user.id);
+    const hasAccessToProject = hasProjectAccess(project, req.user.id, req.user.role);
+    const canManageTaskStatus =
+      isAssignedUser ||
+      hasAccessToProject ||
+      isProjectAdmin(req.user) ||
+      idsEqual(project.createdBy, req.user.id);
+
+    if (!hasAccessToProject && !isAssignedUser) {
       return res.status(403).json({
         success: false,
-        message: "Only the assigned user can update this task status"
+        message: "Access denied to update task status"
+      });
+    }
+
+    if (!canManageTaskStatus) {
+      return res.status(403).json({
+        success: false,
+        message: "Only project users can update this task status"
       });
     }
 
