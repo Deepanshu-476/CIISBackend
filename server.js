@@ -96,8 +96,13 @@ const io = socketIo(server, {
         "https://cds.ciisnetwork.in",
         "https://backendcds.ciisnetwork.in",
         "http://localhost:5173",
-        "http://localhost:5174", 
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
         "http://localhost:5175",
+        "http://127.0.0.1:5175",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
         "http://147.93.106.84",
         "http://localhost:8080"
       ];
