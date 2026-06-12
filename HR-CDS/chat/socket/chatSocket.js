@@ -27,6 +27,21 @@ const emitOnlineUsers = (io, companyId) => {
     );
 };
 
+const getCompanyOnlineUsers = (io, companyId) => {
+    const companyRoom = io.sockets.adapter.rooms.get(`company:${companyId}`);
+    if (!companyRoom) return [];
+
+    const userIds = new Set();
+    companyRoom.forEach(socketId => {
+        const connectedSocket = io.sockets.sockets.get(socketId);
+        if (connectedSocket?.userId) {
+            userIds.add(connectedSocket.userId.toString());
+        }
+    });
+
+    return Array.from(userIds);
+};
+
 const getUnreadCount = (conversationId, userId, companyId) => Message.countDocuments({
     conversationId,
     companyId,
@@ -76,6 +91,15 @@ const chatSocket = (io, socket) => {
 
     // SEND ONLINE USERS
     emitOnlineUsers(io, socket.companyId);
+
+    socket.on("chat:get-online-users", (callback) => {
+        const users = getCompanyOnlineUsers(io, socket.companyId);
+        if (typeof callback === "function") {
+            callback(users);
+        } else {
+            socket.emit("chat:online-users", users);
+        }
+    });
 
 
 

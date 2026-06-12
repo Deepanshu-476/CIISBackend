@@ -26,6 +26,19 @@ const emitCallUnavailable = (socket, payload = {}, reason = "User is not availab
 };
 
 const callSocket = (io, socket) => {
+    socket.on("call:check-availability", (data = {}, callback) => {
+        const toUserId = data.toUserId?.toString();
+        const available = Boolean(toUserId && toUserId !== socket.userId && isUserOnline(io, toUserId));
+
+        if (typeof callback === "function") {
+            callback({
+                success: available,
+                available,
+                reason: available ? "" : "User is offline",
+            });
+        }
+    });
+
     socket.on("call:invite", (data = {}) => {
         const toUserId = data.toUserId?.toString();
         const callType = data.callType === "video" ? "video" : "audio";
