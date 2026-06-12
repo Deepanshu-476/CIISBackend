@@ -1,6 +1,17 @@
 const mongoose = require('mongoose');
 
 const clientMeetingSchema = new mongoose.Schema({
+  title: {
+    type: String,
+    required: [true, 'Meeting title is required'],
+    trim: true
+  },
+  clientId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Client',
+    required: [true, 'Client is required'],
+    index: true
+  },
   clientName: {
     type: String,
     required: [true, 'Client name is required'],
@@ -8,7 +19,6 @@ const clientMeetingSchema = new mongoose.Schema({
   },
   phone: {
     type: String,
-    required: [true, 'Phone number is required'],
     trim: true
   },
   email: {
@@ -20,9 +30,16 @@ const clientMeetingSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  companyCode: {
+    type: String,
+    required: [true, 'Company code is required'],
+    uppercase: true,
+    trim: true,
+    index: true
+  },
   meetingType: {
     type: String,
-    enum: ['Online', 'Demo', 'Discussion', 'Sales', 'Review'],
+    enum: ['Online', 'Demo', 'Discussion', 'Sales', 'Review', 'Support', 'Onboarding'],
     default: 'Online'
   },
   priority: {
@@ -32,8 +49,12 @@ const clientMeetingSchema = new mongoose.Schema({
   },
   location: {
     type: String,
-    required: [true, 'Location/Platform is required'],
     trim: true
+  },
+  link: {
+    type: String,
+    trim: true,
+    default: ''
   },
   meetingDate: {
     type: Date,
@@ -51,9 +72,22 @@ const clientMeetingSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  attendees: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Client'
+  }],
+  attendeeUsers: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }],
   followUpRequired: {
     type: String,
     enum: ['Yes', 'No'],
+    default: 'No'
+  },
+  recurring: {
+    type: String,
+    enum: ['No', 'Daily', 'Weekly', 'Monthly'],
     default: 'No'
   },
   status: {
@@ -61,13 +95,10 @@ const clientMeetingSchema = new mongoose.Schema({
     enum: ['Scheduled', 'Completed', 'Cancelled', 'Rescheduled'],
     default: 'Scheduled'
   },
-  createdAt: {
-    type: Date,
-    default: Date.now
-  },
-  updatedAt: {
-    type: Date,
-    default: Date.now
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
   }
 }, {
   timestamps: true
@@ -78,6 +109,8 @@ clientMeetingSchema.index({ clientName: 1 });
 clientMeetingSchema.index({ meetingDate: 1 });
 clientMeetingSchema.index({ priority: 1 });
 clientMeetingSchema.index({ status: 1 });
+clientMeetingSchema.index({ companyCode: 1, meetingDate: 1 });
+clientMeetingSchema.index({ clientId: 1, meetingDate: -1 });
 
 const ClientMeeting = mongoose.model('ClientMeeting', clientMeetingSchema);
 
