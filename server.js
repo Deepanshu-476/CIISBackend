@@ -95,6 +95,7 @@ const io = socketIo(server, {
       const allowedOrigins = [
         "https://cds.ciisnetwork.in",
         "https://backendcds.ciisnetwork.in",
+        "app://ciis",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://localhost:5174",
@@ -521,7 +522,8 @@ setTimeout(async () => {
 // ==================== CORS CONFIGURATION ====================
 const allowedOrigins = [
   "https://cds.ciisnetwork.in",
-  "https://backendcds.ciisnetwork.in"
+  "https://backendcds.ciisnetwork.in",
+  "app://ciis"
 ];
 
 const isAllowedOrigin = (origin) => {
