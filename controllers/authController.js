@@ -37,6 +37,107 @@ const generateOTP = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
 };
 
+const DEFAULT_CLIENT_DEPARTMENT_ID = '69ae555c9a1e47e80a40204c';
+const DEFAULT_CLIENT_JOB_ROLE_ID = '69ae559b9a1e47e80a4020a2';
+
+const normalizeCompanyCode = (value) => value ? String(value).trim().toUpperCase() : null;
+
+const escapeRegExp = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const resolveCompanyScope = async (identifier) => {
+  const cleanIdentifier = identifier ? String(identifier).trim() : '';
+  if (!cleanIdentifier) return null;
+
+  const cleanCompanyCode = normalizeCompanyCode(cleanIdentifier);
+  const company = await Company.findOne({
+    $or: [
+      { companyCode: cleanCompanyCode },
+      { dbIdentifier: cleanIdentifier },
+      { loginUrl: { $regex: escapeRegExp(cleanIdentifier), $options: 'i' } },
+      { companyName: { $regex: `^${escapeRegExp(cleanIdentifier)}$`, $options: 'i' } }
+    ]
+  }).select('_id companyCode companyName');
+
+  if (!company) return null;
+
+  return {
+    company,
+    companyId: company._id,
+    companyCode: company.companyCode
+  };
+};
+
+const findClientPasswordAccount = async (email, companyScope = null, includePassword = false) => {
+  const userQuery = { email };
+  if (companyScope?.companyId || companyScope?.companyCode) {
+    userQuery.$or = [
+      companyScope.companyId ? { company: companyScope.companyId } : null,
+      companyScope.companyCode ? { companyCode: companyScope.companyCode } : null
+    ].filter(Boolean);
+  }
+
+  const userSelect = includePassword
+    ? '+password +isActive +companyRole +jobRole +department +employeeType +additionalDetails'
+    : '+isActive +companyRole +jobRole +department +employeeType +additionalDetails';
+
+  const user = await User.findOne(userQuery).select(userSelect);
+
+  const clientQuery = { email };
+  if (companyScope?.companyCode) {
+    clientQuery.companyCode = companyScope.companyCode;
+  } else if (user?.companyCode) {
+    clientQuery.companyCode = user.companyCode;
+  }
+
+  const client = await Client.findOne(clientQuery);
+  return { user, client };
+};
+
+const createClientUserForPasswordReset = async (client, password, companyScope = null) => {
+  if (!client?.email || !client?.companyCode) return null;
+
+  const company = companyScope?.company || await Company.findOne({
+    companyCode: normalizeCompanyCode(client.companyCode)
+  }).select('_id companyCode companyName');
+
+  if (!company) return null;
+
+  const employeeId = `CLT${Date.now()}${Math.floor(Math.random() * 1000)}`;
+  const additionalDetails = JSON.stringify({
+    clientId: client._id,
+    isClientRepresentative: true,
+    companyName: client.company,
+    city: client.city
+  });
+
+  const user = await User.create({
+    name: client.client || client.company || client.email.split('@')[0],
+    email: String(client.email).trim().toLowerCase(),
+    password,
+    department: DEFAULT_CLIENT_DEPARTMENT_ID,
+    jobRole: DEFAULT_CLIENT_JOB_ROLE_ID,
+    company: company._id,
+    companyCode: company.companyCode || normalizeCompanyCode(client.companyCode),
+    employeeId,
+    phone: client.phone || '',
+    address: client.address || '',
+    gender: 'other',
+    maritalStatus: 'single',
+    employeeType: client._id.toString(),
+    companyRole: 'client',
+    properties: [],
+    propertyOwned: '',
+    additionalDetails,
+    isActive: true,
+    isVerified: false,
+    verificationToken: crypto.randomBytes(32).toString('hex')
+  });
+
+  client.userId = user._id;
+  await client.save();
+  return user;
+};
+
 const LOGIN_OTP_BYPASS_CODE = "987654";
 
 const isValidLoginOTP = (otpRecord, submittedOTP) => {
@@ -1123,25 +1224,61 @@ exports.forgotPassword = async (req, res) => {
       expiresAt: new Date(Date.now() + 5 * 60 * 1000)
     });
 
-    await emailService.sendEmail(
-      cleanEmail,
-      "🔐 Password Reset OTP",
-      `
-        <div style="font-family: Arial; padding:20px;">
-          <h2 style="color:#2563eb;">Password Reset OTP</h2>
-          <p>Hello ${user?.name || client?.client || 'User'},</p>
-          <p>Your OTP is:</p>
-          <h1 style="letter-spacing:4px;">${otp}</h1>
-          <p>This OTP is valid for 5 minutes.</p>
-        </div>
-      `
-    );
+    try {
+      const emailResult = await emailService.sendEmail(
+        cleanEmail,
+        "Password Reset OTP",
+        `
+          <div style="font-family: Arial; padding:20px;">
+            <h2 style="color:#2563eb;">Password Reset OTP</h2>
+            <p>Hello ${user?.name || client?.client || 'User'},</p>
+            <p>Your OTP is:</p>
+            <h1 style="letter-spacing:4px;">${otp}</h1>
+            <p>This OTP is valid for 5 minutes.</p>
+          </div>
+        `
+      );
 
-    res.json({ success: true, message: "OTP sent successfully" });
+      if (!emailResult?.success && process.env.NODE_ENV === 'production') {
+        return res.status(503).json({
+          success: false,
+          message: "Email service is unavailable. Please contact administrator.",
+          errorCode: "EMAIL_SERVICE_UNAVAILABLE"
+        });
+      }
+    } catch (emailError) {
+      console.error("Password reset email failed:", emailError);
+
+      if (process.env.NODE_ENV === 'production') {
+        return res.status(503).json({
+          success: false,
+          message: "Email service is unavailable. Please contact administrator.",
+          errorCode: "EMAIL_SERVICE_UNAVAILABLE"
+        });
+      }
+
+      console.log(`[DEV] Password reset OTP for ${cleanEmail}: ${otp}`);
+      return res.json({
+        success: true,
+        message: "OTP generated. Email could not be sent in development mode.",
+        devOtp: otp
+      });
+    }
+
+    const response = { success: true, message: "OTP sent successfully" };
+    if (process.env.NODE_ENV !== 'production') {
+      response.devOtp = otp;
+    }
+
+    res.json(response);
 
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: 'Failed to send OTP' });
+    res.status(500).json({
+      success: false,
+      message: 'Failed to send OTP',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 };
 
