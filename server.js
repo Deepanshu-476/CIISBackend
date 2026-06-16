@@ -23,6 +23,27 @@ app.set("trust proxy", 1);
 // ✅ Connect MongoDB
 connectDB();
 
+const allowedOrigins = [
+  "https://cds.ciisnetwork.in",
+  "https://backendcds.ciisnetwork.in",
+  "app://ciis",
+  "capacitor://localhost",
+  "ionic://localhost",
+  "null"
+];
+
+const isAllowedOrigin = (origin) => {
+  if (!origin) return true;
+  if (allowedOrigins.includes(origin)) return true;
+
+  try {
+    const { hostname } = new URL(origin);
+    return hostname === "localhost" || hostname === "127.0.0.1";
+  } catch {
+    return false;
+  }
+};
+
 // ==================== IMPORT MODELS FOR CRON JOBS ====================
 const Task = require("./HR-CDS/models/Task");
 const Attendance = require("./HR-CDS/models/Attendance");
@@ -92,23 +113,7 @@ const getTaskCompanyCode = (task) => {
 const io = socketIo(server, {
   cors: {
     origin: (origin, callback) => {
-      const allowedOrigins = [
-        "https://cds.ciisnetwork.in",
-        "https://backendcds.ciisnetwork.in",
-        "app://ciis",
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5174",
-        "http://localhost:5175",
-        "http://127.0.0.1:5175",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://147.93.106.84",
-        "http://localhost:8080"
-      ];
-      // Allow requests with no origin (like mobile apps, curl, postman)
-      if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      if (isAllowedOrigin(origin)) {
         callback(null, true);
       } else {
         console.log(`❌ Socket CORS blocked: ${origin}`);
@@ -520,24 +525,6 @@ setTimeout(async () => {
 }, 10000);
 
 // ==================== CORS CONFIGURATION ====================
-const allowedOrigins = [
-  "https://cds.ciisnetwork.in",
-  "https://backendcds.ciisnetwork.in",
-  "app://ciis"
-];
-
-const isAllowedOrigin = (origin) => {
-  if (!origin) return true;
-  if (allowedOrigins.includes(origin)) return true;
-
-  try {
-    const { hostname } = new URL(origin);
-    return hostname === "localhost" || hostname === "127.0.0.1";
-  } catch {
-    return false;
-  }
-};
-
 const corsOptions = {
   origin: function (origin, callback) {
     if (isAllowedOrigin(origin)) {
@@ -623,6 +610,7 @@ app.use('/api/cmeeting', require("./HR-CDS/routes/clientMeetingRoutes.js"));
 app.use('/api/sidebar', require("./routes/sidebarConfigs.js"));
 app.use('/api/company-assets', require('./routes/companyAssetRoutes'));
 app.use("/api/holidays", require("./HR-CDS/routes/Holiday.js"));
+app.use("/api/client-documents", require("./HR-CDS/routes/clientDocumentRoutes.js"));
 app.use('/api/branches', require('./routes/branchRoutes.js'));
 app.use('/api/support', require('./routes/supportRoutes.js'));
 
