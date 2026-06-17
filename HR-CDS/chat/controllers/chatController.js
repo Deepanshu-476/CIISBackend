@@ -53,6 +53,25 @@ const emitUnreadCounts = async (conversation, senderId) => {
   }));
 };
 
+const getSocketOnlineUserIds = (companyId) => {
+  const onlineIds = new Set();
+  const companyKey = companyId?.toString();
+
+  if (!global.io?.sockets?.sockets) return onlineIds;
+
+  global.io.sockets.sockets.forEach(socket => {
+    const socketUserId = socket.userId?.toString();
+    const socketCompanyId = socket.companyId?.toString();
+
+    if (!socketUserId) return;
+    if (companyKey && socketCompanyId !== companyKey) return;
+
+    onlineIds.add(socketUserId);
+  });
+
+  return onlineIds;
+};
+
 exports.createConversation = async (req, res) => {
   try {
     const {receiverId} = req.body;
@@ -365,14 +384,20 @@ exports.getMessages = async (req, res) => {
 
 exports.getCompanyUsers = async (req, res) => {
   try {
+    const socketOnlineIds = getSocketOnlineUserIds(req.user.company);
     const users = await User.find({
       company: req.user.company,
       _id: {$ne: req.user.id},
       isActive: true,
       companyRole: { $not: /^client$/i },
-    }).select("name email profileImage companyRole");
+    }).select("name email profileImage companyRole isOnline lastSeen").lean();
 
-    res.status(200).json({success: true, users});
+    const usersWithPresence = users.map(user => ({
+      ...user,
+      isOnline: socketOnlineIds.has(user._id.toString()),
+    }));
+
+    res.status(200).json({success: true, users: usersWithPresence});
   } catch (error) {
     res.status(500).json({success: false, message: error.message});
   }

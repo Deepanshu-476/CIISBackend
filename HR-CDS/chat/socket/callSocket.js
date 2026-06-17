@@ -1,3 +1,5 @@
+const activeCalls = new Map();
+
 const getPublicUser = (user) => ({
     _id: user?._id?.toString(),
     id: user?._id?.toString(),
@@ -17,6 +19,13 @@ const isUserOnline = (io, userId) => {
     return Boolean(room && room.size > 0);
 };
 
+const getParticipantIds = (data = {}) => {
+    const ids = Array.isArray(data.participantIds) ? data.participantIds : [data.toUserId];
+    return [...new Set(ids.map(id => id?.toString()).filter(Boolean))];
+};
+
+const getCallRoom = (callId) => activeCalls.get(callId?.toString());
+
 const emitCallUnavailable = (socket, payload = {}, reason = "User is not available for call") => {
     socket.emit("call:unavailable", {
         callId: payload.callId,
@@ -25,74 +34,179 @@ const emitCallUnavailable = (socket, payload = {}, reason = "User is not availab
     });
 };
 
+const emitToJoinedParticipants = (io, room, eventName, payload, exceptUserId) => {
+    if (!room) return;
+    room.participants.forEach((participant, userId) => {
+        if (userId === exceptUserId || participant.status !== "joined") return;
+        emitToUser(io, userId, eventName, payload);
+    });
+};
+
+const emitToCallParticipants = (io, room, eventName, payload, exceptUserId) => {
+    if (!room) return;
+    room.participants.forEach((participant, userId) => {
+        if (userId === exceptUserId || !["joined", "invited"].includes(participant.status)) return;
+        emitToUser(io, userId, eventName, payload);
+    });
+};
+
+const maybeCloseRoom = (callId) => {
+    const room = getCallRoom(callId);
+    if (!room) return;
+
+    const hasActiveParticipant = Array.from(room.participants.values()).some(
+        participant => participant.status === "joined" || participant.status === "invited"
+    );
+
+    if (!hasActiveParticipant) {
+        activeCalls.delete(callId?.toString());
+    }
+};
+
 const callSocket = (io, socket) => {
     socket.on("call:check-availability", (data = {}, callback) => {
-        const toUserId = data.toUserId?.toString();
-        const available = Boolean(toUserId && toUserId !== socket.userId && isUserOnline(io, toUserId));
+        const participantIds = getParticipantIds(data).filter(userId => userId !== socket.userId);
+        const unavailableIds = participantIds.filter(userId => !isUserOnline(io, userId));
+        const onlineCount = participantIds.length - unavailableIds.length;
+        const available = onlineCount > 0;
 
         if (typeof callback === "function") {
             callback({
                 success: available,
                 available,
-                reason: available ? "" : "User is offline",
+                unavailableIds,
+                reason: available ? "" : "Users are offline",
             });
         }
     });
 
     socket.on("call:invite", (data = {}) => {
-        const toUserId = data.toUserId?.toString();
+        const participantIds = getParticipantIds(data).filter(userId => userId !== socket.userId);
         const callType = data.callType === "video" ? "video" : "audio";
 
-        if (!toUserId || toUserId === socket.userId) {
+        if (participantIds.length === 0) {
             emitCallUnavailable(socket, data, "Invalid call receiver");
             return;
         }
 
-        if (!isUserOnline(io, toUserId)) {
-            emitCallUnavailable(socket, data, "User is offline");
+        const onlineParticipantIds = participantIds.filter(userId => isUserOnline(io, userId));
+        if (onlineParticipantIds.length === 0) {
+            emitCallUnavailable(socket, data, "Users are offline");
             return;
         }
 
-        emitToUser(io, toUserId, "call:incoming", {
-            callId: data.callId,
-            fromUserId: socket.userId,
-            fromUser: getPublicUser(socket.user),
+        const callId = data.callId?.toString();
+        const callerUser = getPublicUser(socket.user);
+        const room = {
+            callId,
             callType,
+            hostUserId: socket.userId,
+            title: data.title || "",
+            participants: new Map(),
+        };
+
+        room.participants.set(socket.userId, {
+            status: "joined",
+            user: callerUser,
+        });
+
+        onlineParticipantIds.forEach(userId => {
+            room.participants.set(userId, {
+                status: "invited",
+                user: null,
+            });
+        });
+
+        activeCalls.set(callId, room);
+
+        onlineParticipantIds.forEach(userId => {
+            emitToUser(io, userId, "call:incoming", {
+                callId,
+                fromUserId: socket.userId,
+                fromUser: callerUser,
+                participantIds: [socket.userId, ...onlineParticipantIds],
+                title: data.title,
+                callType,
+            });
         });
 
         socket.emit("call:ringing", {
-            callId: data.callId,
-            toUserId,
+            callId,
+            toUserIds: onlineParticipantIds,
+            unavailableIds: participantIds.filter(userId => !onlineParticipantIds.includes(userId)),
             callType,
         });
     });
 
     socket.on("call:accept", (data = {}) => {
-        const toUserId = data.toUserId?.toString();
-        if (!isUserOnline(io, toUserId)) {
-            emitCallUnavailable(socket, data, "Caller is no longer online");
+        const callId = data.callId?.toString();
+        const room = getCallRoom(callId);
+
+        if (!room) {
+            emitCallUnavailable(socket, data, "Call is no longer active");
             return;
         }
 
-        emitToUser(io, toUserId, "call:accepted", {
-            callId: data.callId,
-            fromUserId: socket.userId,
-            fromUser: getPublicUser(socket.user),
-            callType: data.callType === "video" ? "video" : "audio",
+        const participantUser = getPublicUser(socket.user);
+        const existingJoinedParticipants = Array.from(room.participants.entries())
+            .filter(([userId, participant]) => userId !== socket.userId && participant.status === "joined")
+            .map(([userId, participant]) => ({
+                userId,
+                user: participant.user,
+            }));
+
+        room.participants.set(socket.userId, {
+            status: "joined",
+            user: participantUser,
         });
+
+        emitToUser(io, socket.userId, "call:joined", {
+            callId,
+            callType: room.callType,
+            participants: existingJoinedParticipants,
+            title: room.title,
+        });
+
+        emitToJoinedParticipants(io, room, "call:participant-joined", {
+            callId,
+            fromUserId: socket.userId,
+            fromUser: participantUser,
+            callType: room.callType,
+        }, socket.userId);
     });
 
     socket.on("call:reject", (data = {}) => {
-        emitToUser(io, data.toUserId?.toString(), "call:rejected", {
-            callId: data.callId,
+        const callId = data.callId?.toString();
+        const room = getCallRoom(callId);
+
+        if (room?.participants.has(socket.userId)) {
+            room.participants.set(socket.userId, {
+                ...room.participants.get(socket.userId),
+                status: "rejected",
+                user: getPublicUser(socket.user),
+            });
+        }
+
+        emitToJoinedParticipants(io, room, "call:rejected", {
+            callId,
             fromUserId: socket.userId,
-        });
+        }, socket.userId);
+
+        if (data.toUserId) {
+            emitToUser(io, data.toUserId?.toString(), "call:rejected", {
+                callId,
+                fromUserId: socket.userId,
+            });
+        }
+
+        maybeCloseRoom(callId);
     });
 
     socket.on("call:offer", (data = {}) => {
         emitToUser(io, data.toUserId?.toString(), "call:offer", {
             callId: data.callId,
             fromUserId: socket.userId,
+            fromUser: getPublicUser(socket.user),
             offer: data.offer,
         });
     });
@@ -101,6 +215,7 @@ const callSocket = (io, socket) => {
         emitToUser(io, data.toUserId?.toString(), "call:answer", {
             callId: data.callId,
             fromUserId: socket.userId,
+            fromUser: getPublicUser(socket.user),
             answer: data.answer,
         });
     });
@@ -114,9 +229,55 @@ const callSocket = (io, socket) => {
     });
 
     socket.on("call:end", (data = {}) => {
+        const callId = data.callId?.toString();
+        const room = getCallRoom(callId);
+
+        if (room?.participants.has(socket.userId)) {
+            room.participants.set(socket.userId, {
+                ...room.participants.get(socket.userId),
+                status: "ended",
+                user: getPublicUser(socket.user),
+            });
+        }
+
+        if (room) {
+            if (room.hostUserId === socket.userId) {
+                emitToCallParticipants(io, room, "call:ended", {
+                    callId,
+                    fromUserId: socket.userId,
+                }, socket.userId);
+                activeCalls.delete(callId);
+                return;
+            }
+            emitToJoinedParticipants(io, room, "call:ended", {
+                callId,
+                fromUserId: socket.userId,
+            }, socket.userId);
+            maybeCloseRoom(callId);
+            return;
+        }
+
         emitToUser(io, data.toUserId?.toString(), "call:ended", {
-            callId: data.callId,
+            callId,
             fromUserId: socket.userId,
+        });
+    });
+
+    socket.on("disconnect", () => {
+        activeCalls.forEach((room, callId) => {
+            if (!room.participants.has(socket.userId)) return;
+
+            room.participants.set(socket.userId, {
+                ...room.participants.get(socket.userId),
+                status: "ended",
+                user: getPublicUser(socket.user),
+            });
+
+            emitToJoinedParticipants(io, room, "call:ended", {
+                callId,
+                fromUserId: socket.userId,
+            }, socket.userId);
+            maybeCloseRoom(callId);
         });
     });
 };
