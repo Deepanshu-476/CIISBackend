@@ -11,12 +11,32 @@ const emitToUser = (io, userId, eventName, payload) => {
     io.to(`user:${userId}`).emit(eventName, payload);
 };
 
+const isUserOnline = (io, userId) => {
+    if (!userId) return false;
+    const room = io.sockets.adapter.rooms.get(`user:${userId}`);
+    return Boolean(room && room.size > 0);
+};
+
+const emitCallUnavailable = (socket, payload = {}, reason = "User is not available for call") => {
+    socket.emit("call:unavailable", {
+        callId: payload.callId,
+        toUserId: payload.toUserId,
+        reason,
+    });
+};
+
 const callSocket = (io, socket) => {
     socket.on("call:invite", (data = {}) => {
         const toUserId = data.toUserId?.toString();
         const callType = data.callType === "video" ? "video" : "audio";
 
         if (!toUserId || toUserId === socket.userId) {
+            emitCallUnavailable(socket, data, "Invalid call receiver");
+            return;
+        }
+
+        if (!isUserOnline(io, toUserId)) {
+            emitCallUnavailable(socket, data, "User is offline");
             return;
         }
 
@@ -26,10 +46,22 @@ const callSocket = (io, socket) => {
             fromUser: getPublicUser(socket.user),
             callType,
         });
+
+        socket.emit("call:ringing", {
+            callId: data.callId,
+            toUserId,
+            callType,
+        });
     });
 
     socket.on("call:accept", (data = {}) => {
-        emitToUser(io, data.toUserId?.toString(), "call:accepted", {
+        const toUserId = data.toUserId?.toString();
+        if (!isUserOnline(io, toUserId)) {
+            emitCallUnavailable(socket, data, "Caller is no longer online");
+            return;
+        }
+
+        emitToUser(io, toUserId, "call:accepted", {
             callId: data.callId,
             fromUserId: socket.userId,
             fromUser: getPublicUser(socket.user),
