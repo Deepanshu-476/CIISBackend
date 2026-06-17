@@ -1,6 +1,35 @@
 // socket/handlers/connectionHandler.js
 const User = require('../../../models/User');
 
+const getCompanyOnlineUsers = (io, companyId) => {
+  if (!companyId) return [];
+
+  const companyKey = companyId.toString();
+  const userIds = new Set();
+
+  io.sockets.sockets.forEach((connectedSocket) => {
+    if (connectedSocket.companyId?.toString() !== companyKey) return;
+    if (!connectedSocket.userId) return;
+    userIds.add(connectedSocket.userId.toString());
+  });
+
+  return Array.from(userIds);
+};
+
+const emitPresence = (io, socket, isOnline) => {
+  if (!socket.userId || !socket.companyId) return;
+
+  const payload = {
+    userId: socket.userId,
+    isOnline,
+    lastSeen: new Date(),
+  };
+
+  io.to(`company:${socket.companyId}`).emit(isOnline ? 'user:online' : 'user:offline', payload);
+  io.to(`company:${socket.companyId}`).emit(isOnline ? 'chat:user-online' : 'chat:user-offline', payload);
+  io.to(`company:${socket.companyId}`).emit('chat:online-users', getCompanyOnlineUsers(io, socket.companyId));
+};
+
 const connectionHandler = (io, socket) => {
   console.log(`🔌 New client connected: ${socket.id} - User: ${socket.user?.name}`);
 
@@ -27,6 +56,7 @@ const connectionHandler = (io, socket) => {
 
   // Update user online status
   updateUserOnlineStatus(socket.userId, true);
+  emitPresence(io, socket, true);
 
   // Handle disconnection
   socket.on('disconnect', async () => {
@@ -36,15 +66,11 @@ const connectionHandler = (io, socket) => {
       const userRoom = io.sockets.adapter.rooms.get(`user:${socket.userId}`);
       if (!userRoom || userRoom.size === 0) {
         await updateUserOnlineStatus(socket.userId, false);
+        emitPresence(io, socket, false);
+      } else {
+        io.to(`company:${socket.companyId}`).emit('chat:online-users', getCompanyOnlineUsers(io, socket.companyId));
       }
     }, 1000);
-    
-    // Leave all rooms
-    socket.leave(`user:${socket.userId}`);
-    if (socket.companyId) {
-      socket.leave(`company:${socket.companyId}`);
-      socket.leave(`company:${socket.companyId}:admin`);
-    }
   });
 
   // Handle errors
@@ -62,6 +88,8 @@ const connectionHandler = (io, socket) => {
 
 // Helper to update user online status
 const updateUserOnlineStatus = async (userId, isOnline) => {
+  if (!userId) return;
+
   try {
     await User.findByIdAndUpdate(userId, {
       isOnline,

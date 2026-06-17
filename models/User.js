@@ -167,6 +167,15 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  isOnline: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+  lastSeen: {
+    type: Date,
+    default: null
+  },
   isVerified: {
     type: Boolean,
     default: false
