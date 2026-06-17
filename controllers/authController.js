@@ -93,6 +93,48 @@ const findClientPasswordAccount = async (email, companyScope = null, includePass
   return { user, client };
 };
 
+const parseAdditionalDetails = (value) => {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return {};
+  }
+};
+
+const resolveClientForUser = async (user) => {
+  if (!user) return null;
+
+  const details = parseAdditionalDetails(user.additionalDetails);
+  const possibleClientIds = [
+    details.clientId,
+    user.employeeType,
+    user.clientId,
+  ].filter(Boolean);
+
+  for (const clientId of possibleClientIds) {
+    if (mongoose.Types.ObjectId.isValid(String(clientId))) {
+      const client = await Client.findById(clientId).select('_id email userId companyCode client company phone');
+      if (client) return client;
+    }
+  }
+
+  if (user._id) {
+    const linkedClient = await Client.findOne({userId: user._id}).select('_id email userId companyCode client company phone');
+    if (linkedClient) return linkedClient;
+  }
+
+  if (user.email) {
+    return Client.findOne({
+      email: String(user.email).trim().toLowerCase(),
+      ...(user.companyCode ? {companyCode: user.companyCode} : {}),
+    }).select('_id email userId companyCode client company phone');
+  }
+
+  return null;
+};
+
 const createClientUserForPasswordReset = async (client, password, companyScope = null) => {
   if (!client?.email || !client?.companyCode) return null;
 
@@ -988,7 +1030,7 @@ exports.verifyLoginOTP = async (req, res) => {
     await otpRecord.save();
 
     // ✅ Get user with populated data
-    const user = await User.findOne({ email })
+    const user = await User.findOne({ _id: decoded.userId, email })
       .select("-password -loginAttempts -lockUntil")
       .populate("department", "name")
       .populate("company", "companyName companyCode logo companyEmail companyPhone companyAddress isActive subscriptionExpiry allowedPages loginUrl dbIdentifier");
@@ -1003,6 +1045,10 @@ exports.verifyLoginOTP = async (req, res) => {
     // ✅ Update last login
     user.lastLogin = new Date();
     await user.save();
+
+    const linkedClient = await resolveClientForUser(user);
+    const additionalDetails = parseAdditionalDetails(user.additionalDetails);
+    const clientId = linkedClient?._id || additionalDetails.clientId || null;
 
     // ✅ Create final token
     const tokenPayload = {
@@ -1048,10 +1094,15 @@ exports.verifyLoginOTP = async (req, res) => {
       expiresIn: process.env.JWT_EXPIRE || "30d",
       user: {
         _id: user._id,
+        id: user._id,
         employeeId: user.employeeId,
         name: user.name,
         email: user.email,
         phone: user.phone,
+        clientId,
+        clientUserId: user._id,
+        employeeType: user.employeeType,
+        additionalDetails,
         role: user.role,
         jobRole: user.jobRole,
         department: user.department,
@@ -1064,6 +1115,17 @@ exports.verifyLoginOTP = async (req, res) => {
         createdAt: user.createdAt,
         updatedAt: user.updatedAt
       },
+      client: linkedClient ? {
+        _id: linkedClient._id,
+        id: linkedClient._id,
+        clientId: linkedClient._id,
+        userId: linkedClient.userId,
+        email: linkedClient.email,
+        client: linkedClient.client,
+        company: linkedClient.company,
+        companyCode: linkedClient.companyCode,
+        phone: linkedClient.phone
+      } : null,
       companyDetails: companyDetails
     };
 

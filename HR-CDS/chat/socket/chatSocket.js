@@ -20,23 +20,33 @@ const removeOnlineUser = (userId, socketId) => {
     }
 };
 
+const getOnlineUserIds = () => Array.from(onlineUsers.keys());
+
 const emitOnlineUsers = (io, companyId) => {
+    const users = getCompanyOnlineUsers(io, companyId);
+
+    if (!companyId) {
+        io.emit("chat:online-users", users);
+        return;
+    }
+
     io.to(`company:${companyId}`).emit(
         "chat:online-users",
-        Array.from(onlineUsers.keys())
+        users
     );
 };
 
 const getCompanyOnlineUsers = (io, companyId) => {
-    const companyRoom = io.sockets.adapter.rooms.get(`company:${companyId}`);
-    if (!companyRoom) return [];
+    if (!companyId) return getOnlineUserIds();
 
     const userIds = new Set();
-    companyRoom.forEach(socketId => {
-        const connectedSocket = io.sockets.sockets.get(socketId);
-        if (connectedSocket?.userId) {
-            userIds.add(connectedSocket.userId.toString());
-        }
+    const companyKey = companyId.toString();
+
+    io.sockets.sockets.forEach(connectedSocket => {
+        const socketCompanyId = connectedSocket.companyId?.toString();
+        if (socketCompanyId !== companyKey) return;
+        if (!connectedSocket.userId) return;
+        userIds.add(connectedSocket.userId.toString());
     });
 
     return Array.from(userIds);

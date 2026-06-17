@@ -1421,6 +1421,49 @@ const renewClientSubscription = async (req, res) => {
   }
 };
 
+const addClientDueInvoice = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title = 'Subscription Due', amount, dueDate, note = '' } = req.body;
+
+    const client = await Client.findById(id);
+    if (!client) {
+      return res.status(404).json({ success: false, message: 'Client not found' });
+    }
+
+    const dueAmount = Number(amount || 0);
+    if (!Number.isFinite(dueAmount) || dueAmount <= 0) {
+      return res.status(400).json({ success: false, message: 'Please enter a valid due amount' });
+    }
+
+    const parsedDueDate = dueDate ? new Date(dueDate) : new Date();
+    if (Number.isNaN(parsedDueDate.getTime())) {
+      return res.status(400).json({ success: false, message: 'Invalid due date' });
+    }
+
+    if (!client.dueInvoices) client.dueInvoices = [];
+    client.dueInvoices.push({
+      title: String(title || 'Subscription Due').trim(),
+      amount: dueAmount,
+      dueDate: parsedDueDate,
+      note: String(note || '').trim(),
+      status: 'Due'
+    });
+
+    client.status = 'On Hold';
+    await client.save();
+
+    res.json({
+      success: true,
+      message: 'Due payment added successfully',
+      data: client
+    });
+  } catch (error) {
+    console.error('Error adding client due invoice:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 const removeClientSubscription = async (req, res) => {
   try {
     const { id } = req.params;
@@ -1447,7 +1490,7 @@ const removeClientSubscription = async (req, res) => {
 const uploadClientReceipt = async (req, res) => {
   try {
     const { id } = req.params;
-    const { amount, transactionId } = req.body;
+    const { amount, transactionId, dueInvoiceId } = req.body;
 
     const client = await Client.findById(id);
     if (!client) {
@@ -1464,13 +1507,25 @@ const uploadClientReceipt = async (req, res) => {
       client.paymentReceipts = [];
     }
 
-    client.paymentReceipts.push({
+    const receipt = {
+      dueInvoiceId: dueInvoiceId || null,
       amount: amount ? parseFloat(amount) : 0,
       transactionId: transactionId || '',
       receiptImage,
       uploadDate: new Date(),
       status: 'Pending'
-    });
+    };
+
+    client.paymentReceipts.push(receipt);
+
+    const addedReceipt = client.paymentReceipts[client.paymentReceipts.length - 1];
+    if (dueInvoiceId && client.dueInvoices) {
+      const dueInvoice = client.dueInvoices.id(dueInvoiceId);
+      if (dueInvoice) {
+        dueInvoice.status = 'Pending Verification';
+        dueInvoice.receiptId = addedReceipt._id;
+      }
+    }
 
     await client.save();
 
@@ -1481,6 +1536,75 @@ const uploadClientReceipt = async (req, res) => {
     });
   } catch (error) {
     console.error('Error uploading client receipt:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const updateClientReceiptStatus = async (req, res) => {
+  try {
+    const { id, receiptId } = req.params;
+    const { status, notes = '', activateClient = true, startDate, endDate } = req.body;
+    const cleanStatus = String(status || '').trim();
+
+    if (!['Approved', 'Rejected'].includes(cleanStatus)) {
+      return res.status(400).json({ success: false, message: 'Status must be Approved or Rejected' });
+    }
+
+    const client = await Client.findById(id);
+    if (!client) {
+      return res.status(404).json({ success: false, message: 'Client not found' });
+    }
+
+    const receipt = client.paymentReceipts?.id(receiptId);
+    if (!receipt) {
+      return res.status(404).json({ success: false, message: 'Receipt not found' });
+    }
+
+    receipt.status = cleanStatus;
+    receipt.verifiedAt = new Date();
+    receipt.notes = String(notes || '').trim();
+
+    let linkedDue = null;
+    if (receipt.dueInvoiceId && client.dueInvoices) {
+      linkedDue = client.dueInvoices.id(receipt.dueInvoiceId);
+    }
+    if (!linkedDue && client.dueInvoices) {
+      linkedDue = client.dueInvoices.find(invoice => String(invoice.receiptId || '') === String(receipt._id));
+    }
+
+    if (linkedDue) {
+      linkedDue.status = cleanStatus === 'Approved' ? 'Paid' : 'Due';
+      linkedDue.clearedAt = cleanStatus === 'Approved' ? new Date() : undefined;
+    }
+
+    if (cleanStatus === 'Approved' && activateClient) {
+      const subStart = startDate ? new Date(startDate) : new Date();
+      const subEnd = endDate ? new Date(endDate) : null;
+      const latestDueDate = linkedDue?.dueDate ? new Date(linkedDue.dueDate) : null;
+      const fallbackEnd = latestDueDate && latestDueDate > subStart
+        ? latestDueDate
+        : new Date(subStart.getTime() + 30 * 24 * 60 * 60 * 1000);
+
+      client.status = 'Active';
+      client.subscription.push({
+        startDate: Number.isNaN(subStart.getTime()) ? new Date() : subStart,
+        endDate: subEnd && !Number.isNaN(subEnd.getTime()) ? subEnd : fallbackEnd,
+        price: Number(receipt.amount || linkedDue?.amount || 0),
+        status: 'Active',
+        extraTasks: 0,
+        benefits: 'Activated after payment verification'
+      });
+    }
+
+    await client.save();
+
+    res.json({
+      success: true,
+      message: `Receipt ${cleanStatus.toLowerCase()} successfully`,
+      data: client
+    });
+  } catch (error) {
+    console.error('Error updating receipt status:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -1500,7 +1624,9 @@ module.exports = {
   extendClientSubscription,
   renewClientSubscription,
   removeClientSubscription,
-  uploadClientReceipt
+  addClientDueInvoice,
+  uploadClientReceipt,
+  updateClientReceiptStatus
 };
 
 console.log("✅ clientController.js loaded successfully with auto-user creation and email integration");
