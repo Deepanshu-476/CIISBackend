@@ -1,4 +1,5 @@
 const express = require("express");
+const axios = require("axios");
 const router = express.Router();
 
 const {
@@ -31,6 +32,40 @@ router.patch("/message/:messageId/delete-for-me", authMiddleware, deleteMessageF
 router.patch("/message/:messageId/delete-for-everyone", authMiddleware, deleteMessageForEveryone);
 router.post("/message/:messageId/forward", authMiddleware, forwardMessage);
 router.patch("/message/:messageId/seen", authMiddleware, markMessageSeen);
+
+router.get("/turn-credentials", authMiddleware, async (_req, res) => {
+  const apiKey = process.env.METERED_TURN_API_KEY;
+  const appName = process.env.METERED_TURN_APP_NAME;
+
+  if (!apiKey || !appName) {
+    return res.status(503).json({
+      success: false,
+      message: "TURN server is not configured",
+    });
+  }
+
+  try {
+    const response = await axios.get(
+      `https://${appName}.metered.live/api/v1/turn/credentials`,
+      {
+        params: { apiKey },
+        timeout: 10000,
+      }
+    );
+
+    if (!Array.isArray(response.data) || response.data.length === 0) {
+      throw new Error("TURN provider returned no ICE servers");
+    }
+
+    return res.json(response.data);
+  } catch (error) {
+    console.error("TURN credentials fetch failed:", error.message);
+    return res.status(502).json({
+      success: false,
+      message: "Unable to fetch TURN credentials",
+    });
+  }
+});
 
 router.get("/test", (req, res) => {
   res.json({success: true, message: "Chat API Working"});
