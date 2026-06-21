@@ -106,6 +106,23 @@ const companySchema = new mongoose.Schema(
       default: "Standard",
     },
 
+    selectedPlan: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Plan",
+      default: null,
+    },
+
+    planFeatures: {
+      type: [String],
+      default: [],
+    },
+
+    planDurationDays: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
     subscriptionAmount: {
       type: Number,
       default: 0,

@@ -21,7 +21,7 @@ const server = http.createServer(app);
 app.set("trust proxy", 1);
 
 // ✅ Connect MongoDB
-connectDB();
+const dbConnectionPromise = connectDB();
 
 const allowedOrigins = [
   "https://cds.ciisnetwork.in",
@@ -511,6 +511,7 @@ schedule.scheduleJob('0 18 * * *', async () => {
 
 // Run initial checks on server start
 setTimeout(async () => {
+  await dbConnectionPromise;
   console.log('🚀 Server started, running initial checks...');
   await runDbJobWithRetry('Initial overdue tasks check', checkAndMarkOverdueTasks);
   await runDbJobWithRetry('Initial past absent records check', markPastAbsentRecords);
@@ -591,6 +592,7 @@ app.use("/api/notifications", require("./HR-CDS/routes/notificationRoutes.js"));
 app.use("/api/groups", require("./HR-CDS/routes/groupRoutes.js"));
 app.use("/api/projects", require("./HR-CDS/routes/projectRoutes.js"));
 app.use("/api/clientsservice", require("./HR-CDS/routes/clientRoutes.js"));
+app.use("/api/client-plans", require("./HR-CDS/routes/clientPlanRoutes.js"));
 app.use("/api/chat", require("./HR-CDS/chat/routes/chatRoutes"));
 // 🔥 IMPORTANT: यहाँ clientTasks routes mount किए गए हैं
 // यह सुनिश्चित करता है कि /api/tasks/... endpoints काम करेंगे
@@ -610,6 +612,7 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/menu-access', require("./routes/menuAccess.js"));
 app.use('/api/menu-items', require("./routes/menuItems.js"));
 app.use('/api/company', require("./routes/companyRoutes.js"));
+app.use('/api/plans', require("./routes/planRoutes.js"));
 app.use('/api/job-roles', require("./routes/jobRoleRoutes.js"));
 app.use('/api/superAdmin', require("./routes/superAdmin.js"));
 app.use("/api/meetings", require("./HR-CDS/routes/meetingRoutes.js"));
@@ -752,7 +755,9 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 3000;
 
 // Use server.listen instead of app.listen
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
+  await dbConnectionPromise;
+
   // Initialize meeting scheduler on startup
   try {
     const { initMeetingScheduler } = require("./services/meetingSchedulerService");

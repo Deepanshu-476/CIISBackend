@@ -1,5 +1,7 @@
 const Client = require('../models/Client');
 const Service = require('../models/Service');
+const ClientPlan = require('../models/ClientPlan');
+const ClientTask = require('../models/ClientTask');
 const User = require('../../models/User');
 const Department = require('../../models/Department');
 const JobRole = require('../../models/JobRole');
@@ -28,6 +30,85 @@ const sendConflict = (res, message, field, extra = {}) => {
     field,
     ...extra
   });
+};
+
+const getPlanServiceNames = plan => (
+  Array.isArray(plan?.services)
+    ? [...new Set(plan.services.map(item => String(item.service || '').trim()).filter(Boolean))]
+    : []
+);
+
+const createSubscriptionFromInput = ({ sub = {}, plan = null, fallbackNo = 1 }) => {
+  const servicesSnapshot = plan?.services?.map(item => ({
+    service: item.service,
+    tasks: (item.tasks || []).map(task => ({
+      name: task.name,
+      description: task.description || task.name,
+      priority: task.priority || 'Medium',
+      dueInDays: Number(task.dueInDays || 0)
+    }))
+  })) || [];
+
+  return {
+    subscriptionNo: fallbackNo,
+    planId: plan?._id || sub.planId || null,
+    planName: plan?.name || sub.planName || '',
+    servicesSnapshot,
+    startDate: new Date(sub.startDate),
+    endDate: new Date(sub.endDate),
+    price: plan ? Number(plan.price || 0) : Number(sub.price || 0),
+    status: sub.status || 'Active',
+    extraTasks: Number(sub.extraTasks || 0),
+    benefits: sub.benefits || ''
+  };
+};
+
+const generateTasksForSubscription = async ({ client, subscription, plan, session }) => {
+  if (!plan || !subscription?._id) return [];
+  const createdTaskIds = [];
+  const startDate = subscription.startDate ? new Date(subscription.startDate) : new Date();
+
+  for (const serviceTemplate of plan.services || []) {
+    for (const taskTemplate of serviceTemplate.tasks || []) {
+      const dueDate = new Date(startDate);
+      dueDate.setDate(dueDate.getDate() + Number(taskTemplate.dueInDays || 0));
+
+      const [task] = await ClientTask.create([{
+        clientId: client._id,
+        subscriptionId: subscription._id,
+        subscriptionNo: subscription.subscriptionNo,
+        planId: plan._id,
+        planName: plan.name,
+        templateTaskId: taskTemplate._id,
+        isPlanTask: true,
+        service: serviceTemplate.service,
+        name: taskTemplate.name,
+        description: taskTemplate.description || taskTemplate.name,
+        dueDate,
+        priority: taskTemplate.priority || 'Medium',
+        status: 'pending',
+        completed: false,
+        activityLogs: [{
+          action: 'created_from_plan',
+          userName: 'System',
+          description: `Generated from ${plan.name} / Subscription ${subscription.subscriptionNo}`,
+          createdAt: new Date()
+        }]
+      }], { session });
+
+      createdTaskIds.push(task._id);
+    }
+  }
+
+  if (createdTaskIds.length) {
+    await Client.updateOne(
+      { _id: client._id, 'subscription._id': subscription._id },
+      { $set: { 'subscription.$.generatedTaskIds': createdTaskIds } },
+      { session }
+    );
+  }
+
+  return createdTaskIds;
 };
 
 // Helper function to get welcome email template
@@ -562,6 +643,7 @@ const addClient = async (req, res) => {
       address,
       description,
       notes,
+      clientPlanId,
       subscription  
     } = req.body;
 
@@ -623,6 +705,22 @@ const addClient = async (req, res) => {
     const cleanCompanyName = normalizeName(company);
     const cleanCity = normalizeName(city);
     const cleanProjectManagers = projectManager.map(manager => normalizeName(manager));
+    let selectedClientPlan = null;
+    if (clientPlanId) {
+      selectedClientPlan = await ClientPlan.findOne({
+        _id: clientPlanId,
+        companyCode: cleanCompanyCode,
+        isActive: true
+      }).session(session);
+      if (!selectedClientPlan) {
+        await session.abortTransaction();
+        return res.status(404).json({
+          success: false,
+          message: 'Selected client plan not found'
+        });
+      }
+    }
+    const finalServices = selectedClientPlan ? getPlanServiceNames(selectedClientPlan) : (services || []);
 
     // Check if client already exists for this company
     const existingClient = await Client.findOne({
@@ -682,8 +780,8 @@ const addClient = async (req, res) => {
     }
 
     // Validate services exist if provided
-    if (services && services.length > 0) {
-      const serviceNames = services.filter(s => s && typeof s === 'string' && s.trim().length > 0);
+    if (finalServices && finalServices.length > 0) {
+      const serviceNames = finalServices.filter(s => s && typeof s === 'string' && s.trim().length > 0);
       if (serviceNames.length > 0) {
         const existingServices = await Service.find({ 
           servicename: { $in: serviceNames },
@@ -807,11 +905,10 @@ const addClient = async (req, res) => {
     // Prepare subscription array with price
     let subscriptionArray = [];
     if (subscription && Array.isArray(subscription) && subscription.length > 0) {
-      subscriptionArray = subscription.map(sub => ({
-        startDate: new Date(sub.startDate),
-        endDate: new Date(sub.endDate),
-        price: sub.price || 0,
-        status: sub.status || 'Active'
+      subscriptionArray = subscription.map((sub, index) => createSubscriptionFromInput({
+        sub,
+        plan: selectedClientPlan,
+        fallbackNo: index + 1
       }));
       console.log('✅ Subscription array created with prices:', subscriptionArray);
     }
@@ -823,7 +920,8 @@ const addClient = async (req, res) => {
       city: cleanCity,
       companyCode: cleanCompanyCode,
       projectManager: cleanProjectManagers,
-      services: services || [],
+      services: finalServices || [],
+      activeClientPlan: selectedClientPlan?._id || null,
       status: status || 'Active',
       progress: progress || '0/0 (0%)',
       email: cleanEmail,
@@ -836,6 +934,14 @@ const addClient = async (req, res) => {
     });
 
     await newClient.save({ session });
+    if (selectedClientPlan && newClient.subscription.length > 0) {
+      await generateTasksForSubscription({
+        client: newClient,
+        subscription: newClient.subscription[newClient.subscription.length - 1],
+        plan: selectedClientPlan,
+        session
+      });
+    }
     console.log('✅ Client created successfully with ID:', newClient._id);
     console.log('✅ Client subscription saved:', newClient.subscription);
 
@@ -1387,37 +1493,76 @@ const extendClientSubscription = async (req, res) => {
 };
 
 const renewClientSubscription = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
   try {
     const { id } = req.params;
-    const { startDate, endDate, price, extraTasks = 0, benefits = '' } = req.body;
+    const { startDate, endDate, price, extraTasks = 0, benefits = '', clientPlanId } = req.body;
 
-    const client = await Client.findById(id);
+    const client = await Client.findById(id).session(session);
 
     if (!client) {
+      await session.abortTransaction();
       return res.status(404).json({ success: false, message: "Client not found" });
     }
 
-    // Push new subscription to array
-    client.subscription.push({
-      startDate: new Date(startDate),
-      endDate: new Date(endDate),
-      price: price ? parseFloat(price) : 0,
-      status: 'Active',
-      extraTasks: extraTasks ? parseInt(extraTasks) : 0,
-      benefits: benefits || ''
+    let selectedClientPlan = null;
+    if (clientPlanId) {
+      selectedClientPlan = await ClientPlan.findOne({
+        _id: clientPlanId,
+        companyCode: client.companyCode,
+        isActive: true
+      }).session(session);
+      if (!selectedClientPlan) {
+        await session.abortTransaction();
+        return res.status(404).json({ success: false, message: "Selected client plan not found" });
+      }
+    }
+
+    client.subscription.forEach(sub => {
+      if (sub.status === 'Active') sub.status = 'Expired';
     });
 
-    await client.save();
+    const subscriptionNo = (client.subscription?.length || 0) + 1;
+    const nextSub = createSubscriptionFromInput({
+      sub: { startDate, endDate, price, status: 'Active', extraTasks, benefits },
+      plan: selectedClientPlan,
+      fallbackNo: subscriptionNo
+    });
+
+    // Push new subscription to array
+    client.subscription.push(nextSub);
+    if (selectedClientPlan) {
+      client.activeClientPlan = selectedClientPlan._id;
+      client.services = getPlanServiceNames(selectedClientPlan);
+    }
+
+    await client.save({ session });
+    const createdSub = client.subscription[client.subscription.length - 1];
+    if (selectedClientPlan) {
+      await generateTasksForSubscription({
+        client,
+        subscription: createdSub,
+        plan: selectedClientPlan,
+        session
+      });
+    }
+
+    await session.commitTransaction();
+    const updatedClient = await Client.findById(id).lean();
 
     res.json({
       success: true,
       message: "Subscription renewed successfully",
-      data: client
+      data: updatedClient
     });
 
   } catch (error) {
+    await session.abortTransaction();
     console.error('Error renewing subscription:', error);
     res.status(500).json({ success: false, message: error.message });
+  } finally {
+    session.endSession();
   }
 };
 
