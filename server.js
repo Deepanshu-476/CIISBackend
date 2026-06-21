@@ -21,7 +21,7 @@ const server = http.createServer(app);
 app.set("trust proxy", 1);
 
 // ✅ Connect MongoDB
-connectDB();
+const dbConnectionPromise = connectDB();
 
 const allowedOrigins = [
   "https://cds.ciisnetwork.in",
@@ -511,6 +511,7 @@ schedule.scheduleJob('0 18 * * *', async () => {
 
 // Run initial checks on server start
 setTimeout(async () => {
+  await dbConnectionPromise;
   console.log('🚀 Server started, running initial checks...');
   await runDbJobWithRetry('Initial overdue tasks check', checkAndMarkOverdueTasks);
   await runDbJobWithRetry('Initial past absent records check', markPastAbsentRecords);
@@ -752,7 +753,9 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 3000;
 
 // Use server.listen instead of app.listen
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
+  await dbConnectionPromise;
+
   // Initialize meeting scheduler on startup
   try {
     const { initMeetingScheduler } = require("./services/meetingSchedulerService");
