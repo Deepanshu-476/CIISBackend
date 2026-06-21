@@ -1,5 +1,4 @@
 const express = require("express");
-const axios = require("axios");
 const router = express.Router();
 
 const {
@@ -45,19 +44,26 @@ router.get("/turn-credentials", authMiddleware, async (_req, res) => {
   }
 
   try {
-    const response = await axios.get(
-      `https://${appName}.metered.live/api/v1/turn/credentials`,
-      {
-        params: { apiKey },
-        timeout: 10000,
-      }
+    const endpoint = new URL(
+      `https://${appName}.metered.live/api/v1/turn/credentials`
     );
+    endpoint.searchParams.set("apiKey", apiKey);
 
-    if (!Array.isArray(response.data) || response.data.length === 0) {
+    const response = await fetch(endpoint, {
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!response.ok) {
+      throw new Error(`TURN provider responded with ${response.status}`);
+    }
+
+    const iceServers = await response.json();
+
+    if (!Array.isArray(iceServers) || iceServers.length === 0) {
       throw new Error("TURN provider returned no ICE servers");
     }
 
-    return res.json(response.data);
+    return res.json(iceServers);
   } catch (error) {
     console.error("TURN credentials fetch failed:", error.message);
     return res.status(502).json({
