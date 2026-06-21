@@ -182,20 +182,36 @@ const calculateUnifiedTaskStats = (tasks, userId) => {
   };
 };
 
+const getTaskSourceAwareDate = task => {
+  if (!task) return null;
+  const source = String(task.__taskSource || task.taskSource || task.source || '').toLowerCase();
+  if (source === 'client') {
+    return task.dueDate || task.dueDateTime || task.createdAt;
+  }
+  if (source === 'project') {
+    let statusUpdateDate = null;
+    if (task.activityLogs && task.activityLogs.length > 0) {
+      const statusLogs = task.activityLogs.filter(log => log.type === 'status_change' || log.type === 'status_changed');
+      if (statusLogs.length > 0) {
+        const sortedLogs = [...statusLogs].sort((a, b) => new Date(b.performedAt || b.createdAt || 0) - new Date(a.performedAt || a.createdAt || 0));
+        statusUpdateDate = sortedLogs[0].performedAt || sortedLogs[0].createdAt;
+      }
+    }
+    return statusUpdateDate || task.updatedAt || task.createdAt;
+  }
+  if (source === 'self' || source === 'personal') {
+    return task.createdAt;
+  }
+  return task.dueDateTime || task.dueDate || task.createdAt;
+};
+
 const groupTasksByDate = (tasks, dateField = 'createdAt', serialKey = 'serialNo') => {
   const grouped = {};
 
   tasks.forEach(task => {
     let dateValue = task[dateField] || task.createdAt;
     if (dateField === 'source-aware') {
-      const source = String(task.__taskSource || task.taskSource || '').toLowerCase();
-      if (source === 'client') {
-        dateValue = task.dueDate || task.dueDateTime || task.createdAt;
-      } else if (source === 'project') {
-        dateValue = task.createdAt;
-      } else {
-        dateValue = task.dueDateTime || task.dueDate || task.createdAt;
-      }
+      dateValue = getTaskSourceAwareDate(task);
     }
     const dateKey = dateValue ? moment(dateValue).format('DD-MM-YYYY') : 'No Date';
     if (!grouped[dateKey]) grouped[dateKey] = [];
@@ -222,15 +238,7 @@ const groupTasksByDate = (tasks, dateField = 'createdAt', serialKey = 'serialNo'
 };
 
 const getTaskSortDate = task => {
-  const source = String(task.__taskSource || task.taskSource || '').toLowerCase();
-  let dateValue;
-  if (source === 'client') {
-    dateValue = task.dueDate || task.dueDateTime || task.createdAt;
-  } else if (source === 'project') {
-    dateValue = task.createdAt;
-  } else {
-    dateValue = task.dueDateTime || task.dueDate || task.createdAt;
-  }
+  const dateValue = getTaskSourceAwareDate(task);
   const date = new Date(dateValue || 0);
   return Number.isNaN(date.getTime()) ? 0 : date.getTime();
 };
@@ -384,10 +392,7 @@ const applyCleanListFilters = (tasks, req) => {
       if (!searchHaystack.includes(query)) return false;
     }
     if (range) {
-      const source = String(t.__taskSource || t.taskSource || '').toLowerCase();
-      const sourceDate = source === 'project'
-        ? t.createdAt
-        : (t.dueDateTime || t.dueDate || t.createdAt);
+      const sourceDate = getTaskSourceAwareDate(t);
       const dateVal = new Date(sourceDate);
       if (isNaN(dateVal.getTime())) return false;
       if (range.$gte && dateVal < range.$gte) return false;
