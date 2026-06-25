@@ -1478,6 +1478,10 @@ const extendClientSubscription = async (req, res) => {
       price: price,
       status: 'Active'
     });
+    client.reminder5DaysSent = false;
+    client.reminder3DaysSent = false;
+    client.expiredMailSent = false;
+    client.expiredReminderLastSentAt = null;
 
     await client.save();
 
@@ -1522,6 +1526,10 @@ const renewClientSubscription = async (req, res) => {
     client.subscription.forEach(sub => {
       if (sub.status === 'Active') sub.status = 'Expired';
     });
+    client.reminder5DaysSent = false;
+    client.reminder3DaysSent = false;
+    client.expiredMailSent = false;
+    client.expiredReminderLastSentAt = null;
 
     const subscriptionNo = (client.subscription?.length || 0) + 1;
     const nextSub = createSubscriptionFromInput({
@@ -1739,6 +1747,10 @@ const updateClientReceiptStatus = async (req, res) => {
         extraTasks: 0,
         benefits: 'Activated after payment verification'
       });
+      client.reminder5DaysSent = false;
+      client.reminder3DaysSent = false;
+      client.expiredMailSent = false;
+      client.expiredReminderLastSentAt = null;
     }
 
     await client.save();
@@ -1752,6 +1764,17 @@ const updateClientReceiptStatus = async (req, res) => {
     console.error('Error updating receipt status:', error);
     res.status(500).json({ success: false, message: error.message });
   }
+};
+
+const markClientReceiptPaymentDone = async (req, res) => {
+  req.body = {
+    ...req.body,
+    status: 'Approved',
+    activateClient: true,
+    notes: req.body?.notes || 'Payment status marked done by team'
+  };
+
+  return updateClientReceiptStatus(req, res);
 };
 
 module.exports = {
@@ -1771,7 +1794,8 @@ module.exports = {
   removeClientSubscription,
   addClientDueInvoice,
   uploadClientReceipt,
-  updateClientReceiptStatus
+  updateClientReceiptStatus,
+  markClientReceiptPaymentDone
 };
 
 console.log("✅ clientController.js loaded successfully with auto-user creation and email integration");

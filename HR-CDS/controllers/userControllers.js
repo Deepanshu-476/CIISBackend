@@ -43,6 +43,11 @@ const getUserPresence = (user, socketOnlineIds) => {
   };
 };
 
+const shouldIncludeInactiveUsers = (query = {}) => {
+  const value = query.includeInactive ?? query.withInactive;
+  return value === true || value === 'true' || value === '1' || value === 'all';
+};
+
 // All field names for consistent usage
 const USER_FIELDS = {
   // Basic fields (required in registration)
@@ -838,6 +843,10 @@ exports.getCompanydepartmentUsers = async (req, res) => {
       }
     };
 
+    if (!shouldIncludeInactiveUsers(req.query)) {
+      filter.isActive = { $ne: false };
+    }
+
     if (requestedDepartment) {
       filter.department = requestedDepartment;
     }
@@ -938,6 +947,10 @@ exports.getCompanyUsers = async (req, res) => {
         $not: /^client$/i 
       }
     };
+
+    if (!shouldIncludeInactiveUsers(req.query)) {
+      filter.isActive = { $ne: false };
+    }
 
     const users = await User.find(filter)
       .select("-password -resetToken -resetTokenExpiry")

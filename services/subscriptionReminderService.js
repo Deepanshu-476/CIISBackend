@@ -1,126 +1,98 @@
 const cron = require('node-cron');
 
 const Client = require('../HR-CDS/models/Client');
-
 const emailService = require('../services/emailService');
 
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+const hasEmail = (client) => Boolean(String(client?.email || '').trim());
+
+const sendSubscriptionEmail = (client, subject, body) => {
+  return emailService.sendEmail(
+    client.email,
+    subject,
+    `
+      <h2>Hello ${client.client || 'Client'}</h2>
+      ${body}
+      <p>Please renew your plan to continue services.</p>
+    `
+  );
+};
+
+const shouldSendExpiredReminder = (client, now) => {
+  if (!client.expiredReminderLastSentAt) return true;
+
+  const lastSentAt = new Date(client.expiredReminderLastSentAt).getTime();
+  if (Number.isNaN(lastSentAt)) return true;
+
+  return now.getTime() - lastSentAt >= ONE_DAY_MS;
+};
+
 cron.schedule('0 9 * * *', async () => {
-
   try {
-
-    console.log('🔔 Checking subscription expiry reminders...');
+    console.log('Checking subscription expiry reminders...');
 
     const clients = await Client.find({
-      subscription: { $exists: true, $ne: [] }
+      subscription: { $exists: true, $ne: [] },
+      email: { $exists: true, $ne: '' }
     });
 
-    const today = new Date();
+    const now = new Date();
 
     for (const client of clients) {
+      if (!hasEmail(client)) continue;
 
-      const latestSubscription =
-        client.subscription[client.subscription.length - 1];
-
+      const latestSubscription = client.subscription[client.subscription.length - 1];
       if (!latestSubscription?.endDate) continue;
 
       const endDate = new Date(latestSubscription.endDate);
+      if (Number.isNaN(endDate.getTime())) continue;
 
-      const diffTime = endDate - today;
+      const daysRemaining = Math.ceil((endDate - now) / ONE_DAY_MS);
+      let changed = false;
 
-      const daysRemaining = Math.ceil(
-        diffTime / (1000 * 60 * 60 * 24)
-      );
-
-      // ================= 5 DAYS =================
-
-      if (
-        daysRemaining === 5 &&
-        !client.reminder5DaysSent
-      ) {
-
-        await emailService.sendEmail(
-
-          client.email,
-
+      if (daysRemaining === 5 && !client.reminder5DaysSent) {
+        await sendSubscriptionEmail(
+          client,
           'Subscription Expiring Soon',
-
-          `
-            <h2>Hello ${client.client}</h2>
-
-            <p>Your subscription will expire in 5 days.</p>
-
-            <p>Please renew your plan to continue services.</p>
-          `
+          '<p>Your subscription will expire in 5 days.</p>'
         );
 
         client.reminder5DaysSent = true;
+        changed = true;
       }
 
-      // ================= 3 DAYS =================
-
-      if (
-        daysRemaining === 3 &&
-        !client.reminder3DaysSent
-      ) {
-
-        await emailService.sendEmail(
-
-          client.email,
-
+      if (daysRemaining === 3 && !client.reminder3DaysSent) {
+        await sendSubscriptionEmail(
+          client,
           'Subscription Expiring Soon',
-
-          `
-            <h2>Hello ${client.client}</h2>
-
-            <p>Your subscription will expire in 3 days.</p>
-
-            <p>Please renew your plan to continue services.</p>
-          `
+          '<p>Your subscription will expire in 3 days.</p>'
         );
 
         client.reminder3DaysSent = true;
+        changed = true;
       }
 
-      // ================= EXPIRED =================
-
-      if (
-        daysRemaining < 0 &&
-        !client.expiredMailSent
-      ) {
-
-        await emailService.sendEmail(
-
-          client.email,
-
+      if (daysRemaining < 0 && shouldSendExpiredReminder(client, now)) {
+        await sendSubscriptionEmail(
+          client,
           'Subscription Expired',
-
-          `
-            <h2>Hello ${client.client}</h2>
-
-            <p>Your subscription has expired.</p>
-
-            <p>Please renew your plan immediately.</p>
-          `
+          '<p>Your subscription has expired.</p><p>You will receive this reminder every 24 hours until the subscription is renewed.</p>'
         );
 
         latestSubscription.status = 'Expired';
-
         client.expiredMailSent = true;
+        client.expiredReminderLastSentAt = now;
+        changed = true;
       }
 
-      await client.save();
-
+      if (changed) {
+        await client.save();
+      }
     }
 
-    console.log('✅ Subscription reminder cron completed');
-
+    console.log('Subscription reminder cron completed');
   } catch (error) {
-
-    console.error(
-      '❌ Subscription Reminder Error:',
-      error
-    );
-
+    console.error('Subscription Reminder Error:', error);
   }
-
 });
