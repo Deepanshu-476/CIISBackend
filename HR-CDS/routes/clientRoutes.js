@@ -23,7 +23,8 @@ const {
   removeClientSubscription,
   addClientDueInvoice,
   uploadClientReceipt,
-  updateClientReceiptStatus
+  updateClientReceiptStatus,
+  markClientReceiptPaymentDone
 } = require('../controllers/clientController');
 
 const multer = require('multer');
@@ -70,6 +71,7 @@ router.patch('/renew-subscription/:id', renewClientSubscription);
 router.delete('/subscription/:id', removeClientSubscription);
 router.post('/due-invoice/:id', addClientDueInvoice);
 router.post('/upload-receipt/:id', uploadReceipt.single('receipt'), uploadClientReceipt);
+router.patch('/:id/receipt/:receiptId/payment-done', markClientReceiptPaymentDone);
 router.patch('/:id/receipt/:receiptId/status', updateClientReceiptStatus);
 
 // ================= GET RECEIPT IMAGE =================
