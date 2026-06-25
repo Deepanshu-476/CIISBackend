@@ -1,6 +1,23 @@
 const mongoose = require('mongoose');
 
+const createPublicId = (prefix) => {
+  const now = new Date();
+  const datePart = [
+    String(now.getFullYear()).slice(-2),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0')
+  ].join('');
+  const randomPart = Math.random().toString(36).slice(2, 8).toUpperCase().padEnd(6, '0');
+  return `CIIS-${prefix}-${datePart}-${randomPart}`;
+};
+
 const serviceEnquirySchema = new mongoose.Schema({
+  enquiryNumber: {
+    type: String,
+    unique: true,
+    sparse: true,
+    index: true
+  },
   serviceName: {
     type: String,
     required: [true, 'Service name is required'],
@@ -70,6 +87,7 @@ const serviceEnquirySchema = new mongoose.Schema({
 });
 
 serviceEnquirySchema.pre('save', function(next) {
+  if (!this.enquiryNumber) this.enquiryNumber = createPublicId('ENQ');
   if (this.companyCode) this.companyCode = this.companyCode.trim().toUpperCase();
   if (this.serviceName) this.serviceName = this.serviceName.trim();
   next();

@@ -41,7 +41,7 @@ const main = async () => {
   console.log(JSON.stringify(users.map(u => ({
     _id: u._id,
     name: u.name,
-    email: u.email
+    email: u.email  
   })), null, 2));
 };
 

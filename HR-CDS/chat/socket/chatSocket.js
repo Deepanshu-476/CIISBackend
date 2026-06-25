@@ -20,11 +20,36 @@ const removeOnlineUser = (userId, socketId) => {
     }
 };
 
+const getOnlineUserIds = () => Array.from(onlineUsers.keys());
+
 const emitOnlineUsers = (io, companyId) => {
+    const users = getCompanyOnlineUsers(io, companyId);
+
+    if (!companyId) {
+        io.emit("chat:online-users", users);
+        return;
+    }
+
     io.to(`company:${companyId}`).emit(
         "chat:online-users",
-        Array.from(onlineUsers.keys())
+        users
     );
+};
+
+const getCompanyOnlineUsers = (io, companyId) => {
+    if (!companyId) return getOnlineUserIds();
+
+    const userIds = new Set();
+    const companyKey = companyId.toString();
+
+    io.sockets.sockets.forEach(connectedSocket => {
+        const socketCompanyId = connectedSocket.companyId?.toString();
+        if (socketCompanyId !== companyKey) return;
+        if (!connectedSocket.userId) return;
+        userIds.add(connectedSocket.userId.toString());
+    });
+
+    return Array.from(userIds);
 };
 
 const getUnreadCount = (conversationId, userId, companyId) => Message.countDocuments({
@@ -76,6 +101,15 @@ const chatSocket = (io, socket) => {
 
     // SEND ONLINE USERS
     emitOnlineUsers(io, socket.companyId);
+
+    socket.on("chat:get-online-users", (callback) => {
+        const users = getCompanyOnlineUsers(io, socket.companyId);
+        if (typeof callback === "function") {
+            callback(users);
+        } else {
+            socket.emit("chat:online-users", users);
+        }
+    });
 
 
 

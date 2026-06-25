@@ -100,6 +100,71 @@ const companySchema = new mongoose.Schema(
       default: () => new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
     },
 
+    subscriptionPlan: {
+      type: String,
+      trim: true,
+      default: "Standard",
+    },
+
+    subscriptionAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    subscriptionPaymentStatus: {
+      type: String,
+      enum: ["paid", "unpaid", "partial", "waived"],
+      default: "unpaid",
+    },
+
+    subscriptionPayments: {
+      type: [{
+        amount: {
+          type: Number,
+          default: 0,
+          min: 0,
+        },
+        paymentDate: {
+          type: Date,
+          default: Date.now,
+        },
+        paymentMode: {
+          type: String,
+          enum: ["cash", "upi", "bank_transfer", "card", "cheque", "other"],
+          default: "other",
+        },
+        transactionId: {
+          type: String,
+          trim: true,
+          default: "",
+        },
+        status: {
+          type: String,
+          enum: ["paid", "unpaid", "partial", "waived"],
+          default: "paid",
+        },
+        subscriptionStartDate: Date,
+        subscriptionExpiry: Date,
+        planName: {
+          type: String,
+          trim: true,
+          default: "Standard",
+        },
+        notes: {
+          type: String,
+          trim: true,
+          default: "",
+        },
+        recordedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+          default: null,
+        },
+      }],
+      default: [],
+    },
+
     allowedPages: {
       type: [String],
       default: [],

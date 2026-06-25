@@ -1,5 +1,16 @@
 const mongoose = require('mongoose');
 
+const createPublicId = (prefix) => {
+  const now = new Date();
+  const datePart = [
+    String(now.getFullYear()).slice(-2),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0')
+  ].join('');
+  const randomPart = Math.random().toString(36).slice(2, 8).toUpperCase().padEnd(6, '0');
+  return `CIIS-${prefix}-${datePart}-${randomPart}`;
+};
+
 const clientSchema = new mongoose.Schema({
   client: {
     type: String,
@@ -108,6 +119,15 @@ const clientSchema = new mongoose.Schema({
   },
   paymentReceipts: {
     type: [{
+      receiptNumber: {
+        type: String,
+        trim: true,
+        index: true
+      },
+      dueInvoiceId: {
+        type: mongoose.Schema.Types.ObjectId,
+        default: null
+      },
       amount: Number,
       transactionId: String,
       receiptImage: String,
@@ -119,7 +139,50 @@ const clientSchema = new mongoose.Schema({
         type: String,
         enum: ['Pending', 'Approved', 'Rejected'],
         default: 'Pending'
+      },
+      verifiedAt: Date,
+      notes: {
+        type: String,
+        default: ''
       }
+    }],
+    default: []
+  },
+  dueInvoices: {
+    type: [{
+      invoiceNumber: {
+        type: String,
+        trim: true,
+        index: true
+      },
+      title: {
+        type: String,
+        default: 'Subscription Due'
+      },
+      amount: {
+        type: Number,
+        default: 0,
+        min: 0
+      },
+      dueDate: Date,
+      note: {
+        type: String,
+        default: ''
+      },
+      status: {
+        type: String,
+        enum: ['Due', 'Pending Verification', 'Paid', 'Cancelled'],
+        default: 'Due'
+      },
+      receiptId: {
+        type: mongoose.Schema.Types.ObjectId,
+        default: null
+      },
+      createdAt: {
+        type: Date,
+        default: Date.now
+      },
+      clearedAt: Date
     }],
     default: []
   }
@@ -328,6 +391,22 @@ clientSchema.pre('save', function(next) {
     this.services = this.services
       .filter(service => service && typeof service === 'string' && service.trim().length > 0)
       .map(service => service.trim());
+  }
+
+  if (Array.isArray(this.dueInvoices)) {
+    this.dueInvoices.forEach(invoice => {
+      if (!invoice.invoiceNumber) {
+        invoice.invoiceNumber = createPublicId('INV');
+      }
+    });
+  }
+
+  if (Array.isArray(this.paymentReceipts)) {
+    this.paymentReceipts.forEach(receipt => {
+      if (!receipt.receiptNumber) {
+        receipt.receiptNumber = createPublicId('PAY');
+      }
+    });
   }
   
   // Default progress if not provided

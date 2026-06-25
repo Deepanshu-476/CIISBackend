@@ -32,8 +32,12 @@ const connectionHandler = (io, socket) => {
   socket.on('disconnect', async () => {
     console.log(`🔌 Client disconnected: ${socket.id} - User: ${socket.user?.name}`);
     
-    // Update user online status
-    await updateUserOnlineStatus(socket.userId, false);
+    setTimeout(async () => {
+      const userRoom = io.sockets.adapter.rooms.get(`user:${socket.userId}`);
+      if (!userRoom || userRoom.size === 0) {
+        await updateUserOnlineStatus(socket.userId, false);
+      }
+    }, 1000);
     
     // Leave all rooms
     socket.leave(`user:${socket.userId}`);
