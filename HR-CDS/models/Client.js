@@ -220,6 +220,22 @@ const clientSchema = new mongoose.Schema({
       clearedAt: Date
     }],
     default: []
+  },
+  reminder5DaysSent: {
+    type: Boolean,
+    default: false
+  },
+  reminder3DaysSent: {
+    type: Boolean,
+    default: false
+  },
+  expiredMailSent: {
+    type: Boolean,
+    default: false
+  },
+  expiredReminderLastSentAt: {
+    type: Date,
+    default: null
   }
 }, { timestamps: true });
 
