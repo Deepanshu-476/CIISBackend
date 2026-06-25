@@ -86,6 +86,11 @@ const userSchema = new mongoose.Schema({
     enum: ['single', 'married', 'divorced', 'widowed']
   },
   dob: Date,
+  aadharCard: String,
+  aadhaar: String,
+  aadhar: String,
+  panCard: String,
+  pan: String,
   salary: Number,
   
   // ==================== BANK DETAILS ====================
@@ -166,6 +171,15 @@ const userSchema = new mongoose.Schema({
   isActive: {
     type: Boolean,
     default: true
+  },
+  isOnline: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+  lastSeen: {
+    type: Date,
+    default: null
   },
   isVerified: {
     type: Boolean,

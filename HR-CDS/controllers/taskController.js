@@ -1006,10 +1006,11 @@ exports.getRemarks = async (req, res) => {
 
 exports.getNotifications = async (req, res) => {
   try {
-    const filter = { user: req.user._id };
+    const ownerFilter = {$or: [{recipient: req.user._id}, {user: req.user._id}]};
+    const filter = {...ownerFilter};
     if (req.query.unreadOnly === 'true') filter.isRead = false;
     const notifications = await Notification.find(filter).populate('relatedTask').sort({ createdAt: -1 }).lean();
-    const unreadCount = await Notification.countDocuments({ user: req.user._id, isRead: false });
+    const unreadCount = await Notification.countDocuments({...ownerFilter, isRead: false});
     res.json({ success: true, notifications, unreadCount });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -1018,7 +1019,11 @@ exports.getNotifications = async (req, res) => {
 
 exports.markNotificationAsRead = async (req, res) => {
   try {
-    const notification = await Notification.findOneAndUpdate({ _id: req.params.notificationId, user: req.user._id }, { isRead: true, readAt: new Date() }, { new: true });
+    const notification = await Notification.findOneAndUpdate(
+      {_id: req.params.notificationId, $or: [{recipient: req.user._id}, {user: req.user._id}]},
+      {isRead: true, readAt: new Date()},
+      {new: true}
+    );
     res.json({ success: true, notification });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -1027,7 +1032,10 @@ exports.markNotificationAsRead = async (req, res) => {
 
 exports.markAllNotificationsAsRead = async (req, res) => {
   try {
-    await Notification.updateMany({ user: req.user._id, isRead: false }, { isRead: true, readAt: new Date() });
+    await Notification.updateMany(
+      {$or: [{recipient: req.user._id}, {user: req.user._id}], isRead: false},
+      {isRead: true, readAt: new Date()}
+    );
     res.json({ success: true, message: 'All notifications marked as read' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });

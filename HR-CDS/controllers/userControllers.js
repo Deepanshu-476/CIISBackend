@@ -5,6 +5,44 @@ const bcrypt = require('bcryptjs');
 const { errorResponse, successResponse } = require('../utils/responseHelper.js');
 const Task = require('../../HR-CDS/models/Task.js');
 
+const getSocketOnlineUserIds = (companyId) => {
+  const onlineIds = new Set();
+  const companyKey = companyId?.toString();
+
+  if (!global.io?.sockets?.sockets) return onlineIds;
+
+  global.io.sockets.sockets.forEach(socket => {
+    const socketUserId = socket.userId?.toString();
+    const socketCompanyId = socket.companyId?.toString();
+
+    if (!socketUserId) return;
+    if (companyKey && socketCompanyId !== companyKey) return;
+
+    onlineIds.add(socketUserId);
+  });
+
+  return onlineIds;
+};
+
+const isRecentlyOnlineInDb = (user) => {
+  if (!user?.isOnline) return false;
+  if (!user.lastSeen) return true;
+
+  const lastSeenTime = new Date(user.lastSeen).getTime();
+  if (Number.isNaN(lastSeenTime)) return true;
+
+  return Date.now() - lastSeenTime < 30 * 1000;
+};
+
+const getUserPresence = (user, socketOnlineIds) => {
+  const userId = user?._id?.toString() || user?.id?.toString();
+
+  return {
+    isOnline: Boolean(userId && socketOnlineIds.has(userId)) || isRecentlyOnlineInDb(user),
+    lastSeen: user?.lastSeen || null,
+  };
+};
+
 // All field names for consistent usage
 const USER_FIELDS = {
   // Basic fields (required in registration)
@@ -816,6 +854,7 @@ exports.getCompanydepartmentUsers = async (req, res) => {
       .populate('company', 'name companyCode companyEmail companyPhone companyAddress logo')
       .populate('createdBy', 'name email')
       .sort({ createdAt: -1 });
+    const socketOnlineIds = getSocketOnlineUserIds(companyId);
     
     console.log(`✅ Found ${users.length} users`);
     
@@ -865,6 +904,7 @@ exports.getCompanydepartmentUsers = async (req, res) => {
         zipCode: user.zipCode,
         country: user.country,
         isActive: user.isActive,
+        ...getUserPresence(user, socketOnlineIds),
         createdAt: user.createdAt,
         updatedAt: user.updatedAt
       }))
@@ -903,6 +943,7 @@ exports.getCompanyUsers = async (req, res) => {
       .select("-password -resetToken -resetTokenExpiry")
       .populate("department", "name description")
       .populate("company", "name companyCode");
+    const socketOnlineIds = getSocketOnlineUserIds(companyId);
 
     // Format users with complete data and task stats
     const usersWithStats = await Promise.all(
@@ -960,6 +1001,7 @@ exports.getCompanyUsers = async (req, res) => {
           zipCode: user.zipCode,
           country: user.country,
           isActive: user.isActive,
+          ...getUserPresence(user, socketOnlineIds),
           createdAt: user.createdAt,
           updatedAt: user.updatedAt,
           taskStats: {

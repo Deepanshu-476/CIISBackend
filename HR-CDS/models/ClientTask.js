@@ -6,6 +6,34 @@ const clienttaskSchema = new mongoose.Schema({
     ref: 'Client',
     required: true
   },
+  subscriptionId: {
+    type: mongoose.Schema.Types.ObjectId,
+    default: null,
+    index: true
+  },
+  subscriptionNo: {
+    type: Number,
+    default: null,
+    index: true
+  },
+  planId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'ClientPlan',
+    default: null
+  },
+  planName: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  templateTaskId: {
+    type: mongoose.Schema.Types.ObjectId,
+    default: null
+  },
+  isPlanTask: {
+    type: Boolean,
+    default: false
+  },
   service: {
     type: String,
     required: true,
@@ -103,6 +131,7 @@ const clienttaskSchema = new mongoose.Schema({
 
 // Indexes for better query performance
 clienttaskSchema.index({ clientId: 1, service: 1 });
+clienttaskSchema.index({ clientId: 1, subscriptionId: 1 });
 clienttaskSchema.index({ clientId: 1, completed: 1 });
 clienttaskSchema.index({ dueDate: 1 });
 clienttaskSchema.index({ assignee: 1 });

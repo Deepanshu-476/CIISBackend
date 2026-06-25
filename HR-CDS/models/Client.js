@@ -50,6 +50,11 @@ const clientSchema = new mongoose.Schema({
     type: String,
     trim: true
   }],
+  activeClientPlan: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'ClientPlan',
+    default: null
+  },
   status: {
     type: String,
     required: true,
@@ -94,6 +99,36 @@ const clientSchema = new mongoose.Schema({
   },
   subscription: {
     type: [{
+      subscriptionNo: {
+        type: Number,
+        default: 1
+      },
+      planId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'ClientPlan',
+        default: null
+      },
+      planName: {
+        type: String,
+        trim: true,
+        default: ''
+      },
+      servicesSnapshot: {
+        type: [{
+          service: String,
+          tasks: [{
+            name: String,
+            description: String,
+            priority: String,
+            dueInDays: Number
+          }]
+        }],
+        default: []
+      },
+      generatedTaskIds: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'ClientTask'
+      }],
       startDate: Date,
       endDate: Date,
       price: {

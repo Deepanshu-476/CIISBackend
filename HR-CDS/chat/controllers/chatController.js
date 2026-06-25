@@ -72,6 +72,16 @@ const getSocketOnlineUserIds = (companyId) => {
   return onlineIds;
 };
 
+const isRecentlyOnlineInDb = (user) => {
+  if (!user?.isOnline) return false;
+  if (!user.lastSeen) return true;
+
+  const lastSeenTime = new Date(user.lastSeen).getTime();
+  if (Number.isNaN(lastSeenTime)) return true;
+
+  return Date.now() - lastSeenTime < 30 * 1000;
+};
+
 exports.createConversation = async (req, res) => {
   try {
     const {receiverId} = req.body;
@@ -394,7 +404,7 @@ exports.getCompanyUsers = async (req, res) => {
 
     const usersWithPresence = users.map(user => ({
       ...user,
-      isOnline: socketOnlineIds.has(user._id.toString()),
+      isOnline: socketOnlineIds.has(user._id.toString()) || isRecentlyOnlineInDb(user),
     }));
 
     res.status(200).json({success: true, users: usersWithPresence});
