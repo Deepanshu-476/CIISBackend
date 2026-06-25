@@ -35,6 +35,9 @@ router.get("/:id/users", companyController.getCompanyUsers);
 // ✅ UPDATE COMPANY PAGE ACCESS / ACTIVATION
 router.patch("/:id/access", companyController.updateCompanyAccess);
 
+// ✅ RENEW COMPANY SUBSCRIPTION / PAYMENT
+router.patch("/:id/subscription", companyController.renewCompanySubscription);
+
 // ✅ GET COMPANY BY ID
 router.get("/:id", companyController.getCompanyById);
 
@@ -50,7 +53,7 @@ router.patch("/:id/activate", companyController.activateCompany);
 // ✅ HARD DELETE COMPANY
 router.delete("/:id", companyController.deleteCompanyPermanently);
 router.get('/test', (req, res) => {
-  res.json({
+  res.json({  
     status: 'healthy',
     service: 'Menu Access API',
     timestamp: new Date().toISOString(),

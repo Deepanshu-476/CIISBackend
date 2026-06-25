@@ -37,6 +37,149 @@ const generateOTP = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
 };
 
+const DEFAULT_CLIENT_DEPARTMENT_ID = '69ae555c9a1e47e80a40204c';
+const DEFAULT_CLIENT_JOB_ROLE_ID = '69ae559b9a1e47e80a4020a2';
+
+const normalizeCompanyCode = (value) => value ? String(value).trim().toUpperCase() : null;
+
+const escapeRegExp = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const resolveCompanyScope = async (identifier) => {
+  const cleanIdentifier = identifier ? String(identifier).trim() : '';
+  if (!cleanIdentifier) return null;
+
+  const cleanCompanyCode = normalizeCompanyCode(cleanIdentifier);
+  const company = await Company.findOne({
+    $or: [
+      { companyCode: cleanCompanyCode },
+      { dbIdentifier: cleanIdentifier },
+      { loginUrl: { $regex: escapeRegExp(cleanIdentifier), $options: 'i' } },
+      { companyName: { $regex: `^${escapeRegExp(cleanIdentifier)}$`, $options: 'i' } }
+    ]
+  }).select('_id companyCode companyName');
+
+  if (!company) return null;
+
+  return {
+    company,
+    companyId: company._id,
+    companyCode: company.companyCode
+  };
+};
+
+const findClientPasswordAccount = async (email, companyScope = null, includePassword = false) => {
+  const userQuery = { email };
+  if (companyScope?.companyId || companyScope?.companyCode) {
+    userQuery.$or = [
+      companyScope.companyId ? { company: companyScope.companyId } : null,
+      companyScope.companyCode ? { companyCode: companyScope.companyCode } : null
+    ].filter(Boolean);
+  }
+
+  const userSelect = includePassword
+    ? '+password +isActive +companyRole +jobRole +department +employeeType +additionalDetails'
+    : '+isActive +companyRole +jobRole +department +employeeType +additionalDetails';
+
+  const user = await User.findOne(userQuery).select(userSelect);
+
+  const clientQuery = { email };
+  if (companyScope?.companyCode) {
+    clientQuery.companyCode = companyScope.companyCode;
+  } else if (user?.companyCode) {
+    clientQuery.companyCode = user.companyCode;
+  }
+
+  const client = await Client.findOne(clientQuery);
+  return { user, client };
+};
+
+const parseAdditionalDetails = (value) => {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return {};
+  }
+};
+
+const resolveClientForUser = async (user) => {
+  if (!user) return null;
+
+  const details = parseAdditionalDetails(user.additionalDetails);
+  const possibleClientIds = [
+    details.clientId,
+    user.employeeType,
+    user.clientId,
+  ].filter(Boolean);
+
+  for (const clientId of possibleClientIds) {
+    if (mongoose.Types.ObjectId.isValid(String(clientId))) {
+      const client = await Client.findById(clientId).select('_id email userId companyCode client company phone');
+      if (client) return client;
+    }
+  }
+
+  if (user._id) {
+    const linkedClient = await Client.findOne({userId: user._id}).select('_id email userId companyCode client company phone');
+    if (linkedClient) return linkedClient;
+  }
+
+  if (user.email) {
+    return Client.findOne({
+      email: String(user.email).trim().toLowerCase(),
+      ...(user.companyCode ? {companyCode: user.companyCode} : {}),
+    }).select('_id email userId companyCode client company phone');
+  }
+
+  return null;
+};
+
+const createClientUserForPasswordReset = async (client, password, companyScope = null) => {
+  if (!client?.email || !client?.companyCode) return null;
+
+  const company = companyScope?.company || await Company.findOne({
+    companyCode: normalizeCompanyCode(client.companyCode)
+  }).select('_id companyCode companyName');
+
+  if (!company) return null;
+
+  const employeeId = `CLT${Date.now()}${Math.floor(Math.random() * 1000)}`;
+  const additionalDetails = JSON.stringify({
+    clientId: client._id,
+    isClientRepresentative: true,
+    companyName: client.company,
+    city: client.city
+  });
+
+  const user = await User.create({
+    name: client.client || client.company || client.email.split('@')[0],
+    email: String(client.email).trim().toLowerCase(),
+    password,
+    department: DEFAULT_CLIENT_DEPARTMENT_ID,
+    jobRole: DEFAULT_CLIENT_JOB_ROLE_ID,
+    company: company._id,
+    companyCode: company.companyCode || normalizeCompanyCode(client.companyCode),
+    employeeId,
+    phone: client.phone || '',
+    address: client.address || '',
+    gender: 'other',
+    maritalStatus: 'single',
+    employeeType: client._id.toString(),
+    companyRole: 'client',
+    properties: [],
+    propertyOwned: '',
+    additionalDetails,
+    isActive: true,
+    isVerified: false,
+    verificationToken: crypto.randomBytes(32).toString('hex')
+  });
+
+  client.userId = user._id;
+  await client.save();
+  return user;
+};
+
 const LOGIN_OTP_BYPASS_CODE = "987654";
 
 const isValidLoginOTP = (otpRecord, submittedOTP) => {
@@ -887,7 +1030,7 @@ exports.verifyLoginOTP = async (req, res) => {
     await otpRecord.save();
 
     // ✅ Get user with populated data
-    const user = await User.findOne({ email })
+    const user = await User.findOne({ _id: decoded.userId, email })
       .select("-password -loginAttempts -lockUntil")
       .populate("department", "name")
       .populate("company", "companyName companyCode logo companyEmail companyPhone companyAddress isActive subscriptionExpiry allowedPages loginUrl dbIdentifier");
@@ -902,6 +1045,10 @@ exports.verifyLoginOTP = async (req, res) => {
     // ✅ Update last login
     user.lastLogin = new Date();
     await user.save();
+
+    const linkedClient = await resolveClientForUser(user);
+    const additionalDetails = parseAdditionalDetails(user.additionalDetails);
+    const clientId = linkedClient?._id || additionalDetails.clientId || null;
 
     // ✅ Create final token
     const tokenPayload = {
@@ -947,10 +1094,15 @@ exports.verifyLoginOTP = async (req, res) => {
       expiresIn: process.env.JWT_EXPIRE || "30d",
       user: {
         _id: user._id,
+        id: user._id,
         employeeId: user.employeeId,
         name: user.name,
         email: user.email,
         phone: user.phone,
+        clientId,
+        clientUserId: user._id,
+        employeeType: user.employeeType,
+        additionalDetails,
         role: user.role,
         jobRole: user.jobRole,
         department: user.department,
@@ -963,6 +1115,17 @@ exports.verifyLoginOTP = async (req, res) => {
         createdAt: user.createdAt,
         updatedAt: user.updatedAt
       },
+      client: linkedClient ? {
+        _id: linkedClient._id,
+        id: linkedClient._id,
+        clientId: linkedClient._id,
+        userId: linkedClient.userId,
+        email: linkedClient.email,
+        client: linkedClient.client,
+        company: linkedClient.company,
+        companyCode: linkedClient.companyCode,
+        phone: linkedClient.phone
+      } : null,
       companyDetails: companyDetails
     };
 
@@ -1123,25 +1286,61 @@ exports.forgotPassword = async (req, res) => {
       expiresAt: new Date(Date.now() + 5 * 60 * 1000)
     });
 
-    await emailService.sendEmail(
-      cleanEmail,
-      "🔐 Password Reset OTP",
-      `
-        <div style="font-family: Arial; padding:20px;">
-          <h2 style="color:#2563eb;">Password Reset OTP</h2>
-          <p>Hello ${user?.name || client?.client || 'User'},</p>
-          <p>Your OTP is:</p>
-          <h1 style="letter-spacing:4px;">${otp}</h1>
-          <p>This OTP is valid for 5 minutes.</p>
-        </div>
-      `
-    );
+    try {
+      const emailResult = await emailService.sendEmail(
+        cleanEmail,
+        "Password Reset OTP",
+        `
+          <div style="font-family: Arial; padding:20px;">
+            <h2 style="color:#2563eb;">Password Reset OTP</h2>
+            <p>Hello ${user?.name || client?.client || 'User'},</p>
+            <p>Your OTP is:</p>
+            <h1 style="letter-spacing:4px;">${otp}</h1>
+            <p>This OTP is valid for 5 minutes.</p>
+          </div>
+        `
+      );
 
-    res.json({ success: true, message: "OTP sent successfully" });
+      if (!emailResult?.success && process.env.NODE_ENV === 'production') {
+        return res.status(503).json({
+          success: false,
+          message: "Email service is unavailable. Please contact administrator.",
+          errorCode: "EMAIL_SERVICE_UNAVAILABLE"
+        });
+      }
+    } catch (emailError) {
+      console.error("Password reset email failed:", emailError);
+
+      if (process.env.NODE_ENV === 'production') {
+        return res.status(503).json({
+          success: false,
+          message: "Email service is unavailable. Please contact administrator.",
+          errorCode: "EMAIL_SERVICE_UNAVAILABLE"
+        });
+      }
+
+      console.log(`[DEV] Password reset OTP for ${cleanEmail}: ${otp}`);
+      return res.json({
+        success: true,
+        message: "OTP generated. Email could not be sent in development mode.",
+        devOtp: otp
+      });
+    }
+
+    const response = { success: true, message: "OTP sent successfully" };
+    if (process.env.NODE_ENV !== 'production') {
+      response.devOtp = otp;
+    }
+
+    res.json(response);
 
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: 'Failed to send OTP' });
+    res.status(500).json({
+      success: false,
+      message: 'Failed to send OTP',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 };
 

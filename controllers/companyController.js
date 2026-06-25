@@ -59,6 +59,16 @@ const isValidObjectId = (id) => {
   return mongoose.Types.ObjectId.isValid(id);
 };
 
+const normalizePaymentStatus = (status = "paid") => {
+  const normalized = String(status || "paid").trim().toLowerCase();
+  return ["paid", "unpaid", "partial", "waived"].includes(normalized) ? normalized : "paid";
+};
+
+const normalizePaymentMode = (mode = "other") => {
+  const normalized = String(mode || "other").trim().toLowerCase();
+  return ["cash", "upi", "bank_transfer", "card", "cheque", "other"].includes(normalized) ? normalized : "other";
+};
+
 // Helper function to get company stats
 const getCompanyStats = async (companyId) => {
   const [totalUsers, activeUsers, deactivatedUsers] = await Promise.all([
@@ -550,7 +560,7 @@ exports.createCompany = async (req, res) => {
         };
       });
       
-      errorDetails = validationErrors;
+      errorDetails = validationErrors;  
     } 
     else if (err.code === 11000) {
       statusCode = 409;
@@ -629,7 +639,7 @@ exports.getAllCompanies = async (req, res) => {
     const companies = await Company.find({})
       .select(
         "_id companyName companyEmail companyAddress companyPhone ownerName logo companyDomain loginToken isActive deactivatedAt subscriptionExpiry createdAt updatedAt companyCode dbIdentifier loginUrl"
-          + " allowedPages accessConfiguredAt accessUpdatedBy"
+          + " allowedPages accessConfiguredAt accessUpdatedBy subscriptionPlan subscriptionAmount subscriptionPaymentStatus subscriptionPayments"
       )
       .sort({ createdAt: -1 });
 
@@ -893,6 +903,9 @@ exports.updateCompany = async (req, res) => {
       "ownerName",
       "logo",
       "subscriptionExpiry",
+      "subscriptionPlan",
+      "subscriptionAmount",
+      "subscriptionPaymentStatus",
     ];
 
     const updateData = {};
@@ -905,6 +918,32 @@ exports.updateCompany = async (req, res) => {
     // ✅ lowercase email
     if (updateData.companyEmail) {
       updateData.companyEmail = updateData.companyEmail.toLowerCase();
+    }
+
+    if (updateData.subscriptionExpiry) {
+      const expiry = new Date(updateData.subscriptionExpiry);
+      if (Number.isNaN(expiry.getTime())) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid subscription expiry date",
+        });
+      }
+      updateData.subscriptionExpiry = expiry;
+    }
+
+    if (updateData.subscriptionAmount !== undefined) {
+      const amount = Number(updateData.subscriptionAmount);
+      if (!Number.isFinite(amount) || amount < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid subscription amount",
+        });
+      }
+      updateData.subscriptionAmount = amount;
+    }
+
+    if (updateData.subscriptionPaymentStatus) {
+      updateData.subscriptionPaymentStatus = normalizePaymentStatus(updateData.subscriptionPaymentStatus);
     }
 
     const updatedCompany = await Company.findByIdAndUpdate(
@@ -1042,6 +1081,152 @@ exports.updateCompanyAccess = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to update company access",
+    });
+  }
+};
+
+// =============================
+// RENEW COMPANY SUBSCRIPTION / PAYMENT
+// =============================
+
+exports.renewCompanySubscription = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      subscriptionExpiry,
+      subscriptionStartDate,
+      planName = "Standard",
+      amount = 0,
+      paymentDate,
+      paymentMode = "other",
+      transactionId = "",
+      paymentStatus = "paid",
+      notes = "",
+      isActive,
+      recordedBy,
+    } = req.body;
+
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid company id",
+      });
+    }
+
+    if (!subscriptionExpiry) {
+      return res.status(400).json({
+        success: false,
+        message: "Subscription expiry date is required",
+      });
+    }
+
+    const expiryDate = new Date(subscriptionExpiry);
+    if (Number.isNaN(expiryDate.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid subscription expiry date",
+      });
+    }
+
+    const startDate = subscriptionStartDate ? new Date(subscriptionStartDate) : new Date();
+    if (Number.isNaN(startDate.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid subscription start date",
+      });
+    }
+
+    const paidOn = paymentDate ? new Date(paymentDate) : new Date();
+    if (Number.isNaN(paidOn.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid payment date",
+      });
+    }
+
+    const paymentAmount = Number(amount || 0);
+    if (!Number.isFinite(paymentAmount) || paymentAmount < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid payment amount",
+      });
+    }
+
+    const cleanStatus = normalizePaymentStatus(paymentStatus);
+    const cleanMode = normalizePaymentMode(paymentMode);
+    const cleanPlanName = String(planName || "Standard").trim() || "Standard";
+
+    const paymentRecord = {
+      amount: paymentAmount,
+      paymentDate: paidOn,
+      paymentMode: cleanMode,
+      transactionId: String(transactionId || "").trim(),
+      status: cleanStatus,
+      subscriptionStartDate: startDate,
+      subscriptionExpiry: expiryDate,
+      planName: cleanPlanName,
+      notes: String(notes || "").trim(),
+      recordedBy: recordedBy && isValidObjectId(recordedBy) ? recordedBy : req.user?._id || null,
+    };
+
+    const updateData = {
+      subscriptionExpiry: expiryDate,
+      subscriptionPlan: cleanPlanName,
+      subscriptionAmount: paymentAmount,
+      subscriptionPaymentStatus: cleanStatus,
+      accessConfiguredAt: new Date(),
+      $push: {
+        subscriptionPayments: {
+          $each: [paymentRecord],
+          $position: 0,
+        },
+      },
+    };
+
+    if (isActive !== undefined) {
+      updateData.isActive = Boolean(isActive);
+      updateData.deactivatedAt = Boolean(isActive) ? null : new Date();
+    }
+
+    const company = await Company.findByIdAndUpdate(
+      id,
+      {
+        $set: Object.fromEntries(
+          Object.entries(updateData).filter(([key]) => key !== "$push")
+        ),
+        $push: updateData.$push,
+      },
+      { new: true, runValidators: true }
+    ).select("-loginToken");
+
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: "Company not found",
+      });
+    }
+
+    if (company.isActive) {
+      await User.updateMany(
+        { company: id },
+        {
+          isActive: true,
+          $unset: { lockUntil: 1 },
+        }
+      );
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Company subscription updated successfully",
+      company,
+      payment: paymentRecord,
+    });
+  } catch (err) {
+    console.error("❌ Renew company subscription error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update company subscription",
     });
   }
 };
