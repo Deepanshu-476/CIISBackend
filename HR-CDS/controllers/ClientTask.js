@@ -1517,7 +1517,11 @@ const getTasksByClientService = async (req, res) => {
     }
 
     const filter = { clientId, service };
-    if (req.query.startDate && req.query.endDate) {
+    if (req.query.subscriptionId && mongoose.Types.ObjectId.isValid(req.query.subscriptionId)) {
+      filter.subscriptionId = req.query.subscriptionId;
+    } else if (req.query.subscriptionNo) {
+      filter.subscriptionNo = Number(req.query.subscriptionNo);
+    } else if (req.query.startDate && req.query.endDate) {
       filter.createdAt = {
         $gte: new Date(req.query.startDate),
         $lte: new Date(req.query.endDate)
@@ -1545,15 +1549,17 @@ const getTasksByClientService = async (req, res) => {
 const getClientTasks = async (req, res) => {
   try {
     const { clientId } = req.params;
-    const { service, completed, assignee, priority } = req.query;
+    const { service, completed, assignee, priority, subscriptionId, subscriptionNo } = req.query;
 
     const filter = { clientId };
     if (service) filter.service = service;
     if (completed !== undefined) filter.completed = completed === 'true';
     if (assignee) filter.assignee = assignee;
     if (priority) filter.priority = priority;
+    if (subscriptionId && mongoose.Types.ObjectId.isValid(subscriptionId)) filter.subscriptionId = subscriptionId;
+    if (subscriptionNo) filter.subscriptionNo = Number(subscriptionNo);
 
-    if (req.query.startDate && req.query.endDate) {
+    if (!subscriptionId && !subscriptionNo && req.query.startDate && req.query.endDate) {
       filter.createdAt = {
         $gte: new Date(req.query.startDate),
         $lte: new Date(req.query.endDate)
@@ -1607,7 +1613,7 @@ const getClientTasks = async (req, res) => {
 const addTask = async (req, res) => {
   try {
     const { clientId, service } = req.params;
-    const { name, dueDate, dueDateTime, assignee, assigneeId, priority, description } = req.body;
+    const { name, dueDate, dueDateTime, assignee, assigneeId, priority, description, subscriptionId, subscriptionNo } = req.body;
     const currentUser = req.user;
     const parsedDueDate = parseClientDueDate(dueDateTime || dueDate);
 
@@ -1633,6 +1639,12 @@ const addTask = async (req, res) => {
       });
     }
 
+    const selectedSubscription = subscriptionId
+      ? client.subscription.id(subscriptionId)
+      : subscriptionNo
+        ? client.subscription.find(sub => Number(sub.subscriptionNo) === Number(subscriptionNo))
+        : client.subscription?.[client.subscription.length - 1];
+
     let resolvedAssigneeId = assigneeId || null;
     if (!resolvedAssigneeId && assignee) {
       const user = await User.findOne({ name: assignee });
@@ -1643,6 +1655,10 @@ const addTask = async (req, res) => {
 
     const task = new Task({
       clientId,
+      subscriptionId: selectedSubscription?._id || null,
+      subscriptionNo: selectedSubscription?.subscriptionNo || null,
+      planId: selectedSubscription?.planId || null,
+      planName: selectedSubscription?.planName || '',
       service,
       name: name.trim(),
       description: description || name.trim(),

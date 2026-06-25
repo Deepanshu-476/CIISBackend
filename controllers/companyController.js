@@ -1,6 +1,7 @@
 const Company = require("../models/Company");
 const User = require("../models/User");
 const Branch = require("../models/Branch");
+const Plan = require("../models/Plan");
 const crypto = require("crypto");
 const mongoose = require("mongoose");
 const multer = require('multer');
@@ -68,6 +69,12 @@ const normalizePaymentMode = (mode = "other") => {
   const normalized = String(mode || "other").trim().toLowerCase();
   return ["cash", "upi", "bank_transfer", "card", "cheque", "other"].includes(normalized) ? normalized : "other";
 };
+
+const cleanStringArray = value => (
+  Array.isArray(value)
+    ? [...new Set(value.map(item => String(item || "").trim()).filter(Boolean))]
+    : []
+);
 
 // Helper function to get company stats
 const getCompanyStats = async (companyId) => {
@@ -220,6 +227,7 @@ exports.createCompany = async (req, res) => {
       logo,
       ownerEmail,
       ownerPassword,
+      planId,
       department = "Management",
     } = req.body;
 
@@ -235,6 +243,7 @@ exports.createCompany = async (req, res) => {
       { field: "ownerName", label: "Owner Name", value: ownerName },
       { field: "ownerEmail", label: "Owner Email", value: ownerEmail },
       { field: "ownerPassword", label: "Owner Password", value: ownerPassword },
+      { field: "planId", label: "Plan", value: planId },
     ];
 
     requiredFields.forEach(({ field, label, value }) => {
@@ -260,6 +269,15 @@ exports.createCompany = async (req, res) => {
     // Password strength validation
     if (ownerPassword && ownerPassword.length < 6) {
       validationErrors.push("Password must be at least 6 characters long");
+    }
+
+    let selectedPlan = null;
+    if (planId && isValidObjectId(planId)) {
+      selectedPlan = await Plan.findOne({ _id: planId, isActive: true });
+    }
+
+    if (!selectedPlan) {
+      validationErrors.push("Please select a valid active plan");
     }
 
     // Return validation errors if any
@@ -371,6 +389,12 @@ exports.createCompany = async (req, res) => {
       const baseUrl = `${req.protocol}://${req.get("host")}`;
       const frontendLoginUrl = `${"https://cds.ciisnetwork.in"}/company/${companyCode}/login`;
       const apiLoginUrl = `${baseUrl}/api/v1/auth/company/${companyCode}/login`;
+      const subscriptionStartDate = new Date();
+      const subscriptionExpiry = new Date(
+        subscriptionStartDate.getTime() + selectedPlan.durationDays * 24 * 60 * 60 * 1000
+      );
+      const cleanAllowedPages = cleanStringArray(selectedPlan.allowedPages);
+      const cleanFeatures = cleanStringArray(selectedPlan.features);
       
       const companyData = {
         companyName: trimmedCompanyName,
@@ -384,9 +408,28 @@ exports.createCompany = async (req, res) => {
         loginUrl: frontendLoginUrl,
         apiLoginUrl: apiLoginUrl,
         dbIdentifier: dbIdentifier,
-        isActive: false,
-        deactivatedAt: new Date(),
-        allowedPages: [],
+        isActive: true,
+        deactivatedAt: null,
+        selectedPlan: selectedPlan._id,
+        subscriptionPlan: selectedPlan.name,
+        subscriptionAmount: selectedPlan.price,
+        subscriptionPaymentStatus: selectedPlan.price > 0 ? "unpaid" : "waived",
+        subscriptionExpiry,
+        planDurationDays: selectedPlan.durationDays,
+        planFeatures: cleanFeatures,
+        allowedPages: cleanAllowedPages,
+        accessConfiguredAt: new Date(),
+        subscriptionPayments: [{
+          amount: selectedPlan.price,
+          paymentDate: new Date(),
+          paymentMode: "other",
+          transactionId: "",
+          status: selectedPlan.price > 0 ? "unpaid" : "waived",
+          subscriptionStartDate,
+          subscriptionExpiry,
+          planName: selectedPlan.name,
+          notes: "Selected during company registration",
+        }],
       };
 
       const company = await Company.create([companyData], { session });
@@ -435,9 +478,6 @@ exports.createCompany = async (req, res) => {
       const loginToken = crypto.randomBytes(32).toString("hex");
       createdCompany.loginToken = loginToken;
       
-      // ✅ 6. KEEP SUBSCRIPTION PENDING UNTIL SUPER ADMIN ACTIVATES ACCESS
-      createdCompany.subscriptionExpiry = null;
-      
       await createdCompany.save({ session });
 
       // Commit transaction
@@ -459,7 +499,8 @@ exports.createCompany = async (req, res) => {
           loginUrl: frontendLoginUrl,
           apiLoginUrl: apiLoginUrl,
           createdAt: createdCompany.createdAt,
-          subscriptionExpiry: createdCompany.subscriptionExpiry
+          subscriptionExpiry: createdCompany.subscriptionExpiry,
+          subscriptionPlan: createdCompany.subscriptionPlan,
         },
         {
           id: createdOwner._id,
@@ -488,7 +529,7 @@ exports.createCompany = async (req, res) => {
       // ✅ 8. SUCCESS RESPONSE
       return res.status(201).json({
         success: true,
-        message: "Company registered successfully! Activate company access before owner login.",
+        message: "Company registered successfully with selected plan.",
         company: {
           id: createdCompany._id,
           companyName: createdCompany.companyName,
@@ -503,6 +544,11 @@ exports.createCompany = async (req, res) => {
           dbIdentifier: createdCompany.dbIdentifier,
           isActive: createdCompany.isActive,
           subscriptionExpiry: createdCompany.subscriptionExpiry,
+          selectedPlan: createdCompany.selectedPlan,
+          subscriptionPlan: createdCompany.subscriptionPlan,
+          subscriptionAmount: createdCompany.subscriptionAmount,
+          planDurationDays: createdCompany.planDurationDays,
+          planFeatures: createdCompany.planFeatures,
           allowedPages: createdCompany.allowedPages,
           createdAt: createdCompany.createdAt,
         },
@@ -524,7 +570,7 @@ exports.createCompany = async (req, res) => {
           timestamp: new Date().toISOString(),
           transactionId: createdCompany._id.toString(),
           companyCode: companyCode,
-          stepsCompleted: ["company_creation", "owner_creation", "token_generation", "pending_access_activation", "email_queued"]
+          stepsCompleted: ["company_creation", "owner_creation", "token_generation", "plan_access_applied", "email_queued"]
         }
       });
 
@@ -639,8 +685,9 @@ exports.getAllCompanies = async (req, res) => {
     const companies = await Company.find({})
       .select(
         "_id companyName companyEmail companyAddress companyPhone ownerName logo companyDomain loginToken isActive deactivatedAt subscriptionExpiry createdAt updatedAt companyCode dbIdentifier loginUrl"
-          + " allowedPages accessConfiguredAt accessUpdatedBy subscriptionPlan subscriptionAmount subscriptionPaymentStatus subscriptionPayments"
+          + " allowedPages accessConfiguredAt accessUpdatedBy selectedPlan subscriptionPlan subscriptionAmount subscriptionPaymentStatus subscriptionPayments planDurationDays planFeatures"
       )
+      .populate("selectedPlan", "name price durationDays features allowedPages")
       .sort({ createdAt: -1 });
 
     // ✅ Get user counts for each company
@@ -687,7 +734,9 @@ exports.getCompanyById = async (req, res) => {
       });
     }
 
-    const company = await Company.findById(id).select("-loginToken");
+    const company = await Company.findById(id)
+      .select("-loginToken")
+      .populate("selectedPlan", "name price durationDays features allowedPages");
 
     if (!company) {
       return res.status(404).json({
@@ -1095,6 +1144,7 @@ exports.renewCompanySubscription = async (req, res) => {
     const {
       subscriptionExpiry,
       subscriptionStartDate,
+      planId,
       planName = "Standard",
       amount = 0,
       paymentDate,
@@ -1144,7 +1194,24 @@ exports.renewCompanySubscription = async (req, res) => {
       });
     }
 
-    const paymentAmount = Number(amount || 0);
+    let selectedPlan = null;
+    if (planId) {
+      if (!isValidObjectId(planId)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid plan id",
+        });
+      }
+      selectedPlan = await Plan.findOne({ _id: planId, isActive: true });
+      if (!selectedPlan) {
+        return res.status(404).json({
+          success: false,
+          message: "Selected plan not found or inactive",
+        });
+      }
+    }
+
+    const paymentAmount = Number(selectedPlan ? selectedPlan.price : amount || 0);
     if (!Number.isFinite(paymentAmount) || paymentAmount < 0) {
       return res.status(400).json({
         success: false,
@@ -1154,7 +1221,9 @@ exports.renewCompanySubscription = async (req, res) => {
 
     const cleanStatus = normalizePaymentStatus(paymentStatus);
     const cleanMode = normalizePaymentMode(paymentMode);
-    const cleanPlanName = String(planName || "Standard").trim() || "Standard";
+    const cleanPlanName = selectedPlan?.name || String(planName || "Standard").trim() || "Standard";
+    const planFeatures = selectedPlan ? cleanStringArray(selectedPlan.features) : null;
+    const planAllowedPages = selectedPlan ? cleanStringArray(selectedPlan.allowedPages) : null;
 
     const paymentRecord = {
       amount: paymentAmount,
@@ -1183,6 +1252,13 @@ exports.renewCompanySubscription = async (req, res) => {
       },
     };
 
+    if (selectedPlan) {
+      updateData.selectedPlan = selectedPlan._id;
+      updateData.planDurationDays = selectedPlan.durationDays;
+      updateData.planFeatures = planFeatures;
+      updateData.allowedPages = planAllowedPages;
+    }
+
     if (isActive !== undefined) {
       updateData.isActive = Boolean(isActive);
       updateData.deactivatedAt = Boolean(isActive) ? null : new Date();
@@ -1197,7 +1273,9 @@ exports.renewCompanySubscription = async (req, res) => {
         $push: updateData.$push,
       },
       { new: true, runValidators: true }
-    ).select("-loginToken");
+    )
+      .select("-loginToken")
+      .populate("selectedPlan", "name price durationDays features allowedPages");
 
     if (!company) {
       return res.status(404).json({
