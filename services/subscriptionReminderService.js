@@ -16,7 +16,7 @@ const sendSubscriptionEmail = (client, subject, body) => {
       ${body}
       <p>Please renew your plan to continue services.</p>
     `
-  );
+  ); 
 };
 
 const shouldSendExpiredReminder = (client, now) => {
