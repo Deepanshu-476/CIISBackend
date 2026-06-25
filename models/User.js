@@ -86,6 +86,11 @@ const userSchema = new mongoose.Schema({
     enum: ['single', 'married', 'divorced', 'widowed']
   },
   dob: Date,
+  aadharCard: String,
+  aadhaar: String,
+  aadhar: String,
+  panCard: String,
+  pan: String,
   salary: Number,
   
   // ==================== BANK DETAILS ====================

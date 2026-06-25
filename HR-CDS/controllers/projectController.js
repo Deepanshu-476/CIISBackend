@@ -324,9 +324,12 @@ exports.createProject = async (req, res) => {
         usersArray = Array.isArray(users) ? users : [];
       }
 
+      // Ensure all IDs are strings and unique
+      usersArray = [...new Set(usersArray.filter(Boolean).map(id => String(id)))];
+
       // Add creator to users array if not already included
-      if (!usersArray.includes(req.user.id)) {
-        usersArray.push(req.user.id);
+      if (!usersArray.includes(String(req.user.id))) {
+        usersArray.push(String(req.user.id));
         console.log("Added creator to users array");
       }
 
@@ -435,6 +438,9 @@ exports.updateProject = async (req, res) => {
       } catch (parseError) {
         usersArray = Array.isArray(users) ? users : [];
       }
+
+      // Ensure all IDs are strings and unique
+      usersArray = [...new Set(usersArray.filter(Boolean).map(id => String(id)))];
 
       // Update fields
       project.projectName = projectName || project.projectName;
