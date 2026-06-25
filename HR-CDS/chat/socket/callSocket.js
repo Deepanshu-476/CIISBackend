@@ -13,15 +13,26 @@ const emitToUser = (io, userId, eventName, payload) => {
     io.to(`user:${userId}`).emit(eventName, payload);
 };
 
+const getUserId = (value) => {
+    if (!value) return "";
+    if (typeof value !== "object") return value.toString();
+
+    const rawId = value._id || value.id || value.userId || value.user?._id || value.user?.id;
+    if (!rawId) return "";
+
+    return typeof rawId === "object" ? getUserId(rawId) : rawId.toString();
+};
+
 const isUserOnline = (io, userId) => {
-    if (!userId) return false;
-    const room = io.sockets.adapter.rooms.get(`user:${userId}`);
+    const normalizedUserId = getUserId(userId);
+    if (!normalizedUserId) return false;
+    const room = io.sockets.adapter.rooms.get(`user:${normalizedUserId}`);
     return Boolean(room && room.size > 0);
 };
 
 const getParticipantIds = (data = {}) => {
     const ids = Array.isArray(data.participantIds) ? data.participantIds : [data.toUserId];
-    return [...new Set(ids.map(id => id?.toString()).filter(Boolean))];
+    return [...new Set(ids.map(getUserId).filter(Boolean))];
 };
 
 const getCallRoom = (callId) => activeCalls.get(callId?.toString());

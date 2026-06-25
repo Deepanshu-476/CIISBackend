@@ -163,6 +163,7 @@ router.get('/stats', async (req, res) => {
 router.get('/companies', async (req, res) => {
   try {
     const companies = await Company.find()
+      .populate('selectedPlan', 'name price durationDays features allowedPages')
       .sort({ createdAt: -1 });
     
     res.json(companies);

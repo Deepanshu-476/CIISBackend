@@ -57,8 +57,9 @@ const sendEmail = async (to, subject, html, options = {}) => {
       to: Array.isArray(to) ? to.join(', ') : to,
       subject: subject,
       html: html,
+      text: options.text || undefined,
       replyTo: process.env.EMAIL_USER,
-      priority: 'high'
+      priority: options.priority || 'normal'
     });
 
     console.log(`✅ Email sent to ${to} | Message ID: ${info.messageId}`);
