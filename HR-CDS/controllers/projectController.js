@@ -51,7 +51,60 @@ const isProjectAdmin = (user = {}) => {
   return roles.some(role => ["admin", "super-admin", "superadmin", "owner"].includes(role));
 };
 
-const hasProjectAccess = (project, userId, userRole) => {
+const getUserCompanyId = (user = {}) => {
+  const company = user.company;
+  if (!company) return user.companyId || null;
+  return company._id || company.id || company;
+};
+
+const getUserCompanyCode = (user = {}) => String(
+  user.companyCode || user.company?.companyCode || ""
+).trim().toUpperCase();
+
+const getProjectCompanyCode = (project = {}) => String(
+  project.companyCode || project.company?.companyCode || ""
+).trim().toUpperCase();
+
+const normalizeId = (value) => {
+  if (!value) return "";
+  if (value._id && value._id !== value) return normalizeId(value._id);
+  if (typeof value.toString === "function") return value.toString();
+  return String(value);
+};
+
+const getCompanyUserIds = async (user = {}) => {
+  const companyId = getUserCompanyId(user);
+  const companyCode = getUserCompanyCode(user);
+  const companyFilters = [];
+
+  if (companyId) companyFilters.push({ company: companyId });
+  if (companyCode) companyFilters.push({ companyCode });
+
+  if (companyFilters.length === 0) return [user._id || user.id].filter(Boolean);
+
+  const users = await User.find({ $or: companyFilters }).select("_id").lean();
+  return users.map(item => item._id);
+};
+
+const projectBelongsToUserCompany = (project, user = {}) => {
+  const userCompanyId = normalizeId(getUserCompanyId(user));
+  const projectCompanyId = normalizeId(project?.company);
+  const userCompanyCode = getUserCompanyCode(user);
+  const projectCompanyCode = getProjectCompanyCode(project);
+
+  if (projectCompanyId && userCompanyId) return projectCompanyId === userCompanyId;
+  if (projectCompanyCode && userCompanyCode) return projectCompanyCode === userCompanyCode;
+
+  // Older projects may not have company fields. In that case, allow the normal
+  // membership/creator checks to keep legacy assigned projects visible.
+  return true;
+};
+
+const hasProjectAccess = (project, userId, userRole, user = {}) => {
+  if (!projectBelongsToUserCompany(project, user)) {
+    return false;
+  }
+
   // Super admin and admin have full access
   if (isProjectAdmin({ role: userRole })) {
     return true;
@@ -204,30 +257,57 @@ exports.listProjects = async (req, res) => {
   try {
     console.log("📋 Listing projects for user:", req.user.id);
     console.log("User role:", req.user.role);
-    
-    let query = {};
-    
-    // If not admin/super-admin, only show projects user is part of
+
+    const companyId = getUserCompanyId(req.user);
+    const companyCode = getUserCompanyCode(req.user);
+    const companyUserIds = await getCompanyUserIds(req.user);
+    const companyUserFilter = {
+      $or: [
+        { users: { $in: companyUserIds } },
+        { createdBy: { $in: companyUserIds } }
+      ]
+    };
+
+    const companyFilters = [];
+    if (companyId) companyFilters.push({ company: companyId });
+    if (companyCode) companyFilters.push({ companyCode });
+    companyFilters.push(companyUserFilter);
+
+    let query = { $or: companyFilters };
+
+    // Non-admin users only see projects they are directly part of or created.
     if (!isProjectAdmin(req.user)) {
-      query.users = req.user.id;
-      console.log("Non-admin query:", query);
+      query = {
+        $and: [
+          query,
+          {
+            $or: [
+              { users: req.user.id },
+              { createdBy: req.user.id }
+            ]
+          }
+        ]
+      };
+      console.log("Non-admin company scoped query:", query);
     } else {
-      console.log("Admin query: showing all projects");
+      console.log("Admin company scoped query:", query);
     }
 
     const projects = await Project.find(query)
-      .populate('users', 'name email role')
+      .populate('users', 'name email role company companyCode')
       .populate('createdBy', 'name email')
       .populate('tasks.assignedTo', 'name email')
       .populate('tasks.createdBy', 'name email')
       .sort({ createdAt: -1 });
 
-    console.log(`Found ${projects.length} projects`);
+    const scopedProjects = projects.filter(project => projectBelongsToUserCompany(project, req.user));
+
+    console.log(`Found ${scopedProjects.length} projects for company ${companyCode || companyId || 'unknown'}`);
 
     res.status(200).json({
       success: true,
-      count: projects.length,
-      items: projects
+      count: scopedProjects.length,
+      items: scopedProjects
     });
   } catch (error) {
     console.error("❌ Error listing projects:", error);
@@ -266,7 +346,7 @@ exports.getProjectById = async (req, res) => {
     console.log("Project created by:", project.createdBy?._id);
     
     // Check if user has access to this project
-    if (!hasProjectAccess(project, req.user.id, req.user.role)) {
+    if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
       console.log("❌ Access denied for user:", req.user.id);
       console.log("User role:", req.user.role);
       console.log("Has admin role:", req.user.role === 'admin' || req.user.role === 'super-admin');
@@ -326,6 +406,8 @@ exports.createProject = async (req, res) => {
 
       // Ensure all IDs are strings and unique
       usersArray = [...new Set(usersArray.filter(Boolean).map(id => String(id)))];
+      const companyUserIds = (await getCompanyUserIds(req.user)).map(id => normalizeId(id));
+      usersArray = usersArray.filter(id => companyUserIds.includes(id));
 
       // Add creator to users array if not already included
       if (!usersArray.includes(String(req.user.id))) {
@@ -337,6 +419,8 @@ exports.createProject = async (req, res) => {
       const projectData = {
         projectName,
         description,
+        company: getUserCompanyId(req.user),
+        companyCode: getUserCompanyCode(req.user),
         users: usersArray,
         startDate,
         endDate,
@@ -425,7 +509,7 @@ exports.updateProject = async (req, res) => {
       }
 
       // Check access
-      if (!hasProjectAccess(project, req.user.id, req.user.role)) {
+      if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
         return res.status(403).json({ 
           success: false, 
           message: "Access denied to update project" 
@@ -441,6 +525,8 @@ exports.updateProject = async (req, res) => {
 
       // Ensure all IDs are strings and unique
       usersArray = [...new Set(usersArray.filter(Boolean).map(id => String(id)))];
+      const companyUserIds = (await getCompanyUserIds(req.user)).map(id => normalizeId(id));
+      usersArray = usersArray.filter(id => companyUserIds.includes(id));
 
       // Update fields
       project.projectName = projectName || project.projectName;
@@ -512,8 +598,10 @@ exports.deleteProject = async (req, res) => {
     }
 
     // Check access - only admin/super-admin or creator can delete
-    const canDelete = isProjectAdmin(req.user) ||
-                     project.createdBy?.toString() === req.user.id;
+    const canDelete = projectBelongsToUserCompany(project, req.user) && (
+      isProjectAdmin(req.user) ||
+      project.createdBy?.toString() === req.user.id
+    );
     
     if (!canDelete) {
       return res.status(403).json({ 
@@ -578,7 +666,7 @@ exports.getProjectUsers = async (req, res) => {
     }
     
     // Check access
-    if (!hasProjectAccess(project, req.user.id, req.user.role)) {
+    if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
       return res.status(403).json({ 
         success: false, 
         message: "Access denied to view project users" 
@@ -591,7 +679,7 @@ exports.getProjectUsers = async (req, res) => {
       createdBy: project.createdBy,
       users: project.users,
       totalUsers: project.users.length,
-      hasAccess: hasProjectAccess(project, req.user.id, req.user.role)
+      hasAccess: hasProjectAccess(project, req.user.id, req.user.role, req.user)
     });
   } catch (error) {
     console.error("❌ Error fetching project users:", error);
@@ -622,7 +710,7 @@ exports.addUserToProject = async (req, res) => {
     }
     
     // Check if requester has permission
-    if (!hasProjectAccess(project, req.user.id, req.user.role)) {
+    if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
       return res.status(403).json({ 
         success: false, 
         message: "Access denied to modify project" 
@@ -701,7 +789,7 @@ exports.addTask = async (req, res) => {
       }
 
       // Check access
-      if (!hasProjectAccess(project, req.user.id, req.user.role)) {
+      if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
         return res.status(403).json({ 
           success: false, 
           message: "Access denied to add task" 
@@ -819,7 +907,7 @@ exports.updateTask = async (req, res) => {
     }
 
     // Check project access
-    if (!hasProjectAccess(project, req.user.id, req.user.role)) {
+    if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
       return res.status(403).json({ 
         success: false, 
         message: "Access denied to update task" 
@@ -966,7 +1054,7 @@ exports.deleteTask = async (req, res) => {
     }
 
     // Check project access
-    if (!hasProjectAccess(project, req.user.id, req.user.role)) {
+    if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
       return res.status(403).json({ 
         success: false, 
         message: "Access denied to delete task" 
@@ -1045,7 +1133,7 @@ exports.updateTaskStatus = async (req, res) => {
     }
 
     const isAssignedUser = isTaskAssignedToUser(task, req.user.id);
-    const hasAccessToProject = hasProjectAccess(project, req.user.id, req.user.role);
+    const hasAccessToProject = hasProjectAccess(project, req.user.id, req.user.role, req.user);
     const canManageTaskStatus =
       isAssignedUser ||
       hasAccessToProject ||
@@ -1148,7 +1236,7 @@ exports.getTaskActivityLogs = async (req, res) => {
     }
 
     // Check project access
-    if (!hasProjectAccess(project, req.user.id, req.user.role)) {
+    if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
       return res.status(403).json({ 
         success: false, 
         message: "Access denied to view activity logs" 
@@ -1203,7 +1291,7 @@ exports.getTaskRemarks = async (req, res) => {
       });
     }
 
-    if (!hasProjectAccess(project, req.user.id, req.user.role)) {
+    if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
       return res.status(403).json({
         success: false,
         message: "Access denied to view remarks"
@@ -1258,7 +1346,7 @@ exports.addRemark = async (req, res) => {
     }
 
     // Check project access
-    if (!hasProjectAccess(project, req.user.id, req.user.role)) {
+    if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
       return res.status(403).json({ 
         success: false, 
         message: "Access denied to add remark" 
