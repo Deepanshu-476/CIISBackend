@@ -186,7 +186,6 @@ exports.updateCompanyLogo = async (req, res) => {
     // Update logo
     company.logo = logoUrl.trim();
     await company.save();
-
     return res.status(200).json({
       success: true,
       message: "Company logo updated successfully",
@@ -606,7 +605,7 @@ exports.createCompany = async (req, res) => {
         };
       });
       
-      errorDetails = validationErrors;
+      errorDetails = validationErrors;  
     } 
     else if (err.code === 11000) {
       statusCode = 409;
@@ -1338,7 +1337,7 @@ exports.deactivateCompany = async (req, res) => {
         success: false,
         message: "Company not found",
       });
-    }
+    } 
 
     // ✅ deactivate all users of this company
     await User.updateMany(

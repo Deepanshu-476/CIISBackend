@@ -34,6 +34,25 @@ const isRecentlyOnlineInDb = (user) => {
   return Date.now() - lastSeenTime < 30 * 1000;
 };
 
+const validateAssignableDepartment = async (departmentId, companyId) => {
+  const department = await Department.findById(departmentId);
+
+  if (!department) {
+    return { status: 404, message: "Department not found" };
+  }
+
+  const departmentCompanyId = department.company?._id
+    ? department.company._id.toString()
+    : department.company?.toString();
+  const targetCompanyId = companyId?._id ? companyId._id.toString() : companyId?.toString();
+
+  if (departmentCompanyId && targetCompanyId && departmentCompanyId !== targetCompanyId) {
+    return { status: 403, message: "Department belongs to a different company" };
+  }
+
+  return null;
+};
+
 const getUserPresence = (user, socketOnlineIds) => {
   const userId = user?._id?.toString() || user?.id?.toString();
 
@@ -204,6 +223,13 @@ exports.updateMe = async (req, res) => {
     
     if (req.body.properties !== undefined) {
       updateData.properties = req.body.properties;
+    }
+
+    if (updateData.department) {
+      const departmentError = await validateAssignableDepartment(updateData.department, req.user.company);
+      if (departmentError) {
+        return errorResponse(res, departmentError.status, departmentError.message);
+      }
     }
     
     const updatedUser = await User.findByIdAndUpdate(
@@ -574,9 +600,9 @@ exports.updateUser = async (req, res) => {
 
     // Validate department if being updated
     if (updateData.department) {
-      const departmentExists = await Department.findById(updateData.department);
-      if (!departmentExists) {
-        return errorResponse(res, 404, "Department not found");
+      const departmentError = await validateAssignableDepartment(updateData.department, user.company || requestingUser.company);
+      if (departmentError) {
+        return errorResponse(res, departmentError.status, departmentError.message);
       }
     }
 
@@ -660,6 +686,13 @@ exports.updateSelfUser = async (req, res) => {
     
     // ✅ REMOVED: No restricted fields for self-update
     // Users can update their own profile including jobRole, department, etc.
+
+    if (updateData.department) {
+      const departmentError = await validateAssignableDepartment(updateData.department, user.company || requestingUser.company);
+      if (departmentError) {
+        return errorResponse(res, departmentError.status, departmentError.message);
+      }
+    }
 
     const updatedUser = await User.findByIdAndUpdate(
       id,

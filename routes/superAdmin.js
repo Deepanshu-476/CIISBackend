@@ -5,7 +5,6 @@ const jwt = require('jsonwebtoken');
 const Company = require('../models/Company');
 const User = require('../models/User');
 
-// Super Admin Login
 // routes/superAdmin.js
 router.post('/login', async (req, res) => {
   try {

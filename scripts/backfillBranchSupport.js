@@ -76,7 +76,7 @@ const backfillBranchSupport = async () => {
       } else {
         console.log(`  ℹ️ All users already have a branch assigned.`);
       }
-
+      
       // 3. Backfill Departments without branch
       const deptsToUpdate = await Department.find({
         company: company._id,

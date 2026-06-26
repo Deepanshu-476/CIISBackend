@@ -14,7 +14,7 @@ const isSuperAdmin = (user) => {
   const isSuper = user.role === 'super-admin' && 
                  user.department === 'Management' && 
                  user.jobRole === 'super_admin';
-  
+
   console.log('🔄 Checking super admin:', {
     userId: user._id || user.id,
     name: user.name,
@@ -55,7 +55,7 @@ exports.createDepartment = async (req, res) => {
 
     console.log("🔍 Fetching user from database with ID:", createdBy);
     
-    // Get user from database
+    // Get user from database 
     const user = await User.findById(createdBy);
     if (!user) {
       console.log("❌ ERROR: User not found in database for ID:", createdBy);
@@ -550,7 +550,7 @@ exports.getDepartmentsByCompany = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      count: departments.length,
+      count: departments.length,    
       departments
     });
   } catch (err) {
