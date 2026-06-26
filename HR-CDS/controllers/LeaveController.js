@@ -16,32 +16,6 @@ const {
 const { emitLeaveEvents } = require('../socket/handlers/leaveHandlers');
 const {notifyPageUsers, notifyDirectUsers} = require('../utils/systemNotificationService');
 
-<<<<<<< HEAD
-const getUserCompanyId = (user) => user?.company?._id || user?.company || user?.companyId;
-
-const normalizeId = (value) => String(value?._id || value?.id || value || '');
-
-const getLeaveApprovalStepsForCompany = async (companyId) => {
-  if (!companyId) return [];
-
-  const config = await PagePermission.findOne({
-    company: companyId,
-    path: '/ciisUser/emp-leaves'
-  }).lean();
-
-  const userIds = (config?.approvers || [])
-    .map(item => normalizeId(item.user))
-    .filter(Boolean);
-
-  return [...new Set(userIds)].map(userId => ({
-    user: userId,
-    status: 'Pending',
-    remarks: '',
-    actionedAt: null
-  }));
-};
-
-=======
 const APPROVAL_ROLES = ['manager', 'hr', 'owner'];
 
 const normalizeRoleValue = (value) => String(value || '')
@@ -81,7 +55,6 @@ const calculateFinalLeaveStatus = (approvals) => {
 
 const formatLeaveWithApprovals = (leave) => Leave.withApprovalDefaults(leave);
 
->>>>>>> b52756cb648425f8db35f0341ea5997631349049
 // 🔹 Apply for Leave (User)
 exports.applyLeave = async (req, res) => {
   console.log("➡️ applyLeave controller called");
