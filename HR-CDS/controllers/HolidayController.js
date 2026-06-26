@@ -1,16 +1,16 @@
 const Holiday = require("../models/Holiday");
 const User = require("../../models/User");
 
-// Error response ka helper function
+// Error response helper.
 const errorResponse = (res, status, message) => {
     return res.status(status).json({ success: false, message });
 };
 
-// Check karta hai ki user super-admin hai ya nahi
+// Check whether the user is a super admin.
 const isSuperAdmin = (user) => {
     if (!user) return false;
     
-    // Super-admin ke teen conditions:
+    // Super-admin conditions:
     // 1. role = 'super-admin'
     // 2. department = 'Management'
     // 3. jobRole = 'super_admin'
@@ -30,11 +30,11 @@ const isSuperAdmin = (user) => {
     return isSuper;
 };
 
-// ==================== 1. HOLIDAY ADD KARNA ====================
+// ==================== 1. ADD HOLIDAY ====================
 exports.addHoliday = async (req, res) => {
     try {
         console.log("========================================");
-        console.log("🚀 HOLIDAY ADD KARNE KA REQUEST AAYA");
+        console.log("🚀 HOLIDAY ADD REQUEST RECEIVED");
         console.log("========================================");
         
         const { title, date, month, description } = req.body;
@@ -42,42 +42,42 @@ exports.addHoliday = async (req, res) => {
 
         // Authentication check
         if (!createdBy) {
-            return errorResponse(res, 401, "Pehle login karo");
+            return errorResponse(res, 401, "Please log in first");
         }
 
         // Required fields check
         if (!title || !date || !month) {
-            return errorResponse(res, 400, "Title, date aur month dena zaroori hai");
+            return errorResponse(res, 400, "Title, date, and month are required");
         }
 
-        // User ko DB se fetch karo
+        // Fetch user from the database.
         const user = await User.findById(createdBy);
         if (!user) {
-            return errorResponse(res, 400, "User nahi mila");
+            return errorResponse(res, 400, "User not found");
         }
 
         // Company check
         if (!user.company) {
-            return errorResponse(res, 400, "User ki company nahi mili");
+            return errorResponse(res, 400, "User company not found");
         }
 
         // Super-admin check
         const isSuper = isSuperAdmin(user);
         
-        // Decide karo ki kis company ke liye holiday banega
+        // Decide which company the holiday belongs to.
         let companyId, companyCode;
         
         if (isSuper) {
-            // Super admin: khud ki company ya koi aur company specify kar sakta hai
+            // Super admin can specify their own company or another company.
             companyId = req.body.company || user.company;
             companyCode = req.body.companyCode || user.companyCode;
         } else {
-            // Normal user: sirf apni company ke liye bana sakta hai
+            // Normal users can create holidays only for their own company.
             companyId = user.company;
             companyCode = user.companyCode;
         }
 
-        // Duplicate check - kya ye holiday already exists?
+        // Duplicate check.
         const existingHoliday = await Holiday.findOne({ 
             title: { $regex: new RegExp(`^${title}$`, 'i') },
             date: date,
@@ -86,10 +86,10 @@ exports.addHoliday = async (req, res) => {
         });
         
         if (existingHoliday) {
-            return errorResponse(res, 409, "Is company me ye holiday already exists");
+            return errorResponse(res, 409, "This holiday already exists for the company");
         }
 
-        // Holiday create karo
+        // Create holiday.
         const holiday = await Holiday.create({
             title,
             date,
@@ -102,64 +102,64 @@ exports.addHoliday = async (req, res) => {
 
         return res.status(201).json({
             success: true,
-            message: "Holiday successfully add ho gaya",
+            message: "Holiday added successfully",
             holiday
         });
     } catch (error) {
         console.error("❌ ERROR:", error.message);
         
         if (error.code === 11000) {
-            return errorResponse(res, 409, "Duplicate holiday - ye already exists");
+            return errorResponse(res, 409, "Duplicate holiday - this already exists");
         }
         
-        return errorResponse(res, 500, "Holiday add karne me problem hui");
+        return errorResponse(res, 500, "Failed to add holiday");
     }
 };
 
-// ==================== 2. SARI HOLIDAYS DIKHAO ====================
+// ==================== 2. GET HOLIDAYS ====================
 exports.getHolidays = async (req, res) => {
     try {
         console.log("========================================");
-        console.log("📋 SARI HOLIDAYS DIKHANE KA REQUEST");
+        console.log("📋 GET HOLIDAYS REQUEST");
         console.log("========================================");
         
         const { month, company } = req.query;
         
         if (!req.user) {
-            return errorResponse(res, 401, "Pehle login karo");
+            return errorResponse(res, 401, "Please log in first");
         }
 
-        // User fetch karo
+        // Fetch user.
         const user = await User.findById(req.user.id);
         if (!user) {
-            return errorResponse(res, 400, "User nahi mila");
+            return errorResponse(res, 400, "User not found");
         }
 
         const isSuper = isSuperAdmin(user);
         
-        // Query build karo
+        // Build query.
         let query = { isActive: true };
         
-        // Agar normal user hai to sirf apni company ki holidays dikhao
+        // Normal users can see only their own company's holidays.
         if (!isSuper) {
             if (!user.company) {
-                return errorResponse(res, 400, "User ki company nahi mili");
+                return errorResponse(res, 400, "User company not found");
             }
             query.company = user.company;
         } else if (company) {
-            // Super admin: kisi specific company ki holidays dekh sakta hai
+            // Super admin can view holidays for a specific company.
             query.company = company;
         }
         
-        // Month filter agar diya ho to
+        // Apply month filter when provided.
         if (month) {
             query.month = month;
         }
         
-        // Holidays fetch karo
+        // Fetch holidays.
         const holidays = await Holiday.find(query)
             .populate('createdBy', 'name email')
-            .sort({ date: 1 });  // Date ke hisaab se sort
+            .sort({ date: 1 });  // Sort by date.
 
         return res.status(200).json({
             success: true,
@@ -168,32 +168,32 @@ exports.getHolidays = async (req, res) => {
         });
     } catch (error) {
         console.error("❌ ERROR:", error.message);
-        return errorResponse(res, 500, "Holidays fetch karne me problem hui");
+        return errorResponse(res, 500, "Failed to fetch holidays");
     }
 };
 
-// ==================== 3. COMPANY KE HISAB SE HOLIDAYS ====================
+// ==================== 3. GET HOLIDAYS BY COMPANY ====================
 exports.getHolidaysByCompany = async (req, res) => {
     try {
         console.log("========================================");
-        console.log("🏢 COMPANY KE HISAB SE HOLIDAYS");
+        console.log("🏢 GET HOLIDAYS BY COMPANY");
         console.log("========================================");
         
         const { companyId } = req.params;
         const { month } = req.query;
         
         if (!req.user) {
-            return errorResponse(res, 401, "Pehle login karo");
+            return errorResponse(res, 401, "Please log in first");
         }
 
         const user = await User.findById(req.user.id);
         if (!user) {
-            return errorResponse(res, 400, "User nahi mila");
+            return errorResponse(res, 400, "User not found");
         }
 
         const isSuper = isSuperAdmin(user);
         
-        // Query prepare karo
+        // Prepare query.
         let query = { 
             isActive: true,
             company: companyId 
@@ -203,14 +203,14 @@ exports.getHolidaysByCompany = async (req, res) => {
             query.month = month;
         }
         
-        // Permission check - normal user apni hi company dekh sakta hai
+        // Permission check: normal users can view only their own company.
         if (!isSuper) {
             if (!user.company) {
-                return errorResponse(res, 400, "User ki company nahi mili");
+                return errorResponse(res, 400, "User company not found");
             }
             
             if (user.company.toString() !== companyId) {
-                return errorResponse(res, 403, "Tum ye company nahi dekh sakte");
+                return errorResponse(res, 403, "You cannot view this company");
             }
         }
         
@@ -225,50 +225,50 @@ exports.getHolidaysByCompany = async (req, res) => {
         });
     } catch (error) {
         console.error("❌ ERROR:", error.message);
-        return errorResponse(res, 500, "Holidays fetch karne me problem hui");
+        return errorResponse(res, 500, "Failed to fetch holidays");
     }
 };
 
-// ==================== 4. HOLIDAY UPDATE KARO ====================
+// ==================== 4. UPDATE HOLIDAY ====================
 exports.updateHoliday = async (req, res) => {
     try {
         console.log("========================================");
-        console.log("✏️ HOLIDAY UPDATE KARNE KA REQUEST");
+        console.log("✏️ HOLIDAY UPDATE REQUEST");
         console.log("========================================");
         
         const { id } = req.params;
         const updateData = req.body;
         
         if (!req.user) {
-            return errorResponse(res, 401, "Pehle login karo");
+            return errorResponse(res, 401, "Please log in first");
         }
 
-        // User fetch karo
+        // Fetch user.
         const user = await User.findById(req.user.id);
         if (!user) {
-            return errorResponse(res, 400, "User nahi mila");
+            return errorResponse(res, 400, "User not found");
         }
 
         const isSuper = isSuperAdmin(user);
 
-        // Holiday fetch karo jo update karna hai
+        // Fetch the holiday to update.
         const holiday = await Holiday.findById(id);
         if (!holiday) {
-            return errorResponse(res, 404, "Holiday nahi mila");
+            return errorResponse(res, 404, "Holiday not found");
         }
 
-        // Permission check - normal user apni company ka hi update kar sakta hai
+        // Permission check: normal users can update only their own company.
         if (!isSuper) {
             if (!user.company) {
-                return errorResponse(res, 400, "User ki company nahi mili");
+                return errorResponse(res, 400, "User company not found");
             }
             
             if (holiday.company.toString() !== user.company.toString()) {
-                return errorResponse(res, 403, "Tum ye holiday update nahi kar sakte");
+                return errorResponse(res, 403, "You cannot update this holiday");
             }
         }
 
-        // Duplicate check - agar title ya date change ho raha hai
+        // Duplicate check when title or date changes.
         if ((updateData.title && updateData.title !== holiday.title) || 
             (updateData.date && updateData.date !== holiday.date)) {
             
@@ -284,17 +284,17 @@ exports.updateHoliday = async (req, res) => {
             });
             
             if (existingHoliday) {
-                return errorResponse(res, 409, "Ye holiday already exists");
+                return errorResponse(res, 409, "This holiday already exists");
             }
         }
 
-        // Normal user company change nahi kar sakta
+        // Normal users cannot change the company.
         if (!isSuper) {
             delete updateData.company;
             delete updateData.companyCode;
         }
 
-        // Update karo
+        // Update holiday.
         const updatedHoliday = await Holiday.findByIdAndUpdate(
             id,
             updateData,
@@ -303,73 +303,73 @@ exports.updateHoliday = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            message: "Holiday successfully update ho gaya",
+            message: "Holiday updated successfully",
             holiday: updatedHoliday
         });
     } catch (error) {
         console.error("❌ ERROR:", error.message);
         
         if (error.code === 11000) {
-            return errorResponse(res, 409, "Duplicate holiday - ye already exists");
+            return errorResponse(res, 409, "Duplicate holiday - this already exists");
         }
         
-        return errorResponse(res, 500, "Holiday update karne me problem hui");
+        return errorResponse(res, 500, "Failed to update holiday");
     }
 };
 
-// ==================== 5. HOLIDAY DELETE KARO (SOFT DELETE) ====================
+// ==================== 5. DELETE HOLIDAY (SOFT DELETE) ====================
 exports.deleteHoliday = async (req, res) => {
     try {
         console.log("========================================");
-        console.log("🗑️ HOLIDAY DELETE KARNE KA REQUEST");
+        console.log("🗑️ HOLIDAY DELETE REQUEST");
         console.log("========================================");
         
         const { id } = req.params;
         
         if (!req.user) {
-            return errorResponse(res, 401, "Pehle login karo");
+            return errorResponse(res, 401, "Please log in first");
         }
 
-        // User fetch karo
+        // Fetch user.
         const user = await User.findById(req.user.id);
         if (!user) {
-            return errorResponse(res, 400, "User nahi mila");
+            return errorResponse(res, 400, "User not found");
         }
 
         const isSuper = isSuperAdmin(user);
 
-        // Holiday fetch karo
+        // Fetch holiday.
         const holiday = await Holiday.findById(id);
         if (!holiday) {
-            return errorResponse(res, 404, "Holiday nahi mila");
+            return errorResponse(res, 404, "Holiday not found");
         }
 
         // Permission check
         if (!isSuper) {
             if (!user.company) {
-                return errorResponse(res, 400, "User ki company nahi mili");
+                return errorResponse(res, 400, "User company not found");
             }
             
             if (holiday.company.toString() !== user.company.toString()) {
-                return errorResponse(res, 403, "Tum ye holiday delete nahi kar sakte");
+                return errorResponse(res, 403, "You cannot delete this holiday");
             }
         }
 
-        // Soft delete - sirf isActive false karo
+        // Soft delete by marking isActive false.
         holiday.isActive = false;
         await holiday.save();
 
         return res.status(200).json({
             success: true,
-            message: "Holiday successfully delete ho gaya"
+            message: "Holiday deleted successfully"
         });
     } catch (error) {
         console.error("❌ ERROR:", error.message);
-        return errorResponse(res, 500, "Holiday delete karne me problem hui");
+        return errorResponse(res, 500, "Failed to delete holiday");
     }
 };
 
-// ==================== 6. HARD DELETE (SIRF SUPER-ADMIN) ====================
+// ==================== 6. HARD DELETE (SUPER ADMIN ONLY) ====================
 exports.hardDeleteHoliday = async (req, res) => {
     try {
         console.log("========================================");
@@ -379,36 +379,36 @@ exports.hardDeleteHoliday = async (req, res) => {
         const { id } = req.params;
         
         if (!req.user) {
-            return errorResponse(res, 401, "Pehle login karo");
+            return errorResponse(res, 401, "Please log in first");
         }
 
         const user = await User.findById(req.user.id);
         if (!user) {
-            return errorResponse(res, 400, "User nahi mila");
+            return errorResponse(res, 400, "User not found");
         }
 
         const isSuper = isSuperAdmin(user);
         
-        // Sirf super-admin hi hard delete kar sakta hai
+        // Only super admins can hard delete.
         if (!isSuper) {
-            return errorResponse(res, 403, "Sirf super-admin permanent delete kar sakta hai");
+            return errorResponse(res, 403, "Only a super admin can permanently delete holidays");
         }
 
-        // Permanently delete karo
+        // Permanently delete.
         const holiday = await Holiday.findByIdAndDelete(id);
 
         if (!holiday) {
-            return errorResponse(res, 404, "Holiday nahi mila");
+            return errorResponse(res, 404, "Holiday not found");
         }
 
         return res.status(200).json({
             success: true,
-            message: "Holiday permanently delete ho gaya"
+            message: "Holiday permanently deleted"
         });
     } catch (error) {
         console.error("❌ ERROR:", error.message);
-        return errorResponse(res, 500, "Permanent delete karne me problem hui");
+        return errorResponse(res, 500, "Failed to permanently delete holiday");
     }
 };
 
-console.log("✅ HolidayController.js successfully load ho gaya");
+console.log("✅ HolidayController.js loaded successfully");

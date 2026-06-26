@@ -2,6 +2,7 @@
 const Leave = require('../models/Leave');
 const User = require('../../models/User');
 const Company = require('../../models/Company');
+const PagePermission = require('../../models/PagePermission');
 const nodemailer = require('nodemailer');
 
 // ✅ IMPORT email functions from utils
@@ -14,6 +15,30 @@ const {
 // ✅ IMPORT socket emit events
 const { emitLeaveEvents } = require('../socket/handlers/leaveHandlers');
 const {notifyPageUsers, notifyDirectUsers} = require('../utils/systemNotificationService');
+
+const getUserCompanyId = (user) => user?.company?._id || user?.company || user?.companyId;
+
+const normalizeId = (value) => String(value?._id || value?.id || value || '');
+
+const getLeaveApprovalStepsForCompany = async (companyId) => {
+  if (!companyId) return [];
+
+  const config = await PagePermission.findOne({
+    company: companyId,
+    path: '/ciisUser/emp-leaves'
+  }).lean();
+
+  const userIds = (config?.approvers || [])
+    .map(item => normalizeId(item.user))
+    .filter(Boolean);
+
+  return [...new Set(userIds)].map(userId => ({
+    user: userId,
+    status: 'Pending',
+    remarks: '',
+    actionedAt: null
+  }));
+};
 
 // 🔹 Apply for Leave (User)
 exports.applyLeave = async (req, res) => {
@@ -57,6 +82,8 @@ exports.applyLeave = async (req, res) => {
       });
     }
 
+    const approvalSteps = await getLeaveApprovalStepsForCompany(getUserCompanyId(req.user));
+
     // Create leave
     const leave = new Leave({
       user: req.user._id,
@@ -67,6 +94,8 @@ exports.applyLeave = async (req, res) => {
       days,
       status: 'Pending',
       approvedBy: null,
+      approvalSteps,
+      approvalMode: approvalSteps.length > 0 ? 'all' : 'single',
       remarks: '',
       companyCode: req.user.companyCode,
       history: [
@@ -88,6 +117,7 @@ exports.applyLeave = async (req, res) => {
     // Populate leave for response
     const populatedLeave = await Leave.findById(leave._id)
       .populate('user', 'name email jobRole department')
+      .populate('approvalSteps.user', 'name email jobRole companyRole')
       .populate('history.by', 'name email');
 
     // ✅ Send email notification
@@ -108,26 +138,50 @@ exports.applyLeave = async (req, res) => {
 
     // ✅ 🔔 SEND NOTIFICATION TO COMPANY OWNERS/ADMINS
     try {
-      await notifyPageUsers({
-        companyId: user.company || user.companyId,
-        targetPath: '/ciisUser/emp-leaves',
-        excludeUserIds: [user._id],
-        type: 'leave_applied',
-        title: 'New Leave Application',
-        message: `${user.name} applied for ${type} leave`,
-        actor: user._id,
-        data: {
-          leaveId: leave._id,
-          userId: user._id,
-          userName: user.name,
-          leaveType: type,
-          startDate,
-          endDate,
-          days,
-          reason
-        },
-        priority: 'high'
-      });
+      const approverIds = approvalSteps.map(step => step.user);
+      if (approverIds.length > 0) {
+        await notifyDirectUsers({
+          userIds: approverIds,
+          targetPath: '/ciisUser/emp-leaves',
+          type: 'leave_applied',
+          title: 'New Leave Approval Pending',
+          message: `${user.name} applied for ${type} leave`,
+          actor: user._id,
+          company: user.company || user.companyId,
+          data: {
+            leaveId: leave._id,
+            userId: user._id,
+            userName: user.name,
+            leaveType: type,
+            startDate,
+            endDate,
+            days,
+            reason
+          },
+          priority: 'high'
+        });
+      } else {
+        await notifyPageUsers({
+          companyId: user.company || user.companyId,
+          targetPath: '/ciisUser/emp-leaves',
+          excludeUserIds: [user._id],
+          type: 'leave_applied',
+          title: 'New Leave Application',
+          message: `${user.name} applied for ${type} leave`,
+          actor: user._id,
+          data: {
+            leaveId: leave._id,
+            userId: user._id,
+            userName: user.name,
+            leaveType: type,
+            startDate,
+            endDate,
+            days,
+            reason
+          },
+          priority: 'high'
+        });
+      }
 
       console.log('✅ Notification sent to company owners');
     } catch (notifError) {
@@ -180,6 +234,7 @@ exports.getUserLeaves = async (req, res) => {
     
     const leaves = await Leave.find({ user: userId })
       .populate('user', 'name email jobRole department')
+      .populate('approvalSteps.user', 'name email jobRole companyRole')
       .populate('history.by', 'name email')
       .sort({ createdAt: -1 })
       .lean();
@@ -400,6 +455,22 @@ exports.getAllLeaves = async (req, res) => {
           };
         }
       })
+      .populate({
+        path: 'approvalSteps.user',
+        select: 'name email jobRole companyRole',
+        match: { _id: { $in: companyUserIds } },
+        transform: (doc) => {
+          if (!doc) return null;
+          return {
+            id: doc._id || doc.id,
+            _id: doc._id || doc.id,
+            name: doc.name,
+            email: doc.email,
+            jobRole: doc.jobRole,
+            companyRole: doc.companyRole
+          };
+        }
+      })
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit))
@@ -425,6 +496,8 @@ exports.getAllLeaves = async (req, res) => {
       status: leave.status || 'Pending',
       remarks: leave.remarks || '',
       approvedBy: leave.approvedBy,
+      approvalSteps: leave.approvalSteps || [],
+      approvalMode: leave.approvalMode || 'single',
       history: leave.history || [],
       createdAt: leave.createdAt,
       updatedAt: leave.updatedAt,
@@ -490,21 +563,10 @@ exports.updateLeaveStatus = async (req, res) => {
       companyRole: currentUser.companyRole
     });
 
-    // Owner check
-    const isOwner = currentUser.companyRole === 'Owner';
-    
-    if (!isOwner) {
-      console.log('❌ ACCESS DENIED - User is not Owner');
-      return res.status(403).json({
-        success: false,
-        error: 'You do not have permission to update leave status. Only Company Owner can perform this action.'
-      });
-    }
-
-    console.log('👑✅ OWNER ACCESS GRANTED');
-
     // Find leave with user info
-    const leave = await Leave.findById(id).populate('user', 'name email phone company companyId');
+    const leave = await Leave.findById(id)
+      .populate('user', 'name email phone company companyId')
+      .populate('approvalSteps.user', 'name email jobRole companyRole');
     
     if (!leave) {
       console.log('❌ Leave not found:', id);
@@ -532,22 +594,59 @@ exports.updateLeaveStatus = async (req, res) => {
 
     // Store old status
     const oldStatus = leave.status;
+    const currentUserId = normalizeId(currentUser._id);
+    const isOwner = String(currentUser.companyRole || '').toLowerCase() === 'owner';
+    const hasApprovalSteps = Array.isArray(leave.approvalSteps) && leave.approvalSteps.length > 0;
+    const approvalStepIndex = hasApprovalSteps
+      ? leave.approvalSteps.findIndex(step => normalizeId(step.user) === currentUserId)
+      : -1;
 
-    // Update the leave
-    leave.status = status;
+    const canUpdateStatus = hasApprovalSteps ? approvalStepIndex !== -1 : isOwner;
+
+    if (!canUpdateStatus) {
+      console.log('❌ ACCESS DENIED - User is not configured as leave approver');
+      return res.status(403).json({
+        success: false,
+        error: hasApprovalSteps
+          ? 'You are not selected as an approver for this leave.'
+          : 'You do not have permission to update leave status. Please configure approvers in Page Management.'
+      });
+    }
+
+    if (hasApprovalSteps) {
+      leave.approvalSteps[approvalStepIndex].status = status === 'Approved' ? 'Approved' : status === 'Rejected' ? 'Rejected' : 'Pending';
+      leave.approvalSteps[approvalStepIndex].remarks = remarks || '';
+      leave.approvalSteps[approvalStepIndex].actionedAt = new Date();
+
+      const hasRejected = leave.approvalSteps.some(step => step.status === 'Rejected');
+      const allApproved = leave.approvalSteps.every(step => step.status === 'Approved');
+
+      if (hasRejected) {
+        leave.status = 'Rejected';
+        leave.approvedBy = currentUser._id;
+      } else if (allApproved) {
+        leave.status = 'Approved';
+        leave.approvedBy = currentUser._id;
+      } else {
+        leave.status = 'Pending';
+      }
+    } else {
+      leave.status = status;
+      leave.approvedBy = currentUser._id;
+    }
+
     leave.remarks = remarks || leave.remarks;
-    leave.approvedBy = currentUser._id;
     leave.updatedAt = new Date();
 
     // Add to history
     leave.history = leave.history || [];
     leave.history.push({
-      action: status,
+      action: hasApprovalSteps && leave.status === 'Pending' ? `${status} by approver` : status,
       from: oldStatus,
-      to: status,
+      to: leave.status,
       by: currentUser._id,
       byName: currentUser.name || currentUser.email || 'Owner',
-      byRole: 'Owner',
+      byRole: currentUser.companyRole || currentUser.jobRole || 'Approver',
       remarks: remarks || '',
       at: new Date()
     });
@@ -559,6 +658,7 @@ exports.updateLeaveStatus = async (req, res) => {
 
     // Populate approvedBy for response
     await leave.populate('approvedBy', 'name email');
+    await leave.populate('approvalSteps.user', 'name email jobRole companyRole');
     const statusMessage = status === 'Approved' ? 'approved' :
                          status === 'Rejected' ? 'rejected' :
                          status === 'Cancelled' ? 'cancelled' : 'updated';
@@ -569,15 +669,19 @@ exports.updateLeaveStatus = async (req, res) => {
         userIds: [leave.user._id],
         targetPath: '/ciisUser/my-leaves',
         type: 'leave_status_changed',
-        title: `Leave ${status}`,
-        message: `${currentUser.name || 'Admin'} ${statusMessage} your ${leave.type} leave${remarks ? ': ' + remarks : ''}`,
+        title: `Leave ${leave.status}`,
+        message: hasApprovalSteps && leave.status === 'Pending'
+          ? `${currentUser.name || 'Approver'} approved your ${leave.type} leave. Waiting for remaining approvals.`
+          : `${currentUser.name || 'Admin'} ${statusMessage} your ${leave.type} leave${remarks ? ': ' + remarks : ''}`,
         actor: currentUser._id,
         company: leave.user.company || leave.user.companyId,
         data: {
           leaveId: leave._id,
           userId: leave.user._id,
           oldStatus,
-          newStatus: status,
+          newStatus: leave.status,
+          requestedStatus: status,
+          approvalSteps: leave.approvalSteps,
           leaveType: leave.type,
           startDate: leave.startDate,
           endDate: leave.endDate,
@@ -603,7 +707,7 @@ exports.updateLeaveStatus = async (req, res) => {
         leave.startDate,
         leave.endDate,
         leave.days,
-        status,
+        leave.status,
         remarks || ''
       );
       console.log(`✅ Status change email sent to ${leave.user.email}`);
@@ -617,7 +721,7 @@ exports.updateLeaveStatus = async (req, res) => {
         emitLeaveEvents.leaveStatusChanged(global.io, {
           leave: leave.toObject ? leave.toObject() : leave,
           oldStatus,
-          newStatus: status,
+          newStatus: leave.status,
           updatedBy: currentUser
         });
         console.log('📢 Socket event emitted: leave status changed');
@@ -630,12 +734,15 @@ exports.updateLeaveStatus = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: `Leave ${status.toLowerCase()} successfully`,
+      message: hasApprovalSteps && leave.status === 'Pending'
+        ? 'Your approval has been saved. Leave is waiting for remaining approvals.'
+        : `Leave ${leave.status.toLowerCase()} successfully`,
       data: {
         _id: leave._id,
         status: leave.status,
         remarks: leave.remarks,
         approvedBy: leave.approvedBy,
+        approvalSteps: leave.approvalSteps,
         history: leave.history.slice(-1)[0]
       }
     });
@@ -670,26 +777,6 @@ exports.deleteLeave = async (req, res) => {
     console.log('👑 User Company Role:', userCompanyRole);
     console.log('🏢 User Company ID:', userCompanyId);
 
-    // Owner check
-   const role = (userCompanyRole || '').toLowerCase();
-      const jobRole = (req.headers['x-user-job-role'] || req.user?.jobRole || '').toLowerCase();
-
-      // ✅ allowed roles
-      const allowedRoles = ['owner', 'admin', 'hr', 'manager'];
-
-      // ✅ final permission check
-      const isAllowed =
-        allowedRoles.includes(role) ||
-        jobRole === 'superadmin';   // 👈 YE ADD KIYA
-
-      if (!isAllowed) {
-        console.log('❌ ACCESS DENIED');
-        return res.status(403).json({
-          success: false,
-          error: 'You do not have permission to delete leave.'
-        });
-      }
-
     // Find the leave with user info
     const leave = await Leave.findById(id).populate('user', 'email name phone company companyId');
 
@@ -707,6 +794,33 @@ exports.deleteLeave = async (req, res) => {
       return res.status(403).json({
         success: false,
         error: 'You can only delete leaves from your own company'
+      });
+    }
+
+    const currentUserId = normalizeId(req.user?._id || userId);
+    const leaveCompanyId = leave.user.company || leave.user.companyId || getUserCompanyId(req.user);
+    const pagePermission = await PagePermission.findOne({
+      company: leaveCompanyId,
+      path: '/ciisUser/emp-leaves'
+    }).lean();
+    const configuredDeleteUserIds = (pagePermission?.deleteUsers || [])
+      .map(item => normalizeId(item.user))
+      .filter(Boolean);
+
+    const role = (userCompanyRole || '').toLowerCase();
+    const jobRole = (req.headers['x-user-job-role'] || req.user?.jobRole || '').toLowerCase();
+    const allowedRoles = ['owner', 'admin', 'hr', 'manager'];
+    const fallbackAllowed = allowedRoles.includes(role) || jobRole === 'superadmin';
+    const isConfiguredDeleteUser = configuredDeleteUserIds.includes(currentUserId);
+    const isAllowed = configuredDeleteUserIds.length > 0 ? isConfiguredDeleteUser : fallbackAllowed;
+
+    if (!isAllowed) {
+      console.log('❌ ACCESS DENIED');
+      return res.status(403).json({
+        success: false,
+        error: configuredDeleteUserIds.length > 0
+          ? 'You are not selected as a delete user for employee leaves.'
+          : 'You do not have permission to delete leave.'
       });
     }
 
@@ -828,6 +942,7 @@ exports.getLeavesWithStatus = async (req, res) => {
 
     const leaves = await Leave.find(filter)
       .populate('user', 'name email jobRole department')
+      .populate('approvalSteps.user', 'name email jobRole companyRole')
       .populate('history.by', 'name email')
       .sort({ startDate: -1 })
       .lean();
