@@ -5,7 +5,6 @@ const leaveController = require('../controllers/LeaveController');
 const authMiddleware = require('../../middleware/authMiddleware');
 const { body, param, query } = require('express-validator');
 const validateRequest = require('../../middleware/validateRequest.js');
-const { isCompanyOwner } = require('../../middleware/authMiddleware');
 // 🔐 All routes are protected
 router.use(authMiddleware.protect);
 // router.patch('/status/:id', leaveController.updateLeaveStatus);
@@ -61,8 +60,7 @@ router.patch('/status/:id',
       .trim()
       .isLength({ max: 500 })
       .withMessage('Remarks must be less than 500 characters'),
-    validateRequest,
-    isCompanyOwner
+    validateRequest
   ],
   leaveController.updateLeaveStatus
 );

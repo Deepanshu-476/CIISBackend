@@ -2,7 +2,7 @@
 
 // Socket events for leave management
 const emitLeaveEvents = {
-  // Jab naya leave apply ho
+  // When a new leave is applied.
   newLeaveApplied: (io, data) => {
     try {
       const { companyId, leave } = data;
@@ -12,7 +12,7 @@ const emitLeaveEvents = {
         return;
       }
 
-      // Company ke sabhi admins/owners ko bhejo
+      // Send to all company admins and owners.
       io.to(`company:${companyId}:admin`).emit('leave:new', {
         type: 'leave_applied',
         message: `New leave application from ${leave.user?.name || 'Unknown'}`,
@@ -26,7 +26,7 @@ const emitLeaveEvents = {
     }
   },
 
-  // Jab leave status change ho
+  // When leave status changes.
   leaveStatusChanged: (io, data) => {
     try {
       const { leave, oldStatus, newStatus, updatedBy } = data;
@@ -36,7 +36,7 @@ const emitLeaveEvents = {
         return;
       }
 
-      // Specific leave room mein sabko bhejo
+      // Send to everyone in the specific leave room.
       io.to(`leave:${leave._id}`).emit('leave:status_changed', {
         type: 'leave_status_changed',
         message: `Leave status changed from ${oldStatus} to ${newStatus}`,
@@ -57,7 +57,7 @@ const emitLeaveEvents = {
     }
   },
 
-  // Jab leave delete ho
+  // When leave is deleted.
   leaveDeleted: (io, data) => {
     try {
       const { leaveId, userId, deletedBy, leaveData } = data;

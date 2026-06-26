@@ -3,30 +3,30 @@ const mongoose = require("mongoose");
 const holidaySchema = new mongoose.Schema({
     title: {
         type: String,
-        required: [true, "Holiday title dena zaroori hai"],
+        required: [true, "Holiday title is required"],
         trim: true,
-        maxlength: [100, "Title 100 characters se bada nahi ho sakta"]
+        maxlength: [100, "Title cannot exceed 100 characters"]
     },
     date: {
         type: Date,
-        required: [true, "Date dena zaroori hai"]
+        required: [true, "Date is required"]
     },
     month: {
         type: String,
-        required: [true, "Month dena zaroori hai"],
-        enum: [    // Sirf yehi 12 months allow honge
+        required: [true, "Month is required"],
+        enum: [    // Only these 12 months are allowed.
             "January", "February", "March", "April", "May", "June",
             "July", "August", "September", "October", "November", "December"
         ]
     },
     description: {
         type: String,
-        maxlength: [200, "Description 200 characters se bada nahi ho sakta"]
+        maxlength: [200, "Description cannot exceed 200 characters"]
     },
     company: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "Company",
-        required: true   // Har holiday kisi na kisi company ka hoga
+        required: true   // Every holiday belongs to a company.
     },
     companyCode: {
         type: String,
@@ -35,24 +35,24 @@ const holidaySchema = new mongoose.Schema({
     },
     isActive: {
         type: Boolean,
-        default: true    // Soft delete ke liye
+        default: true    // For soft delete.
     },
     createdBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "User",
-        required: true   // Kis user ne banaya
+        required: true   // User who created the holiday.
     }
 }, {
-    timestamps: true      // createdAt, updatedAt automatically add honge
+    timestamps: true      // createdAt and updatedAt are added automatically.
 });
 
-// Ye ensure karega ki ek company me same title + same date ka duplicate holiday na ho
+// Ensures a company cannot have duplicate holidays with the same title and date.
 holidaySchema.index({ title: 1, company: 1, date: 1 }, { 
     unique: true,
     partialFilterExpression: { isActive: true }
 });
 
-// Fast query ke liye indexes
+// Indexes for faster queries.
 holidaySchema.index({ company: 1, month: 1, isActive: 1 });
 holidaySchema.index({ company: 1, date: 1, isActive: 1 });
 

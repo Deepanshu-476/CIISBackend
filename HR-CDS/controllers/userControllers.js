@@ -360,8 +360,8 @@ exports.getAllUsers = async (req, res) => {
       company: userCompany  // Always filter by company
     };
 
-    // ✅ UPDATED: Sabhi users (including Employee) ko saare company users dekhne ka permission?
-    // Agar aap chahte ho ki Employee bhi saare company users dekhe, toh yeh condition change karo
+    // Updated: all users, including employees, can view company users.
+    // Adjust this condition if employee visibility should be restricted.
     const authorizedRoles = ['admin', 'super_admin', 'hr', 'manager', 'employee'];
     const isAuthorized = authorizedRoles.includes(req.user.jobRole);
     
@@ -538,11 +538,11 @@ exports.updateUser = async (req, res) => {
     }
 
     // ✅ UPDATED: EVERYONE can update (including Employee)
-    // Sirf yeh check karo ki delete mat karo apna aap (update allowed hai)
+    // Only prevent self-delete; updates are allowed.
     const isSelfUpdate = requestingUser.id.toString() === id;
     
-    // ✅ REMOVED: No role restrictions - sabko update permission hai
-    // Employee bhi doosron ko edit kar sakta hai
+    // Removed role restrictions; all users can update.
+    // Employees can also edit other users.
 
     // Create update data from entire request body - NO RESTRICTIONS!
     const updateData = {};
@@ -570,7 +570,7 @@ exports.updateUser = async (req, res) => {
     
     // ✅ REMOVED: No restrictions for non-super_admin
     // ✅ REMOVED: No restricted fields for self-update
-    // Sab kuch allowed hai!
+    // All fields are allowed.
 
     // Validate department if being updated
     if (updateData.department) {
@@ -709,7 +709,7 @@ exports.deleteUser = async (req, res) => {
     }
     
     // ✅ UPDATED: Authorized roles can delete users (including Employee?)
-    // Agar Employee ko bhi delete permission dena hai toh 'employee' add karo
+    // Add 'employee' here if employees should also be allowed to delete users.
     const authorizedRoles = ['super_admin', 'admin', 'hr', 'manager'];
     const canDelete = authorizedRoles.includes(requestingUser.jobRole) || 
                       authorizedRoles.includes(requestingUser.companyRole);
@@ -851,7 +851,7 @@ exports.getCompanydepartmentUsers = async (req, res) => {
       filter.department = requestedDepartment;
     }
     
-    // ✅ UPDATED: Employee bhi saare company users dekh sakta hai? Agar nahi toh employee ko hatao
+    // Updated: employees can view all company users. Remove employee if needed.
     const authorizedRoles = ['admin', 'hr', 'manager', 'super_admin', 'employee'];
     if (!requestedDepartment && !authorizedRoles.includes(currentUser.jobRole) && currentUser.department) {
       filter.department = currentUser.department;
@@ -1071,7 +1071,7 @@ exports.getCompanyUsersPaginated = async (req, res) => {
       }
     };
     
-    // ✅ UPDATED: Employee bhi saare company users dekh sakta hai? Agar nahi toh employee ko hatao
+    // Updated: employees can view all company users. Remove employee if needed.
     const authorizedRoles = ['admin', 'hr', 'manager', 'super_admin', 'employee'];
     if (!authorizedRoles.includes(currentUser.jobRole) && currentUser.department) {
       filter.department = currentUser.department;
@@ -1170,7 +1170,7 @@ exports.searchUsers = async (req, res) => {
 
     const filter = { company: userCompany };
 
-    // ✅ UPDATED: Employee bhi saare company users search kar sakta hai
+    // Updated: employees can search all company users.
     const authorizedRoles = ['admin', 'super_admin', 'hr', 'manager', 'employee'];
     const isAuthorized = authorizedRoles.includes(req.user.jobRole);
     

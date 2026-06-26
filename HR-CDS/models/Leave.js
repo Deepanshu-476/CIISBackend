@@ -30,6 +30,29 @@ const historySchema = new mongoose.Schema({
   }
 }, { _id: false });
 
+const approvalStepSchema = new mongoose.Schema({
+  user: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  status: {
+    type: String,
+    enum: ['Pending', 'Approved', 'Rejected'],
+    default: 'Pending'
+  },
+  remarks: {
+    type: String,
+    trim: true,
+    default: '',
+    maxlength: 500
+  },
+  actionedAt: {
+    type: Date,
+    default: null
+  }
+}, { _id: false });
+
 const leaveSchema = new mongoose.Schema({
   user: {
     type: mongoose.Schema.Types.ObjectId,
@@ -71,6 +94,12 @@ const leaveSchema = new mongoose.Schema({
   ref: 'User',
   default: null
 },
+  approvalSteps: [approvalStepSchema],
+  approvalMode: {
+    type: String,
+    enum: ['single', 'all'],
+    default: 'single'
+  },
   remarks: {
     type: String,
     trim: true,

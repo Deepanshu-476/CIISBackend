@@ -11,7 +11,7 @@ app.get('/health', (req, res) => {
   res.json({ ok: true, ts: Date.now() });
 });
 
-// Example API route (prefix /api rakhna hai to Nginx me /api/ proxy already set hai)
+// Example API route. Nginx already proxies the /api prefix.
 app.get('/api/hello', (req, res) => {
   res.json({ msg: 'Hello from backend' });
 });

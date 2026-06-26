@@ -1,7 +1,7 @@
 // controllers/pdfController.js
 const PDFDocument = require("pdfkit");
 const Task = require("../models/Task");
-const Project = require("../models/Project"); // <-- optional: agar project model alag hai
+const Project = require("../models/Project"); // Optional project model.
 const fs = require("fs");
 const path = require("path");
 

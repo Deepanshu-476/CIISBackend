@@ -38,7 +38,7 @@ router.put('/:id', userController.updateUser);
 
 
 
-// userRoutes.js में existing routes के बाद ये test routes add करें:
+// Test routes added after existing user routes.
 
 // ==================== 🧪 TEST ROUTES ====================
 

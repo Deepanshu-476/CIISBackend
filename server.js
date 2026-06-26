@@ -594,8 +594,8 @@ app.use("/api/projects", require("./HR-CDS/routes/projectRoutes.js"));
 app.use("/api/clientsservice", require("./HR-CDS/routes/clientRoutes.js"));
 app.use("/api/client-plans", require("./HR-CDS/routes/clientPlanRoutes.js"));
 app.use("/api/chat", require("./HR-CDS/chat/routes/chatRoutes"));
-// 🔥 IMPORTANT: यहाँ clientTasks routes mount किए गए हैं
-// यह सुनिश्चित करता है कि /api/tasks/... endpoints काम करेंगे
+// IMPORTANT: Client task routes are mounted here.
+// This ensures that /api/tasks/... endpoints are available.
 app.use("/api/tasks", require("./HR-CDS/routes/clientTask.js"));
 
 // split task routes
@@ -611,6 +611,7 @@ app.use('/api/dashboard', dashboardRoutes);
 
 app.use('/api/menu-access', require("./routes/menuAccess.js"));
 app.use('/api/menu-items', require("./routes/menuItems.js"));
+app.use('/api/page-permissions', require("./routes/pagePermissions.js"));
 app.use('/api/company', require("./routes/companyRoutes.js"));
 app.use('/api/plans', require("./routes/planRoutes.js"));
 app.use('/api/job-roles', require("./routes/jobRoleRoutes.js"));

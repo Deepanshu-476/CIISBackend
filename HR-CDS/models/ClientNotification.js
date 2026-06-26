@@ -25,7 +25,7 @@ const clientNotificationSchema = new mongoose.Schema({
   },
   recipient: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User', // यदि आपके पास user system है
+    ref: 'User',
     required: false
   },
   relatedEntity: {
