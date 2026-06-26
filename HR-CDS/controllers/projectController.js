@@ -767,7 +767,7 @@ exports.addTask = async (req, res) => {
           message: `${req.user.name} assigned you task "${safeTitle}" in project "${project.projectName}"`,
           actor: req.user.id,
           data: {
-            projectId: project._id,
+            projectId: project._id, 
             taskId: createdTask._id,
             title: safeTitle,
             projectName: project.projectName,
@@ -1184,7 +1184,7 @@ exports.getTaskActivityLogs = async (req, res) => {
       message: "Error fetching activity logs" 
     });
   }
-};
+};``
 
 // ==========================================
 // 📌 REMARKS CONTROLLERS
@@ -1226,7 +1226,7 @@ exports.getTaskRemarks = async (req, res) => {
   } catch (error) {
     console.error("❌ Error fetching project task remarks:", error);
     res.status(500).json({
-      success: false,
+      success: false, 
       message: "Error fetching remarks"
     });
   }

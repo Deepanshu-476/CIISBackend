@@ -16,6 +16,7 @@ const {
 const { emitLeaveEvents } = require('../socket/handlers/leaveHandlers');
 const {notifyPageUsers, notifyDirectUsers} = require('../utils/systemNotificationService');
 
+<<<<<<< HEAD
 const getUserCompanyId = (user) => user?.company?._id || user?.company || user?.companyId;
 
 const normalizeId = (value) => String(value?._id || value?.id || value || '');
@@ -40,6 +41,47 @@ const getLeaveApprovalStepsForCompany = async (companyId) => {
   }));
 };
 
+=======
+const APPROVAL_ROLES = ['manager', 'hr', 'owner'];
+
+const normalizeRoleValue = (value) => String(value || '')
+  .trim()
+  .toLowerCase()
+  .replace(/[\s_-]+/g, '');
+
+const getApprovalRoleForUser = (user = {}) => {
+  const companyRole = normalizeRoleValue(user.companyRole);
+  const role = normalizeRoleValue(user.role);
+  const jobRole = normalizeRoleValue(user.jobRole);
+  const roles = [companyRole, role, jobRole];
+
+  if (companyRole === 'owner' || role === 'companyowner' || jobRole === 'companyowner') {
+    return 'owner';
+  }
+
+  if (roles.includes('hr') || roles.includes('humanresources')) {
+    return 'hr';
+  }
+
+  if (roles.includes('manager')) {
+    return 'manager';
+  }
+
+  return null;
+};
+
+const calculateFinalLeaveStatus = (approvals) => {
+  const normalizedApprovals = Leave.normalizeApprovals(approvals);
+  const statuses = APPROVAL_ROLES.map((role) => normalizedApprovals[role].status);
+
+  if (statuses.includes('Rejected')) return 'Rejected';
+  if (statuses.every((status) => status === 'Approved')) return 'Approved';
+  return 'Pending';
+};
+
+const formatLeaveWithApprovals = (leave) => Leave.withApprovalDefaults(leave);
+
+>>>>>>> b52756cb648425f8db35f0341ea5997631349049
 // 🔹 Apply for Leave (User)
 exports.applyLeave = async (req, res) => {
   console.log("➡️ applyLeave controller called");
@@ -93,6 +135,7 @@ exports.applyLeave = async (req, res) => {
       endDate: end,
       days,
       status: 'Pending',
+      approvals: Leave.defaultApprovals(),
       approvedBy: null,
       approvalSteps,
       approvalMode: approvalSteps.length > 0 ? 'all' : 'single',
@@ -204,7 +247,7 @@ exports.applyLeave = async (req, res) => {
     res.status(201).json({ 
       success: true,
       message: 'Leave applied successfully.', 
-      leave: populatedLeave,
+      leave: formatLeaveWithApprovals(populatedLeave),
       userInfo: {
         id: user._id,
         name: user.name,
@@ -241,7 +284,7 @@ exports.getUserLeaves = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      leaves: leaves,
+      leaves: leaves.map(formatLeaveWithApprovals),
       total: leaves.length
     });
 
@@ -494,6 +537,7 @@ exports.getAllLeaves = async (req, res) => {
       endDate: leave.endDate,
       days: leave.days || 0,
       status: leave.status || 'Pending',
+      approvals: Leave.normalizeApprovals(leave.approvals),
       remarks: leave.remarks || '',
       approvedBy: leave.approvedBy,
       approvalSteps: leave.approvalSteps || [],
@@ -539,6 +583,203 @@ exports.getAllLeaves = async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Server error while fetching leaves',
+      details: error.message
+    });
+  }
+};
+
+// ============================================
+// UPDATE ROLE APPROVAL - MULTI LEVEL LEAVE WORKFLOW
+// ============================================
+exports.updateLeaveApproval = async (req, res) => {
+  try {
+    const { leaveId } = req.params;
+    const { decision, remarks = '' } = req.body;
+    const currentUser = req.user;
+    const approvalRole = getApprovalRoleForUser(currentUser);
+
+    if (!approvalRole) {
+      return res.status(403).json({
+        success: false,
+        error: 'Only Manager, HR, or Company Owner can approve or reject leave requests.'
+      });
+    }
+
+    if (!['Approved', 'Rejected'].includes(decision)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Decision must be Approved or Rejected.'
+      });
+    }
+
+    const leave = await Leave.findById(leaveId).populate('user', 'name email phone company companyId');
+
+    if (!leave) {
+      return res.status(404).json({
+        success: false,
+        error: 'Leave not found'
+      });
+    }
+
+    const userCompanyId = currentUser.company?._id?.toString?.() || currentUser.company?.toString?.() || currentUser.companyId?.toString?.();
+    const leaveCompanyId = leave.user?.company?._id?.toString?.() || leave.user?.company?.toString?.() || leave.user?.companyId?.toString?.();
+
+    if (userCompanyId && leaveCompanyId && userCompanyId !== leaveCompanyId) {
+      return res.status(403).json({
+        success: false,
+        error: 'You can only update leaves from your own company'
+      });
+    }
+
+    leave.approvals = Leave.normalizeApprovals(leave.approvals);
+
+    const existingDecisions = APPROVAL_ROLES.map((role) => leave.approvals[role]);
+    const isLegacyTerminalLeave = ['Approved', 'Rejected'].includes(leave.status) &&
+      existingDecisions.every((approval) => approval.status === 'Pending' && !approval.actedAt);
+
+    if (isLegacyTerminalLeave) {
+      return res.status(409).json({
+        success: false,
+        error: `This leave is already ${leave.status} from the previous approval flow. Create a new request or use the existing admin override flow to change it.`
+      });
+    }
+
+    const roleApproval = leave.approvals[approvalRole];
+
+    if (['Approved', 'Rejected'].includes(roleApproval.status)) {
+      return res.status(409).json({
+        success: false,
+        error: `${approvalRole} approval has already been ${roleApproval.status.toLowerCase()} for this leave.`
+      });
+    }
+
+    const oldStatus = leave.status || 'Pending';
+    const actorName = currentUser.name || currentUser.email || approvalRole;
+    const actedAt = new Date();
+
+    leave.approvals[approvalRole] = {
+      status: decision,
+      approvedBy: decision === 'Approved' ? currentUser._id : null,
+      rejectedBy: decision === 'Rejected' ? currentUser._id : null,
+      approverName: actorName,
+      remarks: remarks || '',
+      actedAt
+    };
+    leave.markModified('approvals');
+
+    leave.status = calculateFinalLeaveStatus(leave.approvals);
+    leave.remarks = remarks || leave.remarks || '';
+    leave.approvedBy = decision === 'Approved' ? currentUser._id : leave.approvedBy;
+
+    leave.history = leave.history || [];
+    leave.history.push({
+      action: `${approvalRole}_${decision.toLowerCase()}`,
+      by: currentUser._id,
+      role: approvalRole,
+      remarks: remarks || '',
+      at: actedAt
+    });
+
+    await leave.save();
+
+    await leave.populate('approvedBy', 'name email');
+    await leave.populate('history.by', 'name email');
+
+    const finalStatusChanged = oldStatus !== leave.status;
+    const responseLeave = formatLeaveWithApprovals(leave);
+
+    if (finalStatusChanged) {
+      const statusMessage = leave.status === 'Approved' ? 'approved' :
+                           leave.status === 'Rejected' ? 'rejected' : 'updated';
+
+      try {
+        await notifyDirectUsers({
+          userIds: [leave.user._id],
+          targetPath: '/ciisUser/my-leaves',
+          type: 'leave_status_changed',
+          title: `Leave ${leave.status}`,
+          message: `${actorName} ${statusMessage} your ${leave.type} leave${remarks ? ': ' + remarks : ''}`,
+          actor: currentUser._id,
+          company: leave.user.company || leave.user.companyId,
+          data: {
+            leaveId: leave._id,
+            userId: leave.user._id,
+            oldStatus,
+            newStatus: leave.status,
+            approvals: responseLeave.approvals,
+            leaveType: leave.type,
+            startDate: leave.startDate,
+            endDate: leave.endDate,
+            days: leave.days,
+            reason: leave.reason,
+            remarks
+          },
+          priority: 'high'
+        });
+      } catch (notifError) {
+        console.error('Failed to send final leave status notification:', notifError.message);
+      }
+
+      try {
+        await sendLeaveStatusEmail(
+          leave.user.email,
+          leave.user.name,
+          leave._id.toString(),
+          leave.status,
+          remarks || '',
+          actorName
+        );
+      } catch (emailError) {
+        console.error('Failed to send final leave status email:', emailError.message);
+      }
+
+      try {
+        if (global.io) {
+          emitLeaveEvents.leaveStatusChanged(global.io, {
+            leave: responseLeave,
+            oldStatus,
+            newStatus: leave.status,
+            updatedBy: currentUser,
+            approvalRole,
+            approvalDecision: decision
+          });
+        }
+      } catch (socketError) {
+        console.error('Failed to emit final leave status socket event:', socketError.message);
+      }
+    }
+
+    try {
+      if (global.io && emitLeaveEvents.leaveApprovalChanged) {
+        emitLeaveEvents.leaveApprovalChanged(global.io, {
+          leave: responseLeave,
+          approvalRole,
+          decision,
+          updatedBy: currentUser
+        });
+      }
+    } catch (socketError) {
+      console.error('Failed to emit leave approval socket event:', socketError.message);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `${approvalRole} ${decision.toLowerCase()} leave successfully`,
+      data: {
+        leave: responseLeave,
+        finalStatusChanged,
+        approvalRole,
+        approval: responseLeave.approvals[approvalRole]
+      }
+    });
+  } catch (error) {
+    console.error('ERROR IN UPDATE LEAVE APPROVAL');
+    console.error('Error:', error);
+    console.error('Stack:', error.stack);
+
+    return res.status(500).json({
+      success: false,
+      error: 'Server error while updating leave approval',
       details: error.message
     });
   }
@@ -949,7 +1190,7 @@ exports.getLeavesWithStatus = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      leaves,
+      leaves: leaves.map(formatLeaveWithApprovals),
       total: leaves.length
     });
 
@@ -986,7 +1227,7 @@ exports.syncLeaves = async (req, res) => {
       .populate('user', 'name email')
       .lean();
 
-    result.serverLeaves = serverLeaves;
+    result.serverLeaves = serverLeaves.map(formatLeaveWithApprovals);
 
     // Process local leaves
     for (const localLeave of localLeaves) {
@@ -1001,6 +1242,7 @@ exports.syncLeaves = async (req, res) => {
             endDate: localLeave.endDate,
             days: localLeave.days,
             status: 'Pending',
+            approvals: Leave.defaultApprovals(),
             history: [{
               action: 'applied',
               by: userId,

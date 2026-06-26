@@ -618,7 +618,7 @@ app.use('/api/job-roles', require("./routes/jobRoleRoutes.js"));
 app.use('/api/superAdmin', require("./routes/superAdmin.js"));
 app.use("/api/meetings", require("./HR-CDS/routes/meetingRoutes.js"));
 app.use('/api/cmeeting', require("./HR-CDS/routes/clientMeetingRoutes.js"));
-app.use('/api/sidebar', require("./routes/sidebarConfigs.js"));
+app.use('/api/sidebar', require("./routes/sidebarConfigs.js")); 
 app.use('/api/company-assets', require('./routes/companyAssetRoutes'));
 app.use("/api/holidays", require("./HR-CDS/routes/Holiday.js"));
 app.use("/api/client-documents", require("./HR-CDS/routes/clientDocumentRoutes.js"));
