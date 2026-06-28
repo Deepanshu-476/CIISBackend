@@ -1,10 +1,25 @@
 const express = require("express");
 const router = express.Router();
 const companyController = require("../controllers/companyController");
+const multer = require("multer");
 
-// ✅ LOGO UPLOAD ROUTE - Using multer middleware
+// ✅ LOGO UPLOAD ROUTE - Using multer middleware with error handling
 router.post("/upload-logo", 
-  companyController.uploadLogo,           // Multer middleware for file upload
+  (req, res, next) => {
+    companyController.uploadLogo(req, res, (err) => {
+      if (err) {
+        let errMsg = err.message || 'Logo upload failed';
+        if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+          errMsg = 'Logo file size is too large. Max limit is 2MB.';
+        }
+        return res.status(400).json({
+          success: false,
+          message: errMsg
+        });
+      }
+      next();
+    });
+  },
   companyController.uploadLogoHandler     // Handle logo upload
 );
 
