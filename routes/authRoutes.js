@@ -13,7 +13,7 @@ router.post("/logout", authController.logout);
  
 // ==================== OTP VERIFICATION ROUTES ==================== 
 router.post("/verify-login-otp", authController.verifyLoginOTP);
-router.post("/resend-login-otp", authController.resendLoginOTP);
+router.post("/resend-login-otp", authController.resendLoginOTP); 
 
 // ==================== SUPER ADMIN ROUTES ====================
 router.post("/superadmin/login", authController.superAdminLogin);
