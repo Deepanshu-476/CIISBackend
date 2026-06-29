@@ -62,6 +62,7 @@ const TaskSchema = new Schema(
     title: { type: String, trim: true, default: "Untitled Task" },
     description: { type: String, trim: true },
     assignedTo: { type: Schema.Types.ObjectId, ref: "User" },
+    assignedUsers: [{ type: Schema.Types.ObjectId, ref: "User" }],
     dueDate: { type: Date },
     priority: { type: String, enum: PRIORITY_LEVELS, default: "medium" },
     status: { type: String, enum: TASK_STATUS, default: "pending" },

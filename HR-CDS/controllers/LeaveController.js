@@ -6,6 +6,7 @@ const PagePermission = require('../../models/PagePermission');
 const nodemailer = require('nodemailer');
 const fs = require('fs');
 const path = require('path');
+const mongoose = require('mongoose');
 
 // ✅ IMPORT email functions from utils
 const { 
@@ -87,7 +88,7 @@ const getUserCompanyCode = (user = {}) => {
 };
 
 const getLeaveApprovalStepsForCompany = async (companyId) => {
-  if (!companyId) return [];
+  if (!companyId || !mongoose.isValidObjectId(companyId)) return [];
 
   const pagePermission = await PagePermission.findOne({
     company: companyId,
@@ -101,7 +102,7 @@ const getLeaveApprovalStepsForCompany = async (companyId) => {
   if (approverIds.length === 0) return [];
 
   return [...new Set(approverIds.map(id => normalizeId(id)))]
-    .filter(id => id && id !== 'undefined' && id !== 'null')
+    .filter(id => mongoose.isValidObjectId(id))
     .map(id => ({
       user: id,
       status: 'Pending',
@@ -152,19 +153,38 @@ exports.applyLeave = async (req, res) => {
       });
     }
 
-    const userCompanyCode = getUserCompanyCode(req.user);
-    let userCompanyId = getUserCompanyId(req.user);
+    // Resolve tenancy from the database instead of relying only on the token
+    // snapshot. This also supports users whose companyCode exists on Company.
+    const user = await User.findById(req.user._id)
+      .select('name email department jobRole employeeId phone company companyCode')
+      .populate('company', 'companyName companyCode isActive')
+      .lean();
 
-    if (!userCompanyCode) {
-      return res.status(400).json({
+    if (!user) {
+      return res.status(401).json({
         success: false,
-        message: 'Company code is missing for this user. Please contact administrator.'
+        message: 'User account was not found. Please login again.'
       });
     }
+
+    let userCompanyId = getUserCompanyId(user) || getUserCompanyId(req.user);
+    let userCompanyCode = getUserCompanyCode(user) || getUserCompanyCode(req.user);
 
     if (!userCompanyId) {
       const company = await Company.findOne({ companyCode: userCompanyCode }).select('_id').lean();
       userCompanyId = company?._id || null;
+    }
+
+    if (!userCompanyCode && userCompanyId) {
+      const company = await Company.findById(userCompanyId).select('companyCode').lean();
+      userCompanyCode = company?.companyCode || '';
+    }
+
+    if (!userCompanyId || !userCompanyCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'Company is not configured for this user. Please contact administrator.'
+      });
     }
 
     const approvalSteps = await getLeaveApprovalStepsForCompany(userCompanyId);
@@ -197,20 +217,9 @@ exports.applyLeave = async (req, res) => {
 
     await leave.save();
 
-    // Get user basic info for response
-    const user = await User.findById(req.user._id)
-      .select('name email department jobRole employeeId phone company companyId')
-      .lean();
-
-    const userInfo = user || {
-      _id: req.user._id,
-      name: req.user.name || req.user.email || 'User',
-      email: req.user.email,
-      department: req.user.department,
-      jobRole: req.user.jobRole,
-      employeeId: req.user.employeeId,
-      phone: req.user.phone,
-      company: req.user.company,
+    const userInfo = {
+      ...user,
+      company: userCompanyId,
       companyId: userCompanyId
     };
 
