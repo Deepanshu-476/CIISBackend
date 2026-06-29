@@ -458,9 +458,45 @@ taskSchema.statics.getTaskWithUserStatus = async function (taskId, userId) {
    PRE SAVE HOOKS
 ================================= */
 taskSchema.pre("save", function (next) {
-  // Auto-mark overdue if due date passed
-  if (this.dueDateTime && new Date(this.dueDateTime) < new Date()) {
-    this.checkAndMarkOverdue();
+  // Auto-mark overdue if due date passed, otherwise reset if due date was extended to the future
+  if (this.dueDateTime) {
+    const now = new Date();
+    const dueDate = new Date(this.dueDateTime);
+    
+    if (dueDate < now) {
+      this.checkAndMarkOverdue();
+    } else {
+      // Due date is in the future. If task was marked overdue, reset it
+      if (this.overallStatus === 'overdue') {
+        let hasInProgress = false;
+        let hasPending = false;
+        let hasCompleted = false;
+
+        this.statusByUser.forEach(s => {
+          if (s.status === 'overdue') {
+            s.status = 'pending';
+            s.updatedAt = now;
+            s.remarks = 'Reset from overdue because due date was extended';
+          }
+          if (['in-progress', 'reopen', 'onhold'].includes(s.status)) hasInProgress = true;
+          if (s.status === 'pending') hasPending = true;
+          if (['completed', 'approved'].includes(s.status)) hasCompleted = true;
+        });
+
+        if (hasInProgress) {
+          this.overallStatus = 'in-progress';
+        } else if (hasPending) {
+          this.overallStatus = 'pending';
+        } else if (hasCompleted) {
+          this.overallStatus = 'completed';
+        } else {
+          this.overallStatus = 'pending';
+        }
+
+        this.overdueReason = undefined;
+        this.markedOverdueAt = undefined;
+      }
+    }
   }
   
   // Update last activity
