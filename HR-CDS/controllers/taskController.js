@@ -1009,7 +1009,10 @@ exports.getNotifications = async (req, res) => {
     const ownerFilter = {$or: [{recipient: req.user._id}, {user: req.user._id}]};
     const filter = {...ownerFilter};
     if (req.query.unreadOnly === 'true') filter.isRead = false;
-    const notifications = await Notification.find(filter).populate('relatedTask').sort({ createdAt: -1 }).lean();
+    // Task details for the shared notification model are stored in `data`.
+    // `relatedTask` belonged to the retired task-only notification schema, so
+    // attempting to populate it throws a StrictPopulateError in Mongoose.
+    const notifications = await Notification.find(filter).sort({ createdAt: -1 }).lean();
     const unreadCount = await Notification.countDocuments({...ownerFilter, isRead: false});
     res.json({ success: true, notifications, unreadCount });
   } catch (err) {

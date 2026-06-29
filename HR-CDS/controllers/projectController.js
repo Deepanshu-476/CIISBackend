@@ -6,6 +6,7 @@ const sharp = require("sharp");
 const {notifyDirectUsers} = require("../utils/systemNotificationService");
 const { sendEmail } = require("../../utils/sendEmail");
 const User = require("../../models/User");
+const mongoose = require("mongoose");
 
 // Configure storage for file uploads
 const storage = multer.diskStorage({
@@ -128,7 +129,14 @@ const idsEqual = (left, right) => {
   return leftId.toString() === rightId.toString();
 };
 
-const isTaskAssignedToUser = (task, userId) => idsEqual(task.assignedTo, userId);
+const getTaskAssigneeIds = (task = {}) => {
+  const assignees = Array.isArray(task.assignedUsers) ? [...task.assignedUsers] : [];
+  if (task.assignedTo) assignees.push(task.assignedTo);
+  return [...new Set(assignees.map(value => normalizeId(value)).filter(Boolean))];
+};
+
+const isTaskAssignedToUser = (task, userId) =>
+  getTaskAssigneeIds(task).some(assigneeId => idsEqual(assigneeId, userId));
 
 const sendProjectTaskAssignmentEmail = async ({ user, actorName, taskTitle, projectName, dueDate }) => {
   if (!user?.email) return;
@@ -297,6 +305,7 @@ exports.listProjects = async (req, res) => {
       .populate('users', 'name email role company companyCode')
       .populate('createdBy', 'name email')
       .populate('tasks.assignedTo', 'name email')
+      .populate('tasks.assignedUsers', 'name email')
       .populate('tasks.createdBy', 'name email')
       .sort({ createdAt: -1 });
 
@@ -329,6 +338,7 @@ exports.getProjectById = async (req, res) => {
       .populate('users', 'name email role _id')
       .populate('createdBy', 'name email _id')
       .populate('tasks.assignedTo', 'name email')
+      .populate('tasks.assignedUsers', 'name email')
       .populate('tasks.createdBy', 'name email')
       .populate('tasks.remarks.createdBy', 'name email')
       .populate('tasks.activityLogs.performedBy', 'name email');
@@ -775,7 +785,6 @@ exports.addTask = async (req, res) => {
 
       const { id } = req.params;
       const { title, description, assignedTo, dueDate, priority, status } = req.body;
-
       console.log("➕ Adding task to project:", id);
       console.log("Task title:", title);
       console.log("Assigned to:", assignedTo);
@@ -796,6 +805,30 @@ exports.addTask = async (req, res) => {
         });
       }
 
+      const rawAssignedUsers = req.body.assignedUsers;
+      const requestedAssigneeIds = (
+        Array.isArray(rawAssignedUsers)
+          ? rawAssignedUsers
+          : rawAssignedUsers
+            ? [rawAssignedUsers]
+            : assignedTo
+              ? [assignedTo]
+              : []
+      )
+        .flatMap(value => String(value).split(','))
+        .map(value => value.trim())
+        .filter(value => mongoose.isValidObjectId(value));
+      const projectUserIds = project.users.map(user => normalizeId(user));
+      const assignedUserIds = [...new Set(requestedAssigneeIds)]
+        .filter(userId => projectUserIds.includes(userId));
+
+      if (requestedAssigneeIds.length !== assignedUserIds.length) {
+        return res.status(400).json({
+          success: false,
+          message: "Tasks can only be assigned to users added to this project"
+        });
+      }
+
       // Create task
       const safeTitle = title?.trim() || "Untitled Task";
       const task = {
@@ -806,7 +839,11 @@ exports.addTask = async (req, res) => {
         createdBy: req.user.id
       };
 
-      if (assignedTo) task.assignedTo = assignedTo;
+      if (assignedUserIds.length) {
+        task.assignedUsers = assignedUserIds;
+        // Keep the legacy field populated for older clients.
+        task.assignedTo = assignedUserIds[0];
+      }
       if (dueDate) task.dueDate = dueDate;
 
       // Handle file upload
@@ -832,8 +869,10 @@ exports.addTask = async (req, res) => {
 
       const createdTask = project.tasks[project.tasks.length - 1];
 
-      if (assignedTo) {
-        const assignedUser = await User.findById(assignedTo).select("name email").lean();
+      if (assignedUserIds.length) {
+        const assignedUsers = await User.find({ _id: { $in: assignedUserIds } })
+          .select("name email")
+          .lean();
 
         // Add notification for assigned user
         const notification = {
@@ -848,7 +887,7 @@ exports.addTask = async (req, res) => {
         await project.addNotification(notification);
 
         await notifyDirectUsers({
-          userIds: [assignedTo],
+          userIds: assignedUserIds,
           targetPath: '/ciisUser/task-management',
           type: 'project_task_assigned',
           title: 'New Project Task',
@@ -863,13 +902,15 @@ exports.addTask = async (req, res) => {
           priority: priority?.toLowerCase() || 'medium',
         });
 
-        await sendProjectTaskAssignmentEmail({
-          user: assignedUser,
-          actorName: req.user.name,
-          taskTitle: safeTitle,
-          projectName: project.projectName,
-          dueDate: createdTask.dueDate
-        });
+        await Promise.allSettled(assignedUsers.map(user =>
+          sendProjectTaskAssignmentEmail({
+            user,
+            actorName: req.user.name,
+            taskTitle: safeTitle,
+            projectName: project.projectName,
+            dueDate: createdTask.dueDate
+          })
+        ));
       }
 
       console.log("✅ Task added successfully");
@@ -1182,7 +1223,7 @@ exports.updateTaskStatus = async (req, res) => {
 
     await project.addNotification(notification);
 
-    const statusNotificationUsers = [project.createdBy, task.assignedTo]
+    const statusNotificationUsers = [project.createdBy, ...getTaskAssigneeIds(task)]
       .filter(userId => userId && !idsEqual(userId, req.user.id));
 
     await notifyDirectUsers({
