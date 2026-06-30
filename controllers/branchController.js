@@ -1,4 +1,4 @@
-// controllers/branchController.js
+    // controllers/branchController.js
 const Branch = require("../models/Branch");
 const Company = require("../models/Company");
 const User = require("../models/User");
