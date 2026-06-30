@@ -380,19 +380,53 @@ const sendTaskStatusUpdateEmail = async (task, updatedUser, oldStatus, newStatus
   }
 };
 
+const getCleanFilterDate = (task, dateField) => {
+  const normalizedField = String(dateField || '').toLowerCase();
+  if (normalizedField === 'createdat' || normalizedField === 'createddate') {
+    return task.createdAt;
+  }
+  return task.dueDateTime || task.dueDate || task.createdAt;
+};
+
+const matchesAssignedUser = (task, assignedTo) => {
+  if (!assignedTo || assignedTo === 'all') return true;
+  const target = String(assignedTo);
+  const assignedUsers = Array.isArray(task.assignedUsers) ? task.assignedUsers : [];
+  return assignedUsers.some(user => String(user?._id || user?.id || user) === target)
+    || String(task.assignedTo?._id || task.assignedTo?.id || task.assignedTo || '') === target
+    || String(task.userId?._id || task.userId?.id || task.userId || '') === target;
+};
+
 const applyCleanListFilters = (tasks, req) => {
-  const { status, search, period, fromDate, toDate } = req.query;
-  const range = getCleanTaskDateRange({ period, fromDate, toDate });
+  const { status, search, period, priority, overdue, assignedTo, dateField } = req.query;
+  const fromDate = req.query.fromDate || req.query.startDate;
+  const toDate = req.query.toDate || req.query.endDate;
+  const range = getCleanTaskDateRange({ period: fromDate || toDate ? 'all' : period, fromDate, toDate });
   const query = search ? String(search).trim().toLowerCase() : '';
 
   return tasks.filter(t => {
-    if (status && status !== 'all' && normalizeTaskStatus(t.status) !== normalizeTaskStatus(status)) return false;
+    if (status && status !== 'all') {
+      const requestedStatus = normalizeTaskStatus(status);
+      if (requestedStatus === 'overdue') {
+        const taskOverdue = isTaskOverdueForStatus(t.dueDateTime || t.dueDate, t.status || t.overallStatus);
+        if (!taskOverdue && normalizeTaskStatus(t.status) !== 'overdue') return false;
+      } else if (normalizeTaskStatus(t.status) !== requestedStatus) {
+        return false;
+      }
+    }
+    if (priority && priority !== 'all' && String(t.priority || '').toLowerCase() !== String(priority).toLowerCase()) return false;
+    if (overdue && overdue !== 'all') {
+      const taskOverdue = isTaskOverdueForStatus(t.dueDateTime || t.dueDate, t.status || t.overallStatus);
+      if ((overdue === 'true' || overdue === 'overdue') && !taskOverdue) return false;
+      if ((overdue === 'false' || overdue === 'not-overdue') && taskOverdue) return false;
+    }
+    if (!matchesAssignedUser(t, assignedTo)) return false;
     if (query) {
       const searchHaystack = [t.title, t.name, t.description, t.clientName, t.service].map(v => String(v || '').toLowerCase()).join(' ');
       if (!searchHaystack.includes(query)) return false;
     }
     if (range) {
-      const sourceDate = getTaskSourceAwareDate(t);
+      const sourceDate = getCleanFilterDate(t, dateField);
       const dateVal = new Date(sourceDate);
       if (isNaN(dateVal.getTime())) return false;
       if (range.$gte && dateVal < range.$gte) return false;
