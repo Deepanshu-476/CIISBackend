@@ -298,13 +298,15 @@ const getOwnerDashboard = async (companyCode, ownerId) => {
     const presentCount = todayAttendance.filter((a) => a.status === "PRESENT").length;
     const lateCount = todayAttendance.filter((a) => a.status === "LATE").length;
     const absentCount = todayAttendance.filter((a) => a.status === "ABSENT").length;
-    const halfDayCount = todayAttendance.filter((a) => a.status === "HALF DAY").length;
+    const halfDayCount = todayAttendance.filter((a) => ["HALF DAY", "HALFDAY"].includes(a.status)).length;
 
     const monthlyStats = {
       present: monthlyAttendance.find((m) => m._id === "PRESENT")?.count || 0,
       late: monthlyAttendance.find((m) => m._id === "LATE")?.count || 0,
       absent: monthlyAttendance.find((m) => m._id === "ABSENT")?.count || 0,
-      halfDay: monthlyAttendance.find((m) => m._id === "HALF DAY")?.count || 0,
+      halfDay: monthlyAttendance
+        .filter((m) => ["HALF DAY", "HALFDAY"].includes(m._id))
+        .reduce((total, item) => total + item.count, 0),
     };
 
     const attendanceSummary = {

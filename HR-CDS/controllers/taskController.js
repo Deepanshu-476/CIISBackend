@@ -543,22 +543,53 @@ const fetchAssignedProjectTaskList = async (req) => {
   return tasks;
 };
 
+const getCleanFilterDate = (task, dateField) => {
+  const normalizedField = String(dateField || '').toLowerCase();
+  if (normalizedField === 'createdat' || normalizedField === 'createddate') {
+    return task.createdAt;
+  }
+  return task.dueDateTime || task.dueDate || task.createdAt;
+};
+
+const matchesAssignedUser = (task, assignedTo) => {
+  if (!assignedTo || assignedTo === 'all') return true;
+  const target = String(assignedTo);
+  const assignedUsers = Array.isArray(task.assignedUsers) ? task.assignedUsers : [];
+  return assignedUsers.some(user => String(user?._id || user?.id || user) === target)
+    || String(task.assignedTo?._id || task.assignedTo?.id || task.assignedTo || '') === target
+    || String(task.userId?._id || task.userId?.id || task.userId || '') === target;
+};
+
 const applyCleanListFilters = (tasks, req) => {
-  const { status, search, period, fromDate, toDate } = req.query;
-  const range = getCleanTaskDateRange({ period, fromDate, toDate });
+  const { status, search, period, priority, overdue, assignedTo, dateField } = req.query;
+  const fromDate = req.query.fromDate || req.query.startDate;
+  const toDate = req.query.toDate || req.query.endDate;
+  const range = getCleanTaskDateRange({ period: fromDate || toDate ? 'all' : period, fromDate, toDate });
   const query = search ? String(search).trim().toLowerCase() : '';
 
   return tasks.filter(t => {
-    if (status && status !== 'all' && normalizeTaskStatus(t.status) !== normalizeTaskStatus(status)) return false;
+    if (status && status !== 'all') {
+      const requestedStatus = normalizeTaskStatus(status);
+      if (requestedStatus === 'overdue') {
+        const taskOverdue = isTaskOverdueForStatus(t.dueDateTime || t.dueDate, t.status || t.overallStatus);
+        if (!taskOverdue && normalizeTaskStatus(t.status) !== 'overdue') return false;
+      } else if (normalizeTaskStatus(t.status) !== requestedStatus) {
+        return false;
+      }
+    }
+    if (priority && priority !== 'all' && String(t.priority || '').toLowerCase() !== String(priority).toLowerCase()) return false;
+    if (overdue && overdue !== 'all') {
+      const taskOverdue = isTaskOverdueForStatus(t.dueDateTime || t.dueDate, t.status || t.overallStatus);
+      if ((overdue === 'true' || overdue === 'overdue') && !taskOverdue) return false;
+      if ((overdue === 'false' || overdue === 'not-overdue') && taskOverdue) return false;
+    }
+    if (!matchesAssignedUser(t, assignedTo)) return false;
     if (query) {
       const searchHaystack = [t.title, t.name, t.description, t.clientName, t.service].map(v => String(v || '').toLowerCase()).join(' ');
       if (!searchHaystack.includes(query)) return false;
     }
     if (range) {
-      const source = String(t.__taskSource || t.taskSource || '').toLowerCase();
-      const sourceDate = source === 'project'
-        ? (t.lastActivityAt || t.updatedAt || t.createdAt)
-        : (t.dueDateTime || t.dueDate || t.createdAt);
+      const sourceDate = getCleanFilterDate(t, dateField);
       const dateVal = new Date(sourceDate);
       if (isNaN(dateVal.getTime())) return false;
       if (range.$gte && dateVal < range.$gte) return false;
@@ -709,8 +740,15 @@ exports.getAssignedTasks = async (req, res) => {
     const enriched = await enrichStatusInfo(tasks);
     const mapped = enriched.map(t => ({ ...t, status: normalizeTaskStatus(t.overallStatus) }));
     const filtered = applyCleanListFilters(mapped, req);
+    const paginated = paginateTasks(filtered, req);
 
-    return res.json({ success: true, groupedTasks: groupTasksByDate(filtered, 'createdAt', 'assignedSerialNo') });
+    return res.json({
+      success: true,
+      tasks: paginated.tasks,
+      groupedTasks: groupTasksByDate(paginated.tasks, 'createdAt', 'assignedSerialNo'),
+      total: paginated.total,
+      pagination: paginated
+    });
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
@@ -1009,7 +1047,10 @@ exports.getNotifications = async (req, res) => {
     const ownerFilter = {$or: [{recipient: req.user._id}, {user: req.user._id}]};
     const filter = {...ownerFilter};
     if (req.query.unreadOnly === 'true') filter.isRead = false;
-    const notifications = await Notification.find(filter).populate('relatedTask').sort({ createdAt: -1 }).lean();
+    // Task details for the shared notification model are stored in `data`.
+    // `relatedTask` belonged to the retired task-only notification schema, so
+    // attempting to populate it throws a StrictPopulateError in Mongoose.
+    const notifications = await Notification.find(filter).sort({ createdAt: -1 }).lean();
     const unreadCount = await Notification.countDocuments({...ownerFilter, isRead: false});
     res.json({ success: true, notifications, unreadCount });
   } catch (err) {
@@ -1264,7 +1305,8 @@ const queryAllUserTasks = async (userId, companyCode) => {
 };
 
 const filterUserTasks = (tasks, query) => {
-  const { period, search, status, priority } = query;
+  const { period, search, status, priority, fromDate, toDate } = query;
+  const range = getCleanTaskDateRange({ period: fromDate || toDate ? 'all' : period, fromDate, toDate });
 
   return tasks.filter(t => {
     // 1. Search filter
@@ -1299,39 +1341,14 @@ const filterUserTasks = (tasks, query) => {
       if (t.priority !== priority.toLowerCase()) return false;
     }
 
-    // 4. Period filter
-    if (period && period !== 'all') {
-      const source = String(t.__taskSource || t.taskSource || '').toLowerCase();
-      const dateToFilter = source === 'project'
-        ? (t.lastActivityAt || t.updatedAt || t.createdAt)
-        : (t.dueDateTime || t.dueDate || t.createdAt);
+    // 4. Date filter
+    if (range) {
+      const dateToFilter = t.dueDateTime || t.dueDate || t.createdAt;
       const taskDate = dateToFilter ? new Date(dateToFilter) : null;
       if (!taskDate || Number.isNaN(taskDate.getTime())) return false;
 
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-
-      if (period === 'today') {
-        const temp = new Date(taskDate);
-        temp.setHours(0, 0, 0, 0);
-        const isToday = temp.getTime() === today.getTime();
-        if (!isToday) return false;
-      } else if (period === 'week') {
-        const startOfThisWeek = new Date(today);
-        const day = startOfThisWeek.getDay();
-        const diffToMonday = day === 0 ? -6 : 1 - day;
-        startOfThisWeek.setDate(startOfThisWeek.getDate() + diffToMonday);
-
-        const endOfThisWeek = new Date(startOfThisWeek);
-        endOfThisWeek.setDate(endOfThisWeek.getDate() + 6);
-        endOfThisWeek.setHours(23, 59, 59, 999);
-
-        const isThisWeek = taskDate >= startOfThisWeek && taskDate <= endOfThisWeek;
-        if (!isThisWeek) return false;
-      } else if (period === 'overdue') {
-        const isOverdue = isTaskOverdueForStatus(t.dueDateTime || t.dueDate, t.userStatus);
-        if (!isOverdue) return false;
-      }
+      if (range.$gte && taskDate < range.$gte) return false;
+      if (range.$lte && taskDate > range.$lte) return false;
     }
 
     return true;

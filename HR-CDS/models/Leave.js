@@ -89,6 +89,14 @@ const leaveSchema = new mongoose.Schema({
    
     default: 'Pending'
   },
+  approvals: {
+    type: mongoose.Schema.Types.Mixed,
+    default: () => ({
+      manager: { status: 'Pending', remarks: '', actionedAt: null, by: null },
+      hr: { status: 'Pending', remarks: '', actionedAt: null, by: null },
+      owner: { status: 'Pending', remarks: '', actionedAt: null, by: null }
+    })
+  },
   approvedBy: {
   type: mongoose.Schema.Types.ObjectId,
   ref: 'User',
@@ -189,6 +197,72 @@ leaveSchema.methods.isInProgress = function() {
 // Method to check if leave is past
 leaveSchema.methods.isPast = function() {
   return this.endDate < new Date();
+};
+
+const APPROVAL_ROLES = ['manager', 'hr', 'owner'];
+
+const buildDefaultApproval = () => ({
+  status: 'Pending',
+  remarks: '',
+  actionedAt: null,
+  by: null
+});
+
+leaveSchema.statics.defaultApprovals = function() {
+  return APPROVAL_ROLES.reduce((acc, role) => {
+    acc[role] = buildDefaultApproval();
+    return acc;
+  }, {});
+};
+
+leaveSchema.statics.normalizeApprovals = function(approvals = {}) {
+  const defaults = this.defaultApprovals();
+
+  if (!approvals || typeof approvals !== 'object' || Array.isArray(approvals)) {
+    return defaults;
+  }
+
+  return APPROVAL_ROLES.reduce((acc, role) => {
+    const current = approvals[role];
+
+    if (current && typeof current === 'object' && !Array.isArray(current)) {
+      acc[role] = {
+        ...defaults[role],
+        ...current,
+        status: current.status || defaults[role].status,
+        remarks: current.remarks || '',
+        actionedAt: current.actionedAt || null,
+        by: current.by || current.user || null
+      };
+    } else if (typeof current === 'string') {
+      acc[role] = {
+        ...defaults[role],
+        status: current
+      };
+    } else {
+      acc[role] = defaults[role];
+    }
+
+    return acc;
+  }, {});
+};
+
+leaveSchema.statics.withApprovalDefaults = function(leave) {
+  if (!leave) return leave;
+
+  const plainLeave = typeof leave.toObject === 'function'
+    ? leave.toObject({ virtuals: true })
+    : { ...leave };
+
+  return {
+    ...plainLeave,
+    approvals: this.normalizeApprovals(plainLeave.approvals),
+    approvalSteps: plainLeave.approvalSteps || [],
+    approvalMode: plainLeave.approvalMode || 'single',
+    history: plainLeave.history || [],
+    remarks: plainLeave.remarks || '',
+    status: plainLeave.status || 'Pending'
+  };
 };
 
 // Pre-save middleware to update sync timestamp

@@ -148,10 +148,7 @@ const filterUserTasks = (tasks, queryParams) => {
       if (!haystack.includes(query)) return false;
     }
     if (range) {
-      const source = String(t.__taskSource || t.taskSource || '').toLowerCase();
-      const sourceDate = source === 'project'
-        ? t.createdAt
-        : (t.dueDateTime || t.dueDate || t.createdAt);
+      const sourceDate = t.dueDateTime || t.dueDate || t.createdAt;
       const dateVal = new Date(sourceDate);
       if (isNaN(dateVal.getTime())) return false;
       if (range.$gte && dateVal < range.$gte) return false;
@@ -159,6 +156,57 @@ const filterUserTasks = (tasks, queryParams) => {
     }
     return true;
   });
+};
+
+const mapWithConcurrency = async (items, limit, mapper) => {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
+};
+
+const calculateUserStatusCounts = (filtered) => {
+  const counts = {
+    total: filtered.length,
+    pending: 0,
+    'in-progress': 0,
+    completed: 0,
+    overdue: 0,
+    onhold: 0
+  };
+
+  filtered.forEach(task => {
+    const status = task.status;
+    if (counts[status] !== undefined) {
+      counts[status] += 1;
+    } else if (status === 'pending') {
+      counts.pending += 1;
+    }
+  });
+
+  const total = filtered.length;
+  const toStat = (count) => ({
+    count,
+    percentage: total > 0 ? Math.round((count / total) * 100) : 0
+  });
+
+  return {
+    total,
+    pending: toStat(counts.pending),
+    inProgress: toStat(counts['in-progress']),
+    completed: toStat(counts.completed),
+    overdue: toStat(counts.overdue),
+    onhold: toStat(counts.onhold)
+  };
 };
 
 // Get all my tasks combined
@@ -284,42 +332,41 @@ exports.getUserTaskStats = async (req, res) => {
     const allTasks = await queryAllUserTasks(userId, req.user.companyCode);
     const filtered = filterUserTasks(allTasks, req.query);
 
-    const counts = {
-      total: filtered.length,
-      pending: 0,
-      'in-progress': 0,
-      completed: 0,
-      overdue: 0,
-      onhold: 0
-    };
-
-    filtered.forEach(task => {
-      const status = task.status;
-      if (counts[status] !== undefined) {
-        counts[status] += 1;
-      } else if (status === 'pending') {
-        counts.pending += 1;
-      }
-    });
-
-    const total = filtered.length;
-    const toStat = (count) => ({
-      count,
-      percentage: total > 0 ? Math.round((count / total) * 100) : 0
-    });
-
-    const statusCounts = {
-      total: total,
-      pending: toStat(counts.pending),
-      inProgress: toStat(counts['in-progress']),
-      completed: toStat(counts.completed),
-      overdue: toStat(counts.overdue),
-      onhold: toStat(counts.onhold)
-    };
+    const statusCounts = calculateUserStatusCounts(filtered);
 
     res.json({
       success: true,
       statusCounts
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+exports.getUsersTaskStatsBatch = async (req, res) => {
+  try {
+    const userIds = Array.isArray(req.body?.userIds)
+      ? req.body.userIds.map(id => String(id || '').trim()).filter(Boolean)
+      : [];
+
+    if (userIds.length === 0) {
+      return res.json({ success: true, statsByUser: {} });
+    }
+
+    const queryParams = { ...req.query, ...(req.body?.filters || {}) };
+    const entries = await mapWithConcurrency(userIds, 6, async (userId) => {
+      try {
+        const allTasks = await queryAllUserTasks(userId, req.user.companyCode);
+        const filtered = filterUserTasks(allTasks, queryParams);
+        return [userId, calculateUserStatusCounts(filtered)];
+      } catch (err) {
+        return [userId, calculateUserStatusCounts([])];
+      }
+    });
+
+    res.json({
+      success: true,
+      statsByUser: Object.fromEntries(entries)
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
