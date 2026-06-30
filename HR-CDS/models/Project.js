@@ -62,6 +62,7 @@ const TaskSchema = new Schema(
     title: { type: String, trim: true, default: "Untitled Task" },
     description: { type: String, trim: true },
     assignedTo: { type: Schema.Types.ObjectId, ref: "User" },
+    assignedUsers: [{ type: Schema.Types.ObjectId, ref: "User" }],
     dueDate: { type: Date },
     priority: { type: String, enum: PRIORITY_LEVELS, default: "medium" },
     status: { type: String, enum: TASK_STATUS, default: "pending" },
@@ -84,6 +85,8 @@ const ProjectSchema = new Schema(
   {
     projectName: { type: String, required: true, trim: true },
     description: { type: String, trim: true },
+    company: { type: Schema.Types.ObjectId, ref: "Company", index: true },
+    companyCode: { type: String, trim: true, uppercase: true, index: true },
     users: [{ type: Schema.Types.ObjectId, ref: "User" }],
     status: { type: String, enum: PROJECT_STATUS, default: "active" },
     startDate: { type: Date },
@@ -102,6 +105,8 @@ const ProjectSchema = new Schema(
 );
 
 ProjectSchema.index({ projectName: "text" });
+ProjectSchema.index({ company: 1, createdAt: -1 });
+ProjectSchema.index({ companyCode: 1, createdAt: -1 });
 ProjectSchema.index({ status: 1 });
 ProjectSchema.index({ priority: 1 });
 ProjectSchema.index({ createdBy: 1 });

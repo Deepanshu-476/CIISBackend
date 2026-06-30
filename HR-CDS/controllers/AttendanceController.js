@@ -266,11 +266,11 @@ const clockIn = async (req, res) => {
     let status = "PRESENT";
     
     if (now >= halfDayThreshold) {
-      status = "HALFDAY";
+      status = "HALF DAY";
     } else if (now >= lateThresholdStart && now <= lateThresholdEnd) {
       status = "LATE";
     } else if (now > lateThresholdEnd && now < halfDayThreshold) {
-      status = "HALFDAY";
+      status = "HALF DAY";
     }
 
     const newRecord = new Attendance({
@@ -363,12 +363,12 @@ const clockOut = async (req, res) => {
     const lateThresholdStart = getIndiaThreshold(loginTime, 9, 10);
 
     if (loginTime >= halfDayThreshold) {
-      record.status = "HALFDAY";
+      record.status = "HALF DAY";
     } else if (loginTime > lateThresholdEnd && loginTime < halfDayThreshold) {
       if (totalHours >= 9) {
-        record.status = "HALFDAY";
+        record.status = "HALF DAY";
       } else if (totalHours >= 5) {
-        record.status = "HALFDAY";
+        record.status = "HALF DAY";
       } else {
         record.status = "ABSENT";
       }
@@ -376,7 +376,7 @@ const clockOut = async (req, res) => {
       if (totalHours >= 9) {
         record.status = "LATE";
       } else if (totalHours >= 5) {
-        record.status = "HALFDAY";
+        record.status = "HALF DAY";
       } else {
         record.status = "ABSENT";
       }
@@ -384,7 +384,7 @@ const clockOut = async (req, res) => {
       if (totalHours >= 9) {
         record.status = "PRESENT";
       } else if (totalHours >= 5) {
-        record.status = "HALFDAY";
+        record.status = "HALF DAY";
       } else {
         record.status = "ABSENT";
       }
@@ -735,9 +735,9 @@ const updateAttendanceRecord = async (req, res) => {
       const totalMinutes = getIndiaMinutesSinceMidnight(loginTime);
       
       if (totalMinutes >= 600) {
-        record.status = "HALFDAY";
+        record.status = "HALF DAY";
       } else if (totalMinutes >= 570) {
-        record.status = "HALFDAY";
+        record.status = "HALF DAY";
       } else if (totalMinutes >= 550) {
         record.status = "LATE";
       } else {
@@ -767,12 +767,12 @@ const updateAttendanceRecord = async (req, res) => {
         const lateThresholdStart = getIndiaThreshold(loginTime, 9, 10);
         
         if (loginTime >= halfDayThreshold) {
-          record.status = "HALFDAY";
+          record.status = "HALF DAY";
         } else if (loginTime > lateThresholdEnd && loginTime < halfDayThreshold) {
           if (totalHours >= 9) {
-            record.status = "HALFDAY";
+            record.status = "HALF DAY";
           } else if (totalHours >= 5) {
-            record.status = "HALFDAY";
+            record.status = "HALF DAY";
           } else {
             record.status = "ABSENT";
           }
@@ -782,7 +782,7 @@ const updateAttendanceRecord = async (req, res) => {
               record.status = "PRESENT";
             }
           } else if (totalHours >= 5) {
-            record.status = "HALFDAY";
+            record.status = "HALF DAY";
           } else {
             record.status = "ABSENT";
           }
@@ -790,7 +790,7 @@ const updateAttendanceRecord = async (req, res) => {
           if (totalHours >= 9) {
             record.status = "PRESENT";
           } else if (totalHours >= 5) {
-            record.status = "HALFDAY";
+            record.status = "HALF DAY";
           } else {
             record.status = "ABSENT";
           }
@@ -1166,7 +1166,7 @@ const getAttendanceStats = async (req, res) => {
           },
           halfDay: {
             $sum: {
-              $cond: [{ $eq: ["$status", "HALFDAY"] }, 1, 0]
+              $cond: [{ $in: ["$status", ["HALF DAY", "HALFDAY"]] }, 1, 0]
             }
           },
           absent: {

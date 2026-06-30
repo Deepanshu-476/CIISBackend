@@ -1577,7 +1577,7 @@ const renewClientSubscription = async (req, res) => {
 const addClientDueInvoice = async (req, res) => {
   try {
     const { id } = req.params;
-    const { title = 'Subscription Due', amount, dueDate, note = '' } = req.body;
+    const { title = 'Subscription Due', amount, dueDate, note = '', status = 'Due' } = req.body;
 
     const client = await Client.findById(id);
     if (!client) {
@@ -1594,16 +1594,21 @@ const addClientDueInvoice = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid due date' });
     }
 
+    const allowedStatuses = ['Due', 'Pending Verification', 'Paid', 'Cancelled'];
+    const finalStatus = allowedStatuses.includes(status) ? status : 'Due';
+
     if (!client.dueInvoices) client.dueInvoices = [];
     client.dueInvoices.push({
       title: String(title || 'Subscription Due').trim(),
       amount: dueAmount,
       dueDate: parsedDueDate,
       note: String(note || '').trim(),
-      status: 'Due'
+      status: finalStatus
     });
 
-    client.status = 'On Hold';
+    if (finalStatus === 'Due' || finalStatus === 'Pending Verification') {
+      client.status = 'On Hold';
+    }
     await client.save();
 
     res.json({

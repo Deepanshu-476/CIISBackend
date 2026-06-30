@@ -9,7 +9,7 @@ const missingCompanyCodeFilter = {
   $or: [
     { companyCode: { $exists: false } },
     { companyCode: null },
-    { companyCode: '' },
+    { companyCode: '' }, 
   ],
 };
 

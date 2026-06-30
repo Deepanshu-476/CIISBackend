@@ -4,6 +4,9 @@ const User = require('../../models/User');
 const Company = require('../../models/Company');
 const PagePermission = require('../../models/PagePermission');
 const nodemailer = require('nodemailer');
+const fs = require('fs');
+const path = require('path');
+const mongoose = require('mongoose');
 
 // ✅ IMPORT email functions from utils
 const { 
@@ -55,6 +58,59 @@ const calculateFinalLeaveStatus = (approvals) => {
 
 const formatLeaveWithApprovals = (leave) => Leave.withApprovalDefaults(leave);
 
+const writeLeaveDebugLog = (label, data) => {
+  try {
+    const logPath = path.join(__dirname, '../../leave-debug.log');
+    fs.appendFileSync(
+      logPath,
+      `${new Date().toISOString()} ${label} ${JSON.stringify(data, null, 2)}\n`,
+      'utf8'
+    );
+  } catch {
+    // Debug logging must never break the leave flow.
+  }
+};
+
+const normalizeId = (value) => {
+  if (!value) return '';
+  if (value._id && value._id !== value) return normalizeId(value._id);
+  if (typeof value.toString === 'function') return value.toString();
+  return String(value);
+};
+
+const getUserCompanyId = (user = {}) => {
+  const company = user.company;
+  return company?._id || company || user.companyId || null;
+};
+
+const getUserCompanyCode = (user = {}) => {
+  return String(user.companyCode || user.company?.companyCode || '').trim();
+};
+
+const getLeaveApprovalStepsForCompany = async (companyId) => {
+  if (!companyId || !mongoose.isValidObjectId(companyId)) return [];
+
+  const pagePermission = await PagePermission.findOne({
+    company: companyId,
+    path: '/ciisUser/emp-leaves'
+  }).lean();
+
+  const approverIds = (pagePermission?.approvers || [])
+    .map(item => item.user)
+    .filter(Boolean);
+
+  if (approverIds.length === 0) return [];
+
+  return [...new Set(approverIds.map(id => normalizeId(id)))]
+    .filter(id => mongoose.isValidObjectId(id))
+    .map(id => ({
+      user: id,
+      status: 'Pending',
+      remarks: '',
+      actionedAt: null
+    }));
+};
+
 // 🔹 Apply for Leave (User)
 exports.applyLeave = async (req, res) => {
   console.log("➡️ applyLeave controller called");
@@ -97,7 +153,41 @@ exports.applyLeave = async (req, res) => {
       });
     }
 
-    const approvalSteps = await getLeaveApprovalStepsForCompany(getUserCompanyId(req.user));
+    // Resolve tenancy from the database instead of relying only on the token
+    // snapshot. This also supports users whose companyCode exists on Company.
+    const user = await User.findById(req.user._id)
+      .select('name email department jobRole employeeId phone company companyCode')
+      .populate('company', 'companyName companyCode isActive')
+      .lean();
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'User account was not found. Please login again.'
+      });
+    }
+
+    let userCompanyId = getUserCompanyId(user) || getUserCompanyId(req.user);
+    let userCompanyCode = getUserCompanyCode(user) || getUserCompanyCode(req.user);
+
+    if (!userCompanyId) {
+      const company = await Company.findOne({ companyCode: userCompanyCode }).select('_id').lean();
+      userCompanyId = company?._id || null;
+    }
+
+    if (!userCompanyCode && userCompanyId) {
+      const company = await Company.findById(userCompanyId).select('companyCode').lean();
+      userCompanyCode = company?.companyCode || '';
+    }
+
+    if (!userCompanyId || !userCompanyCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'Company is not configured for this user. Please contact administrator.'
+      });
+    }
+
+    const approvalSteps = await getLeaveApprovalStepsForCompany(userCompanyId);
 
     // Create leave
     const leave = new Leave({
@@ -113,7 +203,7 @@ exports.applyLeave = async (req, res) => {
       approvalSteps,
       approvalMode: approvalSteps.length > 0 ? 'all' : 'single',
       remarks: '',
-      companyCode: req.user.companyCode,
+      companyCode: userCompanyCode,
       history: [
         {
           action: 'applied',
@@ -127,8 +217,11 @@ exports.applyLeave = async (req, res) => {
 
     await leave.save();
 
-    // Get user basic info for response
-    const user = await User.findById(req.user._id).select('name email department jobRole employeeId phone company companyId');
+    const userInfo = {
+      ...user,
+      company: userCompanyId,
+      companyId: userCompanyId
+    };
 
     // Populate leave for response
     const populatedLeave = await Leave.findById(leave._id)
@@ -139,15 +232,15 @@ exports.applyLeave = async (req, res) => {
     // ✅ Send email notification
     try {
       await sendLeaveAppliedEmail(
-        user.email,
-        user.name,
+        userInfo.email,
+        userInfo.name,
         leave._id.toString(),
         type,
         startDate,
         endDate,
         days
       );
-      console.log(`✅ Leave application email sent to ${user.email}`);
+      console.log(`✅ Leave application email sent to ${userInfo.email}`);
     } catch (emailError) {
       console.error('❌ Failed to send application email:', emailError.message);
     }
@@ -161,13 +254,13 @@ exports.applyLeave = async (req, res) => {
           targetPath: '/ciisUser/emp-leaves',
           type: 'leave_applied',
           title: 'New Leave Approval Pending',
-          message: `${user.name} applied for ${type} leave`,
-          actor: user._id,
-          company: user.company || user.companyId,
+          message: `${userInfo.name} applied for ${type} leave`,
+          actor: userInfo._id,
+          company: userInfo.company || userInfo.companyId,
           data: {
             leaveId: leave._id,
-            userId: user._id,
-            userName: user.name,
+            userId: userInfo._id,
+            userName: userInfo.name,
             leaveType: type,
             startDate,
             endDate,
@@ -178,17 +271,17 @@ exports.applyLeave = async (req, res) => {
         });
       } else {
         await notifyPageUsers({
-          companyId: user.company || user.companyId,
+          companyId: userInfo.company || userInfo.companyId,
           targetPath: '/ciisUser/emp-leaves',
-          excludeUserIds: [user._id],
+          excludeUserIds: [userInfo._id],
           type: 'leave_applied',
           title: 'New Leave Application',
-          message: `${user.name} applied for ${type} leave`,
-          actor: user._id,
+          message: `${userInfo.name} applied for ${type} leave`,
+          actor: userInfo._id,
           data: {
             leaveId: leave._id,
-            userId: user._id,
-            userName: user.name,
+            userId: userInfo._id,
+            userName: userInfo.name,
             leaveType: type,
             startDate,
             endDate,
@@ -208,7 +301,7 @@ exports.applyLeave = async (req, res) => {
     try {
       if (global.io) {
         emitLeaveEvents.newLeaveApplied(global.io, {
-          companyId: user.company || user.companyId,
+          companyId: userInfo.company || userInfo.companyId,
           leave: populatedLeave.toObject ? populatedLeave.toObject() : populatedLeave
         });
         console.log('📢 Socket event emitted: new leave applied');
@@ -222,21 +315,36 @@ exports.applyLeave = async (req, res) => {
       message: 'Leave applied successfully.', 
       leave: formatLeaveWithApprovals(populatedLeave),
       userInfo: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        department: user.department,
-        jobRole: user.jobRole,
-        employeeId: user.employeeId,
-        phone: user.phone
+        id: userInfo._id,
+        name: userInfo.name,
+        email: userInfo.email,
+        department: userInfo.department,
+        jobRole: userInfo.jobRole,
+        employeeId: userInfo.employeeId,
+        phone: userInfo.phone
       }
     });
 
   } catch (err) {
     console.error("❌ Error in applyLeave controller:", err);
+    writeLeaveDebugLog('applyLeave-error', {
+      message: err.message,
+      stack: err.stack,
+      body: req.body,
+      user: {
+        id: req.user?._id,
+        email: req.user?.email,
+        company: req.user?.company,
+        companyCode: req.user?.companyCode,
+        jobRole: req.user?.jobRole,
+        companyRole: req.user?.companyRole
+      }
+    });
     res.status(500).json({ 
       success: false,
-      error: 'Server error' 
+      message: err.message || 'Server error while applying leave',
+      error: 'Server error',
+      details: process.env.NODE_ENV === 'development' ? err.stack : undefined
     });
   }
 };
