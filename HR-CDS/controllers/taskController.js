@@ -1267,7 +1267,8 @@ const queryAllUserTasks = async (userId, companyCode) => {
 };
 
 const filterUserTasks = (tasks, query) => {
-  const { period, search, status, priority } = query;
+  const { period, search, status, priority, fromDate, toDate } = query;
+  const range = getCleanTaskDateRange({ period: fromDate || toDate ? 'all' : period, fromDate, toDate });
 
   return tasks.filter(t => {
     // 1. Search filter
@@ -1302,39 +1303,14 @@ const filterUserTasks = (tasks, query) => {
       if (t.priority !== priority.toLowerCase()) return false;
     }
 
-    // 4. Period filter
-    if (period && period !== 'all') {
-      const source = String(t.__taskSource || t.taskSource || '').toLowerCase();
-      const dateToFilter = source === 'project'
-        ? (t.lastActivityAt || t.updatedAt || t.createdAt)
-        : (t.dueDateTime || t.dueDate || t.createdAt);
+    // 4. Date filter
+    if (range) {
+      const dateToFilter = t.dueDateTime || t.dueDate || t.createdAt;
       const taskDate = dateToFilter ? new Date(dateToFilter) : null;
       if (!taskDate || Number.isNaN(taskDate.getTime())) return false;
 
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-
-      if (period === 'today') {
-        const temp = new Date(taskDate);
-        temp.setHours(0, 0, 0, 0);
-        const isToday = temp.getTime() === today.getTime();
-        if (!isToday) return false;
-      } else if (period === 'week') {
-        const startOfThisWeek = new Date(today);
-        const day = startOfThisWeek.getDay();
-        const diffToMonday = day === 0 ? -6 : 1 - day;
-        startOfThisWeek.setDate(startOfThisWeek.getDate() + diffToMonday);
-
-        const endOfThisWeek = new Date(startOfThisWeek);
-        endOfThisWeek.setDate(endOfThisWeek.getDate() + 6);
-        endOfThisWeek.setHours(23, 59, 59, 999);
-
-        const isThisWeek = taskDate >= startOfThisWeek && taskDate <= endOfThisWeek;
-        if (!isThisWeek) return false;
-      } else if (period === 'overdue') {
-        const isOverdue = isTaskOverdueForStatus(t.dueDateTime || t.dueDate, t.userStatus);
-        if (!isOverdue) return false;
-      }
+      if (range.$gte && taskDate < range.$gte) return false;
+      if (range.$lte && taskDate > range.$lte) return false;
     }
 
     return true;
