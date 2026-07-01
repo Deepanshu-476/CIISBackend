@@ -4,7 +4,7 @@ const validator = require("validator");
 const crypto = require("crypto");
 
 const userSchema = new mongoose.Schema({
-  // ==================== COMPANY FIELD (NEW) ====================
+  
   company: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Company",
@@ -18,7 +18,7 @@ const userSchema = new mongoose.Schema({
     index: true
   },
 
-  // ==================== BRANCH FIELD (NEW) ====================
+  
   branch: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Branch",
@@ -30,7 +30,7 @@ const userSchema = new mongoose.Schema({
     index: true
   },
   
-  // ==================== CORE FIELDS ====================
+  
   name: {
     type: String,
     required: [true, "Name is required"],
@@ -69,12 +69,12 @@ const userSchema = new mongoose.Schema({
     default: 'user'
   },
   
-  // companyRole: {
-  //   type: String,
-  //   default: 'employee'
-  // },
+  
+  
+  
+  
 
-  // ==================== PERSONAL INFORMATION ====================
+  
   phone: String,
   address: String,
   gender: {
@@ -93,13 +93,13 @@ const userSchema = new mongoose.Schema({
   pan: String,
   salary: Number,
   
-  // ==================== BANK DETAILS ====================
+  
   accountNumber: String,
   ifsc: String,
   bankName: String,
   bankHolderName: String,
   
-  // ==================== EMPLOYMENT DETAILS ====================
+  
   employeeType: {
     type: String,
     
@@ -110,7 +110,7 @@ const userSchema = new mongoose.Schema({
     sparse: true
   },
   
-  // ==================== ASSETS ====================
+  
   properties: {
     type: [String],
     enum: ['sim', 'phone', 'laptop', 'desktop', 'headphones', 'tablet', 'vehicle'],
@@ -119,7 +119,7 @@ const userSchema = new mongoose.Schema({
   propertyOwned: String,
   additionalDetails: String,
   
-  // ==================== FAMILY DETAILS ====================
+  
   fatherName: String,
   motherName: String,
   spouseName: String,
@@ -129,19 +129,19 @@ const userSchema = new mongoose.Schema({
     dob: Date
   }],
   
-  // ==================== EMERGENCY DETAILS ====================
+  
   emergencyName: String,
   emergencyPhone: String,
   emergencyRelation: String,
   emergencyAddress: String,
   
-  // ==================== COMPANY-SPECIFIC FIELDS ====================
+  
   companyRole: {
   type: String,
   default: "employee"
 },
   
-  // ==================== SECURITY & AUTHENTICATION ====================
+  
   resetToken: {
     type: String,
     select: false
@@ -167,7 +167,7 @@ const userSchema = new mongoose.Schema({
     select: false
   },
   
-  // ==================== STATUS & META ====================
+  
   isActive: {
     type: Boolean,
     default: true
@@ -190,13 +190,13 @@ const userSchema = new mongoose.Schema({
     select: false
   },
   
-  // ==================== REFERENCES ====================
+  
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User"
   },
 
-  // ==================== NOTIFICATION PREFERENCES ====================
+  
   notificationPreferences: {
     push: {
       type: Boolean,
@@ -211,22 +211,22 @@ const userSchema = new mongoose.Schema({
       default: false
     },
     channels: {
-      taskAssigned: { type: Boolean, default: true }, // personal assigned tasks
-      taskClient: { type: Boolean, default: true }, // client tasks
+      taskAssigned: { type: Boolean, default: true }, 
+      taskClient: { type: Boolean, default: true }, 
       leave: { type: Boolean, default: true },
       assets: { type: Boolean, default: true },
       projects: { type: Boolean, default: true },
       chats: { type: Boolean, default: true },
       attendance: { type: Boolean, default: true }
     },
-    // Quiet hours in HH:mm (24h) format, null means no quiet hours
+    
     quietHours: {
       start: { type: String, default: null },
       end: { type: String, default: null }
     }
   },
 
-  // Add to your User schema
+  
 assets: [{
   type: mongoose.Schema.Types.ObjectId,
   ref: 'Asset'
@@ -241,7 +241,7 @@ currentlyAssignedAssets: [{
     ref: "User"
   },
   
-  // ==================== DOCUMENTS ====================
+  
   documents: [{
     name: String,
     type: String,
@@ -258,19 +258,19 @@ currentlyAssignedAssets: [{
   toObject: { virtuals: true }
 });
 
-// ==================== COMPOUND INDEXES ====================
-// Unique email per company
+
+
 userSchema.index({ company: 1, email: 1 }, { unique: true });
 
-// For faster queries
+
 userSchema.index({ company: 1, jobRole: 1 });
 userSchema.index({ company: 1, department: 1 });
 userSchema.index({ company: 1, isActive: 1 });
 userSchema.index({ company: 1, employeeType: 1 });
 
-// ==================== PRE-SAVE MIDDLEWARE ====================
+
 userSchema.pre("save", async function (next) {
-  // Generate employee ID if not present
+  
   if (!this.employeeId && this.companyCode) {
     const count = await mongoose.model("User").countDocuments({ 
       company: this.company,
@@ -279,7 +279,7 @@ userSchema.pre("save", async function (next) {
     this.employeeId = `${this.companyCode}-EMP-${String(count + 1).padStart(4, '0')}`;
   }
 
-  // Hash password if modified
+  
   if (this.isModified("password")) {
     try {
       this.password = await bcrypt.hash(this.password, 12);
@@ -292,13 +292,13 @@ userSchema.pre("save", async function (next) {
   next();
 });
 
-// ==================== INSTANCE METHODS ====================
-// Compare passwords
+
+
 userSchema.methods.comparePassword = async function (candidatePassword) {
   return await bcrypt.compare(candidatePassword, this.password);
 };
 
-// Generate reset token
+
 userSchema.methods.generateResetToken = function () {
   const resetToken = crypto.randomBytes(32).toString('hex');
   
@@ -307,12 +307,12 @@ userSchema.methods.generateResetToken = function () {
     .update(resetToken)
     .digest('hex');
     
-  this.resetTokenExpiry = Date.now() + 30 * 60 * 1000; // 30 minutes
+  this.resetTokenExpiry = Date.now() + 30 * 60 * 1000; 
   
   return resetToken;
 };
 
-// Generate verification token
+
 userSchema.methods.generateVerificationToken = function () {
   const token = crypto.randomBytes(32).toString('hex');
   
@@ -324,12 +324,12 @@ userSchema.methods.generateVerificationToken = function () {
   return token;
 };
 
-// Check if account is locked
+
 userSchema.methods.isLocked = function () {
   return !!(this.lockUntil && this.lockUntil > Date.now());
 };
 
-// Increment login attempts
+
 userSchema.methods.incrementLoginAttempts = function () {
   if (this.lockUntil && this.lockUntil < Date.now()) {
     return this.updateOne({
@@ -341,13 +341,13 @@ userSchema.methods.incrementLoginAttempts = function () {
   const updates = { $inc: { loginAttempts: 1 } };
   
   if (this.loginAttempts + 1 >= 5 && !this.isLocked()) {
-    updates.$set = { lockUntil: Date.now() + 30 * 60 * 1000 }; // Lock for 30 minutes
+    updates.$set = { lockUntil: Date.now() + 30 * 60 * 1000 }; 
   }
   
   return this.updateOne(updates);
 };
 
-// Reset login attempts on successful login
+
 userSchema.methods.resetLoginAttempts = function () {
   return this.updateOne({
     $set: { 
@@ -358,7 +358,7 @@ userSchema.methods.resetLoginAttempts = function () {
   });
 };
 
-// ==================== VIRTUAL FIELDS ====================
+
 userSchema.virtual('fullName').get(function () {
   return this.name;
 });
@@ -370,24 +370,24 @@ userSchema.virtual('age').get(function () {
   return Math.abs(age.getUTCFullYear() - 1970);
 });
 
-// ==================== QUERY HELPERS ====================
-// Active users query helper
+
+
 userSchema.query.active = function () {
   return this.where({ isActive: true });
 };
 
-// By company query helper
+
 userSchema.query.byCompany = function (companyId) {
   return this.where({ company: companyId });
 };
 
-// By job role query helper
+
 userSchema.query.byRole = function (role) {
   return this.where({ jobRole: role });
 };
 
-// ==================== STATIC METHODS ====================
-// Find by email and company
+
+
 userSchema.statics.findByEmailAndCompany = function (email, companyId) {
   return this.findOne({ 
     email: email.toLowerCase(), 
@@ -395,7 +395,7 @@ userSchema.statics.findByEmailAndCompany = function (email, companyId) {
   });
 };
 
-// Get all users by company
+
 userSchema.statics.findByCompany = function (companyId, options = {}) {
   const { 
     activeOnly = true,
@@ -412,7 +412,7 @@ userSchema.statics.findByCompany = function (companyId, options = {}) {
   return query.sort({ [sortBy]: sortOrder });
 };
 
-// Get statistics for company
+
 userSchema.statics.getCompanyStats = async function (companyId) {
   const stats = await this.aggregate([
     { $match: { company: new mongoose.Types.ObjectId(companyId) } },
@@ -432,13 +432,13 @@ userSchema.statics.getCompanyStats = async function (companyId) {
   return stats[0] || { total: 0, active: 0, byRole: [], byDepartment: [] };
 };
 
-// ==================== VALIDATION ====================
-// Validate email format
+
+
 userSchema.path('email').validate(function (email) {
   return validator.isEmail(email);
 }, 'Invalid email format');
 
-// Validate phone if provided
+
 userSchema.path('phone').validate(function (phone) {
   if (!phone) return true;
   return /^[0-9]{10}$/.test(phone);

@@ -1,4 +1,4 @@
-// controllers/branchController.js
+
 const Branch = require("../models/Branch");
 const Company = require("../models/Company");
 const User = require("../models/User");
@@ -7,7 +7,7 @@ const mongoose = require("mongoose");
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
-// 1. Create a New Branch
+
 exports.createBranch = async (req, res) => {
   try {
     const { name, branchCode, companyId, address, phone } = req.body;
@@ -26,7 +26,7 @@ exports.createBranch = async (req, res) => {
       });
     }
 
-    // Find company to get companyCode
+    
     const company = await Company.findById(companyId);
     if (!company) {
       return res.status(404).json({
@@ -37,7 +37,7 @@ exports.createBranch = async (req, res) => {
 
     const cleanBranchCode = branchCode.trim().toUpperCase();
 
-    // Check for duplicate branch name or code in this company
+    
     const [existingName, existingCode] = await Promise.all([
       Branch.findOne({ company: companyId, name: { $regex: new RegExp(`^${name.trim()}$`, "i") } }),
       Branch.findOne({ company: companyId, branchCode: cleanBranchCode }),
@@ -82,7 +82,7 @@ exports.createBranch = async (req, res) => {
   }
 };
 
-// 2. Get All Branches of a Company
+
 exports.getAllBranches = async (req, res) => {
   try {
     const { companyId } = req.params;
@@ -96,7 +96,7 @@ exports.getAllBranches = async (req, res) => {
 
     const branches = await Branch.find({ company: companyId }).sort({ isDefault: -1, createdAt: 1 });
 
-    // Fetch user counts per branch
+    
     const branchesWithStats = await Promise.all(
       branches.map(async (branch) => {
         const userCount = await User.countDocuments({ branch: branch._id, isActive: true });
@@ -122,7 +122,7 @@ exports.getAllBranches = async (req, res) => {
   }
 };
 
-// 3. Get Branch by ID
+
 exports.getBranchById = async (req, res) => {
   try {
     const { id } = req.params;
@@ -161,7 +161,7 @@ exports.getBranchById = async (req, res) => {
   }
 };
 
-// 4. Update Branch details
+
 exports.updateBranch = async (req, res) => {
   try {
     const { id } = req.params;
@@ -182,7 +182,7 @@ exports.updateBranch = async (req, res) => {
       });
     }
 
-    // Safety check for Default Branch
+    
     if (branch.isDefault) {
       if (isActive === false) {
         return res.status(400).json({
@@ -198,7 +198,7 @@ exports.updateBranch = async (req, res) => {
       }
     }
 
-    // Duplicate check for name and code if they are being updated
+    
     const updates = {};
     if (name && name.trim() !== branch.name) {
       const existingName = await Branch.findOne({
@@ -240,7 +240,7 @@ exports.updateBranch = async (req, res) => {
       runValidators: true,
     });
 
-    // If branchCode or name updated, dynamically sync with User & Department records (lazy update)
+    
     if (updates.branchCode) {
       await Promise.all([
         User.updateMany({ branch: id }, { branchCode: updates.branchCode }),
@@ -263,7 +263,7 @@ exports.updateBranch = async (req, res) => {
   }
 };
 
-// 5. Delete Branch
+
 exports.deleteBranch = async (req, res) => {
   try {
     const { id } = req.params;
@@ -283,7 +283,7 @@ exports.deleteBranch = async (req, res) => {
       });
     }
 
-    // Safety checks
+    
     if (branch.isDefault) {
       return res.status(400).json({
         success: false,
@@ -291,7 +291,7 @@ exports.deleteBranch = async (req, res) => {
       });
     }
 
-    // Check if there are active users assigned to this branch
+    
     const usersCount = await User.countDocuments({ branch: id, isActive: true });
     if (usersCount > 0) {
       return res.status(400).json({
@@ -300,7 +300,7 @@ exports.deleteBranch = async (req, res) => {
       });
     }
 
-    // Check if there are active departments assigned to this branch
+    
     const deptsCount = await Department.countDocuments({ branch: id, isActive: true });
     if (deptsCount > 0) {
       return res.status(400).json({

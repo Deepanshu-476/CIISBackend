@@ -3,7 +3,7 @@ const path = require("path");
 const fs = require("fs");
 const sharp = require("sharp");
 
-// Ensure the upload folders exist
+
 const pdfUploadDir = "uploads/pdfs";
 const taskUploadDir = "uploads/tasks";
 const remarksUploadDir = "uploads/remarks";
@@ -12,7 +12,7 @@ if (!fs.existsSync(pdfUploadDir)) fs.mkdirSync(pdfUploadDir, { recursive: true }
 if (!fs.existsSync(taskUploadDir)) fs.mkdirSync(taskUploadDir, { recursive: true });
 if (!fs.existsSync(remarksUploadDir)) fs.mkdirSync(remarksUploadDir, { recursive: true });
 
-// PDF Multer setup
+
 const pdfStorage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, pdfUploadDir),
   filename: (req, file, cb) => {
@@ -21,13 +21,13 @@ const pdfStorage = multer.diskStorage({
   },
 });
 
-// Task image Multer setup
+
 const taskStorage = multer.memoryStorage();
 
-// Remarks image Multer setup
+
 const remarksStorage = multer.memoryStorage();
 
-// Upload middleware for PDFs
+
 const uploadPDF = multer({
   storage: pdfStorage,
   fileFilter: (req, file, cb) => {
@@ -38,7 +38,7 @@ const uploadPDF = multer({
   limits: { fileSize: 10 * 1024 * 1024 },
 });
 
-// Upload middleware for Task images
+
 const uploadTaskImage = multer({
   storage: taskStorage,
   fileFilter: (req, file, cb) => {
@@ -49,7 +49,7 @@ const uploadTaskImage = multer({
   limits: { fileSize: 5 * 1024 * 1024 },
 }).single("image");
 
-// Upload middleware for Remarks images - NEW
+
 const uploadRemarkImage = multer({
   storage: remarksStorage,
   fileFilter: (req, file, cb) => {
@@ -57,11 +57,11 @@ const uploadRemarkImage = multer({
     if (!allowed.includes(file.mimetype)) return cb(new Error("Only image files are allowed (JPG, PNG, JPEG, GIF, WEBP)"));
     cb(null, true);
   },
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
-}).single("image"); // Single image for remarks
+  limits: { fileSize: 5 * 1024 * 1024 }, 
+}).single("image"); 
 
 module.exports = {
   uploadPDF,
   uploadTaskImage,
-  uploadRemarkImage // Export the new middleware
+  uploadRemarkImage 
 };

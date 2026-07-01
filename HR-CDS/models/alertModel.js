@@ -40,7 +40,7 @@ const alertSchema = new mongoose.Schema({
   timestamps: true 
 });
 
-// Add index for better performance
+
 alertSchema.index({ assignedUsers: 1 });
 alertSchema.index({ assignedGroups: 1 });
 alertSchema.index({ createdBy: 1 });

@@ -1,6 +1,6 @@
 const Joi = require("joi");
 
-// Register validation (Updated with full user fields)
+
 const registerSchema = Joi.object({
    name: Joi.string().min(2).max(50).required().messages({
     "string.empty": "Name is required",
@@ -23,7 +23,7 @@ const registerSchema = Joi.object({
       'string.base': 'Company identifier must be a string'
     }),
     
-  // For two-factor authentication
+  
   twoFactorCode: Joi.string()
     .optional()
     .length(6)
@@ -48,7 +48,7 @@ const registerSchema = Joi.object({
     "string.empty": "Job role is required",
     "string.length": "Invalid job role ID format"
   }),
-  // Optional extended fields (for role = 'user')
+  
   phone: Joi.string().pattern(/^\d{10}$/).allow('').messages({
     "string.pattern.base": "Phone must be 10 digits"
   }),
@@ -80,7 +80,7 @@ const registerSchema = Joi.object({
   emergencyAddress: Joi.string().allow("")
 });
 
-// Login validation
+
 const loginSchema = Joi.object({
   email: Joi.string().email().required().messages({
     "string.empty": "Email is required",
@@ -112,18 +112,18 @@ const loginSchema = Joi.object({
     })
 });
 
-// Forgot password validation
+
 const forgotPasswordSchema = Joi.object({
   email: Joi.string().email().required()
 });
 
-// Reset password validation (using user ID and new password)
+
 const resetPasswordSchema = Joi.object({
   id: Joi.string().required(),
   password: Joi.string().min(8).required()
 });
 
-// ✅ Change password validation (old + new password)
+
 const changePasswordSchema = Joi.object({
   email: Joi.string().email().required(),
   oldPassword: Joi.string().min(5).required(),

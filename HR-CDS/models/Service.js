@@ -17,10 +17,10 @@ const serviceSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Unique service per company
+
 serviceSchema.index({ companyCode: 1, servicename: 1 }, { unique: true });
 
-// Pre-save middleware
+
 serviceSchema.pre('save', function(next) {
   if (this.companyCode) {
     this.companyCode = this.companyCode.trim().toUpperCase();

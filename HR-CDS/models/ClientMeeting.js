@@ -104,7 +104,7 @@ const clientMeetingSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Indexes for better query performance
+
 clientMeetingSchema.index({ clientName: 1 });
 clientMeetingSchema.index({ meetingDate: 1 });
 clientMeetingSchema.index({ priority: 1 });

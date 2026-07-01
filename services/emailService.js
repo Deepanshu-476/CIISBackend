@@ -1,4 +1,4 @@
-// services/emailService.js
+
 
 const nodemailer = require('nodemailer');
 const { getCompanyRegistrationEmailTemplate } = require('../utils/emailTemplates/companyRegistration');
@@ -11,7 +11,7 @@ class EmailService {
   }
 
   initializeTransporter() {
-    // Check if email credentials are configured
+    
     if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
       console.warn('⚠️ Email credentials not configured. Emails will not be sent.');
       return;
@@ -24,35 +24,35 @@ class EmailService {
         pass: process.env.EMAIL_PASS
       },
       tls: {
-        rejectUnauthorized: process.env.NODE_ENV === 'production' // Only reject in production
+        rejectUnauthorized: process.env.NODE_ENV === 'production' 
       },
       pool: true,
       maxConnections: 5,
       maxMessages: 100
     });
 
-    // Verify connection
+    
     this.transporter.verify((error, success) => {
       if (error) {
         console.error('❌ Email transporter verification failed:', error);
       } else {
-        console.log('✅ Email server is ready to send messages');
+        void 0;
       }
     });
   }
 
   async sendEmail(to, subject, html, options = {}) {
     try {
-      // Validate inputs
+      
       if (!to || !subject || !html) {
         throw new Error('Missing required email parameters');
       }
 
-      // Check if transporter is configured
+      
       if (!this.transporter) {
         if (process.env.NODE_ENV === 'development') {
-          console.log('📧 [DEV MODE] Email would be sent:', { to, subject });
-          console.log('📧 [DEV MODE] Email HTML preview available at: /dev-email-preview');
+          void 0;
+          void 0;
           this.notifyEmailSent(to, subject, options);
           return { 
             success: true, 
@@ -77,14 +77,14 @@ class EmailService {
         }
       };
 
-      // Add attachments if provided
+      
       if (options.attachments && options.attachments.length > 0) {
         mailOptions.attachments = options.attachments;
       }
 
       const info = await this.transporter.sendMail(mailOptions);
       
-      console.log(`✅ Email sent successfully to ${to} | Message ID: ${info.messageId}`);
+      void 0;
       this.notifyEmailSent(to, subject, options);
       
       return {
@@ -98,12 +98,12 @@ class EmailService {
     } catch (error) {
       console.error('❌ Error sending email:', error.message);
       
-      // Log more details in development
+      
       if (process.env.NODE_ENV === 'development') {
         console.error('Email error details:', error);
       }
 
-      // Don't throw in production to prevent transaction rollback
+      
       if (process.env.NODE_ENV === 'production') {
         console.error('Email sending failed but continuing with response');
         return {
@@ -144,7 +144,7 @@ class EmailService {
     };
 
     try {
-      // Send email to company
+      
       if (companyData.companyEmail) {
         const companySubject = `🎉 Welcome to CIIS NETWORK - Company Registration Successful (Code: ${companyData.companyCode})`;
         const companyHtml = getCompanyRegistrationEmailTemplate(companyData, ownerData, false);
@@ -168,7 +168,7 @@ class EmailService {
         );
       }
 
-      // Send email to owner
+      
       if (ownerData.email) {
         const ownerSubject = `👑 Welcome to CIIS NETWORK - Super Admin Access Created (Company: ${companyData.companyName})`;
         const ownerHtml = getCompanyRegistrationEmailTemplate(companyData, ownerData, true);
@@ -194,7 +194,7 @@ class EmailService {
       }
 
       results.success = true;
-      console.log(`✅ Registration emails sent successfully for company: ${companyData.companyName} (${companyData.companyCode})`);
+      void 0;
       
       return results;
 
@@ -203,12 +203,12 @@ class EmailService {
       results.errors.push(error.message);
       results.success = false;
       
-      // Don't throw - email failure shouldn't break company creation
+      
       return results;
     }
   }
 
-  // Test email configuration
+  
   async testEmailConfig(testEmail) {
     try {
       const testResult = await this.sendEmail(
@@ -244,7 +244,7 @@ class EmailService {
   }
 }
 
-// Create singleton instance
+
 const emailService = new EmailService();
 
 module.exports = emailService;

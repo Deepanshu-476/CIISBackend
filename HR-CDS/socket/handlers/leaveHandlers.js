@@ -1,18 +1,18 @@
-// socket/handlers/leaveHandlers.js
 
-// Socket events for leave management
+
+
 const emitLeaveEvents = {
-  // When a new leave is applied.
+  
   newLeaveApplied: (io, data) => {
     try {
       const { companyId, leave } = data;
       
       if (!io) {
-        console.log('⚠️ Socket.io not initialized');
+        void 0;
         return;
       }
 
-      // Send to all company admins and owners.
+      
       io.to(`company:${companyId}:admin`).emit('leave:new', {
         type: 'leave_applied',
         message: `New leave application from ${leave.user?.name || 'Unknown'}`,
@@ -20,23 +20,23 @@ const emitLeaveEvents = {
         timestamp: new Date()
       });
 
-      console.log(`📢 Emitted leave:new to company:${companyId}:admin`);
+      void 0;
     } catch (error) {
       console.error('❌ Error in newLeaveApplied event:', error);
     }
   },
 
-  // When leave status changes.
+  
   leaveStatusChanged: (io, data) => {
     try {
       const { leave, oldStatus, newStatus, updatedBy } = data;
       
       if (!io || !leave || !leave._id) {
-        console.log('⚠️ Invalid data for leaveStatusChanged');
+        void 0;
         return;
       }
 
-      // Send to everyone in the specific leave room.
+      
       io.to(`leave:${leave._id}`).emit('leave:status_changed', {
         type: 'leave_status_changed',
         message: `Leave status changed from ${oldStatus} to ${newStatus}`,
@@ -51,19 +51,19 @@ const emitLeaveEvents = {
         timestamp: new Date()
       });
 
-      console.log(`📢 Emitted leave:status_changed for leave ${leave._id}`);
+      void 0;
     } catch (error) {
       console.error('❌ Error in leaveStatusChanged event:', error);
     }
   },
 
-  // When leave is deleted.
+  
   leaveDeleted: (io, data) => {
     try {
       const { leaveId, userId, deletedBy, leaveData } = data;
       
       if (!io || !userId) {
-        console.log('⚠️ Invalid data for leaveDeleted');
+        void 0;
         return;
       }
 
@@ -78,33 +78,33 @@ const emitLeaveEvents = {
         timestamp: new Date()
       });
 
-      console.log(`📢 Emitted leave:deleted for user ${userId}`);
+      void 0;
     } catch (error) {
       console.error('❌ Error in leaveDeleted event:', error);
     }
   }
 };
 
-// Client-side event handlers (jo frontend se aayenge)
+
 const leaveHandlers = (io, socket) => {
   
-  // Join specific leave room
+  
   socket.on('leave:join', (leaveId) => {
     if (!leaveId) return;
     const room = `leave:${leaveId}`;
     socket.join(room);
-    console.log(`📌 User ${socket.userId} joined leave room: ${room}`);
+    void 0;
   });
 
-  // Leave a specific leave room
+  
   socket.on('leave:leave', (leaveId) => {
     if (!leaveId) return;
     const room = `leave:${leaveId}`;
     socket.leave(room);
-    console.log(`📌 User ${socket.userId} left leave room: ${room}`);
+    void 0;
   });
 
-  // Request leave details
+  
   socket.on('leave:get', async (leaveId, callback) => {
     try {
       const Leave = require('../../HR-CDS/models/Leave');
