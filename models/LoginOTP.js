@@ -19,7 +19,7 @@ const loginOTPSchema = new mongoose.Schema({
   expiresAt: { 
     type: Date, 
     required: true, 
-    default: () => new Date(Date.now() + 5 * 60 * 1000) // 5 minutes
+    default: () => new Date(Date.now() + 5 * 60 * 1000) 
   },
   attempts: { 
     type: Number, 
@@ -35,7 +35,7 @@ const loginOTPSchema = new mongoose.Schema({
   }
 });
 
-// Auto-delete expired OTPs
+
 loginOTPSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 module.exports = mongoose.model('LoginOTP', loginOTPSchema);

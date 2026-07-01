@@ -1,4 +1,4 @@
-// controllers/taskHelper.js
+
 const Task = require('../models/Task');
 const ClientTask = require('../models/ClientTask');
 const Client = require('../models/Client');
@@ -438,7 +438,7 @@ const applyCleanListFilters = (tasks, req) => {
 
 const sendCleanTaskList = (res, tasks, view, dateField = 'createdAt', req = null) => {
   const sortedTasks = sortTasksNewestFirst(tasks);
-  const pagination = req ? paginateTasks(sortedTasks, req) : null;
+  const pagination = (req && req.query.page) ? paginateTasks(sortedTasks, req) : null;
   const responseTasks = pagination ? pagination.tasks : sortedTasks;
 
   return res.json({

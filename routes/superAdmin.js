@@ -5,16 +5,16 @@ const jwt = require('jsonwebtoken');
 const Company = require('../models/Company');
 const User = require('../models/User');
 
-// routes/superAdmin.js
+
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     
-    // Debug log
-    console.log('Login attempt for:', email);
-    console.log('Password received:', password ? 'Yes' : 'No');
     
-    // Validate input
+    void 0;
+    void 0;
+    
+    
     if (!email || !password) {
       return res.status(400).json({
         success: false,
@@ -22,35 +22,35 @@ router.post('/login', async (req, res) => {
       });
     }
     
-    // Find user with Management department AND super_admin jobRole
+    
     const user = await User.findOne({ 
       email: email.toLowerCase().trim(),
       department: "Management",
       jobRole: "super_admin"
-    }).select('+password'); // Important: explicitly select password field
+    }).select('+password'); 
     
     if (!user) {
-      console.log('User not found or not authorized:', email);
+      void 0;
       return res.status(401).json({
         success: false,
         message: 'Access denied. Super admin privileges required.'
       });
     }
     
-    console.log('User found:', user.name, user.department, user.jobRole);
-    console.log('User has password field:', user.password ? 'Yes' : 'No');
-    console.log('Password type:', typeof user.password);
+    void 0;
+    void 0;
+    void 0;
     
-    // Check if user has password
+    
     if (!user.password) {
-      console.log('User password is missing in database');
+      void 0;
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials'
       });
     }
     
-    // Check if user is active
+    
     if (!user.isActive) {
       return res.status(401).json({
         success: false,
@@ -58,7 +58,7 @@ router.post('/login', async (req, res) => {
       });
     }
     
-    // Check if user is verified
+    
     if (!user.isVerified) {
       return res.status(401).json({
         success: false,
@@ -66,14 +66,14 @@ router.post('/login', async (req, res) => {
       });
     }
     
-    // Debug: Log the hash and password
-    console.log('Password hash (first 20 chars):', user.password.substring(0, 20));
-    console.log('Password to compare:', password);
     
-    // Compare password using bcrypt
+    void 0;
+    void 0;
+    
+    
     const isMatch = await bcrypt.compare(password, user.password);
     
-    console.log('Password match:', isMatch);
+    void 0;
     
     if (!isMatch) {
       return res.status(401).json({
@@ -82,7 +82,7 @@ router.post('/login', async (req, res) => {
       });
     }
     
-    // Create JWT token
+    
     const token = jwt.sign(
       { 
         id: user._id,
@@ -96,7 +96,7 @@ router.post('/login', async (req, res) => {
       { expiresIn: process.env.JWT_EXPIRE || '30d' }
     );
     
-    // Update last login time
+    
     user.lastLogin = new Date();
     await user.save();
     
@@ -132,14 +132,14 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// Get Dashboard Stats
+
 router.get('/stats', async (req, res) => {
   try {
     const totalCompanies = await Company.countDocuments();
     const activeCompanies = await Company.countDocuments({ isActive: true });
     const totalUsers = await User.countDocuments();
     
-    // Get today's logins (you need to track login timestamps in User model)
+    
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const todayLogins = await User.countDocuments({
@@ -159,7 +159,7 @@ router.get('/stats', async (req, res) => {
   }
 });
 
-// Get all companies
+
 router.get('/companies', async (req, res) => {
   try {
     const companies = await Company.find()
@@ -172,7 +172,7 @@ router.get('/companies', async (req, res) => {
   }
 });
 
-// Get all users
+
 router.get('/users', async (req, res) => {
   try {
     const users = await User.find()
@@ -185,7 +185,7 @@ router.get('/users', async (req, res) => {
   }
 });
 
-// Deactivate company
+
 router.patch('/company/:id/deactivate', async (req, res) => {
   try {
     await Company.findByIdAndUpdate(req.params.id, { isActive: false });
@@ -195,7 +195,7 @@ router.patch('/company/:id/deactivate', async (req, res) => {
   }
 });
 
-// Activate company
+
 router.patch('/company/:id/activate', async (req, res) => {
   try {
     await Company.findByIdAndUpdate(req.params.id, { isActive: true });
@@ -205,7 +205,7 @@ router.patch('/company/:id/activate', async (req, res) => {
   }
 });
 
-// Delete company
+
 router.delete('/company/:id', async (req, res) => {
   try {
     await Company.findByIdAndDelete(req.params.id);
@@ -215,7 +215,7 @@ router.delete('/company/:id', async (req, res) => {
   }
 });
 router.get("/test", (req, res) => {
-  console.log("Debug user info:", req.user);
+  void 0;
   res.json({
     success: true,
     user: req.user
@@ -223,4 +223,4 @@ router.get("/test", (req, res) => {
 });
 
 module.exports = router;
-console.log("✅ superAdmin.js loaded successfully");
+void 0;

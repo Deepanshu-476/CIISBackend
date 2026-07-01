@@ -51,10 +51,7 @@ const menuMatchesTarget = (item, targetPath, target) => {
 };
 
 const logNotificationDebug = (label, payload = {}) => {
-  console.log(`[NOTIFICATION DEBUG] ${label}`, {
-    at: new Date().toISOString(),
-    ...payload,
-  });
+  void 0;
 };
 
 exports.resolveUsersWithPageAccess = async ({companyId, targetPath, excludeUserIds = []}) => {
@@ -191,21 +188,21 @@ exports.sendSystemNotification = async ({
     ids: notifications.map(notification => notification._id.toString()),
   });
 
-  // Fetch user preferences for these recipients to decide push / web notify
+  
   const users = await User.find({_id: {$in: recipientIds}}).select('_id notificationPreferences name');
   const prefsById = users.reduce((acc, u) => {
     acc[String(u._id)] = u.notificationPreferences || {};
     return acc;
   }, {});
 
-  // Helper: determine channel key from type
+  
   const typeToChannel = t => {
-    // Normalize known types
+    
     const map = {
       'task_assigned': 'taskAssigned',
       'task_client': 'taskClient',
-      'status_updated': 'taskAssigned', // treat status updates under taskAssigned channel by default
-      'task_remark_added': 'taskAssigned', // remarks mapped to taskAssigned channel
+      'status_updated': 'taskAssigned', 
+      'task_remark_added': 'taskAssigned', 
       'leave': 'leave',
       'asset': 'assets',
       'project': 'projects',
@@ -235,7 +232,7 @@ exports.sendSystemNotification = async ({
       if (start <= end) {
         return now >= start && now <= end;
       }
-      // overnight (e.g., 22:00 - 07:00)
+      
       return now >= start || now <= end;
     } catch (err) {
       return false;
@@ -246,12 +243,12 @@ exports.sendSystemNotification = async ({
     const rid = String(notification.recipient);
     const pref = prefsById[rid] || {};
 
-    // Web (socket) recipients — only if user enabled web notifications
+    
     if (pref.web !== false) {
       webRecipients.push(notification.recipient);
     }
 
-    // Push recipients: requires push enabled and channel enabled and not in quiet hours
+    
     const pushEnabled = pref.push !== false;
     const channelEnabled = channelKey ? (pref.channels ? pref.channels[channelKey] !== false : true) : true;
     const suppressedByQuiet = inQuietHours(pref);
@@ -271,7 +268,7 @@ exports.sendSystemNotification = async ({
       willSocket: Boolean(global.io && pref.web !== false),
     });
 
-    // Emit socket events for web recipients
+    
     if (global.io && pref.web !== false) {
       global.io.to(`user:${notification.recipient}`).emit('notification:new', notification);
       global.io.to(`user_${notification.recipient}`).emit('new_notification', notification);
@@ -305,7 +302,7 @@ exports.sendSystemNotification = async ({
     }));
   }
 
-  // Send push only to filtered recipients
+  
   if (push && pushRecipients.length) {
     logNotificationDebug('push:dispatch', {
       pushRecipientCount: pushRecipients.length,

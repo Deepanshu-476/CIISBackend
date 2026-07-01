@@ -13,9 +13,9 @@ const emailService = require('../../services/emailService');
 const multer = require('multer');
 const path = require('path');
 
-// Default department ID for clients
+
 const DEFAULT_CLIENT_DEPARTMENT_ID = '69ae555c9a1e47e80a40204c';
-// Default job role ID for clients
+
 const DEFAULT_CLIENT_JOB_ROLE_ID = '69ae559b9a1e47e80a4020a2';
 
 const normalizeCompanyCode = (companyCode) => companyCode?.trim().toUpperCase();
@@ -111,7 +111,7 @@ const generateTasksForSubscription = async ({ client, subscription, plan, sessio
   return createdTaskIds;
 };
 
-// Helper function to get welcome email template
+
 const getWelcomeEmailTemplate = (name, company, email, password, loginUrl) => {
   const currentYear = new Date().getFullYear();
   
@@ -451,7 +451,7 @@ const getWelcomeEmailTemplate = (name, company, email, password, loginUrl) => {
   `;
 };
 
-// Helper function to send welcome email using email service
+
 const getCompanyLoginUrl = (companyCode) => {
   const normalizedCompanyCode = companyCode?.trim();
   if (!normalizedCompanyCode) {
@@ -462,12 +462,12 @@ const getCompanyLoginUrl = (companyCode) => {
 };
 
 const sendWelcomeEmail = async (email, name, company, password, companyCode) => {
-  console.log('📧 ====== SENDING WELCOME EMAIL ======');
-  console.log(`📧 To: ${email}`);
-  console.log(`📧 Name: ${name}`);
-  console.log(`📧 Company: ${company}`);
-  console.log(`📧 Company Code: ${companyCode || 'N/A'}`);
-  console.log(`📧 Auto-generated password: ${password}`);
+  void 0;
+  void 0;
+  void 0;
+  void 0;
+  void 0;
+  void 0;
   
   const fullLoginUrl = getCompanyLoginUrl(companyCode);
   
@@ -495,7 +495,7 @@ const sendWelcomeEmail = async (email, name, company, password, companyCode) => 
     );
     
     if (result.success) {
-      console.log(`✅ Welcome email sent successfully to ${email} | Message ID: ${result.messageId}`);
+      void 0;
     } else {
       console.warn(`⚠️ Welcome email sending failed but continuing: ${result.error}`);
     }
@@ -508,7 +508,7 @@ const sendWelcomeEmail = async (email, name, company, password, companyCode) => 
 };
 
 const getAllClients = async (req, res) => {
-  console.log('🔍 getAllClients called with query:', req.query);
+  void 0;
   try {
     const {
       page = 1,
@@ -596,7 +596,7 @@ const getAllClients = async (req, res) => {
 };
 
 const getClientById = async (req, res) => {
-  console.log('🔍 getClientById called with id:', req.params.id);
+  void 0;
   try {
     const { id } = req.params;
     
@@ -624,7 +624,7 @@ const getClientById = async (req, res) => {
 };
 
 const addClient = async (req, res) => {
-  console.log('🔍 addClient called with body:', req.body);
+  void 0;
   const session = await mongoose.startSession();
   session.startTransaction();
   
@@ -647,19 +647,9 @@ const addClient = async (req, res) => {
       subscription  
     } = req.body;
 
-    console.log('🔍 Processing client data:', {
-      client,
-      company,
-      city,
-      companyCode,
-      projectManager,
-      services,
-      email,
-      phone,
-      subscription: subscription
-    });
+    void 0;
 
-    // Validation
+    
     const errors = [];
     
     if (!client || client.trim().length === 0) {
@@ -722,7 +712,7 @@ const addClient = async (req, res) => {
     }
     const finalServices = selectedClientPlan ? getPlanServiceNames(selectedClientPlan) : (services || []);
 
-    // Check if client already exists for this company
+    
     const existingClient = await Client.findOne({
       client: { $regex: `^${escapeRegExp(cleanClientName)}$`, $options: 'i' },
       companyCode: cleanCompanyCode
@@ -734,7 +724,7 @@ const addClient = async (req, res) => {
       return sendConflict(res, 'This client already exists for this company.', 'client');
     }
 
-    // Check if email is already in use (if email provided)
+    
     let cleanEmail = normalizeEmail(email) || '';
     if (cleanEmail) {
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -761,9 +751,9 @@ const addClient = async (req, res) => {
         return sendConflict(res, 'This email is already used by another client.', 'email');
       }
     } else {
-      // Generate email if not provided
+      
       cleanEmail = `${cleanClientName.toLowerCase().replace(/[^a-z0-9]/g, '')}@${cleanCompanyCode.toLowerCase()}.com`;
-      console.log('🔍 Generated email:', cleanEmail);
+      void 0;
 
       const existingGeneratedEmail = await User.findOne({ email: cleanEmail }).session(session);
       const existingGeneratedClientEmail = await Client.findOne({ email: cleanEmail }).session(session);
@@ -779,7 +769,7 @@ const addClient = async (req, res) => {
       }
     }
 
-    // Validate services exist if provided
+    
     if (finalServices && finalServices.length > 0) {
       const serviceNames = finalServices.filter(s => s && typeof s === 'string' && s.trim().length > 0);
       if (serviceNames.length > 0) {
@@ -804,7 +794,7 @@ const addClient = async (req, res) => {
       }
     }
 
-    // Check if default department exists
+    
     const departmentExists = await Department.findById(DEFAULT_CLIENT_DEPARTMENT_ID).session(session);
     if (!departmentExists) {
       console.error('❌ Default department not found:', DEFAULT_CLIENT_DEPARTMENT_ID);
@@ -816,7 +806,7 @@ const addClient = async (req, res) => {
       });
     }
 
-    // Check if default job role exists
+    
     const jobRoleExists = await JobRole.findById(DEFAULT_CLIENT_JOB_ROLE_ID).session(session);
     if (!jobRoleExists) {
       console.error('❌ Default job role not found:', DEFAULT_CLIENT_JOB_ROLE_ID);
@@ -828,8 +818,8 @@ const addClient = async (req, res) => {
       });
     }
 
-    // Get company ID from companyCode
-    console.log('🔍 Finding company with code:', companyCode);
+    
+    void 0;
     
     const companyExists = await Company.findOne({ companyCode: cleanCompanyCode }).session(session);
     if (!companyExists) {
@@ -841,7 +831,7 @@ const addClient = async (req, res) => {
       });
     }
 
-    // Generate password from client name
+    
     const generatePassword = (name) => {
       const baseName = name.toLowerCase().replace(/[^a-z0-9]/g, '');
       const randomNum = Math.floor(1000 + Math.random() * 9000);
@@ -850,13 +840,13 @@ const addClient = async (req, res) => {
 
     const autoPassword = generatePassword(client);
     
-    // Generate employee ID for user
+    
     const employeeId = `CLT${Date.now()}${Math.floor(Math.random() * 1000)}`;
 
-    // Get current user from request (if authenticated)
+    
     const currentUserId = req.user?.id || null;
 
-    // Create user first (as client representative)
+    
     const userData = {
       name: client.trim(),
       email: cleanEmail,
@@ -900,9 +890,9 @@ const addClient = async (req, res) => {
 
     const createdUsers = await User.create([userData], { session });
     const createdUser = createdUsers[0];
-    console.log('✅ User created successfully:', createdUser._id);
+    void 0;
 
-    // Prepare subscription array with price
+    
     let subscriptionArray = [];
     if (subscription && Array.isArray(subscription) && subscription.length > 0) {
       subscriptionArray = subscription.map((sub, index) => createSubscriptionFromInput({
@@ -910,10 +900,10 @@ const addClient = async (req, res) => {
         plan: selectedClientPlan,
         fallbackNo: index + 1
       }));
-      console.log('✅ Subscription array created with prices:', subscriptionArray);
+      void 0;
     }
 
-    // Create new client with subscription
+    
     const newClient = new Client({
       client: cleanClientName,
       company: cleanCompanyName,
@@ -942,10 +932,10 @@ const addClient = async (req, res) => {
         session
       });
     }
-    console.log('✅ Client created successfully with ID:', newClient._id);
-    console.log('✅ Client subscription saved:', newClient.subscription);
+    void 0;
+    void 0;
 
-    // Update user's additionalDetails with client ID
+    
     const updatedAdditionalDetails = JSON.parse(createdUser.additionalDetails || '{}');
     updatedAdditionalDetails.clientId = newClient._id;
     
@@ -962,11 +952,11 @@ const addClient = async (req, res) => {
 
     await session.commitTransaction();
 
-    // Send welcome email with auto-generated password (don't await - don't block response)
+    
     sendWelcomeEmail(cleanEmail, cleanClientName, cleanCompanyName, autoPassword, cleanCompanyCode)
       .then(result => {
         if (result.success) {
-          console.log('✅ Welcome email sent successfully');
+          void 0;
         } else {
           console.warn('⚠️ Welcome email sending failed:', result.error);
         }
@@ -1022,7 +1012,7 @@ const addClient = async (req, res) => {
 };
 
 const updateClient = async (req, res) => {
-  console.log('🔍 updateClient called with id:', req.params.id);
+  void 0;
   try {
     const { id } = req.params;
     const {
@@ -1162,7 +1152,7 @@ const updateClient = async (req, res) => {
       }
     }
 
-    // Build update object
+    
     const updateData = {};
     
     if (client !== undefined) updateData.client = client.trim();
@@ -1186,7 +1176,7 @@ const updateClient = async (req, res) => {
     if (notes !== undefined) updateData.notes = notes.trim();
     
     if (subscription !== undefined) {
-      console.log('🔍 Updating subscription with price:', JSON.stringify(subscription, null, 2));
+      void 0;
       
       if (Array.isArray(subscription) && subscription.length > 0) {
         const formattedSubscription = subscription.map(sub => ({
@@ -1196,10 +1186,10 @@ const updateClient = async (req, res) => {
           status: sub.status || 'Active'
         }));
         updateData.subscription = formattedSubscription;
-        console.log('✅ Formatted subscription with prices:', JSON.stringify(formattedSubscription, null, 2));
+        void 0;
       } else if (subscription !== null && subscription.length === 0) {
         updateData.subscription = [];
-        console.log('✅ Clearing subscription');
+        void 0;
       }
     }
 
@@ -1209,8 +1199,8 @@ const updateClient = async (req, res) => {
       { new: true, runValidators: true }
     );
 
-    console.log('✅ Client updated successfully:', updatedClient._id);
-    console.log('✅ Updated subscription:', updatedClient.subscription);
+    void 0;
+    void 0;
     
     res.json({
       success: true,
@@ -1245,7 +1235,7 @@ const updateClient = async (req, res) => {
 };
 
 const updateClientProgress = async (req, res) => {
-  console.log('🔍 updateClientProgress called with id:', req.params.id);
+  void 0;
   try {
     const { id } = req.params;
     const { completed, total } = req.body;
@@ -1283,7 +1273,7 @@ const updateClientProgress = async (req, res) => {
 };
 
 const deleteClient = async (req, res) => {
-  console.log('🔍 deleteClient called with id:', req.params.id);
+  void 0;
   try {
     const { id } = req.params;
     
@@ -1312,7 +1302,7 @@ const deleteClient = async (req, res) => {
 };
 
 const getClientStats = async (req, res) => {
-  console.log('🔍 getClientStats called with query:', req.query);
+  void 0;
   try {
     const { companyCode } = req.query;
     
@@ -1333,7 +1323,7 @@ const getClientStats = async (req, res) => {
 };
 
 const getManagerStats = async (req, res) => {
-  console.log('🔍 getManagerStats called with query:', req.query);
+  void 0;
   try {
     const { companyCode } = req.query;
     
@@ -1354,7 +1344,7 @@ const getManagerStats = async (req, res) => {
 };
 
 const addProjectManager = async (req, res) => {
-  console.log('🔍 addProjectManager called with id:', req.params.id);
+  void 0;
   const { id } = req.params;
   const { managerName } = req.body;
 
@@ -1385,7 +1375,7 @@ const addProjectManager = async (req, res) => {
 };
 
 const removeProjectManager = async (req, res) => {
-  console.log('🔍 removeProjectManager called with id:', req.params.id);
+  void 0;
   const { id } = req.params;
   const { managerName } = req.body;
 
@@ -1416,7 +1406,7 @@ const removeProjectManager = async (req, res) => {
 };
 
 const getClientsByCompany = async (req, res) => {
-  console.log('🔍 getClientsByCompany called with companyCode:', req.params.companyCode);
+  void 0;
   try {
     const { companyCode } = req.params;
     
@@ -1538,7 +1528,7 @@ const renewClientSubscription = async (req, res) => {
       fallbackNo: subscriptionNo
     });
 
-    // Push new subscription to array
+    
     client.subscription.push(nextSub);
     if (selectedClientPlan) {
       client.activeClientPlan = selectedClientPlan._id;
@@ -1803,4 +1793,4 @@ module.exports = {
   markClientReceiptPaymentDone
 };
 
-console.log("✅ clientController.js loaded successfully with auto-user creation and email integration");
+void 0;

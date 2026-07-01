@@ -1,16 +1,16 @@
-// attendanceRoutes.js
+
 const express = require('express');
 const router = express.Router();
 const attendanceController = require('../controllers/AttendanceController');
 const { protect, authorize } = require('../../middleware/authMiddleware');
 
-// User routes
+
 router.post('/in', protect, attendanceController.clockIn);
 router.post('/out', protect, attendanceController.clockOut);
 router.get('/status', protect, attendanceController.getTodayStatus);
 router.get('/list', protect, attendanceController.getAttendanceList);
 
-// Admin routes
+
 router.get('/all', protect, attendanceController.getAllUsersAttendance);
 router.post('/manual', protect, attendanceController.createManualAttendance);
 router.put('/:id', protect, attendanceController.updateAttendanceRecord);
@@ -18,12 +18,12 @@ router.delete('/:id', protect, attendanceController.deleteAttendanceRecord);
 router.get('/user/:userId', protect, attendanceController.getAttendanceByUser);
 router.get('/stats', protect, attendanceController.getAttendanceStats);
 
-// Test routes (development/testing only)
+
 router.get('/test', protect, async (req, res) => {
   try {
     const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     
-    // Test company code retrieval
+    
     const testUser = await User.findById(req.user._id).select('companyCode company');
     const testCompany = await Company.findOne({ companyCode: userCompanyCode });
     
@@ -55,7 +55,7 @@ router.post('/test/attendance-creation', protect, async (req, res) => {
       });
     }
     
-    // Create a test attendance record
+    
     const testAttendance = new Attendance({
       user: userId || req.user._id,
       date: date ? new Date(date) : new Date(),
@@ -101,7 +101,7 @@ router.get('/test/company-attendance', protect, async (req, res) => {
       });
     }
     
-    // Get all attendance records for the company
+    
     const companyAttendance = await Attendance.find({ 
       companyCode: userCompanyCode 
     })
@@ -112,12 +112,12 @@ router.get('/test/company-attendance', protect, async (req, res) => {
     .sort({ date: -1 })
     .limit(10);
     
-    // Get company users count
+    
     const companyUsers = await User.find({ 
       companyCode: userCompanyCode 
     }).countDocuments();
     
-    // Get company info
+    
     const company = await Company.findOne({ 
       companyCode: userCompanyCode 
     }).select('companyName companyCode isActive');
@@ -155,7 +155,7 @@ router.delete('/test/cleanup', protect, async (req, res) => {
       });
     }
     
-    // Only delete test records
+    
     const result = await Attendance.deleteMany({
       companyCode: userCompanyCode,
       status: "TEST"
@@ -186,16 +186,16 @@ router.get('/test/company-users', protect, async (req, res) => {
       });
     }
     
-    // Get all users from same company
+    
     const companyUsers = await User.find({ 
       companyCode: userCompanyCode 
     }).select('name email employeeType companyCode isActive');
     
-    // Get attendance records for these users
+    
     const attendanceRecords = await Attendance.find({
       companyCode: userCompanyCode,
       date: {
-        $gte: new Date(new Date().setDate(new Date().getDate() - 7)) // Last 7 days
+        $gte: new Date(new Date().setDate(new Date().getDate() - 7)) 
       }
     })
     .populate({

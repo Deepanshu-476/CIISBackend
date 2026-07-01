@@ -1,4 +1,4 @@
-// models/Branch.js
+
 const mongoose = require("mongoose");
 
 const branchSchema = new mongoose.Schema(
@@ -63,10 +63,10 @@ const branchSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Ensure that branch name is unique within the same company
+
 branchSchema.index({ name: 1, company: 1 }, { unique: true });
 
-// Ensure that branch code is unique within the same company
+
 branchSchema.index({ branchCode: 1, company: 1 }, { unique: true });
 
 module.exports = mongoose.model("Branch", branchSchema);

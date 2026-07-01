@@ -38,13 +38,13 @@ const jobRoleSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Compound index for unique job role names within a department and company
+
 jobRoleSchema.index({ name: 1, department: 1, company: 1 }, { 
   unique: true,
   partialFilterExpression: { isActive: true }
 });
 
-// Prevent deletion of job roles with active users
+
 jobRoleSchema.pre('save', async function(next) {
   if (this.isModified('isActive') && !this.isActive) {
     const User = mongoose.model('User');

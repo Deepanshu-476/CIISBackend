@@ -1,17 +1,17 @@
-// controllers/pdfController.js
+
 const PDFDocument = require("pdfkit");
 const Task = require("../models/Task");
-const Project = require("../models/Project"); // Optional project model.
+const Project = require("../models/Project"); 
 const fs = require("fs");
 const path = require("path");
 
-// ✅ Helper: format date
+
 const formatDate = (d) => (d ? new Date(d).toLocaleString("en-IN") : "-");
 
-// ✅ Generate PDF for Task or Project
+
 exports.generatePDF = async (req, res) => {
   try {
-    const { type, id } = req.params; // type = task | project
+    const { type, id } = req.params; 
     let docData;
 
     if (type === "task") {
@@ -33,14 +33,14 @@ exports.generatePDF = async (req, res) => {
       return res.status(404).json({ error: "Record not found" });
     }
 
-    // 🔹 Create PDF
+    
     const doc = new PDFDocument({ margin: 40 });
     const fileName = `${type}-${id}.pdf`;
     const filePath = path.join(__dirname, "../../uploads/pdfs", fileName);
     const pdfStream = fs.createWriteStream(filePath);
     doc.pipe(pdfStream);
 
-    // --- Header ---
+    
     doc
       .fontSize(22)
       .fillColor("#1a73e8")
@@ -52,7 +52,7 @@ exports.generatePDF = async (req, res) => {
       .text(`Generated: ${new Date().toLocaleString("en-IN")}`, { align: "right" })
       .moveDown(1);
 
-    // --- Basic Info ---
+    
     doc.fontSize(12).fillColor("black").text("📋 Basic Information", { underline: true }).moveDown(0.5);
 
     if (type === "task") {
@@ -73,7 +73,7 @@ exports.generatePDF = async (req, res) => {
 
     doc.moveDown(1);
 
-    // --- Assigned Users ---
+    
     doc.fontSize(12).fillColor("black").text("👥 Assigned Users", { underline: true }).moveDown(0.5);
     const users = type === "task" ? docData.assignedUsers : docData.users;
     if (users?.length) {
@@ -82,7 +82,7 @@ exports.generatePDF = async (req, res) => {
 
     doc.moveDown(1);
 
-    // --- Remarks ---
+    
     doc.fontSize(12).fillColor("black").text("💬 Remarks", { underline: true }).moveDown(0.5);
     if (docData.remarks?.length) {
       docData.remarks.forEach((r, i) => {
@@ -94,7 +94,7 @@ exports.generatePDF = async (req, res) => {
 
     doc.moveDown(1);
 
-    // --- Attachments ---
+    
     doc.fontSize(12).fillColor("black").text("📎 Attachments", { underline: true }).moveDown(0.5);
     if (docData.files?.length) {
       docData.files.forEach((f, i) => doc.text(`${i + 1}. ${f.originalName} (${f.filename})`));
@@ -107,7 +107,7 @@ exports.generatePDF = async (req, res) => {
 
     doc.moveDown(1);
 
-    // --- Status History ---
+    
     if (docData.statusHistory?.length) {
       doc.fontSize(12).fillColor("black").text("📜 Status History", { underline: true }).moveDown(0.5);
       docData.statusHistory.forEach((h, i) => {
@@ -116,7 +116,7 @@ exports.generatePDF = async (req, res) => {
       });
     }
 
-    // --- Footer ---
+    
     doc.moveDown(1);
     doc
       .fontSize(10)
@@ -137,4 +137,4 @@ exports.generatePDF = async (req, res) => {
   }
 };
 
-console.log("✅ pdfController.js loaded successfully");
+void 0;

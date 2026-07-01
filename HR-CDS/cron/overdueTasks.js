@@ -4,14 +4,14 @@ const User = require('../../models/User');
 const moment = require('moment');
 const {notifyDirectUsers} = require('../utils/systemNotificationService');
 
-// Run every 30 minutes to check for overdue tasks
+
 cron.schedule('*/30 * * * *', async () => {
   try {
-    console.log('🔄 Running overdue tasks check...');
+    void 0;
     
     const result = await Task.updateAllOverdueTasks();
     
-    // Get all tasks that were marked overdue
+    
     const now = new Date();
     const thirtyMinutesAgo = new Date(now.getTime() - (30 * 60 * 1000));
     
@@ -24,7 +24,7 @@ cron.schedule('*/30 * * * *', async () => {
     .populate('createdBy', 'name email')
     .lean();
     
-    // Send notifications for newly overdue tasks
+    
     let notificationsSent = 0;
     for (const task of newlyOverdueTasks) {
       for (const userId of task.assignedUsers) {
@@ -46,7 +46,7 @@ cron.schedule('*/30 * * * *', async () => {
           
           notificationsSent++;
           
-          // Mark as notified
+          
           await Task.findByIdAndUpdate(task._id, { overdueNotified: true });
           
         } catch (notifyError) {
@@ -55,22 +55,17 @@ cron.schedule('*/30 * * * *', async () => {
       }
     }
     
-    console.log(`✅ Overdue tasks check completed:
-      • Updated: ${result.updated}
-      • Already Overdue: ${result.alreadyOverdue}
-      • Skipped: ${result.skipped}
-      • Total Checked: ${result.total}
-      • Notifications Sent: ${notificationsSent}`);
+    void 0;
       
   } catch (error) {
     console.error('❌ Error in overdue tasks cron job:', error);
   }
 });
 
-// Optional: Daily summary at 9 AM
+
 cron.schedule('0 9 * * *', async () => {
   try {
-    console.log('📊 Running daily overdue summary...');
+    void 0;
     
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
@@ -87,9 +82,7 @@ cron.schedule('0 9 * * *', async () => {
     .lean();
     
     if (overdueTasks.length > 0) {
-      console.log(`📊 Daily Overdue Summary (${yesterday.toDateString()}):
-        • New Overdue Tasks: ${overdueTasks.length}
-        • Tasks: ${overdueTasks.map(t => t.title).join(', ')}`);
+      void 0;
     }
     
   } catch (error) {

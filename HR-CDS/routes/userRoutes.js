@@ -3,67 +3,67 @@ const router = express.Router();
 const userController = require('../controllers/userControllers');
 const { protect } = require('../../middleware/authMiddleware');
 
-// ✅ Register user (only logged-in user can create)
+
 router.post('/register', protect, userController.register);
 
-// ✅ All routes below require authentication
+
 router.use(protect);
 
-// ✅ User profile routes
+
 router.get('/me', userController.getMe);
 router.put('/me', userController.updateMe);
 router.put('/change-password', userController.changePassword);
 
-// ✅ Company users routes - EXACT MATCH FIRST
+
 router.get('/department-users', userController.getCompanydepartmentUsers);
 router.get('/company-users', userController.getCompanyUsers);
-// router.get('/company-users/paginated', userController.getCompanyUsersPaginated);
 
 
-// push
 
-// ✅ Users management
+
+
+
 router.get('/all', userController.getAllUsers);
 router.get('/deleted', userController.getDeletedUsers);
 router.put('/restore/:id', userController.restoreUser);
 router.delete('/:id', userController.deleteUser);
 
-// ✅ Search users
+
 router.get('/search', userController.searchUsers);
 
-// ✅ Single user routes - THESE MUST COME LAST
+
 router.get('/:id', userController.getUser);
 router.put('/profile-update/:id', userController.updateSelfUser);
 router.put('/:id', userController.updateUser);
 
 
 
-// Test routes added after existing user routes.
 
-// ==================== 🧪 TEST ROUTES ====================
 
-// ✅ TEST: Company Filter Verification
+
+
+
 router.get('/test', protect, async (req, res) => {
   try {
     const User = require('../../models/User');
     const Department = require('../../models/Department');
     
-    // Current user details
+    
     const currentUser = req.user;
     
-    // Get current user with all fields from database
+    
     const userFromDB = await User.findById(currentUser._id)
       .select('name email company department jobRole')
       .populate('company', 'name companyCode')
       .populate('department', 'name description')
       .lean();
     
-    // Get company ID and details
+    
     const userCompany = userFromDB?.company;
     const userCompanyId = userCompany?._id || userCompany;
     const userDepartmentId = userFromDB?.department?._id || userFromDB?.department;
     
-    // Test 1: Find users from same company
+    
     const sameCompanyUsers = await User.find({
       company: userCompanyId,
       isActive: true
@@ -73,7 +73,7 @@ router.get('/test', protect, async (req, res) => {
     .limit(5)
     .lean();
     
-    // Test 2: Find users from same department
+    
     const sameDepartmentUsers = userDepartmentId ? 
       await User.find({
         company: userCompanyId,
@@ -84,13 +84,13 @@ router.get('/test', protect, async (req, res) => {
       .limit(5)
       .lean() : [];
     
-    // Test 3: Count all users in company
+    
     const companyUsersCount = await User.countDocuments({
       company: userCompanyId,
       isActive: true
     });
     
-    // Test 4: Find departments in same company
+    
     const companyDepartments = await Department.find({
       company: userCompanyId,
       isActive: true
@@ -98,7 +98,7 @@ router.get('/test', protect, async (req, res) => {
     .select('name description')
     .lean();
     
-    // Test 5: Try to access users from other companies (should be empty)
+    
     const otherCompanyUsers = await User.findOne({
       company: { $ne: userCompanyId },
       company: { $exists: true },

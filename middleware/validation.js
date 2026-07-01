@@ -1,6 +1,6 @@
 const Joi = require("joi");
 
-// Generic request validation middleware
+
 exports.validateRequest = (schema) => {
   return (req, res, next) => {
     const { error } = schema.validate(req.body);

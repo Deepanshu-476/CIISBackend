@@ -1,22 +1,20 @@
 const mongoose = require("mongoose");
 const { Schema } = mongoose;
 
-/* ENUMS - Fixed to match what you're actually using */
+ 
 const TASK_STATUS = ["pending", "in progress", "completed", "cancelled", "on hold"];
 const PROJECT_STATUS = ["active", "on hold", "completed", "planning", "cancelled"];
 const PRIORITY_LEVELS = ["low", "medium", "high"];
 const ACTIVITY_TYPES = ["assignment", "remark", "creation", "update", "status_change"];
 const NOTIFICATION_TYPES = ["task_assigned", "status_changed", "remark_added", "deadline_approaching", "project_updated"];
 
-/* =========================
-      NOTIFICATION SCHEMA
-========================= */
+ 
 const NotificationSchema = new Schema(
   {
     title: { type: String, required: true },
     message: { type: String, required: true },
     type: { type: String,  required: true },
-    relatedTo: { type: String }, // 'task', 'project'
+    relatedTo: { type: String }, 
     referenceId: { type: Schema.Types.ObjectId },
     createdBy: { type: Schema.Types.ObjectId, ref: "User" },
     isRead: { type: Boolean, default: false },
@@ -25,9 +23,7 @@ const NotificationSchema = new Schema(
   { _id: true }
 );
 
-/* =========================
-      ACTIVITY LOG SCHEMA
-========================= */
+ 
 const ActivityLogSchema = new Schema(
   {
     type: { type: String, enum: ACTIVITY_TYPES, required: true },
@@ -41,9 +37,7 @@ const ActivityLogSchema = new Schema(
   { _id: true }
 );
 
-/* =========================
-      REMARK SCHEMA
-========================= */
+ 
 const RemarkSchema = new Schema(
   {
     text: { type: String, required: true },
@@ -54,9 +48,7 @@ const RemarkSchema = new Schema(
   { _id: true }
 );
 
-/* =========================
-      TASK SCHEMA - FIXED DEFAULTS
-========================= */
+ 
 const TaskSchema = new Schema(
   {
     title: { type: String, trim: true, default: "Untitled Task" },
@@ -78,9 +70,7 @@ const TaskSchema = new Schema(
   { timestamps: true }
 );
 
-/* =========================
-      PROJECT SCHEMA - FIXED DEFAULTS
-========================= */
+ 
 const ProjectSchema = new Schema(
   {
     projectName: { type: String, required: true, trim: true },
@@ -111,11 +101,9 @@ ProjectSchema.index({ status: 1 });
 ProjectSchema.index({ priority: 1 });
 ProjectSchema.index({ createdBy: 1 });
 
-/* =========================
-      DATA NORMALIZATION MIDDLEWARE
-========================= */
+ 
 ProjectSchema.pre('save', function(next) {
-  // Normalize status and priority to lowercase
+  
   if (this.status) {
     this.status = this.status.toLowerCase();
   }
@@ -123,7 +111,7 @@ ProjectSchema.pre('save', function(next) {
     this.priority = this.priority.toLowerCase();
   }
   
-  // Normalize task fields
+  
   if (this.tasks && this.tasks.length > 0) {
     this.tasks.forEach(task => {
       if (task.status) {
@@ -138,7 +126,7 @@ ProjectSchema.pre('save', function(next) {
   next();
 });
 
-// Middleware for update operations
+
 ProjectSchema.pre('findOneAndUpdate', function(next) {
   const update = this.getUpdate();
   
@@ -164,7 +152,7 @@ ProjectSchema.pre('findOneAndUpdate', function(next) {
   next();
 });
 
-// Virtual for formatted dates
+
 ProjectSchema.virtual('formattedStartDate').get(function() {
   return this.startDate ? this.startDate.toISOString().split('T')[0] : null;
 });
@@ -173,21 +161,19 @@ ProjectSchema.virtual('formattedEndDate').get(function() {
   return this.endDate ? this.endDate.toISOString().split('T')[0] : null;
 });
 
-// Method to add notification
+
 ProjectSchema.methods.addNotification = function(notification) {
   this.notifications.push(notification);
   return this.save();
 };
 
-// Method to add task activity log
+
 TaskSchema.methods.addActivityLog = function(activity) {
   this.activityLogs.push(activity);
   return this.save();
 };
 
-/* =========================
-      FINAL EXPORTS
-========================= */
+ 
 const Project = mongoose.model("Project", ProjectSchema);
 
 module.exports = {
