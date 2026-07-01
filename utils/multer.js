@@ -2,13 +2,13 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
-// Ensure 'uploads/tasks' folder exists
+
 const uploadDir = path.join(__dirname, '../uploads/tasks');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
 
-// Storage config
+
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
     cb(null, uploadDir);
@@ -21,7 +21,7 @@ const storage = multer.diskStorage({
 
 
 
-// File type filter (optional)
+
 const fileFilter = (req, file, cb) => {
   const allowedTypes = /jpeg|jpg|png|pdf|mp4|mp3|wav|avi|mkv|webm/;
   const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
@@ -37,7 +37,7 @@ const upload = multer({
   storage: storage,
   fileFilter: fileFilter,
   limits: {
-    fileSize: 20 * 1024 * 1024 // 20MB limit
+    fileSize: 20 * 1024 * 1024 
   }
 });
 

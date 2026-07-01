@@ -8,14 +8,14 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const emailService = require('../services/emailService');
-// =============================
-// MULTER CONFIGURATION FOR LOGOS
-// =============================
 
-// Configure multer for logo storage
+
+
+
+
 const logoStorage = multer.diskStorage({
   destination: function (req, file, cb) {
-    // Create logos directory if it doesn't exist
+    
     const logoDir = path.join(__dirname, '../uploads/logos');
     if (!fs.existsSync(logoDir)) {
       fs.mkdirSync(logoDir, { recursive: true });
@@ -29,7 +29,7 @@ const logoStorage = multer.diskStorage({
   }
 });
 
-// File filter for images only
+
 const logoFileFilter = (req, file, cb) => {
   const allowedTypes = /jpeg|jpg|png|gif|svg|webp/;
   const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
@@ -42,20 +42,20 @@ const logoFileFilter = (req, file, cb) => {
   }
 };
 
-// Multer middleware for single file upload
+
 exports.uploadLogo = multer({
   storage: logoStorage,
   fileFilter: logoFileFilter,
   limits: {
-    fileSize: 2 * 1024 * 1024 // 2MB limit
+    fileSize: 2 * 1024 * 1024 
   }
 }).single('logo');
 
-// =============================
-// HELPER FUNCTIONS
-// =============================
 
-// Helper function
+
+
+
+
 const isValidObjectId = (id) => {
   return mongoose.Types.ObjectId.isValid(id);
 };
@@ -76,7 +76,7 @@ const cleanStringArray = value => (
     : []
 );
 
-// Helper function to get company stats
+
 const getCompanyStats = async (companyId) => {
   const [totalUsers, activeUsers, deactivatedUsers] = await Promise.all([
     User.countDocuments({ company: companyId }),
@@ -91,13 +91,13 @@ const getCompanyStats = async (companyId) => {
   };
 };
 
-// =============================
-// LOGO UPLOAD HANDLER
-// =============================
+
+
+
 
 exports.uploadLogoHandler = async (req, res) => {
   try {
-    // Check if file was uploaded
+    
     if (!req.file) {
       return res.status(400).json({
         success: false,
@@ -105,14 +105,14 @@ exports.uploadLogoHandler = async (req, res) => {
       });
     }
 
-    // Get file details
+    
     const file = req.file;
     
-    // Generate URL to the uploaded file
+    
     const baseUrl = `${req.protocol}://${req.get('host')}`;
     const logoUrl = `${baseUrl}/uploads/logos/${file.filename}`;
 
-    // Return success response
+    
     return res.status(200).json({
       success: true,
       message: 'Logo uploaded successfully 🎉',
@@ -129,7 +129,7 @@ exports.uploadLogoHandler = async (req, res) => {
   } catch (err) {
     console.error('❌ Logo upload error:', err);
     
-    // Handle multer errors
+    
     if (err.code === 'LIMIT_FILE_SIZE') {
       return res.status(400).json({
         success: false,
@@ -152,9 +152,9 @@ exports.uploadLogoHandler = async (req, res) => {
   }
 };
 
-// =============================
-// COMPANY LOGO UPDATE
-// =============================
+
+
+
 
 exports.updateCompanyLogo = async (req, res) => {
   try {
@@ -183,7 +183,7 @@ exports.updateCompanyLogo = async (req, res) => {
       });
     }
 
-    // Update logo
+    
     company.logo = logoUrl.trim();
     await company.save();
     return res.status(200).json({
@@ -206,9 +206,9 @@ exports.updateCompanyLogo = async (req, res) => {
   }
 };
 
-// =============================
-// CREATE COMPANY
-// =============================
+
+
+
 
 exports.createCompany = async (req, res) => {
   let transactionCompleted = false;
@@ -230,10 +230,10 @@ exports.createCompany = async (req, res) => {
       department = "Management",
     } = req.body;
 
-    // ✅ 1. ENHANCED VALIDATION
+    
     const validationErrors = [];
 
-    // Required fields validation
+    
     const requiredFields = [
       { field: "companyName", label: "Company Name", value: companyName },
       { field: "companyEmail", label: "Company Email", value: companyEmail },
@@ -251,7 +251,7 @@ exports.createCompany = async (req, res) => {
       }
     });
 
-    // Email format validation
+    
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (companyEmail && !emailRegex.test(companyEmail)) {
       validationErrors.push("Invalid company email format");
@@ -260,12 +260,12 @@ exports.createCompany = async (req, res) => {
       validationErrors.push("Invalid owner email format");
     }
 
-    // Phone validation
+    
     if (companyPhone && !/^[0-9+\-\s()]{10,15}$/.test(companyPhone)) {
       validationErrors.push("Phone number must be 10-15 digits");
     }
 
-    // Password strength validation
+    
     if (ownerPassword && ownerPassword.length < 6) {
       validationErrors.push("Password must be at least 6 characters long");
     }
@@ -279,7 +279,7 @@ exports.createCompany = async (req, res) => {
       validationErrors.push("Please select a valid active plan");
     }
 
-    // Return validation errors if any
+    
     if (validationErrors.length > 0) {
       return res.status(400).json({
         success: false,
@@ -289,21 +289,21 @@ exports.createCompany = async (req, res) => {
       });
     }
 
-    // ✅ 2. ENHANCED DUPLICATE CHECK (with specific messages)
+    
     const trimmedCompanyName = companyName.trim();
     const lowerCompanyEmail = companyEmail.toLowerCase().trim();
     const lowerOwnerEmail = ownerEmail.toLowerCase().trim();
-    const trimmedPhone = companyPhone.replace(/\D/g, '').slice(0, 10); // Clean phone number
+    const trimmedPhone = companyPhone.replace(/\D/g, '').slice(0, 10); 
 
-    // Generate company code
+    
     const generateCompanyCode = (name) => {
-      // Take first 4 letters, remove spaces and special chars, make uppercase
+      
       const baseCode = name
         .replace(/[^a-zA-Z0-9]/g, '')
         .substring(0, 4)
         .toUpperCase();
       
-      // Add timestamp suffix for uniqueness
+      
       const timestamp = Date.now().toString().slice(-4);
       const random = Math.floor(10 + Math.random() * 90);
       
@@ -315,7 +315,7 @@ exports.createCompany = async (req, res) => {
     let attempts = 0;
     const maxAttempts = 5;
 
-    // Ensure unique company code
+    
     while (!isCodeUnique && attempts < maxAttempts) {
       const existingCode = await Company.findOne({ companyCode });
       if (!existingCode) {
@@ -326,10 +326,10 @@ exports.createCompany = async (req, res) => {
       }
     }
 
-    // ✅ Generate dbIdentifier for multi-tenancy
+    
     const dbIdentifier = `company_${companyCode}_${Date.now()}`;
 
-    // Check for duplicates
+    
     const [existingCompanyEmail, existingCompanyPhone, existingCompanyName, existingUserEmail] = await Promise.all([
       Company.findOne({ companyEmail: lowerCompanyEmail }),
       Company.findOne({ companyPhone: trimmedPhone }),
@@ -379,12 +379,12 @@ exports.createCompany = async (req, res) => {
       });
     }
 
-    // ✅ 3. CREATE COMPANY IN TRANSACTION
+    
     const session = await mongoose.startSession();
     session.startTransaction();
 
     try {
-      // ✅ CREATE COMPANY WITH ALL FIELDS
+      
       const baseUrl = `${req.protocol}://${req.get("host")}`;
       const frontendLoginUrl = `${"https://cds.ciisnetwork.in"}/company/${companyCode}/login`;
       const apiLoginUrl = `${baseUrl}/api/v1/auth/company/${companyCode}/login`;
@@ -435,7 +435,7 @@ exports.createCompany = async (req, res) => {
       createdCompany = company[0];
       companyCreated = true;
 
-      // ✅ Autocreate Default Branch for this new company inside transaction
+      
       const defaultBranchData = {
         name: "Head Office",
         branchCode: `${companyCode}-HQ`,
@@ -450,7 +450,7 @@ exports.createCompany = async (req, res) => {
       const defaultBranch = await Branch.create([defaultBranchData], { session });
       const createdBranch = defaultBranch[0];
 
-      // ✅ 4. CREATE OWNER USER linked to Default Branch
+      
       const ownerUser = await User.create([{
         company: createdCompany._id,
         companyCode: companyCode,
@@ -473,19 +473,19 @@ exports.createCompany = async (req, res) => {
 
       createdOwner = ownerUser[0];
 
-      // ✅ 5. GENERATE LOGIN TOKEN
+      
       const loginToken = crypto.randomBytes(32).toString("hex");
       createdCompany.loginToken = loginToken;
       
       await createdCompany.save({ session });
 
-      // Commit transaction
+      
       await session.commitTransaction();
       transactionCompleted = true;
       session.endSession();
 
-      // ✅ 7. SEND EMAILS AFTER TRANSACTION IS COMMITTED
-      // Don't await - send emails in background
+      
+      
       const emailPromise = emailService.sendCompanyRegistrationEmails(
         {
           id: createdCompany._id,
@@ -508,24 +508,24 @@ exports.createCompany = async (req, res) => {
           jobRole: createdOwner.jobRole,
           department: createdOwner.department,
           employeeId: createdOwner.employeeId,
-          password: ownerPassword // Only for email template, never log this
+          password: ownerPassword 
         }
       );
 
-      // Handle email promise without blocking response
+      
       emailPromise
         .then(emailResults => {
-          console.log(`✅ Registration emails processed for company: ${companyCode}`);
+          void 0;
           if (process.env.NODE_ENV === 'development') {
-            console.log('Email results:', emailResults);
+            void 0;
           }
         })
         .catch(emailError => {
           console.error('❌ Background email sending failed:', emailError);
-          // Log to error tracking service in production
+          
         });
 
-      // ✅ 8. SUCCESS RESPONSE
+      
       return res.status(201).json({
         success: true,
         message: "Company registered successfully with selected plan.",
@@ -574,24 +574,24 @@ exports.createCompany = async (req, res) => {
       });
 
     } catch (transactionError) {
-      // Rollback transaction on error
+      
       await session.abortTransaction();
       session.endSession();
       
-      // Re-throw to be caught by outer catch block
+      
       throw transactionError;
     }
 
   } catch (err) {
     console.error("❌ Create company error:", err);
     
-    // ✅ 9. ENHANCED ERROR HANDLING WITH CLEANUP
+    
     let statusCode = 500;
     let errorMessage = "Failed to create company";
     let errorDetails = null;
     let cleanupRequired = false;
 
-    // Handle different error types
+    
     if (err.name === 'ValidationError') {
       statusCode = 400;
       errorMessage = "Validation failed";
@@ -613,7 +613,7 @@ exports.createCompany = async (req, res) => {
       const duplicateField = Object.keys(err.keyPattern)[0];
       const duplicateValue = err.keyValue[duplicateField];
       
-      // Map to user-friendly messages
+      
       const fieldMessages = {
         'companyName': 'Company name',
         'companyEmail': 'Company email',
@@ -642,23 +642,23 @@ exports.createCompany = async (req, res) => {
       cleanupRequired = companyCreated;
     }
 
-    // ✅ 10. CLEANUP IF PARTIALLY CREATED
+    
     if (cleanupRequired && !transactionCompleted) {
       try {
-        // Attempt to clean up partially created data
+        
         if (companyCreated && createdCompany) {
           await Company.findByIdAndDelete(createdCompany._id);
           if (createdOwner) {
             await User.findByIdAndDelete(createdOwner._id);
           }
-          console.log("✅ Cleaned up partially created company data");
+          void 0;
         }
       } catch (cleanupError) {
         console.error("❌ Cleanup error:", cleanupError);
       }
     }
 
-    // Return error response
+    
     return res.status(statusCode).json({
       success: false,
       message: errorMessage,
@@ -675,9 +675,9 @@ exports.createCompany = async (req, res) => {
   }
 };
 
-// =============================
-// GET ALL COMPANIES
-// =============================
+
+
+
 
 exports.getAllCompanies = async (req, res) => {
   try {
@@ -689,7 +689,7 @@ exports.getAllCompanies = async (req, res) => {
       .populate("selectedPlan", "name price durationDays features allowedPages")
       .sort({ createdAt: -1 });
 
-    // ✅ Get user counts for each company
+    
     const companiesWithStats = await Promise.all(
       companies.map(async (company) => {
         const userCount = await User.countDocuments({
@@ -718,9 +718,9 @@ exports.getAllCompanies = async (req, res) => {
   }
 };
 
-// =============================
-// GET COMPANY BY ID
-// =============================
+
+
+
 
 exports.getCompanyById = async (req, res) => {
   try {
@@ -762,9 +762,9 @@ exports.getCompanyById = async (req, res) => {
   }
 };
 
-// =============================
-// GET COMPANY BY CODE
-// =============================
+
+
+
 
 exports.getCompanyByCode = async (req, res) => {
   try {
@@ -806,20 +806,20 @@ exports.getCompanyByCode = async (req, res) => {
   }
 };
 
-// =============================
-// GET COMPANY DETAILS BY IDENTIFIER
-// =============================
+
+
+
 
 exports.getCompanyDetailsByIdentifier = async (req, res) => {
   try {
     const { identifier } = req.params;
     
-    console.log('Fetching company for identifier:', identifier);
+    void 0;
     
-    // Multiple ways to find company:
-    // 1. By companyCode
-    // 2. By loginUrl segment
-    // 3. By extracted code from URL
+    
+    
+    
+    
     const company = await Company.findOne({
       $or: [
         { companyCode: identifier },
@@ -840,7 +840,7 @@ exports.getCompanyDetailsByIdentifier = async (req, res) => {
       });
     }
 
-    // Check if company is active
+    
     if (!company.isActive) {
       return res.status(403).json({
         success: false,
@@ -848,7 +848,7 @@ exports.getCompanyDetailsByIdentifier = async (req, res) => {
       });
     }
 
-    // Check subscription expiry
+    
     if (new Date() > new Date(company.subscriptionExpiry)) {
       return res.status(403).json({
         success: false,
@@ -887,9 +887,9 @@ exports.getCompanyDetailsByIdentifier = async (req, res) => {
   }
 };
 
-// =============================
-// VALIDATE COMPANY URL
-// =============================
+
+
+
 
 exports.validateCompanyUrl = async (req, res) => {
   try {
@@ -927,9 +927,9 @@ exports.validateCompanyUrl = async (req, res) => {
   }
 };
 
-// =============================
-// UPDATE COMPANY
-// =============================
+
+
+
 
 exports.updateCompany = async (req, res) => {
   try {
@@ -942,7 +942,7 @@ exports.updateCompany = async (req, res) => {
       });
     }
 
-    // ✅ Allowed fields only (Whitelist - safe)
+    
     const allowedFields = [
       "companyName",
       "companyEmail",
@@ -963,7 +963,7 @@ exports.updateCompany = async (req, res) => {
       }
     }
 
-    // ✅ lowercase email
+    
     if (updateData.companyEmail) {
       updateData.companyEmail = updateData.companyEmail.toLowerCase();
     }
@@ -1029,9 +1029,9 @@ exports.updateCompany = async (req, res) => {
   }
 };
 
-// =============================
-// UPDATE COMPANY ACCESS
-// =============================
+
+
+
 
 exports.updateCompanyAccess = async (req, res) => {
   try {
@@ -1133,9 +1133,9 @@ exports.updateCompanyAccess = async (req, res) => {
   }
 };
 
-// =============================
-// RENEW COMPANY SUBSCRIPTION / PAYMENT
-// =============================
+
+
+
 
 exports.renewCompanySubscription = async (req, res) => {
   try {
@@ -1308,9 +1308,9 @@ exports.renewCompanySubscription = async (req, res) => {
   }
 };
 
-// =============================
-// DEACTIVATE COMPANY
-// =============================
+
+
+
 
 exports.deactivateCompany = async (req, res) => {
   try {
@@ -1339,12 +1339,12 @@ exports.deactivateCompany = async (req, res) => {
       });
     } 
 
-    // ✅ deactivate all users of this company
+    
     await User.updateMany(
       { company: id },
       {
         isActive: false,
-        lockUntil: Date.now() + 365 * 24 * 60 * 60 * 1000, // 1 year lock
+        lockUntil: Date.now() + 365 * 24 * 60 * 60 * 1000, 
       }
     );
 
@@ -1362,9 +1362,9 @@ exports.deactivateCompany = async (req, res) => {
   }
 };
 
-// =============================
-// ACTIVATE COMPANY
-// =============================
+
+
+
 
 exports.activateCompany = async (req, res) => {
   try {
@@ -1393,7 +1393,7 @@ exports.activateCompany = async (req, res) => {
       });
     }
 
-    // ✅ activate all users of this company
+    
     await User.updateMany(
       { company: id },
       {
@@ -1416,9 +1416,9 @@ exports.activateCompany = async (req, res) => {
   }
 };
 
-// =============================
-// DELETE COMPANY PERMANENTLY
-// =============================
+
+
+
 
 exports.deleteCompanyPermanently = async (req, res) => {
   try {
@@ -1439,10 +1439,10 @@ exports.deleteCompanyPermanently = async (req, res) => {
       });
     }
 
-    // ✅ Delete users
+    
     await User.deleteMany({ company: id });
 
-    // ✅ Delete company
+    
     await Company.findByIdAndDelete(id);
 
     return res.status(200).json({
@@ -1458,9 +1458,9 @@ exports.deleteCompanyPermanently = async (req, res) => {
   }
 };
 
-// =============================
-// GET COMPANY USERS
-// =============================
+
+
+
 
 exports.getCompanyUsers = async (req, res) => {
   try {
@@ -1480,9 +1480,9 @@ exports.getCompanyUsers = async (req, res) => {
 
     if (page < 1) page = 1;
     if (limit < 1) limit = 20;
-    if (limit > 100) limit = 100; // ✅ prevent abuse
+    if (limit > 100) limit = 100; 
 
-    // ✅ Company exists?
+    
     const companyExists = await Company.exists({ _id: id });
     if (!companyExists) {
       return res.status(404).json({
@@ -1491,7 +1491,7 @@ exports.getCompanyUsers = async (req, res) => {
       });
     }
 
-    // ✅ Build query
+    
     const query = { company: id };
 
     if (role) query.jobRole = role;
@@ -1530,9 +1530,9 @@ exports.getCompanyUsers = async (req, res) => {
   }
 };
 
-// =============================
-// GET COMPANY STATS
-// =============================
+
+
+
 
 exports.getCompanyStats = async (req, res) => {
   try {
@@ -1574,4 +1574,4 @@ exports.getCompanyStats = async (req, res) => {
     });
   }
 };
-console.log("✅ companyController.js loaded successfully");
+void 0;

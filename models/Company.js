@@ -1,4 +1,4 @@
-// models/Company.js
+
 const mongoose = require("mongoose");
 const validator = require("validator");
 
@@ -49,7 +49,7 @@ const companySchema = new mongoose.Schema(
       default: null,
     },
 
-    // ✅ Auto-generated
+    
     companyCode: {
       type: String,
       unique: true,
@@ -58,7 +58,7 @@ const companySchema = new mongoose.Schema(
       maxlength: [10, "Company code cannot exceed 10 characters"],
     },
 
-    // ✅ Auto-generated
+    
     loginUrl: {
       type: String,
       unique: true,
@@ -67,13 +67,13 @@ const companySchema = new mongoose.Schema(
     }
     },
 
-    // ✅ Auto-generated
+    
     dbIdentifier: {
       type: String,
       unique: true,
     },
 
-    // ✅ Auto-generated from email
+    
     companyDomain: {
       type: String,
       default: null,
@@ -201,11 +201,11 @@ const companySchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// ✅ Pre-save hook
+
 companySchema.pre("save", async function (next) {
   if (!this.isNew) return next();
 
-  // ✅ companyCode
+  
   if (!this.companyCode) {
     const code = this.companyName
       .replace(/[^a-zA-Z0-9]/g, "")
@@ -215,19 +215,19 @@ companySchema.pre("save", async function (next) {
     this.companyCode = code || `CMP${Date.now().toString().slice(-4)}`;
   }
 
-  // ✅ dbIdentifier
+  
   if (!this.dbIdentifier) {
     this.dbIdentifier = `company_${Date.now()}_${Math.random()
       .toString(36)
       .substring(2, 9)}`;
   }
 
-  // ✅ companyDomain
+  
   if (!this.companyDomain && this.companyEmail) {
     this.companyDomain = this.companyEmail.split("@")[1];
   }
 
-  // ✅ loginUrl
+  
   if (!this.loginUrl) {
     const urlCode = this.companyName
       .toLowerCase()

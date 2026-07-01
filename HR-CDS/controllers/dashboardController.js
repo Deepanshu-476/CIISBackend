@@ -20,14 +20,10 @@ const formatIndiaTime = value => {
 
 const getDashboardActivity = async (req, res) => {
   try {
-    // ✅ USE companyRole instead of jobRole
+    
     const { companyRole: role, _id: userId, companyCode } = req.user;
 
-    console.log("📊 Dashboard Request:", { 
-      role: role, 
-      userId: userId, 
-      companyCode: companyCode 
-    });
+    void 0;
 
     if (!companyCode) {
       return res.status(400).json({
@@ -38,20 +34,20 @@ const getDashboardActivity = async (req, res) => {
 
     let responseData = {};
 
-    // ✅ Check role (case insensitive)
+    
     const userRole = (role || "").toLowerCase();
     
     if (userRole === "employee") {
-      console.log("✅ Fetching employee dashboard");
+      void 0;
       responseData = await getEmployeeDashboard(userId, companyCode);
     } else if (userRole === "owner") {
-      console.log("✅ Fetching owner dashboard");
+      void 0;
       responseData = await getOwnerDashboard(companyCode, userId);
     } else if (userRole === "client") {
-      console.log("✅ Fetching client dashboard");
+      void 0;
       responseData = await getClientDashboard(userId, companyCode);
     } else {
-      console.log("❌ Unknown role:", role);
+      void 0;
       return res.status(403).json({
         success: false,
         message: `Invalid user role: ${role}. Valid roles: employee, owner, client`,
@@ -81,7 +77,7 @@ const getEmployeeDashboard = async (userId, companyCode) => {
     const todayEnd = new Date();
     todayEnd.setHours(23, 59, 59, 999);
 
-    // Debug: Check counts
+    
     const leaveCount = await Leave.countDocuments({ 
       user: userId, 
       companyCode: companyCode 
@@ -95,7 +91,7 @@ const getEmployeeDashboard = async (userId, companyCode) => {
       companyCode: companyCode 
     });
     
-    console.log("📊 Employee Data Counts:", { leaveCount, taskCount, assetCount });
+    void 0;
 
     const [
       todayAttendance,
@@ -154,12 +150,7 @@ const getEmployeeDashboard = async (userId, companyCode) => {
         .lean(),
     ]);
 
-    console.log("📊 Employee Found Data:", {
-      leaves: leaveRequests.length,
-      assets: assetRequests.length,
-      tasks: assignedTasks.length,
-      meetings: meetings.length
-    });
+    void 0;
 
     const attendanceStatus = todayAttendance
       ? {
@@ -246,10 +237,10 @@ const getOwnerDashboard = async (companyCode, ownerId) => {
         },
       ]),
 
-      // ✅ FIX: Show ALL leaves (remove status filter)
+      
       Leave.find({
         companyCode: companyCode,
-        // ✅ REMOVED: status: "Pending"
+        
       })
       .sort({ createdAt: -1 })
       .limit(10)
@@ -257,7 +248,7 @@ const getOwnerDashboard = async (companyCode, ownerId) => {
       .select("user startDate endDate type status reason createdAt approvedBy remarks")
       .lean(),
 
-      // Asset Requests - ONLY pending status
+      
       AssetRequest.find({
         companyCode: companyCode,
         status: "pending"
@@ -269,7 +260,7 @@ const getOwnerDashboard = async (companyCode, ownerId) => {
       .select("user assetName asset assetType requestType status reason adminComments createdAt approvedBy")
       .lean(),
 
-      // Tasks - Created by OR assigned to owner
+      
       Task.find({
         companyCode: companyCode,
         $or: [
@@ -321,12 +312,7 @@ const getOwnerDashboard = async (companyCode, ownerId) => {
       monthly: monthlyStats,
     };
 
-    console.log("📊 Owner Dashboard Data:", {
-      leaveCount: leaveRequests.length,
-      assetCount: assetRequests.length,
-      taskCount: ownerTasks.length,
-      meetingCount: meetings.length
-    });
+    void 0;
 
     const recentActivity = formatOwnerActivities(
       leaveRequests,
@@ -507,13 +493,13 @@ const formatOwnerActivities = (leaves, assets, tasks, meetings) => {
 
   tasks.forEach((task) => {
 
-  // ✅ Task show
+  
   activities.push({
     type: "task",
     title: `Task: ${task.name}`,
     status: task.status,
     priority: task.priority,
-    date: task.updatedAt || task.createdAt,   // ✅ FIX
+    date: task.updatedAt || task.createdAt,   
     details: `Due: ${
       task.dueDate ? new Date(task.dueDate).toLocaleDateString() : "No due date"
     }`,
@@ -521,7 +507,7 @@ const formatOwnerActivities = (leaves, assets, tasks, meetings) => {
     createdBy: task.createdBy?.name,
   });
 
-  // 🔥 NEW: status change show
+  
   if (task.statusHistory && task.statusHistory.length > 0) {
     task.statusHistory.forEach((history) => {
       activities.push({

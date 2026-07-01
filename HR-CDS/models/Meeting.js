@@ -8,7 +8,7 @@ const meetingSchema = new mongoose.Schema({
   recurring: { type: String, enum: ["No", "Daily", "Weekly"], default: "No" },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   attendees: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
-  companyCode: { type: String, required: true }, // 👈 ADD THIS
+  companyCode: { type: String, required: true }, 
   link: { type: String, default: "" },
   
 });

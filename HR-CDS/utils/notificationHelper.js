@@ -1,9 +1,7 @@
 const User = require('../../models/User');
 const {sendSystemNotification} = require('./systemNotificationService');
 
-/**
- * Send notification to a user
- */
+ 
 exports.sendNotification = async ({
   recipient,
   type,
@@ -28,7 +26,7 @@ exports.sendNotification = async ({
       targetPath: data?.targetPath || '',
     };
 
-    // Save to database if required
+    
     if (saveToDb) {
       const notifications = await sendSystemNotification(notificationData);
       return notifications[0] || null;
@@ -51,9 +49,7 @@ exports.sendNotification = async ({
   }
 };
 
-/**
- * Send notification to all company owners/admins
- */
+ 
 exports.notifyCompanyOwners = async ({
   companyId,
   type,
@@ -63,7 +59,7 @@ exports.notifyCompanyOwners = async ({
   excludeUser = null
 }) => {
   try {
-    // Find all owners and admins in the company
+    
     const owners = await User.find({
       company: companyId,
       companyRole: { $in: ['Owner', 'Admin'] },

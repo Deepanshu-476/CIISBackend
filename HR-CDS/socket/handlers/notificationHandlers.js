@@ -1,9 +1,9 @@
-// socket/handlers/notificationHandlers.js
 
-// Socket events for notifications
+
+
 const notificationHandlers = (io, socket) => {
   
-  // Mark notification as read
+  
   socket.on('notification:markRead', async (notificationId, callback) => {
     try {
       const Notification = require('../../models/Notification');
@@ -13,13 +13,13 @@ const notificationHandlers = (io, socket) => {
         { isRead: true }
       );
       
-      // Get updated unread count
+      
       const unreadCount = await Notification.countDocuments({
         recipient: socket.userId,
         isRead: false
       });
       
-      // Emit to user's room
+      
       io.to(`user:${socket.userId}`).emit('notification:unread_count', unreadCount);
       
       if (callback && typeof callback === 'function') {
@@ -33,7 +33,7 @@ const notificationHandlers = (io, socket) => {
     }
   });
 
-  // Mark all notifications as read
+  
   socket.on('notification:markAllRead', async (callback) => {
     try {
       const Notification = require('../../models/Notification');
@@ -56,7 +56,7 @@ const notificationHandlers = (io, socket) => {
     }
   });
 
-  // Get unread count
+  
   socket.on('notification:getUnreadCount', async (callback) => {
     try {
       const Notification = require('../../models/Notification');
