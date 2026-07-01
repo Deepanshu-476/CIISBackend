@@ -30,7 +30,7 @@ const shouldSendExpiredReminder = (client, now) => {
 
 cron.schedule('0 9 * * *', async () => {
   try {
-    console.log('Checking subscription expiry reminders...');
+    void 0;
 
     const clients = await Client.find({
       subscription: { $exists: true, $ne: [] },
@@ -91,7 +91,7 @@ cron.schedule('0 9 * * *', async () => {
       }
     }
 
-    console.log('Subscription reminder cron completed');
+    void 0;
   } catch (error) {
     console.error('Subscription Reminder Error:', error);
   }

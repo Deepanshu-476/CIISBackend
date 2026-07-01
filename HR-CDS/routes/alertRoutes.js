@@ -5,7 +5,7 @@ const alertController = require("../controllers/alertController");
 const { protect, authorize } = require('../../middleware/authMiddleware');
 
 
-// Middleware to check if user can manage alerts
+
 const canManageAlerts = (req, res, next) => {
   const role = req.user?.role?.toLowerCase();
   if (['admin', 'hr', 'manager'].includes(role)) {
@@ -17,7 +17,7 @@ const canManageAlerts = (req, res, next) => {
   });
 };
 
-// Public routes (but require auth)
+
 router.get("/", protect, alertController.getAlerts);
 router.get("/unread/count", protect, alertController.getUnreadCount);
 router.patch("/:id/read", protect, alertController.markAsRead);
@@ -29,7 +29,7 @@ router.delete("/:id", protect ,  alertController.deleteAlert);
 
 
 
-// ✅ TEST: Alert System Check
+
 router.get('/test/system-check', protect, async (req, res) => {
   try {
     const Alert = require('../models/alertModel');
@@ -38,17 +38,17 @@ router.get('/test/system-check', protect, async (req, res) => {
     
     const currentUser = req.user;
     
-    // Get current user details
+    
     const userFromDB = await User.findById(currentUser._id)
       .select('name email role company department')
       .lean();
     
-    // Check user's groups
+    
     const userGroups = await Group.find({ members: currentUser._id })
       .select('name description')
       .lean();
     
-    // Get alert statistics
+    
     const totalAlerts = await Alert.countDocuments();
     const userAlerts = await Alert.find({
       $or: [
@@ -59,7 +59,7 @@ router.get('/test/system-check', protect, async (req, res) => {
       ]
     }).countDocuments();
     
-    // Get unread alerts for user
+    
     const unreadAlerts = await Alert.countDocuments({
       readBy: { $ne: currentUser._id },
       $or: [
@@ -70,10 +70,10 @@ router.get('/test/system-check', protect, async (req, res) => {
       ]
     });
     
-    // Check permissions
+    
     const canManage = ['admin', 'hr', 'manager'].includes(currentUser.role?.toLowerCase());
     
-    // Sample alerts (if any exist)
+    
     const sampleAlerts = await Alert.find()
       .select('type message createdAt readBy assignedUsers assignedGroups')
       .populate('assignedUsers', 'name email')

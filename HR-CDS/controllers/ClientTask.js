@@ -8,9 +8,9 @@ const User = require('../../models/User');
 const { notifyPageUsers, notifyDirectUsers } = require('../utils/systemNotificationService');
 const { sendEmail } = require('../../utils/sendEmail');
 
-console.log("✅ ClientTask.js loading...");
+void 0;
 
-// ===== HELPER FUNCTIONS =====
+
 
 const formatDuration = (seconds) => {
   if (!seconds || seconds <= 0) return '0s';
@@ -49,7 +49,7 @@ const parseClientDueDate = value => {
     return Number.isNaN(value.getTime()) ? null : value;
   }
   let dateStr = String(value).trim();
-  // If it's a local datetime string without offset (e.g. 2026-06-04T19:01)
+  
   if (dateStr.includes('T') && !/Z|[+-]\d{2}:?\d{2}$/i.test(dateStr)) {
     dateStr = `${dateStr}+05:30`;
   }
@@ -169,7 +169,7 @@ const addClientActivityLogHelper = async (task, logData, req = null) => {
     }
 
     task.activityLogs.push(activityLog);
-    console.log(`📝 Activity log added: ${action} - ${description}`);
+    void 0;
     return activityLog;
   } catch (error) {
     console.error('Error in addClientActivityLogHelper:', error);
@@ -273,11 +273,7 @@ const notifyClientPortalUsers = async ({
       priority,
     });
 
-    console.log('[CLIENT TASK NOTIFICATION] dispatched-client-users', {
-      taskId: task?._id,
-      recipientCount: recipientIds.length,
-      recipients: recipientIds.map(getId),
-    });
+    void 0;
 
     return notifications;
   } catch (error) {
@@ -367,10 +363,7 @@ const notifyClientTaskCompleted = async ({ task, actor, req }) => {
       await sendEmail(client.email, `Task Completed: ${taskName}`, html, {
         skipNotification: true,
       });
-      console.log('[CLIENT TASK NOTIFICATION] email-sent', {
-        taskId: task._id,
-        email: client.email,
-      });
+      void 0;
     }
   } catch (error) {
     console.error('[CLIENT TASK NOTIFICATION] failed', {
@@ -382,7 +375,7 @@ const notifyClientTaskCompleted = async ({ task, actor, req }) => {
   }
 };
 
-// Delete image files function
+
 const deleteImageFiles = (images) => {
   if (!images || images.length === 0) return;
   images.forEach(image => {
@@ -397,27 +390,27 @@ const deleteImageFiles = (images) => {
       const filePath = path.join(__dirname, '../uploads/client-remarks', filename);
       if (fs.existsSync(filePath)) {
         fs.unlinkSync(filePath);
-        console.log(`🗑️ Deleted image: ${filePath}`);
+        void 0;
       }
     }
   });
 };
 
-// ===== ADD CLIENT REMARK WITH IMAGES =====
+
 const addClientRemarkWithImages = async (req, res) => {
   try {
-    console.log('\n📸 ===== ADD CLIENT REMARK WITH IMAGES =====');
+    void 0;
     const { taskId } = req.params;
     const { text } = req.body;
     const currentUser = req.user;
     
-    console.log('Task ID:', taskId);
-    console.log('Text:', text);
-    console.log('Files received:', req.files?.length || 0);
-    console.log('Current user:', currentUser?._id, currentUser?.name);
+    void 0;
+    void 0;
+    void 0;
+    void 0;
     
     if (!mongoose.Types.ObjectId.isValid(taskId)) {
-      console.log('❌ Invalid task ID format');
+      void 0;
       return res.status(400).json({
         success: false,
         message: 'Invalid task ID format'
@@ -426,40 +419,40 @@ const addClientRemarkWithImages = async (req, res) => {
     
     const task = await Task.findById(taskId);
     if (!task) {
-      console.log('❌ Task not found');
+      void 0;
       return res.status(404).json({
         success: false,
         message: 'Task not found'
       });
     }
     
-    console.log('✅ Task found:', task.name, task._id);
+    void 0;
     
-    // Process images with sharp compression
+    
     const images = [];
     
     if (req.files && req.files.length > 0) {
       const uploadDir = path.join(__dirname, '../uploads/client-remarks');
       
-      // Ensure upload directory exists
+      
       if (!fs.existsSync(uploadDir)) {
         fs.mkdirSync(uploadDir, { recursive: true });
-        console.log('📁 Created upload directory:', uploadDir);
+        void 0;
       }
       
       for (const file of req.files) {
         try {
-          // Generate unique filename
+          
           const timestamp = Date.now();
           const randomStr = Math.random().toString(36).substring(2, 8);
           const filename = `remark_${timestamp}_${randomStr}_${currentUser?._id || 'user'}.jpg`;
           
-          // Full path where image will be saved
+          
           const savePath = path.join(uploadDir, filename);
           
-          console.log(`🖼️ Compressing and saving image: ${filename}`);
+          void 0;
           
-          // Compress and save image using sharp
+          
           await sharp(file.buffer)
             .resize(1200, 1200, {
               fit: "inside",
@@ -471,10 +464,10 @@ const addClientRemarkWithImages = async (req, res) => {
             })
             .toFile(savePath);
           
-          // Store relative path in database
+          
           const imageUrl = `/uploads/client-remarks/${filename}`;
           
-          console.log(`✅ Image saved: ${imageUrl}`);
+          void 0;
           
           images.push({
             url: imageUrl,
@@ -492,7 +485,7 @@ const addClientRemarkWithImages = async (req, res) => {
       }
     }
     
-    console.log(`📸 Total images processed: ${images.length}`);
+    void 0;
     
     const remark = {
       text: text || '',
@@ -517,14 +510,14 @@ const addClientRemarkWithImages = async (req, res) => {
     
     await task.save();
     
-    // Populate the newly added remark
+    
     const addedRemark = task.remarks[task.remarks.length - 1];
     if (addedRemark.user) {
       await task.populate('remarks.user', 'name email');
     }
     
-    console.log('✅ Remark added successfully');
-    // Notify page users (company-all-task) about client task remark
+    void 0;
+    
     try {
       const client = await Client.findById(task.clientId).select('company companyCode');
       await notifyPageUsers({
@@ -563,7 +556,7 @@ const addClientRemarkWithImages = async (req, res) => {
       console.error('Error notifying client/assignee for client remark:', notifyErr);
     }
 
-    // Send email to client if email exists
+    
     try {
       const client = await Client.findById(task.clientId).select('name email');
       if (client && client.email) {
@@ -581,7 +574,7 @@ const addClientRemarkWithImages = async (req, res) => {
     } catch (emailErr) {
       console.error('Error sending client email for remark:', emailErr);
     }
-    console.log('=====================================\n');
+    void 0;
     
     res.status(201).json({
       success: true,
@@ -601,20 +594,20 @@ const addClientRemarkWithImages = async (req, res) => {
   }
 };
 
-// ===== ADD SIMPLE CLIENT REMARK =====
+
 const addClientRemark = async (req, res) => {
   try {
-    console.log('\n📝 ===== ADD CLIENT REMARK =====');
+    void 0;
     const { taskId } = req.params;
     const { text } = req.body;
     const currentUser = req.user;
 
-    console.log('Task ID:', taskId);
-    console.log('Text:', text);
-    console.log('Current user:', currentUser?._id, currentUser?.name);
+    void 0;
+    void 0;
+    void 0;
 
     if (!text || text.trim().length === 0) {
-      console.log('❌ Remark text is required');
+      void 0;
       return res.status(400).json({
         success: false,
         message: 'Remark text is required'
@@ -622,7 +615,7 @@ const addClientRemark = async (req, res) => {
     }
 
     if (!mongoose.Types.ObjectId.isValid(taskId)) {
-      console.log('❌ Invalid task ID format');
+      void 0;
       return res.status(400).json({
         success: false,
         message: 'Invalid task ID format'
@@ -631,14 +624,14 @@ const addClientRemark = async (req, res) => {
 
     const task = await Task.findById(taskId);
     if (!task) {
-      console.log('❌ Task not found');
+      void 0;
       return res.status(404).json({
         success: false,
         message: 'Task not found'
       });
     }
 
-    console.log('✅ Task found:', task.name, task._id);
+    void 0;
 
     const remark = {
       text: text.trim(),
@@ -663,19 +656,19 @@ const addClientRemark = async (req, res) => {
 
     await task.save();
     
-    // Populate the newly added remark
+    
     const addedRemark = task.remarks[task.remarks.length - 1];
     if (addedRemark.user) {
       await task.populate('remarks.user', 'name email');
     }
 
-    console.log('✅ Remark added successfully');
-    console.log('=====================================\n');
+    void 0;
+    void 0;
 
-      console.log('✅ Remark added successfully');
-      console.log('=====================================' + '\n');
+      void 0;
+      void 0;
 
-      // Notify page users (company-all-task) about client task remark
+      
       try {
         const client = await Client.findById(task.clientId).select('company companyCode');
         await notifyPageUsers({
@@ -714,7 +707,7 @@ const addClientRemark = async (req, res) => {
         console.error('Error notifying client/assignee for client remark:', notifyErr);
       }
 
-      // Send email to client if email exists
+      
       try {
         const client = await Client.findById(task.clientId).select('name email');
         if (client && client.email) {
@@ -751,14 +744,14 @@ const addClientRemark = async (req, res) => {
   }
 };
 
-// ===== GET CLIENT REMARKS =====
+
 const getClientRemarks = async (req, res) => {
   try {
     const { taskId } = req.params;
     const { limit = 50, page = 1 } = req.query;
 
-    console.log('\n📋 ===== FETCH CLIENT REMARKS =====');
-    console.log('Task ID:', taskId);
+    void 0;
+    void 0;
 
     if (!mongoose.Types.ObjectId.isValid(taskId)) {
       return res.status(400).json({
@@ -781,21 +774,21 @@ const getClientRemarks = async (req, res) => {
 
     let remarks = task.remarks || [];
     
-    console.log(`📊 Total remarks found: ${remarks.length}`);
+    void 0;
     
-    // Verify image files exist and ensure proper URL format
+    
     let imagesFound = 0;
     let imagesMissing = 0;
     
     remarks = remarks.map(remark => {
       if (remark.images && remark.images.length > 0) {
         remark.images = remark.images.map(img => {
-          // Ensure URL has leading slash
+          
           if (img.url && !img.url.startsWith('/')) {
             img.url = '/' + img.url;
           }
           
-          // Check if file exists on disk
+          
           const filename = img.filename;
           if (filename) {
             const fullPath = path.join(__dirname, '../uploads/client-remarks', filename);
@@ -814,17 +807,17 @@ const getClientRemarks = async (req, res) => {
       return remark;
     });
     
-    console.log(`📸 Image Summary: Found: ${imagesFound}, Missing: ${imagesMissing}`);
+    void 0;
     
-    // Sort remarks by creation date (newest first)
+    
     remarks.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     
     const startIndex = (page - 1) * limit;
     const endIndex = startIndex + parseInt(limit);
     const paginatedRemarks = remarks.slice(startIndex, endIndex);
 
-    console.log(`📤 Sending ${paginatedRemarks.length} remarks`);
-    console.log('=====================================\n');
+    void 0;
+    void 0;
 
     res.json({
       success: true,
@@ -847,7 +840,7 @@ const getClientRemarks = async (req, res) => {
   }
 };
 
-// ===== DELETE CLIENT REMARK =====
+
 const deleteClientRemark = async (req, res) => {
   try {
     const { taskId, remarkId } = req.params;
@@ -878,7 +871,7 @@ const deleteClientRemark = async (req, res) => {
 
     const remark = task.remarks[remarkIndex];
     
-    // Check authorization
+    
     const isAuthorized = 
       (remark.user && remark.user.toString() === (currentUser?.id || currentUser?._id)) ||
       currentUser?.role === 'admin';
@@ -890,12 +883,12 @@ const deleteClientRemark = async (req, res) => {
       });
     }
     
-    // Delete image files from disk
+    
     if (remark.images && remark.images.length > 0) {
       deleteImageFiles(remark.images);
     }
     
-    // Remove remark from array
+    
     task.remarks.splice(remarkIndex, 1);
     
     await addClientActivityLogHelper(task, {
@@ -922,7 +915,7 @@ const deleteClientRemark = async (req, res) => {
   }
 };
 
-// ===== ACTIVITY LOG FUNCTIONS =====
+
 
 const addClientActivityLog = async (req, res) => {
   try {
@@ -1030,16 +1023,16 @@ const getClientTaskActivityLogs = async (req, res) => {
   }
 };
 
-// ===== UPDATE ASSIGNED TASK STATUS (FIXED FOR OVERDUE TO IN-PROGRESS) =====
+
 const updateAssignedTaskStatus = async (req, res) => {
   try {
     const { taskId } = req.params;
     const { status, completed, remarks } = req.body;
     const currentUser = req.user;
 
-    console.log(`🔄 Updating task status for task ${taskId}`);
-    console.log(`   Requested status: ${status}`);
-    console.log(`   Completed: ${completed}`);
+    void 0;
+    void 0;
+    void 0;
 
     const task = await Task.findById(taskId);
     if (!task) {
@@ -1049,7 +1042,7 @@ const updateAssignedTaskStatus = async (req, res) => {
       });
     }
 
-    // Check if user is authorized to update this task
+    
     const isAssignedToUser = 
       task.assigneeId?.toString() === currentUser.id?.toString() ||
       task.assigneeId?.toString() === currentUser._id?.toString() ||
@@ -1059,7 +1052,7 @@ const updateAssignedTaskStatus = async (req, res) => {
       task.assignee === currentUser.email;
 
     if (!isAssignedToUser) {
-      console.log(`❌ User not authorized to update task assigned to ${task.assignee}`);
+      void 0;
       return res.status(403).json({
         success: false,
         message: 'You are not authorized to update this task'
@@ -1070,7 +1063,7 @@ const updateAssignedTaskStatus = async (req, res) => {
     const previousCompleted = task.completed;
     const now = new Date();
 
-    // Determine target status
+    
     let targetStatus = status;
     if (completed === true) {
       targetStatus = 'completed';
@@ -1078,51 +1071,51 @@ const updateAssignedTaskStatus = async (req, res) => {
       targetStatus = 'in-progress';
     }
 
-    // Stop timer if moving away from in-progress
+    
     let elapsedSeconds = 0;
     if (previousStatus === 'in-progress' && targetStatus !== 'in-progress') {
       if (task.inProgressSince) {
         elapsedSeconds = Math.max(0, Math.floor((now - new Date(task.inProgressSince)) / 1000));
         task.timeSpent = (task.timeSpent || 0) + elapsedSeconds;
         task.inProgressSince = null;
-        console.log(`   Timer stopped. Session duration: ${elapsedSeconds}s. Total: ${task.timeSpent}s`);
+        void 0;
       }
     }
 
-    // Start timer if moving to in-progress
+    
     if (targetStatus === 'in-progress' && previousStatus !== 'in-progress') {
       task.inProgressSince = now;
-      console.log(`   Timer started at ${now.toISOString()}`);
+      void 0;
     }
 
-    // Update status and completion fields
+    
     if (targetStatus === 'completed') {
       task.completed = true;
       task.completedAt = now;
       task.status = 'completed';
-      console.log(`   Task marked as completed`);
+      void 0;
     } else if (targetStatus === 'in-progress') {
       task.completed = false;
       task.status = 'in-progress';
-      console.log(`   Task marked as in-progress`);
+      void 0;
     } else if (targetStatus === 'pending') {
       task.completed = false;
       task.status = 'pending';
-      console.log(`   Task marked as pending`);
+      void 0;
     } else if (targetStatus === 'overdue') {
       task.completed = false;
       task.status = 'overdue';
-      console.log(`   Task marked as overdue`);
+      void 0;
     } else if (targetStatus === 'onhold') {
       task.completed = false;
       task.status = 'onhold';
-      console.log(`   Task marked as onhold`);
+      void 0;
     } else if (status) {
       task.completed = false;
       task.status = status;
     }
 
-    // Log status change if status actually changed
+    
     if (previousStatus !== task.status) {
       let logDescription = `Status changed from "${previousStatus}" to "${task.status}"`;
       if (elapsedSeconds > 0) {
@@ -1139,10 +1132,10 @@ const updateAssignedTaskStatus = async (req, res) => {
         user: currentUser?.id || currentUser?._id,
         userName: currentUser?.name || currentUser?.username || 'System'
       }, req);
-      console.log(`   ✅ Status change logged: ${previousStatus} → ${task.status}`);
+      void 0;
     }
 
-    // Log completion/reopen if completed status changed
+    
     if (previousCompleted !== task.completed) {
       const action = task.completed ? 'completed' : 'reopened';
       await addClientActivityLogHelper(task, {
@@ -1151,10 +1144,10 @@ const updateAssignedTaskStatus = async (req, res) => {
         user: currentUser?.id || currentUser?._id,
         userName: currentUser?.name || currentUser?.username || 'System'
       }, req);
-      console.log(`   ✅ ${action} logged`);
+      void 0;
     }
 
-    // Add remark if provided
+    
     if (remarks && remarks.trim()) {
       task.remarks = task.remarks || [];
       const remark = {
@@ -1172,7 +1165,7 @@ const updateAssignedTaskStatus = async (req, res) => {
         user: currentUser?.id || currentUser?._id,
         userName: currentUser?.name || currentUser?.username || 'System'
       }, req);
-      console.log(`   ✅ Remark added`);
+      void 0;
     }
 
     await task.save();
@@ -1211,7 +1204,7 @@ const updateAssignedTaskStatus = async (req, res) => {
       }
     }
 
-    console.log(`✅ Task status updated successfully. New status: ${task.status}, Completed: ${task.completed}`);
+    void 0;
 
     res.json({
       success: true,
@@ -1237,7 +1230,7 @@ const updateAssignedTaskStatus = async (req, res) => {
   }
 };
 
-// ===== GET ASSIGNED TO ME TASKS =====
+
 const getAssignedToMeTasks = async (req, res) => {
   try {
     const currentUser = req.user;
@@ -1433,7 +1426,7 @@ const getAssignedToMeTaskStats = async (req, res) => {
   }
 };
 
-// ===== GET ASSIGNED TASKS BY USER ID =====
+
 const getAssignedTasksByUserId = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -1502,7 +1495,7 @@ const getAssignedTasksByUserId = async (req, res) => {
   }
 };
 
-// ===== TASK CRUD OPERATIONS =====
+
 
 const getTasksByClientService = async (req, res) => {
   try {
@@ -1683,7 +1676,7 @@ const addTask = async (req, res) => {
 
     await task.save();
 
-    // Notify company-all-task page owners about the new client task
+    
     try {
       await notifyPageUsers({
         companyId: getNotificationCompanyId(client, req.user),
@@ -1718,7 +1711,7 @@ const addTask = async (req, res) => {
       console.error('Error notifying client/assignee for client task create:', notifyErr);
     }
 
-    // Send email to client if email exists
+    
     try {
       if (client && client.email) {
         const subject = `New Task Created: ${task.name}`;
@@ -1777,7 +1770,7 @@ const updateTask = async (req, res) => {
     const previousStatus = task.status;
     const now = new Date();
     
-    // Loop using for...of to support async await in the loop
+    
     for (const key of Object.keys(updates)) {
       const oldValue = task[key];
       let newValue = updates[key];
@@ -1792,7 +1785,7 @@ const updateTask = async (req, res) => {
         changes.push(`status from "${oldValue}" to "${newValue}"`);
         task[key] = newValue;
         
-        // Stop timer if moving away from in-progress
+        
         if (oldValue === 'in-progress') {
           if (task.inProgressSince) {
             const elapsed = Math.max(0, Math.floor((now - new Date(task.inProgressSince)) / 1000));
@@ -1802,7 +1795,7 @@ const updateTask = async (req, res) => {
           }
         }
         
-        // Start timer if moving to in-progress
+        
         if (newValue === 'in-progress') {
           task.inProgressSince = now;
           changes.push(`timer started`);
@@ -1820,7 +1813,7 @@ const updateTask = async (req, res) => {
         task.completed = !!newValue;
         task.completedAt = task.completed ? (task.completedAt || now) : null;
         
-        // Stop timer if completing
+        
         if (task.completed && task.status === 'in-progress' && task.inProgressSince) {
           const elapsed = Math.max(0, Math.floor((now - new Date(task.inProgressSince)) / 1000));
           task.timeSpent = (task.timeSpent || 0) + elapsed;
@@ -1836,7 +1829,7 @@ const updateTask = async (req, res) => {
         changes.push(`assignee from "${oldValue}" to "${newValue}"`);
         task[key] = newValue;
         
-        // Resolve assigneeId
+        
         if (updates.assigneeId === undefined) {
           const user = await User.findOne({ name: newValue });
           task.assigneeId = user ? user._id : null;
@@ -1871,7 +1864,7 @@ const updateTask = async (req, res) => {
       await notifyClientTaskCompleted({task, actor: currentUser, req});
     }
 
-    // Notify page users (company-all-task) if there were changes
+    
     if (changes.length > 0) {
       try {
         const client = await Client.findById(task.clientId).select('client name email company companyCode userId');
@@ -1905,7 +1898,7 @@ const updateTask = async (req, res) => {
         console.error('Error notifying users for client task update:', notifyErr);
       }
 
-      // Email client about the update if email exists
+      
       try {
         const client = await Client.findById(task.clientId).select('name email');
         if (client && client.email) {
@@ -2260,4 +2253,4 @@ module.exports = {
   getAssignedTasksByUserId
 };
 
-console.log("✅ ClientTask.js loaded successfully");
+void 0;
