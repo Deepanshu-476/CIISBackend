@@ -93,7 +93,7 @@ router.post('/login', async (req, res) => {
         jobRole: user.jobRole
       },
       process.env.JWT_SECRET || 'your-secret-key',
-      { expiresIn: '24h' }
+      { expiresIn: process.env.JWT_EXPIRE || '30d' }
     );
     
     // Update last login time
