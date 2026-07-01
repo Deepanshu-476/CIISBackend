@@ -50,7 +50,7 @@ exports.companyLogin = async (req, res) => {
         email: user.email,
       },
       process.env.JWT_SECRET,
-      { expiresIn: "12h" }
+      { expiresIn: process.env.JWT_EXPIRE || "30d" }
     );
 
     // Update user without password
