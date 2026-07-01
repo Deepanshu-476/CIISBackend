@@ -153,9 +153,9 @@ const checkAndMarkOverdueTasks = async () => {
       dueDateTime: { $lt: now },
       isActive: true,
       $or: [
-        { overallStatus: { $in: ['pending', 'in-progress', 'reopen', 'onhold'] } },
+        { overallStatus: { $in: ['pending', 'in-progress', 'reopen'] } },
         { 
-          'statusByUser.status': { $in: ['pending', 'in-progress', 'reopen', 'onhold'] }
+          'statusByUser.status': { $in: ['pending', 'in-progress', 'reopen'] }
         }
       ]
     })
@@ -590,14 +590,15 @@ app.use("/api/client-plans", require("./HR-CDS/routes/clientPlanRoutes.js"));
 app.use("/api/chat", require("./HR-CDS/chat/routes/chatRoutes"));
 
 
-app.use("/api/tasks", require("./HR-CDS/routes/clientTask.js"));
-
-
 app.use("/api/tasks/self", require("./HR-CDS/routes/selfTaskRoute.js"));
 app.use("/api/tasks/assigned", require("./HR-CDS/routes/assignedTaskRoute.js"));
 app.use("/api/tasks/client-tasks", require("./HR-CDS/routes/clientTaskRoute.js"));
 app.use("/api/tasks/project", require("./HR-CDS/routes/projectTaskRoute.js"));
 app.use("/api/tasks/all", require("./HR-CDS/routes/allTaskRoute.js"));
+
+// IMPORTANT: Client task routes are mounted here.
+// This ensures that /api/tasks/... endpoints are available.
+app.use("/api/tasks", require("./HR-CDS/routes/clientTask.js"));
 
 
 

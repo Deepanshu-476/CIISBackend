@@ -829,6 +829,11 @@ exports.updateTask = async (req, res) => {
     if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
     if (task.createdBy.toString() !== req.user._id.toString()) return res.status(403).json({ success: false, error: 'Not authorized' });
 
+    const hasStatusChangedFromPending = task.overallStatus !== 'pending' || task.statusByUser.some(s => s.status !== 'pending');
+    if (hasStatusChangedFromPending) {
+      return res.status(400).json({ success: false, error: 'Task cannot be edited after its status has changed from pending' });
+    }
+
     const oldTask = task.toObject();
 
     if (req.files?.files) {
@@ -882,6 +887,10 @@ exports.updateStatus = async (req, res) => {
     const task = await Task.findById(taskId);
     if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
 
+    if (task.overallStatus === 'overdue') {
+      return res.status(400).json({ success: false, error: 'Cannot change status of an overdue task' });
+    }
+
     const currentUserId = (req.user._id || req.user.id).toString();
     const userCompanyCode = getRequestCompanyCode(req);
 
@@ -903,6 +912,13 @@ exports.updateStatus = async (req, res) => {
 
     const oldStatusEntry = task.statusByUser.find(s => s.user?.toString() === currentUserId);
     const oldStatus = oldStatusEntry?.status || 'pending';
+
+    if (oldStatus === 'completed' && status !== 'completed' && status !== 'reopen') {
+      return res.status(400).json({ success: false, error: 'Completed tasks can only be reopened.' });
+    }
+    if (oldStatus === 'reopen' && status !== 'reopen' && status !== 'completed') {
+      return res.status(400).json({ success: false, error: 'Reopened tasks can only be completed.' });
+    }
 
     const updateUserStatusInList = (targetUserId, newStatus, userRemarks) => {
       const idx = task.statusByUser.findIndex(s => s.user?.toString() === targetUserId.toString());
@@ -1696,6 +1712,52 @@ exports.snoozeTask = async (req, res) => {
     await task.save();
 
     res.json({ success: true, message: 'Task snoozed successfully', snoozedUntil: task.snoozedUntil });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+exports.updateCreatorStatus = async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    const { status } = req.body;
+
+    if (!['pending', 'completed'].includes(status)) {
+      return res.status(400).json({ success: false, error: 'Invalid status value. Must be pending or completed.' });
+    }
+
+    const task = await Task.findById(taskId);
+    if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
+
+    if (task.createdBy.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ success: false, error: 'Not authorized to change admin status' });
+    }
+
+    if (task.overallStatus === 'overdue') {
+      return res.status(400).json({ success: false, error: 'Cannot change status of an overdue task' });
+    }
+
+    const oldCreatorStatus = (task.creatorStatus && typeof task.creatorStatus === 'object')
+      ? task.creatorStatus.status
+      : (typeof task.creatorStatus === 'string' ? task.creatorStatus : 'pending');
+    task.creatorStatus = {
+      status: status,
+      updatedAt: new Date()
+    };
+
+    task.statusHistory.push({
+      status: status,
+      changedBy: req.user._id,
+      remarks: `Admin status changed from ${oldCreatorStatus} to ${status}`
+    });
+
+    await task.save();
+
+    res.json({
+      success: true,
+      message: 'Admin status updated successfully',
+      task
+    });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
