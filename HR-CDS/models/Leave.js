@@ -124,7 +124,7 @@ const leaveSchema = new mongoose.Schema({
   
   history: [historySchema],
   
-  // For offline sync
+  
   syncStatus: {
     type: String,
     enum: ['synced', 'pending', 'conflict'],
@@ -134,7 +134,7 @@ const leaveSchema = new mongoose.Schema({
     type: Date,
     default: Date.now
   },
-  deviceId: String, // For tracking which device created the leave
+  deviceId: String, 
 
 }, {
   timestamps: true,
@@ -142,7 +142,7 @@ const leaveSchema = new mongoose.Schema({
   toObject: { virtuals: true }
 });
 
-// Compound indexes for better performance
+
 leaveSchema.index({ user: 1, startDate: -1 });
 leaveSchema.index({ user: 1, status: 1 });
 leaveSchema.index({ status: 1, startDate: -1 });
@@ -150,12 +150,12 @@ leaveSchema.index({ user: 1, type: 1 });
 leaveSchema.index({ 'user.department': 1, status: 1 });
 leaveSchema.index({ syncStatus: 1, lastSynced: -1 });
 
-// Virtual for leave duration
+
 leaveSchema.virtual('duration').get(function() {
   return this.days + ' day' + (this.days > 1 ? 's' : '');
 });
 
-// Virtual for formatted dates
+
 leaveSchema.virtual('formattedStartDate').get(function() {
   return this.startDate.toLocaleDateString('en-US', {
     weekday: 'short',
@@ -174,7 +174,7 @@ leaveSchema.virtual('formattedEndDate').get(function() {
   });
 });
 
-// Virtual for department (populated from user)
+
 leaveSchema.virtual('department', {
   ref: 'User',
   localField: 'user',
@@ -183,18 +183,18 @@ leaveSchema.virtual('department', {
   options: { select: 'department' }
 });
 
-// Method to check if leave is upcoming
+
 leaveSchema.methods.isUpcoming = function() {
   return this.startDate > new Date() && this.status === 'Approved';
 };
 
-// Method to check if leave is in progress
+
 leaveSchema.methods.isInProgress = function() {
   const today = new Date();
   return this.startDate <= today && this.endDate >= today && this.status === 'Approved';
 };
 
-// Method to check if leave is past
+
 leaveSchema.methods.isPast = function() {
   return this.endDate < new Date();
 };
@@ -265,13 +265,13 @@ leaveSchema.statics.withApprovalDefaults = function(leave) {
   };
 };
 
-// Pre-save middleware to update sync timestamp
+
 leaveSchema.pre('save', function(next) {
   this.lastSynced = new Date();
   next();
 });
 
-// Pre-find middleware to add department filter for managers
+
 leaveSchema.statics.findByManager = function(managerDept) {
   return this.aggregate([
     {

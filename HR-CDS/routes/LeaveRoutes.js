@@ -1,15 +1,15 @@
-// leaveRoutes.js
+
 const express = require('express');
 const router = express.Router();
 const leaveController = require('../controllers/LeaveController');
 const authMiddleware = require('../../middleware/authMiddleware');
 const { body, param, query } = require('express-validator');
 const validateRequest = require('../../middleware/validateRequest.js');
-// 🔐 All routes are protected
+
 router.use(authMiddleware.protect);
-// router.patch('/status/:id', leaveController.updateLeaveStatus);
-// router.get('/status', leaveController.getLeavesWithStatus);
-// 📋 User Routes
+
+
+
 router.post('/apply', 
   [
     body('type').isIn(['Casual', 'Sick', 'Paid', 'Unpaid', 'Halfday', 'Other']).withMessage('Invalid leave type'),
@@ -21,7 +21,7 @@ router.post('/apply',
   leaveController.applyLeave
 );
 
-router.get('/status',  // ← This is GET /leaves/status
+router.get('/status',  
   [
     query('status').optional().isIn(['Pending', 'Approved', 'Rejected', 'Cancelled', 'All']).withMessage('Invalid status'),
     query('type').optional().isIn(['Casual', 'Sick', 'Paid', 'Unpaid', 'Halfday', 'Other', 'all']).withMessage('Invalid type'),
@@ -46,7 +46,7 @@ router.post('/sync',
 
 router.get('/stats', leaveController.getLeaveStats);
 
-// 📋 All Leaves Route - Accessible to everyone in same company
+
 router.get('/all', leaveController.getAllLeaves);
 
 router.patch('/status/:id',
@@ -65,7 +65,7 @@ router.patch('/status/:id',
   leaveController.updateLeaveStatus
 );
 
-// ✅ Delete Leave
+
 router.delete('/:id',
   [
     param('id').isMongoId().withMessage('Invalid leave ID format'),
@@ -74,7 +74,7 @@ router.delete('/:id',
   leaveController.deleteLeave
 );
 
-// ✅ Department Leaves
+
 router.get('/department/:department',
   [
     param('department').trim().notEmpty().withMessage('Department is required'),
@@ -86,22 +86,22 @@ router.get('/department/:department',
   leaveController.getLeavesByDepartment
 );
 
-// 🔄 Leave Calendar View
+
 router.get('/calendar', leaveController.getCalendarView);
 
-// 📊 Department Statistics
+
 router.get('/department-stats/:department', leaveController.getDepartmentStats);
 
-// 📈 Dashboard Analytics
+
 router.get('/analytics', leaveController.getAnalytics);
 
-// 👤 User Leave Balance
+
 router.get('/balance', leaveController.getLeaveBalance);
 
-// 📤 Export Leaves
+
 router.get('/export', leaveController.exportLeaves);
 
-// 🧪 TEST ROUTE - Company Filter Test
+
 router.get('/test', 
   async (req, res) => {
     try {
@@ -111,11 +111,11 @@ router.get('/test',
       const userCompanyId = req.user.company || req.user.companyId;
       const userCompanyName = req.user.companyName;
       
-      // Test company code retrieval
+      
       const testUser = await User.findById(req.user._id).select('name email company companyId department');
       const testCompany = await Company.findById(userCompanyId).select('companyName companyCode address');
       
-      // Get all users from same company
+      
       const companyUsers = await User.find({ 
         company: userCompanyId 
       }).select('name email department').limit(5);

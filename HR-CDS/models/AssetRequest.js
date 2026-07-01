@@ -69,7 +69,7 @@ const assetRequestSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Indexes for better performance
+
 assetRequestSchema.index({ user: 1, status: 1 });
 assetRequestSchema.index({ asset: 1 });
 assetRequestSchema.index({ companyCode: 1 });

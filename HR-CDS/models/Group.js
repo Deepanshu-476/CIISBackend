@@ -27,7 +27,7 @@ const groupSchema = new mongoose.Schema({
   timestamps: true 
 });
 
-// Index for better query performance
+
 groupSchema.index({ createdBy: 1, isActive: 1 });
 groupSchema.index({ members: 1 });
 

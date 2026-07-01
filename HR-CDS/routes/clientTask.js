@@ -7,18 +7,18 @@ const path = require('path');
 const fs = require('fs');
 const sharp = require('sharp');
 
-// ===== STATIC FILE SERVING - MOVED TO TOP (FIX) =====
-// Serve uploaded images statically - MUST BE BEFORE ANY ROUTES
+
+
 router.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
-// Ensure upload directory exists
+
 const uploadDir = path.join(__dirname, '../uploads/client-remarks');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
-  console.log('📁 Created upload directory:', uploadDir);
+  void 0;
 }
 
-// Configure multer for image uploads
+
 const storage = multer.memoryStorage();
 
 const fileFilter = (req, file, cb) => {
@@ -35,11 +35,11 @@ const fileFilter = (req, file, cb) => {
 
 const upload = multer({ 
   storage: storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  limits: { fileSize: 5 * 1024 * 1024 }, 
   fileFilter: fileFilter
 });
 
-// Image compression middleware
+
 const compressImage = async (req, res, next) => {
   if (!req.files || req.files.length === 0) {
     return next();
@@ -79,7 +79,7 @@ const compressImage = async (req, res, next) => {
   }
 };
 
-// ===== TEST ENDPOINT =====
+
 router.get('/test', (req, res) => {
   res.json({
     status: 'success',
@@ -109,18 +109,18 @@ router.get('/test', (req, res) => {
   });
 });
 
-// ===== ASSIGNED TASK ROUTES =====
 
-// Logged-in user's assigned client tasks
+
+
 router.get('/assigned-to-me', authMiddleware, taskController.getAssignedToMeTasks);
 router.get('/assigned-to-me/stats', authMiddleware, taskController.getAssignedToMeTaskStats);
 
-// NEW: Selected employee's assigned client tasks
+
 router.get('/user/:userId/assigned-tasks', authMiddleware, taskController.getAssignedTasksByUserId);
 
 router.patch('/assigned/:taskId/status', authMiddleware, taskController.updateAssignedTaskStatus);
 
-// ===== CLIENT REMARK ROUTES =====
+
 router.post('/:taskId/client-remarks', authMiddleware, taskController.addClientRemark);
 router.post(
   '/:taskId/client-remarks/upload-images',
@@ -132,14 +132,14 @@ router.post(
 router.get('/:taskId/client-remarks', authMiddleware, taskController.getClientRemarks);
 router.delete('/:taskId/client-remarks/:remarkId', authMiddleware, taskController.deleteClientRemark);
 
-// ===== CLIENT ACTIVITY LOG ROUTES =====
+
 router.post('/:taskId/client-activity-logs', authMiddleware, taskController.addClientActivityLog);
 router.get('/:taskId/client-activity-logs', authMiddleware, taskController.getClientTaskActivityLogs);
 
-// ===== DEBUG ROUTE =====
+
 router.get('/:taskId/debug', authMiddleware, taskController.debugActivityLogs);
 
-// ===== EXISTING ROUTES =====
+
 router.get('/client/:clientId/service/:service', taskController.getTasksByClientService);
 router.post('/client/:clientId/service/:service', authMiddleware, taskController.addTask);
 router.get('/client/:clientId', taskController.getClientTasks);

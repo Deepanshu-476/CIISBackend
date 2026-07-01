@@ -41,7 +41,7 @@ const activityLogSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Indexes
+
 activityLogSchema.index({ user: 1, createdAt: -1 });
 activityLogSchema.index({ task: 1, createdAt: -1 });
 activityLogSchema.index({ action: 1 });

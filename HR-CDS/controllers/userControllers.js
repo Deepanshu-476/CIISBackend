@@ -1,4 +1,4 @@
-// HR-CDS/controllers/userControllers.js
+
 const User = require('../../models/User');
 const Department = require('../../models/Department');
 const bcrypt = require('bcryptjs');
@@ -67,34 +67,34 @@ const shouldIncludeInactiveUsers = (query = {}) => {
   return value === true || value === 'true' || value === '1' || value === 'all';
 };
 
-// All field names for consistent usage
+
 const USER_FIELDS = {
-  // Basic fields (required in registration)
+  
   BASIC: ['name', 'email', 'password', 'department', 'jobRole'],
   
-  // Personal information fields
+  
   PERSONAL: ['phone', 'address', 'gender', 'maritalStatus', 'dob', 
              'fatherName', 'motherName', 'city', 'state', 'zipCode', 'country'],
   
-  // Employment information fields
+  
   EMPLOYMENT: ['employeeType', 'salary', 'properties', 'propertyOwned', 
                'additionalDetails', 'employeeId', 'companyRole', 'reportingManager',
                'dateOfJoining', 'workLocation'],
   
-  // Banking information fields
+  
   BANKING: ['accountNumber', 'ifsc', 'bankName', 'bankHolderName'],
   
-  // Emergency contact fields
+  
   EMERGENCY: ['emergencyName', 'emergencyPhone', 'emergencyRelation', 
               'emergencyAddress'],
   
-  // Family fields
+  
   FAMILY: ['children', 'spouseName'],
   
-  // Document fields
+  
   DOCUMENTS: ['documents'],
   
-  // All fields combined (for reference)
+  
   ALL: function() {
     return [
       ...this.BASIC,
@@ -108,12 +108,12 @@ const USER_FIELDS = {
   }
 };
 
-// Common validation function
+
 const validateUserData = (data, isUpdate = false) => {
   const errors = [];
   
   if (!isUpdate) {
-    // Registration validation
+    
     USER_FIELDS.BASIC.forEach(field => {
       if (!data[field]) {
         errors.push(`${field} is required`);
@@ -121,12 +121,12 @@ const validateUserData = (data, isUpdate = false) => {
     });
   }
 
-  // Email format validation
+  
   if (data.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.email.trim().toLowerCase())) {
     errors.push("Invalid email format");
   }
 
-  // Job role validation only checks type; free-form job titles are allowed
+  
   if (data.jobRole && typeof data.jobRole !== 'string') {
     errors.push("Invalid job role");
   }
@@ -134,7 +134,7 @@ const validateUserData = (data, isUpdate = false) => {
   return errors;
 };
 
-// Get current user profile
+
 exports.getMe = async (req, res) => {
   try {
     const user = await User.findById(req.user.id)
@@ -198,21 +198,21 @@ exports.getMe = async (req, res) => {
   }
 };
 
-// ✅ UPDATED: Update current user profile - NO RESTRICTIONS for anyone
+
 exports.updateMe = async (req, res) => {
   try {
     const userId = req.user.id;
     const updateData = {};
     
-    // Get ALL fields from request body - NO RESTRICTIONS
+    
     Object.keys(req.body).forEach(key => {
-      // Skip sensitive fields that shouldn't be updated directly
+      
       if (key !== 'password' && key !== 'resetToken' && key !== 'resetTokenExpiry' && key !== '__v') {
         updateData[key] = req.body[key];
       }
     });
     
-    // Special handling for arrays
+    
     if (req.body.children !== undefined) {
       updateData.children = req.body.children;
     }
@@ -257,7 +257,7 @@ exports.updateMe = async (req, res) => {
   }
 };
 
-// Change password
+
 exports.changePassword = async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
@@ -272,13 +272,13 @@ exports.changePassword = async (req, res) => {
 
     const user = await User.findById(req.user.id).select('+password');
     
-    // Check current password
+    
     const isMatch = await bcrypt.compare(currentPassword, user.password);
     if (!isMatch) {
       return errorResponse(res, 400, "Current password is incorrect");
     }
     
-    // Update password
+    
     user.password = newPassword;
     await user.save();
     
@@ -291,10 +291,10 @@ exports.changePassword = async (req, res) => {
   }
 };
 
-// Create user (Registration)
+
 exports.register = async (req, res) => {
   try {
-    // Extract all fields from request body
+    
     const userData = {};
     USER_FIELDS.ALL().forEach(field => {
       if (req.body[field] !== undefined) {
@@ -302,7 +302,7 @@ exports.register = async (req, res) => {
       }
     });
     
-    // Add additional fields that might not be in USER_FIELDS
+    
     const extraFields = ['city', 'state', 'zipCode', 'country', 'spouseName', 'children', 'documents', 'employeeId', 'companyRole', 'reportingManager', 'dateOfJoining', 'workLocation'];
     extraFields.forEach(field => {
       if (req.body[field] !== undefined) {
@@ -310,28 +310,28 @@ exports.register = async (req, res) => {
       }
     });
 
-    // Add createdBy if user is authenticated
+    
     if (req.user?.id) {
       userData.createdBy = req.user.id;
     }
 
-    // Add company from authenticated user's company
+    
     if (req.user?.company) {
       userData.company = req.user.company;
     }
 
-    // Validate required fields
+    
     const validationErrors = validateUserData(userData);
     if (validationErrors.length > 0) {
       return errorResponse(res, 400, validationErrors.join(', '));
     }
 
-    // Clean email
+    
     if (userData.email) {
       userData.email = userData.email.trim().toLowerCase();
     }
 
-    // Check existing user
+    
     const existingUser = await User.findOne({ 
       email: userData.email,
       company: userData.company 
@@ -340,7 +340,7 @@ exports.register = async (req, res) => {
       return errorResponse(res, 409, "Email already in use in this company");
     }
 
-    // Check if department exists
+    
     if (userData.department) {
       const departmentExists = await Department.findById(userData.department);
       if (!departmentExists) {
@@ -348,7 +348,7 @@ exports.register = async (req, res) => {
       }
     }
 
-    // Create user
+    
     const user = await User.create(userData);
 
     return successResponse(res, 201, {
@@ -370,10 +370,10 @@ exports.register = async (req, res) => {
   }
 };
 
-// Get all users - FILTERED BY COMPANY AND DEPARTMENT
+
 exports.getAllUsers = async (req, res) => {
   try {
-    // Get authenticated user's company and department from token
+    
     const userCompany = req.user.company;
     const userDepartment = req.user.department;
     
@@ -381,13 +381,13 @@ exports.getAllUsers = async (req, res) => {
       return errorResponse(res, 400, "Company information is required");
     }
 
-    // Build filter based on user role
+    
     let filter = { 
-      company: userCompany  // Always filter by company
+      company: userCompany  
     };
 
-    // Updated: all users, including employees, can view company users.
-    // Adjust this condition if employee visibility should be restricted.
+    
+    
     const authorizedRoles = ['admin', 'super_admin', 'hr', 'manager', 'employee'];
     const isAuthorized = authorizedRoles.includes(req.user.jobRole);
     
@@ -402,7 +402,7 @@ exports.getAllUsers = async (req, res) => {
       .populate('createdBy', 'name email')
       .sort({ createdAt: -1 });
 
-    // Format response with complete field structure
+    
     const formattedUsers = users.map(user => ({
       id: user._id,
       name: user.name,
@@ -457,7 +457,7 @@ exports.getAllUsers = async (req, res) => {
   }
 };
 
-// Get single user by ID - WITH COMPANY CHECK
+
 exports.getUser = async (req, res) => {
   try {
     const user = await User.findById(req.params.id)
@@ -470,7 +470,7 @@ exports.getUser = async (req, res) => {
       return errorResponse(res, 404, "User not found");
     }
 
-    // Check if user belongs to the same company
+    
     if (user.company && req.user.company) {
       const userCompanyId = user.company._id ? user.company._id.toString() : user.company.toString();
       const reqCompanyId = req.user.company._id ? req.user.company._id.toString() : req.user.company.toString();
@@ -480,7 +480,7 @@ exports.getUser = async (req, res) => {
       }
     }
 
-    // Format response with all fields
+    
     const formattedUser = {
       id: user._id,
       name: user.name,
@@ -535,25 +535,25 @@ exports.getUser = async (req, res) => {
   }
 };
 
-// ✅ FINAL UPDATED: Update user by ID - EVERYONE can edit (NO RESTRICTIONS)
+
 exports.updateUser = async (req, res) => {
   try {
     const { id } = req.params;
     
-    // Use authenticated user from middleware
+    
     const requestingUser = req.user;
     
     if (!requestingUser) {
       return errorResponse(res, 401, "Authentication required");
     }
 
-    // First, get the user to check company
+    
     const user = await User.findById(id);
     if (!user) {
       return errorResponse(res, 404, "User not found");
     }
 
-    // Check if user belongs to the same company
+    
     if (user.company && requestingUser.company) {
       const userCompanyId = user.company._id ? user.company._id.toString() : user.company.toString();
       const reqCompanyId = requestingUser.company._id ? requestingUser.company._id.toString() : requestingUser.company.toString();
@@ -563,25 +563,25 @@ exports.updateUser = async (req, res) => {
       }
     }
 
-    // ✅ UPDATED: EVERYONE can update (including Employee)
-    // Only prevent self-delete; updates are allowed.
+    
+    
     const isSelfUpdate = requestingUser.id.toString() === id;
     
-    // Removed role restrictions; all users can update.
-    // Employees can also edit other users.
+    
+    
 
-    // Create update data from entire request body - NO RESTRICTIONS!
+    
     const updateData = {};
     
-    // Get all fields from request body - EVERYTHING IS ALLOWED
+    
     Object.keys(req.body).forEach(key => {
-      // Skip sensitive fields that shouldn't be updated directly
+      
       if (key !== 'password' && key !== 'resetToken' && key !== 'resetTokenExpiry' && key !== '__v') {
         updateData[key] = req.body[key];
       }
     });
     
-    // Special handling for arrays
+    
     if (req.body.children !== undefined) {
       updateData.children = req.body.children;
     }
@@ -594,11 +594,11 @@ exports.updateUser = async (req, res) => {
       updateData.properties = req.body.properties;
     }
     
-    // ✅ REMOVED: No restrictions for non-super_admin
-    // ✅ REMOVED: No restricted fields for self-update
-    // All fields are allowed.
+    
+    
+    
 
-    // Validate department if being updated
+    
     if (updateData.department) {
       const departmentError = await validateAssignableDepartment(updateData.department, user.company || requestingUser.company);
       if (departmentError) {
@@ -606,12 +606,12 @@ exports.updateUser = async (req, res) => {
       }
     }
 
-    // Handle password update separately
+    
     if (req.body.password) {
       updateData.password = req.body.password;
     }
 
-    // Update user - save ALL fields without any restrictions
+    
     const updatedUser = await User.findByIdAndUpdate(
       id,
       { $set: updateData },
@@ -639,7 +639,7 @@ exports.updateUser = async (req, res) => {
   }
 };
 
-// ✅ UPDATED: Update self user - NO RESTRICTIONS
+
 exports.updateSelfUser = async (req, res) => {
   try {
     const { id } = req.params;
@@ -654,7 +654,7 @@ exports.updateSelfUser = async (req, res) => {
       return errorResponse(res, 404, "User not found");
     }
 
-    // Check if user is updating themselves
+    
     const requestingUserId = requestingUser._id || requestingUser.id;
     const targetUserId = user._id || id;
     
@@ -664,14 +664,14 @@ exports.updateSelfUser = async (req, res) => {
 
     const updateData = {};
     
-    // Get all fields from request body - NO RESTRICTIONS for self-update
+    
     Object.keys(req.body).forEach(key => {
       if (key !== 'password' && key !== 'resetToken' && key !== 'resetTokenExpiry' && key !== '__v') {
         updateData[key] = req.body[key];
       }
     });
     
-    // Special handling for arrays
+    
     if (req.body.children !== undefined) {
       updateData.children = req.body.children;
     }
@@ -684,8 +684,8 @@ exports.updateSelfUser = async (req, res) => {
       updateData.properties = req.body.properties;
     }
     
-    // ✅ REMOVED: No restricted fields for self-update
-    // Users can update their own profile including jobRole, department, etc.
+    
+    
 
     if (updateData.department) {
       const departmentError = await validateAssignableDepartment(updateData.department, user.company || requestingUser.company);
@@ -713,25 +713,25 @@ exports.updateSelfUser = async (req, res) => {
   }
 };
 
-// ✅ UPDATED: Delete user by ID - Authorized users can delete
+
 exports.deleteUser = async (req, res) => {
   try {
     const { id } = req.params;
     
-    // Use authenticated user from middleware
+    
     const requestingUser = req.user;
     
     if (!requestingUser) {
       return errorResponse(res, 401, "Authentication required");
     }
 
-    // Check if user exists before deletion
+    
     const user = await User.findById(id);
     if (!user) {
       return errorResponse(res, 404, "User not found");
     }
 
-    // Check if user belongs to the same company
+    
     if (user.company && requestingUser.company) {
       const userCompanyId = user.company._id ? user.company._id.toString() : user.company.toString();
       const reqCompanyId = requestingUser.company._id ? requestingUser.company._id.toString() : requestingUser.company.toString();
@@ -741,8 +741,8 @@ exports.deleteUser = async (req, res) => {
       }
     }
     
-    // ✅ UPDATED: Authorized roles can delete users (including Employee?)
-    // Add 'employee' here if employees should also be allowed to delete users.
+    
+    
     const authorizedRoles = ['super_admin', 'admin', 'hr', 'manager'];
     const canDelete = authorizedRoles.includes(requestingUser.jobRole) || 
                       authorizedRoles.includes(requestingUser.companyRole);
@@ -751,7 +751,7 @@ exports.deleteUser = async (req, res) => {
       return errorResponse(res, 403, "You don't have permission to delete users. Only HR, Manager, Admin, or Super Admin can delete users.");
     }
     
-    // Prevent self-deletion
+    
     const requestingUserId = requestingUser._id || requestingUser.id;
     const targetUserId = user._id || id;
     
@@ -759,7 +759,7 @@ exports.deleteUser = async (req, res) => {
       return errorResponse(res, 400, "You cannot delete your own account");
     }
 
-    // 🔥 PERMANENT HARD DELETE - Remove user completely from database
+    
     await User.findByIdAndDelete(id);
 
     return successResponse(res, 200, {
@@ -778,7 +778,7 @@ exports.deleteUser = async (req, res) => {
   }
 };
 
-// Restore soft-deleted user - WITH COMPANY CHECK
+
 exports.restoreUser = async (req, res) => {
   try {
     const { id } = req.params;
@@ -788,7 +788,7 @@ exports.restoreUser = async (req, res) => {
       return errorResponse(res, 404, "User not found");
     }
 
-    // Check if user belongs to the same company
+    
     if (user.company && req.user.company) {
       const userCompanyId = user.company._id ? user.company._id.toString() : user.company.toString();
       const reqCompanyId = req.user.company._id ? req.user.company._id.toString() : req.user.company.toString();
@@ -798,7 +798,7 @@ exports.restoreUser = async (req, res) => {
       }
     }
 
-    // Restore original email (remove deleted suffix)
+    
     const originalEmail = user.email.split('_deleted_')[0];
     
     await User.findByIdAndUpdate(id, { 
@@ -815,7 +815,7 @@ exports.restoreUser = async (req, res) => {
   }
 };
 
-// Get deleted users - FILTERED BY COMPANY
+
 exports.getDeletedUsers = async (req, res) => {
   try {
     const userCompany = req.user.company;
@@ -826,7 +826,7 @@ exports.getDeletedUsers = async (req, res) => {
 
     const users = await User.find({ 
       isActive: false,
-      company: userCompany  // Filter by company
+      company: userCompany  
     })
       .select('-password -resetToken -resetTokenExpiry')
       .populate('department', 'name description')
@@ -843,10 +843,10 @@ exports.getDeletedUsers = async (req, res) => {
   }
 };
 
-// Get company users with department filter
+
 exports.getCompanydepartmentUsers = async (req, res) => {
   try {
-    console.log("📊 GET request received for company users");
+    void 0;
     
     if (req.params.id && req.params.id === 'department-users') {
       return errorResponse(res, 400, "Invalid endpoint. Use GET /users/department-users");
@@ -864,7 +864,7 @@ exports.getCompanydepartmentUsers = async (req, res) => {
       return errorResponse(res, 400, "User does not belong to any company");
     }
     
-    console.log("🔍 Fetching users for company ID:", companyId);
+    void 0;
     
     const requestedDepartment = req.query.department || req.query.departmentId;
 
@@ -884,7 +884,7 @@ exports.getCompanydepartmentUsers = async (req, res) => {
       filter.department = requestedDepartment;
     }
     
-    // Updated: employees can view all company users. Remove employee if needed.
+    
     const authorizedRoles = ['admin', 'hr', 'manager', 'super_admin', 'employee'];
     if (!requestedDepartment && !authorizedRoles.includes(currentUser.jobRole) && currentUser.department) {
       filter.department = currentUser.department;
@@ -898,7 +898,7 @@ exports.getCompanydepartmentUsers = async (req, res) => {
       .sort({ createdAt: -1 });
     const socketOnlineIds = getSocketOnlineUserIds(companyId);
     
-    console.log(`✅ Found ${users.length} users`);
+    void 0;
     
     return successResponse(res, 200, {
       company: {
@@ -958,7 +958,7 @@ exports.getCompanydepartmentUsers = async (req, res) => {
   }
 };
 
-// Get company users with complete data
+
 exports.getCompanyUsers = async (req, res) => {
   try {
     const currentUser = req.user;
@@ -991,73 +991,127 @@ exports.getCompanyUsers = async (req, res) => {
       .populate("company", "name companyCode");
     const socketOnlineIds = getSocketOnlineUserIds(companyId);
 
-    // Format users with complete data and task stats
-    const usersWithStats = await Promise.all(
-      users.map(async (user) => {
-        const total = await Task.countDocuments({
-          assignedTo: user._id,
-          company: companyId
+    
+    const includeStats = req.query.includeStats === 'true';
+
+    const usersWithStats = includeStats
+      ? await Promise.all(
+          users.map(async (user) => {
+            const total = await Task.countDocuments({
+              assignedTo: user._id,
+              company: companyId
+            });
+
+            const completed = await Task.countDocuments({
+              assignedTo: user._id,
+              company: companyId,
+              status: "completed"
+            });
+
+            const completionRate = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+            return {
+              id: user._id,
+              name: user.name,
+              email: user.email,
+              company: user.company,
+              department: user.department,
+              jobRole: user.jobRole,
+              phone: user.phone,
+              address: user.address,
+              gender: user.gender,
+              maritalStatus: user.maritalStatus,
+              dob: user.dob,
+              employeeType: user.employeeType,
+              salary: user.salary,
+              accountNumber: user.accountNumber,
+              ifsc: user.ifsc,
+              bankName: user.bankName,
+              bankHolderName: user.bankHolderName,
+              fatherName: user.fatherName,
+              motherName: user.motherName,
+              spouseName: user.spouseName,
+              children: user.children,
+              documents: user.documents,
+              emergencyName: user.emergencyName,
+              emergencyPhone: user.emergencyPhone,
+              emergencyRelation: user.emergencyRelation,
+              emergencyAddress: user.emergencyAddress,
+              properties: user.properties,
+              propertyOwned: user.propertyOwned,
+              additionalDetails: user.additionalDetails,
+              employeeId: user.employeeId,
+              companyRole: user.companyRole,
+              reportingManager: user.reportingManager,
+              dateOfJoining: user.dateOfJoining,
+              workLocation: user.workLocation,
+              city: user.city,
+              state: user.state,
+              zipCode: user.zipCode,
+              country: user.country,
+              isActive: user.isActive,
+              ...getUserPresence(user, socketOnlineIds),
+              createdAt: user.createdAt,
+              updatedAt: user.updatedAt,
+              taskStats: {
+                total,
+                completed,
+                completionRate
+              }
+            };
+          })
+        )
+      : users.map((user) => {
+          return {
+            id: user._id,
+            name: user.name,
+            email: user.email,
+            company: user.company,
+            department: user.department,
+            jobRole: user.jobRole,
+            phone: user.phone,
+            address: user.address,
+            gender: user.gender,
+            maritalStatus: user.maritalStatus,
+            dob: user.dob,
+            employeeType: user.employeeType,
+            salary: user.salary,
+            accountNumber: user.accountNumber,
+            ifsc: user.ifsc,
+            bankName: user.bankName,
+            bankHolderName: user.bankHolderName,
+            fatherName: user.fatherName,
+            motherName: user.motherName,
+            spouseName: user.spouseName,
+            children: user.children,
+            documents: user.documents,
+            emergencyName: user.emergencyName,
+            emergencyPhone: user.emergencyPhone,
+            emergencyRelation: user.emergencyRelation,
+            emergencyAddress: user.emergencyAddress,
+            properties: user.properties,
+            propertyOwned: user.propertyOwned,
+            additionalDetails: user.additionalDetails,
+            employeeId: user.employeeId,
+            companyRole: user.companyRole,
+            reportingManager: user.reportingManager,
+            dateOfJoining: user.dateOfJoining,
+            workLocation: user.workLocation,
+            city: user.city,
+            state: user.state,
+            zipCode: user.zipCode,
+            country: user.country,
+            isActive: user.isActive,
+            ...getUserPresence(user, socketOnlineIds),
+            createdAt: user.createdAt,
+            updatedAt: user.updatedAt,
+            taskStats: {
+              total: 0,
+              completed: 0,
+              completionRate: 0
+            }
+          };
         });
-
-        const completed = await Task.countDocuments({
-          assignedTo: user._id,
-          company: companyId,
-          status: "completed"
-        });
-
-        const completionRate = total > 0 ? Math.round((completed / total) * 100) : 0;
-
-        return {
-          id: user._id,
-          name: user.name,
-          email: user.email,
-          company: user.company,
-          department: user.department,
-          jobRole: user.jobRole,
-          phone: user.phone,
-          address: user.address,
-          gender: user.gender,
-          maritalStatus: user.maritalStatus,
-          dob: user.dob,
-          employeeType: user.employeeType,
-          salary: user.salary,
-          accountNumber: user.accountNumber,
-          ifsc: user.ifsc,
-          bankName: user.bankName,
-          bankHolderName: user.bankHolderName,
-          fatherName: user.fatherName,
-          motherName: user.motherName,
-          spouseName: user.spouseName,
-          children: user.children,
-          documents: user.documents,
-          emergencyName: user.emergencyName,
-          emergencyPhone: user.emergencyPhone,
-          emergencyRelation: user.emergencyRelation,
-          emergencyAddress: user.emergencyAddress,
-          properties: user.properties,
-          propertyOwned: user.propertyOwned,
-          additionalDetails: user.additionalDetails,
-          employeeId: user.employeeId,
-          companyRole: user.companyRole,
-          reportingManager: user.reportingManager,
-          dateOfJoining: user.dateOfJoining,
-          workLocation: user.workLocation,
-          city: user.city,
-          state: user.state,
-          zipCode: user.zipCode,
-          country: user.country,
-          isActive: user.isActive,
-          ...getUserPresence(user, socketOnlineIds),
-          createdAt: user.createdAt,
-          updatedAt: user.updatedAt,
-          taskStats: {
-            total,
-            completed,
-            completionRate
-          }
-        };
-      })
-    );
 
     return successResponse(res, 200, {
       count: usersWithStats.length,
@@ -1070,10 +1124,10 @@ exports.getCompanyUsers = async (req, res) => {
   }
 };
 
-// Get company users with pagination
+
 exports.getCompanyUsersPaginated = async (req, res) => {
   try {
-    console.log("📊 GET request received for company users");
+    void 0;
     
     const currentUser = req.user;
     
@@ -1087,14 +1141,7 @@ exports.getCompanyUsersPaginated = async (req, res) => {
       return errorResponse(res, 400, "User does not belong to any company");
     }
     
-    console.log("🔍 Current User:", {
-      id: currentUser.id,
-      name: currentUser.name,
-      company: companyId,
-      jobRole: currentUser.jobRole,
-      department: currentUser.department,
-      companyRole: currentUser.companyRole,
-    });
+    void 0;
     
     const filter = { 
       company: companyId,
@@ -1104,14 +1151,14 @@ exports.getCompanyUsersPaginated = async (req, res) => {
       }
     };
     
-    // Updated: employees can view all company users. Remove employee if needed.
+    
     const authorizedRoles = ['admin', 'hr', 'manager', 'super_admin', 'employee'];
     if (!authorizedRoles.includes(currentUser.jobRole) && currentUser.department) {
       filter.department = currentUser.department;
-      console.log("🔍 Filtering by department:", currentUser.department);
+      void 0;
     }
     
-    console.log("🔍 Database filter:", filter);
+    void 0;
     
     const users = await User.find(filter)
       .select('-password -resetToken -resetTokenExpiry')
@@ -1120,7 +1167,7 @@ exports.getCompanyUsersPaginated = async (req, res) => {
       .populate('createdBy', 'name email')
       .sort({ createdAt: -1 });
     
-    console.log(`✅ Found ${users.length} users`);
+    void 0;
     
     return successResponse(res, 200, {
       company: {
@@ -1186,7 +1233,7 @@ exports.getCompanyUsersPaginated = async (req, res) => {
   }
 };
 
-// Search users with filters - FILTERED BY COMPANY AND DEPARTMENT
+
 exports.searchUsers = async (req, res) => {
   try {
     const { 
@@ -1203,7 +1250,7 @@ exports.searchUsers = async (req, res) => {
 
     const filter = { company: userCompany };
 
-    // Updated: employees can search all company users.
+    
     const authorizedRoles = ['admin', 'super_admin', 'hr', 'manager', 'employee'];
     const isAuthorized = authorizedRoles.includes(req.user.jobRole);
     
@@ -1236,4 +1283,4 @@ exports.searchUsers = async (req, res) => {
   }
 };
 
-console.log("✅ userControllers.js loaded successfully");
+void 0;

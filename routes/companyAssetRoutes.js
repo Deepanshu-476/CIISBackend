@@ -7,16 +7,16 @@ const {
   deleteCompanyAsset
 } = require('../controllers/companyAssetController');
 
-// Debug middleware for this router
+
 router.use((req, res, next) => {
-  console.log(`📍 CompanyAsset Route: ${req.method} ${req.originalUrl}`);
+  void 0;
   next();
 });
 
-// Protect all routes
+
 router.use(protect);
 
-// Company asset routes
+
 router.route('/')
   .get(getCompanyAssets)
   .post(createCompanyAsset);

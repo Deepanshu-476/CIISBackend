@@ -1,4 +1,4 @@
-// routes/allTaskRoute.js
+
 const express = require('express');
 const router = express.Router();
 const allTaskController = require('../controllers/allTaskController');

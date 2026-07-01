@@ -5,7 +5,7 @@ const { protect } = require('../../middleware/authMiddleware');
 const upload = require('../../utils/multer'); 
 const { uploadRemarkImage } = require('../middlewares/uploadMiddleware');
 
-// ==================== TASK RETRIEVAL ROUTES ====================
+
 
 router.get('/', protect, taskController.getTasks);
 router.get('/my', protect, taskController.getMyTasks);
@@ -18,14 +18,14 @@ router.get('/assigned', protect, taskController.getAssignedTasks);
 router.get('/all', protect, taskController.getAllMyTaskViews);
 router.get('/all/stats', protect, taskController.getAllMyTaskStats);
 
-// ==================== TASK CREATION & UPDATES ====================
+
 
 const uploadFields = upload.fields([
   { name: 'files', maxCount: 10 },
   { name: 'voiceNote', maxCount: 1 }
 ]);
 
-// Unified task creation supporting all client paths
+
 router.post('/create', protect, uploadFields, taskController.createTask);
 router.post('/create-self', protect, uploadFields, taskController.createTaskForSelf);
 router.post('/create-for-others', protect, uploadFields, taskController.createTaskForOthers);
@@ -35,27 +35,27 @@ router.delete('/:taskId', protect, taskController.deleteTask);
 router.patch('/:taskId/status', protect, taskController.updateStatus);
 router.patch('/:taskId/quick-status', protect, taskController.quickStatusUpdate);
 
-// ==================== REMARKS (COMMENTS) ====================
+
 
 router.post('/:taskId/remarks', protect, uploadRemarkImage, taskController.addRemark);
 router.get('/:taskId/remarks', protect, taskController.getRemarks);
 
-// ==================== NOTIFICATIONS ====================
+
 
 router.get('/notifications/all', protect, taskController.getNotifications);
 router.patch('/notifications/:notificationId/read', protect, taskController.markNotificationAsRead);
 router.patch('/notifications/read-all', protect, taskController.markAllNotificationsAsRead);
 
-// ==================== ACTIVITY LOGS & TIMELINE ====================
+
 
 router.get('/:taskId/activity-logs', protect, taskController.getTaskActivityLogs);
 router.get('/user-activity/:userId', protect, taskController.getUserActivityTimeline);
 
-// ==================== USER & GROUP CONFIG ====================
+
 
 router.get('/assignable-users', protect, taskController.getAssignableUsers);
 
-// ==================== TASK STATISTICS & ANALYTICS ====================
+
 
 router.get('/status-counts', protect, taskController.getTaskStatusCounts);
 router.get('/statistics', protect, taskController.getTaskStatistics);
@@ -66,7 +66,7 @@ router.get('/department-users-with-counts', protect, taskController.getDepartmen
 router.get('/user/:userId/all-tasks', protect, taskController.getUserAllTasksPaginated);
 router.get('/user/:userId/tasks', protect, taskController.getUserTasks);
 
-// ==================== OVERDUE OPERATIONS ====================
+
 
 router.get('/overdue', protect, taskController.getOverdueTasks);
 router.get('/user/:userId/overdue', protect, taskController.getUserOverdueTasks);
@@ -76,11 +76,11 @@ router.get('/check-overdue', protect, taskController.updateAllOverdueTasks);
 router.get('/overdue/summary', protect, taskController.getOverdueSummary);
 router.get('/overdue/summary/:userId', protect, taskController.getOverdueSummary);
 
-// ==================== ADDITIONAL PUBLIC UTILS ====================
+
 
 router.patch('/:taskId/snooze', protect, taskController.snoozeTask);
 
-// Health Check Endpoints
+
 router.get('/test', (req, res) => {
   return res.json({ success: true, message: 'Task management API is running', timestamp: new Date(), version: '1.0.0' });
 });

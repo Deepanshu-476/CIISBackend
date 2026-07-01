@@ -1,4 +1,4 @@
-// controllers/assignedTaskController.js
+
 const {
   Task,
   Group,
@@ -24,7 +24,7 @@ const {
   sharp
 } = require('./taskHelper');
 
-// Helper to fetch assigned to me tasks list
+
 const fetchAssignedToMeTaskList = async (req) => {
   const currentUserId = req.user._id || req.user.id;
   const groups = await Group.find({ members: currentUserId, isActive: true }).select('_id').lean();
@@ -53,7 +53,7 @@ const fetchAssignedToMeTaskList = async (req) => {
   });
 };
 
-// Create a task for others
+
 exports.createTaskForOthers = async (req, res) => {
   try {
     const { title, description, dueDateTime, whatsappNumber, priorityDays, priority, assignedUsers, assignedGroups } = req.body;
@@ -107,7 +107,7 @@ exports.createTaskForOthers = async (req, res) => {
       await sendTaskCreationEmail(task, task.assignedUsers);
       const targetUsers = task.assignedUsers.map(u => u._id.toString()).filter(id => id !== req.user._id.toString());
       await createNotification(
-        task.createdBy._id, // notify the assigned users
+        task.createdBy._id, 
         'New Task Assigned',
         `${req.user.name} assigned you task "${title}"`,
         'task_assigned',
@@ -124,17 +124,17 @@ exports.createTaskForOthers = async (req, res) => {
   }
 };
 
-// Get tasks assigned to me
+
 exports.getAssignedToMeTasks = async (req, res) => {
   try {
     const list = await fetchAssignedToMeTaskList(req);
-    return sendCleanTaskList(res, applyCleanListFilters(list, req), 'assigned', 'createdAt');
+    return sendCleanTaskList(res, applyCleanListFilters(list, req), 'assigned', 'createdAt', req);
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
 };
 
-// Get stats for tasks assigned to me
+
 exports.getAssignedToMeTaskStats = async (req, res) => {
   try {
     const list = applyCleanListFilters(await fetchAssignedToMeTaskList(req), req);
@@ -144,7 +144,7 @@ exports.getAssignedToMeTaskStats = async (req, res) => {
   }
 };
 
-// Get tasks created by me for others
+
 exports.getAssignedTasks = async (req, res) => {
   try {
     const currentUserId = req.user._id || req.user.id;
@@ -159,13 +159,13 @@ exports.getAssignedTasks = async (req, res) => {
     const mapped = enriched.map(t => ({ ...t, status: normalizeTaskStatus(t.overallStatus) }));
     const filtered = applyCleanListFilters(mapped, req);
 
-    return res.json({ success: true, groupedTasks: groupTasksByDate(filtered, 'createdAt', 'assignedSerialNo') });
+    return sendCleanTaskList(res, filtered, 'assigned_by_me', 'createdAt', req);
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
 };
 
-// Update task status (assignee side)
+
 exports.updateStatus = async (req, res) => {
   try {
     const { taskId } = req.params;
@@ -180,7 +180,7 @@ exports.updateStatus = async (req, res) => {
     const isCreator = task.createdBy.toString() === currentUserId;
     const isAssigned = task.assignedUsers.some(uid => uid.toString() === currentUserId);
 
-    // Group check
+    
     const userGroups = await Group.find({ members: req.user._id, isActive: true }).select('_id').lean();
     const groupIds = userGroups.map(g => g._id.toString());
     const isGroupAssigned = task.assignedGroups?.some(gid => groupIds.includes(gid.toString()));
@@ -276,7 +276,7 @@ exports.updateStatus = async (req, res) => {
   }
 };
 
-// Add Remark
+
 exports.addRemark = async (req, res) => {
   try {
     const { taskId } = req.params;
@@ -307,7 +307,7 @@ exports.addRemark = async (req, res) => {
   }
 };
 
-// Get Remarks
+
 exports.getRemarks = async (req, res) => {
   try {
     const task = await Task.findById(req.params.taskId).populate('remarks.user', 'name role email avatar').select('remarks');

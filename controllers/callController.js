@@ -19,7 +19,7 @@ exports.endCall = async (req, res) => {
     const { callId, status, notes } = req.body;
     const call = await CallLog.findById(callId);
     call.endTime = new Date();
-    call.duration = Math.floor((call.endTime - call.startTime) / 1000); // in seconds
+    call.duration = Math.floor((call.endTime - call.startTime) / 1000); 
     call.status = status;
     call.notes = notes;
     await call.save();
@@ -37,4 +37,4 @@ exports.getAgentCalls = async (req, res) => {
     res.status(500).json({ msg: "Error fetching call logs", error: err.message });
   }
 };
-console.log("✅ callController.js loaded successfully");
+void 0;

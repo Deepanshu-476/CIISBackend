@@ -77,29 +77,20 @@ const emitUnreadCounts = async (io, conversation, senderId) => {
 
 const chatSocket = (io, socket) => {
 
-    console.log(
-        "💬 Chat Connected:",
-        socket.user.name
-    );
+    void 0;
 
-    // USER ROOM
+    
     socket.join(`user:${socket.userId}`);
-    console.log(
-    "✅ JOINED ROOM:",
-    `user:${socket.userId}`
-);
+    void 0;
 
-    // COMPANY ROOM
+    
     socket.join(`company:${socket.companyId}`);
 
-    // STORE ONLINE USER
+    
     addOnlineUser(socket.userId, socket.id);
-    console.log(
-    "🟢 ONLINE USERS:",
-        Array.from(onlineUsers.keys())
-);
+    void 0;
 
-    // SEND ONLINE USERS
+    
     emitOnlineUsers(io, socket.companyId);
 
     socket.on("chat:get-online-users", (callback) => {
@@ -113,7 +104,7 @@ const chatSocket = (io, socket) => {
 
 
 
-// JOIN A CONVERSATION ROOM
+
     socket.on(
         "chat:join-conversation",
         async (data) => {
@@ -132,10 +123,7 @@ const chatSocket = (io, socket) => {
             }
 
             socket.join(`conversation:${data.conversationId}`);
-            console.log(
-                "✅ JOINED CONVERSATION ROOM:",
-                `conversation:${data.conversationId}`
-            );
+            void 0;
         }
     );
 
@@ -147,10 +135,7 @@ const chatSocket = (io, socket) => {
             }
 
             socket.leave(`conversation:${data.conversationId}`);
-            console.log(
-                "⛔ LEFT CONVERSATION ROOM:",
-                `conversation:${data.conversationId}`
-            );
+            void 0;
         }
     );
 
@@ -167,24 +152,18 @@ const chatSocket = (io, socket) => {
         }
     );
 
-    // SEND MESSAGE
+    
 socket.on(
     "chat:send-message",
     async (data) => {
 
-        console.log(
-            "📩 SOCKET MESSAGE:",
-            data
-        );
+        void 0;
 
         const room = data.conversationId
             ? `conversation:${data.conversationId}`
             : `user:${data.receiverId}`;
 
-        console.log(
-            "📤 SENDING TO ROOM:",
-            room
-        );
+        void 0;
 
         if (data?._id) {
             io.to(room).emit(
@@ -209,14 +188,12 @@ socket.on(
             );
         }
 
-        console.log(
-            "✅ MESSAGE EMITTED"
-        );
+        void 0;
     }
 );
 
 
-    // TYPING
+    
     socket.on(
         "chat:typing",
         (data) => {
@@ -236,7 +213,7 @@ socket.on(
 
 
 
-    // STOP TYPING
+    
     socket.on(
         "chat:stop-typing",
         (data) => {
@@ -254,7 +231,7 @@ socket.on(
         }
     );
 
-    // MARK MESSAGE SEEN
+    
 socket.on(
     "chat:seen",
     async (data) => {
@@ -335,12 +312,10 @@ socket.on(
     );
 
 
-    // DISCONNECT
+    
     socket.on("disconnect", () => {
 
-        console.log(
-            "❌ Chat Disconnect"
-        );
+        void 0;
 
         removeOnlineUser(socket.userId, socket.id);
 

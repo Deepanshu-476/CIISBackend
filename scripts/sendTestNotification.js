@@ -15,21 +15,7 @@ const args = process.argv.slice(2).reduce((acc, item, index, list) => {
 }, {});
 
 const usage = () => {
-  console.log(`
-Usage:
-  node scripts/sendTestNotification.js --email user@example.com
-  node scripts/sendTestNotification.js --userId 64...
-
-Options:
-  --title "Test Notification"
-  --message "Manual notification test"
-  --type task_client
-  --screen Dashboard
-  --path /ciisUser/user-dashboard
-  --taskId 123
-  --service "GST"
-  --noPush
-`);
+  void 0;
 };
 
 const main = async () => {
@@ -92,16 +78,7 @@ const main = async () => {
     });
   }
 
-  console.log(JSON.stringify({
-    ok: true,
-    user: {
-      id: user._id,
-      email: user.email,
-      name: user.name,
-    },
-    notificationId: notifications[0]?._id,
-    push: pushResult,
-  }, null, 2));
+  void 0;
 };
 
 main()
