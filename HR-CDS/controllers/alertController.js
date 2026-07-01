@@ -10,7 +10,7 @@ const getAlerts = async (req, res) => {
     
     let query = {};
     
-    // If user is not admin/hr/manager, show only assigned alerts
+    
     if (userRole && !['admin', 'hr', 'manager'].includes(userRole)) {
 
       const userGroups = await Group.find({ members: userId }).select('_id');
@@ -20,8 +20,8 @@ const getAlerts = async (req, res) => {
         $or: [
           { assignedUsers: { $in: [userId] } },
           { assignedGroups: { $in: userGroupIds } },
-          { assignedUsers: { $size: 0 } }, // No specific users assigned (public)
-          { assignedGroups: { $size: 0 } }  // No specific groups assigned (public)
+          { assignedUsers: { $size: 0 } }, 
+          { assignedGroups: { $size: 0 } }  
         ]
       };
     }
@@ -57,9 +57,9 @@ const getUnreadCount = async (req, res) => {
       readBy: { $ne: userId }
     };
     
-    // If user is not admin/hr/manager, filter by assigned alerts
+    
     if (userRole && !['admin', 'hr', 'manager'].includes(userRole)) {
-      // Find groups where user is a member
+      
       const userGroups = await Group.find({ members: userId }).select('_id');
       const userGroupIds = userGroups.map(group => group._id);
       
@@ -92,7 +92,7 @@ const addAlert = async (req, res) => {
     const { type, message, assignedUsers = [], assignedGroups = [] } = req.body;
     const createdBy = req.user._id;
     
-    // Validate required fields
+    
     if (!message || !message.trim()) {
       return res.status(400).json({
         success: false,
@@ -100,7 +100,7 @@ const addAlert = async (req, res) => {
       });
     }
     
-    // Create alert
+    
     const alert = new Alert({
       type: type || 'info',
       message: message.trim(),
@@ -126,15 +126,15 @@ const addAlert = async (req, res) => {
   }
 };
 
-// @desc    Update an alert
-// @route   PUT /api/alerts/:id
-// @access  Private/Admin/HR/Manager
+
+
+
 const updateAlert = async (req, res) => {
   try {
     const { id } = req.params;
     const { type, message, assignedUsers, assignedGroups } = req.body;
     
-    // Find alert
+    
     const alert = await Alert.findById(id);
     if (!alert) {
       return res.status(404).json({
@@ -143,7 +143,7 @@ const updateAlert = async (req, res) => {
       });
     }
     
-    // Update alert
+    
     if (type) alert.type = type;
     if (message) alert.message = message.trim();
     if (assignedUsers !== undefined) alert.assignedUsers = Array.isArray(assignedUsers) ? assignedUsers : [];
@@ -166,9 +166,9 @@ const updateAlert = async (req, res) => {
   }
 };
 
-// @desc    Delete an alert
-// @route   DELETE /api/alerts/:id
-// @access  Private/Admin/HR/Manager
+
+
+
 const deleteAlert = async (req, res) => {
   try {
     const { id } = req.params;
@@ -197,9 +197,9 @@ const deleteAlert = async (req, res) => {
   }
 };
 
-// @desc    Mark alert as read
-// @route   PATCH /api/alerts/:id/read
-// @access  Private
+
+
+
 const markAsRead = async (req, res) => {
   try {
     const { id } = req.params;
@@ -213,7 +213,7 @@ const markAsRead = async (req, res) => {
       });
     }
     
-    // Check if user has already marked as read
+    
     if (!alert.readBy.includes(userId)) {
       alert.readBy.push(userId);
       await alert.save();
@@ -232,7 +232,7 @@ const markAsRead = async (req, res) => {
     });
   }
 };
-console.log("✅ alertController.js loaded successfully");
+void 0;
 module.exports = {
   getAlerts,
   addAlert,

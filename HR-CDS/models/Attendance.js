@@ -1,4 +1,4 @@
-// models/Attendance.js
+
 const mongoose = require('mongoose');
 
 const attendanceSchema = new mongoose.Schema({
@@ -55,7 +55,7 @@ const attendanceSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Index for faster queries
+
 attendanceSchema.index({ user: 1, date: 1 }, { unique: true });
 attendanceSchema.index({ date: 1 });
 

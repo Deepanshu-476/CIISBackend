@@ -1,12 +1,12 @@
 const CompanyAsset = require('../models/CompanyAsset');
 
-// @desc    Get all company assets
-// @route   GET /api/company-assets
-// @access  Private
+
+
+
 const getCompanyAssets = async (req, res) => {
   try {
-    console.log('🔍 GET /company-assets - User:', req.user?._id);
-    console.log('🔍 Company code:', req.user?.companyCode);
+    void 0;
+    void 0;
 
     if (!req.user || !req.user.companyCode) {
       return res.status(401).json({
@@ -16,13 +16,13 @@ const getCompanyAssets = async (req, res) => {
     }
 
     const query = { companyCode: req.user.companyCode };
-    console.log('🔍 Query:', query);
+    void 0;
 
     const assets = await CompanyAsset.find(query)
       .populate('createdBy', 'name email')
       .sort({ createdAt: -1 });
 
-    console.log(`✅ Found ${assets.length} assets`);
+    void 0;
 
     res.json({
       success: true,
@@ -38,17 +38,17 @@ const getCompanyAssets = async (req, res) => {
   }
 };
 
-// @desc    Create new company asset (with default status = Available)
-// @route   POST /api/company-assets
-// @access  Private
+
+
+
 const createCompanyAsset = async (req, res) => {
   try {
-    console.log('🔍 POST /company-assets - Request body:', req.body);
-    console.log('🔍 User:', req.user);
+    void 0;
+    void 0;
 
-    // Validate user
+    
     if (!req.user) {
-      console.log('❌ No user found in request');
+      void 0;
       return res.status(401).json({
         success: false,
         message: 'User not authenticated'
@@ -57,25 +57,25 @@ const createCompanyAsset = async (req, res) => {
 
     const { name, description, quantity } = req.body;
 
-    // Validate name
+    
     if (!name || !name.trim()) {
-      console.log('❌ Name validation failed');
+      void 0;
       return res.status(400).json({
         success: false,
         message: 'Asset name is required'
       });
     }
 
-    // Check company code
+    
     if (!req.user.companyCode) {
-      console.log('❌ Company code missing from user');
+      void 0;
       return res.status(400).json({
         success: false,
         message: 'Company code not found for user'
       });
     }
 
-    // Prepare asset data with default status = 'Available'
+    
     const assetData = {
       name: name.trim(),
       description: description ? description.trim() : '',
@@ -85,14 +85,14 @@ const createCompanyAsset = async (req, res) => {
       createdBy: req.user._id
     };
 
-    console.log('📦 Asset data to save:', assetData);
+    void 0;
 
-    // Create asset
+    
     const asset = await CompanyAsset.create(assetData);
-    console.log('✅ Asset created successfully:', asset._id);
-    console.log('✅ Asset status:', asset.status); // Should show 'Available'
+    void 0;
+    void 0; 
 
-    // Populate createdBy for response
+    
     await asset.populate('createdBy', 'name email');
 
     res.status(201).json({
@@ -103,7 +103,7 @@ const createCompanyAsset = async (req, res) => {
   } catch (error) {
     console.error('❌ Create company asset error:', error);
     
-    // Check for validation errors
+    
     if (error.name === 'ValidationError') {
       const messages = Object.values(error.errors).map(err => err.message);
       return res.status(400).json({
@@ -113,7 +113,7 @@ const createCompanyAsset = async (req, res) => {
       });
     }
 
-    // Check for duplicate key error
+    
     if (error.code === 11000) {
       return res.status(400).json({
         success: false,
@@ -131,31 +131,31 @@ const createCompanyAsset = async (req, res) => {
 
 
 
-// @desc    Delete company asset
-// @route   DELETE /api/company-assets/:id
-// @access  Private
+
+
+
 const deleteCompanyAsset = async (req, res) => {
   try {
-    console.log('🔍 DELETE /company-assets/:id - ID:', req.params.id);
-    console.log('🔍 User:', req.user?._id);
+    void 0;
+    void 0;
 
     const asset = await CompanyAsset.findById(req.params.id);
 
     if (!asset) {
-      console.log('❌ Asset not found');
+      void 0;
       return res.status(404).json({
         success: false,
         message: 'Company asset not found'
       });
     }
 
-    console.log('✅ Asset found:', asset._id);
-    console.log('🔍 Asset companyCode:', asset.companyCode);
-    console.log('🔍 User companyCode:', req.user.companyCode);
+    void 0;
+    void 0;
+    void 0;
 
-    // Check company access
+    
     if (asset.companyCode !== req.user.companyCode) {
-      console.log('❌ Company mismatch - Access denied');
+      void 0;
       return res.status(403).json({
         success: false,
         message: 'Access denied - Asset belongs to different company'
@@ -163,7 +163,7 @@ const deleteCompanyAsset = async (req, res) => {
     }
 
     await asset.deleteOne();
-    console.log('✅ Asset deleted successfully');
+    void 0;
 
     res.json({
       success: true,

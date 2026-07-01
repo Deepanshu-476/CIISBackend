@@ -1,41 +1,41 @@
-// socket/index.js
+
 const authSocket = require('../../middleware/authSocket');
 const connectionHandler = require('../socket/handlers/connectionHandler');
 const { leaveHandlers } = require('../socket/handlers/leaveHandlers');
 const notificationHandlers = require('../socket/handlers/notificationHandlers');
-// const taskHandlers = require('../socket/handlers/');
-// const attendanceHandlers = require('../socket/handlers/');
+
+
 const chatSocket = require("../chat/socket/chatSocket");
 const callSocket = require("../chat/socket/callSocket");
 
 
 const initializeSocket = (io) => {
-  console.log('🔄 Initializing Socket.IO...');
+  void 0;
 
-  // Apply authentication middleware
+  
   io.use(authSocket);
 
   io.on('connection', (socket) => {
-    console.log(`🔌 New socket connection: ${socket.id}`);
+    void 0;
 
-    // Handle basic connection
+    
     connectionHandler(io, socket);
 
-    // Register all handlers
+    
     leaveHandlers(io, socket);
     notificationHandlers(io, socket);
 
     chatSocket(io, socket);
     callSocket(io, socket);
 
-    // taskHandlers(io, socket);
-    // attendanceHandlers(io, socket);
+    
+    
   });
 
-  // Make io globally available for controllers
+  
   global.io = io;
 
-  console.log('✅ Socket.IO initialized successfully');
+  void 0;
   return io;
 };
 

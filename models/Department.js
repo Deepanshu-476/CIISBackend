@@ -52,13 +52,13 @@ const departmentSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Compound index for unique department names within a company
+
 departmentSchema.index({ name: 1, company: 1 }, { 
   unique: true,
   partialFilterExpression: { isActive: true }
 });
 
-// Prevent deletion of departments with active users
+
 departmentSchema.pre('save', async function(next) {
   if (this.isModified('isActive') && !this.isActive) {
     const User = mongoose.model('User');

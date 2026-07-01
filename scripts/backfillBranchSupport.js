@@ -1,4 +1,4 @@
-// scripts/backfillBranchSupport.js
+
 const mongoose = require("mongoose");
 const Company = require("../models/Company");
 const Branch = require("../models/Branch");
@@ -7,11 +7,11 @@ const Department = require("../models/Department");
 const SidebarConfig = require("../models/SidebarConfig");
 
 const backfillBranchSupport = async () => {
-  console.log("🚀 Starting Multi-Branch Support Data Migration...");
+  void 0;
 
   try {
     const companies = await Company.find({});
-    console.log(`📋 Found ${companies.length} companies to inspect.`);
+    void 0;
 
     let totalBranchesCreated = 0;
     let totalUsersUpdated = 0;
@@ -19,18 +19,18 @@ const backfillBranchSupport = async () => {
     let totalSidebarConfigsUpdated = 0;
 
     for (const company of companies) {
-      console.log(`\n🏢 Inspecting Company: ${company.companyName} (${company.companyCode})`);
+      void 0;
 
-      // 1. Check if any branch exists for this company
+      
       let defaultBranch = await Branch.findOne({ company: company._id, isDefault: true });
       
       if (!defaultBranch) {
-        // Look for any branch
+        
         defaultBranch = await Branch.findOne({ company: company._id });
       }
 
       if (!defaultBranch) {
-        // Create Default "Head Office" Branch
+        
         const codeBase = String(company.companyCode || "CMP").substring(0, 7);
         const branchCode = `${codeBase}-HQ`.toUpperCase();
 
@@ -46,15 +46,15 @@ const backfillBranchSupport = async () => {
         });
 
         totalBranchesCreated++;
-        console.log(`  ✅ Created default branch 'Head Office' (code: ${branchCode})`);
+        void 0;
       } else {
-        console.log(`  ℹ️ Found existing branch: '${defaultBranch.name}' (code: ${defaultBranch.branchCode})`);
+        void 0;
       }
 
       const defaultBranchId = defaultBranch._id;
       const defaultBranchCode = defaultBranch.branchCode;
 
-      // 2. Backfill Users (Employees and Clients) without branch
+      
       const usersToUpdate = await User.find({
         company: company._id,
         $or: [{ branch: { $exists: false } }, { branch: null }],
@@ -72,12 +72,12 @@ const backfillBranchSupport = async () => {
           }
         );
         totalUsersUpdated += result.modifiedCount;
-        console.log(`  ✅ Migrated ${result.modifiedCount} Users (including clients) to this branch.`);
+        void 0;
       } else {
-        console.log(`  ℹ️ All users already have a branch assigned.`);
+        void 0;
       }
       
-      // 3. Backfill Departments without branch
+      
       const deptsToUpdate = await Department.find({
         company: company._id,
         $or: [{ branch: { $exists: false } }, { branch: null }],
@@ -95,12 +95,12 @@ const backfillBranchSupport = async () => {
           }
         );
         totalDepartmentsUpdated += result.modifiedCount;
-        console.log(`  ✅ Migrated ${result.modifiedCount} Departments to this branch.`);
+        void 0;
       } else {
-        console.log(`  ℹ️ All departments already have a branch assigned.`);
+        void 0;
       }
 
-      // 4. Backfill Sidebar Configurations without branch
+      
       const configsToUpdate = await SidebarConfig.find({
         companyId: company._id,
         $or: [{ branchId: { $exists: false } }, { branchId: null }],
@@ -117,21 +117,13 @@ const backfillBranchSupport = async () => {
           }
         );
         totalSidebarConfigsUpdated += result.modifiedCount;
-        console.log(`  ✅ Migrated ${result.modifiedCount} Sidebar Configurations to this branch.`);
+        void 0;
       } else {
-        console.log(`  ℹ️ All sidebar configs already have a branch assigned.`);
+        void 0;
       }
     }
 
-    console.log(`
-🎉 ====================================================
-✅ Migration completed successfully!
-✅ Default Branches Created: ${totalBranchesCreated}
-✅ Users Migrated: ${totalUsersUpdated}
-✅ Departments Migrated: ${totalDepartmentsUpdated}
-✅ Sidebar Configs Migrated: ${totalSidebarConfigsUpdated}
-======================================================
-`);
+    void 0;
   } catch (error) {
     console.error("❌ Migration failed with error:", error);
   }

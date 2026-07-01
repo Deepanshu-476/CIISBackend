@@ -129,7 +129,7 @@ const clienttaskSchema = new mongoose.Schema({
   toObject: { virtuals: true }
 });
 
-// Indexes for better query performance
+
 clienttaskSchema.index({ clientId: 1, service: 1 });
 clienttaskSchema.index({ clientId: 1, subscriptionId: 1 });
 clienttaskSchema.index({ clientId: 1, completed: 1 });
@@ -142,7 +142,7 @@ clienttaskSchema.index({ createdAt: -1 });
 clienttaskSchema.index({ 'activityLogs.createdAt': -1 });
 clienttaskSchema.index({ 'remarks.createdAt': -1 });
 
-// Virtual for checking if task is overdue
+
 clienttaskSchema.virtual('isOverdue').get(function() {
   if (!this.dueDate || this.completed) return false;
   const dueDate = new Date(this.dueDate);
@@ -150,7 +150,7 @@ clienttaskSchema.virtual('isOverdue').get(function() {
   return dueDate < new Date();
 });
 
-// Pre-save middleware
+
 clienttaskSchema.pre('save', function(next) {
   if (this.isModified('completed')) {
     if (this.completed && !this.completedAt) {
