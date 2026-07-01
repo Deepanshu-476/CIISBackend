@@ -160,6 +160,14 @@ const taskSchema = new mongoose.Schema(
       default: "pending",
     },
 
+    creatorStatus: {
+      type: mongoose.Schema.Types.Mixed,
+      default: () => ({
+        status: "pending",
+        updatedAt: new Date()
+      })
+    },
+
     taskFor: {
       type: String,
       
@@ -241,6 +249,7 @@ taskSchema.methods.updateUserStatus = function (userId, status, remarks = "") {
 
 taskSchema.methods.checkAndMarkOverdue = function () {
   if (!this.dueDateTime) return false;
+  if (this.overallStatus === 'onhold') return false;
   
   const now = new Date();
   const dueDate = new Date(this.dueDateTime);
@@ -258,7 +267,7 @@ taskSchema.methods.checkAndMarkOverdue = function () {
     if (userStatusIndex !== -1) {
       const currentStatus = this.statusByUser[userStatusIndex].status;
       
-      if (['pending', 'in-progress', 'reopen', 'onhold'].includes(currentStatus)) {
+      if (['pending', 'in-progress', 'reopen'].includes(currentStatus)) {
         this.statusByUser[userStatusIndex].status = 'overdue';
         this.statusByUser[userStatusIndex].updatedAt = now;
         this.statusByUser[userStatusIndex].remarks = 'Automatically marked as overdue';

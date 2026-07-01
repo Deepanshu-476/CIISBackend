@@ -34,6 +34,7 @@ router.put('/:taskId', protect, uploadFields, taskController.updateTask);
 router.delete('/:taskId', protect, taskController.deleteTask);
 router.patch('/:taskId/status', protect, taskController.updateStatus);
 router.patch('/:taskId/quick-status', protect, taskController.quickStatusUpdate);
+router.patch('/:taskId/creator-status', protect, taskController.updateCreatorStatus);
 
 
 
