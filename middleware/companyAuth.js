@@ -17,6 +17,10 @@ exports.companyLogin = async (req, res) => {
       });
     }
 
+
+
+
+    
     
     const user = await User.findOne({
       email: email.toLowerCase(),
