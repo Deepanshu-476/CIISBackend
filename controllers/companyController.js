@@ -77,6 +77,11 @@ const cleanStringArray = value => (
     : []
 );
 
+const escapeRegExp = value => String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const identifierToLooseRegex = value => escapeRegExp(value)
+  .replace(/[-_\s]+/g, "[-_\\s]*");
+
 
 const getCompanyStats = async (companyId) => {
   const [totalUsers, activeUsers, deactivatedUsers] = await Promise.all([
