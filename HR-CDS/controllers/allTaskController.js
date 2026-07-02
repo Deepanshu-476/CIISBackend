@@ -226,7 +226,7 @@ exports.getAllMyTaskViews = async (req, res) => {
       fetchAssignedProjectTaskList(req)
     ]);
     const list = applyCleanListFilters([...personal, ...assigned, ...client, ...project], req);
-    return sendCleanTaskList(res, list, 'all', 'source-aware', req);
+    return sendCleanTaskList(res, list, 'all', 'createdAt', req);
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }

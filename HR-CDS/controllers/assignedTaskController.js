@@ -157,7 +157,7 @@ exports.getAssignedTasks = async (req, res) => {
 
     const enriched = await enrichStatusInfo(tasks);
     const mapped = enriched.map(t => ({ ...t, status: normalizeTaskStatus(t.overallStatus) }));
-    const filtered = applyCleanListFilters(mapped, req);
+    const filtered = sortTasksNewestFirst(applyCleanListFilters(mapped, req));
 
     return res.json({ success: true, groupedTasks: groupTasksByDate(filtered, 'createdAt', 'assignedSerialNo') });
   } catch (err) {
