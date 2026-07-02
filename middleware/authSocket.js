@@ -37,4 +37,4 @@ const authSocket = async (socket, next) => {
   }
 };
 
-module.exports = authSocket;
+module.exports = authSocket; 
