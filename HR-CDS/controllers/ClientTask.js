@@ -7,6 +7,7 @@ const sharp = require('sharp');
 const User = require('../../models/User');
 const { notifyPageUsers, notifyDirectUsers } = require('../utils/systemNotificationService');
 const { sendEmail } = require('../../utils/sendEmail');
+const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
 
 void 0;
 
@@ -1277,9 +1278,16 @@ const getAssignedToMeTasks = async (req, res) => {
       addDueDateCondition(filter, dueDateRange);
     }
 
-    const tasks = await Task.find(filter)
-      .populate('clientId', 'name email company phone')
-      .sort({ dueDate: 1, createdAt: -1 });
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 100 });
+    const [tasks, totalMatchingTasks] = await Promise.all([
+      Task.find(filter)
+        .populate('clientId', 'name email company phone')
+        .sort({ dueDate: 1, createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Task.countDocuments(filter)
+    ]);
 
     const groupedTasks = {};
     let overdueCount = 0;
@@ -1350,8 +1358,11 @@ const getAssignedToMeTasks = async (req, res) => {
     res.json({
       success: true,
       groupedTasks,
-      stats,
-      count: tasks.length
+      pageStats: stats,
+      count: tasks.length,
+      total: totalMatchingTasks,
+      pagination: buildPaginationMeta({ page, limit, total: totalMatchingTasks }),
+      statsEndpoint: '/assigned-to-me/stats'
     });
 
   } catch (error) {
@@ -1521,13 +1532,22 @@ const getTasksByClientService = async (req, res) => {
       };
     }
 
-    const tasks = await Task.find(filter)
-      .sort({ completed: 1, dueDate: 1, createdAt: -1 });
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 100 });
+    const [tasks, total] = await Promise.all([
+      Task.find(filter)
+        .sort({ completed: 1, dueDate: 1, createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Task.countDocuments(filter)
+    ]);
 
     res.json({
       success: true,
       data: tasks,
-      count: tasks.length
+      count: tasks.length,
+      total,
+      pagination: buildPaginationMeta({ page, limit, total })
     });
   } catch (error) {
     console.error('Error fetching tasks:', error);
@@ -1559,9 +1579,16 @@ const getClientTasks = async (req, res) => {
       };
     }
 
-    const tasks = await Task.find(filter)
-      .populate('remarks.user', 'name email')
-      .sort({ completed: 1, dueDate: 1, createdAt: -1 });
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 100 });
+    const [tasks, total] = await Promise.all([
+      Task.find(filter)
+        .populate('remarks.user', 'name email')
+        .sort({ completed: 1, dueDate: 1, createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Task.countDocuments(filter)
+    ]);
 
     const tasksByService = {};
     tasks.forEach(task => {
@@ -1571,9 +1598,9 @@ const getClientTasks = async (req, res) => {
       tasksByService[task.service].push(task);
     });
 
-    const totalTasks = tasks.length;
+    const pageTotalTasks = tasks.length;
     const completedTasks = tasks.filter(t => t.completed).length;
-    const pendingTasks = totalTasks - completedTasks;
+    const pendingTasks = pageTotalTasks - completedTasks;
     
     const overdueTasks = tasks.filter(t => {
       return isClientTaskOverdue(t);
@@ -1584,14 +1611,18 @@ const getClientTasks = async (req, res) => {
       data: {
         tasks,
         groupedByService: tasksByService,
-        stats: {
-          totalTasks,
+        pageStats: {
+          totalTasks: pageTotalTasks,
           completedTasks,
           pendingTasks,
           overdueTasks,
-          completionRate: totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0
+          completionRate: pageTotalTasks > 0 ? Math.round((completedTasks / pageTotalTasks) * 100) : 0
         }
-      }
+      },
+      count: tasks.length,
+      total,
+      pagination: buildPaginationMeta({ page, limit, total }),
+      statsEndpoint: `/client/${clientId}/stats`
     });
   } catch (error) {
     console.error('Error fetching client tasks:', error);
@@ -2162,20 +2193,82 @@ const getTaskStats = async (req, res) => {
           totalTasks: { $sum: 1 },
           completedTasks: { 
             $sum: { $cond: [{ $eq: ['$completed', true] }, 1, 0] } 
+          },
+          pendingTasks: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ['$completed', false] },
+                    { $ne: ['$status', 'in-progress'] }
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          },
+          inProgressTasks: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ['$completed', false] },
+                    { $eq: ['$status', 'in-progress'] }
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          },
+          overdueTasks: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ['$completed', false] },
+                    { $ne: ['$dueDate', null] },
+                    { $lt: ['$dueDate', getClientTaskOverdueCutoff()] }
+                  ]
+                },
+                1,
+                0
+              ]
+            }
           }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          totalTasks: 1,
+          completedTasks: 1,
+          pendingTasks: 1,
+          inProgressTasks: 1,
+          overdueTasks: 1
         }
       }
     ]);
+
+    const emptyOverallStats = {
+      totalTasks: 0,
+      completedTasks: 0,
+      pendingTasks: 0,
+      inProgressTasks: 0,
+      overdueTasks: 0,
+      completionRate: 0
+    };
+    const overall = overallStats.length > 0 ? overallStats[0] : emptyOverallStats;
+    overall.completionRate = overall.totalTasks > 0
+      ? Math.round((overall.completedTasks / overall.totalTasks) * 100)
+      : 0;
 
     res.json({
       success: true,
       data: {
         serviceStats: stats,
-        overall: overallStats.length > 0 ? overallStats[0] : {
-          totalTasks: 0,
-          completedTasks: 0,
-          completionRate: 0
-        }
+        overall
       }
     });
   } catch (error) {

@@ -8,6 +8,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const emailService = require('../services/emailService');
+const { getPaginationOptions, buildPaginationMeta } = require('../utils/pagination');
 
 
 
@@ -681,13 +682,33 @@ exports.createCompany = async (req, res) => {
 
 exports.getAllCompanies = async (req, res) => {
   try {
-    const companies = await Company.find({})
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 20, maxLimit: 100 });
+    const filter = {};
+    const search = String(req.query.search || req.query.q || "").trim();
+
+    if (search) {
+      const searchRegex = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+      filter.$or = [
+        { companyName: searchRegex },
+        { companyEmail: searchRegex },
+        { companyCode: searchRegex },
+        { ownerName: searchRegex }
+      ];
+    }
+
+    const [companies, total] = await Promise.all([
+      Company.find(filter)
       .select(
         "_id companyName companyEmail companyAddress companyPhone ownerName logo companyDomain loginToken isActive deactivatedAt subscriptionExpiry createdAt updatedAt companyCode dbIdentifier loginUrl"
           + " allowedPages accessConfiguredAt accessUpdatedBy selectedPlan subscriptionPlan subscriptionAmount subscriptionPaymentStatus subscriptionPayments planDurationDays planFeatures"
       )
       .populate("selectedPlan", "name price durationDays features allowedPages")
-      .sort({ createdAt: -1 });
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Company.countDocuments(filter)
+    ]);
 
     
     const companiesWithStats = await Promise.all(
@@ -698,15 +719,18 @@ exports.getAllCompanies = async (req, res) => {
         });
 
         return {
-          ...company.toObject(),
+          ...company,
           totalUsers: userCount,
         };
       })
     );
+    const pagination = buildPaginationMeta({ page, limit, total });
 
     return res.status(200).json({
       success: true,
       count: companiesWithStats.length,
+      total,
+      pagination,
       companies: companiesWithStats,
     });
   } catch (err) {
@@ -735,7 +759,8 @@ exports.getCompanyById = async (req, res) => {
 
     const company = await Company.findById(id)
       .select("-loginToken")
-      .populate("selectedPlan", "name price durationDays features allowedPages");
+      .populate("selectedPlan", "name price durationDays features allowedPages")
+      .lean();
 
     if (!company) {
       return res.status(404).json({
@@ -749,7 +774,7 @@ exports.getCompanyById = async (req, res) => {
     return res.status(200).json({
       success: true,
       company: {
-        ...company.toObject(),
+        ...company,
         ...stats,
       },
     });
@@ -1508,7 +1533,8 @@ exports.getCompanyUsers = async (req, res) => {
         .select("name email jobRole department phone employeeId isActive createdAt")
         .sort({ createdAt: -1 })
         .skip(skip)
-        .limit(limit),
+        .limit(limit)
+        .lean(),
 
       User.countDocuments(query),
     ]);

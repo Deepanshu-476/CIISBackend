@@ -3,6 +3,7 @@ const User = require("../../models/User");
 const Company = require("../../models/Company");
 const mongoose = require("mongoose");
 const {notifyPageUsers, getCompanyId} = require("../utils/systemNotificationService");
+const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagination");
 
 
 const formatDuration = (ms) => {
@@ -630,6 +631,7 @@ const getAllUsersAttendance = async (req, res) => {
   try {
     const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     const { date, userId } = req.query;
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 31, maxLimit: 366 });
     
     if (!userCompanyCode) {
       return res.status(400).json({ 
@@ -649,23 +651,32 @@ const getAllUsersAttendance = async (req, res) => {
       filter.date = { $gte: start, $lte: end };
     }
 
-    const records = await Attendance.find(filter)
-      .populate({
-        path: "user",
-        select: "name email employeeType companyCode",
-        populate: {
-          path: "company",
-          select: "companyCode companyName"
-        }
-      })
-      .sort({ date: -1 });
+    const [records, total] = await Promise.all([
+      Attendance.find(filter)
+        .populate({
+          path: "user",
+          select: "name email employeeType companyCode",
+          populate: {
+            path: "company",
+            select: "companyCode companyName"
+          }
+        })
+        .sort({ date: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Attendance.countDocuments(filter)
+    ]);
 
     res.status(200).json({ 
       message: "All attendance records fetched successfully",
       data: records.map(record => ({
-        ...record.toObject(),
+        ...record,
         status: record.status || 'ABSENT'
-      }))
+      })),
+      count: records.length,
+      total,
+      pagination: buildPaginationMeta({ page, limit, total })
     });
   } catch (err) {
     console.error("Get All Users Attendance Error:", err.message);

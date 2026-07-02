@@ -12,6 +12,7 @@ const Company = require('../../models/Company');
 const emailService = require('../../services/emailService'); 
 const multer = require('multer');
 const path = require('path');
+const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
 
 
 const DEFAULT_CLIENT_DEPARTMENT_ID = '69ae555c9a1e47e80a40204c';
@@ -564,13 +565,15 @@ const getAllClients = async (req, res) => {
       sortOptions.createdAt = -1;
     }
 
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 100);
+    const safePage = Math.max(parseInt(page, 10) || 1, 1);
+    const skip = (safePage - 1) * safeLimit;
     
     const [clients, total] = await Promise.all([
       Client.find(filter)
         .sort(sortOptions)
-        .limit(parseInt(limit))
         .skip(skip)
+        .limit(safeLimit)
         .lean(),
       Client.countDocuments(filter)
     ]);
@@ -578,12 +581,9 @@ const getAllClients = async (req, res) => {
     res.json({
       success: true,
       data: clients,
-      pagination: {
-        currentPage: parseInt(page),
-        totalPages: Math.ceil(total / parseInt(limit)),
-        totalItems: total,
-        itemsPerPage: parseInt(limit)
-      }
+      count: clients.length,
+      total,
+      pagination: buildPaginationMeta({ page: safePage, limit: safeLimit, total })
     });
   } catch (error) {
     console.error('❌ Error fetching clients:', error);
@@ -1417,14 +1417,23 @@ const getClientsByCompany = async (req, res) => {
       });
     }
 
-    const clients = await Client.find({ 
-      companyCode: companyCode.toUpperCase() 
-    }).sort({ client: 1 });
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
+    const filter = { companyCode: companyCode.toUpperCase() };
+    const [clients, total] = await Promise.all([
+      Client.find(filter)
+        .sort({ client: 1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Client.countDocuments(filter)
+    ]);
 
     res.json({
       success: true,
       data: clients,
-      count: clients.length
+      count: clients.length,
+      total,
+      pagination: buildPaginationMeta({ page, limit, total })
     });
   } catch (error) {
     console.error('❌ Error fetching clients by company:', error);

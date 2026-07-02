@@ -4,6 +4,7 @@ const Department = require('../../models/Department');
 const bcrypt = require('bcryptjs');
 const { errorResponse, successResponse } = require('../utils/responseHelper.js');
 const Task = require('../../HR-CDS/models/Task.js');
+const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
 
 const getSocketOnlineUserIds = (companyId) => {
   const onlineIds = new Set();
@@ -373,6 +374,7 @@ exports.register = async (req, res) => {
 
 exports.getAllUsers = async (req, res) => {
   try {
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
     
     const userCompany = req.user.company;
     const userDepartment = req.user.department;
@@ -395,12 +397,29 @@ exports.getAllUsers = async (req, res) => {
       filter.department = userDepartment;
     }
 
-    const users = await User.find(filter)
+    const search = String(req.query.search || req.query.q || '').trim();
+    if (search) {
+      const searchRegex = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      filter.$or = [
+        { name: searchRegex },
+        { email: searchRegex },
+        { employeeId: searchRegex },
+        { phone: searchRegex }
+      ];
+    }
+
+    const [users, total] = await Promise.all([
+      User.find(filter)
       .select('-password -resetToken -resetTokenExpiry')
       .populate('department', 'name description')
-      .populate('company', 'name companyCode')
+        .populate('company', 'companyName companyCode')
       .populate('createdBy', 'name email')
-      .sort({ createdAt: -1 });
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      User.countDocuments(filter)
+    ]);
 
     
     const formattedUsers = users.map(user => ({
@@ -449,7 +468,10 @@ exports.getAllUsers = async (req, res) => {
 
     return successResponse(res, 200, {
       count: formattedUsers.length,
-      users: formattedUsers
+      total,
+      pagination: buildPaginationMeta({ page, limit, total }),
+      users: formattedUsers,
+      data: formattedUsers
     });
   } catch (err) {
     console.error("❌ Get users error:", err);
