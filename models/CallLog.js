@@ -11,7 +11,7 @@
       enum: ["answered", "missed", "not reachable", "rejected"],
       default: "answered",
     },
-    notes: String,
+    notes: String, 
   }, { timestamps: true });
 
   module.exports = mongoose.model("CallLog", callLogSchema);
