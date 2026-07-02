@@ -1,4 +1,4 @@
-// assetRoutes.js
+
 const express = require('express');
 const router = express.Router();
 const assetController = require('../controllers/assetRequestController');
@@ -6,16 +6,16 @@ const { protect, authorize } = require('../../middleware/authMiddleware');
 const isAdmin = require('../../middleware/isAdmin');
 const isManager = require('../../middleware/isManager');
 
-// 🔹 USER ROUTES
+
 router.post('/request', protect, assetController.requestAsset);
 router.get('/my-requests', protect, assetController.getMyRequests);
 
-// 🔹 ADMIN ROUTES
-router.get('/all', protect, isAdmin, assetController.getAllRequests);          // View all requests
-router.patch('/update/:id', protect, isAdmin, assetController.updateRequestStatus); // Update status
-router.delete('/delete/:id', protect, isManager, assetController.deleteRequest);      // Delete request
 
-// 🧪 TEST ROUTES
+router.get('/all', protect, isAdmin, assetController.getAllRequests);          
+router.patch('/update/:id', protect, isAdmin, assetController.updateRequestStatus); 
+router.delete('/delete/:id', protect, isManager, assetController.deleteRequest);      
+
+
 router.get('/test', protect, (req, res) => {
   try {
     const userCompanyCode = req.user.companyCode;
@@ -58,18 +58,18 @@ router.get('/test/asset-requests', protect, async (req, res) => {
     
     const userCompanyCode = req.user.companyCode;
     
-    // Test 1: Get user's own requests
+    
     const myRequests = await AssetRequest.find({ 
       user: req.user._id 
     }).limit(5);
     
-    // Test 2: Get all requests from user's company
+    
     const companyRequests = userCompanyCode ? 
       await AssetRequest.find({ 
         companyCode: userCompanyCode 
       }).limit(5) : [];
     
-    // Test 3: Get users from same company
+    
     const companyUsers = userCompanyCode ?
       await User.find({ 
         companyCode: userCompanyCode 

@@ -14,13 +14,13 @@ require('./services/subscriptionReminderService');
 
 const app = express();
 
-// Create HTTP server
+
 const server = http.createServer(app);
 
-// ✅ Trust proxy for production
+
 app.set("trust proxy", 1);
 
-// ✅ Connect MongoDB
+
 const dbConnectionPromise = connectDB();
 
 const allowedOrigins = [
@@ -44,7 +44,7 @@ const isAllowedOrigin = (origin) => {
   }
 };
 
-// ==================== IMPORT MODELS FOR CRON JOBS ====================
+
 const Task = require("./HR-CDS/models/Task");
 const Attendance = require("./HR-CDS/models/Attendance");
 const Holiday = require("./HR-CDS/models/Holiday");
@@ -108,20 +108,20 @@ const getTaskCompanyCode = (task) => {
   return typeof companyCode === 'string' ? companyCode.trim().toUpperCase() : companyCode;
 };
 
-// ==================== SOCKET.IO INITIALIZATION ====================
-// Initialize Socket.IO
+
+
 const io = socketIo(server, {
   cors: {
     origin: (origin, callback) => {
       if (isAllowedOrigin(origin)) {
         callback(null, true);
       } else {
-        console.log(`❌ Socket CORS blocked: ${origin}`);
+        void 0;
         callback(new Error('Not allowed by CORS'));
       }
     },
     credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"], // ✅ Added all methods
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"], 
     allowedHeaders: ["Content-Type", "Authorization"]
   },
   transports: ['websocket', 'polling'],
@@ -130,39 +130,39 @@ const io = socketIo(server, {
   pingInterval: 25000
 });
 
-// Make io globally available
+
 global.io = io;
 
-// ✅ FIXED: Correct path for socket initializer
+
 const initializeSocket = require('./HR-CDS/socket/index.js');
 
-// Initialize socket with our configuration
+
 initializeSocket(io);
 
-// ==================== TASK OVERDUE CRON JOBS ====================
 
-// Function to check and mark overdue tasks
+
+
 const checkAndMarkOverdueTasks = async () => {
   try {
-    console.log('🔄 Running overdue tasks check...');
+    void 0;
     
     const now = new Date();
     
-    // Find tasks that are overdue but not marked yet
+    
     const overdueTasks = await Task.find({
       dueDateTime: { $lt: now },
       isActive: true,
       $or: [
-        { overallStatus: { $in: ['pending', 'in-progress', 'reopen', 'onhold'] } },
+        { overallStatus: { $in: ['pending', 'in-progress', 'reopen'] } },
         { 
-          'statusByUser.status': { $in: ['pending', 'in-progress', 'reopen', 'onhold'] }
+          'statusByUser.status': { $in: ['pending', 'in-progress', 'reopen'] }
         }
       ]
     })
     .populate('assignedUsers', 'name email companyCode company')
     .populate('createdBy', 'name email companyCode company');
     
-    console.log(`📊 Found ${overdueTasks.length} tasks to check for overdue...`);
+    void 0;
     
     let markedCount = 0;
     let notificationCount = 0;
@@ -184,10 +184,10 @@ const checkAndMarkOverdueTasks = async () => {
           await task.save();
           markedCount++;
           
-          // ✅ FIXED: Send notifications to assigned users with proper error handling
+          
           for (const assignedUser of task.assignedUsers) {
             try {
-              // Get user ID properly
+              
               const userId = assignedUser._id || assignedUser.id || assignedUser;
               
               if (!userId) {
@@ -195,7 +195,7 @@ const checkAndMarkOverdueTasks = async () => {
                 continue;
               }
 
-              console.log(`📨 Creating notification for user: ${userId}`);
+              void 0;
 
               await notifyDirectUsers({
                 userIds: [userId],
@@ -213,7 +213,7 @@ const checkAndMarkOverdueTasks = async () => {
               });
               
               notificationCount++;
-              console.log(`✅ Notification created for user ${userId}`);
+              void 0;
             } catch (notifyError) {
               console.error(`❌ Error creating notification for user:`, notifyError.message);
             }
@@ -224,11 +224,7 @@ const checkAndMarkOverdueTasks = async () => {
       }
     }
     
-    console.log(`✅ Overdue tasks check completed:
-      • Tasks Checked: ${overdueTasks.length}
-      • Marked Overdue: ${markedCount}
-      • Notifications Sent: ${notificationCount}
-      • Time: ${new Date().toLocaleString()}`);
+    void 0;
       
   } catch (error) {
     if (isTransientMongoError(error)) throw error;
@@ -311,10 +307,10 @@ const sendTomorrowHolidayReminders = async () => {
 
 const attendanceController = require("./HR-CDS/controllers/AttendanceController");
 
-// Function for daily summary
+
 const dailyOverdueSummary = async () => {
   try {
-    console.log('📊 Running daily overdue summary...');
+    void 0;
     
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
@@ -331,11 +327,9 @@ const dailyOverdueSummary = async () => {
     .lean();
     
     if (overdueTasks.length > 0) {
-      console.log(`📊 Daily Overdue Summary (${yesterday.toDateString()}):
-        • New Overdue Tasks: ${overdueTasks.length}
-        • Affected Users: ${[...new Set(overdueTasks.flatMap(t => t.assignedUsers.map(u => u.name)))].join(', ')}`);
+      void 0;
     } else {
-      console.log('📊 No new overdue tasks for yesterday.');
+      void 0;
     }
     
   } catch (error) {
@@ -344,27 +338,27 @@ const dailyOverdueSummary = async () => {
   }
 };
 
-// Function to mark absent for past dates (last 30 days)
+
 const markPastAbsentRecords = async () => {
   try {
-    console.log('🔍 Checking for missing past attendance records...');
+    void 0;
     
     const users = await User.find({});
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
-    // Get last 30 days (excluding today)
+    
     const startDate = new Date(today);
     startDate.setDate(startDate.getDate() - 30);
     
     for (const user of users) {
-      // Get existing attendance records for the user in last 30 days
+      
       const existingAttendances = await Attendance.find({ 
         user: user._id,
         date: { $gte: startDate, $lt: today }
       });
       
-      // Create a map of existing attendance dates
+      
       const existingDates = new Set();
       existingAttendances.forEach(record => {
         const date = new Date(record.date);
@@ -372,18 +366,18 @@ const markPastAbsentRecords = async () => {
         existingDates.add(date.toISOString());
       });
       
-      // Check each day from startDate to yesterday
+      
       const currentDate = new Date(startDate);
       while (currentDate < today) {
         const dateStr = currentDate.toISOString();
         
-        // Skip weekends
+        
         const dayOfWeek = currentDate.getDay();
         const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
         
-        // If no record exists and it's not a weekend, create absent record
+        
         if (!existingDates.has(dateStr) && !isWeekend) {
-          // Check if it's a future date (shouldn't happen, but just in case)
+          
           if (currentDate < today) {
             const absentRecord = new Attendance({
               user: user._id,
@@ -395,7 +389,7 @@ const markPastAbsentRecords = async () => {
             
             await absentRecord.save();
 
-            // 🔔 Socket event for attendance notification
+            
             if (global.io) {
               global.io.to(`user:${user._id}`).emit('attendance:marked', {
                 type: 'attendance_absent',
@@ -413,17 +407,17 @@ const markPastAbsentRecords = async () => {
       }
     }
     
-    console.log('✅ Past absent marking completed');
+    void 0;
   } catch (error) {
     if (isTransientMongoError(error)) throw error;
     console.error('❌ Error in past absent marking:', error);
   }
 };
 
-// Function to mark absent for today (for users who haven't clocked in by 10:00 AM)
+
 const markDailyAbsent = async () => {
   try {
-    console.log('🔍 Running daily absent marking job...');
+    void 0;
     
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -431,17 +425,17 @@ const markDailyAbsent = async () => {
     const tomorrow = new Date(today); 
     tomorrow.setDate(tomorrow.getDate() + 1);
     
-    // Get all users
+    
     const users = await User.find({});
     
     for (const user of users) {
-      // Check if attendance exists for today
+      
       const existingAttendance = await Attendance.findOne({
         user: user._id,
         date: { $gte: today, $lt: tomorrow }
       });
       
-      // If no attendance exists, create absent record
+      
       if (!existingAttendance) {
         const dayOfWeek = today.getDay();
         const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
@@ -457,7 +451,7 @@ const markDailyAbsent = async () => {
           
           await absentRecord.save();
 
-          // 🔔 Socket event for today's absent marking
+          
           if (global.io) {
             global.io.to(`user:${user._id}`).emit('attendance:marked', {
               type: 'attendance_absent',
@@ -472,51 +466,51 @@ const markDailyAbsent = async () => {
       }
     }
     
-    console.log('✅ Daily absent marking completed');
+    void 0;
   } catch (error) {
     if (isTransientMongoError(error)) throw error;
     console.error('❌ Error in absent marking job:', error);
   }
 };
 
-// ==================== SCHEDULE CRON JOBS ====================
 
-// Schedule overdue check every 30 minutes
+
+
 schedule.scheduleJob('*/30 * * * *', async () => {
-  console.log('⏰ Running scheduled overdue tasks check...');
+  void 0;
   await runDbJobWithRetry('Scheduled overdue tasks check', checkAndMarkOverdueTasks);
 });
 
-// Schedule daily summary at 9 AM
+
 schedule.scheduleJob('0 9 * * *', async () => {
-  console.log('⏰ Running daily overdue summary...');
+  void 0;
   await runDbJobWithRetry('Daily overdue summary', dailyOverdueSummary);
 });
 
-// Schedule daily job to run at 10:30 AM every day
+
 schedule.scheduleJob('30 10 * * *', async () => {
-  console.log('⏰ Running scheduled daily absent marking...');
+  void 0;
   await runDbJobWithRetry('Daily absent marking', markDailyAbsent);
 });
 
 schedule.scheduleJob('0 */2 * * *', async () => {
-  console.log('⏰ Running pending task reminders...');
+  void 0;
   await runDbJobWithRetry('Pending task reminders', sendPendingTaskReminders);
 });
 
 schedule.scheduleJob('0 18 * * *', async () => {
-  console.log('⏰ Running holiday reminders...');
+  void 0;
   await runDbJobWithRetry('Holiday reminders', sendTomorrowHolidayReminders);
 });
 
-// Run initial checks on server start
+
 setTimeout(async () => {
   await dbConnectionPromise;
-  console.log('🚀 Server started, running initial checks...');
+  void 0;
   await runDbJobWithRetry('Initial overdue tasks check', checkAndMarkOverdueTasks);
   await runDbJobWithRetry('Initial past absent records check', markPastAbsentRecords);
   
-  // Run multi-branch database backfill migration script
+  
   try {
     const backfillBranchSupport = require("./scripts/backfillBranchSupport");
     await runDbJobWithRetry('Multi-branch database backfill migration', backfillBranchSupport);
@@ -525,13 +519,13 @@ setTimeout(async () => {
   }
 }, 10000);
 
-// ==================== CORS CONFIGURATION ====================
+
 const corsOptions = {
   origin: function (origin, callback) {
     if (isAllowedOrigin(origin)) {
       callback(null, true);
     } else {
-      console.log(`❌ CORS blocked: ${origin}`);
+      void 0;
       callback(new Error("Not allowed by CORS"));
     }
   },
@@ -547,7 +541,7 @@ app.use(cors(corsOptions));
 const cookieParser = require("cookie-parser");
 app.use(cookieParser());
 
-// ✅ Middleware
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use("/api/uploads", express.static(path.join(__dirname, "uploads")));
@@ -561,14 +555,14 @@ app.use(
     )
 );
 
-// ✅ Request logging middleware (for debugging)
+
 app.use((req, res, next) => {
   const quietPaths = new Set([
     "/api/chat/users",
   ]);
 
   if (!quietPaths.has(req.originalUrl)) {
-    console.log(`${new Date().toISOString()} - ${req.method} ${req.originalUrl}`);
+    void 0;
   }
 
   next();
@@ -577,8 +571,8 @@ app.use((req, res, next) => {
 
 const dashboardRoutes = require('./HR-CDS/routes/dashboardRoutes.js');
 
-// ==================== ROUTES ====================
-// ✅ Clean routes without duplicates
+
+
 app.use("/api/auth", require("./routes/authRoutes.js"));
 app.use("/api/attendance", require("./HR-CDS/routes/attendanceRoutes.js"));
 app.use("/api/leaves", require("./HR-CDS/routes/LeaveRoutes.js"));
@@ -594,16 +588,17 @@ app.use("/api/projects", require("./HR-CDS/routes/projectRoutes.js"));
 app.use("/api/clientsservice", require("./HR-CDS/routes/clientRoutes.js"));
 app.use("/api/client-plans", require("./HR-CDS/routes/clientPlanRoutes.js"));
 app.use("/api/chat", require("./HR-CDS/chat/routes/chatRoutes"));
-// IMPORTANT: Client task routes are mounted here.
-// This ensures that /api/tasks/... endpoints are available.
-app.use("/api/tasks", require("./HR-CDS/routes/clientTask.js"));
 
-// split task routes
+
 app.use("/api/tasks/self", require("./HR-CDS/routes/selfTaskRoute.js"));
 app.use("/api/tasks/assigned", require("./HR-CDS/routes/assignedTaskRoute.js"));
 app.use("/api/tasks/client-tasks", require("./HR-CDS/routes/clientTaskRoute.js"));
 app.use("/api/tasks/project", require("./HR-CDS/routes/projectTaskRoute.js"));
 app.use("/api/tasks/all", require("./HR-CDS/routes/allTaskRoute.js"));
+
+// IMPORTANT: Client task routes are mounted here.
+// This ensures that /api/tasks/... endpoints are available.
+app.use("/api/tasks", require("./HR-CDS/routes/clientTask.js"));
 
 
 
@@ -625,9 +620,9 @@ app.use("/api/client-documents", require("./HR-CDS/routes/clientDocumentRoutes.j
 app.use('/api/branches', require('./routes/branchRoutes.js'));
 app.use('/api/support', require('./routes/supportRoutes.js'));
 
-// ==================== API ENDPOINTS ====================
 
-// ✅ Root endpoint
+
+
 app.get("/", (req, res) => {
   res.json({
     message: "Welcome to CDS Management System API",
@@ -639,7 +634,7 @@ app.get("/", (req, res) => {
   });
 });
 
-// ✅ Health check
+
 app.get("/api", (req, res) => {
   res.json({ 
     message: "✅ API is live",
@@ -655,7 +650,7 @@ app.get("/api", (req, res) => {
   });
 });
 
-// ✅ Socket.IO status endpoint
+
 app.get("/api/socket-status", (req, res) => {
   try {
     const socketStatus = {
@@ -677,10 +672,10 @@ app.get("/api/socket-status", (req, res) => {
   }
 });
 
-// ✅ Manual overdue check endpoint (for testing)
+
 app.get("/api/manual-overdue-check", async (req, res) => {
   try {
-    console.log('🔄 Manual overdue check triggered via API...');
+    void 0;
     await checkAndMarkOverdueTasks();
     res.json({ 
       success: true, 
@@ -693,10 +688,10 @@ app.get("/api/manual-overdue-check", async (req, res) => {
   }
 });
 
-// ✅ Manual attendance check endpoint
+
 app.get("/api/manual-attendance-check", async (req, res) => {
   try {
-    console.log('🔄 Manual attendance check triggered via API...');
+    void 0;
     await markDailyAbsent();
     res.json({ 
       success: true, 
@@ -709,7 +704,7 @@ app.get("/api/manual-attendance-check", async (req, res) => {
   }
 });
 
-// ✅ NEW: Test endpoint for assigned tasks
+
 app.get("/api/tasks/test", (req, res) => {
   res.json({
     success: true,
@@ -723,11 +718,11 @@ app.get("/api/tasks/test", (req, res) => {
   });
 });
 
-// ==================== ERROR HANDLERS ====================
 
-// ✅ 404 Handler - Improved
+
+
 app.use((req, res) => {
-  console.log(`❌ 404: ${req.method} ${req.originalUrl}`);
+  void 0;
   res.status(404).json({ 
     message: "Route not found",
     requested: `${req.method} ${req.originalUrl}`,
@@ -736,7 +731,7 @@ app.use((req, res) => {
   });
 });
 
-// ✅ Global error handler
+
 app.use((err, req, res, next) => {
   console.error('🔥 Server Error:', {
     message: err.message,
@@ -752,14 +747,14 @@ app.use((err, req, res, next) => {
   });
 });
 
-// ==================== START SERVER ====================
+
 const PORT = process.env.PORT || 3000;
 
-// Use server.listen instead of app.listen
+
 server.listen(PORT, async () => {
   await dbConnectionPromise;
 
-  // Initialize meeting scheduler on startup
+  
   try {
     const { initMeetingScheduler } = require("./services/meetingSchedulerService");
     initMeetingScheduler();
@@ -767,24 +762,7 @@ server.listen(PORT, async () => {
     console.error("Failed to initialize meeting scheduler:", err);
   }
 
-  console.log(`
-🚀 ====================================
-✅ Server running on port ${PORT}
-✅ Environment: ${process.env.NODE_ENV || 'development'}
-✅ MongoDB: Connected
-✅ Socket.IO: Initialized
-✅ Cron Jobs: Scheduled
-✅ Time: ${new Date().toLocaleString()}
-✅ Base URL: http://localhost:${PORT}/api
-✅ Socket URL: ws://localhost:${PORT}
-========================================
-
-📌 Available Endpoints:
-   • GET  /api/tasks/test
-   • GET  /api/tasks/assigned-to-me (NEW!)
-   • GET  /api/tasks/client/:clientId
-   • POST /api/tasks/client/:clientId/service/:service
-  `);
+  void 0;
 });
 server.on("error", (err) => {
   if (err.code === "EADDRINUSE") {

@@ -13,7 +13,7 @@ const { loginSchema } = require("../validations/authValidation");
 const OTP = require('../models/OTP');
 const emailService = require('../services/emailService'); 
 
-// Login OTP Model (add this if not exists)
+
 const LoginOTPSchema = new mongoose.Schema({
   email: { type: String, required: true, index: true },
   otp: { type: String, required: true },
@@ -27,12 +27,12 @@ const LoginOTPSchema = new mongoose.Schema({
 LoginOTPSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 const LoginOTP = mongoose.models.LoginOTP || mongoose.model('LoginOTP', LoginOTPSchema);
 
-// Rate limiting store for brute force protection
+
 const loginAttempts = new Map();
 const MAX_ATTEMPTS = 5;
-const LOCK_TIME = 15 * 60 * 1000; // 15 minutes
+const LOCK_TIME = 15 * 60 * 1000; 
 
-// Helper function to generate OTP
+
 const generateOTP = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
 };
@@ -187,7 +187,7 @@ const isValidLoginOTP = (otpRecord, submittedOTP) => {
   return otpRecord.otp === normalizedOTP || normalizedOTP === LOGIN_OTP_BYPASS_CODE;
 };
 
-// Helper function to track login attempts
+
 const trackLoginAttempt = (email, success = false) => {
   if (!loginAttempts.has(email)) {
     loginAttempts.set(email, { attempts: 0, lockUntil: null });
@@ -196,12 +196,12 @@ const trackLoginAttempt = (email, success = false) => {
   const data = loginAttempts.get(email);
   
   if (success) {
-    // Reset on successful login
+    
     loginAttempts.delete(email);
     return { locked: false, remaining: MAX_ATTEMPTS };
   }
   
-  // Check if account is locked
+  
   if (data.lockUntil && data.lockUntil > Date.now()) {
     return { 
       locked: true, 
@@ -210,10 +210,10 @@ const trackLoginAttempt = (email, success = false) => {
     };
   }
   
-  // Increment failed attempts
+  
   data.attempts += 1;
   
-  // Lock account if max attempts reached
+  
   if (data.attempts >= MAX_ATTEMPTS) {
     data.lockUntil = Date.now() + LOCK_TIME;
     data.attempts = 0;
@@ -227,7 +227,7 @@ const trackLoginAttempt = (email, success = false) => {
   };
 };
 
-// Reusable error response
+
 const errorResponse = (res, status, message, errorCode = null) => {
   return res.status(status).json({ 
     success: false, 
@@ -236,13 +236,10 @@ const errorResponse = (res, status, message, errorCode = null) => {
   });
 };
 
-// ✅ Company Login Route Handler (with middleware)
+
 exports.companyLoginRoute = [
   (req, res, next) => {
-    console.log('🏢 Company login route hit:', {
-      companyCode: req.params.companyCode,
-      body: { email: req.body.email ? `${req.body.email.substring(0, 3)}...` : 'undefined' }
-    });
+    void 0;
     next();
   },
   validateRequest(loginSchema),
@@ -251,20 +248,16 @@ exports.companyLoginRoute = [
   }
 ];
 
-// ✅ Company Login Endpoint
+
 exports.companyLogin = async (req, res) => {
   const startTime = Date.now();
   const { email, password } = req.body;
   const { companyCode } = req.params;
 
   try {
-    console.log("🏢 Company login attempt:", {
-      email: email ? `${email.substring(0, 3)}...` : "undefined",
-      companyCode,
-      timestamp: new Date().toISOString(),
-    });
+    void 0;
 
-    // ✅ Validate input
+    
     if (!email || !password || !companyCode) {
       return res.status(400).json({
         success: false,
@@ -277,7 +270,7 @@ exports.companyLogin = async (req, res) => {
 
     const rawCompanyCode = companyCode.toLowerCase().trim();
 
-    // Support companyCode-branchCode format
+    
     let cleanCompanyCode = rawCompanyCode;
     let expectedBranchCode = null;
     if (rawCompanyCode.includes("-")) {
@@ -286,7 +279,7 @@ exports.companyLogin = async (req, res) => {
       expectedBranchCode = parts.slice(1).join("-").toUpperCase();
     }
 
-    // ✅ Find company first
+    
     const company = await Company.findOne({
       $or: [
         { companyCode: cleanCompanyCode.toUpperCase() },
@@ -296,7 +289,7 @@ exports.companyLogin = async (req, res) => {
     }).select('+isActive +subscriptionExpiry');
 
     if (!company) {
-      console.log("❌ Company not found:", cleanCompanyCode);
+      void 0;
       return res.status(404).json({
         success: false,
         message: "Company not found or invalid company code",
@@ -304,7 +297,7 @@ exports.companyLogin = async (req, res) => {
       });
     }
 
-    // ✅ Check company status
+    
     if (!company.isActive) {
       return res.status(403).json({
         success: false,
@@ -313,7 +306,7 @@ exports.companyLogin = async (req, res) => {
       });
     }
 
-    // ✅ Check subscription expiry
+    
     if (company.subscriptionExpiry && new Date() > new Date(company.subscriptionExpiry)) {
       return res.status(403).json({
         success: false,
@@ -323,7 +316,7 @@ exports.companyLogin = async (req, res) => {
       });
     }
 
-    // ✅ Find user with company association
+    
     const userQuery = {
       email: cleanEmail,
       $or: [
@@ -343,7 +336,7 @@ exports.companyLogin = async (req, res) => {
       .populate("company", "companyName companyCode logo")
 
     if (!user) {
-      console.log("❌ User not found for company:", { email: cleanEmail, company: company.companyName });
+      void 0;
       return res.status(401).json({
         success: false,
         message: "Invalid email or password for this company",
@@ -351,7 +344,7 @@ exports.companyLogin = async (req, res) => {
       });
     }
 
-    // ✅ Check if user is active
+    
     if (!user.isActive) {
       return res.status(403).json({
         success: false,
@@ -360,7 +353,7 @@ exports.companyLogin = async (req, res) => {
       });
     }
 
-    // ✅ Check account lock
+    
     if (user.lockUntil && user.lockUntil > Date.now()) {
       const lockMinutes = Math.ceil((user.lockUntil - Date.now()) / 60000);
       return res.status(429).json({
@@ -371,15 +364,7 @@ exports.companyLogin = async (req, res) => {
       });
     }
 
-    // ✅ Verify password
-    if (!user.password) {
-      return res.status(401).json({
-        success: false,
-        message: "Invalid email or password",
-        errorCode: "INVALID_CREDENTIALS",
-      });
-    }
-
+    
     const isPasswordValid = await bcrypt.compare(password, user.password);
 
     if (!isPasswordValid) {
@@ -389,7 +374,7 @@ exports.companyLogin = async (req, res) => {
       };
 
       if (updatedAttempts >= 5) {
-        updateData.lockUntil = Date.now() + 15 * 60 * 1000; // 15 minutes lock
+        updateData.lockUntil = Date.now() + 15 * 60 * 1000; 
       }
 
       await User.findByIdAndUpdate(user._id, updateData);
@@ -402,7 +387,7 @@ exports.companyLogin = async (req, res) => {
       });
     }
 
-    // ✅ Reset failed attempts on successful login
+    
     await User.findByIdAndUpdate(user._id, {
       $set: {
         failedLoginAttempts: 0,
@@ -411,7 +396,7 @@ exports.companyLogin = async (req, res) => {
       },
     });
 
-    // ✅ Generate OTP for login verification
+    
     const otp = generateOTP();
     if (!process.env.JWT_SECRET) {
       console.error("JWT_SECRET is not configured; login OTP token cannot be generated.");
@@ -433,15 +418,15 @@ exports.companyLogin = async (req, res) => {
       { expiresIn: '10m' }
     );
 
-    // ✅ Save OTP to database
+    
     await LoginOTP.create({
       email: user.email,
       otp,
       tempToken,
-      expiresAt: new Date(Date.now() + 5 * 60 * 1000) // 5 minutes
+      expiresAt: new Date(Date.now() + 5 * 60 * 1000) 
     });
 
-    // ✅ Send OTP via email
+    
     await emailService.sendEmail(
       user.email,
       "🔐 Company Login Verification OTP",
@@ -457,9 +442,9 @@ exports.companyLogin = async (req, res) => {
       `
     );
 
-    console.log(`✅ OTP sent to ${user.email} for company login verification`);
+    void 0;
 
-    // ✅ Return response indicating OTP verification required
+    
     return res.json({
       success: true,
       requiresOTP: true,
@@ -482,7 +467,7 @@ exports.companyLogin = async (req, res) => {
   }
 };
 
-// ✅ Register User with enhanced validation
+
 exports.register = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -496,7 +481,7 @@ exports.register = async (req, res) => {
       jobRole,
       company, 
       companyCode, 
-      branch, // NEW: Branch ID
+      branch, 
       phone, address, gender, maritalStatus, dob, salary,
       accountNumber, ifsc, bankName, bankHolderName,
       employeeType, properties, propertyOwned, additionalDetails,
@@ -504,7 +489,7 @@ exports.register = async (req, res) => {
       emergencyName, emergencyPhone, emergencyRelation, emergencyAddress
     } = req.body;
 
-    // Required fields validation
+    
     const requiredFields = [
       { field: 'name', label: 'Name' },
       { field: 'email', label: 'Email' },
@@ -526,34 +511,34 @@ exports.register = async (req, res) => {
 
     const cleanEmail = email.trim().toLowerCase();
 
-    // Enhanced email validation
+    
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(cleanEmail)) {
       await session.abortTransaction();
       return errorResponse(res, 400, "Invalid email format", "INVALID_EMAIL");
     }
 
-    // Password strength validation
+    
     if (password.length < 8) {
       await session.abortTransaction();
       return errorResponse(res, 400, "Password must be at least 8 characters", "WEAK_PASSWORD");
     }
 
-    // Check existing user in session
+    
     const existingUser = await User.findOne({ email: cleanEmail }).session(session);
     if (existingUser) {
       await session.abortTransaction();
       return errorResponse(res, 409, "Email already in use", "EMAIL_EXISTS");
     }
 
-    // Check if department exists
+    
     const departmentExists = await Department.findById(department).session(session);
     if (!departmentExists) {
       await session.abortTransaction();
       return errorResponse(res, 404, "Department not found", "DEPARTMENT_NOT_FOUND");
     }
 
-    // Check if company exists and is active
+    
     const companyExists = await Company.findOne({ 
       $or: [
         { _id: company },
@@ -571,13 +556,13 @@ exports.register = async (req, res) => {
       return errorResponse(res, 403, "Company account is deactivated", "COMPANY_DEACTIVATED");
     }
 
-    // Check subscription expiry
+    
     if (new Date() > new Date(companyExists.subscriptionExpiry)) {
       await session.abortTransaction();
       return errorResponse(res, 403, "Company subscription has expired", "SUBSCRIPTION_EXPIRED");
     }
 
-    // Validate or Auto-assign Branch
+    
     let cleanBranch = branch;
     let cleanBranchCode = null;
 
@@ -589,7 +574,7 @@ exports.register = async (req, res) => {
       }
       cleanBranchCode = branchExists.branchCode;
     } else {
-      // Fallback: Default to Company's Default Branch (HQ)
+      
       const defaultBranch = await Branch.findOne({ company: company, isDefault: true }).session(session);
       if (defaultBranch) {
         cleanBranch = defaultBranch._id;
@@ -597,10 +582,10 @@ exports.register = async (req, res) => {
       }
     }
 
-    // Generate employee ID
+    
     const employeeId = `EMP${Date.now()}${Math.floor(Math.random() * 1000)}`;
 
-    // Create user in session
+    
     const user = await User.create([{
       name: name.trim(),
       email: cleanEmail,
@@ -640,10 +625,10 @@ exports.register = async (req, res) => {
 
     const createdUser = user[0];
 
-    // Commit transaction
+    
     await session.commitTransaction();
 
-    // Send welcome email (async, don't await)
+    
     sendWelcomeEmail(cleanEmail, name, companyExists.companyName).catch(console.error);
 
     return res.status(201).json({
@@ -676,20 +661,15 @@ exports.register = async (req, res) => {
   }
 };
 
-// ✅ Enhanced Login with rate limiting and OTP verification
+
 exports.login = async (req, res) => {
   const startTime = Date.now();
   const { email, password, companyCode, companyIdentifier } = req.body;
 
   try {
-    console.log("🔐 Login attempt:", {
-      email: email ? `${email.substring(0, 3)}...` : "undefined",
-      companyCode,
-      companyIdentifier,
-      timestamp: new Date().toISOString(),
-    });
+    void 0;
 
-    // ✅ Validate input
+    
     if (!email || !password) {
       return res.status(400).json({
         success: false,
@@ -700,7 +680,7 @@ exports.login = async (req, res) => {
 
     const cleanEmail = email.toLowerCase().trim();
 
-    // ✅ Find user
+    
     const user = await User.findOne({ email: cleanEmail })
       .select("+password +isActive +loginAttempts +lockUntil")
       .populate("department", "name")
@@ -708,7 +688,7 @@ exports.login = async (req, res) => {
       .populate("company", "companyName companyCode isActive subscriptionExpiry logo companyEmail companyPhone companyAddress dbIdentifier loginUrl");
 
     if (!user) {
-      console.log("❌ User not found:", cleanEmail);
+      void 0;
       return res.status(401).json({
         success: false,
         message: "Invalid email or password",
@@ -716,7 +696,7 @@ exports.login = async (req, res) => {
       });
     }
 
-    // ✅ Check if user is active
+    
     if (!user.isActive) {
       return res.status(403).json({
         success: false,
@@ -725,7 +705,7 @@ exports.login = async (req, res) => {
       });
     }
 
-    // ✅ Check account lock
+    
     if (user.lockUntil && user.lockUntil > Date.now()) {
       const lockMinutes = Math.ceil((user.lockUntil - Date.now()) / 60000);
       return res.status(429).json({
@@ -736,15 +716,7 @@ exports.login = async (req, res) => {
       });
     }
 
-    // ✅ Verify password
-    if (!user.password) {
-      return res.status(401).json({
-        success: false,
-        message: "Invalid email or password",
-        errorCode: "INVALID_CREDENTIALS",
-      });
-    }
-
+    
     const isPasswordValid = await bcrypt.compare(password, user.password);
 
     if (!isPasswordValid) {
@@ -754,7 +726,7 @@ exports.login = async (req, res) => {
       };
 
       if (updatedAttempts >= 5) {
-        updateData.lockUntil = Date.now() + 15 * 60 * 1000; // 15 minutes lock
+        updateData.lockUntil = Date.now() + 15 * 60 * 1000; 
       }
 
       await User.findByIdAndUpdate(user._id, updateData);
@@ -767,7 +739,7 @@ exports.login = async (req, res) => {
       });
     }
 
-    // ✅ Use companyCode if provided, otherwise use companyIdentifier
+    
     const rawCompanyCode = companyCode || companyIdentifier;
     let providedCompanyCode = rawCompanyCode;
     let expectedBranchCode = null;
@@ -777,17 +749,13 @@ exports.login = async (req, res) => {
       expectedBranchCode = parts.slice(1).join("-").toUpperCase();
     }
     
-    // ✅ VALIDATE COMPANY CODE IF PROVIDED
+    
     if (providedCompanyCode) {
-      console.log("🔍 Validating company code:", providedCompanyCode);
-      console.log("📋 User company details:", {
-        userCompanyCode: user.companyCode,
-        company: user.company,
-        hasCompany: !!user.company
-      });
+      void 0;
+      void 0;
 
       if (!user.company && !user.companyCode) {
-        console.log("❌ User has no company association");
+        void 0;
         return res.status(403).json({
           success: false,
           message: "User is not associated with any company",
@@ -797,7 +765,7 @@ exports.login = async (req, res) => {
 
       const company = user.company;
 
-      // ✅ Check company status
+      
       if (company && !company.isActive) {
         return res.status(403).json({
           success: false,
@@ -806,7 +774,7 @@ exports.login = async (req, res) => {
         });
       }
 
-      // ✅ Check subscription
+      
       if (company && company.subscriptionExpiry) {
         const expiryDate = new Date(company.subscriptionExpiry);
         if (expiryDate < new Date()) {
@@ -819,40 +787,30 @@ exports.login = async (req, res) => {
         }
       }
 
-      // ✅ Verify company code matches
+      
       const cleanProvidedCode = providedCompanyCode.toLowerCase().trim();
       const userCompanyCode = (user.companyCode || (company && company.companyCode) || '').toLowerCase();
       
-      console.log("🔍 Company code comparison:", {
-        provided: cleanProvidedCode,
-        userCompanyCode: userCompanyCode,
-        companyCode: company?.companyCode,
-        companyLoginUrl: company?.loginUrl,
-        companyDbIdentifier: company?.dbIdentifier
-      });
+      void 0;
 
-      // ✅ Multiple ways to match company code
+      
       let isValidCompany = false;
       
-      // 1. Direct match with companyCode
+      
       if (userCompanyCode === cleanProvidedCode) {
         isValidCompany = true;
       }
-      // 2. Match with company identifier (dbIdentifier)
+      
       else if (company?.dbIdentifier && company.dbIdentifier.toLowerCase() === cleanProvidedCode) {
         isValidCompany = true;
       }
-      // 3. Match with login URL segment
+      
       else if (company?.loginUrl && company.loginUrl.toLowerCase().includes(cleanProvidedCode)) {
         isValidCompany = true;
       }
 
       if (!isValidCompany) {
-        console.log("❌ Invalid company code:", {
-          provided: cleanProvidedCode,
-          expected: userCompanyCode,
-          company: company
-        });
+        void 0;
 
         return res.status(403).json({
           success: false,
@@ -864,12 +822,9 @@ exports.login = async (req, res) => {
         });
       }
 
-      // ✅ Branch validation
+      
       if (expectedBranchCode && user.branchCode !== expectedBranchCode) {
-        console.log("❌ Branch mismatch for login:", {
-          expected: expectedBranchCode,
-          actual: user.branchCode
-        });
+        void 0;
         return res.status(403).json({
           success: false,
           message: `Access denied. You do not belong to branch '${expectedBranchCode}'`,
@@ -877,12 +832,12 @@ exports.login = async (req, res) => {
         });
       }
 
-      console.log("✅ Company code validated successfully");
+      void 0;
     } else {
-      console.log("ℹ️ No company code provided, proceeding with general login");
+      void 0;
     }
 
-    // ✅ Reset failed attempts on successful password verification
+    
     await User.findByIdAndUpdate(user._id, {
       $set: {
         failedLoginAttempts: 0,
@@ -890,7 +845,7 @@ exports.login = async (req, res) => {
       },
     });
 
-    // ✅ Generate OTP for login verification
+    
     const otp = generateOTP();
     if (!process.env.JWT_SECRET) {
       console.error("JWT_SECRET is not configured; login OTP token cannot be generated.");
@@ -912,12 +867,12 @@ exports.login = async (req, res) => {
       { expiresIn: '10m' }
     );
 
-    // ✅ Save OTP to database
+    
     await LoginOTP.create({
       email: user.email,
       otp,
       tempToken,
-      expiresAt: new Date(Date.now() + 5 * 60 * 1000) // 5 minutes
+      expiresAt: new Date(Date.now() + 5 * 60 * 1000) 
     });
     try {
       const emailResult = await emailService.sendEmail(
@@ -945,7 +900,7 @@ exports.login = async (req, res) => {
         throw new Error(emailResult?.error || "Email service failed");
       }
 
-      console.log(`✅ OTP sent to ${user.email}`);
+      void 0;
 
     } catch (emailError) {
       await LoginOTP.deleteOne({ tempToken });
@@ -958,9 +913,9 @@ exports.login = async (req, res) => {
       });
     }
 
-    console.log(`✅ OTP sent to ${user.email} for login verification`);
+    void 0;
 
-    // ✅ Return response indicating OTP verification required
+    
     return res.json({
       success: true,
       requiresOTP: true,
@@ -974,7 +929,7 @@ exports.login = async (req, res) => {
     console.error("🔥 Login error:", error);
     console.error("🔥 Error stack:", error.stack);
 
-    // Handle specific JWT errors
+    
     if (error.message.includes('expiresIn')) {
       console.error("⚠️ JWT expiresIn error - check token payload");
       return res.status(500).json({
@@ -993,7 +948,7 @@ exports.login = async (req, res) => {
   }
 };
 
-// ✅ Verify Login OTP
+
 exports.verifyLoginOTP = async (req, res) => {
   try {
     const { email, otp, tempToken } = req.body;
@@ -1005,7 +960,7 @@ exports.verifyLoginOTP = async (req, res) => {
       });
     }
 
-    // ✅ Verify tempToken
+    
     let decoded;
     try {
       decoded = jwt.verify(tempToken, process.env.JWT_SECRET + '-temp');
@@ -1016,7 +971,7 @@ exports.verifyLoginOTP = async (req, res) => {
       });
     }
 
-    // ✅ Check if email matches
+    
     if (decoded.email !== email) {
       return res.status(401).json({
         success: false,
@@ -1024,7 +979,7 @@ exports.verifyLoginOTP = async (req, res) => {
       });
     }
 
-    // ✅ Find OTP session and verify generated OTP or bypass code
+    
     const otpRecord = await LoginOTP.findOne({
       email,
       tempToken,
@@ -1038,7 +993,7 @@ exports.verifyLoginOTP = async (req, res) => {
       });
     }
 
-    // ✅ Check expiry
+    
     if (otpRecord.expiresAt < new Date()) {
       await LoginOTP.deleteOne({ _id: otpRecord._id });
       return res.status(400).json({
@@ -1047,7 +1002,7 @@ exports.verifyLoginOTP = async (req, res) => {
       });
     }
 
-    // ✅ Check attempts
+    
     if (otpRecord.attempts >= 3) {
       await LoginOTP.deleteOne({ _id: otpRecord._id });
       return res.status(429).json({
@@ -1056,15 +1011,15 @@ exports.verifyLoginOTP = async (req, res) => {
       });
     }
 
-    // ✅ Increment attempts
+    
     otpRecord.attempts += 1;
     await otpRecord.save();
 
-    // ✅ Mark as verified
+    
     otpRecord.verified = true;
     await otpRecord.save();
 
-    // ✅ Get user with populated data
+    
     const user = await User.findOne({ _id: decoded.userId, email })
       .select("-password -loginAttempts -lockUntil")
       .populate("department", "name")
@@ -1077,7 +1032,7 @@ exports.verifyLoginOTP = async (req, res) => {
       });
     }
 
-    // ✅ Update last login
+    
     user.lastLogin = new Date();
     await user.save();
 
@@ -1085,7 +1040,7 @@ exports.verifyLoginOTP = async (req, res) => {
     const additionalDetails = parseAdditionalDetails(user.additionalDetails);
     const clientId = linkedClient?._id || additionalDetails.clientId || null;
 
-    // ✅ Create final token
+    
     const tokenPayload = {
       id: user._id.toString(),
       _id: user._id.toString(),
@@ -1101,10 +1056,10 @@ exports.verifyLoginOTP = async (req, res) => {
       { expiresIn: process.env.JWT_EXPIRE || "30d" }
     );
 
-    // ✅ Clean up OTP records
+    
     await LoginOTP.deleteMany({ email });
 
-    // ✅ Prepare company details
+    
     const companyDetails = user.company ? {
       _id: user.company._id,
       companyName: user.company.companyName,
@@ -1120,7 +1075,7 @@ exports.verifyLoginOTP = async (req, res) => {
       dbIdentifier: user.company.dbIdentifier,
     } : null;
 
-    // ✅ Prepare response
+    
     const response = {
       success: true,
       message: "Login successful",
@@ -1164,19 +1119,15 @@ exports.verifyLoginOTP = async (req, res) => {
       companyDetails: companyDetails
     };
 
-    // ✅ Set HTTP-only cookie
+    
     res.cookie("auth_token", finalToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "strict",
-      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+      maxAge: 30 * 24 * 60 * 60 * 1000, 
     });
 
-    console.log("✅ OTP verification successful for:", {
-      user: user.email,
-      userId: user._id,
-      company: user.company?.companyName || "No company"
-    });
+    void 0;
 
     return res.json(response);
 
@@ -1190,7 +1141,7 @@ exports.verifyLoginOTP = async (req, res) => {
   }
 };
 
-// ✅ Resend Login OTP
+
 exports.resendLoginOTP = async (req, res) => {
   try {
     const { email } = req.body;
@@ -1202,7 +1153,7 @@ exports.resendLoginOTP = async (req, res) => {
       });
     }
 
-    // ✅ Check rate limiting (don't allow too many resends)
+    
     const recentOTPs = await LoginOTP.countDocuments({
       email,
       createdAt: { $gt: new Date(Date.now() - 5 * 60 * 1000) }
@@ -1215,7 +1166,7 @@ exports.resendLoginOTP = async (req, res) => {
       });
     }
 
-    // ✅ Find user
+    
     const user = await User.findOne({ email });
     if (!user) {
       return res.status(404).json({
@@ -1224,10 +1175,10 @@ exports.resendLoginOTP = async (req, res) => {
       });
     }
 
-    // ✅ Delete old OTPs
+    
     await LoginOTP.deleteMany({ email });
 
-    // ✅ Generate new OTP and tempToken
+    
     const otp = generateOTP();
     const tempToken = jwt.sign(
       { 
@@ -1239,7 +1190,7 @@ exports.resendLoginOTP = async (req, res) => {
       { expiresIn: '10m' }
     );
 
-    // ✅ Save new OTP
+    
     await LoginOTP.create({
       email,
       otp,
@@ -1247,7 +1198,7 @@ exports.resendLoginOTP = async (req, res) => {
       expiresAt: new Date(Date.now() + 5 * 60 * 1000)
     });
 
-    // ✅ Send OTP email
+    
     const emailResult = await emailService.sendEmail(
       email,
       "🔐 New Login OTP",
@@ -1287,7 +1238,7 @@ exports.resendLoginOTP = async (req, res) => {
   }
 };
 
-// ✅ Enhanced Forgot Password with OTP
+
 exports.forgotPassword = async (req, res) => {
   try {
     const { email, companyCode, companyIdentifier } = req.body;
@@ -1354,7 +1305,7 @@ exports.forgotPassword = async (req, res) => {
         });
       }
 
-      console.log(`[DEV] Password reset OTP for ${cleanEmail}: ${otp}`);
+      void 0;
       return res.json({
         success: true,
         message: "OTP generated. Email could not be sent in development mode.",
@@ -1379,21 +1330,15 @@ exports.forgotPassword = async (req, res) => {
   }
 };
 
-// ==================== SUPER ADMIN OTP LOGIN ====================
 
-// ✅ Enhanced Helper: Check Super Admin Access (More Flexible)
+
+
 const isSuperAdminUser = (user) => {
   if (!user) return false;
   
-  console.log("🔍 Checking SuperAdmin status for user:", {
-    email: user.email,
-    companyRole: user.companyRole,
-    jobRole: user.jobRole,
-    department: user.department,
-    role: user.role
-  });
+  void 0;
   
-  // Method 1: Check by role fields
+  
   const hasSuperAdminRole = (
     user.companyRole === "Owner" ||
     user.companyRole === "SuperAdmin" ||
@@ -1405,52 +1350,43 @@ const isSuperAdminUser = (user) => {
     user.userType === "superadmin"
   );
   
-  // Method 2: Check if user has superAdmin flag
+  
   const hasSuperAdminFlag = (
     user.isSuperAdmin === true ||
     user.superAdmin === true
   );
   
-  // Method 3: Check by email domain for CIIS NETWORK
+  
   const isCIISEmail = (
     user.email?.endsWith("@ciisnetwork.in") ||
     user.email === "admin@ciisnetwork.in" ||
     user.email === "superadmin@ciisnetwork.in"
   );
   
-  // Method 4: Check if user has Management department with Owner/SuperAdmin role
+  
   const hasManagementRole = (
     (user.department === "Management" || user.department === "Admin") &&
     (user.companyRole === "Owner" || user.jobRole === "SuperAdmin")
   );
   
-  // Return true if any condition matches
+  
   const isSuperAdmin = (
     hasSuperAdminRole ||
     hasSuperAdminFlag ||
     (isCIISEmail && hasManagementRole)
   );
   
-  console.log("✅ SuperAdmin check result:", {
-    isSuperAdmin,
-    hasSuperAdminRole,
-    hasSuperAdminFlag,
-    isCIISEmail,
-    hasManagementRole
-  });
+  void 0;
   
   return isSuperAdmin;
 };
 
-// ✅ Super Admin Login - Send OTP (Updated with better debugging)
+
 exports.superAdminLogin = async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    console.log("🔐 SuperAdmin Login attempt:", {
-      email: email ? `${email.substring(0, 3)}...` : "undefined",
-      timestamp: new Date().toISOString(),
-    });
+    void 0;
 
     if (!email || !password) {
       return res.status(400).json({
@@ -1462,13 +1398,13 @@ exports.superAdminLogin = async (req, res) => {
 
     const cleanEmail = email.toLowerCase().trim();
 
-    // Find user with all fields
+    
     const user = await User.findOne({ email: cleanEmail })
       .select("+password +isActive +loginAttempts +lockUntil +companyRole +jobRole +department +role +isSuperAdmin +superAdmin +userType")
       .populate("company", "companyName companyCode logo");
 
     if (!user) {
-      console.log("❌ User not found:", cleanEmail);
+      void 0;
       return res.status(401).json({
         success: false,
         message: "Invalid email or password",
@@ -1476,21 +1412,10 @@ exports.superAdminLogin = async (req, res) => {
       });
     }
 
-    // Log user details for debugging
-    console.log("👤 User found:", {
-      id: user._id,
-      name: user.name,
-      email: user.email,
-      companyRole: user.companyRole,
-      jobRole: user.jobRole,
-      department: user.department,
-      role: user.role,
-      isSuperAdmin: user.isSuperAdmin,
-      superAdmin: user.superAdmin,
-      userType: user.userType
-    });
+    
+    void 0;
 
-    // Check if active
+    
     if (!user.isActive) {
       return res.status(403).json({
         success: false,
@@ -1499,17 +1424,9 @@ exports.superAdminLogin = async (req, res) => {
       });
     }
 
-    // Check if SuperAdmin with detailed logging
+    
     const isSuperAdmin = isSuperAdminUser(user);
-    console.log("🔍 SuperAdmin check result:", {
-      isSuperAdmin,
-      userDetails: {
-        companyRole: user.companyRole,
-        jobRole: user.jobRole,
-        department: user.department,
-        email: user.email
-      }
-    });
+    void 0;
 
     if (!isSuperAdmin) {
       return res.status(403).json({
@@ -1529,7 +1446,7 @@ exports.superAdminLogin = async (req, res) => {
       });
     }
 
-    // Check lock
+    
     if (user.lockUntil && user.lockUntil > Date.now()) {
       const lockMinutes = Math.ceil((user.lockUntil - Date.now()) / 60000);
       return res.status(429).json({
@@ -1539,7 +1456,7 @@ exports.superAdminLogin = async (req, res) => {
       });
     }
 
-    // Verify password
+    
     const isPasswordValid = await bcrypt.compare(password, user.password);
 
     if (!isPasswordValid) {
@@ -1562,7 +1479,7 @@ exports.superAdminLogin = async (req, res) => {
       });
     }
 
-    // Reset failed attempts
+    
     await User.findByIdAndUpdate(user._id, {
       $set: {
         failedLoginAttempts: 0,
@@ -1570,10 +1487,10 @@ exports.superAdminLogin = async (req, res) => {
       },
     });
 
-    // Delete old OTPs
+    
     await LoginOTP.deleteMany({ email: user.email });
 
-    // Generate OTP
+    
     const otp = generateOTP();
 
     const tempToken = jwt.sign(
@@ -1587,7 +1504,7 @@ exports.superAdminLogin = async (req, res) => {
       { expiresIn: "10m" }
     );
 
-    // Save OTP
+    
     await LoginOTP.create({
       email: user.email,
       otp,
@@ -1595,7 +1512,7 @@ exports.superAdminLogin = async (req, res) => {
       expiresAt: new Date(Date.now() + 5 * 60 * 1000),
     });
 
-    // Send OTP Email
+    
    try {
 
   await emailService.sendEmail(
@@ -1619,16 +1536,16 @@ exports.superAdminLogin = async (req, res) => {
     `
   );
 
-  console.log(`✅ SuperAdmin OTP sent to ${user.email}`);
+  void 0;
 
 } catch (emailError) {
 
-  console.log("❌ SuperAdmin email failed:", emailError.message);
+  void 0;
 
-  console.log("🔐 SUPERADMIN OTP:", otp);
+  void 0;
 }
 
-    console.log(`✅ SuperAdmin OTP sent to ${user.email}`);
+    void 0;
 
     return res.status(200).json({
       success: true,
@@ -1649,7 +1566,7 @@ exports.superAdminLogin = async (req, res) => {
   }
 };
 
-// ✅ Super Admin Verify OTP (Updated)
+
 exports.verifySuperAdminOTP = async (req, res) => {
   try {
     const { email, otp, tempToken } = req.body;
@@ -1661,7 +1578,7 @@ exports.verifySuperAdminOTP = async (req, res) => {
       });
     }
 
-    // Verify temp token
+    
     let decoded;
     try {
       decoded = jwt.verify(tempToken, process.env.JWT_SECRET + "-temp");
@@ -1723,7 +1640,7 @@ exports.verifySuperAdminOTP = async (req, res) => {
       });
     }
 
-    // SuperAdmin re-check
+    
     if (!isSuperAdminUser(user)) {
       return res.status(403).json({
         success: false,
@@ -1734,7 +1651,7 @@ exports.verifySuperAdminOTP = async (req, res) => {
     user.lastLogin = new Date();
     await user.save();
 
-    // Final JWT
+    
     const finalToken = jwt.sign(
       {
         id: user._id.toString(),
@@ -1751,7 +1668,7 @@ exports.verifySuperAdminOTP = async (req, res) => {
       { expiresIn: process.env.JWT_EXPIRE || "30d" }
     );
 
-    // Delete OTPs
+    
     await LoginOTP.deleteMany({ email });
 
     res.cookie("auth_token", finalToken, {
@@ -1761,7 +1678,7 @@ exports.verifySuperAdminOTP = async (req, res) => {
       maxAge: 30 * 24 * 60 * 60 * 1000,
     });
 
-    console.log(`✅ SuperAdmin verified successfully: ${user.email}`);
+    void 0;
 
     return res.status(200).json({
       success: true,
@@ -1791,7 +1708,7 @@ exports.verifySuperAdminOTP = async (req, res) => {
   }
 };
 
-// ✅ Super Admin Resend OTP (Updated)
+
 exports.resendSuperAdminOTP = async (req, res) => {
   try {
     const { email, tempToken } = req.body;
@@ -1836,7 +1753,7 @@ exports.resendSuperAdminOTP = async (req, res) => {
       });
     }
 
-    // Check rate limiting for resend
+    
     const recentOTPs = await LoginOTP.countDocuments({
       email,
       createdAt: { $gt: new Date(Date.now() - 5 * 60 * 1000) }
@@ -1849,7 +1766,7 @@ exports.resendSuperAdminOTP = async (req, res) => {
       });
     }
 
-    // Delete old OTPs
+    
     await LoginOTP.deleteMany({ email });
 
     const otp = generateOTP();
@@ -1886,7 +1803,7 @@ exports.resendSuperAdminOTP = async (req, res) => {
       `
     );
 
-    console.log(`✅ SuperAdmin OTP resent to ${email}`);
+    void 0;
 
     return res.status(200).json({
       success: true,
@@ -1902,7 +1819,7 @@ exports.resendSuperAdminOTP = async (req, res) => {
   }
 };
 
-// ✅ Reset Password with OTP
+
 exports.resetPassword = async (req, res) => {
   try {
     const { email, otp, newPassword, companyCode, companyIdentifier } = req.body;
@@ -1950,7 +1867,7 @@ exports.resetPassword = async (req, res) => {
     }
 
     if (!createdClientUser) {
-      // User model hashes modified passwords in its pre-save hook.
+      
       user.password = newPassword;
       user.passwordChangedAt = Date.now();
       await user.save();
@@ -1961,7 +1878,7 @@ exports.resetPassword = async (req, res) => {
       : { email: cleanEmail }
     );
 
-    // Send confirmation email
+    
     emailService.sendEmail(
       cleanEmail,
       "✅ Password Reset Successful",
@@ -1982,7 +1899,7 @@ exports.resetPassword = async (req, res) => {
   }
 };
 
-// ✅ Verify Email Endpoint
+
 exports.verifyEmail = async (req, res) => {
   try {
     const { token } = req.params;
@@ -2014,7 +1931,7 @@ exports.verifyEmail = async (req, res) => {
   }
 };
 
-// ✅ Refresh Token Endpoint
+
 exports.refreshToken = async (req, res) => {
   try {
     const { refreshToken } = req.body;
@@ -2030,7 +1947,7 @@ exports.refreshToken = async (req, res) => {
       return errorResponse(res, 404, "User not found");
     }
 
-    // Generate new access token
+    
     const newToken = jwt.sign(
       {
         userId: user._id,
@@ -2062,16 +1979,16 @@ exports.refreshToken = async (req, res) => {
   }
 };
 
-// ✅ Logout Endpoint
+
 exports.logout = async (req, res) => {
   try {
-    // Clear HTTP-only cookie
+    
     res.clearCookie('auth_token');
     
-    // Optionally blacklist token if using token blacklist
+    
     const token = req.headers.authorization?.split(' ')[1];
     if (token) {
-      // Add to blacklist (implement Redis/memory store)
+      
       await blacklistToken(token, '1d');
     }
 
@@ -2086,31 +2003,24 @@ exports.logout = async (req, res) => {
   }
 };
 
-// ✅ Get Company Details by Identifier
+
 exports.getCompanyDetailsByIdentifier = async (req, res) => {
   try {
     const { identifier } = req.params;
     const rawIdentifier = identifier ? String(identifier).trim() : '';
     
-    console.log('🔍 Fetching company for identifier:', identifier);
+    void 0;
     
-    // Clean and normalize the identifier
-    if (!rawIdentifier) {
-      return res.status(400).json({
-        success: false,
-        message: 'Company identifier is required'
-      });
-    }
-
-    const cleanIdentifier = rawIdentifier.toLowerCase();
     
-    // Multiple ways to find company:
+    const cleanIdentifier = identifier.trim().toLowerCase();
+    
+    
     const company = await Company.findOne({
       $or: [
-        // Direct company code match
+        
         { companyCode: cleanIdentifier.toUpperCase() },
         
-        // Match from loginUrl (extract code from URL patterns)
+        
         { 
           loginUrl: { 
             $regex: escapeRegExp(cleanIdentifier).replace(/-/g, '.*'), 
@@ -2118,10 +2028,10 @@ exports.getCompanyDetailsByIdentifier = async (req, res) => {
           } 
         },
         
-        // Match dbIdentifier
+        
         { dbIdentifier: cleanIdentifier },
         
-        // Match extracted code from URL pattern like "company-xxxxxx"
+        
         {
           $expr: {
             $regexMatch: {
@@ -2134,7 +2044,7 @@ exports.getCompanyDetailsByIdentifier = async (req, res) => {
     }).select('-loginToken -__v');
 
     if (!company) {
-      console.log('❌ Company not found for identifier:', cleanIdentifier);
+      void 0;
       return res.status(404).json({
         success: false,
         message: 'Company not found',
@@ -2142,7 +2052,7 @@ exports.getCompanyDetailsByIdentifier = async (req, res) => {
       });
     }
 
-    // Check if company is active
+    
     if (!company.isActive) {
       return res.status(403).json({
         success: false,
@@ -2151,7 +2061,7 @@ exports.getCompanyDetailsByIdentifier = async (req, res) => {
       });
     }
 
-    // Check subscription expiry
+    
     if (new Date() > new Date(company.subscriptionExpiry)) {
       return res.status(403).json({
         success: false,
@@ -2160,7 +2070,7 @@ exports.getCompanyDetailsByIdentifier = async (req, res) => {
       });
     }
 
-    console.log('✅ Company found:', company.companyName);
+    void 0;
     
     res.json({
       success: true,
@@ -2193,7 +2103,7 @@ exports.getCompanyDetailsByIdentifier = async (req, res) => {
   }
 };
 
-// ✅ Test API Endpoint
+
 exports.testAPI = async (req, res) => {
   try {
     return res.status(200).json({
@@ -2233,7 +2143,7 @@ exports.testAPI = async (req, res) => {
   }
 };
 
-// Helper function to send welcome email
+
 const sendWelcomeEmail = async (email, name, companyName) => {
   try {
     await sendEmail(
@@ -2261,11 +2171,11 @@ const sendWelcomeEmail = async (email, name, companyName) => {
   }
 };
 
-// Helper function to blacklist token
+
 const blacklistToken = async (token, expiry) => {
-  // Implement your token blacklist logic here
-  // This could use Redis, MongoDB, or in-memory storage
-  console.log(`Token blacklisted: ${token.substring(0, 20)}...`);
+  
+  
+  void 0;
 };
 
-console.log("✅ authController.js loaded successfully");
+void 0;

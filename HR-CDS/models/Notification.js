@@ -59,13 +59,13 @@ const notificationSchema = new mongoose.Schema({
   createdAt: {
     type: Date,
     default: Date.now,
-    expires: 30 * 24 * 60 * 60 // 30 days ke baad auto-delete
+    expires: 30 * 24 * 60 * 60 
   }
 }, {
   timestamps: true
 });
 
-// Indexes for faster queries
+
 notificationSchema.index({ recipient: 1, createdAt: -1 });
 notificationSchema.index({ recipient: 1, isRead: 1 });
 notificationSchema.index({ type: 1, createdAt: -1 });

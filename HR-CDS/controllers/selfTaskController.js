@@ -1,4 +1,4 @@
-// controllers/selfTaskController.js
+
 const {
   Task,
   parsePositiveInt,
@@ -20,7 +20,7 @@ const {
   sharp
 } = require('./taskHelper');
 
-// Helper to fetch personal tasks list
+
 const fetchPersonalTaskList = async (req) => {
   const companyCode = req.user.companyCode;
   const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
@@ -37,7 +37,7 @@ const fetchPersonalTaskList = async (req) => {
   return enriched.map(t => ({ ...t, status: normalizeTaskStatus(t.overallStatus), taskSource: 'self', __taskSource: 'self' }));
 };
 
-// Create a task for self
+
 exports.createTaskForSelf = async (req, res) => {
   try {
     const { title, description, dueDateTime, whatsappNumber, priorityDays, priority } = req.body;
@@ -88,7 +88,7 @@ exports.createTaskForSelf = async (req, res) => {
   }
 };
 
-// Get personal tasks
+
 exports.getPersonalTasks = async (req, res) => {
   try {
     const list = await fetchPersonalTaskList(req);
@@ -98,7 +98,7 @@ exports.getPersonalTasks = async (req, res) => {
   }
 };
 
-// Get personal task stats
+
 exports.getPersonalTaskStats = async (req, res) => {
   try {
     const list = applyCleanListFilters(await fetchPersonalTaskList(req), req);
@@ -108,7 +108,7 @@ exports.getPersonalTaskStats = async (req, res) => {
   }
 };
 
-// Update personal task
+
 exports.updateTask = async (req, res) => {
   try {
     const { taskId } = req.params;
@@ -139,7 +139,7 @@ exports.updateTask = async (req, res) => {
   }
 };
 
-// Delete personal task
+
 exports.deleteTask = async (req, res) => {
   try {
     const { taskId } = req.params;
@@ -157,7 +157,7 @@ exports.deleteTask = async (req, res) => {
   }
 };
 
-// Update status
+
 exports.updateStatus = async (req, res) => {
   try {
     const { taskId } = req.params;
@@ -195,7 +195,7 @@ exports.updateStatus = async (req, res) => {
   }
 };
 
-// Remarks
+
 exports.addRemark = async (req, res) => {
   try {
     const { taskId } = req.params;

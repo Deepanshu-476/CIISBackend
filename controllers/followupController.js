@@ -4,12 +4,12 @@ exports.createFollowUp = async (req, res) => {
   try {
     const { leadId, note } = req.body;
 
-    // Auto-set date to tomorrow at 10:00 AM IST
+    
     const now = new Date();
     const istOffset = 5.5 * 60 * 60000;
     const tomorrowIST = new Date(now.getTime() + istOffset);
     tomorrowIST.setUTCDate(tomorrowIST.getUTCDate() + 1);
-    tomorrowIST.setUTCHours(4, 30, 0, 0); // 10:00 AM IST in UTC
+    tomorrowIST.setUTCHours(4, 30, 0, 0); 
 
     const follow = await FollowUp.create({
       lead: leadId,
@@ -29,8 +29,8 @@ exports.getTodayFollowUps = async (req, res) => {
   try {
     const now = new Date();
 
-    // Create today's midnight in IST
-    const istOffset = 5.5 * 60 * 60000; // 5.5 hours in ms
+    
+    const istOffset = 5.5 * 60 * 60000; 
     const localMidnight = new Date(now.getTime() + istOffset);
     localMidnight.setUTCHours(0, 0, 0, 0);
 
@@ -38,8 +38,8 @@ exports.getTodayFollowUps = async (req, res) => {
     const tomorrowIST = new Date(todayIST);
     tomorrowIST.setDate(todayIST.getDate() + 1);
 
-    console.log("Agent:", req.user.id);
-    console.log("Searching between:", todayIST.toISOString(), "and", tomorrowIST.toISOString());
+    void 0;
+    void 0;
 
     const followUps = await FollowUp.find({
       agent: req.user.id,
@@ -65,4 +65,4 @@ exports.completeFollowUp = async (req, res) => {
 
 
 
-console.log("✅ followupController.js loaded successfully");
+void 0;

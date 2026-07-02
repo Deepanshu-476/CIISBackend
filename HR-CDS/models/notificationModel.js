@@ -40,5 +40,5 @@ const notificationSchema = new mongoose.Schema({
 notificationSchema.index({ user: 1, isRead: 1 });
 notificationSchema.index({ createdAt: -1 });
 
-// ✅ FIX: Always export model like this:
+
 module.exports = mongoose.models.Notification || mongoose.model("Notification", notificationSchema);

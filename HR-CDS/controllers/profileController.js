@@ -5,7 +5,7 @@ exports.getUserProfile = async (req, res) => {
     const requestedUserId = req.params.id;
     const loggedInUser = req.user;
 
-    // Only allow the user themself or admin to access the profile
+    
     if (requestedUserId !== loggedInUser._id.toString() && loggedInUser.role !== 'admin') {
       return res.status(403).json({ success: false, message: 'Unauthorized access' });
     }
@@ -22,4 +22,4 @@ exports.getUserProfile = async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error' });
   }
 };
-console.log("✅ profileController.js loaded successfully");
+void 0;

@@ -2,18 +2,19 @@ const Group = require('../models/Group');
 const Task = require('../models/Task');
 const User = require('../../models/User');
 const {notifyDirectUsers} = require('../utils/systemNotificationService');
+const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
 
-// Create a new group
+
 exports.createGroup = async (req, res) => {
   try {
     const { name, description, members } = req.body;
 
-    // Validate required fields
+    
     if (!name) {
       return res.status(400).json({ error: 'Group name is required' });
     }
 
-    // Check if group name already exists for this user
+    
     const existingGroup = await Group.findOne({
       name,
       createdBy: req.user._id,
@@ -24,7 +25,7 @@ exports.createGroup = async (req, res) => {
       return res.status(400).json({ error: 'Group name already exists' });
     }
 
-    // Validate members
+    
     const validMembers = Array.isArray(members) ? members : [];
     if (validMembers.length > 0) {
       const usersExist = await User.find({ 
@@ -50,7 +51,7 @@ exports.createGroup = async (req, res) => {
       createdBy: req.user._id
     });
 
-    // Populate member details for response
+    
     await group.populate('members', 'name role email');
 
     notifyDirectUsers({
@@ -80,22 +81,33 @@ exports.createGroup = async (req, res) => {
   }
 };
 
-// Get all groups for the current user
+
 exports.getGroups = async (req, res) => {
   try {
-    const groups = await Group.find({
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
+    const filter = {
       isActive: true,
       $or: [
         { createdBy: req.user._id },
         { members: req.user._id }
       ]
-    })
-    .populate('members', 'name role email')
-    .sort({ createdAt: -1 });
+    };
+    const [groups, total] = await Promise.all([
+      Group.find(filter)
+        .populate('members', 'name role email')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Group.countDocuments(filter)
+    ]);
 
     res.json({
       success: true,
-      groups
+      groups,
+      count: groups.length,
+      total,
+      pagination: buildPaginationMeta({ page, limit, total })
     });
 
   } catch (error) {
@@ -104,7 +116,7 @@ exports.getGroups = async (req, res) => {
   }
 };
 
-// Get group by ID
+
 exports.getGroupById = async (req, res) => {
   try {
     const { groupId } = req.params;
@@ -133,7 +145,7 @@ exports.getGroupById = async (req, res) => {
   }
 };
 
-// Update group
+
 exports.updateGroup = async (req, res) => {
   try {
     const { groupId } = req.params;
@@ -149,7 +161,7 @@ exports.updateGroup = async (req, res) => {
       return res.status(404).json({ error: 'Group not found' });
     }
 
-    // Check if group name already exists (excluding current group)
+    
     if (name && name !== group.name) {
       const existingGroup = await Group.findOne({
         name,
@@ -163,7 +175,7 @@ exports.updateGroup = async (req, res) => {
       }
     }
 
-    // Validate members if provided
+    
     if (members && Array.isArray(members)) {
       const usersExist = await User.find({ 
         _id: { $in: members } 
@@ -176,7 +188,7 @@ exports.updateGroup = async (req, res) => {
 
     const previousMembers = (group.members || []).map(member => member.toString());
 
-    // Update group
+    
     if (name) group.name = name;
     if (description !== undefined) group.description = description;
     if (members !== undefined) group.members = members;
@@ -214,7 +226,7 @@ exports.updateGroup = async (req, res) => {
   }
 };
 
-// Delete group (soft delete)
+
 exports.deleteGroup = async (req, res) => {
   try {
     const { groupId } = req.params;
@@ -229,7 +241,7 @@ exports.deleteGroup = async (req, res) => {
       return res.status(404).json({ error: 'Group not found' });
     }
 
-    // Check if group is used in any tasks
+    
     const tasksWithGroup = await Task.findOne({
       assignedGroups: groupId,
       createdBy: req.user._id
@@ -242,7 +254,7 @@ exports.deleteGroup = async (req, res) => {
       });
     }
 
-    // Soft delete
+    
     group.isActive = false;
     await group.save();
 
@@ -257,7 +269,7 @@ exports.deleteGroup = async (req, res) => {
   }
 };
 
-// Add members to group
+
 exports.addMembersToGroup = async (req, res) => {
   try {
     const { groupId } = req.params;
@@ -277,7 +289,7 @@ exports.addMembersToGroup = async (req, res) => {
       return res.status(404).json({ error: 'Group not found' });
     }
 
-    // Validate new members
+    
     const usersExist = await User.find({ 
       _id: { $in: members } 
     }).select('_id');
@@ -286,7 +298,7 @@ exports.addMembersToGroup = async (req, res) => {
       return res.status(400).json({ error: 'Some users do not exist' });
     }
 
-    // Add new members (avoid duplicates)
+    
     const newMembers = members.filter(memberId => 
       !group.members.includes(memberId)
     );
@@ -326,7 +338,7 @@ exports.addMembersToGroup = async (req, res) => {
   }
 };
 
-// Remove member from group
+
 exports.removeMemberFromGroup = async (req, res) => {
   try {
     const { groupId, userId } = req.params;
@@ -341,13 +353,13 @@ exports.removeMemberFromGroup = async (req, res) => {
       return res.status(404).json({ error: 'Group not found' });
     }
 
-    // Check if user is a member
+    
     const memberIndex = group.members.indexOf(userId);
     if (memberIndex === -1) {
       return res.status(400).json({ error: 'User is not a member of this group' });
     }
 
-    // Remove member
+    
     group.members.splice(memberIndex, 1);
     await group.save();
     await group.populate('members', 'name role email');
@@ -364,13 +376,13 @@ exports.removeMemberFromGroup = async (req, res) => {
   }
 };
 
-// Get groups available for task assignment
+
 exports.getAssignableGroups = async (req, res) => {
   try {
     const groups = await Group.find({
       createdBy: req.user._id,
       isActive: true,
-      'members.0': { $exists: true } // Only groups with at least one member
+      'members.0': { $exists: true } 
     })
     .populate('members', 'name role')
     .select('name description members')
@@ -386,4 +398,4 @@ exports.getAssignableGroups = async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 };
-console.log("✅ groupController.js loaded successfully");
+void 0;

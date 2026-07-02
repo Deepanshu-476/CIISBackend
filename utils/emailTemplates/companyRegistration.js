@@ -1,4 +1,4 @@
-// utils/emailTemplates/companyRegistration.js
+
 
 const getCompanyRegistrationEmailTemplate = (companyData, ownerData, isOwnerEmail = false) => {
   const recipientType = isOwnerEmail ? 'Owner' : 'Company';

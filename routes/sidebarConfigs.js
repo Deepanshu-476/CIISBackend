@@ -1,4 +1,4 @@
-// routes/sidebar.js
+
 const express = require('express');
 const router = express.Router();
 const SidebarConfig = require('../models/SidebarConfig');
@@ -26,7 +26,7 @@ const filterMenuItemsByCompanyAccess = async (companyId, menuItems) => {
   ));
 };
 
-// ✅ GET all sidebar configs
+
 router.get('/', async (req, res) => {
   try {
     const { companyId, branchId, departmentId, role } = req.query;
@@ -68,7 +68,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// ✅ GET config for specific combination
+
 router.get('/config', async (req, res) => {
   try {
     const { companyId, branchId, departmentId, role } = req.query;
@@ -121,14 +121,14 @@ router.get('/config', async (req, res) => {
   }
 });
 
-// ✅ CREATE new sidebar config
+
 router.post('/', async (req, res) => {
   try {
     const { companyId, branchId, departmentId, role, menuItems } = req.body;
     
-    console.log('Creating config:', { companyId, branchId, departmentId, role, menuItemsCount: menuItems?.length });
+    void 0;
     
-    // Validate required fields
+    
     if (!companyId || !departmentId || !role || !menuItems) {
       return res.status(400).json({
         success: false,
@@ -136,7 +136,7 @@ router.post('/', async (req, res) => {
       });
     }
     
-    // Validate ObjectIds
+    
     if (!mongoose.Types.ObjectId.isValid(companyId)) {
       return res.status(400).json({
         success: false,
@@ -160,7 +160,7 @@ router.post('/', async (req, res) => {
       });
     }
 
-    // Check if config already exists
+    
     const query = { companyId, departmentId, role };
     if (branchId) query.branchId = branchId;
 
@@ -174,7 +174,7 @@ router.post('/', async (req, res) => {
       });
     }
     
-    // Create new config
+    
     const newConfig = new SidebarConfig({
       companyId,
       branchId: branchId || null,
@@ -185,7 +185,7 @@ router.post('/', async (req, res) => {
     
     const savedConfig = await newConfig.save();
     
-    // Populate references
+    
     const populatedConfig = await SidebarConfig.findById(savedConfig._id)
       .populate('companyId', 'companyName companyCode')
       .populate('departmentId', 'name');
@@ -198,7 +198,7 @@ router.post('/', async (req, res) => {
   } catch (error) {
     console.error('Error creating config:', error);
     
-    // Handle duplicate key error
+    
     if (error.code === 11000) {
       return res.status(409).json({
         success: false,
@@ -206,7 +206,7 @@ router.post('/', async (req, res) => {
       });
     }
     
-    // Handle validation errors
+    
     if (error.name === 'ValidationError') {
       const messages = Object.values(error.errors).map(err => err.message);
       return res.status(400).json({
@@ -224,7 +224,7 @@ router.post('/', async (req, res) => {
   }
 });
 
-// ✅ UPDATE existing config
+
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -283,7 +283,7 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-// ✅ DELETE config
+
 router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -311,7 +311,7 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// ✅ Get user's sidebar config
+
 router.get('/user-config', async (req, res) => {
   try {
     const { companyId, branchId, departmentId, role } = req.query;
@@ -361,11 +361,11 @@ router.get('/user-config', async (req, res) => {
   }
 });
 router.get("/test", (req, res) => {
-  console.log("Debug user info:", req.user);
+  void 0;
   res.json({
     success: true,
     user: req.user
   });
 });
 module.exports = router;
-console.log("✅ sidebarConfigs.js loaded successfully");
+void 0;

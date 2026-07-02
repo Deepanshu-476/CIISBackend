@@ -5,12 +5,12 @@ const { protect, authorize } = require('../../middleware/authMiddleware');
 const { check } = require("express-validator");
 const { uploadRemarkImage } = require('../middlewares/uploadMiddleware');
 
-// ==================== NOTIFICATION ROUTES ====================
+
 router.get("/notifications", protect, projectController.getUserNotifications);
 router.patch("/notifications/:notificationId/read", protect, projectController.markNotificationAsRead);
 router.delete("/notifications/clear", protect, projectController.clearAllNotifications);
 
-// ==================== PROJECT CRUD ROUTES ====================
+
 router.get("/", protect, projectController.listProjects);
 router.get("/:id", protect, projectController.getProjectById);
 
@@ -34,13 +34,13 @@ router.put("/:id", protect, [
 
 router.delete("/:id", protect, projectController.deleteProject);
 
-// ==================== TASK CRUD ROUTES ====================
+
 router.post("/:id/tasks", protect, projectController.addTask);
 
 router.patch("/:id/tasks/:taskId", protect, projectController.updateTask);
 router.delete("/:id/tasks/:taskId", protect, projectController.deleteTask);
 
-// ==================== TASK STATUS & ACTIVITY ROUTES ====================
+
 router.patch("/:projectId/tasks/:taskId/status", protect, [
   check("status").notEmpty().withMessage("Status is required")
 ], projectController.updateTaskStatus);
@@ -49,30 +49,30 @@ router.get("/:projectId/tasks/:taskId/activity", protect, projectController.getT
 router.get("/:projectId/tasks/:taskId/remarks", protect, projectController.getTaskRemarks);
 router.post("/:projectId/tasks/:taskId/remarks", protect, uploadRemarkImage, projectController.addRemark);
 
-// ==================== DEBUG/UTILITY ROUTES ====================
+
 router.get("/:id/users", protect, projectController.getProjectUsers);
 router.post("/:projectId/users", protect, projectController.addUserToProject);
 
-// ==================== 🧪 TEST ROUTES ====================
 
-// ✅ TEST: Project System Health Check
+
+
 router.get("/test/system-health", protect, async (req, res) => {
   try {
     const Project = require("../models/Project");
     
     const currentUser = req.user;
     
-    // Get statistics
+    
     const totalProjects = await Project.countDocuments();
     const userProjects = await Project.countDocuments({ users: currentUser._id });
     const activeProjects = await Project.countDocuments({ status: "active" });
     
-    // Test database connection
+    
     const testProject = await Project.findOne().select('projectName').lean();
     
-    // Check user permissions
+    
     const isAdmin = ['admin', 'super-admin'].includes(currentUser.role);
-    const canCreateProjects = true; // All authenticated users can create projects
+    const canCreateProjects = true; 
     const canDeleteProjects = isAdmin;
     
     res.status(200).json({
@@ -120,7 +120,7 @@ router.get("/test/system-health", protect, async (req, res) => {
   }
 });
 
-// ✅ TEST: Create Test Project
+
 router.post("/test/create-test-project", protect, async (req, res) => {
   try {
     const Project = require("../models/Project");
@@ -128,30 +128,30 @@ router.post("/test/create-test-project", protect, async (req, res) => {
     
     const currentUser = req.user;
     
-    // Get current user details
+    
     const userFromDB = await User.findById(currentUser._id)
       .select('name email company')
       .lean();
     
-    // Create test project data
+    
     const timestamp = Date.now();
     const testProjectData = {
       projectName: `Test Project ${timestamp}`,
       description: `This is a test project created for system verification. Created at: ${new Date().toLocaleString()}`,
-      users: [currentUser._id], // Only creator
+      users: [currentUser._id], 
       createdBy: currentUser._id,
       startDate: new Date(),
-      endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days from now
+      endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), 
       priority: "medium",
       status: "active",
       isTestProject: true,
       testCreatedAt: new Date()
     };
     
-    // Create test project
+    
     const testProject = await Project.create(testProjectData);
     
-    // Populate for response
+    
     const populatedProject = await Project.findById(testProject._id)
       .populate('users', 'name email')
       .populate('createdBy', 'name email')
@@ -183,7 +183,7 @@ router.post("/test/create-test-project", protect, async (req, res) => {
   }
 });
 
-// ✅ TEST: Bulk Create Test Projects
+
 router.post("/test/bulk-test-projects", protect, async (req, res) => {
   try {
     const Project = require("../models/Project");
@@ -192,7 +192,7 @@ router.post("/test/bulk-test-projects", protect, async (req, res) => {
     
     const currentUser = req.user;
     
-    // Get some other users for project assignment
+    
     const otherUsers = await User.find({ 
       _id: { $ne: currentUser._id },
       isActive: true 
@@ -203,7 +203,7 @@ router.post("/test/bulk-test-projects", protect, async (req, res) => {
     
     const allUserIds = [currentUser._id, ...otherUsers.map(u => u._id)];
     
-    // Project templates
+    
     const projectTemplates = [
       {
         name: "Website Development",
@@ -232,7 +232,7 @@ router.post("/test/bulk-test-projects", protect, async (req, res) => {
       }
     ];
     
-    // Create test projects
+    
     const testProjects = [];
     const baseTimestamp = Date.now();
     
@@ -240,7 +240,7 @@ router.post("/test/bulk-test-projects", protect, async (req, res) => {
       const template = projectTemplates[i % projectTemplates.length];
       const timestamp = baseTimestamp + i;
       
-      // Select random users for this project (1-3 users)
+      
       const shuffledUsers = [...allUserIds].sort(() => 0.5 - Math.random());
       const projectUsers = shuffledUsers.slice(0, Math.floor(Math.random() * 3) + 1);
       
@@ -250,7 +250,7 @@ router.post("/test/bulk-test-projects", protect, async (req, res) => {
         users: projectUsers,
         createdBy: currentUser._id,
         startDate: new Date(),
-        endDate: new Date(Date.now() + (i * 7) * 24 * 60 * 60 * 1000), // i weeks from now
+        endDate: new Date(Date.now() + (i * 7) * 24 * 60 * 60 * 1000), 
         priority: template.priority,
         status: i % 2 === 0 ? "active" : "planning",
         isTestProject: true,
@@ -261,7 +261,7 @@ router.post("/test/bulk-test-projects", protect, async (req, res) => {
       testProjects.push(testProject);
     }
     
-    // Insert all test projects
+    
     const createdProjects = await Project.insertMany(testProjects);
     
     res.status(201).json({
@@ -298,14 +298,14 @@ router.post("/test/bulk-test-projects", protect, async (req, res) => {
   }
 });
 
-// ✅ TEST: Cleanup Test Projects
+
 router.delete("/test/cleanup-test-projects", protect, async (req, res) => {
   try {
     const Project = require("../models/Project");
     
     const currentUser = req.user;
     
-    // Delete all test projects created by current user
+    
     const result = await Project.deleteMany({
       createdBy: currentUser._id,
       isTestProject: true
@@ -330,7 +330,7 @@ router.delete("/test/cleanup-test-projects", protect, async (req, res) => {
   }
 });
 
-// ✅ TEST: Project Permissions Test
+
 router.get("/test/permissions-test", protect, async (req, res) => {
   try {
     const Project = require("../models/Project");
@@ -339,14 +339,14 @@ router.get("/test/permissions-test", protect, async (req, res) => {
     const userRole = currentUser.role?.toLowerCase() || 'user';
     const isAdmin = ['admin', 'super-admin'].includes(userRole);
     
-    // Get project statistics
+    
     const totalProjects = await Project.countDocuments();
     const userProjects = await Project.countDocuments({ users: currentUser._id });
     const createdProjects = await Project.countDocuments({ createdBy: currentUser._id });
     
-    // Test permissions
+    
     const permissions = {
-      canCreateProjects: true, // All authenticated users
+      canCreateProjects: true, 
       canDeleteProjects: isAdmin,
       canUpdateAnyProject: isAdmin,
       canViewAllProjects: isAdmin,
@@ -355,7 +355,7 @@ router.get("/test/permissions-test", protect, async (req, res) => {
       canUpdateTaskStatus: true
     };
     
-    // Get sample projects for testing
+    
     const sampleProjects = await Project.find(
       isAdmin ? {} : { users: currentUser._id }
     )
@@ -406,7 +406,7 @@ router.get("/test/permissions-test", protect, async (req, res) => {
   }
 });
 
-// ✅ TEST: Create Test Project with Tasks
+
 router.post("/test/create-project-with-tasks", protect, async (req, res) => {
   try {
     const Project = require("../models/Project");
@@ -415,7 +415,7 @@ router.post("/test/create-project-with-tasks", protect, async (req, res) => {
     const currentUser = req.user;
     const { taskCount = 3 } = req.body;
     
-    // Create test project
+    
     const timestamp = Date.now();
     const testProject = new Project({
       projectName: `Test Project with Tasks ${timestamp}`,
@@ -423,14 +423,14 @@ router.post("/test/create-project-with-tasks", protect, async (req, res) => {
       users: [currentUser._id],
       createdBy: currentUser._id,
       startDate: new Date(),
-      endDate: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000), // 15 days
+      endDate: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000), 
       priority: "high",
       status: "active",
       isTestProject: true,
       testType: "with-tasks"
     });
     
-    // Add test tasks
+    
     const taskTitles = [
       "Design user interface",
       "Implement backend API",
@@ -449,7 +449,7 @@ router.post("/test/create-project-with-tasks", protect, async (req, res) => {
         title: `Task ${i}: ${taskTitles[i % taskTitles.length]}`,
         description: `This is test task ${i} for project verification`,
         assignedTo: currentUser._id,
-        dueDate: new Date(Date.now() + (i * 2) * 24 * 60 * 60 * 1000), // i*2 days from now
+        dueDate: new Date(Date.now() + (i * 2) * 24 * 60 * 60 * 1000), 
         priority: i % 3 === 0 ? "high" : i % 3 === 1 ? "medium" : "low",
         status: taskStatuses[i % taskStatuses.length],
         createdBy: currentUser._id,
@@ -465,7 +465,7 @@ router.post("/test/create-project-with-tasks", protect, async (req, res) => {
     
     await testProject.save();
     
-    // Populate for response
+    
     const populatedProject = await Project.findById(testProject._id)
       .populate('users', 'name email')
       .populate('createdBy', 'name email')
@@ -509,12 +509,12 @@ router.post("/test/create-project-with-tasks", protect, async (req, res) => {
   }
 });
 
-// ✅ TEST: Project Model Schema Check
+
 router.get("/test/model-schema", protect, async (req, res) => {
   try {
     const Project = require("../models/Project");
     
-    // Get schema information
+    
     const projectSchema = Project.schema;
     const schemaPaths = projectSchema.paths;
     
@@ -532,10 +532,10 @@ router.get("/test/model-schema", protect, async (req, res) => {
       };
     });
     
-    // Check for important fields
+    
     const missingFields = importantFields.filter(field => !(field in fields));
     
-    // Get sample data stats
+    
     const totalProjects = await Project.countDocuments();
     const projectsWithTasks = await Project.countDocuments({ 'tasks.0': { $exists: true } });
     const activeProjects = await Project.countDocuments({ status: 'active' });
@@ -580,7 +580,7 @@ router.get("/test/model-schema", protect, async (req, res) => {
   }
 });
 
-// ==================== ERROR HANDLING ====================
+
 router.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).json({

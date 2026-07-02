@@ -1,4 +1,4 @@
-// socket/middleware/authSocket.js
+
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
@@ -8,27 +8,27 @@ const authSocket = async (socket, next) => {
                   socket.handshake.headers.authorization?.split(' ')[1];
     
     if (!token) {
-      console.log('❌ Socket auth: No token provided');
+      void 0;
       return next(new Error('Authentication token required'));
     }
   
-    // Verify token
+    
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     
-    // Get user from database
+    
     const user = await User.findById(decoded.id).select('-password');
     
     if (!user) {
-      console.log('❌ Socket auth: User not found');
+      void 0;
       return next(new Error('User not found'));
     }
 
-    // Attach user to socket
+    
     socket.user = user;
     socket.userId = user._id.toString();
     socket.companyId = user.company?.toString() || user.companyId?.toString();
 
-    console.log(`✅ Socket authenticated: ${user.name} (${user._id})`);
+    void 0;
     
     next();
   } catch (error) {

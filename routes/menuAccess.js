@@ -2,7 +2,7 @@
   const router = express.Router();
   const MenuAccess = require('../models/MenuAccess');
 
-  // Get menu access for specific department and job role
+  
   router.get('/', async (req, res) => {
     try {
       const { department, jobRole } = req.query;
@@ -16,7 +16,7 @@
       if (access) {
         res.json(access);
       } else {
-        // Return default access if not configured
+        
         res.json({
           department,
           jobRole,
@@ -29,12 +29,12 @@
     }
   });
 
-  // Save/Update menu access
+  
   router.post('/', async (req, res) => {
     try {
       const { department, jobRole, accessItems, updatedBy } = req.body;
       
-      // Validation
+      
       if (!department || !jobRole || !accessItems || !Array.isArray(accessItems) || !updatedBy) {
         return res.status(400).json({ error: 'Missing required fields' });
       }
@@ -62,7 +62,7 @@
     }
   });
 
-  // Update existing configuration
+  
   router.put('/:id', async (req, res) => {
     try {
       const { id } = req.params;
@@ -92,7 +92,7 @@
     }
   });
 
-  // Delete configuration
+  
   router.delete('/:id', async (req, res) => {
     try {
       const menuAccess = await MenuAccess.findByIdAndDelete(req.params.id);
@@ -107,7 +107,7 @@
     }
   });
 
-  // Get all configurations
+  
   router.get('/all', async (req, res) => {
     try {
       const accesses = await MenuAccess.find().sort({ updatedAt: -1 });
@@ -117,7 +117,7 @@
     }
   });
 
-  // Helper function for default access
+  
   function getDefaultAccess(jobRole) {
     const defaults = {
   
@@ -127,7 +127,7 @@
     
     return defaults[jobRole?.toLowerCase()] || defaults.user;
   }
-// Simple health check
+
 router.get('/test', (req, res) => {
   res.json({
     status: 'healthy',

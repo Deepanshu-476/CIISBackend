@@ -1,7 +1,7 @@
 const Notification = require('../models/Notification');
 const User = require('../../models/User');
 
-// 🔹 Get User's Notifications
+
 exports.getMyNotifications = async (req, res) => {
   try {
     const userId = req.user._id;
@@ -47,7 +47,7 @@ exports.getMyNotifications = async (req, res) => {
   }
 };
 
-// 🔹 Mark Notification as Read
+
 exports.markAsRead = async (req, res) => {
   try {
     const { id } = req.params;
@@ -87,7 +87,7 @@ exports.markAsRead = async (req, res) => {
   }
 };
 
-// 🔹 Mark All Notifications as Read
+
 exports.markAllAsRead = async (req, res) => {
   try {
     const userId = req.user._id;
@@ -116,7 +116,7 @@ exports.markAllAsRead = async (req, res) => {
   }
 };
 
-// 🔹 Delete Notification
+
 exports.deleteNotification = async (req, res) => {
   try {
     const { id } = req.params;
@@ -148,7 +148,7 @@ exports.deleteNotification = async (req, res) => {
   }
 };
 
-// 🔹 Get Unread Count
+
 exports.getUnreadCount = async (req, res) => {
   try {
     const userId = req.user._id;

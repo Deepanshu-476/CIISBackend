@@ -17,7 +17,7 @@ const {
   getMeetingHistory
 } = require('../controllers/clientMeetingController');
 
-// Basic CRUD routes
+
 router.get('/', getMeetings);
 router.get('/stats', getMeetingStats);
 router.get('/today', getTodayMeetings);
@@ -35,7 +35,7 @@ router.delete('/:id', deleteMeeting);
 
 
 router.get("/test", (req, res) => {
-  console.log("Debug user info:", req.user);
+  void 0;
   res.json({
     success: true,
     user: req.user

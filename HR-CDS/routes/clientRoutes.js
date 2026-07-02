@@ -45,7 +45,7 @@ const uploadReceipt = multer({
   limits: { fileSize: 10 * 1024 * 1024 }
 });
 
-// ✅ Service Routes
+
 router.get('/services', serviceController.getAllServices);
 router.post('/services', serviceController.addService);
 router.put('/services/:id', serviceController.updateService);
@@ -55,17 +55,17 @@ router.get('/service-enquiries', serviceEnquiryController.getServiceEnquiries);
 router.post('/service-enquiries', serviceEnquiryController.createServiceEnquiry);
 router.patch('/service-enquiries/:id/status', serviceEnquiryController.updateServiceEnquiryStatus);
 
-// ✅ Client Stats Routes
+
 router.get('/stats', getClientStats);
 router.get('/manager-stats', getManagerStats);
 
-// normal routes
+
 router.get('/company/:companyCode', getClientsByCompany);
 router.get('/', getAllClients);
 router.post('/', addClient);
 
 
-// ✅ EXTEND ROUTE
+
 router.post('/:id/extend-subscription', extendClientSubscription);
 router.patch('/renew-subscription/:id', renewClientSubscription);
 router.delete('/subscription/:id', removeClientSubscription);
@@ -74,19 +74,19 @@ router.post('/upload-receipt/:id', uploadReceipt.single('receipt'), uploadClient
 router.patch('/:id/receipt/:receiptId/payment-done', markClientReceiptPaymentDone);
 router.patch('/:id/receipt/:receiptId/status', updateClientReceiptStatus);
 
-// ================= GET RECEIPT IMAGE =================
-// ✅ API to serve receipt images
+
+
 router.get('/receipt-image/:filename', (req, res) => {
   try {
     const { filename } = req.params;
     
-    // Security: Prevent directory traversal attacks
+    
     const safeFilename = path.basename(filename);
     const imagePath = path.join(__dirname, '../uploads/receipts', safeFilename);
     
-    // Check if file exists
+    
     if (fs.existsSync(imagePath)) {
-      // Send file with appropriate headers
+      
       res.sendFile(imagePath, (err) => {
         if (err) {
           console.error('Error sending file:', err);
@@ -111,7 +111,7 @@ router.get('/receipt-image/:filename', (req, res) => {
   }
 });
 
-// ✅ Alternative: Get receipt by client ID and receipt ID
+
 router.get('/client/:clientId/receipt/:receiptId', async (req, res) => {
   try {
     const { clientId, receiptId } = req.params;
@@ -161,24 +161,24 @@ router.get('/client/:clientId/receipt/:receiptId', async (req, res) => {
   }
 });
 
-// ==================== 🧪 TEST ROUTES ====================
 
-// ✅ TEST: Client System Health Check
+
+
 router.get('/test/system-check', async (req, res) => {
   try {
     const Client = require('../models/Client');
     const Service = require('../models/Service');
     
-    // Get statistics
+    
     const totalClients = await Client.countDocuments();
     const totalServices = await Service.countDocuments();
     
-    // Check if any clients have companyCode field
+    
     const clientsWithCompanyCode = await Client.countDocuments({ 
       companyCode: { $exists: true, $ne: '' } 
     });
     
-    // Get sample data
+    
     const sampleClient = await Client.findOne()
       .select('client company companyCode projectManager services status')
       .lean();
@@ -187,7 +187,7 @@ router.get('/test/system-check', async (req, res) => {
       .select('servicename description companyCode price')
       .lean();
     
-    // Check unique company codes
+    
     const uniqueCompanyCodes = await Client.distinct('companyCode');
     
     res.status(200).json({
@@ -231,7 +231,7 @@ router.get('/test/system-check', async (req, res) => {
   }
 });
 
-// ✅ TEST: Create Test Client with Company Code
+
 router.post('/test/create-test-client', async (req, res) => {
   try {
     const Client = require('../models/Client');
@@ -239,7 +239,7 @@ router.post('/test/create-test-client', async (req, res) => {
     
     const { companyCode = 'TEST001', createServices = true } = req.body;
     
-    // Validate company code
+    
     if (!companyCode || companyCode.trim() === '') {
       return res.status(400).json({
         success: false,
@@ -247,7 +247,7 @@ router.post('/test/create-test-client', async (req, res) => {
       });
     }
     
-    // Check if test client already exists
+    
     const existingTestClient = await Client.findOne({
       client: 'Test Client',
       companyCode: companyCode.toUpperCase()
@@ -261,10 +261,10 @@ router.post('/test/create-test-client', async (req, res) => {
       });
     }
     
-    // Create test services if needed
+    
     let testServiceNames = [];
     if (createServices) {
-      // Check if test services exist, create if not
+      
       const testServices = [
         { servicename: 'Web Development', description: 'Website development service', price: 5000 },
         { servicename: 'Mobile App', description: 'Mobile application development', price: 8000 },
@@ -288,7 +288,7 @@ router.post('/test/create-test-client', async (req, res) => {
       }
     }
     
-    // Create test client
+    
     const testClient = new Client({
       client: 'Test Client',
       company: 'Test Company Pvt. Ltd.',
@@ -335,13 +335,13 @@ router.post('/test/create-test-client', async (req, res) => {
   }
 });
 
-// ✅ TEST: Bulk Create Test Clients
+
 router.post('/test/bulk-test-clients', async (req, res) => {
   try {
     const Client = require('../models/Client');
     const { count = 3, companyCode = 'TEST001' } = req.body;
     
-    // Validate company code
+    
     if (!companyCode || companyCode.trim() === '') {
       return res.status(400).json({
         success: false,
@@ -349,10 +349,10 @@ router.post('/test/bulk-test-clients', async (req, res) => {
       });
     }
     
-    // Ensure count is within limits
+    
     const validCount = Math.min(Math.max(1, parseInt(count)), 5);
     
-    // Client templates
+    
     const clientTemplates = [
       {
         client: 'ABC Corporation',
@@ -391,7 +391,7 @@ router.post('/test/bulk-test-clients', async (req, res) => {
       }
     ];
     
-    // Project manager options
+    
     const projectManagers = [
       ['John Doe', 'Jane Smith'],
       ['Robert Johnson', 'Emily Davis'],
@@ -400,14 +400,14 @@ router.post('/test/bulk-test-clients', async (req, res) => {
       ['James Anderson', 'Maria Thomas']
     ];
     
-    // Services options
+    
     const serviceOptions = [
       ['Web Development', 'Consulting', 'Support'],
       ['Mobile App', 'Cloud Services', 'Security'],
       ['Data Analytics', 'AI Solutions', 'Support']
     ];
     
-    // Create test clients
+    
     const testClients = [];
     const timestamp = Date.now();
     
@@ -439,10 +439,10 @@ router.post('/test/bulk-test-clients', async (req, res) => {
       testClients.push(testClientData);
     }
     
-    // Insert all test clients
+    
     const createdClients = await Client.insertMany(testClients);
     
-    // Calculate statistics
+    
     const stats = {
       totalCreated: createdClients.length,
       activeClients: createdClients.filter(c => c.status === 'Active').length,
@@ -481,7 +481,7 @@ router.post('/test/bulk-test-clients', async (req, res) => {
   }
 });
 
-// ✅ TEST: Cleanup Test Clients
+
 router.delete('/test/cleanup-test-clients', async (req, res) => {
   try {
     const Client = require('../models/Client');
@@ -496,13 +496,13 @@ router.delete('/test/cleanup-test-clients', async (req, res) => {
       });
     }
     
-    // Delete test clients
+    
     const clientResult = await Client.deleteMany({
       companyCode: companyCode.toUpperCase(),
       isTestData: true
     });
     
-    // Delete test services only if requested
+    
     let serviceResult = { deletedCount: 0 };
     if (deleteServices === 'true') {
       serviceResult = await Service.deleteMany({
@@ -531,12 +531,12 @@ router.delete('/test/cleanup-test-clients', async (req, res) => {
   }
 });
 
-// ✅ TEST: Company Code Filter Test
+
 router.get('/test/company-filter-test', async (req, res) => {
   try {
     const Client = require('../models/Client');
     
-    // Get all unique company codes
+    
     const companyCodes = await Client.distinct('companyCode');
     
     if (companyCodes.length === 0) {
@@ -552,17 +552,17 @@ router.get('/test/company-filter-test', async (req, res) => {
       });
     }
     
-    // Test each company code
+    
     const testResults = [];
     
-    for (const companyCode of companyCodes.slice(0, 5)) { // Test first 5 company codes
+    for (const companyCode of companyCodes.slice(0, 5)) { 
       if (!companyCode) continue;
       
       const clientsInCompany = await Client.find({ 
         companyCode: companyCode 
       }).countDocuments();
       
-      // Try to access clients from other company (should not see if properly isolated)
+      
       const otherCompanyCode = companyCodes.find(code => code && code !== companyCode);
       let canSeeOtherCompanyData = false;
       
@@ -581,7 +581,7 @@ router.get('/test/company-filter-test', async (req, res) => {
       });
     }
     
-    // Overall assessment
+    
     const securityIssues = testResults.filter(r => r.canSeeOtherCompanyData === 'Yes (possible issue)').length;
     
     res.status(200).json({
@@ -614,12 +614,12 @@ router.get('/test/company-filter-test', async (req, res) => {
   }
 });
 
-// ✅ TEST: Client Model Schema Check
+
 router.get('/test/model-schema', async (req, res) => {
   try {
     const Client = require('../models/Client');
     
-    // Get schema information
+    
     const clientSchema = Client.schema;
     const schemaPaths = clientSchema.paths;
     
@@ -637,11 +637,11 @@ router.get('/test/model-schema', async (req, res) => {
       };
     });
     
-    // Check for important fields
+    
     const missingFields = importantFields.filter(field => !(field in fields));
     const existingImportantFields = importantFields.filter(field => field in fields);
     
-    // Get sample data stats
+    
     const totalClients = await Client.countDocuments();
     const clientsWithCompanyCode = await Client.countDocuments({ companyCode: { $exists: true, $ne: '' } });
     const clientsWithServices = await Client.countDocuments({ 'services.0': { $exists: true } });
@@ -690,7 +690,7 @@ router.get('/test/model-schema', async (req, res) => {
   }
 });
 
-// ✅ TEST: Client Creation with Validation
+
 router.post('/test/validation-test', async (req, res) => {
   try {
     const Client = require('../models/Client');
@@ -753,7 +753,7 @@ router.post('/test/validation-test', async (req, res) => {
     const results = [];
     let validationFailed = false;
     
-    // Create a test for duplicate client
+    
     const duplicateTestData = {
       name: 'Duplicate client for same company',
       data: {
@@ -795,9 +795,9 @@ router.post('/test/validation-test', async (req, res) => {
       }
     }
     
-    // Test duplicate client separately
+    
     try {
-      // Create first client
+      
       const firstClient = new Client({
         ...duplicateTestData.data,
         isTestData: true,
@@ -805,7 +805,7 @@ router.post('/test/validation-test', async (req, res) => {
       });
       await firstClient.save();
       
-      // Try to create duplicate
+      
       try {
         const duplicateClient = new Client({
           ...duplicateTestData.data,
@@ -839,7 +839,7 @@ router.post('/test/validation-test', async (req, res) => {
       });
     }
     
-    // Cleanup test data
+    
     await Client.deleteMany({ testValidation: true });
     
     const passedTests = results.filter(r => r.passed).length;
@@ -859,7 +859,7 @@ router.post('/test/validation-test', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Validation test error:', error);
-    // Clean up any leftover test data
+    
     try {
       const Client = require('../models/Client');
       await Client.deleteMany({ testValidation: true });
@@ -875,7 +875,7 @@ router.post('/test/validation-test', async (req, res) => {
   }
 });
 
-// ✅ ID ROUTES (SABSE LAST)
+
 router.get('/:id', getClientById);
 router.put('/:id', updateClient);
 router.patch('/:id/progress', updateClientProgress);

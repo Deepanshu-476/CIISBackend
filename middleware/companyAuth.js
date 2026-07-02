@@ -1,14 +1,14 @@
-// controllers/companyAuthController.js
+
 const Company = require("../models/Company");
 const User = require("../models/User");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
-// Company-specific login
+
 exports.companyLogin = async (req, res) => {
   try {
     const { email, password } = req.body;
-    const company = req.company; // From middleware
+    const company = req.company; 
 
     if (!email || !password) {
       return res.status(400).json({
@@ -17,7 +17,11 @@ exports.companyLogin = async (req, res) => {
       });
     }
 
-    // Find user in this specific company
+
+
+
+    
+    
     const user = await User.findOne({
       email: email.toLowerCase(),
       company: company._id,
@@ -31,7 +35,7 @@ exports.companyLogin = async (req, res) => {
       });
     }
 
-    // Verify password
+    
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res.status(401).json({
@@ -40,7 +44,7 @@ exports.companyLogin = async (req, res) => {
       });
     }
 
-    // Generate company-specific token
+    
     const token = jwt.sign(
       {
         id: user._id,
@@ -53,7 +57,7 @@ exports.companyLogin = async (req, res) => {
       { expiresIn: process.env.JWT_EXPIRE || "30d" }
     );
 
-    // Update user without password
+    
     const userWithoutPassword = user.toObject();
     delete userWithoutPassword.password;
 
@@ -78,14 +82,14 @@ exports.companyLogin = async (req, res) => {
   }
 };
 
-// Register user in specific company
+
 exports.companyRegister = async (req, res) => {
   try {
     const company = req.company;
     const userData = req.body;
     const createdBy = req.user?.id;
 
-    // Validate email domain (optional)
+    
     if (company.companyDomain) {
       const userDomain = userData.email.split("@")[1];
       if (userDomain !== company.companyDomain) {
@@ -96,7 +100,7 @@ exports.companyRegister = async (req, res) => {
       }
     }
 
-    // Check if user already exists in this company
+    
     const existingUser = await User.findOne({
       email: userData.email.toLowerCase(),
       company: company._id,
@@ -109,7 +113,7 @@ exports.companyRegister = async (req, res) => {
       });
     }
 
-    // Create user with company reference
+    
     const user = await User.create({
       ...userData,
       company: company._id,
@@ -146,13 +150,13 @@ exports.companyRegister = async (req, res) => {
   }
 };
 
-// Get company profile
+
 exports.getCompanyProfile = async (req, res) => {
   try {
     const company = req.company;
     const user = req.user;
 
-    // Count active users in this company
+    
     const userCount = await User.countDocuments({
       company: company._id,
       isActive: true,
@@ -191,7 +195,7 @@ exports.getCompanyProfile = async (req, res) => {
     });
   }
 };
-// ✅ Middleware: Check Company Access
+
 exports.checkCompanyAccess = (req, res, next) => {
   try {
     if (!req.user) {
