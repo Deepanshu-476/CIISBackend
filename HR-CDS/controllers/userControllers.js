@@ -1035,73 +1035,51 @@ exports.getCompanyUsers = async (req, res) => {
       .lean();
     const socketOnlineIds = getSocketOnlineUserIds(companyId);
 
-    
-    const usersWithStats = await Promise.all(
-      users.map(async (user) => {
-        const total = await Task.countDocuments({
-          assignedTo: user._id,
-          company: companyId
-        });
+    const includeStats = req.query.includeStats === 'true';
+    let statsByUser = new Map();
 
-        const completed = await Task.countDocuments({
-          assignedTo: user._id,
-          company: companyId,
-          status: "completed"
-        });
-
-        const completionRate = total > 0 ? Math.round((completed / total) * 100) : 0;
-
-        return {
-          id: user._id,
-          name: user.name,
-          email: user.email,
-          company: user.company,
-          department: user.department,
-          jobRole: user.jobRole,
-          phone: user.phone,
-          address: user.address,
-          gender: user.gender,
-          maritalStatus: user.maritalStatus,
-          dob: user.dob,
-          employeeType: user.employeeType,
-          salary: user.salary,
-          accountNumber: user.accountNumber,
-          ifsc: user.ifsc,
-          bankName: user.bankName,
-          bankHolderName: user.bankHolderName,
-          fatherName: user.fatherName,
-          motherName: user.motherName,
-          spouseName: user.spouseName,
-          children: user.children,
-          documents: user.documents,
-          emergencyName: user.emergencyName,
-          emergencyPhone: user.emergencyPhone,
-          emergencyRelation: user.emergencyRelation,
-          emergencyAddress: user.emergencyAddress,
-          properties: user.properties,
-          propertyOwned: user.propertyOwned,
-          additionalDetails: user.additionalDetails,
-          employeeId: user.employeeId,
-          companyRole: user.companyRole,
-          reportingManager: user.reportingManager,
-          dateOfJoining: user.dateOfJoining,
-          workLocation: user.workLocation,
-          city: user.city,
-          state: user.state,
-          zipCode: user.zipCode,
-          country: user.country,
-          isActive: user.isActive,
-          ...getUserPresence(user, socketOnlineIds),
-          createdAt: user.createdAt,
-          updatedAt: user.updatedAt,
-          taskStats: {
-            total,
-            completed,
-            completionRate
+    // One aggregation replaces two count queries per user. Most task-management
+    // screens do not request stats, so their user list remains a single DB query.
+    if (includeStats && users.length > 0) {
+      const userIds = users.map(user => user._id);
+      const stats = await Task.aggregate([
+        {
+          $match: {
+            companyCode: String(companyCode).trim().toUpperCase(),
+            isActive: true,
+            assignedUsers: { $in: userIds }
           }
-        };
-      })
-    );
+        },
+        { $unwind: '$assignedUsers' },
+        { $match: { assignedUsers: { $in: userIds } } },
+        {
+          $group: {
+            _id: '$assignedUsers',
+            total: { $sum: 1 },
+            completed: {
+              $sum: { $cond: [{ $eq: ['$overallStatus', 'completed'] }, 1, 0] }
+            }
+          }
+        }
+      ]);
+      statsByUser = new Map(stats.map(stat => [stat._id.toString(), stat]));
+    }
+
+    const usersWithStats = users.map(user => {
+      const stats = statsByUser.get(user._id.toString());
+      const total = stats?.total || 0;
+      const completed = stats?.completed || 0;
+      return {
+        ...user,
+        id: user._id,
+        ...getUserPresence(user, socketOnlineIds),
+        taskStats: {
+          total,
+          completed,
+          completionRate: total > 0 ? Math.round((completed / total) * 100) : 0
+        }
+      };
+    });
 
     return successResponse(res, 200, {
       count: usersWithStats.length,
