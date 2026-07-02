@@ -67,6 +67,32 @@ const shouldIncludeInactiveUsers = (query = {}) => {
   return value === true || value === 'true' || value === '1' || value === 'all';
 };
 
+const escapeRegExp = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const getCompanyScope = (req) => {
+  const company = req.user?.company;
+  const companyId = company?._id || company?.id || company;
+  const companyCode = req.user?.companyCode || company?.companyCode;
+  const requestedCompanyCode = req.query?.companyCode?.trim();
+
+  if (!companyId || !companyCode) {
+    return { error: { status: 400, message: "User company information is incomplete" } };
+  }
+
+  if (requestedCompanyCode && requestedCompanyCode.toLowerCase() !== companyCode.toLowerCase()) {
+    return { error: { status: 403, message: "You cannot access another company's users" } };
+  }
+
+  return {
+    companyId,
+    companyCode,
+    filter: {
+      company: companyId,
+      companyCode: new RegExp(`^${escapeRegExp(companyCode)}$`, 'i')
+    }
+  };
+};
+
 
 const USER_FIELDS = {
   
@@ -205,9 +231,20 @@ exports.updateMe = async (req, res) => {
     const updateData = {};
     
     
+    const protectedFields = new Set([
+      '_id',
+      '__v',
+      'company',
+      'companyId',
+      'companyCode',
+      'createdBy',
+      'password',
+      'resetToken',
+      'resetTokenExpiry'
+    ]);
+
     Object.keys(req.body).forEach(key => {
-      
-      if (key !== 'password' && key !== 'resetToken' && key !== 'resetTokenExpiry' && key !== '__v') {
+      if (!protectedFields.has(key)) {
         updateData[key] = req.body[key];
       }
     });
@@ -606,12 +643,6 @@ exports.updateUser = async (req, res) => {
       }
     }
 
-    
-    if (req.body.password) {
-      updateData.password = req.body.password;
-    }
-
-    
     const updatedUser = await User.findByIdAndUpdate(
       id,
       { $set: updateData },
@@ -858,22 +889,19 @@ exports.getCompanydepartmentUsers = async (req, res) => {
       return errorResponse(res, 401, "Authentication required");
     }
     
-    const companyId = currentUser.company;
-    
-    if (!companyId) {
-      return errorResponse(res, 400, "User does not belong to any company");
+    const companyScope = getCompanyScope(req);
+    if (companyScope.error) {
+      return errorResponse(res, companyScope.error.status, companyScope.error.message);
     }
+    const { companyId, companyCode } = companyScope;
     
     void 0;
     
     const requestedDepartment = req.query.department || req.query.departmentId;
 
     const filter = { 
-      company: companyId,
-      companyRole: { 
-        $exists: true,
-        $not: /^client$/i 
-      }
+      ...companyScope.filter,
+      companyRole: { $not: /^client$/i }
     };
 
     if (!shouldIncludeInactiveUsers(req.query)) {
@@ -903,6 +931,7 @@ exports.getCompanydepartmentUsers = async (req, res) => {
     return successResponse(res, 200, {
       company: {
         id: companyId,
+        code: companyCode,
         name: currentUser.companyName || 'Company'
       },
       count: users.length,
@@ -967,18 +996,15 @@ exports.getCompanyUsers = async (req, res) => {
       return errorResponse(res, 401, "Authentication required");
     }
 
-    const companyId = currentUser.company;
-
-    if (!companyId) {
-      return errorResponse(res, 400, "User does not belong to any company");
+    const companyScope = getCompanyScope(req);
+    if (companyScope.error) {
+      return errorResponse(res, companyScope.error.status, companyScope.error.message);
     }
+    const { companyId } = companyScope;
 
     const filter = {
-      company: companyId,
-      companyRole: { 
-        $exists: true,
-        $not: /^client$/i 
-      }
+      ...companyScope.filter,
+      companyRole: { $not: /^client$/i }
     };
 
     if (!shouldIncludeInactiveUsers(req.query)) {

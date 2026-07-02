@@ -136,6 +136,8 @@ clienttaskSchema.index({ clientId: 1, completed: 1 });
 clienttaskSchema.index({ dueDate: 1 });
 clienttaskSchema.index({ assignee: 1 });
 clienttaskSchema.index({ assigneeId: 1 });
+clienttaskSchema.index({ assigneeId: 1, createdAt: -1 });
+clienttaskSchema.index({ assignee: 1, createdAt: -1 });
 clienttaskSchema.index({ status: 1 });
 clienttaskSchema.index({ priority: 1 });
 clienttaskSchema.index({ createdAt: -1 });
