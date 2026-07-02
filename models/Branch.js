@@ -9,11 +9,7 @@ const branchSchema = new mongoose.Schema(
       trim: true,
       maxlength: [100, "Branch name cannot exceed 100 characters"],
     },
-    
-
-
-
-    
+        
     branchCode: {
       type: String,
       required: [true, "Branch code is required"],
