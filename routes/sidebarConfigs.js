@@ -5,6 +5,7 @@ const SidebarConfig = require('../models/SidebarConfig');
 const Company = require('../models/Company');
 const Department = require('../models/Department');
 const Branch = require('../models/Branch');
+const JobRole = require('../models/JobRole');
 const mongoose = require('mongoose');
 
 const getRouteKey = item => {
@@ -24,6 +25,55 @@ const filterMenuItemsByCompanyAccess = async (companyId, menuItems) => {
     allowedSet.has(item.path) ||
     allowedSet.has(getRouteKey(item))
   ));
+};
+
+const escapeRegex = value => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const buildRoleQuery = async (companyId, departmentId, role) => {
+  const roleValue = String(role || '').trim();
+  const aliases = new Set([roleValue]);
+  let jobRole = null;
+
+  if (mongoose.Types.ObjectId.isValid(roleValue)) {
+    jobRole = await JobRole.findOne({
+      _id: roleValue,
+      company: companyId,
+      department: departmentId
+    }).select('_id name');
+  } else {
+    jobRole = await JobRole.findOne({
+      company: companyId,
+      department: departmentId,
+      name: { $regex: `^${escapeRegex(roleValue)}$`, $options: 'i' }
+    }).select('_id name');
+  }
+
+  if (jobRole) {
+    aliases.add(String(jobRole._id));
+    aliases.add(jobRole.name);
+  }
+
+  return {
+    $in: [...aliases].map(value => new RegExp(`^${escapeRegex(value)}$`, 'i'))
+  };
+};
+
+const findSidebarConfig = async ({ companyId, branchId, departmentId, role }) => {
+  const roleQuery = await buildRoleQuery(companyId, departmentId, role);
+  const baseQuery = { companyId, departmentId, role: roleQuery, isActive: { $ne: false } };
+
+  if (branchId) {
+    const branchConfig = await SidebarConfig.findOne({ ...baseQuery, branchId });
+    if (branchConfig) return branchConfig;
+
+    // Older/global assignments did not store a branch.
+    return SidebarConfig.findOne({
+      ...baseQuery,
+      $or: [{ branchId: null }, { branchId: { $exists: false } }]
+    });
+  }
+
+  return SidebarConfig.findOne(baseQuery).sort({ branchId: 1, updatedAt: -1 });
 };
 
 
@@ -90,13 +140,13 @@ router.get('/config', async (req, res) => {
       });
     }
     
-    const query = { companyId, departmentId, role };
-    if (branchId) query.branchId = branchId;
-    
-    const config = await SidebarConfig.findOne(query)
-    .populate('companyId', 'companyName')
-    .populate('branchId', 'name branchCode')
-    .populate('departmentId', 'name');
+    const config = await findSidebarConfig({ companyId, branchId, departmentId, role });
+
+    if (config) {
+      await config.populate('companyId', 'companyName');
+      await config.populate('branchId', 'name branchCode');
+      await config.populate('departmentId', 'name');
+    }
     
     if (!config) {
       return res.json({
@@ -333,10 +383,7 @@ router.get('/user-config', async (req, res) => {
       });
     }
     
-    const query = { companyId, departmentId, role };
-    if (branchId) query.branchId = branchId;
-    
-    const config = await SidebarConfig.findOne(query);
+    const config = await findSidebarConfig({ companyId, branchId, departmentId, role });
     
     if (!config) {
       return res.json({

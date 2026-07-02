@@ -1096,6 +1096,8 @@ exports.verifyLoginOTP = async (req, res) => {
         role: user.role,
         jobRole: user.jobRole,
         department: user.department,
+        branch: user.branch,
+        branchCode: user.branchCode,
         company: user.company?._id,
         companyName: user.company?.companyName,
         companyCode: user.companyCode || (user.company && user.company.companyCode),
