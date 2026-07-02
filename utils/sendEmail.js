@@ -21,18 +21,18 @@ const notifyEmailSent = ({to, subject, options = {}}) => {
 
 const sendEmail = async (to, subject, html, options = {}) => {
   try {
-    // Validate inputs
+    
     if (!to || !subject || !html) {
       throw new Error('Missing required email parameters');
     }
 
-    // Check if email credentials are configured
+    
     if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
       console.error('❌ Email credentials not configured in environment variables');
       throw new Error('Email service not configured');
     }
 
-    // Create transporter with better configuration
+    
     const transporter = nodemailer.createTransport({
       service: 'Gmail',
       auth: {
@@ -40,18 +40,18 @@ const sendEmail = async (to, subject, html, options = {}) => {
         pass: process.env.EMAIL_PASS
       },
       tls: {
-        rejectUnauthorized: false // For development only, remove in production
+        rejectUnauthorized: false 
       },
-      pool: true, // Use connection pooling
+      pool: true, 
       maxConnections: 5,
       maxMessages: 100
     });
 
-    // Verify transporter connection
+    
     await transporter.verify();
-    console.log('✅ Email server is ready to send messages');
+    void 0;
 
-    // Send email
+    
     const info = await transporter.sendMail({
       from: `"CIIS NETWORK" <${process.env.EMAIL_USER}>`,
       to: Array.isArray(to) ? to.join(', ') : to,
@@ -62,14 +62,14 @@ const sendEmail = async (to, subject, html, options = {}) => {
       priority: options.priority || 'normal'
     });
 
-    console.log(`✅ Email sent to ${to} | Message ID: ${info.messageId}`);
+    void 0;
     notifyEmailSent({to, subject, options});
     return { success: true, messageId: info.messageId };
 
   } catch (error) {
     console.error('❌ Error sending email:', error.message);
     
-    // Log more details in development
+    
     if (process.env.NODE_ENV === 'development') {
       console.error('Email error details:', error);
     }
@@ -78,7 +78,7 @@ const sendEmail = async (to, subject, html, options = {}) => {
   }
 };
 
-// Specific email templates for leave management
+
 const emailTemplates = {
   leaveStatusUpdate: (userName, leaveId, status, remarks, updatedBy) => {
     const statusColor = status.toLowerCase() === 'approved' ? '#4CAF50' : 
@@ -165,7 +165,7 @@ const emailTemplates = {
     `;
   },
 
-  // Additional templates for other notifications
+  
   leaveApplied: (userName, leaveId, type, startDate, endDate) => {
     return `
       <!DOCTYPE html>
@@ -241,7 +241,7 @@ const emailTemplates = {
   }
 };
 
-// Helper function to send leave status update email
+
 const sendLeaveStatusEmail = async (userEmail, userName, leaveId, status, remarks, updatedBy) => {
   const subject = `Leave Request ${status} - ID: ${leaveId}`;
   const html = emailTemplates.leaveStatusUpdate(userName, leaveId, status, remarks, updatedBy);
@@ -251,7 +251,7 @@ const sendLeaveStatusEmail = async (userEmail, userName, leaveId, status, remark
   });
 };
 
-// Helper function to send leave applied email
+
 const sendLeaveAppliedEmail = async (userEmail, userName, leaveId, type, startDate, endDate) => {
   const subject = `Leave Application Submitted - ID: ${leaveId}`;
   const html = emailTemplates.leaveApplied(userName, leaveId, type, startDate, endDate);
@@ -265,7 +265,7 @@ const sendLeaveAppliedEmail = async (userEmail, userName, leaveId, type, startDa
   });
 };
 
-// Helper function to send leave deleted email
+
 const sendLeaveDeletedEmail = async (userEmail, userName, leaveId) => {
   const subject = `Leave Request Deleted - ID: ${leaveId}`;
   const html = emailTemplates.leaveDeleted(userName, leaveId);

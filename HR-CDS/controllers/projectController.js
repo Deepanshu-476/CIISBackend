@@ -7,8 +7,9 @@ const {notifyDirectUsers} = require("../utils/systemNotificationService");
 const { sendEmail } = require("../../utils/sendEmail");
 const User = require("../../models/User");
 const mongoose = require("mongoose");
+const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagination");
 
-// Configure storage for file uploads
+
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
     const uploadDir = 'uploads/projects/';
@@ -23,7 +24,7 @@ const storage = multer.diskStorage({
   }
 });
 
-// File filter
+
 const fileFilter = (req, file, cb) => {
   const allowedTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/gif'];
   if (allowedTypes.includes(file.mimetype)) {
@@ -36,15 +37,15 @@ const fileFilter = (req, file, cb) => {
 const upload = multer({ 
   storage: storage,
   fileFilter: fileFilter,
-  limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+  limits: { fileSize: 5 * 1024 * 1024 } 
 });
 
-// Middleware for file upload
+
 const handleFileUpload = upload.single('pdfFile');
 
-// ==========================================
-// 📌 HELPER FUNCTIONS
-// ==========================================
+
+
+
 const normalizeRole = (value = "") => value.toString().trim().toLowerCase().replace(/[_\s]+/g, "-");
 
 const isProjectAdmin = (user = {}) => {
@@ -96,8 +97,8 @@ const projectBelongsToUserCompany = (project, user = {}) => {
   if (projectCompanyId && userCompanyId) return projectCompanyId === userCompanyId;
   if (projectCompanyCode && userCompanyCode) return projectCompanyCode === userCompanyCode;
 
-  // Older projects may not have company fields. In that case, allow the normal
-  // membership/creator checks to keep legacy assigned projects visible.
+  
+  
   return true;
 };
 
@@ -106,17 +107,17 @@ const hasProjectAccess = (project, userId, userRole, user = {}) => {
     return false;
   }
 
-  // Super admin and admin have full access
+  
   if (isProjectAdmin({ role: userRole })) {
     return true;
   }
   
-  // Check if user is in project users array
+  
   const isUserInProject = project.users.some(user => 
     idsEqual(user, userId)
   );
   
-  // Check if user created the project
+  
   const isCreator = idsEqual(project.createdBy, userId);
   
   return isUserInProject || isCreator;
@@ -159,52 +160,12 @@ const sendProjectTaskAssignmentEmail = async ({ user, actorName, taskTitle, proj
   }
 };
 
-const getObjectIdTime = (id) => {
-  const value = String(id || "");
-  if (!/^[a-f\d]{24}$/i.test(value)) return 0;
-  return parseInt(value.slice(0, 8), 16) * 1000;
-};
 
-const getTaskCreatedTime = (task = {}) => {
-  const creationLog = Array.isArray(task.activityLogs)
-    ? task.activityLogs.find(log => log?.type === "creation")
-    : null;
-  const date = new Date(
-    task.createdAt ||
-    task.createdDate ||
-    creationLog?.performedAt ||
-    creationLog?.createdAt ||
-    0
-  );
-  const parsedTime = Number.isNaN(date.getTime()) ? 0 : date.getTime();
-  if (parsedTime) return parsedTime;
-  return getObjectIdTime(task._id || task.id);
-};
 
-const sortProjectTasksByCreatedAt = (tasks = []) => (
-  Array.isArray(tasks)
-    ? [...tasks].sort((a, b) => {
-        const createdDiff = getTaskCreatedTime(b) - getTaskCreatedTime(a);
-        if (createdDiff !== 0) return createdDiff;
-        return new Date(b.updatedAt || b.dueDate || 0) - new Date(a.updatedAt || a.dueDate || 0);
-      })
-    : []
-);
 
-const withSortedProjectTasks = (project) => {
-  const plainProject = typeof project?.toObject === "function" ? project.toObject() : project;
-  return {
-    ...plainProject,
-    tasks: sortProjectTasksByCreatedAt(plainProject?.tasks)
-  };
-};
-
-// ==========================================
-// 📌 NOTIFICATION CONTROLLERS
-// ==========================================
 exports.getUserNotifications = async (req, res) => {
   try {
-    console.log("🔔 Fetching notifications for user:", req.user.id);
+    void 0;
     
     const projects = await Project.find({
       users: req.user.id
@@ -221,7 +182,7 @@ exports.getUserNotifications = async (req, res) => {
       });
     });
 
-    // Sort by date (newest first)
+    
     allNotifications.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
     res.status(200).json({
@@ -242,9 +203,9 @@ exports.markNotificationAsRead = async (req, res) => {
   try {
     const { notificationId } = req.params;
     
-    console.log("📌 Marking notification as read:", notificationId);
+    void 0;
     
-    // Find project containing this notification
+    
     const project = await Project.findOne({
       'notifications._id': notificationId
     });
@@ -256,7 +217,7 @@ exports.markNotificationAsRead = async (req, res) => {
       });
     }
 
-    // Mark notification as read
+    
     const notification = project.notifications.id(notificationId);
     if (notification) {
       notification.isRead = true;
@@ -278,7 +239,7 @@ exports.markNotificationAsRead = async (req, res) => {
 
 exports.clearAllNotifications = async (req, res) => {
   try {
-    console.log("🗑️ Clearing all notifications for user:", req.user.id);
+    void 0;
     
     await Project.updateMany(
       { users: req.user.id },
@@ -298,13 +259,13 @@ exports.clearAllNotifications = async (req, res) => {
   }
 };
 
-// ==========================================
-// 📌 PROJECT CRUD CONTROLLERS
-// ==========================================
+
+
+
 exports.listProjects = async (req, res) => {
   try {
-    console.log("📋 Listing projects for user:", req.user.id);
-    console.log("User role:", req.user.role);
+    void 0;
+    void 0;
 
     const companyId = getUserCompanyId(req.user);
     const companyCode = getUserCompanyCode(req.user);
@@ -323,7 +284,7 @@ exports.listProjects = async (req, res) => {
 
     let query = { $or: companyFilters };
 
-    // Non-admin users only see projects they are directly part of or created.
+    
     if (!isProjectAdmin(req.user)) {
       query = {
         $and: [
@@ -336,28 +297,37 @@ exports.listProjects = async (req, res) => {
           }
         ]
       };
-      console.log("Non-admin company scoped query:", query);
+      void 0;
     } else {
-      console.log("Admin company scoped query:", query);
+      void 0;
     }
 
-    const projects = await Project.find(query)
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
+    const [projects, total] = await Promise.all([
+      Project.find(query)
       .populate('users', 'name email role company companyCode')
       .populate('createdBy', 'name email')
       .populate('tasks.assignedTo', 'name email')
       .populate('tasks.assignedUsers', 'name email')
       .populate('tasks.createdBy', 'name email')
-      .sort({ createdAt: -1 });
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Project.countDocuments(query)
+    ]);
 
     const scopedProjects = projects
       .filter(project => projectBelongsToUserCompany(project, req.user))
       .map(withSortedProjectTasks);
 
-    console.log(`Found ${scopedProjects.length} projects for company ${companyCode || companyId || 'unknown'}`);
+    void 0;
 
     res.status(200).json({
       success: true,
       count: scopedProjects.length,
+      total,
+      pagination: buildPaginationMeta({ page, limit, total }),
       items: scopedProjects
     });
   } catch (error) {
@@ -371,10 +341,10 @@ exports.listProjects = async (req, res) => {
 
 exports.getProjectById = async (req, res) => {
   try {
-    console.log("🔍 Fetching project by ID");
-    console.log("Project ID:", req.params.id);
-    console.log("User ID:", req.user.id);
-    console.log("User Role:", req.user.role);
+    void 0;
+    void 0;
+    void 0;
+    void 0;
     
     const project = await Project.findById(req.params.id)
       .populate('users', 'name email role _id')
@@ -386,24 +356,24 @@ exports.getProjectById = async (req, res) => {
       .populate('tasks.activityLogs.performedBy', 'name email');
 
     if (!project) {
-      console.log("❌ Project not found:", req.params.id);
+      void 0;
       return res.status(404).json({ 
         success: false, 
         message: "Project not found" 
       });
     }
 
-    console.log("Project found:", project.projectName);
-    console.log("Project users:", project.users.map(u => ({id: u._id, name: u.name})));
-    console.log("Project created by:", project.createdBy?._id);
+    void 0;
+    void 0;
+    void 0;
     
-    // Check if user has access to this project
+    
     if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
-      console.log("❌ Access denied for user:", req.user.id);
-      console.log("User role:", req.user.role);
-      console.log("Has admin role:", req.user.role === 'admin' || req.user.role === 'super-admin');
+      void 0;
+      void 0;
+      void 0;
       
-      // Return more informative error
+      
       return res.status(403).json({ 
         success: false, 
         message: "Access denied. You are not a member of this project.",
@@ -416,7 +386,7 @@ exports.getProjectById = async (req, res) => {
       });
     }
 
-    console.log("✅ Access granted, returning project data");
+    void 0;
 
     res.status(200).json({
       success: true,
@@ -444,10 +414,10 @@ exports.createProject = async (req, res) => {
 
       const { projectName, description, startDate, endDate, priority, status, users } = req.body;
       
-      console.log("🆕 Creating new project");
-      console.log("Created by:", req.user.id);
-      console.log("Project name:", projectName);
-      console.log("Users to add:", users);
+      void 0;
+      void 0;
+      void 0;
+      void 0;
       
       let usersArray = [];
       try {
@@ -456,18 +426,18 @@ exports.createProject = async (req, res) => {
         usersArray = Array.isArray(users) ? users : [];
       }
 
-      // Ensure all IDs are strings and unique
+      
       usersArray = [...new Set(usersArray.filter(Boolean).map(id => String(id)))];
       const companyUserIds = (await getCompanyUserIds(req.user)).map(id => normalizeId(id));
       usersArray = usersArray.filter(id => companyUserIds.includes(id));
 
-      // Add creator to users array if not already included
+      
       if (!usersArray.includes(String(req.user.id))) {
         usersArray.push(String(req.user.id));
-        console.log("Added creator to users array");
+        void 0;
       }
 
-      // Prepare project data
+      
       const projectData = {
         projectName,
         description,
@@ -481,7 +451,7 @@ exports.createProject = async (req, res) => {
         createdBy: req.user.id
       };
 
-      // Handle file upload
+      
       if (req.file) {
         projectData.pdfFile = {
           filename: req.file.originalname,
@@ -492,7 +462,7 @@ exports.createProject = async (req, res) => {
       const project = new Project(projectData);
       await project.save();
 
-      // Add creation notification
+      
       const notification = {
         title: "New Project Created",
         message: `${req.user.name} created project "${projectName}"`,
@@ -518,7 +488,7 @@ exports.createProject = async (req, res) => {
         priority: priority?.toLowerCase() || 'medium',
       });
 
-      console.log("✅ Project created successfully:", project._id);
+      void 0;
 
       res.status(201).json({
         success: true,
@@ -548,10 +518,10 @@ exports.updateProject = async (req, res) => {
       const { id } = req.params;
       const { projectName, description, startDate, endDate, priority, status, users } = req.body;
       
-      console.log("✏️ Updating project:", id);
-      console.log("Updated by:", req.user.id);
+      void 0;
+      void 0;
       
-      // Find existing project
+      
       const project = await Project.findById(id);
       if (!project) {
         return res.status(404).json({ 
@@ -560,7 +530,7 @@ exports.updateProject = async (req, res) => {
         });
       }
 
-      // Check access
+      
       if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
         return res.status(403).json({ 
           success: false, 
@@ -575,12 +545,12 @@ exports.updateProject = async (req, res) => {
         usersArray = Array.isArray(users) ? users : [];
       }
 
-      // Ensure all IDs are strings and unique
+      
       usersArray = [...new Set(usersArray.filter(Boolean).map(id => String(id)))];
       const companyUserIds = (await getCompanyUserIds(req.user)).map(id => normalizeId(id));
       usersArray = usersArray.filter(id => companyUserIds.includes(id));
 
-      // Update fields
+      
       project.projectName = projectName || project.projectName;
       project.description = description || project.description;
       project.users = usersArray;
@@ -589,9 +559,9 @@ exports.updateProject = async (req, res) => {
       project.priority = priority?.toLowerCase() || project.priority;
       project.status = status?.toLowerCase() || project.status;
 
-      // Handle file upload
+      
       if (req.file) {
-        // Delete old file if exists
+        
         if (project.pdfFile && project.pdfFile.path) {
           fs.unlink(project.pdfFile.path, (err) => {
             if (err) console.error("Error deleting old file:", err);
@@ -606,7 +576,7 @@ exports.updateProject = async (req, res) => {
 
       await project.save();
 
-      // Add update notification
+      
       const notification = {
         title: "Project Updated",
         message: `${req.user.name} updated project "${projectName}"`,
@@ -618,7 +588,7 @@ exports.updateProject = async (req, res) => {
 
       await project.addNotification(notification);
 
-      console.log("✅ Project updated successfully:", id);
+      void 0;
 
       res.status(200).json({
         success: true,
@@ -637,8 +607,8 @@ exports.updateProject = async (req, res) => {
 
 exports.deleteProject = async (req, res) => {
   try {
-    console.log("🗑️ Deleting project:", req.params.id);
-    console.log("Deleted by:", req.user.id);
+    void 0;
+    void 0;
     
     const project = await Project.findById(req.params.id);
     
@@ -649,7 +619,7 @@ exports.deleteProject = async (req, res) => {
       });
     }
 
-    // Check access - only admin/super-admin or creator can delete
+    
     const canDelete = projectBelongsToUserCompany(project, req.user) && (
       isProjectAdmin(req.user) ||
       project.createdBy?.toString() === req.user.id
@@ -662,14 +632,14 @@ exports.deleteProject = async (req, res) => {
       });
     }
 
-    // Delete associated file
+    
     if (project.pdfFile && project.pdfFile.path) {
       fs.unlink(project.pdfFile.path, (err) => {
         if (err) console.error("Error deleting file:", err);
       });
     }
 
-    // Delete task files
+    
     project.tasks.forEach(task => {
       if (task.pdfFile && task.pdfFile.path) {
         fs.unlink(task.pdfFile.path, (err) => {
@@ -680,7 +650,7 @@ exports.deleteProject = async (req, res) => {
 
     await project.deleteOne();
 
-    console.log("✅ Project deleted successfully:", req.params.id);
+    void 0;
 
     res.status(200).json({
       success: true,
@@ -695,15 +665,15 @@ exports.deleteProject = async (req, res) => {
   }
 };
 
-// ==========================================
-// 📌 DEBUG/UTILITY CONTROLLERS
-// ==========================================
+
+
+
 exports.getProjectUsers = async (req, res) => {
   try {
-    console.log("🔍 Debug - Fetching project users");
-    console.log("Project ID:", req.params.id);
-    console.log("User ID:", req.user.id);
-    console.log("User Role:", req.user.role);
+    void 0;
+    void 0;
+    void 0;
+    void 0;
     
     const project = await Project.findById(req.params.id)
       .select('users projectName createdBy')
@@ -717,7 +687,7 @@ exports.getProjectUsers = async (req, res) => {
       });
     }
     
-    // Check access
+    
     if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
       return res.status(403).json({ 
         success: false, 
@@ -747,10 +717,10 @@ exports.addUserToProject = async (req, res) => {
     const { projectId } = req.params;
     const { userId } = req.body;
     
-    console.log("➕ Adding user to project");
-    console.log("Project ID:", projectId);
-    console.log("User ID to add:", userId);
-    console.log("Requested by:", req.user.id);
+    void 0;
+    void 0;
+    void 0;
+    void 0;
     
     const project = await Project.findById(projectId);
     
@@ -761,7 +731,7 @@ exports.addUserToProject = async (req, res) => {
       });
     }
     
-    // Check if requester has permission
+    
     if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
       return res.status(403).json({ 
         success: false, 
@@ -769,7 +739,7 @@ exports.addUserToProject = async (req, res) => {
       });
     }
     
-    // Check if user already exists
+    
     const userExists = project.users.some(userIdObj => 
       userIdObj.toString() === userId
     );
@@ -781,11 +751,11 @@ exports.addUserToProject = async (req, res) => {
       });
     }
     
-    // Add user
+    
     project.users.push(userId);
     await project.save();
     
-    // Add notification
+    
     const notification = {
       title: "User Added to Project",
       message: `${req.user.name} added a new user to project "${project.projectName}"`,
@@ -812,9 +782,9 @@ exports.addUserToProject = async (req, res) => {
   }
 };
 
-// ==========================================
-// 📌 TASK CRUD CONTROLLERS
-// ==========================================
+
+
+
 exports.addTask = async (req, res) => {
   try {
     handleFileUpload(req, res, async (err) => {
@@ -827,9 +797,9 @@ exports.addTask = async (req, res) => {
 
       const { id } = req.params;
       const { title, description, assignedTo, dueDate, priority, status } = req.body;
-      console.log("➕ Adding task to project:", id);
-      console.log("Task title:", title);
-      console.log("Assigned to:", assignedTo);
+      void 0;
+      void 0;
+      void 0;
 
       const project = await Project.findById(id);
       if (!project) {
@@ -839,7 +809,7 @@ exports.addTask = async (req, res) => {
         });
       }
 
-      // Check access
+      
       if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
         return res.status(403).json({ 
           success: false, 
@@ -871,7 +841,7 @@ exports.addTask = async (req, res) => {
         });
       }
 
-      // Create task
+      
       const safeTitle = title?.trim() || "Untitled Task";
       const now = new Date();
       const task = {
@@ -886,12 +856,12 @@ exports.addTask = async (req, res) => {
 
       if (assignedUserIds.length) {
         task.assignedUsers = assignedUserIds;
-        // Keep the legacy field populated for older clients.
+        
         task.assignedTo = assignedUserIds[0];
       }
       if (dueDate) task.dueDate = dueDate;
 
-      // Handle file upload
+      
       if (req.file) {
         task.pdfFile = {
           filename: req.file.originalname,
@@ -899,7 +869,7 @@ exports.addTask = async (req, res) => {
         };
       }
 
-      // Add activity log
+      
       const activityLog = {
         type: "creation",
         description: `Task "${safeTitle}" was created`,
@@ -908,7 +878,7 @@ exports.addTask = async (req, res) => {
 
       task.activityLogs = [activityLog];
 
-      // Add task to project
+      
       project.tasks.push(task);
       await project.save();
 
@@ -919,7 +889,7 @@ exports.addTask = async (req, res) => {
           .select("name email")
           .lean();
 
-        // Add notification for assigned user
+        
         const notification = {
           title: "New Task Assigned",
           message: `You have been assigned task "${safeTitle}" in project "${project.projectName}"`,
@@ -958,7 +928,7 @@ exports.addTask = async (req, res) => {
         ));
       }
 
-      console.log("✅ Task added successfully");
+      void 0;
 
       res.status(201).json({
         success: true,
@@ -980,9 +950,9 @@ exports.updateTask = async (req, res) => {
     const { id, taskId } = req.params;
     const updateData = req.body;
 
-    console.log("✏️ Updating task:", taskId);
-    console.log("In project:", id);
-    console.log("Updated by:", req.user.id);
+    void 0;
+    void 0;
+    void 0;
 
     const project = await Project.findById(id);
     if (!project) {
@@ -992,7 +962,7 @@ exports.updateTask = async (req, res) => {
       });
     }
 
-    // Check project access
+    
     if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
       return res.status(403).json({ 
         success: false, 
@@ -1019,7 +989,7 @@ exports.updateTask = async (req, res) => {
       newlyAssignedUser = await User.findById(nextAssignedTo).select("name email").lean();
     }
 
-    // Update task fields
+    
     Object.keys(updateData).forEach(key => {
       if (key === '_id') return;
 
@@ -1052,7 +1022,7 @@ exports.updateTask = async (req, res) => {
     });
     task.updatedAt = new Date();
 
-    // Add activity log
+    
     task.activityLogs.push({
       type: "update",
       description: `Task was updated`,
@@ -1107,7 +1077,7 @@ exports.updateTask = async (req, res) => {
       });
     }
 
-    console.log("✅ Task updated successfully");
+    void 0;
 
     res.status(200).json({
       success: true,
@@ -1127,9 +1097,9 @@ exports.deleteTask = async (req, res) => {
   try {
     const { id, taskId } = req.params;
 
-    console.log("🗑️ Deleting task:", taskId);
-    console.log("From project:", id);
-    console.log("Deleted by:", req.user.id);
+    void 0;
+    void 0;
+    void 0;
 
     const project = await Project.findById(id);
     if (!project) {
@@ -1139,7 +1109,7 @@ exports.deleteTask = async (req, res) => {
       });
     }
 
-    // Check project access
+    
     if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
       return res.status(403).json({ 
         success: false, 
@@ -1155,18 +1125,18 @@ exports.deleteTask = async (req, res) => {
       });
     }
 
-    // Delete task file if exists
+    
     if (task.pdfFile && task.pdfFile.path) {
       fs.unlink(task.pdfFile.path, (err) => {
         if (err) console.error("Error deleting task file:", err);
       });
     }
 
-    // Remove task
+    
     project.tasks.pull(taskId);
     await project.save();
 
-    console.log("✅ Task deleted successfully");
+    void 0;
 
     res.status(200).json({
       success: true,
@@ -1181,19 +1151,19 @@ exports.deleteTask = async (req, res) => {
   }
 };
 
-// ==========================================
-// 📌 TASK STATUS & ACTIVITY CONTROLLERS
-// ==========================================
+
+
+
 exports.updateTaskStatus = async (req, res) => {
   try {
     const { projectId, taskId } = req.params;
     const { status, remark } = req.body;
 
-    console.log("🔄 Updating task status");
-    console.log("Project:", projectId);
-    console.log("Task:", taskId);
-    console.log("New status:", status);
-    console.log("Updated by:", req.user.id);
+    void 0;
+    void 0;
+    void 0;
+    void 0;
+    void 0;
 
     if (!TASK_STATUS.includes(status.toLowerCase())) {
       return res.status(400).json({ 
@@ -1244,7 +1214,7 @@ exports.updateTaskStatus = async (req, res) => {
     task.status = status.toLowerCase();
     task.updatedAt = new Date();
 
-    // Add activity log
+    
     task.activityLogs.push({
       type: "status_change",
       description: `Status changed from ${oldStatus} to ${status}`,
@@ -1256,7 +1226,7 @@ exports.updateTaskStatus = async (req, res) => {
 
     await project.save();
 
-    // Add notification for status change
+    
     const notification = {
       title: "Task Status Updated",
       message: `Task "${task.title}" status changed from ${oldStatus} to ${status}`,
@@ -1288,7 +1258,7 @@ exports.updateTaskStatus = async (req, res) => {
       priority: 'medium',
     });
 
-    console.log("✅ Task status updated successfully");
+    void 0;
 
     res.status(200).json({
       success: true,
@@ -1308,10 +1278,10 @@ exports.getTaskActivityLogs = async (req, res) => {
   try {
     const { projectId, taskId } = req.params;
 
-    console.log("📊 Fetching task activity logs");
-    console.log("Project:", projectId);
-    console.log("Task:", taskId);
-    console.log("Requested by:", req.user.id);
+    void 0;
+    void 0;
+    void 0;
+    void 0;
 
     const project = await Project.findById(projectId);
     if (!project) {
@@ -1321,7 +1291,7 @@ exports.getTaskActivityLogs = async (req, res) => {
       });
     }
 
-    // Check project access
+    
     if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
       return res.status(403).json({ 
         success: false, 
@@ -1337,13 +1307,13 @@ exports.getTaskActivityLogs = async (req, res) => {
       });
     }
 
-    // Populate activity logs
+    
     await Project.populate(task, {
       path: 'activityLogs.performedBy',
       select: 'name email'
     });
 
-    console.log(`✅ Found ${task.activityLogs.length} activity logs`);
+    void 0;
 
     res.status(200).json({
       success: true,
@@ -1360,9 +1330,9 @@ exports.getTaskActivityLogs = async (req, res) => {
   }
 };``
 
-// ==========================================
-// 📌 REMARKS CONTROLLERS
-// ==========================================
+
+
+
 exports.getTaskRemarks = async (req, res) => {
   try {
     const { projectId, taskId } = req.params;
@@ -1411,10 +1381,10 @@ exports.addRemark = async (req, res) => {
     const { projectId, taskId } = req.params;
     const { text } = req.body;
 
-    console.log("💬 Adding remark to task");
-    console.log("Project:", projectId);
-    console.log("Task:", taskId);
-    console.log("Added by:", req.user.id);
+    void 0;
+    void 0;
+    void 0;
+    void 0;
 
     if ((!text || text.trim() === "") && !req.file) {
       return res.status(400).json({ 
@@ -1431,7 +1401,7 @@ exports.addRemark = async (req, res) => {
       });
     }
 
-    // Check project access
+    
     if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
       return res.status(403).json({ 
         success: false, 
@@ -1461,7 +1431,7 @@ exports.addRemark = async (req, res) => {
         .toFile(savePath);
     }
 
-    // Add remark
+    
     task.remarks.push({
       text: text || "",
       createdBy: req.user.id,
@@ -1469,7 +1439,7 @@ exports.addRemark = async (req, res) => {
     });
     task.updatedAt = new Date();
 
-    // Add activity log
+    
     task.activityLogs.push({
       type: "remark",
       description: `Remark added: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`,
@@ -1478,7 +1448,7 @@ exports.addRemark = async (req, res) => {
 
     await project.save();
 
-    // Add notification for remark
+    
     const notification = {
       title: "New Remark Added",
       message: `${req.user.name} added a remark to task "${task.title}"`,
@@ -1490,7 +1460,7 @@ exports.addRemark = async (req, res) => {
 
     await project.addNotification(notification);
 
-    console.log("✅ Remark added successfully");
+    void 0;
 
     res.status(201).json({
       success: true,
@@ -1505,4 +1475,4 @@ exports.addRemark = async (req, res) => {
     });
   }
 };
-console.log("✅ projectController.js loaded successfully");
+void 0;

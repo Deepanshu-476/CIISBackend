@@ -14,10 +14,7 @@ let firebaseStatus = {
 };
 
 const logPushDebug = (label, payload = {}) => {
-  console.log(`[FCM DEBUG] ${label}`, {
-    at: new Date().toISOString(),
-    ...payload,
-  });
+  void 0;
 };
 
 const loadFirebaseAdmin = () => {
@@ -249,21 +246,21 @@ exports.sendPushToUsers = async ({userIds, title, body, data = {}}) => {
     return {success: true, sent: 0, reason: 'no-device-tokens'};
   }
 
-  // Helper: chunk array into batches
+  
   const chunk = (arr, size) => {
     const out = [];
     for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
     return out;
   };
 
-  const MAX_BATCH = 500; // FCM limit for multicast
+  const MAX_BATCH = 500; 
   const batches = chunk(tokens, MAX_BATCH);
 
   let totalSent = 0;
   let totalFailed = 0;
   const tokensToRemove = new Set();
 
-  // Simple retry with backoff
+  
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   for (let b = 0; b < batches.length; b++) {
@@ -325,12 +322,12 @@ exports.sendPushToUsers = async ({userIds, title, body, data = {}}) => {
           }
         });
 
-        // success break retry loop
+        
         break;
       } catch (err) {
         lastError = err;
         attempt += 1;
-        const backoff = 200 * Math.pow(2, attempt); // 400, 800, 1600ms
+        const backoff = 200 * Math.pow(2, attempt); 
         console.warn('[FCM DEBUG] firebase:batch-exception', {
           at: new Date().toISOString(),
           batchIndex: b,

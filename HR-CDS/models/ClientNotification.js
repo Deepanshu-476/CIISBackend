@@ -1,4 +1,4 @@
-// models/Notification.js
+
 const mongoose = require('mongoose');
 
 const clientNotificationSchema = new mongoose.Schema({
@@ -29,7 +29,7 @@ const clientNotificationSchema = new mongoose.Schema({
     required: false
   },
   relatedEntity: {
-    type: String, // 'client', 'service', etc.
+    type: String, 
     trim: true
   },
   relatedEntityId: {
@@ -54,14 +54,14 @@ const clientNotificationSchema = new mongoose.Schema({
   toObject: { virtuals: true }
 });
 
-// Indexes for better performance
+
 clientnotificationSchema.index({ isRead: 1 });
 clientnotificationSchema.index({ recipient: 1 });
 clientnotificationSchema.index({ createdAt: -1 });
 clientnotificationSchema.index({ type: 1 });
 clientnotificationSchema.index({ expiryDate: 1 }, { expireAfterSeconds: 0 });
 
-// Static method to get unread count
+
 clientnotificationSchema.statics.getUnreadCount = async function(recipientId = null) {
   const query = { isRead: false };
   if (recipientId) {
@@ -71,13 +71,13 @@ clientnotificationSchema.statics.getUnreadCount = async function(recipientId = n
   return await this.countDocuments(query);
 };
 
-// Static method to create notification
+
 clientnotificationSchema.statics.createNotification = async function(notificationData) {
   const notification = new this(notificationData);
   return await notification.save();
 };
 
-// Static method to mark all as read
+
 clientnotificationSchema.statics.markAllAsRead = async function(recipientId = null) {
   const query = { isRead: false };
   if (recipientId) {
@@ -87,16 +87,16 @@ clientnotificationSchema.statics.markAllAsRead = async function(recipientId = nu
   return await this.updateMany(query, { isRead: true });
 };
 
-// Instance method to mark as read
+
 clientnotificationSchema.methods.markAsRead = function() {
   this.isRead = true;
   return this.save();
 };
 
-// Pre-save middleware to set default expiry (30 days)
+
 clientnotificationSchema.pre('save', function(next) {
   if (!this.expiryDate) {
-    this.expiryDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
+    this.expiryDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); 
   }
   next();
 });

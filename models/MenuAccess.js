@@ -1,12 +1,12 @@
 const mongoose = require('mongoose');
 const Schema = mongoose.Schema;
 
-// Define the MenuAccess Schema
+
 const menuAccessSchema = new Schema(
   {
     department: {
       type: Schema.Types.ObjectId,
-      ref: 'Department', // Assuming you have a Department model to reference
+      ref: 'Department', 
       required: true
     },
     jobRole: {
@@ -14,17 +14,17 @@ const menuAccessSchema = new Schema(
       
     },
     accessItems: {
-      type: [String], // Array of strings to store the menu access items
+      type: [String], 
       required: true
     },
     createdBy: {
       type: Schema.Types.ObjectId,
-      ref: 'User', // Assuming you have a User model to reference
+      ref: 'User', 
       required: true
     },
     updatedBy: {
       type: Schema.Types.ObjectId,
-      ref: 'User', // Assuming you have a User model to reference
+      ref: 'User', 
       required: true
     },
     createdAt: {
@@ -38,7 +38,7 @@ const menuAccessSchema = new Schema(
   { timestamps: true }
 );
 
-// Create a model from the schema
+
 const MenuAccess = mongoose.model('MenuAccess', menuAccessSchema);
 
 module.exports = MenuAccess;

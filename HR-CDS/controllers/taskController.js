@@ -1,4 +1,4 @@
-// controllers/taskController.js
+
 const Task = require('../models/Task');
 const ClientTask = require('../models/ClientTask');
 const Client = require('../models/Client');
@@ -14,9 +14,7 @@ const path = require('path');
 const sharp = require('sharp');
 const { notifyDirectUsers, notifyPageUsers } = require('../utils/systemNotificationService');
 
-/* ==========================================================================
-   1. CORE HELPERS & UTILITIES
-   ========================================================================== */
+ 
 
 const parsePositiveInt = (value, fallback, max = 100) => {
   const parsed = parseInt(value, 10);
@@ -368,9 +366,7 @@ const sendTaskStatusUpdateEmail = async (task, updatedUser, oldStatus, newStatus
   }
 };
 
-/* ==========================================================================
-   2. REUSABLE BUSINESS LOGIC
-   ========================================================================== */
+ 
 
 const fetchPersonalTaskList = async (req) => {
   const companyCode = req.user.companyCode;
@@ -617,9 +613,7 @@ const sendCleanTaskList = (res, tasks, view, dateField = 'createdAt', req = null
   });
 };
 
-/* ==========================================================================
-   3. TASK CONTROLLER EXPORTS
-   ========================================================================== */
+ 
 
 exports.getPersonalTasks = async (req, res) => {
   try {
@@ -703,8 +697,7 @@ exports.getTasks = async (req, res) => {
       fetchAssignedToMeTaskList(req)
     ]);
     const list = applyCleanListFilters([...personal, ...assigned], req);
-    const sorted = sortTasksNewestFirst(list);
-    return res.json({ success: true, groupedTasks: groupTasksByDate(sorted, 'createdAt', 'serialNo'), tasks: sorted });
+    return sendCleanTaskList(res, list, 'tasks', 'createdAt', req);
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
@@ -714,8 +707,7 @@ exports.getMyTasks = async (req, res) => {
   try {
     const list = await fetchAssignedToMeTaskList(req);
     const filtered = applyCleanListFilters(list, req);
-    const sorted = sortTasksNewestFirst(filtered);
-    return res.json({ success: true, groupedTasks: groupTasksByDate(sorted, 'createdAt', 'mySerialNo'), tasks: sorted });
+    return sendCleanTaskList(res, filtered, 'my', 'createdAt', req);
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
@@ -829,6 +821,11 @@ exports.updateTask = async (req, res) => {
     if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
     if (task.createdBy.toString() !== req.user._id.toString()) return res.status(403).json({ success: false, error: 'Not authorized' });
 
+    const hasStatusChangedFromPending = task.overallStatus !== 'pending' || task.statusByUser.some(s => s.status !== 'pending');
+    if (hasStatusChangedFromPending) {
+      return res.status(400).json({ success: false, error: 'Task cannot be edited after its status has changed from pending' });
+    }
+
     const oldTask = task.toObject();
 
     if (req.files?.files) {
@@ -882,18 +879,22 @@ exports.updateStatus = async (req, res) => {
     const task = await Task.findById(taskId);
     if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
 
+    if (task.overallStatus === 'overdue') {
+      return res.status(400).json({ success: false, error: 'Cannot change status of an overdue task' });
+    }
+
     const currentUserId = (req.user._id || req.user.id).toString();
     const userCompanyCode = getRequestCompanyCode(req);
 
     const isCreator = task.createdBy.toString() === currentUserId;
     const isAssigned = task.assignedUsers.some(uid => uid.toString() === currentUserId);
 
-    // Group check
+    
     const userGroups = await Group.find({ members: req.user._id, isActive: true }).select('_id').lean();
     const groupIds = userGroups.map(g => g._id.toString());
     const isGroupAssigned = task.assignedGroups?.some(gid => groupIds.includes(gid.toString()));
 
-    // Company check (fallback)
+    
     const isSameCompany = task.companyCode && userCompanyCode && 
       task.companyCode.toUpperCase() === userCompanyCode.toUpperCase();
 
@@ -903,6 +904,13 @@ exports.updateStatus = async (req, res) => {
 
     const oldStatusEntry = task.statusByUser.find(s => s.user?.toString() === currentUserId);
     const oldStatus = oldStatusEntry?.status || 'pending';
+
+    if (oldStatus === 'completed' && status !== 'completed' && status !== 'reopen') {
+      return res.status(400).json({ success: false, error: 'Completed tasks can only be reopened.' });
+    }
+    if (oldStatus === 'reopen' && status !== 'reopen' && status !== 'completed') {
+      return res.status(400).json({ success: false, error: 'Reopened tasks can only be completed.' });
+    }
 
     const updateUserStatusInList = (targetUserId, newStatus, userRemarks) => {
       const idx = task.statusByUser.findIndex(s => s.user?.toString() === targetUserId.toString());
@@ -1041,9 +1049,9 @@ exports.getNotifications = async (req, res) => {
     const ownerFilter = {$or: [{recipient: req.user._id}, {user: req.user._id}]};
     const filter = {...ownerFilter};
     if (req.query.unreadOnly === 'true') filter.isRead = false;
-    // Task details for the shared notification model are stored in `data`.
-    // `relatedTask` belonged to the retired task-only notification schema, so
-    // attempting to populate it throws a StrictPopulateError in Mongoose.
+    
+    
+    
     const notifications = await Notification.find(filter).sort({ createdAt: -1 }).lean();
     const unreadCount = await Notification.countDocuments({...ownerFilter, isRead: false});
     res.json({ success: true, notifications, unreadCount });
@@ -1173,7 +1181,7 @@ const queryAllUserTasks = async (userId, companyCode) => {
   const groups = await Group.find({ members: userId, isActive: true }).select('_id').lean();
   const groupIds = groups.map(g => g._id);
 
-  // Use base company code regex for security and compatibility
+  
   const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
   const companyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : companyCode;
 
@@ -1303,7 +1311,7 @@ const filterUserTasks = (tasks, query) => {
   const range = getCleanTaskDateRange({ period: fromDate || toDate ? 'all' : period, fromDate, toDate });
 
   return tasks.filter(t => {
-    // 1. Search filter
+    
     if (search && search.trim()) {
       const q = search.trim().toLowerCase();
       const textToSearch = [
@@ -1317,7 +1325,7 @@ const filterUserTasks = (tasks, query) => {
       if (!textToSearch.includes(q)) return false;
     }
 
-    // 2. Status filter
+    
     if (status && status !== 'all') {
       const queryStatus = normalizeTaskStatus(status);
       if (queryStatus === 'overdue') {
@@ -1330,12 +1338,12 @@ const filterUserTasks = (tasks, query) => {
       }
     }
 
-    // 3. Priority filter
+    
     if (priority && priority !== 'all') {
       if (t.priority !== priority.toLowerCase()) return false;
     }
 
-    // 4. Date filter
+    
     if (range) {
       const dateToFilter = t.dueDateTime || t.dueDate || t.createdAt;
       const taskDate = dateToFilter ? new Date(dateToFilter) : null;
@@ -1399,7 +1407,7 @@ exports.getUsersWithTaskCounts = async (req, res) => {
     const currentUser = await User.findById(req.user.id).lean();
     const users = await User.find({ isActive: true, company: currentUser.company }).select('name email role employeeType company companyCode').lean();
 
-    // Use base company code regex for security and compatibility
+    
     const companyCode = req.user.companyCode;
     const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
     const companyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : companyCode;
@@ -1449,7 +1457,7 @@ exports.getDepartmentUsersWithTaskCounts = async (req, res) => {
     const currentUser = await User.findById(req.user.id).lean();
     const users = await User.find({ isActive: true, company: currentUser.company, department: currentUser.department }).select('name email role employeeType company department companyCode').lean();
 
-    // Use base company code regex for security and compatibility
+    
     const companyCode = req.user.companyCode;
     const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
     const companyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : companyCode;
@@ -1522,18 +1530,18 @@ exports.getUserAllTasksPaginated = async (req, res) => {
     const allTasks = await queryAllUserTasks(userId, req.user.companyCode);
     const filtered = filterUserTasks(allTasks, req.query);
 
-    // Sort by task date first so meeting auto-tasks appear on their scheduled date,
-    // not on the date when the meeting/task was created.
+    
+    
     const sortedFiltered = sortTasksNewestFirst(filtered);
 
-    // Paginate
+    
     const total = sortedFiltered.length;
     const pages = Math.max(1, Math.ceil(total / limit));
     const safePage = Math.min(page, pages);
     const start = (safePage - 1) * limit;
     const tasks = sortedFiltered.slice(start, start + limit);
 
-    // Calculate unified stats on the ENTIRE list of filtered tasks
+    
     const counts = {
       total: total,
       pending: 0,
@@ -1701,5 +1709,51 @@ exports.snoozeTask = async (req, res) => {
   }
 };
 
+exports.updateCreatorStatus = async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    const { status } = req.body;
+
+    if (!['pending', 'completed'].includes(status)) {
+      return res.status(400).json({ success: false, error: 'Invalid status value. Must be pending or completed.' });
+    }
+
+    const task = await Task.findById(taskId);
+    if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
+
+    if (task.createdBy.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ success: false, error: 'Not authorized to change admin status' });
+    }
+
+    if (task.overallStatus === 'overdue') {
+      return res.status(400).json({ success: false, error: 'Cannot change status of an overdue task' });
+    }
+
+    const oldCreatorStatus = (task.creatorStatus && typeof task.creatorStatus === 'object')
+      ? task.creatorStatus.status
+      : (typeof task.creatorStatus === 'string' ? task.creatorStatus : 'pending');
+    task.creatorStatus = {
+      status: status,
+      updatedAt: new Date()
+    };
+
+    task.statusHistory.push({
+      status: status,
+      changedBy: req.user._id,
+      remarks: `Admin status changed from ${oldCreatorStatus} to ${status}`
+    });
+
+    await task.save();
+
+    res.json({
+      success: true,
+      message: 'Admin status updated successfully',
+      task
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
 module.exports = exports;
-console.log('✅ taskController.js loaded successfully');
+void 0;

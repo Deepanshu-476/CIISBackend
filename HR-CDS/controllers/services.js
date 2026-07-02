@@ -1,13 +1,13 @@
 const Service = require('../models/Service');
 
-// Get all services (with companyCode filter)
+
 const getAllServices = async (req, res) => {
   try {
     const { companyCode } = req.query;
     
     let query = {};
     
-    // Filter by companyCode if provided
+    
     if (companyCode) {
       query.companyCode = companyCode.toUpperCase();
     }
@@ -28,12 +28,12 @@ const getAllServices = async (req, res) => {
   }
 };
 
-// Add new service (with companyCode)
+
 const addService = async (req, res) => {
   try {
     const { servicename, companyCode } = req.body;
 
-    // Validate required fields
+    
     if (!servicename || servicename.trim() === '') {
       return res.status(400).json({
         success: false,
@@ -48,11 +48,11 @@ const addService = async (req, res) => {
       });
     }
 
-    // Create new service with companyCode
+    
     const newService = new Service({
       servicename: servicename.trim(),
       companyCode: companyCode.trim().toUpperCase(),
-      createdBy: req.user?._id // Optional: if you have user authentication
+      createdBy: req.user?._id 
     });
 
     await newService.save();
@@ -78,7 +78,7 @@ const addService = async (req, res) => {
   }
 };
 
-// Delete service
+
 const deleteService = async (req, res) => {
   try {
     const { id } = req.params;
@@ -106,7 +106,7 @@ const deleteService = async (req, res) => {
   }
 };
 
-// Update service
+
 const updateService = async (req, res) => {
   try {
     const { id } = req.params;
@@ -123,7 +123,7 @@ const updateService = async (req, res) => {
       servicename: servicename.trim()
     };
 
-    // Update companyCode if provided
+    
     if (companyCode && companyCode.trim() !== '') {
       updateData.companyCode = companyCode.trim().toUpperCase();
     }
@@ -162,7 +162,7 @@ const updateService = async (req, res) => {
   }
 };
 
-// Get services by company code
+
 const getServicesByCompany = async (req, res) => {
   try {
     const { companyCode } = req.params;
@@ -199,4 +199,4 @@ module.exports = {
   updateService,
   getServicesByCompany
 };
-console.log("✅ servicesController.js loaded successfully");
+void 0;

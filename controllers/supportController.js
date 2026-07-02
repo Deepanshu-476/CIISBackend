@@ -6,6 +6,7 @@ const KnowledgeBaseArticle = require("../models/KnowledgeBaseArticle");
 const User = require("../models/User");
 const Department = require("../models/Department");
 const { notifyDirectUsers, notifyPageUsers } = require("../HR-CDS/utils/systemNotificationService");
+const { getPaginationOptions, buildPaginationMeta } = require("../utils/pagination");
 
 const getId = value => {
   if (!value) return null;
@@ -330,7 +331,7 @@ exports.getMyTickets = async (req, res) => {
       { category: new RegExp(q, "i") },
     ];
 
-    const tickets = await SupportTicket.find(filter).sort({ updatedAt: -1 }).limit(100);
+    const tickets = await SupportTicket.find(filter).sort({ updatedAt: -1 }).limit(100).lean();
     res.json({ success: true, tickets: tickets.map(serializeTicket) });
   } catch (error) {
     console.error("Get my support tickets error:", error);
@@ -402,6 +403,7 @@ exports.getAllTickets = async (req, res) => {
     if (!access.allowed) return;
 
     const { status, category, priority, q } = req.query;
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
     const filter = await getManagedTicketFilter(req, getCompanyFilter(req));
     if (status && status !== "All") filter.status = status;
     if (category && category !== "All") filter.category = category;
@@ -414,13 +416,24 @@ exports.getAllTickets = async (req, res) => {
       { category: new RegExp(q, "i") },
     ];
 
-    const tickets = await SupportTicket.find(filter)
+    const [tickets, total] = await Promise.all([
+      SupportTicket.find(filter)
       .populate("requester", "name email department")
       .populate("assignedTo", "name email")
       .sort({ updatedAt: -1 })
-      .limit(200);
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      SupportTicket.countDocuments(filter)
+    ]);
 
-    res.json({ success: true, tickets: tickets.map(serializeTicket) });
+    res.json({
+      success: true,
+      tickets: tickets.map(serializeTicket),
+      count: tickets.length,
+      total,
+      pagination: buildPaginationMeta({ page, limit, total })
+    });
   } catch (error) {
     console.error("Get all support tickets error:", error);
     res.status(500).json({ success: false, message: "Failed to fetch support tickets" });
@@ -520,7 +533,7 @@ exports.getEnquiries = async (req, res) => {
     if (!isSupportAdmin(req.user)) {
       return res.status(403).json({ success: false, message: "Support admin access required" });
     }
-    const enquiries = await SupportEnquiry.find(getCompanyFilter(req)).sort({ createdAt: -1 }).limit(100);
+    const enquiries = await SupportEnquiry.find(getCompanyFilter(req)).sort({ createdAt: -1 }).limit(100).lean();
     res.json({ success: true, enquiries });
   } catch (error) {
     console.error("Get support enquiries error:", error);
@@ -671,7 +684,7 @@ exports.getChatbotLogs = async (req, res) => {
       return res.status(403).json({ success: false, message: "Support admin access required" });
     }
 
-    const logs = await ChatbotLog.find(getCompanyFilter(req)).sort({ createdAt: -1 }).limit(200);
+    const logs = await ChatbotLog.find(getCompanyFilter(req)).sort({ createdAt: -1 }).limit(200).lean();
     const intentStats = await ChatbotLog.aggregate([
       { $match: getCompanyFilter(req) },
       {
@@ -908,7 +921,7 @@ exports.getKnowledgeBase = async (req, res) => {
       { tags: new RegExp(q, "i") },
     ];
 
-    const articles = await KnowledgeBaseArticle.find(filter).sort({ views: -1, updatedAt: -1 }).limit(50);
+    const articles = await KnowledgeBaseArticle.find(filter).sort({ views: -1, updatedAt: -1 }).limit(50).lean();
     res.json({ success: true, articles });
   } catch (error) {
     console.error("Get knowledge base error:", error);
@@ -950,9 +963,9 @@ exports.getEmployeeOverview = async (req, res) => {
     const filter = getCompanyFilter(req);
     const [activeTickets, myTickets, articles, lastLog] = await Promise.all([
       SupportTicket.countDocuments({ ...filter, requester: req.user._id, status: { $nin: ["Resolved", "Closed"] } }),
-      SupportTicket.find({ ...filter, requester: req.user._id }).sort({ updatedAt: -1 }).limit(6),
-      KnowledgeBaseArticle.find({ ...filter, isPublished: true }).sort({ views: -1 }).limit(4),
-      ChatbotLog.findOne({ ...filter, user: req.user._id }).sort({ createdAt: -1 }),
+      SupportTicket.find({ ...filter, requester: req.user._id }).sort({ updatedAt: -1 }).limit(6).lean(),
+      KnowledgeBaseArticle.find({ ...filter, isPublished: true }).sort({ views: -1 }).limit(4).lean(),
+      ChatbotLog.findOne({ ...filter, user: req.user._id }).sort({ createdAt: -1 }).lean(),
     ]);
 
     res.json({
@@ -1006,7 +1019,7 @@ exports.getAdminDashboard = async (req, res) => {
       SupportTicket.countDocuments({ ...filter, status: "Escalated" }),
       ChatbotLog.countDocuments(companyFilter),
       ChatbotLog.countDocuments({ ...companyFilter, outcome: { $in: ["Resolved", "Article served"] } }),
-      SupportTicket.find(filter).populate("requester", "name email department").sort({ updatedAt: -1 }).limit(10),
+      SupportTicket.find(filter).populate("requester", "name email department").sort({ updatedAt: -1 }).limit(10).lean(),
       SupportTicket.aggregate([
         { $match: filter },
         { $group: { _id: "$category", count: { $sum: 1 } } },

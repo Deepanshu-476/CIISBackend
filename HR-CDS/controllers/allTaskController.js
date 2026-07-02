@@ -1,4 +1,4 @@
-// controllers/allTaskController.js
+
 const {
   Task,
   ClientTask,
@@ -19,7 +19,7 @@ const {
   getProjectTaskAssignedBy
 } = require('./taskHelper');
 
-// Helper to query all user tasks from different sources (personal, client, project)
+
 const queryAllUserTasks = async (userId, companyCode) => {
   const groups = await Group.find({ members: userId, isActive: true }).select('_id').lean();
   const groupIds = groups.map(g => g._id);
@@ -135,7 +135,7 @@ const queryAllUserTasks = async (userId, companyCode) => {
   return [...personalFormatted, ...clientFormatted, ...projectFormatted];
 };
 
-// Filter user tasks helper (for getUserAllTasksPaginated)
+
 const filterUserTasks = (tasks, queryParams) => {
   const { status, search, period, fromDate, toDate } = queryParams;
   const range = getCleanTaskDateRange({ period, fromDate, toDate });
@@ -209,7 +209,7 @@ const calculateUserStatusCounts = (filtered) => {
   };
 };
 
-// Get all my tasks combined
+
 exports.getAllMyTaskViews = async (req, res) => {
   try {
     const {
@@ -232,7 +232,7 @@ exports.getAllMyTaskViews = async (req, res) => {
   }
 };
 
-// Get stats for all tasks combined
+
 exports.getAllMyTaskStats = async (req, res) => {
   try {
     const {
@@ -255,7 +255,7 @@ exports.getAllMyTaskStats = async (req, res) => {
   }
 };
 
-// Get all tasks for a specific user paginated (used on frontend)
+
 exports.getUserAllTasksPaginated = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -267,7 +267,7 @@ exports.getUserAllTasksPaginated = async (req, res) => {
 
     const sortedFiltered = sortTasksNewestFirst(filtered);
 
-    // Paginate
+    
     const total = sortedFiltered.length;
     const pages = Math.max(1, Math.ceil(total / limit));
     const safePage = Math.min(page, pages);
@@ -325,7 +325,7 @@ exports.getUserAllTasksPaginated = async (req, res) => {
   }
 };
 
-// Get stats for a specific user
+
 exports.getUserTaskStats = async (req, res) => {
   try {
     const { userId } = req.params;

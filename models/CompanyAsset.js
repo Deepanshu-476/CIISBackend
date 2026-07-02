@@ -53,7 +53,7 @@ const companyAssetSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Add indexes for better performance
+
 companyAssetSchema.index({ company: 1 });
 companyAssetSchema.index({ status: 1 });
 companyAssetSchema.index({ createdBy: 1 });

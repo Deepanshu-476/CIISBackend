@@ -1,4 +1,4 @@
-// socket/handlers/connectionHandler.js
+
 const User = require('../../../models/User');
 
 const getCompanyOnlineUsers = (io, companyId) => {
@@ -31,36 +31,36 @@ const emitPresence = (io, socket, isOnline) => {
 };
 
 const connectionHandler = (io, socket) => {
-  console.log(`🔌 New client connected: ${socket.id} - User: ${socket.user?.name}`);
+  void 0;
 
-  // Join user to their personal room
+  
   if (socket.userId) {
     socket.join(`user:${socket.userId}`);
-    console.log(`📌 Joined room: user:${socket.userId}`);
+    void 0;
   } else {
-    console.log("❌ socket.userId missing");
+    void 0;
   }
-  console.log(`📌 Joined room: user:${socket.userId}`);
+  void 0;
 
-  // Join company room if user has company
+  
   if (socket.companyId) {
     socket.join(`company:${socket.companyId}`);
-    console.log(`📌 Joined company room: company:${socket.companyId}`);
+    void 0;
   }
 
-  // Join role-based rooms
+  
   if (socket.user.companyRole === 'Owner' || socket.user.companyRole === 'Admin') {
     socket.join(`company:${socket.companyId}:admin`);
-    console.log(`📌 Joined admin room: company:${socket.companyId}:admin`);
+    void 0;
   }
 
-  // Update user online status
+  
   updateUserOnlineStatus(socket.userId, true);
   emitPresence(io, socket, true);
 
-  // Handle disconnection
+  
   socket.on('disconnect', async () => {
-    console.log(`🔌 Client disconnected: ${socket.id} - User: ${socket.user?.name}`);
+    void 0;
     
     setTimeout(async () => {
       const userRoom = io.sockets.adapter.rooms.get(`user:${socket.userId}`);
@@ -73,12 +73,12 @@ const connectionHandler = (io, socket) => {
     }, 1000);
   });
 
-  // Handle errors
+  
   socket.on('error', (error) => {
     console.error(`❌ Socket error for user ${socket.userId}:`, error);
   });
 
-  // Ping-pong for connection health
+  
   socket.on('ping', (callback) => {
     if (typeof callback === 'function') {
       callback({ status: 'ok', timestamp: new Date() });
@@ -86,7 +86,7 @@ const connectionHandler = (io, socket) => {
   });
 };
 
-// Helper to update user online status
+
 const updateUserOnlineStatus = async (userId, isOnline) => {
   if (!userId) return;
 

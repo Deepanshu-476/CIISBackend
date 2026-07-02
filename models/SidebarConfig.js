@@ -1,4 +1,4 @@
-// models/SidebarConfig.js
+
 const mongoose = require('mongoose');
 
 const menuItemSchema = new mongoose.Schema({
@@ -48,7 +48,7 @@ const sidebarConfigSchema = new mongoose.Schema({
   branchId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Branch',
-    required: false // Optional for backward compatibility before migration
+    required: false 
   },
   departmentId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -68,18 +68,18 @@ const sidebarConfigSchema = new mongoose.Schema({
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    default: null // ✅ Allow null
+    default: null 
   },
   updatedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    default: null // ✅ Allow null
+    default: null 
   }
 }, {
   timestamps: true
 });
 
-// Index including branchId for unique configurations
+
 sidebarConfigSchema.index(
   { companyId: 1, branchId: 1, departmentId: 1, role: 1 },
   { unique: true, name: 'unique_sidebar_config_branch' }

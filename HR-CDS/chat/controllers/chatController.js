@@ -172,7 +172,7 @@ exports.getConversations = async (req, res) => {
   try {
     const userId = getUserId(req);
 
-    // Fetch all active groups where the user is a member
+    
     const activeUserGroups = await Group.find({
       members: userId,
       isActive: true,
@@ -187,9 +187,9 @@ exports.getConversations = async (req, res) => {
       .populate("admins", "name email profileImage")
       .sort({updatedAt: -1});
 
-    // Filter conversations based on:
-    // 1. If group chat, the user must still be a member of that active group
-    // 2. If direct chat, the other participant must be active
+    
+    
+    
     const activeConversations = conversations.filter(conversation => {
       if (conversation.isGroup) {
         if (!conversation.groupId) return false;
@@ -294,13 +294,7 @@ exports.sendMessage = async (req, res) => {
       .map(member => member.toString())
       .filter(memberId => memberId !== senderId);
 
-    console.log('[CHAT NOTIFICATION] dispatch', {
-      conversationId,
-      messageId: message._id,
-      isGroup: conversation.isGroup,
-      recipientCount: recipients.length,
-      recipients,
-    });
+    void 0;
 
     notifyDirectUsers({
       userIds: recipients,
@@ -319,11 +313,7 @@ exports.sendMessage = async (req, res) => {
       priority: 'medium',
     })
       .then(notifications => {
-        console.log('[CHAT NOTIFICATION] dispatched', {
-          conversationId,
-          messageId: message._id,
-          notificationCount: notifications?.length || 0,
-        });
+        void 0;
       })
       .catch(error => {
         console.error('[CHAT NOTIFICATION] failed', {

@@ -68,10 +68,10 @@ const run = async () => {
     updated += 1;
   }
 
-  console.log(`Backfill complete. Checked: ${tasks.length}, Updated: ${updated}, Skipped: ${skipped.length}`);
+  void 0;
 
   if (skipped.length > 0) {
-    console.log('Skipped task IDs:', skipped.join(', '));
+    void 0;
   }
 };
 

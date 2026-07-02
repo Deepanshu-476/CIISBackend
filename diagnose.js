@@ -12,37 +12,26 @@ const main = async () => {
   }
 
   await mongoose.connect(process.env.MONGO_URI);
-  console.log('Connected to MongoDB');
+  void 0;
 
-  // 1. Check Firebase Push Status
+  
   const fbStatus = getFirebasePushStatus();
-  console.log('--- Firebase Push Status ---');
-  console.log(JSON.stringify(fbStatus, null, 2));
+  void 0;
+  void 0;
 
-  // 2. Count registered devices
+  
   const deviceCount = await Device.countDocuments({});
-  console.log(`Total devices registered: ${deviceCount}`);
+  void 0;
 
-  // 3. List some devices
+  
   const devices = await Device.find({}).limit(10).lean();
-  console.log('--- Sample Devices ---');
-  console.log(JSON.stringify(devices.map(d => ({
-    _id: d._id,
-    userId: d.userId,
-    platform: d.platform,
-    notificationPermission: d.notificationPermission,
-    updatedAt: d.updatedAt,
-    tokenPreview: d.deviceToken ? `${d.deviceToken.slice(0, 10)}...${d.deviceToken.slice(-10)}` : 'none'
-  })), null, 2));
+  void 0;
+  void 0;
 
-  // 4. Sample Users
+  
   const users = await User.find({}).limit(5).lean();
-  console.log('--- Sample Users ---');
-  console.log(JSON.stringify(users.map(u => ({
-    _id: u._id,
-    name: u.name,
-    email: u.email  
-  })), null, 2));
+  void 0;
+  void 0;
 };
 
 main()

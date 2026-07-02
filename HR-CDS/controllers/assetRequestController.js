@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const AssetRequest = require('../models/AssetRequest');
+const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
 const CompanyAsset = require('../../models/CompanyAsset');
 const User = require('../../models/User');
 const { sendNotification, notifyCompanyOwners } = require('../../HR-CDS/utils/notificationHelper');
@@ -164,10 +165,10 @@ const sendAssetRequestStatusEmail = async ({ to, userName, assetName, status, ad
   });
 };
 
-// ✅ USER: Get available company assets for dropdown
+
 exports.getAvailableAssets = async (req, res) => {
   try {
-    console.log('🔍 Fetching available assets for user:', req.user._id);
+    void 0;
     
     const query = { 
       companyCode: req.user.companyCode,
@@ -183,7 +184,7 @@ exports.getAvailableAssets = async (req, res) => {
       .select('name description status companyCode branch quantity')
       .sort({ name: 1 });
     
-    console.log(`✅ Found ${assets.length} available assets`);
+    void 0;
     
     res.status(200).json({
       success: true,
@@ -199,19 +200,14 @@ exports.getAvailableAssets = async (req, res) => {
   }
 };
 
-// ✅ USER: Request an asset from company assets
+
 exports.requestAsset = async (req, res) => {
   try {
     const { assetId, reason, expectedReturnDate } = req.body;
     
-    console.log('🔍 Asset request received:', {
-      userId: req.user._id,
-      assetId,
-      reason,
-      expectedReturnDate
-    });
+    void 0;
 
-    // Validate asset ID
+    
     if (!assetId || !mongoose.Types.ObjectId.isValid(assetId)) {
       return res.status(400).json({ 
         success: false, 
@@ -219,7 +215,7 @@ exports.requestAsset = async (req, res) => {
       });
     }
 
-    // Check if asset exists and is available
+    
     const asset = await CompanyAsset.findOne({
       _id: assetId,
       companyCode: req.user.companyCode
@@ -239,7 +235,7 @@ exports.requestAsset = async (req, res) => {
       });
     }
 
-    // Check for existing pending request for this asset
+    
     const existingRequest = await AssetRequest.findOne({
       asset: assetId,
       user: req.user._id,
@@ -253,7 +249,7 @@ exports.requestAsset = async (req, res) => {
       });
     }
 
-    // Create new request
+    
     const newRequest = new AssetRequest({
       user: req.user._id,
       asset: assetId,
@@ -277,7 +273,7 @@ exports.requestAsset = async (req, res) => {
         expectedReturnDate,
         requestId: newRequest._id.toString()
       });
-      console.log(`✅ Asset request confirmation email sent to ${req.user.email}`);
+      void 0;
     } catch (emailError) {
       console.error('❌ Failed to send asset request confirmation email:', emailError.message);
     }
@@ -301,13 +297,13 @@ exports.requestAsset = async (req, res) => {
       });
 
       if (ownerEmails.length > 0) {
-        console.log(`✅ Asset request admin email sent to ${ownerEmails.length} recipient(s)`);
+        void 0;
       }
     } catch (emailError) {
       console.error('❌ Failed to send asset request admin email:', emailError.message);
     }
 
-    // 🔔 NOTIFY ADMINS / OWNERS
+    
 try {
   await notifyPageUsers({
     companyId: req.user.company || req.user.companyId,
@@ -346,18 +342,18 @@ try {
     excludeUser: req.user._id
   });
 
-  console.log('✅ Asset request notification sent to admins');
+  void 0;
 } catch (err) {
   console.error('❌ Notification error:', err.message);
 }
     
-    // Populate user and asset details for response
+    
     await newRequest.populate([
       { path: 'user', select: 'name email department' },
       { path: 'asset', select: 'name description status' }
     ]);
 
-    console.log('✅ Asset request created successfully:', newRequest._id);
+    void 0;
 
     return res.status(201).json({
       success: true,
@@ -374,10 +370,10 @@ try {
   }
 };
 
-// ✅ USER: Get my asset requests
+
 exports.getMyRequests = async (req, res) => {
   try {
-    console.log('🔍 Fetching requests for user:', req.user._id);
+    void 0;
     
     const requests = await AssetRequest.find({ 
       user: req.user._id,
@@ -402,7 +398,7 @@ exports.getMyRequests = async (req, res) => {
   }
 };
 
-// ✅ USER: Cancel my pending request
+
 exports.cancelRequest = async (req, res) => {
   try {
     const { id } = req.params;
@@ -437,10 +433,11 @@ exports.cancelRequest = async (req, res) => {
   }
 };
 
-// ✅ ADMIN: Get all requests with filters
+
 exports.getAllRequests = async (req, res) => {
   try {
     const { status, department, assetId } = req.query;
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
     const filter = { companyCode: req.user.companyCode };
 
     if (status) filter.status = status;
@@ -449,15 +446,23 @@ exports.getAllRequests = async (req, res) => {
       filter.asset = assetId;
     }
 
-    const requests = await AssetRequest.find(filter)
-      .populate('user', 'name email department')
-      .populate('asset', 'name description status')
-      .populate('approvedBy', 'name email')
-      .sort({ createdAt: -1 });
+    const [requests, total] = await Promise.all([
+      AssetRequest.find(filter)
+        .populate('user', 'name email department')
+        .populate('asset', 'name description status')
+        .populate('approvedBy', 'name email')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      AssetRequest.countDocuments(filter)
+    ]);
 
     res.status(200).json({
       success: true,
       count: requests.length,
+      total,
+      pagination: buildPaginationMeta({ page, limit, total }),
       requests
     });
 
@@ -470,14 +475,14 @@ exports.getAllRequests = async (req, res) => {
   }
 };
 
-// ✅ ADMIN: Update request status (approve/reject)
+
 exports.updateRequestStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { status, adminComment } = req.body;
     
     const validStatuses = ['approved', 'rejected', 'completed'];
-          // ✅ allow comment-only update
+          
       if (!status && !adminComment) {
         return res.status(400).json({
           success: false,
@@ -485,7 +490,7 @@ exports.updateRequestStatus = async (req, res) => {
         });
       }
 
-      // ✅ validate only if status comes
+      
       if (status) {
         const validStatuses = ['approved', 'rejected', 'completed'];
         if (!validStatuses.includes(status)) {
@@ -510,7 +515,7 @@ exports.updateRequestStatus = async (req, res) => {
       });
     }
 
-    // If approving, check if asset is still available
+    
     if (status === 'approved' && request.asset.quantity <= 0) {
       return res.status(400).json({ 
         success: false, 
@@ -518,14 +523,14 @@ exports.updateRequestStatus = async (req, res) => {
       });
     }
 
-    // Update request
-   // ✅ only update status if provided
+    
+   
       if (status) {
         request.status = status;
       }
 
-      // ✅ main fix (IMPORTANT)
-      // ✅ ensure array exists
+      
+      
         if (!request.adminComments) {
           request.adminComments = [];
         }
@@ -540,7 +545,7 @@ exports.updateRequestStatus = async (req, res) => {
     request.decisionDate = new Date();
     request.approvedBy = req.user._id;
 
-    // If approved, update asset status to 'Assigned'
+    
     if (status === 'approved') {
       await CompanyAsset.findByIdAndUpdate(request.asset._id, {
         status: 'Assigned',
@@ -549,7 +554,7 @@ exports.updateRequestStatus = async (req, res) => {
       });
     }
 
-    // If completed, update asset status back to 'Available'
+    
     if (status === 'completed') {
       await CompanyAsset.findByIdAndUpdate(request.asset._id, {
         status: 'Available',
@@ -572,13 +577,13 @@ exports.updateRequestStatus = async (req, res) => {
           requestId: request._id.toString(),
           approverName: req.user.name || req.user.email || 'Admin'
         });
-        console.log(`✅ Asset request status email sent to ${request.user?.email}`);
+        void 0;
       } catch (emailError) {
         console.error('❌ Failed to send asset request status email:', emailError.message);
       }
     }
 
-    // 🔔 NOTIFY USER ABOUT STATUS CHANGE
+    
 try {
   await notifyDirectUsers({
     userIds: [request.user?._id || request.user],
@@ -614,7 +619,7 @@ try {
     priority: 'high'
   });
 
-  console.log('✅ Notification sent to user');
+  void 0;
 } catch (err) {
   console.error('❌ Notification error:', err.message);
 }
@@ -634,7 +639,7 @@ try {
   }
 };
 
-// ✅ ADMIN: Delete request
+
 exports.deleteRequest = async (req, res) => {
   try {
     const { id } = req.params;
@@ -667,7 +672,7 @@ exports.deleteRequest = async (req, res) => {
   }
 };
 
-// ✅ Get asset request statistics
+
 exports.getRequestStats = async (req, res) => {
   try {
     const stats = await AssetRequest.aggregate([
@@ -699,4 +704,4 @@ exports.getRequestStats = async (req, res) => {
   }
 };
 
-console.log("✅ assetRequestController.js loaded");
+void 0;

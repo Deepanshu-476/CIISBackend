@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const MenuItem = require('../models/MenuItem');
 
-// Get all active menu items
+
 router.get('/', async (req, res) => {
   try {
     const items = await MenuItem.find({ isActive: true }).sort({ order: 1 });
@@ -12,7 +12,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Get all menu items (including inactive for admin)
+
 router.get('/all', async (req, res) => {
   try {
     const items = await MenuItem.find().sort({ order: 1 });
@@ -22,7 +22,7 @@ router.get('/all', async (req, res) => {
   }
 });
 
-// Create new menu item
+
 router.post('/', async (req, res) => {
   try {
     const { name, icon, path, category, isActive = true, order = 0 } = req.body;
@@ -31,7 +31,7 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'Name and path are required' });
     }
     
-    // Check if menu item already exists
+    
     const existingItem = await MenuItem.findOne({ 
       $or: [{ name }, { path }] 
     });
@@ -57,7 +57,7 @@ router.post('/', async (req, res) => {
   }
 });
 
-// Update menu item
+
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -78,7 +78,7 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-// Delete menu item (soft delete)
+
 router.delete('/:id', async (req, res) => {
   try {
     const menuItem = await MenuItem.findByIdAndUpdate(
@@ -97,7 +97,7 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// Restore menu item
+
 router.put('/:id/restore', async (req, res) => {
   try {
     const menuItem = await MenuItem.findByIdAndUpdate(
@@ -126,4 +126,4 @@ router.get('/test', (req, res) => {
 });
 
 module.exports = router;
-console.log("✅ menuItems.js loaded successfully");
+void 0;
