@@ -2,6 +2,7 @@ const Group = require('../models/Group');
 const Task = require('../models/Task');
 const User = require('../../models/User');
 const {notifyDirectUsers} = require('../utils/systemNotificationService');
+const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
 
 
 exports.createGroup = async (req, res) => {
@@ -83,19 +84,30 @@ exports.createGroup = async (req, res) => {
 
 exports.getGroups = async (req, res) => {
   try {
-    const groups = await Group.find({
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
+    const filter = {
       isActive: true,
       $or: [
         { createdBy: req.user._id },
         { members: req.user._id }
       ]
-    })
-    .populate('members', 'name role email')
-    .sort({ createdAt: -1 });
+    };
+    const [groups, total] = await Promise.all([
+      Group.find(filter)
+        .populate('members', 'name role email')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Group.countDocuments(filter)
+    ]);
 
     res.json({
       success: true,
-      groups
+      groups,
+      count: groups.length,
+      total,
+      pagination: buildPaginationMeta({ page, limit, total })
     });
 
   } catch (error) {

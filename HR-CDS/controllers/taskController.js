@@ -705,7 +705,7 @@ exports.getTasks = async (req, res) => {
       fetchAssignedToMeTaskList(req)
     ]);
     const list = applyCleanListFilters([...personal, ...assigned], req);
-    return res.json({ success: true, groupedTasks: groupTasksByDate(list, 'createdAt', 'serialNo') });
+    return sendCleanTaskList(res, list, 'tasks', 'createdAt', req);
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
@@ -715,7 +715,7 @@ exports.getMyTasks = async (req, res) => {
   try {
     const list = await fetchAssignedToMeTaskList(req);
     const filtered = applyCleanListFilters(list, req);
-    return res.json({ success: true, groupedTasks: groupTasksByDate(filtered, 'createdAt', 'mySerialNo') });
+    return sendCleanTaskList(res, filtered, 'my', 'createdAt', req);
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }

@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const AssetRequest = require('../models/AssetRequest');
+const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
 const CompanyAsset = require('../../models/CompanyAsset');
 const User = require('../../models/User');
 const { sendNotification, notifyCompanyOwners } = require('../../HR-CDS/utils/notificationHelper');
@@ -431,6 +432,7 @@ exports.cancelRequest = async (req, res) => {
 exports.getAllRequests = async (req, res) => {
   try {
     const { status, department, assetId } = req.query;
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
     const filter = { companyCode: req.user.companyCode };
 
     if (status) filter.status = status;
@@ -439,15 +441,23 @@ exports.getAllRequests = async (req, res) => {
       filter.asset = assetId;
     }
 
-    const requests = await AssetRequest.find(filter)
-      .populate('user', 'name email department')
-      .populate('asset', 'name description status')
-      .populate('approvedBy', 'name email')
-      .sort({ createdAt: -1 });
+    const [requests, total] = await Promise.all([
+      AssetRequest.find(filter)
+        .populate('user', 'name email department')
+        .populate('asset', 'name description status')
+        .populate('approvedBy', 'name email')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      AssetRequest.countDocuments(filter)
+    ]);
 
     res.status(200).json({
       success: true,
       count: requests.length,
+      total,
+      pagination: buildPaginationMeta({ page, limit, total }),
       requests
     });
 

@@ -7,6 +7,7 @@ const {notifyDirectUsers} = require("../utils/systemNotificationService");
 const { sendEmail } = require("../../utils/sendEmail");
 const User = require("../../models/User");
 const mongoose = require("mongoose");
+const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagination");
 
 
 const storage = multer.diskStorage({
@@ -301,13 +302,20 @@ exports.listProjects = async (req, res) => {
       void 0;
     }
 
-    const projects = await Project.find(query)
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
+    const [projects, total] = await Promise.all([
+      Project.find(query)
       .populate('users', 'name email role company companyCode')
       .populate('createdBy', 'name email')
       .populate('tasks.assignedTo', 'name email')
       .populate('tasks.assignedUsers', 'name email')
       .populate('tasks.createdBy', 'name email')
-      .sort({ createdAt: -1 });
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Project.countDocuments(query)
+    ]);
 
     const scopedProjects = projects.filter(project => projectBelongsToUserCompany(project, req.user));
 
@@ -316,6 +324,8 @@ exports.listProjects = async (req, res) => {
     res.status(200).json({
       success: true,
       count: scopedProjects.length,
+      total,
+      pagination: buildPaginationMeta({ page, limit, total }),
       items: scopedProjects
     });
   } catch (error) {

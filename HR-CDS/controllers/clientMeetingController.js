@@ -5,6 +5,7 @@ const Client = require('../models/Client');
 const User = require('../../models/User');
 const { sendEmail } = require('../../utils/sendEmail');
 const { notifyDirectUsers } = require('../utils/systemNotificationService');
+const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
 
 const clientMeetingJobs = new Map();
 
@@ -152,11 +153,25 @@ const meetingPopulate = [
 
 const getMeetings = async (req, res, next) => {
   try {
-    const meetings = await ClientMeeting.find(buildCompanyFilter(req))
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
+    const filter = buildCompanyFilter(req);
+    const [meetings, total] = await Promise.all([
+      ClientMeeting.find(filter)
       .populate(meetingPopulate)
-      .sort({ meetingDate: -1, meetingTime: 1 });
+        .sort({ meetingDate: -1, meetingTime: 1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      ClientMeeting.countDocuments(filter)
+    ]);
 
-    res.status(200).json({ success: true, count: meetings.length, data: meetings });
+    res.status(200).json({
+      success: true,
+      count: meetings.length,
+      total,
+      pagination: buildPaginationMeta({ page, limit, total }),
+      data: meetings
+    });
   } catch (error) {
     next(error);
   }
@@ -164,7 +179,7 @@ const getMeetings = async (req, res, next) => {
 
 const getMeeting = async (req, res, next) => {
   try {
-    const meeting = await ClientMeeting.findById(req.params.id).populate(meetingPopulate);
+    const meeting = await ClientMeeting.findById(req.params.id).populate(meetingPopulate).lean();
     if (!meeting) return res.status(404).json({ success: false, error: 'Meeting not found' });
     res.status(200).json({ success: true, data: meeting });
   } catch (error) {
