@@ -58,6 +58,13 @@ const parseClientDueDate = value => {
   return Number.isNaN(date.getTime()) ? null : date;
 };
 
+const getSubscriptionTaskDueDate = subscription => {
+  if (!subscription?.endDate) return null;
+  const dueDate = new Date(subscription.endDate);
+  if (Number.isNaN(dueDate.getTime())) return null;
+  return dueDate;
+};
+
 const getClientTaskDueDateRange = period => {
   if (!period || period === 'all') return null;
 
@@ -1687,7 +1694,8 @@ const addTask = async (req, res) => {
     const { clientId, service } = req.params;
     const { name, dueDate, dueDateTime, assignee, assigneeId, priority, description, subscriptionId, subscriptionNo } = req.body;
     const currentUser = req.user;
-    const parsedDueDate = parseClientDueDate(dueDateTime || dueDate);
+    const requestedDueDate = dueDateTime || dueDate;
+    const parsedDueDate = parseClientDueDate(requestedDueDate);
 
     if (!name || name.trim().length === 0) {
       return res.status(400).json({
@@ -1716,6 +1724,14 @@ const addTask = async (req, res) => {
       : subscriptionNo
         ? client.subscription.find(sub => Number(sub.subscriptionNo) === Number(subscriptionNo))
         : client.subscription?.[client.subscription.length - 1];
+    const effectiveDueDate = parsedDueDate || getSubscriptionTaskDueDate(selectedSubscription);
+
+    if (!effectiveDueDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'Task due date is required because the selected subscription has no valid end date'
+      });
+    }
 
     let resolvedAssigneeId = assigneeId || null;
     if (!resolvedAssigneeId && assignee) {
@@ -1734,7 +1750,8 @@ const addTask = async (req, res) => {
       service,
       name: name.trim(),
       description: description || name.trim(),
-      dueDate: parsedDueDate,
+      dueDate: effectiveDueDate,
+      dueDateSource: parsedDueDate ? 'manual' : 'subscription',
       assignee: assignee || '',
       assigneeId: resolvedAssigneeId,
       priority: priority || 'Medium',
@@ -1923,6 +1940,7 @@ const updateTask = async (req, res) => {
           changes.push(`due date from "${oldValue}" to "${parsedDueDate}"`);
         }
         task.dueDate = parsedDueDate;
+        task.dueDateSource = 'manual';
       } else if (updates[key] !== undefined) {
         task[key] = updates[key];
       }

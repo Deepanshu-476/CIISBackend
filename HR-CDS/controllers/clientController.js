@@ -64,16 +64,20 @@ const createSubscriptionFromInput = ({ sub = {}, plan = null, fallbackNo = 1 }) 
   };
 };
 
+const getSubscriptionTaskDueDate = subscription => {
+  if (!subscription?.endDate) return null;
+  const dueDate = new Date(subscription.endDate);
+  if (Number.isNaN(dueDate.getTime())) return null;
+  return dueDate;
+};
+
 const generateTasksForSubscription = async ({ client, subscription, plan, session }) => {
   if (!plan || !subscription?._id) return [];
   const createdTaskIds = [];
-  const startDate = subscription.startDate ? new Date(subscription.startDate) : new Date();
+  const subscriptionDueDate = getSubscriptionTaskDueDate(subscription);
 
   for (const serviceTemplate of plan.services || []) {
     for (const taskTemplate of serviceTemplate.tasks || []) {
-      const dueDate = new Date(startDate);
-      dueDate.setDate(dueDate.getDate() + Number(taskTemplate.dueInDays || 0));
-
       const [task] = await ClientTask.create([{
         clientId: client._id,
         subscriptionId: subscription._id,
@@ -85,7 +89,8 @@ const generateTasksForSubscription = async ({ client, subscription, plan, sessio
         service: serviceTemplate.service,
         name: taskTemplate.name,
         description: taskTemplate.description || taskTemplate.name,
-        dueDate,
+        dueDate: subscriptionDueDate,
+        dueDateSource: 'subscription',
         priority: taskTemplate.priority || 'Medium',
         status: 'pending',
         completed: false,
