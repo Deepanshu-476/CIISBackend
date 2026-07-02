@@ -589,6 +589,10 @@ app.use("/api/clientsservice", require("./HR-CDS/routes/clientRoutes.js"));
 app.use("/api/client-plans", require("./HR-CDS/routes/clientPlanRoutes.js"));
 app.use("/api/chat", require("./HR-CDS/chat/routes/chatRoutes"));
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> 99cdff2f2811b8e85121221441fb6e3802ab1443
 app.use("/api/tasks/self", require("./HR-CDS/routes/selfTaskRoute.js"));
 app.use("/api/tasks/assigned", require("./HR-CDS/routes/assignedTaskRoute.js"));
 app.use("/api/tasks/client-tasks", require("./HR-CDS/routes/clientTaskRoute.js"));
@@ -597,10 +601,6 @@ app.use("/api/tasks/all", require("./HR-CDS/routes/allTaskRoute.js"));
 
 // IMPORTANT: Client task routes are mounted here.
 // This ensures that /api/tasks/... endpoints are available.
-app.use("/api/tasks", require("./HR-CDS/routes/clientTask.js"));
-
-
-
 app.use("/api/tasks", require("./HR-CDS/routes/clientTask.js"));
 
 

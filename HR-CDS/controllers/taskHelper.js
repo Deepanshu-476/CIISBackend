@@ -238,7 +238,7 @@ const groupTasksByDate = (tasks, dateField = 'createdAt', serialKey = 'serialNo'
 };
 
 const getTaskSortDate = task => {
-  const dateValue = getTaskSourceAwareDate(task);
+  const dateValue = task?.createdAt || task?.createdDate || task?.updatedAt || getTaskSourceAwareDate(task);
   const date = new Date(dateValue || 0);
   return Number.isNaN(date.getTime()) ? 0 : date.getTime();
 };
@@ -438,7 +438,7 @@ const applyCleanListFilters = (tasks, req) => {
 
 const sendCleanTaskList = (res, tasks, view, dateField = 'createdAt', req = null) => {
   const sortedTasks = sortTasksNewestFirst(tasks);
-  const pagination = (req && req.query.page) ? paginateTasks(sortedTasks, req) : null;
+  const pagination = req ? paginateTasks(sortedTasks, req) : null;
   const responseTasks = pagination ? pagination.tasks : sortedTasks;
 
   return res.json({

@@ -17,13 +17,6 @@ exports.companyLogin = async (req, res) => {
       });
     }
 
-<<<<<<< HEAD
-=======
-
-
-
-    
->>>>>>> a04bca305ce6aae547db9131db786bfd463001eb
     
     const user = await User.findOne({
       email: email.toLowerCase(),

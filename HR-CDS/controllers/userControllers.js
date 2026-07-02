@@ -1035,6 +1035,7 @@ exports.getCompanyUsers = async (req, res) => {
       .lean();
     const socketOnlineIds = getSocketOnlineUserIds(companyId);
 
+<<<<<<< HEAD
     const includeStats = req.query.includeStats === 'true';
     let statsByUser = new Map();
 
@@ -1080,6 +1081,75 @@ exports.getCompanyUsers = async (req, res) => {
         }
       };
     });
+=======
+    
+    const usersWithStats = await Promise.all(
+      users.map(async (user) => {
+        const total = await Task.countDocuments({
+          assignedTo: user._id,
+          company: companyId
+        });
+>>>>>>> 99cdff2f2811b8e85121221441fb6e3802ab1443
+
+        const completed = await Task.countDocuments({
+          assignedTo: user._id,
+          company: companyId,
+          status: "completed"
+        });
+
+        const completionRate = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+        return {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          company: user.company,
+          department: user.department,
+          jobRole: user.jobRole,
+          phone: user.phone,
+          address: user.address,
+          gender: user.gender,
+          maritalStatus: user.maritalStatus,
+          dob: user.dob,
+          employeeType: user.employeeType,
+          salary: user.salary,
+          accountNumber: user.accountNumber,
+          ifsc: user.ifsc,
+          bankName: user.bankName,
+          bankHolderName: user.bankHolderName,
+          fatherName: user.fatherName,
+          motherName: user.motherName,
+          spouseName: user.spouseName,
+          children: user.children,
+          documents: user.documents,
+          emergencyName: user.emergencyName,
+          emergencyPhone: user.emergencyPhone,
+          emergencyRelation: user.emergencyRelation,
+          emergencyAddress: user.emergencyAddress,
+          properties: user.properties,
+          propertyOwned: user.propertyOwned,
+          additionalDetails: user.additionalDetails,
+          employeeId: user.employeeId,
+          companyRole: user.companyRole,
+          reportingManager: user.reportingManager,
+          dateOfJoining: user.dateOfJoining,
+          workLocation: user.workLocation,
+          city: user.city,
+          state: user.state,
+          zipCode: user.zipCode,
+          country: user.country,
+          isActive: user.isActive,
+          ...getUserPresence(user, socketOnlineIds),
+          createdAt: user.createdAt,
+          updatedAt: user.updatedAt,
+          taskStats: {
+            total,
+            completed,
+            completionRate
+          }
+        };
+      })
+    );
 
     return successResponse(res, 200, {
       count: usersWithStats.length,

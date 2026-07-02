@@ -172,11 +172,16 @@ exports.getAvailableAssets = async (req, res) => {
     
     const query = { 
       companyCode: req.user.companyCode,
-      status: 'Available'  
+      $or: [
+        { status: 'Available' },
+        { status: { $exists: false } },
+        { status: null },
+        { status: '' }
+      ]
     };
     
     const assets = await CompanyAsset.find(query)
-      .select('name description status companyCode')
+      .select('name description status companyCode branch quantity')
       .sort({ name: 1 });
     
     void 0;

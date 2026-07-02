@@ -75,7 +75,7 @@ const createCompanyAsset = async (req, res) => {
       });
     }
 
-    const { name, description, quantity } = req.body;
+    const { name, description, quantity, branch } = req.body;
 
     
     if (!name || !name.trim()) {
@@ -100,6 +100,8 @@ const createCompanyAsset = async (req, res) => {
       name: name.trim(),
       description: description ? description.trim() : '',
       quantity: quantity || 0,
+      status: 'Available',
+      branch: branch || null,
       company: req.user.companyName || req.user.company || 'Unknown',
       companyCode: req.user.companyCode,
       createdBy: req.user._id
@@ -114,6 +116,7 @@ const createCompanyAsset = async (req, res) => {
 
     
     await asset.populate('createdBy', 'name email');
+    await asset.populate('branch', 'name branchCode');
 
     res.status(201).json({
       success: true,

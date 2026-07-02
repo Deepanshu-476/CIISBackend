@@ -15,6 +15,25 @@ const companyAssetSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  status: {
+    type: String,
+    enum: ['Available', 'Assigned', 'Maintenance'],
+    default: 'Available'
+  },
+  branch: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Branch',
+    default: null
+  },
+  assignedTo: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
+  assignedDate: {
+    type: Date,
+    default: null
+  },
   company: {
     type: String,
     required: [true, 'Company code is required'],

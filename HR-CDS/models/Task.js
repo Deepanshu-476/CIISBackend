@@ -194,9 +194,12 @@ taskSchema.index({ assignedUsers: 1, dueDateTime: 1 });
 taskSchema.index({ overallStatus: 1, dueDateTime: 1 });
 taskSchema.index({ createdBy: 1, createdAt: -1 });
 taskSchema.index({ 'statusByUser.user': 1, 'statusByUser.status': 1 });
+<<<<<<< HEAD
 taskSchema.index({ companyCode: 1, isActive: 1, taskFor: 1, createdAt: -1 });
 taskSchema.index({ companyCode: 1, isActive: 1, taskFor: 1, assignedUsers: 1, createdAt: -1 });
 taskSchema.index({ companyCode: 1, isActive: 1, taskFor: 1, assignedGroups: 1, createdAt: -1 });
+=======
+>>>>>>> 99cdff2f2811b8e85121221441fb6e3802ab1443
 
  
 taskSchema.virtual('isPastDue').get(function() {

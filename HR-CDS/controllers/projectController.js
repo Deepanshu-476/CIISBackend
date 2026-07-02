@@ -160,7 +160,45 @@ const sendProjectTaskAssignmentEmail = async ({ user, actorName, taskTitle, proj
   }
 };
 
+const getObjectIdTime = (id) => {
+  const value = String(id || "");
+  if (!/^[a-f\d]{24}$/i.test(value)) return 0;
+  return parseInt(value.slice(0, 8), 16) * 1000;
+};
 
+const getTaskCreatedTime = (task = {}) => {
+  const creationLog = Array.isArray(task.activityLogs)
+    ? task.activityLogs.find(log => log?.type === "creation")
+    : null;
+  const date = new Date(
+    task.createdAt ||
+    task.createdDate ||
+    creationLog?.performedAt ||
+    creationLog?.createdAt ||
+    0
+  );
+  const parsedTime = Number.isNaN(date.getTime()) ? 0 : date.getTime();
+  if (parsedTime) return parsedTime;
+  return getObjectIdTime(task._id || task.id);
+};
+
+const sortProjectTasksByCreatedAt = (tasks = []) => (
+  Array.isArray(tasks)
+    ? [...tasks].sort((a, b) => {
+        const createdDiff = getTaskCreatedTime(b) - getTaskCreatedTime(a);
+        if (createdDiff !== 0) return createdDiff;
+        return new Date(b.updatedAt || b.dueDate || 0) - new Date(a.updatedAt || a.dueDate || 0);
+      })
+    : []
+);
+
+const withSortedProjectTasks = (project) => {
+  const plainProject = typeof project?.toObject === "function" ? project.toObject() : project;
+  return {
+    ...plainProject,
+    tasks: sortProjectTasksByCreatedAt(plainProject?.tasks)
+  };
+};
 
 
 exports.getUserNotifications = async (req, res) => {
@@ -317,7 +355,9 @@ exports.listProjects = async (req, res) => {
       Project.countDocuments(query)
     ]);
 
-    const scopedProjects = projects.filter(project => projectBelongsToUserCompany(project, req.user));
+    const scopedProjects = projects
+      .filter(project => projectBelongsToUserCompany(project, req.user))
+      .map(withSortedProjectTasks);
 
     void 0;
 
@@ -388,7 +428,7 @@ exports.getProjectById = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      ...project.toObject(),
+      ...withSortedProjectTasks(project),
       userHasAccess: true
     });
   } catch (error) {
@@ -841,12 +881,15 @@ exports.addTask = async (req, res) => {
 
       
       const safeTitle = title?.trim() || "Untitled Task";
+      const now = new Date();
       const task = {
         title: safeTitle,
         description: description?.trim() || "",
         priority: priority?.toLowerCase(),
         status: status?.toLowerCase() || 'pending',
-        createdBy: req.user.id
+        createdBy: req.user.id,
+        createdAt: now,
+        updatedAt: now
       };
 
       if (assignedUserIds.length) {

@@ -1461,7 +1461,7 @@ const getAssignedTasksByUserId = async (req, res) => {
       ]
     })
       .populate('clientId', 'name email company phone')
-      .sort({ dueDate: 1, createdAt: -1 });
+      .sort({ createdAt: -1 });
 
     const formattedTasks = tasks.map(task => ({
       _id: task._id,
