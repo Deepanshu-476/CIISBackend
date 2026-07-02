@@ -1634,6 +1634,54 @@ const getClientTasks = async (req, res) => {
   }
 };
 
+// Return task counters for a page of clients in one database query. This avoids
+// the client-management screen issuing one (or more) requests per client.
+const getClientTaskSummaries = async (req, res) => {
+  try {
+    const rawIds = Array.isArray(req.query.clientIds)
+      ? req.query.clientIds
+      : String(req.query.clientIds || '').split(',');
+    const clientIds = [...new Set(rawIds.map(id => String(id).trim()).filter(id => mongoose.Types.ObjectId.isValid(id)))];
+
+    if (!clientIds.length) {
+      return res.json({ success: true, data: {} });
+    }
+    if (clientIds.length > 100) {
+      return res.status(400).json({ success: false, message: 'A maximum of 100 client IDs is allowed' });
+    }
+
+    const tasks = await Task.find({ clientId: { $in: clientIds } })
+      .select('clientId name title taskName completed status dueDate')
+      .lean();
+    const summaries = Object.fromEntries(clientIds.map(id => [
+      id,
+      { total: 0, completed: 0, pending: 0, overdue: 0, overdueTaskNames: [] }
+    ]));
+
+    tasks.forEach(task => {
+      const summary = summaries[String(task.clientId)];
+      if (!summary) return;
+      summary.total += 1;
+      if (task.completed) summary.completed += 1;
+      else summary.pending += 1;
+      if (isClientTaskOverdue(task)) {
+        summary.overdue += 1;
+        const name = task.name || task.title || task.taskName;
+        if (name) summary.overdueTaskNames.push(name);
+      }
+    });
+
+    return res.json({ success: true, data: summaries });
+  } catch (error) {
+    console.error('Error fetching client task summaries:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error fetching client task summaries',
+      error: error.message
+    });
+  }
+};
+
 const addTask = async (req, res) => {
   try {
     const { clientId, service } = req.params;
@@ -2334,6 +2382,7 @@ module.exports = {
   addClientActivityLogHelper,
   getTasksByClientService,
   getClientTasks,
+  getClientTaskSummaries,
   addTask,
   updateTask,
   toggleTaskCompletion,

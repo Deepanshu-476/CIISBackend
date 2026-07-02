@@ -142,6 +142,7 @@ router.get('/:taskId/debug', authMiddleware, taskController.debugActivityLogs);
 
 router.get('/client/:clientId/service/:service', taskController.getTasksByClientService);
 router.post('/client/:clientId/service/:service', authMiddleware, taskController.addTask);
+router.get('/summary/bulk', authMiddleware, taskController.getClientTaskSummaries);
 router.get('/client/:clientId', taskController.getClientTasks);
 router.get('/client/:clientId/stats', taskController.getTaskStats);
 router.put('/:taskId', authMiddleware, taskController.updateTask);
