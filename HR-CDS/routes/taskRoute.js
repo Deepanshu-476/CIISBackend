@@ -34,8 +34,13 @@ router.put('/:taskId', protect, uploadFields, taskController.updateTask);
 router.delete('/:taskId', protect, taskController.deleteTask);
 router.patch('/:taskId/status', protect, taskController.updateStatus);
 router.patch('/:taskId/quick-status', protect, taskController.quickStatusUpdate);
+router.patch('/:taskId/creator-status', protect, taskController.updateCreatorStatus);
 
 
+<<<<<<< HEAD
+
+=======
+>>>>>>> a04bca305ce6aae547db9131db786bfd463001eb
 
 router.post('/:taskId/remarks', protect, uploadRemarkImage, taskController.addRemark);
 router.get('/:taskId/remarks', protect, taskController.getRemarks);

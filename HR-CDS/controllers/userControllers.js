@@ -4,6 +4,7 @@ const Department = require('../../models/Department');
 const bcrypt = require('bcryptjs');
 const { errorResponse, successResponse } = require('../utils/responseHelper.js');
 const Task = require('../../HR-CDS/models/Task.js');
+const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
 
 const getSocketOnlineUserIds = (companyId) => {
   const onlineIds = new Set();
@@ -67,6 +68,7 @@ const shouldIncludeInactiveUsers = (query = {}) => {
   return value === true || value === 'true' || value === '1' || value === 'all';
 };
 
+<<<<<<< HEAD
 const escapeRegExp = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const getCompanyScope = (req) => {
@@ -93,6 +95,8 @@ const getCompanyScope = (req) => {
   };
 };
 
+=======
+>>>>>>> a04bca305ce6aae547db9131db786bfd463001eb
 
 const USER_FIELDS = {
   
@@ -231,6 +235,7 @@ exports.updateMe = async (req, res) => {
     const updateData = {};
     
     
+<<<<<<< HEAD
     const protectedFields = new Set([
       '_id',
       '__v',
@@ -245,6 +250,11 @@ exports.updateMe = async (req, res) => {
 
     Object.keys(req.body).forEach(key => {
       if (!protectedFields.has(key)) {
+=======
+    Object.keys(req.body).forEach(key => {
+      
+      if (key !== 'password' && key !== 'resetToken' && key !== 'resetTokenExpiry' && key !== '__v') {
+>>>>>>> a04bca305ce6aae547db9131db786bfd463001eb
         updateData[key] = req.body[key];
       }
     });
@@ -410,6 +420,10 @@ exports.register = async (req, res) => {
 
 exports.getAllUsers = async (req, res) => {
   try {
+<<<<<<< HEAD
+=======
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
+>>>>>>> a04bca305ce6aae547db9131db786bfd463001eb
     
     const userCompany = req.user.company;
     const userDepartment = req.user.department;
@@ -432,12 +446,29 @@ exports.getAllUsers = async (req, res) => {
       filter.department = userDepartment;
     }
 
-    const users = await User.find(filter)
+    const search = String(req.query.search || req.query.q || '').trim();
+    if (search) {
+      const searchRegex = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      filter.$or = [
+        { name: searchRegex },
+        { email: searchRegex },
+        { employeeId: searchRegex },
+        { phone: searchRegex }
+      ];
+    }
+
+    const [users, total] = await Promise.all([
+      User.find(filter)
       .select('-password -resetToken -resetTokenExpiry')
       .populate('department', 'name description')
-      .populate('company', 'name companyCode')
+        .populate('company', 'companyName companyCode')
       .populate('createdBy', 'name email')
-      .sort({ createdAt: -1 });
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      User.countDocuments(filter)
+    ]);
 
     
     const formattedUsers = users.map(user => ({
@@ -486,7 +517,10 @@ exports.getAllUsers = async (req, res) => {
 
     return successResponse(res, 200, {
       count: formattedUsers.length,
-      users: formattedUsers
+      total,
+      pagination: buildPaginationMeta({ page, limit, total }),
+      users: formattedUsers,
+      data: formattedUsers
     });
   } catch (err) {
     console.error("❌ Get users error:", err);
@@ -643,6 +677,15 @@ exports.updateUser = async (req, res) => {
       }
     }
 
+<<<<<<< HEAD
+=======
+    
+    if (req.body.password) {
+      updateData.password = req.body.password;
+    }
+
+    
+>>>>>>> a04bca305ce6aae547db9131db786bfd463001eb
     const updatedUser = await User.findByIdAndUpdate(
       id,
       { $set: updateData },
@@ -1018,6 +1061,7 @@ exports.getCompanyUsers = async (req, res) => {
     const socketOnlineIds = getSocketOnlineUserIds(companyId);
 
     
+<<<<<<< HEAD
     const includeStats = req.query.includeStats === 'true';
 
     const usersWithStats = includeStats
@@ -1137,6 +1181,13 @@ exports.getCompanyUsers = async (req, res) => {
               completionRate: 0
             }
           };
+=======
+    const usersWithStats = await Promise.all(
+      users.map(async (user) => {
+        const total = await Task.countDocuments({
+          assignedTo: user._id,
+          company: companyId
+>>>>>>> a04bca305ce6aae547db9131db786bfd463001eb
         });
 
     return successResponse(res, 200, {

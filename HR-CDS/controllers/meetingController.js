@@ -4,6 +4,7 @@ const User = require("../../models/User");
 const { sendEmail } = require("../../utils/sendEmail");
 const { notifyDirectUsers } = require("../utils/systemNotificationService");
 const { scheduleMeetingReminder, cancelMeetingReminder } = require("../../services/meetingSchedulerService");
+const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagination");
 
  
 const createMeeting = async (req, res) => {
@@ -244,24 +245,44 @@ const updateMeeting = async (req, res) => {
 const getUserMeetings = async (req, res) => {
   try {
     const { companyCode } = req.query;
-
-    const userMeetings = await Meeting.find({
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
+    const filter = {
       attendees: req.params.userId,
       ...(companyCode && { companyCode })
-    }).sort({ date: 1 });
+    };
 
-    const views = await MeetingView.find({ userId: req.params.userId });
+    const [userMeetings, total] = await Promise.all([
+      Meeting.find(filter)
+        .sort({ date: 1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Meeting.countDocuments(filter)
+    ]);
+
+    const meetingIds = userMeetings.map(meeting => meeting._id);
+    const views = await MeetingView.find({
+      userId: req.params.userId,
+      meetingId: { $in: meetingIds }
+    }).lean();
 
     const data = userMeetings.map((m) => {
       const v = views.find((vv) => vv.meetingId.toString() === m._id.toString());
       return {
-        ...m.toObject(),
+        ...m,
         viewed: v ? v.viewed : false,
         viewedAt: v ? v.viewedAt : null,
       };
     });
 
-    res.json(data);
+    res.json({
+      success: true,
+      data,
+      meetings: data,
+      count: data.length,
+      total,
+      pagination: buildPaginationMeta({ page, limit, total })
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -303,9 +324,24 @@ const getViewStatus = async (req, res) => {
 const getAllMeetings = async (req, res) => {
   try {
     const { companyCode } = req.query;
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
     const filter = companyCode ? { companyCode } : {};
-    const meetings = await Meeting.find(filter).sort({ date: -1 });
-    res.json(meetings);
+    const [meetings, total] = await Promise.all([
+      Meeting.find(filter)
+        .sort({ date: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Meeting.countDocuments(filter)
+    ]);
+    res.json({
+      success: true,
+      data: meetings,
+      meetings,
+      count: meetings.length,
+      total,
+      pagination: buildPaginationMeta({ page, limit, total })
+    });
   } catch (error) {
     console.error("Get All Meetings Error:", error);
     res.status(500).json({ error: error.message });
