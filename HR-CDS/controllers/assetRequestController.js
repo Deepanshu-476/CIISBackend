@@ -265,7 +265,7 @@ exports.requestAsset = async (req, res) => {
     await newRequest.save();
 
     try {
-      await sendAssetRequestSubmittedEmail({
+      await sendAssetRequestSubmittedEmail({  
         to: req.user.email,
         userName: req.user.name,
         assetName: asset.name,

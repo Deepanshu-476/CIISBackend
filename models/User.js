@@ -3,6 +3,16 @@ const bcrypt = require("bcryptjs");
 const validator = require("validator");
 const crypto = require("crypto");
 
+const userDocumentSchema = new mongoose.Schema({
+  name: String,
+  type: String,
+  url: String,
+  uploadedAt: {
+    type: Date,
+    default: Date.now
+  }
+}, { _id: true });
+
 const userSchema = new mongoose.Schema({
   
   company: {
@@ -242,15 +252,10 @@ currentlyAssignedAssets: [{
   },
   
   
-  documents: [{
-    name: String,
-    type: String,
-    url: String,
-    uploadedAt: {
-      type: Date,
-      default: Date.now
-    }
-  }]
+  documents: {
+    type: [userDocumentSchema],
+    default: []
+  }
 
 }, {
   timestamps: true,
