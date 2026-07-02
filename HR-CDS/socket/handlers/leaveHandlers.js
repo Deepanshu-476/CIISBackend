@@ -107,7 +107,7 @@ const leaveHandlers = (io, socket) => {
   
   socket.on('leave:get', async (leaveId, callback) => {
     try {
-      const Leave = require('../../HR-CDS/models/Leave');
+      const Leave = require('../../models/Leave');
       const leave = await Leave.findById(leaveId)
         .populate('user', 'name email department')
         .populate('approvedBy', 'name email');
