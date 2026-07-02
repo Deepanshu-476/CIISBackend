@@ -31,6 +31,7 @@ router.delete('/:id', userController.deleteUser);
 
 router.get('/search', userController.searchUsers);
 
+router.use('/:id/documents', require('./employeeDocumentRoutes'));
 
 router.get('/:id', userController.getUser);
 router.put('/profile-update/:id', userController.updateSelfUser);
