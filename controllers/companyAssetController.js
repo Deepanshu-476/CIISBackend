@@ -1,4 +1,5 @@
 const CompanyAsset = require('../models/CompanyAsset');
+const { getPaginationOptions, buildPaginationMeta } = require('../utils/pagination');
 
 
 
@@ -15,18 +16,37 @@ const getCompanyAssets = async (req, res) => {
       });
     }
 
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
     const query = { companyCode: req.user.companyCode };
+    const search = String(req.query.search || req.query.q || '').trim();
+    if (search) {
+      const searchRegex = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      query.$or = [
+        { name: searchRegex },
+        { description: searchRegex },
+        { status: searchRegex }
+      ];
+    }
     void 0;
 
-    const assets = await CompanyAsset.find(query)
-      .populate('createdBy', 'name email')
-      .sort({ createdAt: -1 });
+    const [assets, total] = await Promise.all([
+      CompanyAsset.find(query)
+        .populate('createdBy', 'name email')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      CompanyAsset.countDocuments(query)
+    ]);
 
     void 0;
 
     res.json({
       success: true,
-      assets
+      assets,
+      count: assets.length,
+      total,
+      pagination: buildPaginationMeta({ page, limit, total })
     });
   } catch (error) {
     console.error('❌ Get company assets error:', error);
