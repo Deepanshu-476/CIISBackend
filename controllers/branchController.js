@@ -11,7 +11,7 @@ exports.createBranch = async (req, res) => {
   try {
     const { name, branchCode, companyId, address, phone } = req.body;
 
-    if (!name || !branchCode || !companyId) {
+    if (!name || !branchCode || !companyId) { 
       return res.status(400).json({
         success: false,
         message: "Branch name, branch code, and company ID are required",
