@@ -10,10 +10,6 @@ const mongoose = require("mongoose");
 const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagination");
 
 
-<<<<<<< HEAD
-
-=======
->>>>>>> a04bca305ce6aae547db9131db786bfd463001eb
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
     const uploadDir = 'uploads/projects/';

@@ -5,10 +5,6 @@ const {notifyDirectUsers} = require('../utils/systemNotificationService');
 const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
 
 
-<<<<<<< HEAD
-
-=======
->>>>>>> a04bca305ce6aae547db9131db786bfd463001eb
 exports.createGroup = async (req, res) => {
   try {
     const { name, description, members } = req.body;

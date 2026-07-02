@@ -15,10 +15,6 @@ const path = require('path');
 const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
 
 
-<<<<<<< HEAD
-
-=======
->>>>>>> a04bca305ce6aae547db9131db786bfd463001eb
 const DEFAULT_CLIENT_DEPARTMENT_ID = '69ae555c9a1e47e80a40204c';
 
 const DEFAULT_CLIENT_JOB_ROLE_ID = '69ae559b9a1e47e80a4020a2';

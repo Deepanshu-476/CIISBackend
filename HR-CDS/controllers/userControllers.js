@@ -68,8 +68,7 @@ const shouldIncludeInactiveUsers = (query = {}) => {
   return value === true || value === 'true' || value === '1' || value === 'all';
 };
 
-<<<<<<< HEAD
-const escapeRegExp = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const escapeRegExp = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const getCompanyScope = (req) => {
   const company = req.user?.company;
@@ -81,7 +80,7 @@ const getCompanyScope = (req) => {
     return { error: { status: 400, message: "User company information is incomplete" } };
   }
 
-  if (requestedCompanyCode && requestedCompanyCode.toLowerCase() !== companyCode.toLowerCase()) {
+  if (requestedCompanyCode && requestedCompanyCode.toLowerCase() !== String(companyCode).toLowerCase()) {
     return { error: { status: 403, message: "You cannot access another company's users" } };
   }
 
@@ -95,8 +94,6 @@ const getCompanyScope = (req) => {
   };
 };
 
-=======
->>>>>>> a04bca305ce6aae547db9131db786bfd463001eb
 
 const USER_FIELDS = {
   
@@ -235,26 +232,9 @@ exports.updateMe = async (req, res) => {
     const updateData = {};
     
     
-<<<<<<< HEAD
-    const protectedFields = new Set([
-      '_id',
-      '__v',
-      'company',
-      'companyId',
-      'companyCode',
-      'createdBy',
-      'password',
-      'resetToken',
-      'resetTokenExpiry'
-    ]);
-
-    Object.keys(req.body).forEach(key => {
-      if (!protectedFields.has(key)) {
-=======
     Object.keys(req.body).forEach(key => {
       
       if (key !== 'password' && key !== 'resetToken' && key !== 'resetTokenExpiry' && key !== '__v') {
->>>>>>> a04bca305ce6aae547db9131db786bfd463001eb
         updateData[key] = req.body[key];
       }
     });
@@ -420,10 +400,7 @@ exports.register = async (req, res) => {
 
 exports.getAllUsers = async (req, res) => {
   try {
-<<<<<<< HEAD
-=======
     const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
->>>>>>> a04bca305ce6aae547db9131db786bfd463001eb
     
     const userCompany = req.user.company;
     const userDepartment = req.user.department;
@@ -677,15 +654,12 @@ exports.updateUser = async (req, res) => {
       }
     }
 
-<<<<<<< HEAD
-=======
     
     if (req.body.password) {
       updateData.password = req.body.password;
     }
 
     
->>>>>>> a04bca305ce6aae547db9131db786bfd463001eb
     const updatedUser = await User.findByIdAndUpdate(
       id,
       { $set: updateData },
@@ -1043,7 +1017,7 @@ exports.getCompanyUsers = async (req, res) => {
     if (companyScope.error) {
       return errorResponse(res, companyScope.error.status, companyScope.error.message);
     }
-    const { companyId } = companyScope;
+    const { companyId, companyCode } = companyScope;
 
     const filter = {
       ...companyScope.filter,
@@ -1057,138 +1031,55 @@ exports.getCompanyUsers = async (req, res) => {
     const users = await User.find(filter)
       .select("-password -resetToken -resetTokenExpiry")
       .populate("department", "name description")
-      .populate("company", "name companyCode");
+      .populate("company", "name companyCode")
+      .lean();
     const socketOnlineIds = getSocketOnlineUserIds(companyId);
 
-    
-<<<<<<< HEAD
     const includeStats = req.query.includeStats === 'true';
+    let statsByUser = new Map();
 
-    const usersWithStats = includeStats
-      ? await Promise.all(
-          users.map(async (user) => {
-            const total = await Task.countDocuments({
-              assignedTo: user._id,
-              company: companyId
-            });
-
-            const completed = await Task.countDocuments({
-              assignedTo: user._id,
-              company: companyId,
-              status: "completed"
-            });
-
-            const completionRate = total > 0 ? Math.round((completed / total) * 100) : 0;
-
-            return {
-              id: user._id,
-              name: user.name,
-              email: user.email,
-              company: user.company,
-              department: user.department,
-              jobRole: user.jobRole,
-              phone: user.phone,
-              address: user.address,
-              gender: user.gender,
-              maritalStatus: user.maritalStatus,
-              dob: user.dob,
-              employeeType: user.employeeType,
-              salary: user.salary,
-              accountNumber: user.accountNumber,
-              ifsc: user.ifsc,
-              bankName: user.bankName,
-              bankHolderName: user.bankHolderName,
-              fatherName: user.fatherName,
-              motherName: user.motherName,
-              spouseName: user.spouseName,
-              children: user.children,
-              documents: user.documents,
-              emergencyName: user.emergencyName,
-              emergencyPhone: user.emergencyPhone,
-              emergencyRelation: user.emergencyRelation,
-              emergencyAddress: user.emergencyAddress,
-              properties: user.properties,
-              propertyOwned: user.propertyOwned,
-              additionalDetails: user.additionalDetails,
-              employeeId: user.employeeId,
-              companyRole: user.companyRole,
-              reportingManager: user.reportingManager,
-              dateOfJoining: user.dateOfJoining,
-              workLocation: user.workLocation,
-              city: user.city,
-              state: user.state,
-              zipCode: user.zipCode,
-              country: user.country,
-              isActive: user.isActive,
-              ...getUserPresence(user, socketOnlineIds),
-              createdAt: user.createdAt,
-              updatedAt: user.updatedAt,
-              taskStats: {
-                total,
-                completed,
-                completionRate
-              }
-            };
-          })
-        )
-      : users.map((user) => {
-          return {
-            id: user._id,
-            name: user.name,
-            email: user.email,
-            company: user.company,
-            department: user.department,
-            jobRole: user.jobRole,
-            phone: user.phone,
-            address: user.address,
-            gender: user.gender,
-            maritalStatus: user.maritalStatus,
-            dob: user.dob,
-            employeeType: user.employeeType,
-            salary: user.salary,
-            accountNumber: user.accountNumber,
-            ifsc: user.ifsc,
-            bankName: user.bankName,
-            bankHolderName: user.bankHolderName,
-            fatherName: user.fatherName,
-            motherName: user.motherName,
-            spouseName: user.spouseName,
-            children: user.children,
-            documents: user.documents,
-            emergencyName: user.emergencyName,
-            emergencyPhone: user.emergencyPhone,
-            emergencyRelation: user.emergencyRelation,
-            emergencyAddress: user.emergencyAddress,
-            properties: user.properties,
-            propertyOwned: user.propertyOwned,
-            additionalDetails: user.additionalDetails,
-            employeeId: user.employeeId,
-            companyRole: user.companyRole,
-            reportingManager: user.reportingManager,
-            dateOfJoining: user.dateOfJoining,
-            workLocation: user.workLocation,
-            city: user.city,
-            state: user.state,
-            zipCode: user.zipCode,
-            country: user.country,
-            isActive: user.isActive,
-            ...getUserPresence(user, socketOnlineIds),
-            createdAt: user.createdAt,
-            updatedAt: user.updatedAt,
-            taskStats: {
-              total: 0,
-              completed: 0,
-              completionRate: 0
+    // One aggregation replaces two count queries per user. Most task-management
+    // screens do not request stats, so their user list remains a single DB query.
+    if (includeStats && users.length > 0) {
+      const userIds = users.map(user => user._id);
+      const stats = await Task.aggregate([
+        {
+          $match: {
+            companyCode: String(companyCode).trim().toUpperCase(),
+            isActive: true,
+            assignedUsers: { $in: userIds }
+          }
+        },
+        { $unwind: '$assignedUsers' },
+        { $match: { assignedUsers: { $in: userIds } } },
+        {
+          $group: {
+            _id: '$assignedUsers',
+            total: { $sum: 1 },
+            completed: {
+              $sum: { $cond: [{ $eq: ['$overallStatus', 'completed'] }, 1, 0] }
             }
-          };
-=======
-    const usersWithStats = await Promise.all(
-      users.map(async (user) => {
-        const total = await Task.countDocuments({
-          assignedTo: user._id,
-          company: companyId
->>>>>>> a04bca305ce6aae547db9131db786bfd463001eb
-        });
+          }
+        }
+      ]);
+      statsByUser = new Map(stats.map(stat => [stat._id.toString(), stat]));
+    }
+
+    const usersWithStats = users.map(user => {
+      const stats = statsByUser.get(user._id.toString());
+      const total = stats?.total || 0;
+      const completed = stats?.completed || 0;
+      return {
+        ...user,
+        id: user._id,
+        ...getUserPresence(user, socketOnlineIds),
+        taskStats: {
+          total,
+          completed,
+          completionRate: total > 0 ? Math.round((completed / total) * 100) : 0
+        }
+      };
+    });
 
     return successResponse(res, 200, {
       count: usersWithStats.length,

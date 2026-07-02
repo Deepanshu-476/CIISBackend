@@ -6,10 +6,6 @@ const {notifyPageUsers, getCompanyId} = require("../utils/systemNotificationServ
 const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagination");
 
 
-<<<<<<< HEAD
-
-=======
->>>>>>> a04bca305ce6aae547db9131db786bfd463001eb
 const formatDuration = (ms) => {
   const totalSeconds = Math.floor(ms / 1000);
   const hours = String(Math.floor(totalSeconds / 3600)).padStart(2, "0");
