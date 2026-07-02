@@ -211,11 +211,11 @@ const getOwnerDashboard = async (companyCode, ownerId) => {
       ownerTasks,
       meetings
     ] = await Promise.all([
-      User.countDocuments({
+      User.find({
         companyCode: companyCode,
         companyRole: "employee",
         isActive: true,
-      }),
+      }).select("_id name email employeeId companyRole"),
 
       Attendance.find({
         companyCode: companyCode,
@@ -301,13 +301,13 @@ const getOwnerDashboard = async (companyCode, ownerId) => {
     };
 
     const attendanceSummary = {
-      totalEmployees: allEmployees,
+      totalEmployees: allEmployees.length,
       today: {
         present: presentCount,
         late: lateCount,
         absent: absentCount,
         halfDay: halfDayCount,
-        notClockedIn: allEmployees - (presentCount + lateCount + absentCount + halfDayCount),
+        notClockedIn: allEmployees.length - (presentCount + lateCount + absentCount + halfDayCount),
       },
       monthly: monthlyStats,
     };

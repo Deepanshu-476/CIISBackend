@@ -838,6 +838,7 @@ exports.getCompanyByCode = async (req, res) => {
 exports.getCompanyDetailsByIdentifier = async (req, res) => {
   try {
     const { identifier } = req.params;
+    const cleanIdentifier = identifier ? String(identifier).trim() : '';
     
     void 0;
     
@@ -847,11 +848,12 @@ exports.getCompanyDetailsByIdentifier = async (req, res) => {
     
     const company = await Company.findOne({
       $or: [
-        { companyCode: identifier },
-        { loginUrl: { $regex: identifier, $options: 'i' } },
+        { companyCode: cleanIdentifier.toUpperCase() },
+        { dbIdentifier: cleanIdentifier.toLowerCase() },
+        { loginUrl: { $regex: escapeRegExp(cleanIdentifier), $options: 'i' } },
         { 
           loginUrl: { 
-            $regex: identifier.replace(/-/g, '.*'), 
+            $regex: identifierToLooseRegex(cleanIdentifier), 
             $options: 'i' 
           } 
         }
@@ -919,11 +921,20 @@ exports.getCompanyDetailsByIdentifier = async (req, res) => {
 exports.validateCompanyUrl = async (req, res) => {
   try {
     const { identifier } = req.params;
+    const cleanIdentifier = identifier ? String(identifier).trim() : '';
+
+    if (!cleanIdentifier) {
+      return res.status(400).json({
+        success: false,
+        message: 'Company identifier is required'
+      });
+    }
     
     const company = await Company.findOne({
       $or: [
-        { companyCode: identifier },
-        { loginUrl: { $regex: identifier, $options: 'i' } }
+        { companyCode: cleanIdentifier.toUpperCase() },
+        { dbIdentifier: cleanIdentifier.toLowerCase() },
+        { loginUrl: { $regex: escapeRegExp(cleanIdentifier), $options: 'i' } }
       ]
     }).select('companyName loginUrl isActive');
 

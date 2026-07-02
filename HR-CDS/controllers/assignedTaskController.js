@@ -128,7 +128,7 @@ exports.createTaskForOthers = async (req, res) => {
 exports.getAssignedToMeTasks = async (req, res) => {
   try {
     const list = await fetchAssignedToMeTaskList(req);
-    return sendCleanTaskList(res, applyCleanListFilters(list, req), 'assigned', 'createdAt', req);
+    return sendCleanTaskList(res, applyCleanListFilters(list, req), 'assigned', 'createdAt');
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
@@ -157,9 +157,9 @@ exports.getAssignedTasks = async (req, res) => {
 
     const enriched = await enrichStatusInfo(tasks);
     const mapped = enriched.map(t => ({ ...t, status: normalizeTaskStatus(t.overallStatus) }));
-    const filtered = applyCleanListFilters(mapped, req);
+    const filtered = sortTasksNewestFirst(applyCleanListFilters(mapped, req));
 
-    return sendCleanTaskList(res, filtered, 'assigned_by_me', 'createdAt', req);
+    return res.json({ success: true, groupedTasks: groupTasksByDate(filtered, 'createdAt', 'assignedSerialNo') });
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }

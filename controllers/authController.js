@@ -267,6 +267,7 @@ exports.companyLogin = async (req, res) => {
     }
 
     const cleanEmail = email.toLowerCase().trim();
+
     const rawCompanyCode = companyCode.toLowerCase().trim();
 
     
@@ -397,6 +398,15 @@ exports.companyLogin = async (req, res) => {
 
     
     const otp = generateOTP();
+    if (!process.env.JWT_SECRET) {
+      console.error("JWT_SECRET is not configured; login OTP token cannot be generated.");
+      return res.status(500).json({
+        success: false,
+        message: "Authentication service is not configured. Please contact administrator.",
+        errorCode: "AUTH_CONFIG_MISSING",
+      });
+    }
+
     const tempToken = jwt.sign(
       {              
         email: user.email,
@@ -837,6 +847,15 @@ exports.login = async (req, res) => {
 
     
     const otp = generateOTP();
+    if (!process.env.JWT_SECRET) {
+      console.error("JWT_SECRET is not configured; login OTP token cannot be generated.");
+      return res.status(500).json({
+        success: false,
+        message: "Authentication service is not configured. Please contact administrator.",
+        errorCode: "AUTH_CONFIG_MISSING",
+      });
+    }
+
     const tempToken = jwt.sign(
       { 
         email: user.email,
@@ -1988,6 +2007,7 @@ exports.logout = async (req, res) => {
 exports.getCompanyDetailsByIdentifier = async (req, res) => {
   try {
     const { identifier } = req.params;
+    const rawIdentifier = identifier ? String(identifier).trim() : '';
     
     void 0;
     
@@ -2003,7 +2023,7 @@ exports.getCompanyDetailsByIdentifier = async (req, res) => {
         
         { 
           loginUrl: { 
-            $regex: cleanIdentifier.replace(/[^a-z0-9]/gi, '.*'), 
+            $regex: escapeRegExp(cleanIdentifier).replace(/-/g, '.*'), 
             $options: 'i' 
           } 
         },

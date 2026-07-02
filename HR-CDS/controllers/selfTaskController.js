@@ -92,7 +92,7 @@ exports.createTaskForSelf = async (req, res) => {
 exports.getPersonalTasks = async (req, res) => {
   try {
     const list = await fetchPersonalTaskList(req);
-    return sendCleanTaskList(res, applyCleanListFilters(list, req), 'personal', 'createdAt', req);
+    return sendCleanTaskList(res, applyCleanListFilters(list, req), 'personal', 'createdAt');
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
