@@ -100,6 +100,7 @@ ProjectSchema.index({ companyCode: 1, createdAt: -1 });
 ProjectSchema.index({ status: 1 });
 ProjectSchema.index({ priority: 1 });
 ProjectSchema.index({ createdBy: 1 });
+ProjectSchema.index({ 'tasks.assignedTo': 1 });
 
  
 ProjectSchema.pre('save', function(next) {

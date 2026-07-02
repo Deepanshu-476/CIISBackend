@@ -484,7 +484,15 @@ const fetchPersonalTaskList = async (req) => {
     createdBy: req.user._id,
     taskFor: 'self',
     isActive: true
-  }).populate('assignedUsers', 'name email').populate('createdBy', 'name email').sort({ createdAt: -1 }).lean();
+  })
+    // Remarks and status history are loaded by their dedicated detail endpoints.
+    // Keeping them out of list responses prevents large task documents from
+    // dominating transfer and JSON serialization time.
+    .select('-remarks -statusHistory')
+    .populate('assignedUsers', 'name email')
+    .populate('createdBy', 'name email')
+    .sort({ createdAt: -1 })
+    .lean();
 
   const enriched = await enrichStatusInfo(tasks);
   return enriched.map(t => ({ ...t, status: normalizeTaskStatus(t.overallStatus), taskSource: 'self', __taskSource: 'self' }));
@@ -508,7 +516,12 @@ const fetchAssignedToMeTaskList = async (req) => {
       { assignedUsers: currentUserId },
       { assignedGroups: { $in: groupIds } }
     ]
-  }).populate('assignedUsers', 'name email').populate('createdBy', 'name email').sort({ createdAt: -1 }).lean();
+  })
+    .select('-remarks -statusHistory')
+    .populate('assignedUsers', 'name email')
+    .populate('createdBy', 'name email')
+    .sort({ createdAt: -1 })
+    .lean();
 
   const enriched = await enrichStatusInfo(tasks);
   return enriched.map(t => {
@@ -536,7 +549,11 @@ const fetchAssignedClientTaskList = async (req) => {
       { assignee: currentUser.name },
       { assignee: currentUser.email }
     ].filter(Boolean)
-  }).populate('clientId', 'client name email company phone companyCode').sort({ createdAt: -1 }).lean();
+  })
+    .select('-remarks -activityLogs')
+    .populate('clientId', 'client name email company phone companyCode')
+    .sort({ createdAt: -1 })
+    .lean();
 
   return tasks.map(t => {
     const status = t.completed ? 'completed' : normalizeTaskStatus(t.status || 'pending');
