@@ -1035,53 +1035,6 @@ exports.getCompanyUsers = async (req, res) => {
       .lean();
     const socketOnlineIds = getSocketOnlineUserIds(companyId);
 
-<<<<<<< HEAD
-    const includeStats = req.query.includeStats === 'true';
-    let statsByUser = new Map();
-
-    // One aggregation replaces two count queries per user. Most task-management
-    // screens do not request stats, so their user list remains a single DB query.
-    if (includeStats && users.length > 0) {
-      const userIds = users.map(user => user._id);
-      const stats = await Task.aggregate([
-        {
-          $match: {
-            companyCode: String(companyCode).trim().toUpperCase(),
-            isActive: true,
-            assignedUsers: { $in: userIds }
-          }
-        },
-        { $unwind: '$assignedUsers' },
-        { $match: { assignedUsers: { $in: userIds } } },
-        {
-          $group: {
-            _id: '$assignedUsers',
-            total: { $sum: 1 },
-            completed: {
-              $sum: { $cond: [{ $eq: ['$overallStatus', 'completed'] }, 1, 0] }
-            }
-          }
-        }
-      ]);
-      statsByUser = new Map(stats.map(stat => [stat._id.toString(), stat]));
-    }
-
-    const usersWithStats = users.map(user => {
-      const stats = statsByUser.get(user._id.toString());
-      const total = stats?.total || 0;
-      const completed = stats?.completed || 0;
-      return {
-        ...user,
-        id: user._id,
-        ...getUserPresence(user, socketOnlineIds),
-        taskStats: {
-          total,
-          completed,
-          completionRate: total > 0 ? Math.round((completed / total) * 100) : 0
-        }
-      };
-    });
-=======
     
     const usersWithStats = await Promise.all(
       users.map(async (user) => {
@@ -1089,7 +1042,6 @@ exports.getCompanyUsers = async (req, res) => {
           assignedTo: user._id,
           company: companyId
         });
->>>>>>> 99cdff2f2811b8e85121221441fb6e3802ab1443
 
         const completed = await Task.countDocuments({
           assignedTo: user._id,

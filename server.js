@@ -589,10 +589,6 @@ app.use("/api/clientsservice", require("./HR-CDS/routes/clientRoutes.js"));
 app.use("/api/client-plans", require("./HR-CDS/routes/clientPlanRoutes.js"));
 app.use("/api/chat", require("./HR-CDS/chat/routes/chatRoutes"));
 
-<<<<<<< HEAD
-=======
-
->>>>>>> 99cdff2f2811b8e85121221441fb6e3802ab1443
 app.use("/api/tasks/self", require("./HR-CDS/routes/selfTaskRoute.js"));
 app.use("/api/tasks/assigned", require("./HR-CDS/routes/assignedTaskRoute.js"));
 app.use("/api/tasks/client-tasks", require("./HR-CDS/routes/clientTaskRoute.js"));
