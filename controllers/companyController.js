@@ -8,6 +8,10 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const emailService = require('../services/emailService');
+
+const escapeRegExp = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const identifierToLooseRegex = (value) => escapeRegExp(value).replace(/-/g, '.*');
 // =============================
 // MULTER CONFIGURATION FOR LOGOS
 // =============================
@@ -813,8 +817,16 @@ exports.getCompanyByCode = async (req, res) => {
 exports.getCompanyDetailsByIdentifier = async (req, res) => {
   try {
     const { identifier } = req.params;
+    const cleanIdentifier = identifier ? String(identifier).trim() : '';
     
-    console.log('Fetching company for identifier:', identifier);
+    console.log('Fetching company for identifier:', cleanIdentifier);
+
+    if (!cleanIdentifier) {
+      return res.status(400).json({
+        success: false,
+        message: 'Company identifier is required'
+      });
+    }
     
     // Multiple ways to find company:
     // 1. By companyCode
@@ -822,11 +834,12 @@ exports.getCompanyDetailsByIdentifier = async (req, res) => {
     // 3. By extracted code from URL
     const company = await Company.findOne({
       $or: [
-        { companyCode: identifier },
-        { loginUrl: { $regex: identifier, $options: 'i' } },
+        { companyCode: cleanIdentifier.toUpperCase() },
+        { dbIdentifier: cleanIdentifier.toLowerCase() },
+        { loginUrl: { $regex: escapeRegExp(cleanIdentifier), $options: 'i' } },
         { 
           loginUrl: { 
-            $regex: identifier.replace(/-/g, '.*'), 
+            $regex: identifierToLooseRegex(cleanIdentifier), 
             $options: 'i' 
           } 
         }
@@ -894,11 +907,20 @@ exports.getCompanyDetailsByIdentifier = async (req, res) => {
 exports.validateCompanyUrl = async (req, res) => {
   try {
     const { identifier } = req.params;
+    const cleanIdentifier = identifier ? String(identifier).trim() : '';
+
+    if (!cleanIdentifier) {
+      return res.status(400).json({
+        success: false,
+        message: 'Company identifier is required'
+      });
+    }
     
     const company = await Company.findOne({
       $or: [
-        { companyCode: identifier },
-        { loginUrl: { $regex: identifier, $options: 'i' } }
+        { companyCode: cleanIdentifier.toUpperCase() },
+        { dbIdentifier: cleanIdentifier.toLowerCase() },
+        { loginUrl: { $regex: escapeRegExp(cleanIdentifier), $options: 'i' } }
       ]
     }).select('companyName loginUrl isActive');
 

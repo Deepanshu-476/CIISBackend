@@ -1286,7 +1286,7 @@ const getAssignedToMeTasks = async (req, res) => {
 
     const tasks = await Task.find(filter)
       .populate('clientId', 'name email company phone')
-      .sort({ dueDate: 1, createdAt: -1 });
+      .sort({ createdAt: -1 });
 
     const groupedTasks = {};
     let overdueCount = 0;
@@ -1457,7 +1457,7 @@ const getAssignedTasksByUserId = async (req, res) => {
       ]
     })
       .populate('clientId', 'name email company phone')
-      .sort({ dueDate: 1, createdAt: -1 });
+      .sort({ createdAt: -1 });
 
     const formattedTasks = tasks.map(task => ({
       _id: task._id,
@@ -1529,7 +1529,7 @@ const getTasksByClientService = async (req, res) => {
     }
 
     const tasks = await Task.find(filter)
-      .sort({ completed: 1, dueDate: 1, createdAt: -1 });
+      .sort({ createdAt: -1 });
 
     res.json({
       success: true,
@@ -1568,7 +1568,7 @@ const getClientTasks = async (req, res) => {
 
     const tasks = await Task.find(filter)
       .populate('remarks.user', 'name email')
-      .sort({ completed: 1, dueDate: 1, createdAt: -1 });
+      .sort({ createdAt: -1 });
 
     const tasksByService = {};
     tasks.forEach(task => {

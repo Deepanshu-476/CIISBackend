@@ -238,7 +238,7 @@ const groupTasksByDate = (tasks, dateField = 'createdAt', serialKey = 'serialNo'
 };
 
 const getTaskSortDate = task => {
-  const dateValue = getTaskSourceAwareDate(task);
+  const dateValue = task?.createdAt || task?.createdDate || task?.updatedAt || getTaskSourceAwareDate(task);
   const date = new Date(dateValue || 0);
   return Number.isNaN(date.getTime()) ? 0 : date.getTime();
 };

@@ -226,15 +226,7 @@ const groupTasksByDate = (tasks, dateField = 'createdAt', serialKey = 'serialNo'
 };
 
 const getTaskSortDate = task => {
-  const source = String(task.__taskSource || task.taskSource || '').toLowerCase();
-  let dateValue;
-  if (source === 'client') {
-    dateValue = task.dueDate || task.dueDateTime || task.createdAt;
-  } else if (source === 'project') {
-    dateValue = task.lastActivityAt || task.updatedAt || task.createdAt;
-  } else {
-    dateValue = task.dueDateTime || task.dueDate || task.createdAt;
-  }
+  const dateValue = task?.createdAt || task?.createdDate || task?.updatedAt || task?.dueDateTime || task?.dueDate;
   const date = new Date(dateValue || 0);
   return Number.isNaN(date.getTime()) ? 0 : date.getTime();
 };
@@ -650,7 +642,7 @@ exports.getAssignedToMeTasks = async (req, res) => {
 exports.getAssignedProjectTasks = async (req, res) => {
   try {
     const list = await fetchAssignedProjectTaskList(req);
-    return sendCleanTaskList(res, applyCleanListFilters(list, req), 'project', 'source-aware');
+    return sendCleanTaskList(res, applyCleanListFilters(list, req), 'project', 'createdAt');
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
@@ -665,7 +657,7 @@ exports.getAllMyTaskViews = async (req, res) => {
       fetchAssignedProjectTaskList(req)
     ]);
     const list = applyCleanListFilters([...personal, ...assigned, ...client, ...project], req);
-    return sendCleanTaskList(res, list, 'all', 'source-aware', req);
+    return sendCleanTaskList(res, list, 'all', 'createdAt', req);
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
@@ -711,7 +703,8 @@ exports.getTasks = async (req, res) => {
       fetchAssignedToMeTaskList(req)
     ]);
     const list = applyCleanListFilters([...personal, ...assigned], req);
-    return res.json({ success: true, groupedTasks: groupTasksByDate(list, 'createdAt', 'serialNo') });
+    const sorted = sortTasksNewestFirst(list);
+    return res.json({ success: true, groupedTasks: groupTasksByDate(sorted, 'createdAt', 'serialNo'), tasks: sorted });
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
@@ -721,7 +714,8 @@ exports.getMyTasks = async (req, res) => {
   try {
     const list = await fetchAssignedToMeTaskList(req);
     const filtered = applyCleanListFilters(list, req);
-    return res.json({ success: true, groupedTasks: groupTasksByDate(filtered, 'createdAt', 'mySerialNo') });
+    const sorted = sortTasksNewestFirst(filtered);
+    return res.json({ success: true, groupedTasks: groupTasksByDate(sorted, 'createdAt', 'mySerialNo'), tasks: sorted });
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
@@ -739,7 +733,7 @@ exports.getAssignedTasks = async (req, res) => {
 
     const enriched = await enrichStatusInfo(tasks);
     const mapped = enriched.map(t => ({ ...t, status: normalizeTaskStatus(t.overallStatus) }));
-    const filtered = applyCleanListFilters(mapped, req);
+    const filtered = sortTasksNewestFirst(applyCleanListFilters(mapped, req));
     const paginated = paginateTasks(filtered, req);
 
     return res.json({

@@ -274,6 +274,7 @@ exports.companyLogin = async (req, res) => {
     }
 
     const cleanEmail = email.toLowerCase().trim();
+
     const rawCompanyCode = companyCode.toLowerCase().trim();
 
     // Support companyCode-branchCode format
@@ -371,6 +372,14 @@ exports.companyLogin = async (req, res) => {
     }
 
     // ✅ Verify password
+    if (!user.password) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid email or password",
+        errorCode: "INVALID_CREDENTIALS",
+      });
+    }
+
     const isPasswordValid = await bcrypt.compare(password, user.password);
 
     if (!isPasswordValid) {
@@ -404,6 +413,15 @@ exports.companyLogin = async (req, res) => {
 
     // ✅ Generate OTP for login verification
     const otp = generateOTP();
+    if (!process.env.JWT_SECRET) {
+      console.error("JWT_SECRET is not configured; login OTP token cannot be generated.");
+      return res.status(500).json({
+        success: false,
+        message: "Authentication service is not configured. Please contact administrator.",
+        errorCode: "AUTH_CONFIG_MISSING",
+      });
+    }
+
     const tempToken = jwt.sign(
       {              
         email: user.email,
@@ -719,6 +737,14 @@ exports.login = async (req, res) => {
     }
 
     // ✅ Verify password
+    if (!user.password) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid email or password",
+        errorCode: "INVALID_CREDENTIALS",
+      });
+    }
+
     const isPasswordValid = await bcrypt.compare(password, user.password);
 
     if (!isPasswordValid) {
@@ -866,6 +892,15 @@ exports.login = async (req, res) => {
 
     // ✅ Generate OTP for login verification
     const otp = generateOTP();
+    if (!process.env.JWT_SECRET) {
+      console.error("JWT_SECRET is not configured; login OTP token cannot be generated.");
+      return res.status(500).json({
+        success: false,
+        message: "Authentication service is not configured. Please contact administrator.",
+        errorCode: "AUTH_CONFIG_MISSING",
+      });
+    }
+
     const tempToken = jwt.sign(
       { 
         email: user.email,
@@ -2055,11 +2090,19 @@ exports.logout = async (req, res) => {
 exports.getCompanyDetailsByIdentifier = async (req, res) => {
   try {
     const { identifier } = req.params;
+    const rawIdentifier = identifier ? String(identifier).trim() : '';
     
     console.log('🔍 Fetching company for identifier:', identifier);
     
     // Clean and normalize the identifier
-    const cleanIdentifier = identifier.trim().toLowerCase();
+    if (!rawIdentifier) {
+      return res.status(400).json({
+        success: false,
+        message: 'Company identifier is required'
+      });
+    }
+
+    const cleanIdentifier = rawIdentifier.toLowerCase();
     
     // Multiple ways to find company:
     const company = await Company.findOne({
@@ -2070,7 +2113,7 @@ exports.getCompanyDetailsByIdentifier = async (req, res) => {
         // Match from loginUrl (extract code from URL patterns)
         { 
           loginUrl: { 
-            $regex: cleanIdentifier.replace(/[^a-z0-9]/gi, '.*'), 
+            $regex: escapeRegExp(cleanIdentifier).replace(/-/g, '.*'), 
             $options: 'i' 
           } 
         },
