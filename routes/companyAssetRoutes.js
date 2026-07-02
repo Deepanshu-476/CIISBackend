@@ -8,7 +8,7 @@ const {
 } = require('../controllers/companyAssetController');
 
 
-router.use((req, res, next) => {
+router.use((req, res, next) => { 
   void 0;
   next();
 });
