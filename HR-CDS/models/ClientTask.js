@@ -54,6 +54,11 @@ const clienttaskSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  dueDateSource: {
+    type: String,
+    enum: ['subscription', 'manual'],
+    default: 'subscription'
+  },
   assignee: {
     type: String,
     trim: true,
