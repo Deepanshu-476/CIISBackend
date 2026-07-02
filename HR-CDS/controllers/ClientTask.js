@@ -11,11 +11,6 @@ const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagin
 
 void 0;
 
-<<<<<<< HEAD
-void 0;
-
-=======
->>>>>>> a04bca305ce6aae547db9131db786bfd463001eb
 
 
 const formatDuration = (seconds) => {
@@ -1584,33 +1579,6 @@ const getClientTasks = async (req, res) => {
       };
     }
 
-<<<<<<< HEAD
-    // Determine pagination parameters
-    const page = req.query.page ? parseInt(req.query.page) : null;
-    const limit = req.query.limit ? parseInt(req.query.limit) : 10;
-
-    let tasks;
-    let totalTasks;
-
-    if (page) {
-      const skip = (page - 1) * limit;
-      [tasks, totalTasks] = await Promise.all([
-        Task.find(filter)
-          .populate('remarks.user', 'name email')
-          .sort({ completed: 1, dueDate: 1, createdAt: -1 })
-          .skip(skip)
-          .limit(limit)
-          .lean(),
-        Task.countDocuments(filter)
-      ]);
-    } else {
-      tasks = await Task.find(filter)
-        .populate('remarks.user', 'name email')
-        .sort({ completed: 1, dueDate: 1, createdAt: -1 })
-        .lean();
-      totalTasks = tasks.length;
-    }
-=======
     const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 100 });
     const [tasks, total] = await Promise.all([
       Task.find(filter)
@@ -1621,7 +1589,6 @@ const getClientTasks = async (req, res) => {
         .lean(),
       Task.countDocuments(filter)
     ]);
->>>>>>> a04bca305ce6aae547db9131db786bfd463001eb
 
     const tasksByService = {};
     tasks.forEach(task => {
@@ -1631,50 +1598,6 @@ const getClientTasks = async (req, res) => {
       tasksByService[task.service].push(task);
     });
 
-<<<<<<< HEAD
-    // To compute stats accurately, we need the total stats for all filtered items
-    let completedTasks;
-    let overdueTasksCount;
-
-    if (page) {
-      const allStatsTasks = await Task.find(filter).select('completed dueDate').lean();
-      completedTasks = allStatsTasks.filter(t => t.completed).length;
-      overdueTasksCount = allStatsTasks.filter(t => isClientTaskOverdue(t)).length;
-    } else {
-      completedTasks = tasks.filter(t => t.completed).length;
-      overdueTasksCount = tasks.filter(t => isClientTaskOverdue(t)).length;
-    }
-
-    const pendingTasks = totalTasks - completedTasks;
-
-    const responseData = {
-      tasks,
-      groupedByService: tasksByService,
-      stats: {
-        totalTasks,
-        completedTasks,
-        pendingTasks,
-        overdueTasks: overdueTasksCount,
-        completionRate: totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0
-      }
-    };
-
-    if (page) {
-      const totalPages = Math.ceil(totalTasks / limit);
-      responseData.pagination = {
-        page,
-        limit,
-        total: totalTasks,
-        pages: totalPages,
-        hasNext: page < totalPages,
-        hasPrev: page > 1
-      };
-    }
-
-    res.json({
-      success: true,
-      data: responseData
-=======
     const pageTotalTasks = tasks.length;
     const completedTasks = tasks.filter(t => t.completed).length;
     const pendingTasks = pageTotalTasks - completedTasks;
@@ -1700,7 +1623,6 @@ const getClientTasks = async (req, res) => {
       total,
       pagination: buildPaginationMeta({ page, limit, total }),
       statsEndpoint: `/client/${clientId}/stats`
->>>>>>> a04bca305ce6aae547db9131db786bfd463001eb
     });
   } catch (error) {
     console.error('Error fetching client tasks:', error);
