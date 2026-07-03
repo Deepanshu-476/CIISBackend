@@ -1480,15 +1480,70 @@ exports.deleteCompanyPermanently = async (req, res) => {
       });
     }
 
-    
-    await User.deleteMany({ company: id });
+    const companyObjectId = new mongoose.Types.ObjectId(id);
+    const companyCode = String(company.companyCode || "").trim();
+    const escapedCompanyCode = escapeRegExp(companyCode);
+    const companyCodePattern = companyCode
+      ? new RegExp(`^${escapedCompanyCode}(?:-|$)`, "i")
+      : null;
+    const companyUsers = await User.find({
+      $or: [
+        { company: companyObjectId },
+        ...(companyCodePattern ? [{ companyCode: companyCodePattern }] : [])
+      ]
+    }).select("_id").lean();
+    const userIds = companyUsers.map(user => user._id);
 
-    
+    const protectedCollections = new Set([
+      Company.collection.name,
+      Plan.collection.name,
+      "superadmins",
+      "system.version"
+    ]);
+    const collections = await mongoose.connection.db.listCollections({}, { nameOnly: true }).toArray();
+    const deletionSummary = {};
+
+    const companyConditions = [
+      { company: companyObjectId },
+      { company: id },
+      { companyId: companyObjectId },
+      { companyId: id },
+      ...(companyCodePattern ? [
+        { companyCode: companyCodePattern },
+        { companyIdentifier: companyCodePattern }
+      ] : [])
+    ];
+
+    const userReferenceFields = [
+      "user", "userId", "recipient", "sender", "requester", "requestedBy",
+      "createdBy", "updatedBy", "employee", "employeeId", "assignedTo",
+      "assigneeId", "approvedBy", "rejectedBy", "uploadedBy", "performedBy"
+    ];
+
+    for (const { name } of collections) {
+      if (protectedCollections.has(name) || name.startsWith("system.")) continue;
+
+      const conditions = [...companyConditions];
+      if (userIds.length > 0) {
+        userReferenceFields.forEach(field => {
+          conditions.push({ [field]: { $in: userIds } });
+        });
+      }
+
+      const result = await mongoose.connection.db
+        .collection(name)
+        .deleteMany({ $or: conditions });
+      if (result.deletedCount > 0) deletionSummary[name] = result.deletedCount;
+    }
+
+    // Delete the company only after every related collection was cleaned.
     await Company.findByIdAndDelete(id);
 
     return res.status(200).json({
       success: true,
-      message: "Company deleted permanently",
+      message: "Company, users and all related data deleted permanently",
+      deletedUsers: userIds.length,
+      deletedRecords: deletionSummary,
     });
   } catch (err) {
     console.error("❌ Delete company error:", err);
