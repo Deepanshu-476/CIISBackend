@@ -12,7 +12,7 @@ const getMeetingStartDateTime = (date, timeStr) => {
   const [hours, minutes] = timeStr.split(':').map(Number);
   meetingDate.setHours(hours, minutes, 0, 0);
   return meetingDate;
-};
+}; 
 
  
 const sendMeetingReminder = async (meetingId) => {
