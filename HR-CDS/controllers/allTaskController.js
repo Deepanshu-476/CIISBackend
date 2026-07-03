@@ -136,19 +136,37 @@ const queryAllUserTasks = async (userId, companyCode) => {
 };
 
 
+const getFilterDate = (task, dateField) => {
+  const normalizedField = String(dateField || '').toLowerCase();
+  if (normalizedField === 'createdat' || normalizedField === 'createddate') return task.createdAt;
+  if (normalizedField === 'updatedat' || normalizedField === 'updateddate') return task.updatedAt || task.createdAt;
+  return task.dueDateTime || task.dueDate || task.createdAt;
+};
+
+const getFilterStatus = (task) => {
+  const status = normalizeTaskStatus(task.userStatus || task.status || task.overallStatus || 'pending');
+  return isTaskOverdueForStatus(task.dueDateTime || task.dueDate, status) ? 'overdue' : status;
+};
+
 const filterUserTasks = (tasks, queryParams) => {
-  const { status, search, period, fromDate, toDate } = queryParams;
-  const range = getCleanTaskDateRange({ period, fromDate, toDate });
+  const { status, search, period, fromDate, toDate, priority, dateField } = queryParams;
+  const range = getCleanTaskDateRange({ period: fromDate || toDate ? 'all' : period, fromDate, toDate });
   const query = search ? String(search).trim().toLowerCase() : '';
 
   return tasks.filter(t => {
-    if (status && status !== 'all' && t.status !== status) return false;
+    if (status && status !== 'all') {
+      const requestedStatus = normalizeTaskStatus(status);
+      if (getFilterStatus(t) !== requestedStatus) return false;
+    }
+    if (priority && priority !== 'all' && String(t.priority || '').toLowerCase() !== String(priority).toLowerCase()) {
+      return false;
+    }
     if (query) {
       const haystack = [t.title, t.description, t.clientName, t.projectName].map(v => String(v || '').toLowerCase()).join(' ');
       if (!haystack.includes(query)) return false;
     }
     if (range) {
-      const sourceDate = t.dueDateTime || t.dueDate || t.createdAt;
+      const sourceDate = getFilterDate(t, dateField);
       const dateVal = new Date(sourceDate);
       if (isNaN(dateVal.getTime())) return false;
       if (range.$gte && dateVal < range.$gte) return false;
