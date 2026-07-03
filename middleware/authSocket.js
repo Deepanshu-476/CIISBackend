@@ -7,7 +7,7 @@ const authSocket = async (socket, next) => {
     const token = socket.handshake.auth.token || 
                   socket.handshake.headers.authorization?.split(' ')[1];
     
-    if (!token) {
+    if (!token) { 
       void 0;
       return next(new Error('Authentication token required'));
     }
