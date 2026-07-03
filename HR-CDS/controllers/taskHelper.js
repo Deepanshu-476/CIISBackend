@@ -385,7 +385,19 @@ const getCleanFilterDate = (task, dateField) => {
   if (normalizedField === 'createdat' || normalizedField === 'createddate') {
     return task.createdAt;
   }
+  if (normalizedField === 'updatedat' || normalizedField === 'updateddate') {
+    return task.updatedAt || task.createdAt;
+  }
+  if (normalizedField === 'source-aware' || normalizedField === 'sourceaware') {
+    return getTaskSourceAwareDate(task);
+  }
   return task.dueDateTime || task.dueDate || task.createdAt;
+};
+
+const getCleanTaskStatus = task => {
+  const rawStatus = task.userStatus || task.status || task.overallStatus || 'pending';
+  const normalized = normalizeTaskStatus(rawStatus);
+  return isTaskOverdueForStatus(task.dueDateTime || task.dueDate, normalized) ? 'overdue' : normalized;
 };
 
 const matchesAssignedUser = (task, assignedTo) => {
@@ -407,16 +419,16 @@ const applyCleanListFilters = (tasks, req) => {
   return tasks.filter(t => {
     if (status && status !== 'all') {
       const requestedStatus = normalizeTaskStatus(status);
+      const taskStatus = getCleanTaskStatus(t);
       if (requestedStatus === 'overdue') {
-        const taskOverdue = isTaskOverdueForStatus(t.dueDateTime || t.dueDate, t.status || t.overallStatus);
-        if (!taskOverdue && normalizeTaskStatus(t.status) !== 'overdue') return false;
-      } else if (normalizeTaskStatus(t.status) !== requestedStatus) {
+        if (taskStatus !== 'overdue') return false;
+      } else if (taskStatus !== requestedStatus) {
         return false;
       }
     }
     if (priority && priority !== 'all' && String(t.priority || '').toLowerCase() !== String(priority).toLowerCase()) return false;
     if (overdue && overdue !== 'all') {
-      const taskOverdue = isTaskOverdueForStatus(t.dueDateTime || t.dueDate, t.status || t.overallStatus);
+      const taskOverdue = getCleanTaskStatus(t) === 'overdue';
       if ((overdue === 'true' || overdue === 'overdue') && !taskOverdue) return false;
       if ((overdue === 'false' || overdue === 'not-overdue') && taskOverdue) return false;
     }
