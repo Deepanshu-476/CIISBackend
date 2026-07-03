@@ -1286,13 +1286,19 @@ const getAssignedToMeTasks = async (req, res) => {
     }
 
     const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 100 });
+    const returnAllTasks = ['true', '1', 'yes'].includes(
+      String(req.query.all || req.query.noPagination || '').toLowerCase()
+    );
+    let tasksQuery = Task.find(filter)
+      .populate('clientId', 'name email company phone')
+      .sort({ dueDate: 1, createdAt: -1 });
+
+    if (!returnAllTasks) {
+      tasksQuery = tasksQuery.skip(skip).limit(limit);
+    }
+
     const [tasks, totalMatchingTasks] = await Promise.all([
-      Task.find(filter)
-        .populate('clientId', 'name email company phone')
-        .sort({ dueDate: 1, createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
+      tasksQuery.lean(),
       Task.countDocuments(filter)
     ]);
 
@@ -1368,7 +1374,9 @@ const getAssignedToMeTasks = async (req, res) => {
       pageStats: stats,
       count: tasks.length,
       total: totalMatchingTasks,
-      pagination: buildPaginationMeta({ page, limit, total: totalMatchingTasks }),
+      ...(!returnAllTasks && {
+        pagination: buildPaginationMeta({ page, limit, total: totalMatchingTasks })
+      }),
       statsEndpoint: '/assigned-to-me/stats'
     });
 
