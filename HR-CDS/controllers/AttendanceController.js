@@ -234,12 +234,19 @@ const clockIn = async (req, res) => {
     const now = new Date();
     const {start: todayStart, end: todayEnd} = getIndiaDayRange(now);
 
-    const alreadyIn = await Attendance.findOne({ 
+    const existingRecord = await Attendance.findOne({
       user: userId, 
       date: { $gte: todayStart, $lte: todayEnd } 
     });
-    
-    if (alreadyIn) {
+
+    // An automatic ABSENT placeholder can be created after 10 AM. Employees
+    // must still be able to clock in later, so reuse that empty record.
+    const isAbsentPlaceholder = existingRecord
+      && !existingRecord.inTime
+      && !existingRecord.outTime
+      && !existingRecord.isClockedIn;
+
+    if (existingRecord && !isAbsentPlaceholder) {
       return res.status(400).json({ 
         message: "✅ You've already logged your attendance today." 
       });
@@ -262,22 +269,24 @@ const clockIn = async (req, res) => {
       status = "HALF DAY";
     }
 
-    const newRecord = new Attendance({
-      user: userId,
-      date: now,
-      inTime: now,
-      lateBy,
-      status: status,
-      isClockedIn: true,
-      totalTime: "00:00:00",
-      overTime: "00:00:00",
-      earlyLeave: "00:00:00",
-      companyCode: userCompanyCode
-    });
+    const attendanceRecord = existingRecord || new Attendance({ user: userId });
+    attendanceRecord.date = now;
+    attendanceRecord.inTime = now;
+    attendanceRecord.outTime = null;
+    attendanceRecord.lateBy = lateBy;
+    attendanceRecord.status = status;
+    attendanceRecord.isClockedIn = true;
+    attendanceRecord.totalTime = "00:00:00";
+    attendanceRecord.overTime = "00:00:00";
+    attendanceRecord.earlyLeave = "00:00:00";
+    attendanceRecord.companyCode = userCompanyCode;
+    if (isAbsentPlaceholder) {
+      attendanceRecord.notes = "Clocked in after the automatic absent mark";
+    }
 
-    await newRecord.save();
+    await attendanceRecord.save();
 
-    const populatedRecord = await Attendance.findById(newRecord._id)
+    const populatedRecord = await Attendance.findById(attendanceRecord._id)
       .populate({
         path: "user",
         select: "name email employeeType companyCode",
@@ -293,7 +302,7 @@ const clockIn = async (req, res) => {
       type: 'attendance_clock_in',
       title: 'Employee Clock In',
       message: `${req.user.name || 'An employee'} clocked in at ${formatTime(now)}`,
-      attendanceId: newRecord._id,
+      attendanceId: attendanceRecord._id,
       status,
       time: now,
     });

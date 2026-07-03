@@ -22,6 +22,11 @@ const menuItemSchema = new mongoose.Schema({
     type: String,
     default: 'main'
   },
+  order: {
+    type: Number,
+    min: 1,
+    default: 99
+  },
   notificationAccess: {
     scope: {
       type: String,
