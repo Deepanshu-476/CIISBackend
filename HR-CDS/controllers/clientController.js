@@ -1787,6 +1787,8 @@ const markClientReceiptPaymentDone = async (req, res) => {
 };
 
 module.exports = {
+  getWelcomeEmailTemplate,
+  getCompanyLoginUrl,
   getAllClients,
   getClientById,
   addClient,
