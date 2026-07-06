@@ -1079,6 +1079,21 @@ const updateAssignedTaskStatus = async (req, res) => {
       targetStatus = 'in-progress';
     }
 
+    if (
+      targetStatus !== 'overdue' &&
+      (previousStatus === 'overdue' || isClientTaskOverdue(task))
+    ) {
+      if (previousStatus === 'pending' && isClientTaskOverdue(task)) {
+        task.status = 'overdue';
+        task.completed = false;
+        await task.save();
+      }
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot change status of an overdue task'
+      });
+    }
+
     
     let elapsedSeconds = 0;
     if (previousStatus === 'in-progress' && targetStatus !== 'in-progress') {

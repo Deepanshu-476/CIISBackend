@@ -249,7 +249,7 @@ taskSchema.methods.updateUserStatus = function (userId, status, remarks = "") {
 
 taskSchema.methods.checkAndMarkOverdue = function () {
   if (!this.dueDateTime) return false;
-  if (this.overallStatus === 'onhold') return false;
+  if (['onhold', 'on hold', 'completed', 'rejected', 'cancelled', 'overdue'].includes(String(this.overallStatus || '').toLowerCase())) return false;
   
   const now = new Date();
   const dueDate = new Date(this.dueDateTime);
@@ -267,21 +267,22 @@ taskSchema.methods.checkAndMarkOverdue = function () {
     if (userStatusIndex !== -1) {
       const currentStatus = this.statusByUser[userStatusIndex].status;
       
-      if (['pending', 'in-progress', 'reopen'].includes(currentStatus)) {
+      if (currentStatus === 'pending') {
         this.statusByUser[userStatusIndex].status = 'overdue';
         this.statusByUser[userStatusIndex].updatedAt = now;
         this.statusByUser[userStatusIndex].remarks = 'Automatically marked as overdue';
         anyUserMarked = true;
       }
     } else {
-      
-      this.statusByUser.push({
-        user: userId,
-        status: 'overdue',
-        updatedAt: now,
-        remarks: 'Automatically marked as overdue'
-      });
-      anyUserMarked = true;
+      if (!this.overallStatus || this.overallStatus === 'pending') {
+        this.statusByUser.push({
+          user: userId,
+          status: 'overdue',
+          updatedAt: now,
+          remarks: 'Automatically marked as overdue'
+        });
+        anyUserMarked = true;
+      }
     }
   });
   
@@ -369,13 +370,13 @@ taskSchema.statics.getUserOverdueTasks = async function (userId) {
         'statusByUser': {
           $elemMatch: {
             user: userId,
-            status: { $in: ['pending', 'in-progress', 'reopen', 'onhold'] }
+            status: 'pending'
           }
         }
       },
       { 
         'statusByUser.user': { $ne: userId },
-        'overallStatus': { $in: ['pending', 'in-progress', 'reopen', 'onhold'] }
+        'overallStatus': 'pending'
       }
     ]
   })
@@ -391,9 +392,9 @@ taskSchema.statics.updateAllOverdueTasks = async function () {
     dueDateTime: { $lt: now },
     isActive: true,
     $or: [
-      { overallStatus: { $in: ['pending', 'in-progress', 'reopen', 'onhold'] } },
+      { overallStatus: 'pending' },
       { 
-        'statusByUser.status': { $in: ['pending', 'in-progress', 'reopen', 'onhold'] }
+        'statusByUser.status': 'pending'
       }
     ]
   });

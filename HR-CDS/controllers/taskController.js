@@ -124,10 +124,11 @@ const normalizeTaskStatus = status => {
 
 const isTaskOverdueForStatus = (dueDateTime, status) => {
   if (!dueDateTime) return false;
-  if (status === 'overdue') return true;
+  const normalizedStatus = normalizeTaskStatus(status);
+  if (normalizedStatus === 'overdue') return true;
   const dueDate = new Date(dueDateTime);
   if (isNaN(dueDate.getTime())) return false;
-  return dueDate < new Date() && !['completed', 'cancelled', 'approved'].includes(status);
+  return dueDate < new Date() && normalizedStatus === 'pending';
 };
 
 const calculateUnifiedTaskStats = (tasks, userId) => {
@@ -905,6 +906,18 @@ exports.updateStatus = async (req, res) => {
 
     const oldStatusEntry = task.statusByUser.find(s => s.user?.toString() === currentUserId);
     const oldStatus = oldStatusEntry?.status || 'pending';
+    const normalizedStatus = normalizeTaskStatus(status);
+
+    if (
+      normalizedStatus !== 'overdue' &&
+      (normalizeTaskStatus(oldStatus) === 'overdue' || isTaskOverdueForStatus(task.dueDateTime || task.dueDate, oldStatus))
+    ) {
+      if (normalizeTaskStatus(oldStatus) === 'pending') {
+        task.markUserStatusOverdue(currentUserId, 'Automatically marked overdue after due time passed');
+        await task.save();
+      }
+      return res.status(400).json({ success: false, error: 'Cannot change status of an overdue task' });
+    }
 
     if (oldStatus === 'completed' && status !== 'completed' && status !== 'reopen') {
       return res.status(400).json({ success: false, error: 'Completed tasks can only be reopened.' });
@@ -1613,11 +1626,15 @@ exports.getUserOverdueTasks = async (req, res) => {
     const tasks = await Task.find({
       isActive: true,
       dueDateTime: { $lt: new Date() },
-      overallStatus: { $nin: ['completed', 'cancelled', 'approved'] },
       $or: [{ assignedUsers: userId }, { assignedGroups: { $in: groupIds } }, { createdBy: userId }]
     }).populate('assignedUsers', 'name email').populate('createdBy', 'name email').sort({ dueDateTime: 1 }).lean();
 
-    res.json({ success: true, userId, overdueTasks: groupTasksByDate(tasks, 'dueDateTime', 'overdueSerialNo'), count: tasks.length });
+    const overdueTasks = tasks.filter(t => {
+      const userStatus = t.statusByUser?.find(item => item.user?.toString() === userId.toString())?.status || t.overallStatus || 'pending';
+      return isTaskOverdueForStatus(t.dueDateTime || t.dueDate, userStatus);
+    });
+
+    res.json({ success: true, userId, overdueTasks: groupTasksByDate(overdueTasks, 'dueDateTime', 'overdueSerialNo'), count: overdueTasks.length });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -1642,12 +1659,8 @@ exports.markTaskAsOverdue = async (req, res) => {
 
 exports.updateAllOverdueTasks = async (req, res) => {
   try {
-    const now = new Date();
-    const result = await Task.updateMany(
-      { dueDateTime: { $lt: now }, overallStatus: { $in: ['pending', 'in-progress', 'reopen', 'onhold'] }, isActive: true },
-      { $set: { overallStatus: 'overdue', markedOverdueAt: now } }
-    );
-    res.json({ success: true, message: `Updated overdue tasks`, count: result.modifiedCount });
+    const result = await Task.updateAllOverdueTasks();
+    res.json({ success: true, message: `Updated overdue tasks`, count: result.updated, result });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
