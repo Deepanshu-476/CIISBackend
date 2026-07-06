@@ -17,7 +17,7 @@ exports.verify = async (req, res) => {
         success: false,
         message: "No token provided"
       });
-    }
+    } 
 
     
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
