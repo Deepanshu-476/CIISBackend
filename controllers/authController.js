@@ -3,7 +3,7 @@ const Company = require("../models/Company");
 const Client = require("../HR-CDS/models/Client");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
-const sendEmail = require("../utils/sendEmail");
+const { sendEmail } = require("../utils/sendEmail");
 const Department = require("../models/Department");
 const Branch = require("../models/Branch");
 const crypto = require("crypto");
@@ -12,6 +12,10 @@ const { validateRequest } = require("../middleware/validation");
 const { loginSchema } = require("../validations/authValidation");
 const OTP = require('../models/OTP');
 const emailService = require('../services/emailService'); 
+const {
+  getWelcomeEmailTemplate,
+  getCompanyLoginUrl,
+} = require("../HR-CDS/controllers/clientController");
 
 
 const LoginOTPSchema = new mongoose.Schema({
@@ -629,7 +633,13 @@ exports.register = async (req, res) => {
     await session.commitTransaction();
 
     
-    sendWelcomeEmail(cleanEmail, name, companyExists.companyName).catch(console.error);
+    sendExistingTemplateWelcomeEmail(
+      cleanEmail,
+      name,
+      companyExists.companyName,
+      password,
+      companyExists.companyCode || companyCode
+    ).catch(console.error);
 
     return res.status(201).json({
       success: true,
@@ -2145,6 +2155,35 @@ exports.testAPI = async (req, res) => {
   }
 };
 
+
+const sendExistingTemplateWelcomeEmail = async (email, name, companyName, password, companyCode) => {
+  try {
+    const loginUrl = getCompanyLoginUrl(companyCode);
+    const emailHtml = getWelcomeEmailTemplate(name, companyName, email, password, loginUrl);
+
+    await sendEmail(
+      email,
+      `Welcome to CIIS NETWORK - Your Account Has Been Created (${companyName})`,
+      emailHtml,
+      {
+        priority: 'high',
+        referenceId: `user-welcome-${Date.now()}`,
+        notificationType: 'email_notification',
+        notificationTargetPath: '/ciisUser/user-dashboard',
+        notificationMessage: `Your CIIS account for ${companyName} has been created. Please check your email for login details.`,
+        notificationPriority: 'high',
+        headers: {
+          'X-Email-Type': 'user-welcome',
+          'X-Company': companyName,
+          'X-Company-Code': companyCode || '',
+          'X-User-Email': email
+        }
+      }
+    );
+  } catch (err) {
+    console.error("Failed to send welcome email:", err);
+  }
+};
 
 const sendWelcomeEmail = async (email, name, companyName) => {
   try {
