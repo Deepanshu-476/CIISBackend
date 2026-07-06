@@ -194,6 +194,18 @@ exports.updateStatus = async (req, res) => {
 
     const oldStatusEntry = task.statusByUser.find(s => s.user?.toString() === currentUserId);
     const oldStatus = oldStatusEntry?.status || 'pending';
+    const normalizedStatus = normalizeTaskStatus(status);
+
+    if (
+      normalizedStatus !== 'overdue' &&
+      (normalizeTaskStatus(oldStatus) === 'overdue' || isTaskOverdueForStatus(task.dueDateTime || task.dueDate, oldStatus))
+    ) {
+      if (normalizeTaskStatus(oldStatus) === 'pending') {
+        task.markUserStatusOverdue(currentUserId, 'Automatically marked overdue after due time passed');
+        await task.save();
+      }
+      return res.status(400).json({ success: false, error: 'Cannot change status of an overdue task' });
+    }
 
     const updateUserStatusInList = (targetUserId, newStatus, userRemarks) => {
       const idx = task.statusByUser.findIndex(s => s.user?.toString() === targetUserId.toString());

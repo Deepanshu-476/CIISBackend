@@ -48,6 +48,19 @@ const handleFileUpload = upload.single('pdfFile');
 
 const normalizeRole = (value = "") => value.toString().trim().toLowerCase().replace(/[_\s]+/g, "-");
 
+const normalizeTaskStatus = (value = "pending") => {
+  const normalized = String(value || "pending").trim().toLowerCase();
+  if (normalized === "in progress" || normalized === "inprogress") return "in-progress";
+  if (normalized === "on hold" || normalized === "onhold") return "onhold";
+  return normalized;
+};
+
+const isPendingTaskPastDue = (task = {}) => {
+  if (normalizeTaskStatus(task.status) !== "pending" || !task.dueDate) return false;
+  const dueDate = new Date(task.dueDate);
+  return !Number.isNaN(dueDate.getTime()) && dueDate < new Date();
+};
+
 const isProjectAdmin = (user = {}) => {
   const roles = [user.role, user.jobRole, user.companyRole].map(normalizeRole);
   return roles.some(role => ["admin", "super-admin", "superadmin", "owner"].includes(role));
@@ -1249,15 +1262,37 @@ exports.updateTaskStatus = async (req, res) => {
     }
 
     const oldStatus = task.status;
-    task.status = status.toLowerCase();
+    const nextStatus = normalizeTaskStatus(status);
+
+    if (nextStatus !== "overdue" && (normalizeTaskStatus(oldStatus) === "overdue" || isPendingTaskPastDue(task))) {
+      if (isPendingTaskPastDue(task)) {
+        task.status = "overdue";
+        task.updatedAt = new Date();
+        task.activityLogs.push({
+          type: "status_change",
+          description: "Automatically marked overdue after due time passed",
+          oldValue: oldStatus,
+          newValue: "overdue",
+          performedBy: req.user.id,
+          remark: "Automatically marked overdue after due time passed"
+        });
+        await project.save();
+      }
+      return res.status(400).json({
+        success: false,
+        message: "Cannot change status of an overdue task"
+      });
+    }
+
+    task.status = nextStatus;
     task.updatedAt = new Date();
 
     
     task.activityLogs.push({
       type: "status_change",
-      description: `Status changed from ${oldStatus} to ${status}`,
+      description: `Status changed from ${oldStatus} to ${nextStatus}`,
       oldValue: oldStatus,
-      newValue: status,
+      newValue: nextStatus,
       performedBy: req.user.id,
       remark: remark
     });
@@ -1267,7 +1302,7 @@ exports.updateTaskStatus = async (req, res) => {
     
     const notification = {
       title: "Task Status Updated",
-      message: `Task "${task.title}" status changed from ${oldStatus} to ${status}`,
+      message: `Task "${task.title}" status changed from ${oldStatus} to ${nextStatus}`,
       type: "status_changed",
       relatedTo: "task",
       referenceId: task._id,
@@ -1284,13 +1319,13 @@ exports.updateTaskStatus = async (req, res) => {
       targetPath: '/ciisUser/task-management',
       type: 'project_task_status_changed',
       title: 'Project Task Updated',
-      message: `${req.user.name} changed "${task.title}" status from ${oldStatus} to ${status}${remark ? ': ' + remark : ''}`,
+      message: `${req.user.name} changed "${task.title}" status from ${oldStatus} to ${nextStatus}${remark ? ': ' + remark : ''}`,
       actor: req.user.id,
       data: {
         projectId: project._id,
         taskId: task._id,
         oldStatus,
-        newStatus: status,
+        newStatus: nextStatus,
         remark,
       },
       priority: 'medium',

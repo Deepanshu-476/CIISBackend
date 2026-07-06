@@ -4,6 +4,15 @@ const getCompanyRegistrationEmailTemplate = (companyData, ownerData, isOwnerEmai
   const recipientType = isOwnerEmail ? 'Owner' : 'Company';
   const primaryColor = '#2563eb';
   const secondaryColor = '#1e40af';
+  const escapeHtml = value => String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+  const ownerPassword = ownerData?.password
+    ? escapeHtml(ownerData.password)
+    : 'As set during registration';
   
   return `
     <!DOCTYPE html>
@@ -327,30 +336,38 @@ const getCompanyRegistrationEmailTemplate = (companyData, ownerData, isOwnerEmai
           ` : `
             <!-- Owner Details Section - Only for Owner Email -->
             <div class="section">
-              <div class="section-title">
-                <div class="section-icon">👑</div>
-                <span>Owner Account Details</span>
-              </div>
+              <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin-bottom: 20px;">
+                <tr>
+                  <td width="40" style="width: 40px; vertical-align: middle;">
+                    <div style="width: 32px; height: 32px; line-height: 32px; background: #2563eb; border-radius: 8px; color: #ffffff; text-align: center; font-size: 18px; font-weight: 700;">&#128081;</div>
+                  </td>
+                  <td style="vertical-align: middle; color: #2563eb; font-size: 18px; font-weight: 700;">
+                    Owner Account Details
+                  </td>
+                </tr>
+              </table>
               
               <div class="credentials-highlight">
-                <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 15px;">
-                  <div style="width: 40px; height: 40px; background: #2563eb; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold;">
-                    👤
-                  </div>
-                  <div>
-                    <h3 style="color: #1f2937; margin: 0;">Super Admin Credentials</h3>
-                    <p style="color: #6b7280; margin: 0; font-size: 13px;">Keep these credentials secure</p>
-                  </div>
-                </div>
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin-bottom: 15px;">
+                  <tr>
+                    <td width="55" style="width: 55px; vertical-align: middle;">
+                      <div style="width: 40px; height: 40px; line-height: 40px; background: #2563eb; border-radius: 50%; color: #ffffff; text-align: center; font-size: 20px; font-weight: 700;">&#128100;</div>
+                    </td>
+                    <td style="vertical-align: middle;">
+                      <h3 style="color: #1f2937; margin: 0; font-size: 18px; line-height: 24px;">Super Admin Credentials</h3>
+                      <p style="color: #6b7280; margin: 0; font-size: 13px; line-height: 20px;">Keep these credentials secure</p>
+                    </td>
+                  </tr>
+                </table>
                 
                 <div style="background: white; padding: 15px; border-radius: 8px;">
                   <div style="margin-bottom: 12px;">
                     <span style="font-weight: 600; color: #4b5563;">Email:</span>
-                    <span style="font-weight: 700; color: #2563eb; margin-left: 10px;">${ownerData.email}</span>
+                    <span style="font-weight: 700; color: #2563eb; margin-left: 10px;">${escapeHtml(ownerData.email)}</span>
                   </div>
                   <div style="margin-bottom: 12px;">
                     <span style="font-weight: 600; color: #4b5563;">Password:</span>
-                    <span style="font-weight: 700; color: #059669; margin-left: 10px;">•••••••• (as set during registration)</span>
+                    <span style="font-weight: 700; color: #059669; margin-left: 10px;">${ownerPassword}</span>
                   </div>
                   <div style="margin-bottom: 12px;">
                     <span style="font-weight: 600; color: #4b5563;">Role:</span>
