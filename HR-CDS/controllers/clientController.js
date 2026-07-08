@@ -71,6 +71,36 @@ const getSubscriptionTaskDueDate = subscription => {
   return dueDate;
 };
 
+const getSubscriptionMonthSpan = subscription => {
+  const start = new Date(subscription?.startDate);
+  const end = new Date(subscription?.endDate);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) return 1;
+  const months = ((end.getFullYear() - start.getFullYear()) * 12) + (end.getMonth() - start.getMonth());
+  return Math.max(1, months || 1);
+};
+
+const createRenewalDueInvoice = ({ subscription, plan = null }) => {
+  const amount = Number(subscription?.price || 0);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+
+  const planName = subscription?.planName || plan?.name || 'Subscription Renewal';
+  const months = getSubscriptionMonthSpan(subscription);
+
+  return {
+    title: `${planName} Renewal`,
+    subscriptionId: subscription._id,
+    subscriptionNo: subscription.subscriptionNo,
+    planName,
+    periodStart: subscription.startDate,
+    periodEnd: subscription.endDate,
+    billingCycle: `${months} Month${months === 1 ? '' : 's'}`,
+    amount,
+    dueDate: subscription.startDate || new Date(),
+    note: `Auto generated bill for Subscription ${subscription.subscriptionNo}`,
+    status: 'Due'
+  };
+};
+
 const generateTasksForSubscription = async ({ client, subscription, plan, session }) => {
   if (!plan || !subscription?._id) return [];
   const createdTaskIds = [];
@@ -1551,6 +1581,17 @@ const renewClientSubscription = async (req, res) => {
 
     await client.save({ session });
     const createdSub = client.subscription[client.subscription.length - 1];
+    const renewalInvoice = createRenewalDueInvoice({
+      subscription: createdSub,
+      plan: selectedClientPlan
+    });
+
+    if (renewalInvoice) {
+      if (!Array.isArray(client.dueInvoices)) client.dueInvoices = [];
+      client.dueInvoices.push(renewalInvoice);
+      await client.save({ session });
+    }
+
     if (selectedClientPlan) {
       await generateTasksForSubscription({
         client,
