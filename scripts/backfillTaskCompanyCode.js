@@ -10,7 +10,7 @@ const missingCompanyCodeFilter = {
     { companyCode: { $exists: false } },
     { companyCode: null },
     { companyCode: '' }, 
-  ],
+  ],                                  
 };
 
 const getUserCompanyCode = async (userId) => {
