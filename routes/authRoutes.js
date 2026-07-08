@@ -11,8 +11,8 @@ router.get("/verify-email/:token", authController.verifyEmail);
 router.post("/refresh-token", authController.refreshToken);
 router.post("/logout", authController.logout); 
  
-
-router.post("/verify-login-otp", authController.verifyLoginOTP);
+ 
+router.post("/verify-login-otp", authController.verifyLoginOTP);         
 router.post("/resend-login-otp", authController.resendLoginOTP); 
 
 

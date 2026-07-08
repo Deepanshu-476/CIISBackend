@@ -147,6 +147,60 @@ const generateTasksForSubscription = async ({ client, subscription, plan, sessio
   return createdTaskIds;
 };
 
+const extendOverdueClientTasksToSubscriptionEnd = async ({ clientId, subscription, session = null }) => {
+  const subscriptionDueDate = getSubscriptionTaskDueDate(subscription);
+  if (!clientId || !subscriptionDueDate) {
+    return { matchedCount: 0, modifiedCount: 0 };
+  }
+
+  const now = new Date();
+  const overdueOpenTaskFilter = {
+    clientId,
+    completed: { $ne: true },
+    status: { $nin: ['completed', 'onhold'] },
+    $or: [
+      { status: 'overdue' },
+      { dueDate: { $lt: now } }
+    ]
+  };
+  const updateOptions = session ? { session } : {};
+  const activityLog = {
+    action: 'subscription_renewed_due_date_extended',
+    userName: 'System',
+    description: `Due date extended to subscription expiry ${subscriptionDueDate.toISOString()}`,
+    oldValues: { overdueBefore: now },
+    newValues: {
+      dueDate: subscriptionDueDate,
+      subscriptionNo: subscription.subscriptionNo || null,
+      subscriptionId: subscription._id || null
+    },
+    createdAt: now
+  };
+
+  const result = await ClientTask.updateMany(
+    overdueOpenTaskFilter,
+    {
+      $set: {
+        dueDate: subscriptionDueDate,
+        dueDateSource: 'subscription'
+      },
+      $push: { activityLogs: activityLog }
+    },
+    updateOptions
+  );
+
+  await ClientTask.updateMany(
+    { ...overdueOpenTaskFilter, status: 'overdue' },
+    { $set: { status: 'pending' } },
+    updateOptions
+  );
+
+  return {
+    matchedCount: result.matchedCount || result.n || 0,
+    modifiedCount: result.modifiedCount || result.nModified || 0
+  };
+};
+
 
 const getWelcomeEmailTemplate = (name, company, email, password, loginUrl) => {
   const currentYear = new Date().getFullYear();
@@ -1518,11 +1572,17 @@ const extendClientSubscription = async (req, res) => {
     client.expiredReminderLastSentAt = null;
 
     await client.save();
+    const createdSub = client.subscription[client.subscription.length - 1];
+    const overdueTaskExtension = await extendOverdueClientTasksToSubscriptionEnd({
+      clientId: client._id,
+      subscription: createdSub
+    });
 
     res.json({
       success: true,
       message: "Subscription extended successfully",
-      data: client
+      data: client,
+      overdueTaskExtension
     });
 
   } catch (error) {
@@ -1581,16 +1641,11 @@ const renewClientSubscription = async (req, res) => {
 
     await client.save({ session });
     const createdSub = client.subscription[client.subscription.length - 1];
-    const renewalInvoice = createRenewalDueInvoice({
+    const overdueTaskExtension = await extendOverdueClientTasksToSubscriptionEnd({
+      clientId: client._id,
       subscription: createdSub,
-      plan: selectedClientPlan
+      session
     });
-
-    if (renewalInvoice) {
-      if (!Array.isArray(client.dueInvoices)) client.dueInvoices = [];
-      client.dueInvoices.push(renewalInvoice);
-      await client.save({ session });
-    }
 
     if (selectedClientPlan) {
       await generateTasksForSubscription({
@@ -1607,7 +1662,8 @@ const renewClientSubscription = async (req, res) => {
     res.json({
       success: true,
       message: "Subscription renewed successfully",
-      data: updatedClient
+      data: updatedClient,
+      overdueTaskExtension
     });
 
   } catch (error) {
@@ -1780,6 +1836,7 @@ const updateClientReceiptStatus = async (req, res) => {
       linkedDue.clearedAt = cleanStatus === 'Approved' ? new Date() : undefined;
     }
 
+    let activatedSubscription = null;
     if (cleanStatus === 'Approved' && activateClient) {
       const subStart = startDate ? new Date(startDate) : new Date();
       const subEnd = endDate ? new Date(endDate) : null;
@@ -1797,6 +1854,7 @@ const updateClientReceiptStatus = async (req, res) => {
         extraTasks: 0,
         benefits: 'Activated after payment verification'
       });
+      activatedSubscription = client.subscription[client.subscription.length - 1];
       client.reminder5DaysSent = false;
       client.reminder3DaysSent = false;
       client.expiredMailSent = false;
@@ -1804,11 +1862,18 @@ const updateClientReceiptStatus = async (req, res) => {
     }
 
     await client.save();
+    const overdueTaskExtension = activatedSubscription
+      ? await extendOverdueClientTasksToSubscriptionEnd({
+        clientId: client._id,
+        subscription: activatedSubscription
+      })
+      : { matchedCount: 0, modifiedCount: 0 };
 
     res.json({
       success: true,
       message: `Receipt ${cleanStatus.toLowerCase()} successfully`,
-      data: client
+      data: client,
+      overdueTaskExtension
     });
   } catch (error) {
     console.error('Error updating receipt status:', error);
