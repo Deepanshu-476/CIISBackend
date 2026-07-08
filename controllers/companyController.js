@@ -1671,4 +1671,55 @@ exports.getCompanyStats = async (req, res) => {
     });
   }
 };
+
+exports.getDashboardConfig = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ success: false, message: "Invalid company id" });
+    }
+    const company = await Company.findById(id).select("dashboardConfig");
+    if (!company) {
+      return res.status(404).json({ success: false, message: "Company not found" });
+    }
+    return res.status(200).json({
+      success: true,
+      dashboardConfig: company.dashboardConfig || []
+    });
+  } catch (err) {
+    console.error("❌ Get dashboard config error:", err);
+    return res.status(500).json({ success: false, message: "Failed to fetch dashboard config" });
+  }
+};
+
+exports.updateDashboardConfig = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { dashboardConfig } = req.body;
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ success: false, message: "Invalid company id" });
+    }
+    if (!Array.isArray(dashboardConfig)) {
+      return res.status(400).json({ success: false, message: "dashboardConfig must be an array" });
+    }
+    const company = await Company.findByIdAndUpdate(
+      id,
+      { $set: { dashboardConfig } },
+      { new: true, runValidators: true }
+    ).select("dashboardConfig");
+
+    if (!company) {
+      return res.status(404).json({ success: false, message: "Company not found" });
+    }
+    return res.status(200).json({
+      success: true,
+      message: "Dashboard configuration updated successfully",
+      dashboardConfig: company.dashboardConfig
+    });
+  } catch (err) {
+    console.error("❌ Update dashboard config error:", err);
+    return res.status(500).json({ success: false, message: "Failed to update dashboard config" });
+  }
+};
+
 void 0;

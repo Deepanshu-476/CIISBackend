@@ -5,8 +5,24 @@ const attendanceController = require('../controllers/AttendanceController');
 const { protect, authorize } = require('../../middleware/authMiddleware');
 
 
+const upload = require('../../utils/multer');
+
 router.post('/in', protect, attendanceController.clockIn);
 router.post('/out', protect, attendanceController.clockOut);
+router.post('/upload-selfie', protect, upload.single('selfie'), (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: "No file uploaded" });
+    }
+    const selfieUrl = `/api/uploads/tasks/${req.file.filename}`;
+    return res.status(200).json({
+      success: true,
+      selfieUrl
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
 router.get('/status', protect, attendanceController.getTodayStatus);
 router.get('/list', protect, attendanceController.getAttendanceList);
 

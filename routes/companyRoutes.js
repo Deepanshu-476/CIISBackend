@@ -2,6 +2,8 @@ const express = require("express");
 const router = express.Router();
 const companyController = require("../controllers/companyController");
 const multer = require("multer");
+const { protect } = require("../middleware/authMiddleware");
+
 
 
 router.post("/upload-logo", 
@@ -65,6 +67,9 @@ router.patch("/:id/deactivate", companyController.deactivateCompany);
 
 router.patch("/:id/activate", companyController.activateCompany);
 
+
+router.get("/:id/dashboard-config", protect, companyController.getDashboardConfig);
+router.put("/:id/dashboard-config", protect, companyController.updateDashboardConfig);
 
 router.delete("/:id", companyController.deleteCompanyPermanently);
 router.get('/test', (req, res) => {
