@@ -71,7 +71,38 @@ const canDeleteDocument = (req, doc) => (
   Boolean(getRequestUserId(req)) && getDocumentUploaderId(doc) === getRequestUserId(req)
 );
 
-const formatDocument = (doc, req) => ({
+const canManageDocument = (req, doc, client) => (
+  canDeleteDocument(req, doc) || Boolean(client && canAccessClient(req, client))
+);
+
+const removeDocumentFile = filePath => {
+  if (!filePath || !fs.existsSync(filePath)) return;
+  try {
+    fs.unlinkSync(filePath);
+  } catch (fileError) {
+    console.warn('Failed to remove client document file:', fileError.message);
+  }
+};
+
+const getAccessibleDocument = async (req, documentId) => {
+  const document = await ClientDocument.findById(documentId);
+  if (!document) {
+    return { status: 404, error: 'Document not found' };
+  }
+
+  const client = await Client.findById(document.client).lean();
+  if (!client || !canAccessClient(req, client)) {
+    return { status: 403, error: 'Access denied for this document' };
+  }
+
+  if (!canManageDocument(req, document, client)) {
+    return { status: 403, error: 'You do not have permission to manage this document' };
+  }
+
+  return { document, client };
+};
+
+const formatDocument = (doc, req, client = null) => ({
   _id: doc._id,
   client: doc.client,
   name: doc.originalName,
@@ -82,7 +113,7 @@ const formatDocument = (doc, req) => ({
   uploadedBy: doc.uploadedByName,
   uploadedById: getDocumentUploaderId(doc),
   uploadedByRole: doc.uploadedByRole,
-  canDelete: req ? canDeleteDocument(req, doc) : false,
+  canDelete: req ? canManageDocument(req, doc, client) : false,
   isDeleted: doc.isDeleted,
   deletedAt: doc.deletedAt,
   createdAt: doc.createdAt,
@@ -115,7 +146,7 @@ router.get('/', protect, async (req, res) => {
 
     return res.json({
       success: true,
-      data: documents.map(document => formatDocument(document, req)),
+      data: documents.map(document => formatDocument(document, req, client)),
       count: documents.length,
     });
   } catch (error) {
@@ -161,7 +192,7 @@ router.post('/', protect, upload.single('document'), async (req, res) => {
     return res.status(201).json({
       success: true,
       message: 'Document uploaded successfully',
-      data: formatDocument(document, req),
+      data: formatDocument(document, req, client),
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
@@ -194,28 +225,78 @@ router.get('/:id/download', protect, async (req, res) => {
   }
 });
 
+const restoreDocument = async (req, res) => {
+  try {
+    const result = await getAccessibleDocument(req, req.params.id);
+    if (result.error) {
+      return res.status(result.status).json({ success: false, message: result.error });
+    }
+
+    const { document, client } = result;
+    document.isDeleted = false;
+    document.deletedAt = null;
+    document.deletedBy = null;
+    await document.save();
+
+    return res.json({
+      success: true,
+      message: 'Document recovered successfully',
+      data: formatDocument(document, req, client),
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+router.patch('/:id/restore', protect, restoreDocument);
+router.put('/:id/restore', protect, restoreDocument);
+router.post('/:id/restore', protect, restoreDocument);
+
+const permanentlyDeleteDocument = async (req, res) => {
+  try {
+    const result = await getAccessibleDocument(req, req.params.id);
+    if (result.error) {
+      return res.status(result.status).json({ success: false, message: result.error });
+    }
+
+    const { document } = result;
+    const filePath = document.path;
+    await document.deleteOne();
+    removeDocumentFile(filePath);
+
+    return res.json({ success: true, message: 'Document permanently deleted' });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+router.delete('/:id/permanent', protect, permanentlyDeleteDocument);
+router.post('/:id/permanent-delete', protect, permanentlyDeleteDocument);
+
 router.delete('/:id', protect, async (req, res) => {
   try {
-    const document = await ClientDocument.findById(req.params.id);
-    if (!document) {
-      return res.status(404).json({ success: false, message: 'Document not found' });
+    const permanentRequested = (
+      String(req.query.permanent || '').toLowerCase() === 'true' ||
+      String(req.body?.permanent || '').toLowerCase() === 'true' ||
+      String(req.headers['x-permanent-delete'] || '').toLowerCase() === 'true'
+    );
+
+    if (permanentRequested) {
+      return permanentlyDeleteDocument(req, res);
     }
 
-    const client = await Client.findById(document.client).lean();
-    if (!client || !canAccessClient(req, client)) {
-      return res.status(403).json({ success: false, message: 'Access denied for this document' });
+    const result = await getAccessibleDocument(req, req.params.id);
+    if (result.error) {
+      return res.status(result.status).json({ success: false, message: result.error });
     }
 
-    if (!canDeleteDocument(req, document)) {
-      return res.status(403).json({ success: false, message: 'Only the uploader can delete this document' });
-    }
-
+    const { document, client } = result;
     document.isDeleted = true;
     document.deletedAt = new Date();
     document.deletedBy = req.user._id || req.user.id;
     await document.save();
 
-    return res.json({ success: true, message: 'Document moved to trash', data: formatDocument(document, req) });
+    return res.json({ success: true, message: 'Document moved to trash', data: formatDocument(document, req, client) });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
