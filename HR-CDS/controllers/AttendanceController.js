@@ -1,6 +1,8 @@
 const Attendance = require("../models/Attendance");
 const User = require("../../models/User");
 const Company = require("../../models/Company");
+const Department = require("../../models/Department");
+const JobRole = require("../../models/JobRole");
 const mongoose = require("mongoose");
 const {notifyPageUsers, getCompanyId} = require("../utils/systemNotificationService");
 const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagination");
@@ -230,6 +232,30 @@ const clockIn = async (req, res) => {
         message: "User company code not found. Please contact admin." 
       });
     }
+
+    // 1. Fetch Company settings to read attendance mode
+    const company = await Company.findOne({ companyCode: userCompanyCode });
+    const clockInConfig = company?.dashboardConfig?.find(c => c.componentId === 'clock-in');
+    const attendanceMode = clockInConfig?.settings?.attendanceMode || 'normal';
+
+    const { latitude, longitude, selfieUrl } = req.body;
+
+    // 2. Validate Geolocation/Selfie based on company requirements
+    if (attendanceMode === 'location' || attendanceMode === 'both') {
+      if (latitude === undefined || longitude === undefined) {
+        return res.status(400).json({
+          message: "Location coordinates (latitude and longitude) are required for attendance."
+        });
+      }
+    }
+
+    if (attendanceMode === 'image' || attendanceMode === 'both') {
+      if (!selfieUrl) {
+        return res.status(400).json({
+          message: "Selfie/Live image upload is required for attendance."
+        });
+      }
+    }
     
     const now = new Date();
     const {start: todayStart, end: todayEnd} = getIndiaDayRange(now);
@@ -239,8 +265,6 @@ const clockIn = async (req, res) => {
       date: { $gte: todayStart, $lte: todayEnd } 
     });
 
-    // An automatic ABSENT placeholder can be created after 10 AM. Employees
-    // must still be able to clock in later, so reuse that empty record.
     const isAbsentPlaceholder = existingRecord
       && !existingRecord.inTime
       && !existingRecord.outTime
@@ -252,21 +276,50 @@ const clockIn = async (req, res) => {
       });
     }
 
-    const halfDayThreshold = getIndiaThreshold(now, 10, 0);
-    const lateThresholdEnd = getIndiaThreshold(now, 9, 30);
-    const lateThresholdStart = getIndiaThreshold(now, 9, 10);
-    const shiftStart = getIndiaThreshold(now, 9, 0);
+    // 3. Fetch JobRole shift timing configuration
+    const userObj = await User.findById(userId);
+    let shiftSettings = null;
+    if (userObj) {
+      const jobRoleDoc = await JobRole.findOne({
+        name: { $regex: new RegExp(`^${userObj.jobRole}$`, 'i') },
+        company: userObj.company,
+        isActive: true
+      });
+      if (jobRoleDoc) {
+        shiftSettings = jobRoleDoc.shiftSettings;
+      }
+    }
+
+    const shiftStartStr = shiftSettings?.shiftStart || "09:00";
+    const earlyClockInStartStr = shiftSettings?.earlyClockInStart || "08:30";
+    const lateGraceLimitStr = shiftSettings?.lateGraceLimit || "09:10";
+    const halfDayLateLimitStr = shiftSettings?.halfDayLateLimit || "11:00";
+
+    const [startHour, startMin] = shiftStartStr.split(':').map(Number);
+    const [earlyHour, earlyMin] = earlyClockInStartStr.split(':').map(Number);
+    const [graceHour, graceMin] = lateGraceLimitStr.split(':').map(Number);
+    const [halfDayHour, halfDayMin] = halfDayLateLimitStr.split(':').map(Number);
+
+    const shiftStart = getIndiaThreshold(now, startHour, startMin);
+    const earlyThreshold = getIndiaThreshold(now, earlyHour, earlyMin);
+    const graceThreshold = getIndiaThreshold(now, graceHour, graceMin);
+    const halfDayThreshold = getIndiaThreshold(now, halfDayHour, halfDayMin);
+
+    // 4. Validate Early Clock-In
+    if (now < earlyThreshold) {
+      return res.status(400).json({
+        message: `You cannot clock in too early. Clock-in is allowed from ${earlyClockInStartStr}.`
+      });
+    }
 
     const lateBy = now > shiftStart ? formatDuration(now - shiftStart) : "00:00:00";
 
+    // 5. Determine dynamic status
     let status = "PRESENT";
-    
     if (now >= halfDayThreshold) {
       status = "HALF DAY";
-    } else if (now >= lateThresholdStart && now <= lateThresholdEnd) {
+    } else if (now > graceThreshold && now < halfDayThreshold) {
       status = "LATE";
-    } else if (now > lateThresholdEnd && now < halfDayThreshold) {
-      status = "HALF DAY";
     }
 
     const attendanceRecord = existingRecord || new Attendance({ user: userId });
@@ -280,6 +333,15 @@ const clockIn = async (req, res) => {
     attendanceRecord.overTime = "00:00:00";
     attendanceRecord.earlyLeave = "00:00:00";
     attendanceRecord.companyCode = userCompanyCode;
+
+    // Save Location & Selfie
+    if (latitude !== undefined && longitude !== undefined) {
+      attendanceRecord.inLocation = { latitude, longitude };
+    }
+    if (selfieUrl) {
+      attendanceRecord.inSelfieUrl = selfieUrl;
+    }
+
     if (isAbsentPlaceholder) {
       attendanceRecord.notes = "Clocked in after the automatic absent mark";
     }
@@ -330,6 +392,30 @@ const clockOut = async (req, res) => {
     const userId = req.user._id || req.user.id;
     const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     
+    // 1. Fetch Company settings to read attendance mode requirements
+    const company = await Company.findOne({ companyCode: userCompanyCode });
+    const clockInConfig = company?.dashboardConfig?.find(c => c.componentId === 'clock-in');
+    const attendanceMode = clockInConfig?.settings?.attendanceMode || 'normal';
+
+    const { latitude, longitude, selfieUrl } = req.body;
+
+    // 2. Validate Geolocation/Selfie based on company requirements
+    if (attendanceMode === 'location' || attendanceMode === 'both') {
+      if (latitude === undefined || longitude === undefined) {
+        return res.status(400).json({
+          message: "Location coordinates (latitude and longitude) are required to clock out."
+        });
+      }
+    }
+
+    if (attendanceMode === 'image' || attendanceMode === 'both') {
+      if (!selfieUrl) {
+        return res.status(400).json({
+          message: "Selfie/Live image upload is required to clock out."
+        });
+      }
+    }
+
     const now = new Date();
     const {start: todayStart, end: todayEnd} = getIndiaDayRange(now);
 
@@ -344,7 +430,31 @@ const clockOut = async (req, res) => {
       });
     }
 
-    const shiftEnd = getIndiaThreshold(now, 19, 0);
+    // 3. Fetch JobRole shift settings
+    const userObj = await User.findById(userId);
+    let shiftSettings = null;
+    if (userObj) {
+      const jobRoleDoc = await JobRole.findOne({
+        name: { $regex: new RegExp(`^${userObj.jobRole}$`, 'i') },
+        company: userObj.company,
+        isActive: true
+      });
+      if (jobRoleDoc) {
+        shiftSettings = jobRoleDoc.shiftSettings;
+      }
+    }
+
+    const shiftEndStr = shiftSettings?.shiftEnd || "19:00";
+    const shortLeaveEarlyLimitStr = shiftSettings?.shortLeaveEarlyLimit || "18:30";
+    const halfDayEarlyLimitStr = shiftSettings?.halfDayEarlyLimit || "15:00";
+
+    const [endHour, endMin] = shiftEndStr.split(':').map(Number);
+    const [shortHour, shortMin] = shortLeaveEarlyLimitStr.split(':').map(Number);
+    const [halfHour, halfMin] = halfDayEarlyLimitStr.split(':').map(Number);
+
+    const shiftEnd = getIndiaThreshold(now, endHour, endMin);
+    const shortLeaveThreshold = getIndiaThreshold(now, shortHour, shortMin);
+    const halfDayOutThreshold = getIndiaThreshold(now, halfHour, halfMin);
 
     const totalMs = now - new Date(record.inTime);
     const totalHours = totalMs / (1000 * 60 * 60);
@@ -355,38 +465,34 @@ const clockOut = async (req, res) => {
     record.overTime = now > shiftEnd ? formatDuration(now - shiftEnd) : "00:00:00";
     record.earlyLeave = now < shiftEnd ? formatDuration(shiftEnd - now) : "00:00:00";
 
-    const loginTime = new Date(record.inTime);
-    const halfDayThreshold = getIndiaThreshold(loginTime, 10, 0);
-    const lateThresholdEnd = getIndiaThreshold(loginTime, 9, 30);
-    const lateThresholdStart = getIndiaThreshold(loginTime, 9, 10);
+    // Save Location & Selfie
+    if (latitude !== undefined && longitude !== undefined) {
+      record.outLocation = { latitude, longitude };
+    }
+    if (selfieUrl) {
+      record.outSelfieUrl = selfieUrl;
+    }
 
-    if (loginTime >= halfDayThreshold) {
-      record.status = "HALF DAY";
-    } else if (loginTime > lateThresholdEnd && loginTime < halfDayThreshold) {
-      if (totalHours >= 9) {
-        record.status = "HALF DAY";
-      } else if (totalHours >= 5) {
-        record.status = "HALF DAY";
+    // 4. Calculate final status based on early leaves and total hours
+    let finalStatus = record.status; // starts as PRESENT, LATE, or HALF DAY
+    if (finalStatus !== "HALF DAY" && finalStatus !== "ABSENT") {
+      if (now < shiftEnd) {
+        if (now < halfDayOutThreshold) {
+          finalStatus = "HALF DAY";
+        } else if (now < shortLeaveThreshold) {
+          finalStatus = "HALF DAY";
+        } else {
+          finalStatus = "SHORT LEAVE";
+        }
       } else {
-        record.status = "ABSENT";
-      }
-    } else if (loginTime >= lateThresholdStart && loginTime <= lateThresholdEnd) {
-      if (totalHours >= 9) {
-        record.status = "LATE";
-      } else if (totalHours >= 5) {
-        record.status = "HALF DAY";
-      } else {
-        record.status = "ABSENT";
-      }
-    } else {
-      if (totalHours >= 9) {
-        record.status = "PRESENT";
-      } else if (totalHours >= 5) {
-        record.status = "HALF DAY";
-      } else {
-        record.status = "ABSENT";
+        if (totalHours < 9 && totalHours >= 5) {
+          finalStatus = "HALF DAY";
+        } else if (totalHours < 5) {
+          finalStatus = "ABSENT";
+        }
       }
     }
+    record.status = finalStatus;
 
     if (!record.companyCode && userCompanyCode) {
       record.companyCode = userCompanyCode;

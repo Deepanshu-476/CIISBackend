@@ -187,6 +187,29 @@ const companySchema = new mongoose.Schema(
       default: [],
     },
 
+    dashboardConfig: {
+      type: [{
+        componentId: { type: String, required: true },
+        componentName: { type: String, required: true },
+        isEnabled: { type: Boolean, default: true },
+        sortOrder: { type: Number, default: 0 },
+        settings: {
+          attendanceMode: {
+            type: String,
+            enum: ['normal', 'location', 'image', 'both'],
+            default: 'normal'
+          }
+        }
+      }],
+      default: [
+        { componentId: 'header', componentName: 'Welcome Header', isEnabled: true, sortOrder: 1 },
+        { componentId: 'clock-in', componentName: 'Attendance Timer & Clock In', isEnabled: true, sortOrder: 2, settings: { attendanceMode: 'normal' } },
+        { componentId: 'stats', componentName: 'Monthly Stats Grid', isEnabled: true, sortOrder: 3 },
+        { componentId: 'calendar', componentName: 'Attendance Calendar Grid', isEnabled: true, sortOrder: 4 },
+        { componentId: 'activity', componentName: 'Recent Activity Timeline', isEnabled: true, sortOrder: 5 }
+      ]
+    },
+
     accessConfiguredAt: {
       type: Date,
       default: null,

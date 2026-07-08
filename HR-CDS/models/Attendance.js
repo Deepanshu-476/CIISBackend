@@ -19,7 +19,7 @@ const attendanceSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['PRESENT', 'LATE', 'HALF DAY', 'ABSENT', 'WEEKEND','HALFDAY'],
+    enum: ['PRESENT', 'LATE', 'HALF DAY', 'ABSENT', 'WEEKEND','HALFDAY', 'SHORT LEAVE'],
     default: 'ABSENT'
   },
   lateBy: {
@@ -45,7 +45,17 @@ const attendanceSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
-    companyCode: {
+  inLocation: {
+    latitude: { type: Number },
+    longitude: { type: Number }
+  },
+  outLocation: {
+    latitude: { type: Number },
+    longitude: { type: Number }
+  },
+  inSelfieUrl: { type: String },
+  outSelfieUrl: { type: String },
+  companyCode: {
     type: String,
     required: true,
     index: true,
