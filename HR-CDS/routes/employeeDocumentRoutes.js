@@ -37,6 +37,15 @@ const upload = multer({
 const sameCompany = (user, target) =>
   String(user.company?._id || user.company || '') === String(target.company?._id || target.company || '');
 
+const canManageDocuments = (user, target) => {
+  const isOwnDocument = String(user._id || user.id) === String(target._id);
+  if (isOwnDocument) return true;
+
+  const allowedRoles = new Set(['super_admin', 'admin', 'owner', 'hr', 'manager']);
+  const userRole = String(user.companyRole || user.jobRole || user.role || '').toLowerCase();
+  return allowedRoles.has(userRole);
+};
+
 const documentJson = (document, userId) => ({
   _id: document._id,
   name: document.name,
@@ -61,9 +70,9 @@ router.get('/', (req, res) => {
 });
 
 router.post('/', upload.single('document'), async (req, res) => {
-  if (String(req.user._id || req.user.id) !== String(req.targetUser._id)) {
+  if (!canManageDocuments(req.user, req.targetUser)) {
     if (req.file) fs.unlink(req.file.path, () => {});
-    return res.status(403).json({ message: 'Employees can only upload their own documents' });
+    return res.status(403).json({ message: 'You do not have permission to upload documents for this employee' });
   }
   if (!req.file) return res.status(400).json({ message: 'No document received. Please select the file again.' });
 
@@ -106,8 +115,8 @@ router.get('/:documentId/view', sendDocument('inline'));
 router.get('/:documentId/download', sendDocument('attachment'));
 
 router.delete('/:documentId', async (req, res) => {
-  if (String(req.user._id || req.user.id) !== String(req.targetUser._id)) {
-    return res.status(403).json({ message: 'Employees can only delete their own documents' });
+  if (!canManageDocuments(req.user, req.targetUser)) {
+    return res.status(403).json({ message: 'You do not have permission to delete documents for this employee' });
   }
   const document = req.targetUser.documents.id(req.params.documentId);
   if (!document) return res.status(404).json({ message: 'Document not found' });
