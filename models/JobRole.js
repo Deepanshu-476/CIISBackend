@@ -33,6 +33,20 @@ const jobRoleSchema = new mongoose.Schema({
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User"
+  },
+  shiftSettings: {
+    shiftStart: { type: String, default: "09:00" },
+    shiftEnd: { type: String, default: "19:00" },
+    earlyClockInStart: { type: String, default: "08:30" },
+    lateGraceLimit: { type: String, default: "09:10" },
+    halfDayLateLimit: { type: String, default: "11:00" },
+    shortLeaveEarlyLimit: { type: String, default: "18:30" },
+    halfDayEarlyLimit: { type: String, default: "15:00" },
+    secondHalfStart: { type: String, default: "14:00" },
+    secondHalfClockInWindow: {
+      start: { type: String, default: "13:30" },
+      end: { type: String, default: "14:30" }
+    }
   }
 }, {
   timestamps: true

@@ -29,7 +29,7 @@ exports.createJobRole = async (req, res) => {
     void 0;
     void 0;
     
-    const { name, description, department } = req.body;
+    const { name, description, department, shiftSettings } = req.body;
     const createdBy = req.user ? req.user.id : null;
 
     if (!createdBy) {
@@ -129,7 +129,8 @@ exports.createJobRole = async (req, res) => {
       department,
       company: companyId,
       companyCode,
-      createdBy
+      createdBy,
+      shiftSettings
     });
 
     void 0;
