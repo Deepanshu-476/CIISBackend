@@ -174,7 +174,7 @@ exports.updateStatus = async (req, res) => {
       normalizedStatus !== 'overdue' &&
       (normalizeTaskStatus(oldStatus) === 'overdue' || isTaskOverdueForStatus(task.dueDateTime || task.dueDate, oldStatus))
     ) {
-      if (normalizeTaskStatus(oldStatus) === 'pending') {
+      if (!['onhold', 'completed', 'approved', 'rejected', 'cancelled', 'overdue'].includes(normalizeTaskStatus(oldStatus))) {
         task.markUserStatusOverdue(req.user._id, 'Automatically marked overdue after due time passed');
         task.overallStatus = 'overdue';
         await task.save();

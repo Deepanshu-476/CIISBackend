@@ -152,6 +152,8 @@ clienttaskSchema.index({ 'remarks.createdAt': -1 });
 
 clienttaskSchema.virtual('isOverdue').get(function() {
   if (!this.dueDate || this.completed) return false;
+  const status = String(this.status || 'pending').trim().toLowerCase();
+  if (['completed', 'onhold', 'on hold'].includes(status)) return false;
   const dueDate = new Date(this.dueDate);
   if (Number.isNaN(dueDate.getTime())) return false;
   return dueDate < new Date();

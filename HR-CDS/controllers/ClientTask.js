@@ -34,14 +34,20 @@ const getLocalDateStart = (value = new Date()) => {
 };
 
 const getClientTaskOverdueCutoff = () => new Date();
+const CLIENT_TASK_OVERDUE_EXCLUDED_STATUSES = ['completed', 'onhold', 'on hold'];
 
 const isClientTaskOverdue = task => {
   if (!task?.dueDate || task.completed) return false;
   const status = String(task.status || 'pending').trim().toLowerCase();
-  if (status === 'overdue') return true;
-  if (status !== 'pending') return false;
+  if (CLIENT_TASK_OVERDUE_EXCLUDED_STATUSES.includes(status)) return false;
   const dueDate = new Date(task.dueDate);
   return !Number.isNaN(dueDate.getTime()) && dueDate < new Date();
+};
+
+const isClientTaskOpen = task => {
+  if (!task || task.completed) return false;
+  const status = String(task.status || 'pending').trim().toLowerCase();
+  return !CLIENT_TASK_OVERDUE_EXCLUDED_STATUSES.includes(status);
 };
 
 const parseClientDueDate = value => {
@@ -142,9 +148,9 @@ const getAssignedClientTaskFilter = async (currentUser) => {
 const calculateClientAssignedStats = tasks => {
   const total = tasks.length;
   const completed = tasks.filter(task => task.completed || task.status === 'completed').length;
-  const overdue = tasks.filter(task => !task.completed && isClientTaskOverdue(task)).length;
-  const inProgress = tasks.filter(task => !task.completed && !isClientTaskOverdue(task) && task.status === 'in-progress').length;
-  const pending = tasks.filter(task => !task.completed && !isClientTaskOverdue(task) && task.status !== 'in-progress').length;
+  const overdue = tasks.filter(task => isClientTaskOpen(task) && isClientTaskOverdue(task)).length;
+  const inProgress = tasks.filter(task => isClientTaskOpen(task) && !isClientTaskOverdue(task) && task.status === 'in-progress').length;
+  const pending = tasks.filter(task => isClientTaskOpen(task) && !isClientTaskOverdue(task) && task.status !== 'in-progress').length;
   const percentage = count => total > 0 ? Math.round((count / total) * 100) : 0;
 
   return {
@@ -1083,7 +1089,7 @@ const updateAssignedTaskStatus = async (req, res) => {
       targetStatus !== 'overdue' &&
       (previousStatus === 'overdue' || isClientTaskOverdue(task))
     ) {
-      if (previousStatus === 'pending' && isClientTaskOverdue(task)) {
+      if (previousStatus !== 'overdue' && isClientTaskOverdue(task)) {
         task.status = 'overdue';
         task.completed = false;
         await task.save();
@@ -1370,8 +1376,8 @@ const getAssignedToMeTasks = async (req, res) => {
 
     const total = tasks.length;
     const completed = tasks.filter(t => t.completed).length;
-    const pending = tasks.filter(t => !t.completed && t.status !== 'in-progress').length;
-    const inProgress = tasks.filter(t => t.status === 'in-progress').length;
+    const pending = tasks.filter(t => isClientTaskOpen(t) && !isClientTaskOverdue(t) && t.status !== 'in-progress').length;
+    const inProgress = tasks.filter(t => isClientTaskOpen(t) && !isClientTaskOverdue(t) && t.status === 'in-progress').length;
 
     const calculatePercentage = (count) => total > 0 ? Math.round((count / total) * 100) : 0;
 
@@ -1503,9 +1509,11 @@ const getAssignedTasksByUserId = async (req, res) => {
       completed: task.completed,
       status: task.completed
         ? 'completed'
+        : isClientTaskOverdue(task)
+        ? 'overdue'
         : task.status === 'in-progress'
         ? 'in-progress'
-        : 'pending',
+        : task.status || 'pending',
       priority: (task.priority || 'Medium').toLowerCase(),
       clientName: task.clientId?.name || 'Unknown Client',
       clientId: task.clientId,
@@ -1630,11 +1638,10 @@ const getClientTasks = async (req, res) => {
 
     const pageTotalTasks = tasks.length;
     const completedTasks = tasks.filter(t => t.completed).length;
-    const pendingTasks = pageTotalTasks - completedTasks;
-    
     const overdueTasks = tasks.filter(t => {
       return isClientTaskOverdue(t);
     }).length;
+    const pendingTasks = tasks.filter(t => isClientTaskOpen(t) && !isClientTaskOverdue(t) && t.status !== 'in-progress').length;
 
     res.json({
       success: true,
@@ -1693,11 +1700,12 @@ const getClientTaskSummaries = async (req, res) => {
       if (!summary) return;
       summary.total += 1;
       if (task.completed) summary.completed += 1;
-      else summary.pending += 1;
       if (isClientTaskOverdue(task)) {
         summary.overdue += 1;
         const name = task.name || task.title || task.taskName;
         if (name) summary.overdueTaskNames.push(name);
+      } else if (isClientTaskOpen(task) && task.status !== 'in-progress') {
+        summary.pending += 1;
       }
     });
 
@@ -2221,6 +2229,17 @@ const deleteTask = async (req, res) => {
 const getTaskStats = async (req, res) => {
   try {
     const { clientId } = req.params;
+    const overdueCutoff = getClientTaskOverdueCutoff();
+    const openTaskExpression = [
+      { $eq: ['$completed', false] },
+      { $not: [{ $in: ['$status', CLIENT_TASK_OVERDUE_EXCLUDED_STATUSES] }] }
+    ];
+    const overdueExpression = [
+      ...openTaskExpression,
+      { $ne: ['$dueDate', null] },
+      { $lt: ['$dueDate', overdueCutoff] }
+    ];
+    const notOverdueExpression = { $not: [{ $and: overdueExpression }] };
 
     const stats = await Task.aggregate([
       { $match: { clientId: new mongoose.Types.ObjectId(clientId) } },
@@ -2232,25 +2251,25 @@ const getTaskStats = async (req, res) => {
             $sum: { $cond: [{ $eq: ['$completed', true] }, 1, 0] } 
           },
           pendingTasks: { 
-            $sum: { $cond: [{ $eq: ['$completed', false] }, 1, 0] } 
-          },
-          highPriorityTasks: {
-            $sum: { $cond: [{ $eq: ['$priority', 'High'] }, 1, 0] }
-          },
-          overdueTasks: {
             $sum: {
               $cond: [
                 {
                   $and: [
-                    { $eq: ['$completed', false] },
-                    { $ne: ['$dueDate', null] },
-                    { $lt: ['$dueDate', getClientTaskOverdueCutoff()] }
+                    ...openTaskExpression,
+                    { $ne: ['$status', 'in-progress'] },
+                    notOverdueExpression
                   ]
                 },
                 1,
                 0
               ]
             }
+          },
+          highPriorityTasks: {
+            $sum: { $cond: [{ $eq: ['$priority', 'High'] }, 1, 0] }
+          },
+          overdueTasks: {
+            $sum: { $cond: [{ $and: overdueExpression }, 1, 0] }
           }
         }
       },
@@ -2288,8 +2307,9 @@ const getTaskStats = async (req, res) => {
               $cond: [
                 {
                   $and: [
-                    { $eq: ['$completed', false] },
-                    { $ne: ['$status', 'in-progress'] }
+                    ...openTaskExpression,
+                    { $ne: ['$status', 'in-progress'] },
+                    notOverdueExpression
                   ]
                 },
                 1,
@@ -2302,8 +2322,9 @@ const getTaskStats = async (req, res) => {
               $cond: [
                 {
                   $and: [
-                    { $eq: ['$completed', false] },
-                    { $eq: ['$status', 'in-progress'] }
+                    ...openTaskExpression,
+                    { $eq: ['$status', 'in-progress'] },
+                    notOverdueExpression
                   ]
                 },
                 1,
@@ -2312,19 +2333,7 @@ const getTaskStats = async (req, res) => {
             }
           },
           overdueTasks: {
-            $sum: {
-              $cond: [
-                {
-                  $and: [
-                    { $eq: ['$completed', false] },
-                    { $ne: ['$dueDate', null] },
-                    { $lt: ['$dueDate', getClientTaskOverdueCutoff()] }
-                  ]
-                },
-                1,
-                0
-              ]
-            }
+            $sum: { $cond: [{ $and: overdueExpression }, 1, 0] }
           }
         }
       },
