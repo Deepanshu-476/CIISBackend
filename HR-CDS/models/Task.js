@@ -2,6 +2,9 @@ const mongoose = require("mongoose");
 
  
 const SYSTEM_USER_ID = new mongoose.Types.ObjectId("000000000000000000000001");
+const OVERDUE_LOCKED_STATUSES = new Set(['onhold', 'on hold', 'completed', 'approved', 'rejected', 'cancelled', 'overdue']);
+const normalizeTaskStatus = status => String(status || 'pending').trim().toLowerCase();
+const canMoveToOverdue = status => !OVERDUE_LOCKED_STATUSES.has(normalizeTaskStatus(status));
 
  
 const statusHistorySchema = new mongoose.Schema(
@@ -249,7 +252,7 @@ taskSchema.methods.updateUserStatus = function (userId, status, remarks = "") {
 
 taskSchema.methods.checkAndMarkOverdue = function () {
   if (!this.dueDateTime) return false;
-  if (['onhold', 'on hold', 'completed', 'rejected', 'cancelled', 'overdue'].includes(String(this.overallStatus || '').toLowerCase())) return false;
+  if (!canMoveToOverdue(this.overallStatus)) return false;
   
   const now = new Date();
   const dueDate = new Date(this.dueDateTime);
@@ -267,14 +270,14 @@ taskSchema.methods.checkAndMarkOverdue = function () {
     if (userStatusIndex !== -1) {
       const currentStatus = this.statusByUser[userStatusIndex].status;
       
-      if (currentStatus === 'pending') {
+      if (canMoveToOverdue(currentStatus)) {
         this.statusByUser[userStatusIndex].status = 'overdue';
         this.statusByUser[userStatusIndex].updatedAt = now;
         this.statusByUser[userStatusIndex].remarks = 'Automatically marked as overdue';
         anyUserMarked = true;
       }
     } else {
-      if (!this.overallStatus || this.overallStatus === 'pending') {
+      if (canMoveToOverdue(this.overallStatus)) {
         this.statusByUser.push({
           user: userId,
           status: 'overdue',
@@ -360,23 +363,25 @@ taskSchema.methods.markUserStatusOverdue = function (userId, remarks = '') {
 
 taskSchema.statics.getUserOverdueTasks = async function (userId) {
   const now = new Date();
+  const lockedStatuses = Array.from(OVERDUE_LOCKED_STATUSES);
   
   return await this.find({
     assignedUsers: userId,
     dueDateTime: { $lt: now },
     isActive: true,
+    overallStatus: { $nin: lockedStatuses },
     $or: [
       { 
         'statusByUser': {
           $elemMatch: {
             user: userId,
-            status: 'pending'
+            status: { $nin: lockedStatuses }
           }
         }
       },
       { 
         'statusByUser.user': { $ne: userId },
-        'overallStatus': 'pending'
+        'overallStatus': { $nin: lockedStatuses }
       }
     ]
   })
@@ -388,13 +393,15 @@ taskSchema.statics.getUserOverdueTasks = async function (userId) {
 
 taskSchema.statics.updateAllOverdueTasks = async function () {
   const now = new Date();
+  const lockedStatuses = Array.from(OVERDUE_LOCKED_STATUSES);
   const overdueTasks = await this.find({
     dueDateTime: { $lt: now },
     isActive: true,
+    overallStatus: { $nin: lockedStatuses },
     $or: [
-      { overallStatus: 'pending' },
+      { overallStatus: { $nin: lockedStatuses } },
       { 
-        'statusByUser.status': 'pending'
+        'statusByUser.status': { $nin: lockedStatuses }
       }
     ]
   });

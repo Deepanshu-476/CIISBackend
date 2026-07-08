@@ -124,9 +124,10 @@ const isTaskOverdueForStatus = (dueDateTime, status) => {
   if (!dueDateTime) return false;
   const normalizedStatus = normalizeTaskStatus(status);
   if (normalizedStatus === 'overdue') return true;
+  if (['onhold', 'completed', 'approved', 'rejected', 'cancelled'].includes(normalizedStatus)) return false;
   const dueDate = new Date(dueDateTime);
   if (isNaN(dueDate.getTime())) return false;
-  return dueDate < new Date() && normalizedStatus === 'pending';
+  return dueDate < new Date();
 };
 
 const calculateUnifiedTaskStats = (tasks, userId) => {
