@@ -95,6 +95,14 @@ const clienttaskSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  holdStartedAt: {
+    type: Date,
+    default: null
+  },
+  totalHoldSeconds: {
+    type: Number,
+    default: 0
+  },
   files: [{
     filename: String,
     originalName: String,
