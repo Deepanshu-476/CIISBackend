@@ -414,7 +414,7 @@ exports.cancelRequest = async (req, res) => {
         success: false, 
         error: 'Pending request not found' 
       });
-    }
+    }    
 
     request.status = 'cancelled';
     await request.save();
