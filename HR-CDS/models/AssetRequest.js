@@ -44,6 +44,7 @@ const assetRequestSchema = new mongoose.Schema({
   adminComments: [
   {
     text: { type: String },
+    image: { type: String },
     addedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     addedAt: { type: Date, default: Date.now }
   }

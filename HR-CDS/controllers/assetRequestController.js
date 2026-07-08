@@ -480,13 +480,14 @@ exports.updateRequestStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { status, adminComment } = req.body;
+    const commentImage = req.file ? `/uploads/asset-comments/${req.file.filename}` : '';
     
     const validStatuses = ['approved', 'rejected', 'completed'];
           
-      if (!status && !adminComment) {
+      if (!status && !adminComment && !commentImage) {
         return res.status(400).json({
           success: false,
-          error: 'Status or comment required'
+          error: 'Status, comment, or image required'
         });
       }
 
@@ -535,9 +536,10 @@ exports.updateRequestStatus = async (req, res) => {
           request.adminComments = [];
         }
 
-        if (adminComment) {
+        if (adminComment || commentImage) {
           request.adminComments.push({
-            text: adminComment,
+            text: adminComment || '',
+            image: commentImage,
             addedBy: req.user._id,
             addedAt: new Date()
           });
