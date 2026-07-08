@@ -194,6 +194,26 @@ const clientSchema = new mongoose.Schema({
         type: String,
         default: 'Subscription Due'
       },
+      subscriptionId: {
+        type: mongoose.Schema.Types.ObjectId,
+        default: null
+      },
+      subscriptionNo: {
+        type: Number,
+        default: null
+      },
+      planName: {
+        type: String,
+        trim: true,
+        default: ''
+      },
+      periodStart: Date,
+      periodEnd: Date,
+      billingCycle: {
+        type: String,
+        trim: true,
+        default: ''
+      },
       amount: {
         type: Number,
         default: 0,
