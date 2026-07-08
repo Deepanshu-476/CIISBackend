@@ -50,6 +50,31 @@ const isClientTaskOpen = task => {
   return !CLIENT_TASK_OVERDUE_EXCLUDED_STATUSES.includes(status);
 };
 
+const applyClientTaskHoldTransition = (task, previousStatus, targetStatus, now = new Date()) => {
+  const oldStatus = String(previousStatus || 'pending').trim().toLowerCase();
+  const newStatus = String(targetStatus || 'pending').trim().toLowerCase();
+  let holdSeconds = 0;
+
+  if (newStatus === 'onhold' && oldStatus !== 'onhold') {
+    task.holdStartedAt = task.holdStartedAt || now;
+  }
+
+  if (oldStatus === 'onhold' && newStatus !== 'onhold' && task.holdStartedAt) {
+    holdSeconds = Math.max(0, Math.floor((now - new Date(task.holdStartedAt)) / 1000));
+    task.totalHoldSeconds = (task.totalHoldSeconds || 0) + holdSeconds;
+    task.holdStartedAt = null;
+
+    if (task.dueDate && holdSeconds > 0) {
+      const dueDate = new Date(task.dueDate);
+      if (!Number.isNaN(dueDate.getTime())) {
+        task.dueDate = new Date(dueDate.getTime() + holdSeconds * 1000);
+      }
+    }
+  }
+
+  return holdSeconds;
+};
+
 const parseClientDueDate = value => {
   if (!value) return null;
   if (value instanceof Date) {
@@ -150,6 +175,7 @@ const calculateClientAssignedStats = tasks => {
   const completed = tasks.filter(task => task.completed || task.status === 'completed').length;
   const overdue = tasks.filter(task => isClientTaskOpen(task) && isClientTaskOverdue(task)).length;
   const inProgress = tasks.filter(task => isClientTaskOpen(task) && !isClientTaskOverdue(task) && task.status === 'in-progress').length;
+  const onHold = tasks.filter(task => task.status === 'onhold').length;
   const pending = tasks.filter(task => isClientTaskOpen(task) && !isClientTaskOverdue(task) && task.status !== 'in-progress').length;
   const percentage = count => total > 0 ? Math.round((count / total) * 100) : 0;
 
@@ -158,6 +184,7 @@ const calculateClientAssignedStats = tasks => {
     completed: { count: completed, percentage: percentage(completed) },
     pending: { count: pending, percentage: percentage(pending) },
     inProgress: { count: inProgress, percentage: percentage(inProgress) },
+    onHold: { count: onHold, percentage: percentage(onHold) },
     overdue: { count: overdue, percentage: percentage(overdue) }
   };
 };
@@ -1102,6 +1129,8 @@ const updateAssignedTaskStatus = async (req, res) => {
 
     
     let elapsedSeconds = 0;
+    const holdSeconds = applyClientTaskHoldTransition(task, previousStatus, targetStatus, now);
+
     if (previousStatus === 'in-progress' && targetStatus !== 'in-progress') {
       if (task.inProgressSince) {
         elapsedSeconds = Math.max(0, Math.floor((now - new Date(task.inProgressSince)) / 1000));
@@ -1149,6 +1178,9 @@ const updateAssignedTaskStatus = async (req, res) => {
       let logDescription = `Status changed from "${previousStatus}" to "${task.status}"`;
       if (elapsedSeconds > 0) {
         logDescription += ` (Timer stopped. Session duration: ${formatDuration(elapsedSeconds)}, Total time: ${formatDuration(task.timeSpent)})`;
+      }
+      if (holdSeconds > 0) {
+        logDescription += ` (On hold paused for ${formatDuration(holdSeconds)}; due time resumed)`;
       } else if (task.status === 'in-progress') {
         logDescription += ` (Timer started)`;
       }
@@ -1284,6 +1316,9 @@ const getAssignedToMeTasks = async (req, res) => {
       } else if (status === 'in-progress') {
         filter.status = 'in-progress';
         filter.completed = false;
+      } else if (status === 'onhold') {
+        filter.status = 'onhold';
+        filter.completed = false;
       } else if (status === 'overdue') {
         filter.completed = false;
         addDueDateCondition(filter, { $lt: getClientTaskOverdueCutoff() });
@@ -1331,6 +1366,8 @@ const getAssignedToMeTasks = async (req, res) => {
         taskStatus = 'completed';
       } else if (task.status === 'in-progress') {
         taskStatus = 'in-progress';
+      } else if (task.status === 'onhold') {
+        taskStatus = 'onhold';
       }
       
       if (isClientTaskOverdue(task)) {
@@ -1434,6 +1471,9 @@ const getAssignedToMeTaskStats = async (req, res) => {
       } else if (status === 'in-progress') {
         filter.status = 'in-progress';
         filter.completed = false;
+      } else if (status === 'onhold') {
+        filter.status = 'onhold';
+        filter.completed = false;
       } else if (status === 'overdue') {
         filter.completed = false;
         addDueDateCondition(filter, { $lt: getClientTaskOverdueCutoff() });
@@ -1509,6 +1549,8 @@ const getAssignedTasksByUserId = async (req, res) => {
       completed: task.completed,
       status: task.completed
         ? 'completed'
+        : task.status === 'onhold'
+        ? 'onhold'
         : isClientTaskOverdue(task)
         ? 'overdue'
         : task.status === 'in-progress'
@@ -1896,6 +1938,22 @@ const updateTask = async (req, res) => {
     const previousCompleted = task.completed;
     const previousStatus = task.status;
     const now = new Date();
+
+    if (
+      (updates.status || updates.completed !== undefined) &&
+      updates.status !== 'overdue' &&
+      (previousStatus === 'overdue' || isClientTaskOverdue(task))
+    ) {
+      if (previousStatus !== 'overdue' && isClientTaskOverdue(task)) {
+        task.status = 'overdue';
+        task.completed = false;
+        await task.save();
+      }
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot change status of an overdue task'
+      });
+    }
     
     
     for (const key of Object.keys(updates)) {
@@ -1910,6 +1968,10 @@ const updateTask = async (req, res) => {
         task[key] = newValue;
       } else if (key === 'status' && oldValue !== newValue) {
         changes.push(`status from "${oldValue}" to "${newValue}"`);
+        const holdSeconds = applyClientTaskHoldTransition(task, oldValue, newValue, now);
+        if (holdSeconds > 0) {
+          changes.push(`on-hold paused for ${formatDuration(holdSeconds)}; due time resumed`);
+        }
         task[key] = newValue;
         
         
@@ -1939,6 +2001,11 @@ const updateTask = async (req, res) => {
         changes.push(`completed from "${oldValue}" to "${newValue}"`);
         task.completed = !!newValue;
         task.completedAt = task.completed ? (task.completedAt || now) : null;
+        const completedTargetStatus = task.completed ? 'completed' : 'pending';
+        const holdSeconds = applyClientTaskHoldTransition(task, task.status, completedTargetStatus, now);
+        if (holdSeconds > 0) {
+          changes.push(`on-hold paused for ${formatDuration(holdSeconds)}; due time resumed`);
+        }
         
         
         if (task.completed && task.status === 'in-progress' && task.inProgressSince) {
@@ -1948,7 +2015,7 @@ const updateTask = async (req, res) => {
           changes.push(`timer stopped (session duration: ${formatDuration(elapsed)}, total: ${formatDuration(task.timeSpent)})`);
         }
         
-        task.status = task.completed ? 'completed' : 'pending';
+        task.status = completedTargetStatus;
       } else if (key === 'priority' && oldValue !== newValue) {
         changes.push(`priority from "${oldValue}" to "${newValue}"`);
         task[key] = newValue;
@@ -2089,12 +2156,17 @@ const toggleTaskCompletion = async (req, res) => {
 
     task.completed = !task.completed;
     task.completedAt = task.completed ? now : null;
-    task.status = task.completed ? 'completed' : 'pending';
+    const targetStatus = task.completed ? 'completed' : 'pending';
+    const holdSeconds = applyClientTaskHoldTransition(task, previousStatus, targetStatus, now);
+    task.status = targetStatus;
     
     const action = task.completed ? 'completed' : 'reopened';
     let logDescription = `Task ${action}`;
     if (elapsedSeconds > 0) {
       logDescription += ` (Timer stopped. Session duration: ${formatDuration(elapsedSeconds)}, Total time: ${formatDuration(task.timeSpent)})`;
+    }
+    if (holdSeconds > 0) {
+      logDescription += ` (On hold paused for ${formatDuration(holdSeconds)}; due time resumed)`;
     }
 
     await addClientActivityLogHelper(task, {
