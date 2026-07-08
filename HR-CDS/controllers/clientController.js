@@ -1641,16 +1641,11 @@ const renewClientSubscription = async (req, res) => {
 
     await client.save({ session });
     const createdSub = client.subscription[client.subscription.length - 1];
-    const renewalInvoice = createRenewalDueInvoice({
+    const overdueTaskExtension = await extendOverdueClientTasksToSubscriptionEnd({
+      clientId: client._id,
       subscription: createdSub,
-      plan: selectedClientPlan
+      session
     });
-
-    if (renewalInvoice) {
-      if (!Array.isArray(client.dueInvoices)) client.dueInvoices = [];
-      client.dueInvoices.push(renewalInvoice);
-      await client.save({ session });
-    }
 
     if (selectedClientPlan) {
       await generateTasksForSubscription({
