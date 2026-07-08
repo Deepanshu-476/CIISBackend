@@ -122,7 +122,7 @@ const io = socketIo(server, {
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"], 
-    allowedHeaders: ["Content-Type", "Authorization"]
+    allowedHeaders: ["Content-Type", "Authorization", "X-Permanent-Delete"]
   },
   transports: ['websocket', 'polling'],
   allowEIO3: true,
@@ -531,7 +531,7 @@ const corsOptions = {
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"]
+  allowedHeaders: ["Content-Type", "Authorization", "X-Permanent-Delete"]
 };
 
 app.use(cors(corsOptions));
