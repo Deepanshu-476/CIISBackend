@@ -11,7 +11,7 @@ const authSocket = async (socket, next) => {
       void 0;
       return next(new Error('Authentication token required'));
     }
-  
+   
     
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     
