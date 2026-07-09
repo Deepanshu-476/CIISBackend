@@ -7,8 +7,8 @@
     endTime: Date,
     duration: Number,
     status: {
-      type: String,
-      enum: ["answered", "missed", "not reachable", "rejected"],
+      type: String,       
+      enum: ["answered", "missed", "not reachable", "rejected"],    
       default: "answered",
     },
     notes: String, 
