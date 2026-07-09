@@ -113,7 +113,7 @@ const buildLocationPayload = ({ latitude, longitude, accuracy }) => {
 
 const isValidObjectId = (id) => {
   return mongoose.Types.ObjectId.isValid(id);
-};
+}; 
 
 
 const findAttendanceRecord = async (id, updateData = {}) => {

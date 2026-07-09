@@ -55,6 +55,17 @@ const normalizeTaskStatus = (value = "pending") => {
   return normalized;
 };
 
+const toProjectTaskStatus = (value = "pending") => {
+  const normalized = normalizeTaskStatus(value);
+  if (normalized === "in-progress") return "in progress";
+  if (normalized === "onhold") return "on hold";
+  return normalized;
+};
+
+const canChangeFromOnHold = (nextStatus) => {
+  return ["in-progress", "completed"].includes(normalizeTaskStatus(nextStatus));
+};
+
 const isPendingTaskPastDue = (task = {}) => {
   if (normalizeTaskStatus(task.status) !== "pending" || !task.dueDate) return false;
   const dueDate = new Date(task.dueDate);
@@ -1216,7 +1227,10 @@ exports.updateTaskStatus = async (req, res) => {
     void 0;
     void 0;
 
-    if (!TASK_STATUS.includes(status.toLowerCase())) {
+    const nextStatus = normalizeTaskStatus(status);
+    const nextProjectStatus = toProjectTaskStatus(status);
+
+    if (!TASK_STATUS.includes(nextProjectStatus)) {
       return res.status(400).json({ 
         success: false, 
         message: "Invalid status value" 
@@ -1262,9 +1276,23 @@ exports.updateTaskStatus = async (req, res) => {
     }
 
     const oldStatus = task.status;
-    const nextStatus = normalizeTaskStatus(status);
+    const normalizedOldStatus = normalizeTaskStatus(oldStatus);
 
-    if (nextStatus !== "overdue" && (normalizeTaskStatus(oldStatus) === "overdue" || isPendingTaskPastDue(task))) {
+    if (normalizedOldStatus === "onhold" && !canChangeFromOnHold(nextStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: "On hold tasks can only be changed to in-progress or completed"
+      });
+    }
+
+    if (nextStatus !== "overdue" && normalizedOldStatus === "overdue") {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot change status of an overdue task"
+      });
+    }
+
+    if (!["overdue", "onhold"].includes(nextStatus) && isPendingTaskPastDue(task)) {
       if (isPendingTaskPastDue(task)) {
         task.status = "overdue";
         task.updatedAt = new Date();
@@ -1284,15 +1312,15 @@ exports.updateTaskStatus = async (req, res) => {
       });
     }
 
-    task.status = nextStatus;
+    task.status = nextProjectStatus;
     task.updatedAt = new Date();
 
     
     task.activityLogs.push({
       type: "status_change",
-      description: `Status changed from ${oldStatus} to ${nextStatus}`,
+      description: `Status changed from ${oldStatus} to ${nextProjectStatus}`,
       oldValue: oldStatus,
-      newValue: nextStatus,
+      newValue: nextProjectStatus,
       performedBy: req.user.id,
       remark: remark
     });
@@ -1302,7 +1330,7 @@ exports.updateTaskStatus = async (req, res) => {
     
     const notification = {
       title: "Task Status Updated",
-      message: `Task "${task.title}" status changed from ${oldStatus} to ${nextStatus}`,
+      message: `Task "${task.title}" status changed from ${oldStatus} to ${nextProjectStatus}`,
       type: "status_changed",
       relatedTo: "task",
       referenceId: task._id,
@@ -1319,13 +1347,13 @@ exports.updateTaskStatus = async (req, res) => {
       targetPath: '/ciisUser/task-management',
       type: 'project_task_status_changed',
       title: 'Project Task Updated',
-      message: `${req.user.name} changed "${task.title}" status from ${oldStatus} to ${nextStatus}${remark ? ': ' + remark : ''}`,
+      message: `${req.user.name} changed "${task.title}" status from ${oldStatus} to ${nextProjectStatus}${remark ? ': ' + remark : ''}`,
       actor: req.user.id,
       data: {
         projectId: project._id,
         taskId: task._id,
         oldStatus,
-        newStatus: nextStatus,
+        newStatus: nextProjectStatus,
         remark,
       },
       priority: 'medium',
