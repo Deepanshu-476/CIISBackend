@@ -8,6 +8,7 @@ const { protect } = require('../../middleware/authMiddleware');
 
 const router = express.Router();
 const uploadDir = path.join(__dirname, '../uploads/client-documents');
+const CLIENT_DOCUMENT_STORAGE_LIMIT = 5 * 1024 * 1024 * 1024;
 
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
@@ -82,6 +83,15 @@ const removeDocumentFile = filePath => {
   } catch (fileError) {
     console.warn('Failed to remove client document file:', fileError.message);
   }
+};
+
+const getClientStorageUsed = async clientId => {
+  const result = await ClientDocument.aggregate([
+    { $match: { client: clientId } },
+    { $group: { _id: null, total: { $sum: '$size' } } },
+  ]);
+
+  return Number(result[0]?.total || 0);
 };
 
 const getAccessibleDocument = async (req, documentId) => {
@@ -173,6 +183,20 @@ router.post('/', protect, upload.single('document'), async (req, res) => {
     if (!canAccessClient(req, client)) {
       fs.unlinkSync(req.file.path);
       return res.status(403).json({ success: false, message: 'Access denied for this client' });
+    }
+
+    const usedStorage = await getClientStorageUsed(client._id);
+    if (usedStorage + req.file.size > CLIENT_DOCUMENT_STORAGE_LIMIT) {
+      fs.unlinkSync(req.file.path);
+      return res.status(413).json({
+        success: false,
+        message: 'Storage limit exceeded. You can upload up to 5 GB of documents.',
+        storage: {
+          used: usedStorage,
+          limit: CLIENT_DOCUMENT_STORAGE_LIMIT,
+          requested: req.file.size,
+        },
+      });
     }
 
     const document = await ClientDocument.create({
