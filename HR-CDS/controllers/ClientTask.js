@@ -2131,13 +2131,28 @@ const updateTask = async (req, res) => {
 const toggleTaskCompletion = async (req, res) => {
   try {
     const { taskId } = req.params;
+    const { clientId } = req.body || {};
     const currentUser = req.user;
+
+    if (!mongoose.Types.ObjectId.isValid(taskId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid task id is required'
+      });
+    }
 
     const task = await Task.findById(taskId);
     if (!task) {
       return res.status(404).json({
         success: false,
         message: 'Task not found'
+      });
+    }
+
+    if (clientId && String(task.clientId) !== String(clientId)) {
+      return res.status(409).json({
+        success: false,
+        message: 'Task does not belong to this client'
       });
     }
 
