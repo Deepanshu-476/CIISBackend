@@ -6,6 +6,8 @@ const {
   parsePositiveInt,
   getCleanTaskDateRange,
   normalizeTaskStatus,
+  isOnHoldStatus,
+  canChangeFromOnHold,
   isTaskOverdueForStatus,
   calculateUnifiedTaskStats,
   groupTasksByDate,
@@ -193,12 +195,26 @@ exports.updateStatus = async (req, res) => {
     }
 
     const oldStatusEntry = task.statusByUser.find(s => s.user?.toString() === currentUserId);
-    const oldStatus = oldStatusEntry?.status || 'pending';
+    const oldStatus = oldStatusEntry?.status || task.overallStatus || 'pending';
     const normalizedStatus = normalizeTaskStatus(status);
+
+    if (isOnHoldStatus(oldStatus) && !canChangeFromOnHold(normalizedStatus)) {
+      return res.status(400).json({
+        success: false,
+        error: 'On hold tasks can only be changed to in-progress or completed'
+      });
+    }
 
     if (
       normalizedStatus !== 'overdue' &&
-      (normalizeTaskStatus(oldStatus) === 'overdue' || isTaskOverdueForStatus(task.dueDateTime || task.dueDate, oldStatus))
+      normalizeTaskStatus(oldStatus) === 'overdue'
+    ) {
+      return res.status(400).json({ success: false, error: 'Cannot change status of an overdue task' });
+    }
+
+    if (
+      !['overdue', 'onhold'].includes(normalizedStatus) &&
+      isTaskOverdueForStatus(task.dueDateTime || task.dueDate, oldStatus)
     ) {
       if (!['onhold', 'completed', 'approved', 'rejected', 'cancelled', 'overdue'].includes(normalizeTaskStatus(oldStatus))) {
         task.markUserStatusOverdue(currentUserId, 'Automatically marked overdue after due time passed');

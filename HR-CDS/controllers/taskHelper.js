@@ -130,6 +130,12 @@ const isTaskOverdueForStatus = (dueDateTime, status) => {
   return dueDate < new Date();
 };
 
+const isOnHoldStatus = status => normalizeTaskStatus(status) === 'onhold';
+
+const canChangeFromOnHold = nextStatus => {
+  return ['in-progress', 'completed'].includes(normalizeTaskStatus(nextStatus));
+};
+
 const calculateUnifiedTaskStats = (tasks, userId) => {
   const counts = {
     pending: 0,
@@ -676,6 +682,8 @@ module.exports = {
   parsePositiveInt,
   getCleanTaskDateRange,
   normalizeTaskStatus,
+  isOnHoldStatus,
+  canChangeFromOnHold,
   isTaskOverdueForStatus,
   calculateUnifiedTaskStats,
   groupTasksByDate,

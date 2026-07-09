@@ -289,11 +289,20 @@ taskSchema.methods.checkAndMarkOverdue = function () {
     }
   });
   
+  const allUsersOverdue = this.assignedUsers.length > 0 && this.assignedUsers.every((assignedUserId) => {
+    const userStatus = this.statusByUser.find(
+      s => s.user && s.user.toString() === assignedUserId.toString()
+    );
+    return userStatus && userStatus.status === 'overdue';
+  });
+
   if (anyUserMarked) {
     const oldStatus = this.overallStatus;
-    this.overallStatus = 'overdue';
-    this.markedOverdueAt = now;
-    this.overdueReason = 'Automatic overdue detection';
+    if (allUsersOverdue) {
+      this.overallStatus = 'overdue';
+      this.markedOverdueAt = now;
+      this.overdueReason = 'Automatic overdue detection';
+    }
     
     this.statusHistory.push({
       status: 'overdue',
@@ -312,6 +321,8 @@ taskSchema.methods.checkAndMarkOverdue = function () {
 
 
 taskSchema.methods.markUserStatusOverdue = function (userId, remarks = '') {
+  if (!canMoveToOverdue(this.overallStatus)) return false;
+
   const userStatusIndex = this.statusByUser.findIndex(
     (s) => s.user && s.user.toString() === userId.toString()
   );
@@ -325,7 +336,7 @@ taskSchema.methods.markUserStatusOverdue = function (userId, remarks = '') {
     });
   } else {
     const oldStatus = this.statusByUser[userStatusIndex].status;
-    if (oldStatus === 'overdue') return false;
+    if (!canMoveToOverdue(oldStatus)) return false;
     
     this.statusByUser[userStatusIndex].status = 'overdue';
     this.statusByUser[userStatusIndex].updatedAt = new Date();
