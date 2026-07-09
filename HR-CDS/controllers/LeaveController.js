@@ -1095,8 +1095,12 @@ exports.deleteLeave = async (req, res) => {
     }
 
     
-    if (userCompanyId && leave.user.company?.toString() !== userCompanyId && 
-        leave.user.companyId?.toString() !== userCompanyId) {
+    const requestCompanyId = normalizeId(userCompanyId);
+    const leaveUserCompanyId = normalizeId(leave.user.company);
+    const leaveUserCompanyIdAlt = normalizeId(leave.user.companyId);
+
+    if (requestCompanyId && leaveUserCompanyId !== requestCompanyId && 
+        leaveUserCompanyIdAlt !== requestCompanyId) {
       void 0;
       return res.status(403).json({
         success: false,
@@ -1114,8 +1118,8 @@ exports.deleteLeave = async (req, res) => {
       .map(item => normalizeId(item.user))
       .filter(Boolean);
 
-    const role = (userCompanyRole || '').toLowerCase();
-    const jobRole = (req.headers['x-user-job-role'] || req.user?.jobRole || '').toLowerCase();
+    const role = normalizeRoleValue(userCompanyRole);
+    const jobRole = normalizeRoleValue(req.headers['x-user-job-role'] || req.user?.jobRole);
     const allowedRoles = ['owner', 'admin', 'hr', 'manager'];
     const fallbackAllowed = allowedRoles.includes(role) || jobRole === 'superadmin';
     const isConfiguredDeleteUser = configuredDeleteUserIds.includes(currentUserId);
