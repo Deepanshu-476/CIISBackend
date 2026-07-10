@@ -50,6 +50,84 @@ const isClientTaskOpen = task => {
   return !CLIENT_TASK_OVERDUE_EXCLUDED_STATUSES.includes(status);
 };
 
+const normalizeClientTaskStatusForDueDate = task => {
+  if (task?.completed) return 'completed';
+  if (isClientTaskOverdue(task)) return 'overdue';
+  const status = String(task?.status || 'pending').trim().toLowerCase();
+  return status === 'overdue' ? 'pending' : (task?.status || 'pending');
+};
+
+const getLatestSubscription = client => {
+  const subscriptions = Array.isArray(client?.subscription) ? client.subscription : [];
+  if (!subscriptions.length) return null;
+
+  return [...subscriptions].sort((a, b) => {
+    const noDiff = Number(b?.subscriptionNo || 0) - Number(a?.subscriptionNo || 0);
+    if (noDiff) return noDiff;
+    return new Date(b?.endDate || 0) - new Date(a?.endDate || 0);
+  })[0];
+};
+
+const syncExpiredSubscriptionClientTasks = async (clientIds = []) => {
+  const normalizedClientIds = [...new Set(
+    (Array.isArray(clientIds) ? clientIds : [clientIds])
+      .map(id => String(id || '').trim())
+      .filter(id => mongoose.Types.ObjectId.isValid(id))
+  )];
+  const now = new Date();
+  const clientFilter = normalizedClientIds.length ? { _id: { $in: normalizedClientIds } } : {};
+  const clients = await Client.find(clientFilter).select('_id subscription').lean();
+  const bulkOps = [];
+
+  clients.forEach(client => {
+    const latestSubscription = getLatestSubscription(client);
+    const subscriptionEnd = latestSubscription?.endDate ? new Date(latestSubscription.endDate) : null;
+    if (!subscriptionEnd || Number.isNaN(subscriptionEnd.getTime()) || subscriptionEnd >= now) return;
+
+    bulkOps.push({
+      updateMany: {
+        filter: {
+          clientId: client._id,
+          completed: { $ne: true },
+          status: { $nin: ['completed', 'onhold', 'on hold', 'overdue'] }
+        },
+        update: {
+          $set: {
+            status: 'overdue',
+            dueDate: subscriptionEnd,
+            dueDateSource: 'subscription'
+          },
+          $push: {
+            activityLogs: {
+              action: 'subscription_expired_task_overdue',
+              userName: 'System',
+              description: `Subscription expired on ${subscriptionEnd.toISOString()}`,
+              oldValues: { syncedAt: now },
+              newValues: {
+                status: 'overdue',
+                dueDate: subscriptionEnd,
+                subscriptionNo: latestSubscription.subscriptionNo || null,
+                subscriptionId: latestSubscription._id || null
+              },
+              createdAt: now
+            }
+          }
+        }
+      }
+    });
+  });
+
+  if (!bulkOps.length) {
+    return { matchedCount: 0, modifiedCount: 0 };
+  }
+
+  const result = await Task.bulkWrite(bulkOps);
+  return {
+    matchedCount: result.matchedCount || 0,
+    modifiedCount: result.modifiedCount || 0
+  };
+};
+
 const applyClientTaskHoldTransition = (task, previousStatus, targetStatus, now = new Date()) => {
   const oldStatus = String(previousStatus || 'pending').trim().toLowerCase();
   const newStatus = String(targetStatus || 'pending').trim().toLowerCase();
@@ -1304,6 +1382,7 @@ const getAssignedToMeTasks = async (req, res) => {
     }
 
     const { status, search, period } = req.query;
+    await syncExpiredSubscriptionClientTasks();
     
     let filter = await getAssignedClientTaskFilter(currentUser);
 
@@ -1460,6 +1539,7 @@ const getAssignedToMeTaskStats = async (req, res) => {
     }
 
     const { status, search, period } = req.query;
+    await syncExpiredSubscriptionClientTasks();
     let filter = await getAssignedClientTaskFilter(currentUser);
 
     if (status && status !== 'all' && status !== '') {
@@ -1527,6 +1607,8 @@ const getAssignedTasksByUserId = async (req, res) => {
         message: 'User not found'
       });
     }
+
+    await syncExpiredSubscriptionClientTasks();
 
     const tasks = await Task.find({
       $or: [
@@ -1600,6 +1682,8 @@ const getTasksByClientService = async (req, res) => {
       });
     }
 
+    await syncExpiredSubscriptionClientTasks([clientId]);
+
     const filter = { clientId, service };
     if (req.query.subscriptionId && mongoose.Types.ObjectId.isValid(req.query.subscriptionId)) {
       filter.subscriptionId = req.query.subscriptionId;
@@ -1622,10 +1706,15 @@ const getTasksByClientService = async (req, res) => {
       Task.countDocuments(filter)
     ]);
 
+    const responseTasks = tasks.map(task => ({
+      ...task,
+      status: normalizeClientTaskStatusForDueDate(task)
+    }));
+
     res.json({
       success: true,
-      data: tasks,
-      count: tasks.length,
+      data: responseTasks,
+      count: responseTasks.length,
       total,
       pagination: buildPaginationMeta({ page, limit, total })
     });
@@ -1643,6 +1732,8 @@ const getClientTasks = async (req, res) => {
   try {
     const { clientId } = req.params;
     const { service, completed, assignee, priority, subscriptionId, subscriptionNo } = req.query;
+
+    await syncExpiredSubscriptionClientTasks([clientId]);
 
     const filter = { clientId };
     if (service) filter.service = service;
@@ -1670,25 +1761,30 @@ const getClientTasks = async (req, res) => {
       Task.countDocuments(filter)
     ]);
 
+    const responseTasks = tasks.map(task => ({
+      ...task,
+      status: normalizeClientTaskStatusForDueDate(task)
+    }));
+
     const tasksByService = {};
-    tasks.forEach(task => {
+    responseTasks.forEach(task => {
       if (!tasksByService[task.service]) {
         tasksByService[task.service] = [];
       }
       tasksByService[task.service].push(task);
     });
 
-    const pageTotalTasks = tasks.length;
-    const completedTasks = tasks.filter(t => t.completed).length;
-    const overdueTasks = tasks.filter(t => {
+    const pageTotalTasks = responseTasks.length;
+    const completedTasks = responseTasks.filter(t => t.completed).length;
+    const overdueTasks = responseTasks.filter(t => {
       return isClientTaskOverdue(t);
     }).length;
-    const pendingTasks = tasks.filter(t => isClientTaskOpen(t) && !isClientTaskOverdue(t) && t.status !== 'in-progress').length;
+    const pendingTasks = responseTasks.filter(t => isClientTaskOpen(t) && !isClientTaskOverdue(t) && t.status !== 'in-progress').length;
 
     res.json({
       success: true,
       data: {
-        tasks,
+        tasks: responseTasks,
         groupedByService: tasksByService,
         pageStats: {
           totalTasks: pageTotalTasks,
@@ -1698,7 +1794,7 @@ const getClientTasks = async (req, res) => {
           completionRate: pageTotalTasks > 0 ? Math.round((completedTasks / pageTotalTasks) * 100) : 0
         }
       },
-      count: tasks.length,
+      count: responseTasks.length,
       total,
       pagination: buildPaginationMeta({ page, limit, total }),
       statsEndpoint: `/client/${clientId}/stats`
@@ -1728,6 +1824,8 @@ const getClientTaskSummaries = async (req, res) => {
     if (clientIds.length > 100) {
       return res.status(400).json({ success: false, message: 'A maximum of 100 client IDs is allowed' });
     }
+
+    await syncExpiredSubscriptionClientTasks(clientIds);
 
     const tasks = await Task.find({ clientId: { $in: clientIds } })
       .select('clientId name title taskName completed status dueDate')
@@ -2316,6 +2414,7 @@ const deleteTask = async (req, res) => {
 const getTaskStats = async (req, res) => {
   try {
     const { clientId } = req.params;
+    await syncExpiredSubscriptionClientTasks([clientId]);
     const overdueCutoff = getClientTaskOverdueCutoff();
     const openTaskExpression = [
       { $eq: ['$completed', false] },

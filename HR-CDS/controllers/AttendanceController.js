@@ -95,7 +95,7 @@ const formatTime = (date) => {
     : "";
 };
 
-const buildLocationPayload = ({ latitude, longitude, accuracy }) => {
+const buildLocationPayload = ({ latitude, longitude, accuracy, distanceFromOfficeMeters }) => {
   if (latitude === undefined || longitude === undefined) return null;
 
   const location = {
@@ -107,7 +107,70 @@ const buildLocationPayload = ({ latitude, longitude, accuracy }) => {
     location.accuracy = Number(accuracy);
   }
 
+  if (distanceFromOfficeMeters !== undefined && distanceFromOfficeMeters !== null) {
+    location.distanceFromOfficeMeters = Math.round(Number(distanceFromOfficeMeters));
+  }
+
   return location;
+};
+
+const toFiniteCoordinate = value => {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+};
+
+const calculateDistanceMeters = (lat1, lon1, lat2, lon2) => {
+  const earthRadiusMeters = 6371000;
+  const toRadians = degrees => degrees * (Math.PI / 180);
+  const dLat = toRadians(lat2 - lat1);
+  const dLon = toRadians(lon2 - lon1);
+  const startLat = toRadians(lat1);
+  const endLat = toRadians(lat2);
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(startLat) * Math.cos(endLat) * Math.sin(dLon / 2) ** 2;
+  return earthRadiusMeters * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+};
+
+const validateCompanyLocationRange = ({ company, latitude, longitude, actionLabel }) => {
+  const officeLatitude = toFiniteCoordinate(company?.officeLocation?.latitude);
+  const officeLongitude = toFiniteCoordinate(company?.officeLocation?.longitude);
+  const userLatitude = toFiniteCoordinate(latitude);
+  const userLongitude = toFiniteCoordinate(longitude);
+  const allowedRadiusMeters = Number(company?.officeLocation?.allowedRadiusMeters || 100);
+
+  if (officeLatitude === null || officeLongitude === null) {
+    return {
+      ok: false,
+      status: 400,
+      message: "Company office location is not configured. Please add latitude and longitude in company settings."
+    };
+  }
+
+  if (userLatitude === null || userLongitude === null) {
+    return {
+      ok: false,
+      status: 400,
+      message: "Valid location coordinates are required for attendance."
+    };
+  }
+
+  const distanceMeters = calculateDistanceMeters(officeLatitude, officeLongitude, userLatitude, userLongitude);
+
+  if (distanceMeters > allowedRadiusMeters) {
+    return {
+      ok: false,
+      status: 403,
+      distanceMeters,
+      allowedRadiusMeters,
+      message: `You are outside the allowed office area. ${actionLabel} is allowed within ${Math.round(allowedRadiusMeters)} meters. Your distance is ${Math.round(distanceMeters)} meters.`
+    };
+  }
+
+  return {
+    ok: true,
+    distanceMeters,
+    allowedRadiusMeters
+  };
 };
 
 
@@ -256,10 +319,26 @@ const clockIn = async (req, res) => {
     const { latitude, longitude, accuracy, selfieUrl } = req.body;
 
     // 2. Validate Geolocation/Selfie based on company requirements
+    let locationRange = null;
     if (attendanceMode === 'location' || attendanceMode === 'both') {
       if (latitude === undefined || longitude === undefined) {
         return res.status(400).json({
           message: "Location coordinates (latitude and longitude) are required for attendance."
+        });
+      }
+
+      locationRange = validateCompanyLocationRange({
+        company,
+        latitude,
+        longitude,
+        actionLabel: "Clock-in"
+      });
+
+      if (!locationRange.ok) {
+        return res.status(locationRange.status).json({
+          message: locationRange.message,
+          distanceMeters: locationRange.distanceMeters ? Math.round(locationRange.distanceMeters) : undefined,
+          allowedRadiusMeters: locationRange.allowedRadiusMeters
         });
       }
     }
@@ -351,7 +430,12 @@ const clockIn = async (req, res) => {
 
     // Save Location & Selfie
     if (latitude !== undefined && longitude !== undefined) {
-      attendanceRecord.inLocation = buildLocationPayload({ latitude, longitude, accuracy });
+      attendanceRecord.inLocation = buildLocationPayload({
+        latitude,
+        longitude,
+        accuracy,
+        distanceFromOfficeMeters: locationRange?.distanceMeters
+      });
     }
     if (selfieUrl) {
       attendanceRecord.inSelfieUrl = selfieUrl;
@@ -415,10 +499,26 @@ const clockOut = async (req, res) => {
     const { latitude, longitude, accuracy, selfieUrl } = req.body;
 
     // 2. Validate Geolocation/Selfie based on company requirements
+    let locationRange = null;
     if (attendanceMode === 'location' || attendanceMode === 'both') {
       if (latitude === undefined || longitude === undefined) {
         return res.status(400).json({
           message: "Location coordinates (latitude and longitude) are required to clock out."
+        });
+      }
+
+      locationRange = validateCompanyLocationRange({
+        company,
+        latitude,
+        longitude,
+        actionLabel: "Clock-out"
+      });
+
+      if (!locationRange.ok) {
+        return res.status(locationRange.status).json({
+          message: locationRange.message,
+          distanceMeters: locationRange.distanceMeters ? Math.round(locationRange.distanceMeters) : undefined,
+          allowedRadiusMeters: locationRange.allowedRadiusMeters
         });
       }
     }
@@ -482,7 +582,12 @@ const clockOut = async (req, res) => {
 
     // Save Location & Selfie
     if (latitude !== undefined && longitude !== undefined) {
-      record.outLocation = buildLocationPayload({ latitude, longitude, accuracy });
+      record.outLocation = buildLocationPayload({
+        latitude,
+        longitude,
+        accuracy,
+        distanceFromOfficeMeters: locationRange?.distanceMeters
+      });
     }
     if (selfieUrl) {
       record.outSelfieUrl = selfieUrl;

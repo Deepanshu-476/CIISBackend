@@ -31,6 +31,31 @@ const companySchema = new mongoose.Schema(
       trim: true,
     },
 
+    officeLocation: {
+      latitude: {
+        type: Number,
+        min: [-90, "Latitude must be between -90 and 90"],
+        max: [90, "Latitude must be between -90 and 90"],
+        default: null,
+      },
+      longitude: {
+        type: Number,
+        min: [-180, "Longitude must be between -180 and 180"],
+        max: [180, "Longitude must be between -180 and 180"],
+        default: null,
+      },
+      allowedRadiusMeters: {
+        type: Number,
+        min: [10, "Allowed radius must be at least 10 meters"],
+        max: [10000, "Allowed radius cannot exceed 10000 meters"],
+        default: 100,
+      },
+      updatedAt: {
+        type: Date,
+        default: null,
+      },
+    },
+
     companyPhone: {
       type: String,
       required: [true, "Company phone is required"],

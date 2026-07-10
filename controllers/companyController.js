@@ -1672,11 +1672,28 @@ exports.getCompanyStats = async (req, res) => {
   }
 };
 
+const getScopedCompanyId = (value) => {
+  if (!value) return "";
+  if (typeof value === "object") return String(value._id || value.id || "");
+  return String(value);
+};
+
+const canManageDashboardConfig = (req, companyId) => {
+  const userCompanyId = getScopedCompanyId(req.user?.company || req.user?.companyId);
+  const userRole = String(req.user?.role || req.user?.jobRole || req.user?.companyRole || "").toLowerCase();
+  const isPlatformAdmin = Boolean(req.user?.isSuperAdmin) || userRole === "super-admin" || userRole === "super_admin";
+
+  return isPlatformAdmin || (userCompanyId && userCompanyId === String(companyId));
+};
+
 exports.getDashboardConfig = async (req, res) => {
   try {
     const { id } = req.params;
     if (!isValidObjectId(id)) {
       return res.status(400).json({ success: false, message: "Invalid company id" });
+    }
+    if (!canManageDashboardConfig(req, id)) {
+      return res.status(403).json({ success: false, message: "You can only manage settings for your company" });
     }
     const company = await Company.findById(id).select("dashboardConfig");
     if (!company) {
@@ -1699,6 +1716,9 @@ exports.updateDashboardConfig = async (req, res) => {
     if (!isValidObjectId(id)) {
       return res.status(400).json({ success: false, message: "Invalid company id" });
     }
+    if (!canManageDashboardConfig(req, id)) {
+      return res.status(403).json({ success: false, message: "You can only manage settings for your company" });
+    }
     if (!Array.isArray(dashboardConfig)) {
       return res.status(400).json({ success: false, message: "dashboardConfig must be an array" });
     }
@@ -1719,6 +1739,88 @@ exports.updateDashboardConfig = async (req, res) => {
   } catch (err) {
     console.error("❌ Update dashboard config error:", err);
     return res.status(500).json({ success: false, message: "Failed to update dashboard config" });
+  }
+};
+
+const normalizeCoordinate = (value) => {
+  if (value === "" || value === null || value === undefined) return null;
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : NaN;
+};
+
+exports.getCompanyLocation = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ success: false, message: "Invalid company id" });
+    }
+    if (!canManageDashboardConfig(req, id)) {
+      return res.status(403).json({ success: false, message: "You can only manage settings for your company" });
+    }
+
+    const company = await Company.findById(id).select("officeLocation");
+    if (!company) {
+      return res.status(404).json({ success: false, message: "Company not found" });
+    }
+
+    return res.status(200).json({
+      success: true,
+      officeLocation: company.officeLocation || {}
+    });
+  } catch (err) {
+    console.error("Get company location error:", err);
+    return res.status(500).json({ success: false, message: "Failed to fetch company location" });
+  }
+};
+
+exports.updateCompanyLocation = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const latitude = normalizeCoordinate(req.body.latitude);
+    const longitude = normalizeCoordinate(req.body.longitude);
+    const allowedRadiusMeters = normalizeCoordinate(req.body.allowedRadiusMeters);
+
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ success: false, message: "Invalid company id" });
+    }
+    if (!canManageDashboardConfig(req, id)) {
+      return res.status(403).json({ success: false, message: "You can only manage settings for your company" });
+    }
+    if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) {
+      return res.status(400).json({ success: false, message: "Latitude must be between -90 and 90" });
+    }
+    if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+      return res.status(400).json({ success: false, message: "Longitude must be between -180 and 180" });
+    }
+    if (!Number.isFinite(allowedRadiusMeters) || allowedRadiusMeters < 10 || allowedRadiusMeters > 10000) {
+      return res.status(400).json({ success: false, message: "Allowed radius must be between 10 and 10000 meters" });
+    }
+
+    const officeLocation = {
+      latitude,
+      longitude,
+      allowedRadiusMeters,
+      updatedAt: new Date()
+    };
+
+    const company = await Company.findByIdAndUpdate(
+      id,
+      { $set: { officeLocation } },
+      { new: true, runValidators: true }
+    ).select("officeLocation");
+
+    if (!company) {
+      return res.status(404).json({ success: false, message: "Company not found" });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Company location updated successfully",
+      officeLocation: company.officeLocation
+    });
+  } catch (err) {
+    console.error("Update company location error:", err);
+    return res.status(500).json({ success: false, message: "Failed to update company location" });
   }
 };
 
