@@ -48,12 +48,14 @@ const attendanceSchema = new mongoose.Schema({
   inLocation: {
     latitude: { type: Number },
     longitude: { type: Number },
-    accuracy: { type: Number }
+    accuracy: { type: Number },
+    distanceFromOfficeMeters: { type: Number }
   },
   outLocation: {
     latitude: { type: Number },
     longitude: { type: Number },
-    accuracy: { type: Number }
+    accuracy: { type: Number },
+    distanceFromOfficeMeters: { type: Number }
   },
   inSelfieUrl: { type: String },
   outSelfieUrl: { type: String },

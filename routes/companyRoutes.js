@@ -70,6 +70,8 @@ router.patch("/:id/activate", companyController.activateCompany);
 
 router.get("/:id/dashboard-config", protect, companyController.getDashboardConfig);
 router.put("/:id/dashboard-config", protect, companyController.updateDashboardConfig);
+router.get("/:id/location", protect, companyController.getCompanyLocation);
+router.put("/:id/location", protect, companyController.updateCompanyLocation);
 
 router.delete("/:id", companyController.deleteCompanyPermanently);
 router.get('/test', (req, res) => {

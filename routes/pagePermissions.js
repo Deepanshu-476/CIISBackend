@@ -11,6 +11,8 @@ const APP_PAGES = [
   { pageKey: 'emp-leaves', name: 'Employee Leaves', path: '/ciisUser/emp-leaves' },
   { pageKey: 'emp-assets', name: 'Employee Assets', path: '/ciisUser/emp-assets' },
   { pageKey: 'emp-attendance', name: 'Employee Attendance', path: '/ciisUser/emp-attendance' },
+  { pageKey: 'department', name: 'Department Management', path: '/ciisUser/department' },
+  { pageKey: 'JobRoleManagement', name: 'Job Role Management', path: '/ciisUser/JobRoleManagement' },
   { pageKey: 'admin-task-create', name: 'Admin Task Create', path: '/ciisUser/admin-task-create' },
   { pageKey: 'manage-groups', name: 'Manage Groups', path: '/ciisUser/manage-groups' },
   { pageKey: 'admin-meeting', name: 'Admin Meeting', path: '/ciisUser/admin-meeting' },

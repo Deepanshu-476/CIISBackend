@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const AssetRequest = require('../models/AssetRequest');
 const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
 const CompanyAsset = require('../../models/CompanyAsset');
+const Department = require('../../models/Department');
 const User = require('../../models/User');
 const { sendNotification, notifyCompanyOwners } = require('../../HR-CDS/utils/notificationHelper');
 const {notifyPageUsers, notifyDirectUsers} = require('../utils/systemNotificationService');
@@ -19,6 +20,24 @@ const formatDate = (date) => {
 const titleCase = (value) => {
   if (!value) return '';
   return value.charAt(0).toUpperCase() + value.slice(1).toLowerCase();
+};
+
+const getDepartmentName = async (department, companyCode) => {
+  if (!department) return '';
+
+  if (typeof department === 'object') {
+    return department.name || department.departmentName || department.title || '';
+  }
+
+  const departmentValue = String(department);
+  if (!mongoose.Types.ObjectId.isValid(departmentValue)) return departmentValue;
+
+  const departmentRecord = await Department.findOne({
+    _id: departmentValue,
+    ...(companyCode ? { companyCode } : {})
+  }).select('name').lean();
+
+  return departmentRecord?.name || '';
 };
 
 const getAssetEmailTemplate = ({
@@ -250,13 +269,15 @@ exports.requestAsset = async (req, res) => {
     }
 
     
+    const departmentName = await getDepartmentName(req.user.department, req.user.companyCode);
+
     const newRequest = new AssetRequest({
       user: req.user._id,
       asset: assetId,
       assetName: asset.name,
       assetStatus: asset.status,
       companyCode: req.user.companyCode,
-      department: req.user.department || 'General',
+      department: departmentName || 'General',
       reason: reason || 'No reason provided',
       expectedReturnDate: expectedReturnDate || null,
       requestDate: new Date()
@@ -436,7 +457,7 @@ exports.cancelRequest = async (req, res) => {
 
 exports.getAllRequests = async (req, res) => {
   try {
-    const { status, department, assetId } = req.query;
+    const { status, department, assetId, branch } = req.query;
     const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
     const filter = { companyCode: req.user.companyCode };
 
@@ -445,11 +466,22 @@ exports.getAllRequests = async (req, res) => {
     if (assetId && mongoose.Types.ObjectId.isValid(assetId)) {
       filter.asset = assetId;
     }
+    if (branch && mongoose.Types.ObjectId.isValid(branch)) {
+      const branchAssetIds = await CompanyAsset.find({
+        companyCode: req.user.companyCode,
+        branch
+      }).distinct('_id');
+      filter.asset = { $in: branchAssetIds };
+    }
 
-    const [requests, total] = await Promise.all([
+    const [rawRequests, total] = await Promise.all([
       AssetRequest.find(filter)
         .populate('user', 'name email department')
-        .populate('asset', 'name description status')
+        .populate({
+          path: 'asset',
+          select: 'name description status branch',
+          populate: { path: 'branch', select: 'name branchCode' }
+        })
         .populate('approvedBy', 'name email')
         .sort({ createdAt: -1 })
         .skip(skip)
@@ -457,6 +489,41 @@ exports.getAllRequests = async (req, res) => {
         .lean(),
       AssetRequest.countDocuments(filter)
     ]);
+
+    const departmentIds = [
+      ...new Set(
+        rawRequests
+          .flatMap(request => [request.department, request.user?.department])
+          .map(value => (value ? String(value) : ''))
+          .filter(value => mongoose.Types.ObjectId.isValid(value))
+      )
+    ];
+
+    const departments = departmentIds.length
+      ? await Department.find({
+          _id: { $in: departmentIds },
+          companyCode: req.user.companyCode
+        }).select('name').lean()
+      : [];
+
+    const departmentNamesById = new Map(
+      departments.map(department => [String(department._id), department.name])
+    );
+
+    const requests = rawRequests.map(request => {
+      const requestDepartment = request.department ? String(request.department) : '';
+      const userDepartment = request.user?.department ? String(request.user.department) : '';
+      const departmentName =
+        departmentNamesById.get(requestDepartment) ||
+        departmentNamesById.get(userDepartment) ||
+        (requestDepartment && !mongoose.Types.ObjectId.isValid(requestDepartment) ? requestDepartment : '') ||
+        (userDepartment && !mongoose.Types.ObjectId.isValid(userDepartment) ? userDepartment : '');
+
+      return {
+        ...request,
+        departmentName: departmentName || 'N/A'
+      };
+    });
 
     res.status(200).json({
       success: true,

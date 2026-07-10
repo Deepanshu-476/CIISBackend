@@ -182,16 +182,11 @@ const extendOverdueClientTasksToSubscriptionEnd = async ({ clientId, subscriptio
     {
       $set: {
         dueDate: subscriptionDueDate,
-        dueDateSource: 'subscription'
+        dueDateSource: 'subscription',
+        status: 'pending'
       },
       $push: { activityLogs: activityLog }
     },
-    updateOptions
-  );
-
-  await ClientTask.updateMany(
-    { ...overdueOpenTaskFilter, status: 'overdue' },
-    { $set: { status: 'pending' } },
     updateOptions
   );
 
