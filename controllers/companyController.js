@@ -1748,6 +1748,13 @@ const normalizeCoordinate = (value) => {
   return Number.isFinite(numberValue) ? numberValue : NaN;
 };
 
+const normalizeBoolean = (value, fallback = true) => {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") return value.toLowerCase() === "true" || value.toLowerCase() === "yes";
+  return Boolean(value);
+};
+
 exports.getCompanyLocation = async (req, res) => {
   try {
     const { id } = req.params;
@@ -1779,6 +1786,7 @@ exports.updateCompanyLocation = async (req, res) => {
     const latitude = normalizeCoordinate(req.body.latitude);
     const longitude = normalizeCoordinate(req.body.longitude);
     const allowedRadiusMeters = normalizeCoordinate(req.body.allowedRadiusMeters);
+    const allowedRadiusEnabled = normalizeBoolean(req.body.allowedRadiusEnabled, true);
 
     if (!isValidObjectId(id)) {
       return res.status(400).json({ success: false, message: "Invalid company id" });
@@ -1792,14 +1800,15 @@ exports.updateCompanyLocation = async (req, res) => {
     if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
       return res.status(400).json({ success: false, message: "Longitude must be between -180 and 180" });
     }
-    if (!Number.isFinite(allowedRadiusMeters) || allowedRadiusMeters < 10 || allowedRadiusMeters > 10000) {
+    if (allowedRadiusEnabled && (!Number.isFinite(allowedRadiusMeters) || allowedRadiusMeters < 10 || allowedRadiusMeters > 10000)) {
       return res.status(400).json({ success: false, message: "Allowed radius must be between 10 and 10000 meters" });
     }
 
     const officeLocation = {
       latitude,
       longitude,
-      allowedRadiusMeters,
+      allowedRadiusMeters: allowedRadiusEnabled ? allowedRadiusMeters : null,
+      allowedRadiusEnabled,
       updatedAt: new Date()
     };
 
