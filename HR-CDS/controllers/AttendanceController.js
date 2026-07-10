@@ -95,6 +95,21 @@ const formatTime = (date) => {
     : "";
 };
 
+const buildLocationPayload = ({ latitude, longitude, accuracy }) => {
+  if (latitude === undefined || longitude === undefined) return null;
+
+  const location = {
+    latitude: Number(latitude),
+    longitude: Number(longitude),
+  };
+
+  if (accuracy !== undefined && accuracy !== null && accuracy !== "") {
+    location.accuracy = Number(accuracy);
+  }
+
+  return location;
+};
+
 
 const isValidObjectId = (id) => {
   return mongoose.Types.ObjectId.isValid(id);
@@ -238,7 +253,7 @@ const clockIn = async (req, res) => {
     const clockInConfig = company?.dashboardConfig?.find(c => c.componentId === 'clock-in');
     const attendanceMode = clockInConfig?.settings?.attendanceMode || 'normal';
 
-    const { latitude, longitude, selfieUrl } = req.body;
+    const { latitude, longitude, accuracy, selfieUrl } = req.body;
 
     // 2. Validate Geolocation/Selfie based on company requirements
     if (attendanceMode === 'location' || attendanceMode === 'both') {
@@ -336,7 +351,7 @@ const clockIn = async (req, res) => {
 
     // Save Location & Selfie
     if (latitude !== undefined && longitude !== undefined) {
-      attendanceRecord.inLocation = { latitude, longitude };
+      attendanceRecord.inLocation = buildLocationPayload({ latitude, longitude, accuracy });
     }
     if (selfieUrl) {
       attendanceRecord.inSelfieUrl = selfieUrl;
@@ -397,7 +412,7 @@ const clockOut = async (req, res) => {
     const clockInConfig = company?.dashboardConfig?.find(c => c.componentId === 'clock-in');
     const attendanceMode = clockInConfig?.settings?.attendanceMode || 'normal';
 
-    const { latitude, longitude, selfieUrl } = req.body;
+    const { latitude, longitude, accuracy, selfieUrl } = req.body;
 
     // 2. Validate Geolocation/Selfie based on company requirements
     if (attendanceMode === 'location' || attendanceMode === 'both') {
@@ -467,7 +482,7 @@ const clockOut = async (req, res) => {
 
     // Save Location & Selfie
     if (latitude !== undefined && longitude !== undefined) {
-      record.outLocation = { latitude, longitude };
+      record.outLocation = buildLocationPayload({ latitude, longitude, accuracy });
     }
     if (selfieUrl) {
       record.outSelfieUrl = selfieUrl;
