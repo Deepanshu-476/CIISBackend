@@ -50,6 +50,10 @@ const companySchema = new mongoose.Schema(
         max: [10000, "Allowed radius cannot exceed 10000 meters"],
         default: 100,
       },
+      allowedRadiusEnabled: {
+        type: Boolean,
+        default: true,
+      },
       updatedAt: {
         type: Date,
         default: null,
