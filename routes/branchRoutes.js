@@ -11,3 +11,4 @@ router.put("/:id", branchController.updateBranch);
 router.delete("/:id", branchController.deleteBranch);  
 
 module.exports = router;
+ 
