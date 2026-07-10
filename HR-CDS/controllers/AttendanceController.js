@@ -136,21 +136,31 @@ const validateCompanyLocationRange = ({ company, latitude, longitude, actionLabe
   const officeLongitude = toFiniteCoordinate(company?.officeLocation?.longitude);
   const userLatitude = toFiniteCoordinate(latitude);
   const userLongitude = toFiniteCoordinate(longitude);
+  const allowedRadiusEnabled = company?.officeLocation?.allowedRadiusEnabled !== false;
   const allowedRadiusMeters = Number(company?.officeLocation?.allowedRadiusMeters || 100);
-
-  if (officeLatitude === null || officeLongitude === null) {
-    return {
-      ok: false,
-      status: 400,
-      message: "Company office location is not configured. Please add latitude and longitude in company settings."
-    };
-  }
 
   if (userLatitude === null || userLongitude === null) {
     return {
       ok: false,
       status: 400,
       message: "Valid location coordinates are required for attendance."
+    };
+  }
+
+  if (!allowedRadiusEnabled) {
+    return {
+      ok: true,
+      distanceMeters: null,
+      allowedRadiusMeters: null,
+      allowedRadiusEnabled: false
+    };
+  }
+
+  if (officeLatitude === null || officeLongitude === null) {
+    return {
+      ok: false,
+      status: 400,
+      message: "Company office location is not configured. Please add latitude and longitude in company settings."
     };
   }
 
