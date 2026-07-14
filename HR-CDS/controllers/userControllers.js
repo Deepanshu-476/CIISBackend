@@ -214,6 +214,8 @@ exports.getMe = async (req, res) => {
         state: user.state,
         zipCode: user.zipCode,
         country: user.country,
+        chatSettings: user.chatSettings,
+        notificationPreferences: user.notificationPreferences,
         isActive: user.isActive,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt

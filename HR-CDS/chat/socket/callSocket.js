@@ -8,6 +8,21 @@ const getPublicUser = (user) => ({
     avatar: user?.avatar || user?.profileImage || user?.image,
 });
 
+const normalizeCallerUser = (socket, data = {}) => {
+    const socketUser = getPublicUser(socket.user);
+    const clientUser = data.callerUser && typeof data.callerUser === "object"
+        ? getPublicUser(data.callerUser)
+        : {};
+
+    return {
+        ...socketUser,
+        ...clientUser,
+        _id: socket.userId,
+        id: socket.userId,
+        name: clientUser.name || socketUser.name || "User",
+    };
+};
+
 const emitToUser = (io, userId, eventName, payload) => {
     if (!userId) return;
     io.to(`user:${userId}`).emit(eventName, payload);
@@ -107,7 +122,7 @@ const callSocket = (io, socket) => {
         }
 
         const callId = data.callId?.toString();
-        const callerUser = getPublicUser(socket.user);
+        const callerUser = normalizeCallerUser(socket, data);
         const room = {
             callId,
             callType,

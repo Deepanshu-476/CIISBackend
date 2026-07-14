@@ -236,6 +236,41 @@ const userSchema = new mongoose.Schema({
     }
   },
 
+  chatSettings: {
+    about: { type: String, default: 'Available' },
+    blockedContacts: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    }],
+    privacy: {
+      lastSeen: { type: String, enum: ['everyone', 'contacts', 'nobody'], default: 'everyone' },
+      profilePhoto: { type: String, enum: ['everyone', 'contacts', 'nobody'], default: 'everyone' },
+      readReceipts: { type: Boolean, default: true },
+      groups: { type: String, enum: ['everyone', 'contacts'], default: 'everyone' }
+    },
+    chats: {
+      theme: { type: String, enum: ['system', 'light', 'dark'], default: 'system' },
+      enterToSend: { type: Boolean, default: true },
+      mediaAutoDownload: { type: Boolean, default: true },
+      wallpaper: { type: String, default: '' }
+    },
+    videoVoice: {
+      cameraEnabled: { type: Boolean, default: true },
+      microphoneEnabled: { type: Boolean, default: true },
+      speakerEnabled: { type: Boolean, default: true }
+    },
+    general: {
+      startWithSystem: { type: Boolean, default: false },
+      keepLoggedIn: { type: Boolean, default: true },
+      compactMode: { type: Boolean, default: true }
+    },
+    keyboard: {
+      enabled: { type: Boolean, default: true },
+      sendMessage: { type: String, default: 'Enter' },
+      newLine: { type: String, default: 'Shift+Enter' }
+    }
+  },
+
   
 assets: [{
   type: mongoose.Schema.Types.ObjectId,

@@ -9,10 +9,15 @@ const serviceEnquiryController = require('../controllers/serviceEnquiryControlle
 const {
   getAllClients,
   getClientById,
+  getClientCompanies,
+  getCompanyById,
   addClient,
+  addClientCompany,
   updateClient,
+  updateCompany,
   updateClientProgress,
   deleteClient,
+  deleteCompany,
   getClientStats,
   getManagerStats,
   addProjectManager,
@@ -63,6 +68,11 @@ router.get('/manager-stats', getManagerStats);
 router.get('/company/:companyCode', getClientsByCompany);
 router.get('/', getAllClients);
 router.post('/', addClient);
+router.post('/:clientId/companies', addClientCompany);
+router.get('/:clientId/companies', getClientCompanies);
+router.get('/companies/:companyId', getCompanyById);
+router.put('/companies/:companyId', updateCompany);
+router.delete('/companies/:companyId', deleteCompany);
 
 
 

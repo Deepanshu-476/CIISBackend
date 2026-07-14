@@ -17,8 +17,7 @@ class EmailService {
       return;
     }
 
-    this.transporter = nodemailer.createTransport({
-      service: process.env.EMAIL_SERVICE || 'Gmail',
+    const transportConfig = {
       auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS
@@ -29,7 +28,17 @@ class EmailService {
       pool: true,
       maxConnections: 5,
       maxMessages: 100
-    });
+    };
+
+    if (process.env.EMAIL_HOST) {
+      transportConfig.host = process.env.EMAIL_HOST;
+      transportConfig.port = parseInt(process.env.EMAIL_PORT || '465', 10);
+      transportConfig.secure = process.env.EMAIL_SECURE === 'true' || transportConfig.port === 465;
+    } else {
+      transportConfig.service = process.env.EMAIL_SERVICE || 'Gmail';
+    }
+
+    this.transporter = nodemailer.createTransport(transportConfig);
 
     
     this.transporter.verify((error, success) => {
@@ -48,15 +57,22 @@ class EmailService {
         throw new Error('Missing required email parameters');
       }
 
+      const isDev = process.env.NODE_ENV !== 'production';
+
       
       if (!this.transporter) {
-        if (process.env.NODE_ENV === 'development') {
-          void 0;
-          void 0;
+        if (isDev) {
+          console.warn('⚠️ [DEV ONLY] Email credentials not configured. Mocking email send:');
+          console.warn(`[DEV ONLY] To: ${to}`);
+          console.warn(`[DEV ONLY] Subject: ${subject}`);
+          const otpMatch = html.match(/(\b\d{6}\b)/);
+          if (otpMatch) {
+            console.warn(`[DEV ONLY] OTP: ${otpMatch[1]}`);
+          }
           this.notifyEmailSent(to, subject, options);
           return { 
             success: true, 
-            messageId: `dev-${Date.now()}`,
+            messageId: `dev-mock-${Date.now()}`,
             preview: html.substring(0, 200) + '...'
           };
         }
@@ -96,14 +112,26 @@ class EmailService {
       };
 
     } catch (error) {
+      const isDev = process.env.NODE_ENV !== 'production';
       console.error('❌ Error sending email:', error.message);
       
-      
-      if (process.env.NODE_ENV === 'development') {
+      if (isDev) {
         console.error('Email error details:', error);
+        console.warn('⚠️ [DEV ONLY] Real email sending failed. Mocking successful email send for local development context.');
+        console.warn(`[DEV ONLY] To: ${to}`);
+        console.warn(`[DEV ONLY] Subject: ${subject}`);
+        const otpMatch = html.match(/(\b\d{6}\b)/);
+        if (otpMatch) {
+          console.warn(`[DEV ONLY] OTP: ${otpMatch[1]}`);
+        }
+        return {
+          success: true,
+          messageId: `dev-fallback-${Date.now()}`,
+          preview: html.substring(0, 200) + '...',
+          mocked: true
+        };
       }
 
-      
       if (process.env.NODE_ENV === 'production') {
         console.error('Email sending failed but continuing with response');
         return {

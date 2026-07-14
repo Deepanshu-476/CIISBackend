@@ -23,6 +23,51 @@ const normalizeCompanyCode = (companyCode) => companyCode?.trim().toUpperCase();
 const normalizeEmail = (email) => email?.trim().toLowerCase();
 const normalizeName = (value) => value?.trim();
 const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+let clientMultiCompanyIndexPromise = null;
+
+const isIndexKey = (index, expectedKey) => {
+  const key = index?.key || {};
+  const keyNames = Object.keys(key);
+  const expectedNames = Object.keys(expectedKey);
+  return keyNames.length === expectedNames.length &&
+    expectedNames.every(name => Number(key[name]) === Number(expectedKey[name]));
+};
+
+const ensureClientMultiCompanyIndexes = async () => {
+  if (clientMultiCompanyIndexPromise) return clientMultiCompanyIndexPromise;
+
+  clientMultiCompanyIndexPromise = (async () => {
+    try {
+      const indexes = await Client.collection.indexes();
+      const oldUniqueIndex = indexes.find(index => (
+        index.unique === true &&
+        isIndexKey(index, { client: 1, companyCode: 1 })
+      ));
+
+      if (oldUniqueIndex?.name) {
+        await Client.collection.dropIndex(oldUniqueIndex.name);
+      }
+
+      await Client.collection.createIndex(
+        { client: 1, company: 1, companyCode: 1 },
+        { unique: true, name: 'client_1_company_1_companyCode_1' }
+      );
+      await Client.collection.createIndex(
+        { parentClientId: 1, companyCode: 1 },
+        { name: 'parentClientId_1_companyCode_1' }
+      );
+      await Client.collection.createIndex(
+        { parentClientName: 1, companyCode: 1 },
+        { name: 'parentClientName_1_companyCode_1' }
+      );
+    } catch (error) {
+      clientMultiCompanyIndexPromise = null;
+      console.error('Client multi-company index sync failed:', error);
+    }
+  })();
+
+  return clientMultiCompanyIndexPromise;
+};
 
 const sendConflict = (res, message, field, extra = {}) => {
   return res.status(409).json({
@@ -61,6 +106,78 @@ const createSubscriptionFromInput = ({ sub = {}, plan = null, fallbackNo = 1 }) 
     status: sub.status || 'Active',
     extraTasks: Number(sub.extraTasks || 0),
     benefits: sub.benefits || ''
+  };
+};
+
+const getClientCompanyFilter = (client) => ({
+  companyCode: client.companyCode,
+  $or: [
+    { parentClientId: client._id },
+    { _id: client._id },
+    {
+      $or: [{ parentClientId: null }, { parentClientId: { $exists: false } }],
+      client: { $regex: `^${escapeRegExp(client.client || '')}$`, $options: 'i' }
+    }
+  ]
+});
+
+const getLatestSubscription = (client) => (
+  Array.isArray(client?.subscription) && client.subscription.length > 0
+    ? client.subscription[client.subscription.length - 1]
+    : null
+);
+
+const getClientRevenueTotal = (client) => {
+  const approvedReceiptTotal = Array.isArray(client?.paymentReceipts)
+    ? client.paymentReceipts
+      .filter(receipt => ['Approved', 'Paid'].includes(receipt.status))
+      .reduce((sum, receipt) => sum + Number(receipt.amount || 0), 0)
+    : 0;
+
+  if (approvedReceiptTotal > 0) return approvedReceiptTotal;
+
+  const paidInvoiceTotal = Array.isArray(client?.dueInvoices)
+    ? client.dueInvoices
+      .filter(invoice => invoice.status === 'Paid')
+      .reduce((sum, invoice) => sum + Number(invoice.amount || 0), 0)
+    : 0;
+
+  if (paidInvoiceTotal > 0) return paidInvoiceTotal;
+
+  return Array.isArray(client?.subscription)
+    ? client.subscription.reduce((sum, subscription) => sum + Number(subscription.price || 0), 0)
+    : 0;
+};
+
+const toCompanyCard = (client, taskSummary = {}) => {
+  const latestSubscription = getLatestSubscription(client);
+  const approvedPayments = Array.isArray(client.paymentReceipts)
+    ? client.paymentReceipts.filter(receipt => receipt.status === 'Approved')
+    : [];
+  const lastPayment = approvedPayments
+    .sort((a, b) => new Date(b.verifiedAt || b.uploadDate || 0) - new Date(a.verifiedAt || a.uploadDate || 0))[0] || null;
+
+  return {
+    _id: client._id,
+    parentClientId: client.parentClientId || client._id,
+    parentClientName: client.parentClientName || client.client,
+    companyLogo: client.companyLogo || '',
+    companyName: client.company,
+    company: client.company,
+    gst: client.gst || '',
+    pan: client.pan || '',
+    email: client.email || '',
+    phone: client.phone || '',
+    status: client.status,
+    activePlan: latestSubscription?.planName || '',
+    totalServices: Array.isArray(client.services) ? client.services.length : 0,
+    totalTasks: taskSummary.total || 0,
+    lastPayment: lastPayment ? {
+      amount: lastPayment.amount || 0,
+      date: lastPayment.verifiedAt || lastPayment.uploadDate || null,
+      receiptNumber: lastPayment.receiptNumber || ''
+    } : null,
+    client
   };
 };
 
@@ -604,7 +721,8 @@ const getAllClients = async (req, res) => {
       status,
       projectManager,
       service,
-      companyCode
+      companyCode,
+      groupByClient = 'false'
     } = req.query;
 
     const filter = {};
@@ -662,6 +780,63 @@ const getAllClients = async (req, res) => {
       Client.countDocuments(filter)
     ]);
 
+    if (groupByClient === 'true') {
+      const clientIds = clients.map(client => client._id);
+      const taskCounts = await ClientTask.aggregate([
+        { $match: { clientId: { $in: clientIds } } },
+        {
+          $group: {
+            _id: '$clientId',
+            total: { $sum: 1 },
+            completed: { $sum: { $cond: [{ $eq: ['$completed', true] }, 1, 0] } },
+            pending: { $sum: { $cond: [{ $eq: ['$completed', true] }, 0, 1] } }
+          }
+        }
+      ]);
+      const taskSummaryByClient = taskCounts.reduce((acc, item) => {
+        acc[String(item._id)] = item;
+        return acc;
+      }, {});
+      const groupedMap = new Map();
+
+      clients.forEach(companyClient => {
+        const key = String(companyClient.parentClientId || companyClient.parentClientName || companyClient.client || companyClient._id);
+        const latestSubscription = getLatestSubscription(companyClient);
+        const revenue = getClientRevenueTotal(companyClient);
+        const isExpired = latestSubscription?.endDate
+          ? new Date(latestSubscription.endDate) < new Date()
+          : companyClient.status !== 'Active';
+
+        if (!groupedMap.has(key)) {
+          groupedMap.set(key, {
+            _id: companyClient.parentClientId || companyClient._id,
+            client: companyClient.parentClientName || companyClient.client,
+            companyCode: companyClient.companyCode,
+            totalCompanies: 0,
+            activeCompanies: 0,
+            expiredCompanies: 0,
+            totalRevenue: 0,
+            companies: []
+          });
+        }
+
+        const group = groupedMap.get(key);
+        group.totalCompanies += 1;
+        group.activeCompanies += companyClient.status === 'Active' && !isExpired ? 1 : 0;
+        group.expiredCompanies += isExpired ? 1 : 0;
+        group.totalRevenue += revenue;
+        group.companies.push(toCompanyCard(companyClient, taskSummaryByClient[String(companyClient._id)]));
+      });
+
+      return res.json({
+        success: true,
+        data: Array.from(groupedMap.values()),
+        count: groupedMap.size,
+        total,
+        pagination: buildPaginationMeta({ page: safePage, limit: safeLimit, total })
+      });
+    }
+
     res.json({
       success: true,
       data: clients,
@@ -707,12 +882,108 @@ const getClientById = async (req, res) => {
   }
 };
 
+const getClientCompanies = async (req, res) => {
+  try {
+    const { clientId } = req.params;
+    const parentClient = await Client.findById(clientId).lean();
+
+    if (!parentClient) {
+      return res.status(404).json({
+        success: false,
+        message: 'Client not found'
+      });
+    }
+
+    const companies = await Client.find(getClientCompanyFilter(parentClient))
+      .sort({ company: 1, createdAt: -1 })
+      .lean();
+    const clientIds = companies.map(company => company._id);
+    const taskCounts = await ClientTask.aggregate([
+      { $match: { clientId: { $in: clientIds } } },
+      {
+        $group: {
+          _id: '$clientId',
+          total: { $sum: 1 },
+          completed: { $sum: { $cond: [{ $eq: ['$completed', true] }, 1, 0] } },
+          pending: { $sum: { $cond: [{ $eq: ['$completed', true] }, 0, 1] } }
+        }
+      }
+    ]);
+    const taskSummaryByClient = taskCounts.reduce((acc, item) => {
+      acc[String(item._id)] = item;
+      return acc;
+    }, {});
+
+    res.json({
+      success: true,
+      data: companies.map(company => toCompanyCard(company, taskSummaryByClient[String(company._id)])),
+      count: companies.length
+    });
+  } catch (error) {
+    console.error('Error fetching client companies:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching companies',
+      error: error.message
+    });
+  }
+};
+
+const getCompanyById = async (req, res) => {
+  req.params.id = req.params.companyId;
+  return getClientById(req, res);
+};
+
+const addClientCompany = async (req, res) => {
+  try {
+    const { clientId } = req.params;
+    const parentClient = await Client.findById(clientId).lean();
+
+    if (!parentClient) {
+      return res.status(404).json({
+        success: false,
+        message: 'Client not found'
+      });
+    }
+
+    req.body = {
+      ...req.body,
+      client: parentClient.client,
+      parentClientId: parentClient.parentClientId || parentClient._id,
+      parentClientName: parentClient.parentClientName || parentClient.client,
+      companyCode: req.body.companyCode || parentClient.companyCode,
+      projectManager: req.body.projectManager || parentClient.projectManager || [],
+      city: req.body.city || parentClient.city
+    };
+
+    return addClient(req, res);
+  } catch (error) {
+    console.error('Error adding client company:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error adding company',
+      error: error.message
+    });
+  }
+};
+
+const updateCompany = async (req, res) => {
+  req.params.id = req.params.companyId;
+  return updateClient(req, res);
+};
+
+const deleteCompany = async (req, res) => {
+  req.params.id = req.params.companyId;
+  return deleteClient(req, res);
+};
+
 const addClient = async (req, res) => {
   void 0;
   const session = await mongoose.startSession();
   session.startTransaction();
   
   try {
+    await ensureClientMultiCompanyIndexes();
     const {
       client,
       company,
@@ -728,7 +999,17 @@ const addClient = async (req, res) => {
       description,
       notes,
       clientPlanId,
-      subscription  
+      subscription,
+      parentClientId,
+      parentClientName,
+      companyLogo,
+      industry,
+      gst,
+      pan,
+      website,
+      state,
+      country,
+      pincode
     } = req.body;
 
     void 0;
@@ -795,10 +1076,23 @@ const addClient = async (req, res) => {
       }
     }
     const finalServices = selectedClientPlan ? getPlanServiceNames(selectedClientPlan) : (services || []);
+    const requestedParentId = parentClientId ? String(parentClientId) : '';
+    const requestedParentName = normalizeName(parentClientName) || cleanClientName;
+    const isSameParentClient = existing => {
+      const existingParentId = existing.parentClientId ? String(existing.parentClientId) : '';
+      const existingParentName = normalizeName(existing.parentClientName) || existing.client;
+      return (
+        String(existing._id) === requestedParentId ||
+        (requestedParentId && existingParentId === requestedParentId) ||
+        String(existing.client || '').toLowerCase() === cleanClientName.toLowerCase() ||
+        String(existingParentName || '').toLowerCase() === requestedParentName.toLowerCase()
+      );
+    };
 
     
     const existingClient = await Client.findOne({
       client: { $regex: `^${escapeRegExp(cleanClientName)}$`, $options: 'i' },
+      company: { $regex: `^${escapeRegExp(cleanCompanyName)}$`, $options: 'i' },
       companyCode: cleanCompanyCode
     }).session(session);
 
@@ -810,6 +1104,7 @@ const addClient = async (req, res) => {
 
     
     let cleanEmail = normalizeEmail(email) || '';
+    let reusableClientUser = null;
     if (cleanEmail) {
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (!emailRegex.test(cleanEmail)) {
@@ -820,36 +1115,45 @@ const addClient = async (req, res) => {
           message: "Invalid email format"
         });
       }
-
-      const existingUser = await User.findOne({ email: cleanEmail }).session(session);
-      if (existingUser) {
-        console.warn('⚠️ Email already in use:', cleanEmail);
-        await session.abortTransaction();
-        return sendConflict(res, 'This email is already registered. Please use another email.', 'email');
-      }
-
-      const existingClientEmail = await Client.findOne({ email: cleanEmail }).session(session);
-      if (existingClientEmail) {
-        console.warn('⚠️ Client email already in use:', cleanEmail);
+      const existingClientsWithEmail = await Client.find({
+        email: cleanEmail,
+        companyCode: cleanCompanyCode
+      }).session(session);
+      const emailBelongsToDifferentClient = existingClientsWithEmail.some(existing => !isSameParentClient(existing));
+      if (emailBelongsToDifferentClient) {
+        console.warn('Client email already in use by another client:', cleanEmail);
         await session.abortTransaction();
         return sendConflict(res, 'This email is already used by another client.', 'email');
       }
+
+      const existingUser = await User.findOne({
+        email: cleanEmail,
+        companyCode: cleanCompanyCode
+      }).session(session);
+      if (existingUser) {
+        if (existingClientsWithEmail.length > 0 && String(existingUser.companyRole || '').toLowerCase() === 'client') {
+          reusableClientUser = existingUser;
+        } else {
+          console.warn('Email already in use:', cleanEmail);
+          await session.abortTransaction();
+          return sendConflict(res, 'This email is already registered. Please use another email.', 'email');
+        }
+      }
     } else {
-      
-      cleanEmail = `${cleanClientName.toLowerCase().replace(/[^a-z0-9]/g, '')}@${cleanCompanyCode.toLowerCase()}.com`;
+      const clientSlug = cleanClientName.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const companySlug = cleanCompanyName.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const emailBase = [clientSlug, companySlug].filter(Boolean).join('-') || `client-${Date.now()}`;
+      const emailDomain = `${cleanCompanyCode.toLowerCase()}.com`;
+      cleanEmail = `${emailBase}@${emailDomain}`;
       void 0;
 
-      const existingGeneratedEmail = await User.findOne({ email: cleanEmail }).session(session);
-      const existingGeneratedClientEmail = await Client.findOne({ email: cleanEmail }).session(session);
-      if (existingGeneratedEmail || existingGeneratedClientEmail) {
-        console.warn('⚠️ Generated email already in use:', cleanEmail);
-        await session.abortTransaction();
-        return sendConflict(
-          res,
-          `Generated email ${cleanEmail} already exists. Please enter a unique client email manually.`,
-          'email',
-          { generatedEmail: cleanEmail }
-        );
+      let suffix = 1;
+      while (
+        await User.findOne({ email: cleanEmail }).session(session) ||
+        await Client.findOne({ email: cleanEmail }).session(session)
+      ) {
+        suffix += 1;
+        cleanEmail = `${emailBase}-${suffix}@${emailDomain}`;
       }
     }
 
@@ -922,7 +1226,7 @@ const addClient = async (req, res) => {
       return `${baseName}@${randomNum}`;
     };
 
-    const autoPassword = generatePassword(client);
+    const autoPassword = reusableClientUser ? '' : generatePassword(client);
     
     
     const employeeId = `CLT${Date.now()}${Math.floor(Math.random() * 1000)}`;
@@ -931,6 +1235,8 @@ const addClient = async (req, res) => {
     const currentUserId = req.user?.id || null;
 
     
+    let createdUser = reusableClientUser;
+    if (!createdUser) {
     const userData = {
       name: client.trim(),
       email: cleanEmail,
@@ -973,7 +1279,8 @@ const addClient = async (req, res) => {
     };
 
     const createdUsers = await User.create([userData], { session });
-    const createdUser = createdUsers[0];
+    createdUser = createdUsers[0];
+    }
     void 0;
 
     
@@ -990,7 +1297,17 @@ const addClient = async (req, res) => {
     
     const newClient = new Client({
       client: cleanClientName,
+      parentClientId: parentClientId || null,
+      parentClientName: normalizeName(parentClientName) || cleanClientName,
       company: cleanCompanyName,
+      companyLogo: companyLogo ? companyLogo.trim() : '',
+      industry: industry ? industry.trim() : '',
+      gst: gst ? gst.trim().toUpperCase() : '',
+      pan: pan ? pan.trim().toUpperCase() : '',
+      website: website ? website.trim() : '',
+      state: state ? state.trim() : '',
+      country: country ? country.trim() : '',
+      pincode: pincode ? pincode.trim() : '',
       city: cleanCity,
       companyCode: cleanCompanyCode,
       projectManager: cleanProjectManagers,
@@ -1021,37 +1338,48 @@ const addClient = async (req, res) => {
 
     
     const updatedAdditionalDetails = JSON.parse(createdUser.additionalDetails || '{}');
-    updatedAdditionalDetails.clientId = newClient._id;
+    if (!reusableClientUser || !updatedAdditionalDetails.clientId) {
+      updatedAdditionalDetails.clientId = newClient._id;
+    }
+    updatedAdditionalDetails.clientIds = Array.from(new Set([
+      ...(Array.isArray(updatedAdditionalDetails.clientIds) ? updatedAdditionalDetails.clientIds.map(String) : []),
+      String(newClient._id)
+    ]));
+    const userLinkUpdate = {
+      additionalDetails: JSON.stringify(updatedAdditionalDetails)
+    };
+    if (!reusableClientUser) {
+      userLinkUpdate.employeeType = newClient._id.toString();
+    }
     
     await User.findByIdAndUpdate(
       createdUser._id,
       { 
-        $set: { 
-          'additionalDetails': JSON.stringify(updatedAdditionalDetails),
-          employeeType: newClient._id.toString()
-        } 
+        $set: userLinkUpdate
       },
       { session }
     );
 
     await session.commitTransaction();
-
-    
-    sendWelcomeEmail(cleanEmail, cleanClientName, cleanCompanyName, autoPassword, cleanCompanyCode)
-      .then(result => {
-        if (result.success) {
-          void 0;
-        } else {
-          console.warn('⚠️ Welcome email sending failed:', result.error);
-        }
-      })
-      .catch(err => {
-        console.error('❌ Unexpected error in email sending:', err);
-      });
+    if (!reusableClientUser) {
+      sendWelcomeEmail(cleanEmail, cleanClientName, cleanCompanyName, autoPassword, cleanCompanyCode)
+        .then(result => {
+          if (result.success) {
+            void 0;
+          } else {
+            console.warn('Welcome email sending failed:', result.error);
+          }
+        })
+        .catch(err => {
+          console.error('Unexpected error in email sending:', err);
+        });
+    }
 
     res.status(201).json({
       success: true,
-      message: 'Client added successfully. User account created with auto-generated password.',
+      message: reusableClientUser
+        ? 'Client company added successfully. Existing client email account reused.'
+        : 'Client added successfully. User account created with auto-generated password.',
       data: {
         client: newClient,
         user: {
@@ -1059,7 +1387,8 @@ const addClient = async (req, res) => {
           employeeId: createdUser.employeeId,
           name: createdUser.name,
           email: createdUser.email,
-          autoPassword: autoPassword
+          autoPassword: autoPassword || undefined,
+          reused: Boolean(reusableClientUser)
         }
       }
     });
@@ -1071,6 +1400,15 @@ const addClient = async (req, res) => {
       console.error('❌ Duplicate key error:', error.keyValue);
       if (error.keyValue?.email) {
         return sendConflict(res, 'This email is already registered. Please use another email.', 'email');
+      }
+      if (error.keyPattern?.client && error.keyPattern?.companyCode && !error.keyPattern?.company) {
+        clientMultiCompanyIndexPromise = null;
+        await ensureClientMultiCompanyIndexes();
+        return sendConflict(
+          res,
+          'Old client index was refreshed. Please retry adding this company once.',
+          'client'
+        );
       }
       return sendConflict(res, 'This client already exists for this company.', 'client');
     }
@@ -1104,6 +1442,16 @@ const updateClient = async (req, res) => {
       company,
       city,
       companyCode,
+      parentClientId,
+      parentClientName,
+      companyLogo,
+      industry,
+      gst,
+      pan,
+      website,
+      state,
+      country,
+      pincode,
       projectManager,
       services,
       status,
@@ -1241,6 +1589,16 @@ const updateClient = async (req, res) => {
     
     if (client !== undefined) updateData.client = client.trim();
     if (company !== undefined) updateData.company = company.trim();
+    if (parentClientId !== undefined) updateData.parentClientId = parentClientId || null;
+    if (parentClientName !== undefined) updateData.parentClientName = parentClientName.trim();
+    if (companyLogo !== undefined) updateData.companyLogo = companyLogo.trim();
+    if (industry !== undefined) updateData.industry = industry.trim();
+    if (gst !== undefined) updateData.gst = gst.trim().toUpperCase();
+    if (pan !== undefined) updateData.pan = pan.trim().toUpperCase();
+    if (website !== undefined) updateData.website = website.trim();
+    if (state !== undefined) updateData.state = state.trim();
+    if (country !== undefined) updateData.country = country.trim();
+    if (pincode !== undefined) updateData.pincode = pincode.trim();
     if (city !== undefined) updateData.city = city.trim();
     if (companyCode !== undefined) updateData.companyCode = companyCode.trim().toUpperCase();
     
@@ -1892,10 +2250,15 @@ module.exports = {
   getCompanyLoginUrl,
   getAllClients,
   getClientById,
+  getClientCompanies,
+  getCompanyById,
   addClient,
+  addClientCompany,
   updateClient,
+  updateCompany,
   updateClientProgress,
   deleteClient,
+  deleteCompany,
   getClientStats,
   getManagerStats,
   addProjectManager,
