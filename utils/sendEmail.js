@@ -26,15 +26,27 @@ const sendEmail = async (to, subject, html, options = {}) => {
       throw new Error('Missing required email parameters');
     }
 
+    const isDev = process.env.NODE_ENV !== 'production';
+
     
     if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
       console.error('❌ Email credentials not configured in environment variables');
+      if (isDev) {
+        console.warn('⚠️ [DEV ONLY] Email credentials not configured. Mocking email send:');
+        console.warn(`[DEV ONLY] To: ${to}`);
+        console.warn(`[DEV ONLY] Subject: ${subject}`);
+        const otpMatch = html.match(/(\b\d{6}\b)/);
+        if (otpMatch) {
+          console.warn(`[DEV ONLY] OTP: ${otpMatch[1]}`);
+        }
+        notifyEmailSent({to, subject, options});
+        return { success: true, messageId: `dev-mock-${Date.now()}` };
+      }
       throw new Error('Email service not configured');
     }
 
     
-    const transporter = nodemailer.createTransport({
-      service: 'Gmail',
+    const transportConfig = {
       auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS
@@ -45,7 +57,17 @@ const sendEmail = async (to, subject, html, options = {}) => {
       pool: true, 
       maxConnections: 5,
       maxMessages: 100
-    });
+    };
+
+    if (process.env.EMAIL_HOST) {
+      transportConfig.host = process.env.EMAIL_HOST;
+      transportConfig.port = parseInt(process.env.EMAIL_PORT || '465', 10);
+      transportConfig.secure = process.env.EMAIL_SECURE === 'true' || transportConfig.port === 465;
+    } else {
+      transportConfig.service = 'Gmail';
+    }
+
+    const transporter = nodemailer.createTransport(transportConfig);
 
     
     await transporter.verify();
@@ -67,11 +89,19 @@ const sendEmail = async (to, subject, html, options = {}) => {
     return { success: true, messageId: info.messageId };
 
   } catch (error) {
+    const isDev = process.env.NODE_ENV !== 'production';
     console.error('❌ Error sending email:', error.message);
     
-    
-    if (process.env.NODE_ENV === 'development') {
+    if (isDev) {
       console.error('Email error details:', error);
+      console.warn('⚠️ [DEV ONLY] Real email sending failed. Mocking successful email send for local development context.');
+      console.warn(`[DEV ONLY] To: ${to}`);
+      console.warn(`[DEV ONLY] Subject: ${subject}`);
+      const otpMatch = html.match(/(\b\d{6}\b)/);
+      if (otpMatch) {
+        console.warn(`[DEV ONLY] OTP: ${otpMatch[1]}`);
+      }
+      return { success: true, messageId: `dev-fallback-${Date.now()}`, mocked: true };
     }
     
     throw new Error(`Failed to send email: ${error.message}`);

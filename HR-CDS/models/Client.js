@@ -18,11 +18,66 @@ const clientSchema = new mongoose.Schema({
     trim: true,
     maxlength: [100, 'Client name cannot exceed 100 characters']
   },
+  parentClientId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Client',
+    default: null,
+    index: true
+  },
+  parentClientName: {
+    type: String,
+    trim: true,
+    maxlength: [100, 'Parent client name cannot exceed 100 characters'],
+    default: ''
+  },
   company: {
     type: String,
     required: [true, 'Company name is required'],
     trim: true,
     maxlength: [100, 'Company name cannot exceed 100 characters']
+  },
+  companyLogo: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  industry: {
+    type: String,
+    trim: true,
+    maxlength: [100, 'Industry cannot exceed 100 characters'],
+    default: ''
+  },
+  gst: {
+    type: String,
+    uppercase: true,
+    trim: true,
+    default: ''
+  },
+  pan: {
+    type: String,
+    uppercase: true,
+    trim: true,
+    default: ''
+  },
+  website: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  state: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  country: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  pincode: {
+    type: String,
+    trim: true,
+    default: ''
   },
   city: {
     type: String,
@@ -260,7 +315,9 @@ const clientSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 
-clientSchema.index({ client: 1, companyCode: 1 }, { unique: true });
+clientSchema.index({ client: 1, company: 1, companyCode: 1 }, { unique: true });
+clientSchema.index({ parentClientId: 1, companyCode: 1 });
+clientSchema.index({ parentClientName: 1, companyCode: 1 });
 clientSchema.index({ companyCode: 1 });
 clientSchema.index({ status: 1 });
 clientSchema.index({ city: 1 });
@@ -428,6 +485,10 @@ clientSchema.pre('save', function(next) {
   
   if (this.companyCode) {
     this.companyCode = this.companyCode.trim().toUpperCase();
+  }
+
+  if (!this.parentClientName && this.client) {
+    this.parentClientName = this.client;
   }
   
   
