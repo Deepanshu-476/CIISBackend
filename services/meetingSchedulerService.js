@@ -65,7 +65,7 @@ const scheduleMeetingReminder = (meeting) => {
     const startDateTime = getMeetingStartDateTime(meeting.date, meeting.time);
     const reminderTime = new Date(startDateTime.getTime() - 60 * 60 * 1000); 
 
-    const now = new Date();
+    const now = new Date();   
     if (reminderTime <= now) {
       void 0;
       return;
