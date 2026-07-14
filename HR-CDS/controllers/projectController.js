@@ -1416,11 +1416,26 @@ exports.getTaskActivityLogs = async (req, res) => {
 
     void 0;
 
+    const activityLogs = (task.activityLogs || []).map((entry) => {
+      const log = typeof entry.toObject === 'function' ? entry.toObject() : entry;
+      const actor = log.performedBy && typeof log.performedBy === 'object'
+        ? log.performedBy
+        : null;
+
+      return {
+        ...log,
+        user: actor,
+        userName: actor?.name || 'Unknown User',
+        action: log.type || 'update',
+        createdAt: log.performedAt || log.createdAt || null
+      };
+    });
+
     res.status(200).json({
       success: true,
-      activityLogs: task.activityLogs,
-      logs: task.activityLogs,
-      data: task.activityLogs
+      activityLogs,
+      logs: activityLogs,
+      data: activityLogs
     });
   } catch (error) {
     console.error("❌ Error fetching activity logs:", error);
