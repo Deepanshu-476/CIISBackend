@@ -6,6 +6,7 @@ const { protect } = require('../../middleware/authMiddleware');
 
 router.get('/', protect, allTaskController.getAllMyTaskViews);
 router.get('/stats', protect, allTaskController.getAllMyTaskStats);
+router.get('/company-overview', protect, allTaskController.getCompanyAllTaskOverview);
 router.post('/users/stats', protect, allTaskController.getUsersTaskStatsBatch);
 router.get('/user/:userId', protect, allTaskController.getUserAllTasksPaginated);
 router.get('/user/:userId/stats', protect, allTaskController.getUserTaskStats);

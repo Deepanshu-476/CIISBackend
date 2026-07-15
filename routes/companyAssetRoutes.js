@@ -4,6 +4,7 @@ const { protect } = require('../middleware/authMiddleware');
 const {
   getCompanyAssets,
   createCompanyAsset,
+  updateCompanyAssetStatus,
   deleteCompanyAsset
 } = require('../controllers/companyAssetController');
 
@@ -24,5 +25,7 @@ router.route('/')
 
 router.route('/:id')
   .delete(deleteCompanyAsset);
+
+router.put('/:id/status', updateCompanyAssetStatus);
 
 module.exports = router;

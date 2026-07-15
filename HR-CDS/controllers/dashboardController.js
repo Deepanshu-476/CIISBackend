@@ -3,9 +3,12 @@ const Attendance = require("../models/Attendance");
 const Leave = require("../models/Leave");
 const AssetRequest = require("../models/AssetRequest");
 const Task = require("../models/ClientTask");
+const EmployeeTask = require("../models/Task");
 const Meeting = require("../models/Meeting");
 const Holiday = require("../models/Holiday");
 const User = require("../../models/User");
+const Company = require("../../models/Company");
+const JobRole = require("../../models/JobRole");
 
 const formatIndiaTime = value => {
   const date = value ? new Date(value) : null;
@@ -16,6 +19,132 @@ const formatIndiaTime = value => {
     hour12: true,
     timeZone: "Asia/Kolkata",
   });
+};
+
+const getTodayRange = () => {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const end = new Date();
+  end.setHours(23, 59, 59, 999);
+  return {start, end};
+};
+
+const getScopedCompanyId = user => {
+  const company = user?.company;
+  return company?._id || company || user?.companyId || null;
+};
+
+const normalizeRoleForDashboard = role => ({
+  _id: role._id || role.id || "employee",
+  roleName: role.roleName || role.name || role.jobRole || role.title || "Employee",
+  roleNumber: role.roleNumber || role.roleNo || role.code || "N/A",
+});
+
+const mapTaskActivity = task => ({
+  type: "task",
+  title: task.title || task.name || "Task",
+  date: task.updatedAt || task.createdAt || task.dueDateTime,
+  assignedTo: task.assignedUsers?.map(user => user.name).filter(Boolean).join(", ") || "",
+  status: task.overallStatus || task.status || task.creatorStatus?.status || "pending",
+});
+
+const getEmployeeDashboardSummary = async (req, res) => {
+  try {
+    const userId = req.user._id || req.user.id;
+    const companyId = getScopedCompanyId(req.user);
+    const companyCode = String(req.user.companyCode || req.user.company?.companyCode || "").trim();
+
+    if (!userId || !companyCode) {
+      return res.status(400).json({
+        success: false,
+        message: "User or company context missing",
+      });
+    }
+
+    const {start: todayStart, end: todayEnd} = getTodayRange();
+
+    const [
+      company,
+      jobRoles,
+      holidays,
+      attendance,
+      todayAttendance,
+      leaves,
+      tasks,
+    ] = await Promise.all([
+      companyId ? Company.findById(companyId).select("dashboardConfig officeLocation").lean() : null,
+      JobRole.find({
+        isActive: true,
+        ...(companyId ? {company: companyId} : {companyCode}),
+      }).select("_id name roleName roleNumber roleNo code jobRole title shiftSettings department").lean(),
+      Holiday.find({
+        isActive: true,
+        $or: [
+          {companyCode},
+          ...(companyId ? [{company: companyId}] : []),
+        ],
+      }).sort({date: 1}).lean(),
+      Attendance.find({user: userId, companyCode}).sort({date: -1}).lean(),
+      Attendance.findOne({
+        user: userId,
+        companyCode,
+        date: {$gte: todayStart, $lte: todayEnd},
+      }).lean(),
+      Leave.find({user: userId})
+        .populate("user", "name email jobRole department")
+        .populate("approvalSteps.user", "name email jobRole companyRole")
+        .populate("history.by", "name email")
+        .sort({startDate: -1})
+        .lean(),
+      EmployeeTask.find({
+        companyCode,
+        isActive: {$ne: false},
+        $or: [
+          {createdBy: userId},
+          {assignedUsers: userId},
+          {"statusByUser.user": userId},
+        ],
+      })
+        .populate("assignedUsers", "name email")
+        .sort({updatedAt: -1, createdAt: -1})
+        .limit(8)
+        .lean(),
+    ]);
+
+    const attendanceStatus = todayAttendance
+      ? {
+          ...todayAttendance,
+          login: formatIndiaTime(todayAttendance.inTime),
+          logout: formatIndiaTime(todayAttendance.outTime),
+          status: todayAttendance.status,
+          isClockedIn: Boolean(todayAttendance.isClockedIn),
+        }
+      : {
+          isClockedIn: false,
+          message: "No attendance recorded yet",
+        };
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        dashboardConfig: company?.dashboardConfig || [],
+        jobRoles: jobRoles.map(normalizeRoleForDashboard),
+        holidays,
+        attendance,
+        attendanceStatus,
+        leaves,
+        recentTasks: tasks,
+        recentActivity: tasks.map(mapTaskActivity),
+      },
+    });
+  } catch (error) {
+    console.error("Employee dashboard summary error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch dashboard summary",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
 };
 
 const getDashboardActivity = async (req, res) => {
@@ -537,4 +666,5 @@ const formatOwnerActivities = (leaves, assets, tasks, meetings) => {
 
 module.exports = {
   getDashboardActivity,
+  getEmployeeDashboardSummary,
 };

@@ -29,7 +29,9 @@ const {
   addClientDueInvoice,
   uploadClientReceipt,
   updateClientReceiptStatus,
-  markClientReceiptPaymentDone
+  markClientReceiptPaymentDone,
+  getClientDashboardOverview,
+  getClientDashboardStats
 } = require('../controllers/clientController');
 
 const multer = require('multer');
@@ -63,6 +65,8 @@ router.patch('/service-enquiries/:id/status', serviceEnquiryController.updateSer
 
 router.get('/stats', getClientStats);
 router.get('/manager-stats', getManagerStats);
+router.get('/dashboard-overview', auth.protect, getClientDashboardOverview);
+router.get('/dashboard-stats/:clientId', auth.protect, getClientDashboardStats);
 
 
 router.get('/company/:companyCode', getClientsByCompany);

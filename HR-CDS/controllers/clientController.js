@@ -3,6 +3,7 @@ const Service = require('../models/Service');
 const ClientPlan = require('../models/ClientPlan');
 const ClientTask = require('../models/ClientTask');
 const User = require('../../models/User');
+const SupportTicket = require('../../models/SupportTicket');
 const Department = require('../../models/Department');
 const JobRole = require('../../models/JobRole');
 const bcrypt = require('bcryptjs');
@@ -187,6 +188,227 @@ const getSubscriptionTaskDueDate = subscription => {
   if (Number.isNaN(dueDate.getTime())) return null;
   return dueDate;
 };
+
+const normalizeMatchValue = value => String(value || '').trim().toLowerCase();
+const normalizePhoneValue = value => String(value || '').replace(/\D/g, '');
+
+const getIdValues = value => {
+  if (!value) return [];
+  if (typeof value === 'object') {
+    return [
+      value._id,
+      value.id,
+      value.userId,
+      value.clientId,
+      value.clientUserId
+    ].map(normalizeMatchValue).filter(Boolean);
+  }
+  return [normalizeMatchValue(value)].filter(Boolean);
+};
+
+const parseAdditionalDetails = value => {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {};
+  }
+};
+
+const getClientMatchValues = client => ({
+  ids: [
+    ...getIdValues(client?._id),
+    ...getIdValues(client?.id),
+    ...getIdValues(client?.userId),
+    ...getIdValues(client?.clientId),
+    ...getIdValues(client?.clientUserId),
+    ...getIdValues(client?.user),
+    ...getIdValues(client?.clientUser)
+  ],
+  emails: [
+    client?.email,
+    client?.clientEmail,
+    client?.userEmail,
+    client?.contactEmail,
+    client?.companyEmail,
+    client?.user?.email,
+    client?.clientUser?.email
+  ].map(normalizeMatchValue).filter(Boolean),
+  names: [
+    client?.client,
+    client?.name,
+    client?.clientName,
+    client?.fullName,
+    client?.company,
+    client?.companyName,
+    client?.contactName,
+    client?.username,
+    client?.user?.name,
+    client?.user?.fullName,
+    client?.clientUser?.name
+  ].map(normalizeMatchValue).filter(Boolean),
+  phones: [
+    client?.phone,
+    client?.mobile,
+    client?.contactPhone,
+    client?.contactMobile,
+    client?.user?.phone,
+    client?.clientUser?.phone
+  ].map(normalizePhoneValue).filter(Boolean)
+});
+
+const getUserMatchValues = user => {
+  const additionalDetails = parseAdditionalDetails(user?.additionalDetails);
+  return {
+    ids: [
+      ...getIdValues(user?._id),
+      ...getIdValues(user?.id),
+      ...getIdValues(user?.userId),
+      ...getIdValues(user?.clientId),
+      ...getIdValues(user?.clientUserId),
+      ...getIdValues(user?.employeeType),
+      ...getIdValues(user?.client),
+      ...getIdValues(user?.clientUser),
+      ...getIdValues(additionalDetails?.clientId),
+      ...(Array.isArray(additionalDetails?.clientIds) ? additionalDetails.clientIds.flatMap(getIdValues) : [])
+    ],
+    emails: [
+      user?.email,
+      user?.clientEmail,
+      user?.userEmail,
+      user?.companyEmail,
+      user?.client?.email,
+      user?.clientUser?.email
+    ].map(normalizeMatchValue).filter(Boolean),
+    names: [
+      user?.name,
+      user?.fullName,
+      user?.client,
+      user?.clientName,
+      user?.company,
+      user?.companyName,
+      user?.organizationName,
+      user?.username,
+      user?.client?.name,
+      user?.client?.client,
+      user?.client?.company,
+      user?.clientUser?.name
+    ].map(normalizeMatchValue).filter(Boolean),
+    phones: [
+      user?.phone,
+      user?.mobile,
+      user?.clientPhone,
+      user?.clientMobile,
+      user?.client?.phone,
+      user?.clientUser?.phone
+    ].map(normalizePhoneValue).filter(Boolean)
+  };
+};
+
+const hasIntersection = (left = [], right = []) => left.some(value => right.includes(value));
+
+const isClientForLoggedInUser = (client, user) => {
+  const clientValues = getClientMatchValues(client);
+  const userValues = getUserMatchValues(user);
+
+  return (
+    hasIntersection(clientValues.ids, userValues.ids) ||
+    hasIntersection(clientValues.emails, userValues.emails) ||
+    hasIntersection(clientValues.names, userValues.names) ||
+    hasIntersection(clientValues.phones, userValues.phones)
+  );
+};
+
+const getPersonName = person => {
+  if (!person) return '';
+  if (typeof person === 'string') return person;
+  return person.name || person.fullName || person.employeeName || person.username || person.email || '';
+};
+
+const getPersonEmail = person => (
+  typeof person === 'object' && person
+    ? person.email || person.employeeEmail || person.userEmail || ''
+    : ''
+);
+
+const getPersonRole = person => (
+  typeof person === 'object' && person
+    ? person.role || person.designation || person.position || person.employeeRole || 'Project Team'
+    : 'Project Team'
+);
+
+const normalizeProjectMember = person => {
+  const name = getPersonName(person).trim();
+  if (!name) return null;
+  return {
+    _id: typeof person === 'object' && person ? person._id || person.id || person.userId || person.employeeId || name : name,
+    name,
+    email: getPersonEmail(person),
+    role: getPersonRole(person)
+  };
+};
+
+const addUniqueProjectMember = (membersMap, person) => {
+  const member = normalizeProjectMember(person);
+  if (!member) return;
+  const key = String(member.email || member._id || member.name).toLowerCase();
+  if (!membersMap.has(key)) membersMap.set(key, member);
+};
+
+const findUserForAssignedMember = (member, users = []) => {
+  const memberId = typeof member === 'object' && member ? member._id || member.id || member.userId || member.employeeId : '';
+  const memberName = getPersonName(member).trim().toLowerCase();
+  const memberEmail = getPersonEmail(member).trim().toLowerCase();
+
+  return users.find(user => {
+    const userId = String(user._id || user.id || user.userId || user.employeeId || '').toLowerCase();
+    const userName = String(user.name || user.fullName || user.employeeName || '').trim().toLowerCase();
+    const userEmail = String(user.email || user.employeeEmail || '').trim().toLowerCase();
+    return (
+      (memberId && userId && String(memberId).toLowerCase() === userId) ||
+      (memberEmail && userEmail && memberEmail === userEmail) ||
+      (memberName && userName && memberName === userName)
+    );
+  });
+};
+
+const collectProjectMembers = (currentClient, users = []) => {
+  const membersMap = new Map();
+  [currentClient?.projectManagers, currentClient?.projectManager].forEach(group => {
+    if (Array.isArray(group)) {
+      group.forEach(person => addUniqueProjectMember(membersMap, findUserForAssignedMember(person, users) || person));
+    } else {
+      addUniqueProjectMember(membersMap, findUserForAssignedMember(group, users) || group);
+    }
+  });
+  return Array.from(membersMap.values());
+};
+
+const normalizeClientTaskStatus = task => {
+  if (task.completed) return 'completed';
+  const status = String(task.status || 'pending').toLowerCase();
+  const dueDate = task.dueDate ? new Date(task.dueDate) : null;
+  if (status !== 'onhold' && dueDate && !Number.isNaN(dueDate.getTime()) && dueDate < new Date()) {
+    return 'overdue';
+  }
+  return status;
+};
+
+const serializeSupportTicketForClient = ticket => ({
+  _id: ticket._id,
+  id: ticket._id,
+  ticketNumber: ticket.ticketNumber,
+  subject: ticket.subject,
+  title: ticket.subject,
+  description: ticket.description,
+  status: ticket.status,
+  category: ticket.category,
+  priority: ticket.priority,
+  createdAt: ticket.createdAt,
+  updatedAt: ticket.updatedAt,
+  lastMessageAt: ticket.lastMessageAt,
+});
 
 const getSubscriptionMonthSpan = subscription => {
   const start = new Date(subscription?.startDate);
@@ -851,6 +1073,128 @@ const getAllClients = async (req, res) => {
       message: 'Error fetching clients',
       error: error.message
     });
+  }
+};
+
+const getClientDashboardOverview = async (req, res) => {
+  try {
+    const companyCode = normalizeCompanyCode(req.query.companyCode || req.user?.companyCode);
+    const selectedClientId = String(req.query.selectedClientId || '').trim();
+
+    if (!companyCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'Company code is required'
+      });
+    }
+
+    const currentUser = req.user || {};
+    const userCompanyId = currentUser.company?._id || currentUser.company || currentUser.companyId || null;
+    const companyRole = String(currentUser.companyRole || currentUser.role || currentUser.userRole || '').toLowerCase();
+    const usersFilter = {
+      isActive: true,
+      companyRole: { $not: /^client$/i },
+      ...(userCompanyId ? { company: userCompanyId } : { companyCode })
+    };
+    if (companyRole === 'employee' && currentUser.department) {
+      usersFilter.department = currentUser.department?._id || currentUser.department;
+    }
+
+    const [clients, companyUsers, supportTickets] = await Promise.all([
+      Client.find({ companyCode }).sort({ createdAt: -1 }).limit(1000).lean(),
+      User.find(usersFilter)
+        .select('_id id name fullName employeeName email employeeEmail role companyRole jobRole designation phone department isActive')
+        .lean(),
+      SupportTicket.find({
+        companyCode,
+        requester: currentUser._id,
+      }).sort({ updatedAt: -1 }).limit(100).lean(),
+    ]);
+
+    const matchingClients = clients.filter(client => isClientForLoggedInUser(client, currentUser));
+    const currentClient = (
+      selectedClientId
+        ? matchingClients.find(client => String(client._id) === selectedClientId || String(client.id || '') === selectedClientId)
+        : null
+    ) || matchingClients[0] || null;
+
+    if (!currentClient) {
+      return res.json({
+        success: true,
+        data: {
+          availableClients: [],
+          client: null,
+          services: [],
+          projectManagers: [],
+          serviceTasks: [],
+          supportTickets: supportTickets.map(serializeSupportTicketForClient),
+        }
+      });
+    }
+
+    const services = Array.isArray(currentClient.services) ? currentClient.services : [];
+    const serviceTasks = services.length
+      ? await ClientTask.find({
+          clientId: currentClient._id,
+          service: { $in: services },
+        })
+          .sort({ completed: 1, dueDate: 1, createdAt: -1 })
+          .limit(500)
+          .lean()
+      : [];
+
+    return res.json({
+      success: true,
+      data: {
+        availableClients: matchingClients,
+        client: currentClient,
+        services,
+        projectManagers: collectProjectMembers(currentClient, companyUsers),
+        serviceTasks: serviceTasks.map(task => ({
+          ...task,
+          serviceName: task.service,
+          status: normalizeClientTaskStatus(task),
+        })),
+        supportTickets: supportTickets.map(serializeSupportTicketForClient),
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error fetching client dashboard overview:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch client dashboard overview',
+      error: error.message
+    });
+  }
+};
+
+const getClientDashboardStats = async (req, res) => {
+  try {
+    const { clientId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(clientId)) {
+      return res.status(400).json({ success: false, message: 'Invalid client id' });
+    }
+
+    const tasks = await ClientTask.find({ clientId }).select('completed status dueDate service').lean();
+    const stats = tasks.reduce((acc, task) => {
+      const status = normalizeClientTaskStatus(task);
+      acc.total += 1;
+      acc[status] = (acc[status] || 0) + 1;
+      if (task.service) {
+        acc.byService[task.service] = acc.byService[task.service] || { total: 0, completed: 0, pending: 0, overdue: 0, inProgress: 0 };
+        acc.byService[task.service].total += 1;
+        if (status === 'completed') acc.byService[task.service].completed += 1;
+        else if (status === 'overdue') acc.byService[task.service].overdue += 1;
+        else if (status === 'in-progress') acc.byService[task.service].inProgress += 1;
+        else acc.byService[task.service].pending += 1;
+      }
+      return acc;
+    }, { total: 0, completed: 0, pending: 0, overdue: 0, 'in-progress': 0, onhold: 0, byService: {} });
+
+    return res.json({ success: true, stats });
+  } catch (error) {
+    console.error('❌ Error fetching client dashboard stats:', error);
+    return res.status(500).json({ success: false, message: 'Failed to fetch client dashboard stats' });
   }
 };
 
@@ -2248,6 +2592,8 @@ const markClientReceiptPaymentDone = async (req, res) => {
 module.exports = {
   getWelcomeEmailTemplate,
   getCompanyLoginUrl,
+  getClientDashboardOverview,
+  getClientDashboardStats,
   getAllClients,
   getClientById,
   getClientCompanies,
