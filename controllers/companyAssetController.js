@@ -152,6 +152,54 @@ const createCompanyAsset = async (req, res) => {
   }
 };
 
+const updateCompanyAssetStatus = async (req, res) => {
+  try {
+    const { status } = req.body;
+    const allowedStatuses = ['Available', 'Assigned', 'Maintenance'];
+
+    if (!allowedStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid asset status'
+      });
+    }
+
+    const asset = await CompanyAsset.findById(req.params.id);
+
+    if (!asset) {
+      return res.status(404).json({
+        success: false,
+        message: 'Company asset not found'
+      });
+    }
+
+    if (asset.companyCode !== req.user.companyCode) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied - Asset belongs to different company'
+      });
+    }
+
+    asset.status = status;
+    await asset.save();
+    await asset.populate('createdBy', 'name email');
+    await asset.populate('branch', 'name branchCode');
+
+    return res.json({
+      success: true,
+      message: 'Company asset status updated successfully',
+      asset
+    });
+  } catch (error) {
+    console.error('❌ Update company asset status error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while updating company asset status',
+      error: error.message
+    });
+  }
+};
+
 
 
 
@@ -205,5 +253,6 @@ const deleteCompanyAsset = async (req, res) => {
 module.exports = {
   getCompanyAssets,
   createCompanyAsset,
+  updateCompanyAssetStatus,
   deleteCompanyAsset
 };

@@ -43,6 +43,8 @@ router.get("/details/:identifier", companyController.getCompanyDetailsByIdentifi
 
 router.get("/validate-url/:identifier", companyController.validateCompanyUrl);
 
+router.get("/overview/current", protect, companyController.getCompanyOverview);
+router.get("/:id/overview", protect, companyController.getCompanyOverview);
 
 router.get("/:id/stats", companyController.getCompanyStats);
 

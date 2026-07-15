@@ -1,6 +1,8 @@
 const Company = require("../models/Company");
 const User = require("../models/User");
 const Branch = require("../models/Branch");
+const Department = require("../models/Department");
+const JobRole = require("../models/JobRole");
 const Plan = require("../models/Plan");
 const crypto = require("crypto");
 const mongoose = require("mongoose");
@@ -1623,6 +1625,97 @@ exports.getCompanyUsers = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to fetch company users",
+    });
+  }
+};
+
+const normalizeCompanyForOverview = company => {
+  if (!company) return null;
+  return {
+    ...company,
+    companyName: company.companyName || company.name || "Company",
+    companyEmail: company.companyEmail || company.email || "",
+    companyPhone: company.companyPhone || company.phone || "",
+    companyAddress: company.companyAddress || company.address || "",
+    companyDomain: company.companyDomain || company.domain || "",
+    loginUrl: company.loginUrl || (company.companyCode ? `/company/${company.companyCode}/login` : ""),
+  };
+};
+
+exports.getCompanyOverview = async (req, res) => {
+  try {
+    const requestedCompanyId = req.query.companyId || req.params.id;
+    const userCompanyId = req.user?.company?._id || req.user?.company || req.user?.companyId;
+    const companyCode = String(req.query.companyCode || req.user?.companyCode || req.user?.company?.companyCode || "").trim().toUpperCase();
+    const rawLimit = parseInt(req.query.limit || "100", 10);
+    const limit = Math.min(Math.max(Number.isFinite(rawLimit) ? rawLimit : 100, 5), 300);
+
+    const companyQuery = {};
+    if (requestedCompanyId && isValidObjectId(requestedCompanyId)) {
+      companyQuery._id = requestedCompanyId;
+    } else if (userCompanyId && isValidObjectId(userCompanyId)) {
+      companyQuery._id = userCompanyId;
+    } else if (companyCode) {
+      companyQuery.companyCode = companyCode;
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: "Company context missing",
+      });
+    }
+
+    const company = await Company.findOne(companyQuery)
+      .select("-loginToken")
+      .populate("selectedPlan", "name price durationDays features allowedPages")
+      .lean();
+
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: "Company not found",
+      });
+    }
+
+    const userQuery = { company: company._id };
+    const [users, totalUsers, activeUsers, departments, jobRoles] = await Promise.all([
+      User.find(userQuery)
+        .select("name email role companyRole jobRole department phone designation employeeId isActive createdAt")
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .lean(),
+      User.countDocuments(userQuery),
+      User.countDocuments({ ...userQuery, isActive: true }),
+      Department.find({ company: company._id, isActive: true })
+        .select("_id name departmentName title description")
+        .sort({ name: 1 })
+        .lean(),
+      JobRole.find({ company: company._id, isActive: true })
+        .select("_id name roleName jobRole title department")
+        .sort({ name: 1 })
+        .lean(),
+    ]);
+
+    const departmentIds = await User.distinct("department", userQuery);
+
+    return res.status(200).json({
+      success: true,
+      company: normalizeCompanyForOverview(company),
+      users,
+      recentUsers: users.slice(0, 5),
+      departments,
+      jobRoles,
+      stats: {
+        totalUsers,
+        activeUsers,
+        departments: departments.length || departmentIds.filter(Boolean).length,
+        todayLogins: 0,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Get company overview error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch company overview",
     });
   }
 };

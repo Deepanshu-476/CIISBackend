@@ -4,6 +4,7 @@ const {
   ClientTask,
   Project,
   Group,
+  User,
   parsePositiveInt,
   getCleanTaskDateRange,
   normalizeTaskStatus,
@@ -20,28 +21,84 @@ const {
 } = require('./taskHelper');
 
 
-const queryAllUserTasks = async (userId, companyCode) => {
+const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
   const groups = await Group.find({ members: userId, isActive: true }).select('_id').lean();
   const groupIds = groups.map(g => g._id);
 
   const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
   const companyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : companyCode;
+  const range = getCleanTaskDateRange({
+    period: queryOptions.fromDate || queryOptions.toDate ? 'all' : queryOptions.period,
+    fromDate: queryOptions.fromDate,
+    toDate: queryOptions.toDate
+  });
+  const priority = queryOptions.priority && queryOptions.priority !== 'all'
+    ? String(queryOptions.priority).toLowerCase()
+    : '';
+  const hasSearch = String(queryOptions.search || '').trim();
+  const dateOr = range ? [
+    { dueDateTime: range },
+    { dueDate: range },
+    { createdAt: range },
+    { updatedAt: range }
+  ] : null;
+
+  const personalQuery = {
+    isActive: true,
+    companyCode: companyFilter,
+    $or: [{ assignedUsers: userId }, { assignedGroups: { $in: groupIds } }, { createdBy: userId }]
+  };
+  if (dateOr) personalQuery.$and = [{ $or: dateOr }];
+  if (priority) personalQuery.priority = new RegExp(`^${priority}$`, 'i');
+  if (hasSearch) {
+    personalQuery.$and = [
+      ...(personalQuery.$and || []),
+      { $or: [{ title: new RegExp(hasSearch, 'i') }, { description: new RegExp(hasSearch, 'i') }] }
+    ];
+  }
+
+  const clientQuery = {
+    $or: [
+      { assigneeId: userId },
+      { assignee: userId.toString() }
+    ]
+  };
+  if (dateOr) clientQuery.$and = [{ $or: [{ dueDate: range }, { createdAt: range }, { updatedAt: range }] }];
+  if (priority) clientQuery.priority = new RegExp(`^${priority}$`, 'i');
+  if (hasSearch) {
+    clientQuery.$and = [
+      ...(clientQuery.$and || []),
+      { $or: [{ name: new RegExp(hasSearch, 'i') }, { description: new RegExp(hasSearch, 'i') }] }
+    ];
+  }
+
+  const projectTaskElemMatch = { assignedTo: userId };
+  if (range) {
+    projectTaskElemMatch.$or = [
+      { dueDate: range },
+      { createdAt: range },
+      { updatedAt: range }
+    ];
+  }
+  if (priority) projectTaskElemMatch.priority = new RegExp(`^${priority}$`, 'i');
+
+  const projectQuery = { tasks: { $elemMatch: projectTaskElemMatch } };
 
   const [personalTasks, clientTasks, projectTasks] = await Promise.all([
-    Task.find({
-      isActive: true,
-      companyCode: companyFilter,
-      $or: [{ assignedUsers: userId }, { assignedGroups: { $in: groupIds } }, { createdBy: userId }]
-    }).populate('assignedUsers', 'name email').populate('createdBy', 'name email').sort({ createdAt: -1 }).lean(),
+    Task.find(personalQuery)
+      .select('title description dueDate dueDateTime priority overallStatus statusByUser assignedUsers assignedGroups createdBy companyCode createdAt updatedAt')
+      .populate('assignedUsers', 'name email')
+      .populate('createdBy', 'name email')
+      .sort({ createdAt: -1 })
+      .lean(),
     
-    ClientTask.find({
-      $or: [
-        { assigneeId: userId },
-        { assignee: userId.toString() }
-      ]
-    }).populate('clientId', 'name email company phone companyCode').sort({ createdAt: -1 }).lean(),
+    ClientTask.find(clientQuery)
+      .select('name description dueDate priority status completed clientId createdAt updatedAt assignee assigneeId')
+      .populate('clientId', 'name email company phone companyCode')
+      .sort({ createdAt: -1 })
+      .lean(),
 
-    Project.find({ 'tasks.assignedTo': userId })
+    Project.find(projectQuery)
       .select('projectName description createdBy tasks createdAt updatedAt')
       .populate('createdBy', 'name email')
       .populate('tasks.assignedTo', 'name email')
@@ -280,7 +337,7 @@ exports.getUserAllTasksPaginated = async (req, res) => {
     const page = parsePositiveInt(req.query.page, 1);
     const limit = parsePositiveInt(req.query.limit, 10, 50);
 
-    const allTasks = await queryAllUserTasks(userId, req.user.companyCode);
+    const allTasks = await queryAllUserTasks(userId, req.user.companyCode, req.query);
     const filtered = filterUserTasks(allTasks, req.query);
 
     const sortedFiltered = sortTasksNewestFirst(filtered);
@@ -347,7 +404,7 @@ exports.getUserAllTasksPaginated = async (req, res) => {
 exports.getUserTaskStats = async (req, res) => {
   try {
     const { userId } = req.params;
-    const allTasks = await queryAllUserTasks(userId, req.user.companyCode);
+    const allTasks = await queryAllUserTasks(userId, req.user.companyCode, req.query);
     const filtered = filterUserTasks(allTasks, req.query);
 
     const statusCounts = calculateUserStatusCounts(filtered);
@@ -374,7 +431,7 @@ exports.getUsersTaskStatsBatch = async (req, res) => {
     const queryParams = { ...req.query, ...(req.body?.filters || {}) };
     const entries = await mapWithConcurrency(userIds, 6, async (userId) => {
       try {
-        const allTasks = await queryAllUserTasks(userId, req.user.companyCode);
+        const allTasks = await queryAllUserTasks(userId, req.user.companyCode, queryParams);
         const filtered = filterUserTasks(allTasks, queryParams);
         return [userId, calculateUserStatusCounts(filtered)];
       } catch (err) {
@@ -387,6 +444,84 @@ exports.getUsersTaskStatsBatch = async (req, res) => {
       statsByUser: Object.fromEntries(entries)
     });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+exports.getCompanyAllTaskOverview = async (req, res) => {
+  try {
+    const currentUser = await User.findById(req.user.id || req.user._id).lean();
+    if (!currentUser) {
+      return res.status(401).json({ success: false, message: 'User not found' });
+    }
+
+    const rawRole = String(currentUser.companyRole || currentUser.role || currentUser.jobRole || '').toLowerCase();
+    const isOwnerScope = ['owner', 'admin', 'super-admin', 'superadmin', 'hr'].includes(rawRole);
+    const query = { isActive: true };
+
+    if (currentUser.company) query.company = currentUser.company;
+    else if (currentUser.companyCode) query.companyCode = currentUser.companyCode;
+
+    if (!isOwnerScope && currentUser.department) {
+      query.department = currentUser.department;
+    }
+
+    const users = await User.find(query)
+      .select('name email role companyRole jobRole employeeType employeeId company department companyCode isActive createdAt')
+      .sort({ name: 1 })
+      .lean();
+
+    const includeStats = String(req.query.includeStats || '').toLowerCase() === 'true';
+    if (!includeStats) {
+      return res.json({
+        success: true,
+        users,
+        statsByUser: {},
+        summary: {
+          totalUsers: users.length,
+          totalTasks: 0,
+          statsDeferred: true,
+        }
+      });
+    }
+
+    const queryParams = {
+      period: req.query.fromDate || req.query.toDate ? 'all' : (req.query.period || 'today'),
+      fromDate: req.query.fromDate,
+      toDate: req.query.toDate,
+      status: req.query.status || 'all',
+      priority: req.query.priority || 'all',
+      search: req.query.search || '',
+    };
+
+    const entries = await mapWithConcurrency(users, 6, async (user) => {
+      const userId = String(user._id);
+      try {
+        const allTasks = await queryAllUserTasks(userId, req.user.companyCode || currentUser.companyCode, queryParams);
+        const filtered = filterUserTasks(allTasks, queryParams);
+        return [userId, calculateUserStatusCounts(filtered)];
+      } catch {
+        return [userId, calculateUserStatusCounts([])];
+      }
+    });
+
+    const statsByUser = Object.fromEntries(entries);
+    const usersWithStats = users.map(user => ({
+      ...user,
+      taskStats: statsByUser[String(user._id)]
+    }));
+
+    res.json({
+      success: true,
+      users: usersWithStats,
+      statsByUser,
+      summary: {
+        totalUsers: usersWithStats.length,
+        totalTasks: Object.values(statsByUser).reduce((sum, item) => sum + Number(item?.total || 0), 0),
+      }
+    });
+  } catch (err) {
+    console.error('Company all task overview error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 };
