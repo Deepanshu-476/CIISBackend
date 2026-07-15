@@ -2,6 +2,7 @@
 const {
   Task,
   ClientTask,
+  Client,
   Project,
   Group,
   User,
@@ -22,6 +23,8 @@ const {
 
 
 const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
+  const targetUser = await User.findById(userId).select('name email').lean();
+  const targetUserId = userId.toString();
   const groups = await Group.find({ members: userId, isActive: true }).select('_id').lean();
   const groupIds = groups.map(g => g._id);
 
@@ -57,11 +60,17 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
     ];
   }
 
+  const clients = await Client.find(companyFilter ? { companyCode: companyFilter } : {}).select('_id').lean();
+  const clientIds = clients.map(c => c._id);
+
   const clientQuery = {
+    ...(companyFilter ? { clientId: { $in: clientIds } } : {}),
     $or: [
       { assigneeId: userId },
-      { assignee: userId.toString() }
-    ]
+      { assignee: targetUserId },
+      { assignee: targetUser?.name },
+      { assignee: targetUser?.email }
+    ].filter(condition => Object.values(condition)[0])
   };
   if (dateOr) clientQuery.$and = [{ $or: [{ dueDate: range }, { createdAt: range }, { updatedAt: range }] }];
   if (priority) clientQuery.priority = new RegExp(`^${priority}$`, 'i');
@@ -158,7 +167,6 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
   projectTasks.forEach(project => {
     (project.tasks || []).forEach(task => {
       const assignedTo = task.assignedTo?._id || task.assignedTo;
-      const targetUserId = userId.toString();
       const isAssignedToUser = assignedTo?.toString() === targetUserId;
       if (!isAssignedToUser) return;
 
@@ -256,7 +264,10 @@ const calculateUserStatusCounts = (filtered) => {
     'in-progress': 0,
     completed: 0,
     overdue: 0,
-    onhold: 0
+    rejected: 0,
+    onhold: 0,
+    reopen: 0,
+    cancelled: 0
   };
 
   filtered.forEach(task => {
@@ -280,7 +291,11 @@ const calculateUserStatusCounts = (filtered) => {
     inProgress: toStat(counts['in-progress']),
     completed: toStat(counts.completed),
     overdue: toStat(counts.overdue),
-    onhold: toStat(counts.onhold)
+    rejected: toStat(counts.rejected),
+    onhold: toStat(counts.onhold),
+    onHold: toStat(counts.onhold),
+    reopen: toStat(counts.reopen),
+    cancelled: toStat(counts.cancelled)
   };
 };
 
