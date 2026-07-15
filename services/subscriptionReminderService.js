@@ -13,7 +13,7 @@ const sendSubscriptionEmail = (client, subject, body) => {
     subject,
     `  
       <h2>Hello ${client.client || 'Client'}</h2>
-      ${body}
+      ${body}  
       <p>Please renew your plan to continue services.</p>
     `
   ); 
