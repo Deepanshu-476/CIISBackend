@@ -11,7 +11,7 @@ const sendSubscriptionEmail = (client, subject, body) => {
   return emailService.sendEmail(
     client.email,
     subject,
-    `
+    `  
       <h2>Hello ${client.client || 'Client'}</h2>
       ${body}
       <p>Please renew your plan to continue services.</p>
