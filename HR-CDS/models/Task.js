@@ -3,8 +3,24 @@ const mongoose = require("mongoose");
  
 const SYSTEM_USER_ID = new mongoose.Types.ObjectId("000000000000000000000001");
 const OVERDUE_LOCKED_STATUSES = new Set(['onhold', 'on hold', 'completed', 'approved', 'rejected', 'cancelled', 'overdue']);
+const ON_HOLD_OVERDUE_GRACE_MS = 24 * 60 * 60 * 1000;
 const normalizeTaskStatus = status => String(status || 'pending').trim().toLowerCase();
 const canMoveToOverdue = status => !OVERDUE_LOCKED_STATUSES.has(normalizeTaskStatus(status));
+
+const getOverdueEligibilityDate = (task) => {
+  if (!task?.dueDateTime) return null;
+  const dueDate = new Date(task.dueDateTime);
+  if (Number.isNaN(dueDate.getTime())) return null;
+
+  if (task.taskFor === 'self' && task.onHoldReleasedAt) {
+    const releasedAt = new Date(task.onHoldReleasedAt);
+    if (!Number.isNaN(releasedAt.getTime()) && dueDate <= releasedAt) {
+      return new Date(releasedAt.getTime() + ON_HOLD_OVERDUE_GRACE_MS);
+    }
+  }
+
+  return dueDate;
+};
 
  
 const statusHistorySchema = new mongoose.Schema(
@@ -184,6 +200,7 @@ const taskSchema = new mongoose.Schema(
     markedOverdueAt: Date,
     overdueReason: String,
     overdueNotified: { type: Boolean, default: false },
+    onHoldReleasedAt: { type: Date, default: null },
     completionDate: Date,
 
     lastActivityAt: { type: Date, default: Date.now },
@@ -255,9 +272,9 @@ taskSchema.methods.checkAndMarkOverdue = function () {
   if (!canMoveToOverdue(this.overallStatus)) return false;
   
   const now = new Date();
-  const dueDate = new Date(this.dueDateTime);
+  const dueDate = getOverdueEligibilityDate(this);
   
-  if (dueDate >= now) return false;
+  if (!dueDate || dueDate >= now) return false;
   
   let anyUserMarked = false;
   
@@ -467,11 +484,11 @@ taskSchema.pre("save", function (next) {
   
   if (this.dueDateTime) {
     const now = new Date();
-    const dueDate = new Date(this.dueDateTime);
+    const dueDate = getOverdueEligibilityDate(this);
     
-    if (dueDate < now) {
+    if (dueDate && dueDate < now) {
       this.checkAndMarkOverdue();
-    } else {
+    } else if (this.taskFor !== 'self') {
       
       if (this.overallStatus === 'overdue') {
         let hasInProgress = false;

@@ -120,13 +120,28 @@ const normalizeTaskStatus = status => {
   return map[val] || val;
 };
 
-const isTaskOverdueForStatus = (dueDateTime, status) => {
+const getTaskOverdueEligibilityDate = (dueDateTime, task) => {
+  if (!dueDateTime) return null;
+  const dueDate = new Date(dueDateTime);
+  if (isNaN(dueDate.getTime())) return null;
+
+  if (task?.taskFor === 'self' && task?.onHoldReleasedAt) {
+    const releasedAt = new Date(task.onHoldReleasedAt);
+    if (!isNaN(releasedAt.getTime()) && dueDate <= releasedAt) {
+      return new Date(releasedAt.getTime() + 24 * 60 * 60 * 1000);
+    }
+  }
+
+  return dueDate;
+};
+
+const isTaskOverdueForStatus = (dueDateTime, status, task = null) => {
   if (!dueDateTime) return false;
   const normalizedStatus = normalizeTaskStatus(status);
   if (normalizedStatus === 'overdue') return true;
   if (['onhold', 'completed', 'approved', 'rejected', 'cancelled'].includes(normalizedStatus)) return false;
-  const dueDate = new Date(dueDateTime);
-  if (isNaN(dueDate.getTime())) return false;
+  const dueDate = getTaskOverdueEligibilityDate(dueDateTime, task);
+  if (!dueDate) return false;
   return dueDate < new Date();
 };
 
@@ -162,7 +177,7 @@ const calculateUnifiedTaskStats = (tasks, userId) => {
 
     status = normalizeTaskStatus(status);
 
-    if (isTaskOverdueForStatus(task.dueDateTime || task.dueDate, status)) {
+    if (isTaskOverdueForStatus(task.dueDateTime || task.dueDate, status, task)) {
       status = 'overdue';
     }
 
@@ -405,7 +420,7 @@ const getCleanFilterDate = (task, dateField) => {
 const getCleanTaskStatus = task => {
   const rawStatus = task.userStatus || task.status || task.overallStatus || 'pending';
   const normalized = normalizeTaskStatus(rawStatus);
-  return isTaskOverdueForStatus(task.dueDateTime || task.dueDate, normalized) ? 'overdue' : normalized;
+  return isTaskOverdueForStatus(task.dueDateTime || task.dueDate, normalized, task) ? 'overdue' : normalized;
 };
 
 const matchesAssignedUser = (task, assignedTo) => {
@@ -595,7 +610,7 @@ const fetchAssignedClientTaskList = async (req) => {
       createdAt: t.createdAt,
       taskSource: 'client',
       __taskSource: 'client',
-      isOverdue: isTaskOverdueForStatus(t.dueDate, status)
+      isOverdue: isTaskOverdueForStatus(t.dueDate, status, t)
     };
   });
 };
@@ -655,7 +670,7 @@ const fetchAssignedProjectTaskList = async (req) => {
         source: 'project',
         taskSource: 'project',
         __taskSource: 'project',
-        isOverdue: isTaskOverdueForStatus(task.dueDate, status)
+        isOverdue: isTaskOverdueForStatus(task.dueDate, status, task)
       });
     });
   });
