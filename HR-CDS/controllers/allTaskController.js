@@ -95,7 +95,7 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
 
   const [personalTasks, clientTasks, projectTasks] = await Promise.all([
     Task.find(personalQuery)
-      .select('title description dueDate dueDateTime priority overallStatus statusByUser assignedUsers assignedGroups createdBy companyCode createdAt updatedAt')
+      .select('title description dueDate dueDateTime priority overallStatus statusByUser assignedUsers assignedGroups createdBy companyCode taskFor onHoldReleasedAt createdAt updatedAt')
       .populate('assignedUsers', 'name email')
       .populate('createdBy', 'name email')
       .sort({ createdAt: -1 })
@@ -122,7 +122,7 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
     );
     const createdById = (t.createdBy?._id || t.createdBy)?.toString();
     const taskSource = createdById === userId.toString() ? 'self' : 'assigned';
-    const isOverdue = isTaskOverdueForStatus(t.dueDateTime || t.dueDate, userStatus);
+    const isOverdue = isTaskOverdueForStatus(t.dueDateTime || t.dueDate, userStatus, t);
     const displayStatus = isOverdue ? 'overdue' : userStatus;
 
     return {
@@ -142,7 +142,7 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
 
   const clientFormatted = clientTasks.map(t => {
     const clientStatus = t.completed ? 'completed' : normalizeTaskStatus(t.status || 'pending');
-    const isOverdue = isTaskOverdueForStatus(t.dueDate, clientStatus);
+    const isOverdue = isTaskOverdueForStatus(t.dueDate, clientStatus, t);
     const displayStatus = isOverdue ? 'overdue' : clientStatus;
 
     return {
@@ -171,7 +171,7 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
       if (!isAssignedToUser) return;
 
       const projectStatus = normalizeProjectTaskStatus(task.status);
-      const isOverdue = isTaskOverdueForStatus(task.dueDate, projectStatus);
+      const isOverdue = isTaskOverdueForStatus(task.dueDate, projectStatus, task);
       const displayStatus = isOverdue ? 'overdue' : projectStatus;
       const assignedBy = getProjectTaskAssignedBy(task, project);
 
@@ -210,7 +210,7 @@ const getFilterDate = (task, dateField) => {
 
 const getFilterStatus = (task) => {
   const status = normalizeTaskStatus(task.userStatus || task.status || task.overallStatus || 'pending');
-  return isTaskOverdueForStatus(task.dueDateTime || task.dueDate, status) ? 'overdue' : status;
+  return isTaskOverdueForStatus(task.dueDateTime || task.dueDate, status, task) ? 'overdue' : status;
 };
 
 const filterUserTasks = (tasks, queryParams) => {

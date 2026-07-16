@@ -188,7 +188,7 @@ exports.updateStatus = async (req, res) => {
 
     if (
       !['overdue', 'onhold'].includes(normalizedStatus) &&
-      isTaskOverdueForStatus(task.dueDateTime || task.dueDate, oldStatus)
+      isTaskOverdueForStatus(task.dueDateTime || task.dueDate, oldStatus, task)
     ) {
       if (!['onhold', 'completed', 'approved', 'rejected', 'cancelled', 'overdue'].includes(normalizeTaskStatus(oldStatus))) {
         task.markUserStatusOverdue(req.user._id, 'Automatically marked overdue after due time passed');
@@ -208,6 +208,11 @@ exports.updateStatus = async (req, res) => {
     }
 
     task.overallStatus = status;
+    if (isOnHoldStatus(oldStatus) && normalizedStatus === 'in-progress') {
+      task.onHoldReleasedAt = new Date();
+    } else if (normalizedStatus === 'onhold') {
+      task.onHoldReleasedAt = null;
+    }
     if (status === 'completed') {
       task.completionDate = new Date();
     } else {
