@@ -95,6 +95,8 @@ const statusSchema = new mongoose.Schema(
     },
     updatedAt: { type: Date, default: Date.now },
     remarks: String,
+    pendingDueReminderSentAt: Date,
+    pendingDueReminderDueAt: Date,
   },
   { _id: false }
 );

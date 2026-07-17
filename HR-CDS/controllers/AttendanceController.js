@@ -876,7 +876,7 @@ const getAllUsersAttendance = async (req, res) => {
   try {
     const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     const { date, userId } = req.query;
-    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 31, maxLimit: 366 });
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 31, maxLimit: 1000 });
     
     if (!userCompanyCode) {
       return res.status(400).json({ 
