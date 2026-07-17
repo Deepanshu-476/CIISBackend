@@ -11,8 +11,7 @@ const mongoose = require('mongoose');
 
 const { 
   sendLeaveAppliedEmail, 
-  sendLeaveStatusEmail,
-  sendLeaveDeletedEmail 
+  sendLeaveStatusEmail
 } = require('../../utils/sendEmail');
 
 
@@ -1165,24 +1164,6 @@ exports.deleteLeave = async (req, res) => {
     } catch (notifError) {
       console.error('❌ Failed to send deletion notification:', notifError.message);
     }
-
-    
-    try {
-      await sendLeaveDeletedEmail(
-        leave.user.email,
-        leave.user.name,
-        leave._id.toString(),
-        leave.type,
-        leave.startDate,
-        leave.endDate,
-        leave.reason
-      );
-      void 0;
-    } catch (emailError) {
-      console.error('❌ Failed to send deletion email:', emailError);
-    }
-
-    
     try {
       if (global.io) {
         emitLeaveEvents.leaveDeleted(global.io, {

@@ -18,7 +18,6 @@ const {
   createActivityLog,
   enrichStatusInfo,
   sendTaskCreationEmail,
-  sendTaskStatusUpdateEmail,
   applyCleanListFilters,
   sendCleanTaskList,
   fs,
@@ -294,7 +293,6 @@ exports.updateStatus = async (req, res) => {
 
     if (!isCreator) {
       await createNotification(task.createdBy._id, 'Task Status Updated', `${updatedUser.name} updated task status to ${status}`, 'status_updated', task._id);
-      await sendTaskStatusUpdateEmail(task, updatedUser, oldStatus, status);
     }
 
     await createActivityLog(req.user, 'status_updated', task._id, `Updated task status to ${status}`, { status: oldStatus }, { status, remarks }, req);

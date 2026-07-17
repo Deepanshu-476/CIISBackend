@@ -387,21 +387,6 @@ const sendTaskCreationEmail = async (task, assignedUsers) => {
   }
 };
 
-const sendTaskStatusUpdateEmail = async (task, updatedUser, oldStatus, newStatus) => {
-  try {
-    const subject = `🔄 Task Status Updated: ${task.title}`;
-    const html = `<div style="font-family: Arial; padding: 20px;">
-      <h2>Task Status Updated</h2>
-      <p>Hello <strong>${task.createdBy.name}</strong>,</p>
-      <p><strong>${updatedUser.name}</strong> has updated the task status:</p>
-      <p>Task: ${task.title}</p>
-      <p>Status: ${oldStatus.toUpperCase()} → ${newStatus.toUpperCase()}</p>
-    </div>`;
-    await sendEmail(task.createdBy.email, subject, html, { skipNotification: true });
-  } catch (err) {
-    console.error('❌ Email failed:', err);
-  }
-};
 
 const getCleanFilterDate = (task, dateField) => {
   const normalizedField = String(dateField || '').toLowerCase();
@@ -710,7 +695,6 @@ module.exports = {
   createActivityLog,
   enrichStatusInfo,
   sendTaskCreationEmail,
-  sendTaskStatusUpdateEmail,
   applyCleanListFilters,
   sendCleanTaskList,
   normalizeProjectTaskStatus,
