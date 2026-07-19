@@ -148,6 +148,56 @@ const createClientUserForPasswordReset = async (client, password, companyScope =
 
   if (!company) return null;
 
+  // Resolve local company-specific client department and job role
+  let departmentId = DEFAULT_CLIENT_DEPARTMENT_ID;
+  let jobRoleId = DEFAULT_CLIENT_JOB_ROLE_ID;
+
+  try {
+    const JobRole = mongoose.model('JobRole');
+
+    let clientDept = await Department.findOne({
+      company: company._id,
+      name: { $regex: /^client$/i },
+      isActive: true
+    });
+
+    if (!clientDept) {
+      clientDept = new Department({
+        name: 'client',
+        description: 'Department for clients',
+        company: company._id,
+        companyCode: company.companyCode || normalizeCompanyCode(client.companyCode),
+        isActive: true,
+        createdBy: null
+      });
+      await clientDept.save();
+    }
+    departmentId = String(clientDept._id);
+
+    let clientRole = await JobRole.findOne({
+      company: company._id,
+      department: clientDept._id,
+      name: { $regex: /^client$/i },
+      isActive: true
+    });
+
+    if (!clientRole) {
+      clientRole = new JobRole({
+        name: 'client',
+        description: 'Job role for clients',
+        department: clientDept._id,
+        company: company._id,
+        companyCode: company.companyCode || normalizeCompanyCode(client.companyCode),
+        isActive: true,
+        createdBy: null
+      });
+      await clientRole.save();
+    }
+    jobRoleId = String(clientRole._id);
+  } catch (err) {
+    console.error('Failed to resolve/create client department/role for password reset:', err);
+  }
+
   const employeeId = `CLT${Date.now()}${Math.floor(Math.random() * 1000)}`;
   const additionalDetails = JSON.stringify({
     clientId: client._id,
@@ -160,8 +210,8 @@ const createClientUserForPasswordReset = async (client, password, companyScope =
     name: client.client || client.company || client.email.split('@')[0],
     email: String(client.email).trim().toLowerCase(),
     password,
-    department: DEFAULT_CLIENT_DEPARTMENT_ID,
-    jobRole: DEFAULT_CLIENT_JOB_ROLE_ID,
+    department: departmentId,
+    jobRole: jobRoleId,
     company: company._id,
     companyCode: company.companyCode || normalizeCompanyCode(client.companyCode),
     employeeId,
@@ -372,9 +422,9 @@ exports.companyLogin = async (req, res) => {
     const isPasswordValid = await bcrypt.compare(password, user.password);
 
     if (!isPasswordValid) {
-      const updatedAttempts = (user.failedLoginAttempts || 0) + 1;
+      const updatedAttempts = (user.loginAttempts || 0) + 1;
       const updateData = {
-        failedLoginAttempts: updatedAttempts,
+        loginAttempts: updatedAttempts,
       };
 
       if (updatedAttempts >= 5) {
@@ -394,7 +444,7 @@ exports.companyLogin = async (req, res) => {
     
     await User.findByIdAndUpdate(user._id, {
       $set: {
-        failedLoginAttempts: 0,
+        loginAttempts: 0,
         lockUntil: null,
         lastLogin: new Date(),
       },
@@ -689,9 +739,40 @@ exports.login = async (req, res) => {
     }
 
     const cleanEmail = email.toLowerCase().trim();
+    const rawCompanyCode = companyCode || companyIdentifier;
+    let providedCompanyCode = rawCompanyCode;
+    let expectedBranchCode = null;
+    let companyScope = null;
 
-    
-    const user = await User.findOne({ email: cleanEmail })
+    if (rawCompanyCode && typeof rawCompanyCode === "string" && rawCompanyCode.includes("-")) {
+      const parts = rawCompanyCode.split("-");
+      providedCompanyCode = parts[0];
+      expectedBranchCode = parts.slice(1).join("-").toUpperCase();
+    }
+
+    if (providedCompanyCode) {
+      companyScope = await resolveCompanyScope(providedCompanyCode);
+      if (!companyScope?.company) {
+        return res.status(404).json({
+          success: false,
+          message: "Company not found or invalid company code",
+          errorCode: "COMPANY_NOT_FOUND",
+        });
+      }
+    }
+
+    const userQuery = { email: cleanEmail };
+    if (companyScope?.companyId || companyScope?.companyCode) {
+      userQuery.$or = [
+        companyScope.companyId ? { company: companyScope.companyId } : null,
+        companyScope.companyCode ? { companyCode: companyScope.companyCode } : null,
+      ].filter(Boolean);
+    }
+    if (expectedBranchCode) {
+      userQuery.branchCode = expectedBranchCode;
+    }
+
+    const user = await User.findOne(userQuery)
       .select("+password +isActive +loginAttempts +lockUntil")
       .populate("department", "name")
       .populate("branch", "name branchCode")
@@ -701,7 +782,9 @@ exports.login = async (req, res) => {
       void 0;
       return res.status(401).json({
         success: false,
-        message: "Invalid email or password",
+        message: providedCompanyCode
+          ? "Invalid email or password for this company"
+          : "Invalid email or password",
         errorCode: "INVALID_CREDENTIALS",
       });
     }
@@ -730,9 +813,9 @@ exports.login = async (req, res) => {
     const isPasswordValid = await bcrypt.compare(password, user.password);
 
     if (!isPasswordValid) {
-      const updatedAttempts = (user.failedLoginAttempts || 0) + 1;
+      const updatedAttempts = (user.loginAttempts || 0) + 1;
       const updateData = {
-        failedLoginAttempts: updatedAttempts,
+        loginAttempts: updatedAttempts,
       };
 
       if (updatedAttempts >= 5) {
@@ -749,16 +832,6 @@ exports.login = async (req, res) => {
       });
     }
 
-    
-    const rawCompanyCode = companyCode || companyIdentifier;
-    let providedCompanyCode = rawCompanyCode;
-    let expectedBranchCode = null;
-    if (rawCompanyCode && typeof rawCompanyCode === "string" && rawCompanyCode.includes("-")) {
-      const parts = rawCompanyCode.split("-");
-      providedCompanyCode = parts[0];
-      expectedBranchCode = parts.slice(1).join("-").toUpperCase();
-    }
-    
     
     if (providedCompanyCode) {
       void 0;
@@ -850,7 +923,7 @@ exports.login = async (req, res) => {
     
     await User.findByIdAndUpdate(user._id, {
       $set: {
-        failedLoginAttempts: 0,
+        loginAttempts: 0,
         lockUntil: null,
       },
     });
