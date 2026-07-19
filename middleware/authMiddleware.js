@@ -193,7 +193,11 @@ exports.protect = async (req, res, next) => {
         companyLogo: user.company?.logo,
         isActive: user.isActive,
         lastLogin: user.lastLogin,
-        createdAt: user.createdAt
+        createdAt: user.createdAt,
+        employeeType: user.employeeType,
+        clientId: user.clientId,
+        clientUserId: user.clientUserId || user._id,
+        additionalDetails: user.additionalDetails
       };
       
       

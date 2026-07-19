@@ -52,17 +52,44 @@ const getUserRole = req => String(req.user?.companyRole || req.user?.role || '')
 
 const getRequestUserId = req => String(req.user?._id || req.user?.id || '');
 
+const parseAdditionalDetails = value => {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {};
+  }
+};
+
+const getRequestClientIds = req => {
+  const details = parseAdditionalDetails(req.user?.additionalDetails);
+  return [
+    req.user?.clientId,
+    req.user?.clientDetails?._id,
+    req.user?.clientDetails?.id,
+    req.user?.linkedClient?._id,
+    req.user?.linkedClient?.id,
+    details.clientId,
+    req.user?.employeeType,
+  ].map(value => String(value || '').trim()).filter(Boolean);
+};
+
 const canAccessClient = (req, client) => {
   const role = getUserRole(req);
+  const userCompanyCode = getUserCompanyCode(req);
   if (role === 'client') {
+    const requestClientIds = getRequestClientIds(req);
+    const clientId = String(client._id || client.id || '').trim();
     return (
+      (clientId && requestClientIds.includes(clientId)) ||
       client.userId?.toString() === req.user._id?.toString() ||
       client.userId?.toString() === req.user.id?.toString() ||
-      String(client.email || '').toLowerCase() === String(req.user.email || '').toLowerCase()
+      String(client.email || '').toLowerCase() === String(req.user.email || '').toLowerCase() ||
+      (userCompanyCode && String(client.companyCode || '').toUpperCase() === userCompanyCode)
     );
   }
 
-  const userCompanyCode = getUserCompanyCode(req);
   return userCompanyCode && client.companyCode === userCompanyCode;
 };
 
