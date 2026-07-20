@@ -148,6 +148,56 @@ const createClientUserForPasswordReset = async (client, password, companyScope =
 
   if (!company) return null;
 
+  // Resolve local company-specific client department and job role
+  let departmentId = DEFAULT_CLIENT_DEPARTMENT_ID;
+  let jobRoleId = DEFAULT_CLIENT_JOB_ROLE_ID;
+
+  try {
+    const JobRole = mongoose.model('JobRole');
+
+    let clientDept = await Department.findOne({
+      company: company._id,
+      name: { $regex: /^client$/i },
+      isActive: true
+    });
+
+    if (!clientDept) {
+      clientDept = new Department({
+        name: 'client',
+        description: 'Department for clients',
+        company: company._id,
+        companyCode: company.companyCode || normalizeCompanyCode(client.companyCode),
+        isActive: true,
+        createdBy: null
+      });
+      await clientDept.save();
+    }
+    departmentId = String(clientDept._id);
+
+    let clientRole = await JobRole.findOne({
+      company: company._id,
+      department: clientDept._id,
+      name: { $regex: /^client$/i },
+      isActive: true
+    });
+
+    if (!clientRole) {
+      clientRole = new JobRole({
+        name: 'client',
+        description: 'Job role for clients',
+        department: clientDept._id,
+        company: company._id,
+        companyCode: company.companyCode || normalizeCompanyCode(client.companyCode),
+        isActive: true,
+        createdBy: null
+      });
+      await clientRole.save();
+    }
+    jobRoleId = String(clientRole._id);
+  } catch (err) {
+    console.error('Failed to resolve/create client department/role for password reset:', err);
+  }
+
   const employeeId = `CLT${Date.now()}${Math.floor(Math.random() * 1000)}`;
   const additionalDetails = JSON.stringify({
     clientId: client._id,
@@ -160,8 +210,8 @@ const createClientUserForPasswordReset = async (client, password, companyScope =
     name: client.client || client.company || client.email.split('@')[0],
     email: String(client.email).trim().toLowerCase(),
     password,
-    department: DEFAULT_CLIENT_DEPARTMENT_ID,
-    jobRole: DEFAULT_CLIENT_JOB_ROLE_ID,
+    department: departmentId,
+    jobRole: jobRoleId,
     company: company._id,
     companyCode: company.companyCode || normalizeCompanyCode(client.companyCode),
     employeeId,
@@ -2220,3 +2270,4 @@ const blacklistToken = async (token, expiry) => {
 };
 
 void 0;
+
