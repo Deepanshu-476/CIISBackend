@@ -25,6 +25,53 @@ const messageSchema = new mongoose.Schema(
         default: ""
     },
 
+    messageType: {
+        type: String,
+        enum: ["message", "system"],
+        default: "message"
+    },
+
+    systemEvent: {
+        type: {
+            type: String,
+            default: ""
+        },
+        actor: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
+            default: null
+        },
+        mode: {
+            type: String,
+            default: ""
+        }
+    },
+
+    replyTo: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Message",
+        default: null
+    },
+
+    reactions: [{
+        user: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
+            required: true
+        },
+        emoji: {
+            type: String,
+            required: true,
+            maxlength: 16
+        }
+    }],
+
+    expiresAt: {
+        type: Date,
+        default: null,
+        index: {expireAfterSeconds: 0}
+    },
+
     file: {
         type: String,
         default: ""
