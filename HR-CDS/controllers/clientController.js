@@ -1079,7 +1079,7 @@ const getAllClients = async (req, res) => {
 const getClientDashboardOverview = async (req, res) => {
   try {
     const companyCode = normalizeCompanyCode(req.query.companyCode || req.user?.companyCode);
-    const selectedClientId = String(req.query.selectedClientId || '').trim();
+    const selectedClientId = String(req.query.selectedClientId || req.query.clientId || '').trim();
 
     if (!companyCode) {
       return res.status(400).json({
@@ -1527,31 +1527,7 @@ const addClient = async (req, res) => {
     }
 
     
-    const departmentExists = await Department.findById(DEFAULT_CLIENT_DEPARTMENT_ID).session(session);
-    if (!departmentExists) {
-      console.error('❌ Default department not found:', DEFAULT_CLIENT_DEPARTMENT_ID);
-      await session.abortTransaction();
-      return res.status(404).json({
-        success: false,
-        message: "Default department not found for client",
-        departmentId: DEFAULT_CLIENT_DEPARTMENT_ID
-      });
-    }
-
-    
-    const jobRoleExists = await JobRole.findById(DEFAULT_CLIENT_JOB_ROLE_ID).session(session);
-    if (!jobRoleExists) {
-      console.error('❌ Default job role not found:', DEFAULT_CLIENT_JOB_ROLE_ID);
-      await session.abortTransaction();
-      return res.status(404).json({
-        success: false,
-        message: "Default job role not found for client",
-        jobRoleId: DEFAULT_CLIENT_JOB_ROLE_ID
-      });
-    }
-
-    
-    void 0;
+    const currentUserId = req.user?.id || null;
     
     const companyExists = await Company.findOne({ companyCode: cleanCompanyCode }).session(session);
     if (!companyExists) {
@@ -1563,7 +1539,46 @@ const addClient = async (req, res) => {
       });
     }
 
-    
+    // 1. Find or create the company-specific 'client' department
+    let clientDept = await Department.findOne({
+      company: companyExists._id,
+      name: { $regex: /^client$/i },
+      isActive: true
+    }).session(session);
+
+    if (!clientDept) {
+      clientDept = new Department({
+        name: 'client',
+        description: 'Department for clients',
+        company: companyExists._id,
+        companyCode: cleanCompanyCode,
+        isActive: true,
+        createdBy: currentUserId
+      });
+      await clientDept.save({ session });
+    }
+
+    // 2. Find or create the 'client' job role inside that department
+    let clientRole = await JobRole.findOne({
+      company: companyExists._id,
+      department: clientDept._id,
+      name: { $regex: /^client$/i },
+      isActive: true
+    }).session(session);
+
+    if (!clientRole) {
+      clientRole = new JobRole({
+        name: 'client',
+        description: 'Job role for clients',
+        department: clientDept._id,
+        company: companyExists._id,
+        companyCode: cleanCompanyCode,
+        isActive: true,
+        createdBy: currentUserId
+      });
+      await clientRole.save({ session });
+    }
+
     const generatePassword = (name) => {
       const baseName = name.toLowerCase().replace(/[^a-z0-9]/g, '');
       const randomNum = Math.floor(1000 + Math.random() * 9000);
@@ -1572,21 +1587,16 @@ const addClient = async (req, res) => {
 
     const autoPassword = reusableClientUser ? '' : generatePassword(client);
     
-    
     const employeeId = `CLT${Date.now()}${Math.floor(Math.random() * 1000)}`;
 
-    
-    const currentUserId = req.user?.id || null;
-
-    
     let createdUser = reusableClientUser;
     if (!createdUser) {
     const userData = {
       name: client.trim(),
       email: cleanEmail,
       password: autoPassword,
-      department: DEFAULT_CLIENT_DEPARTMENT_ID,
-      jobRole: DEFAULT_CLIENT_JOB_ROLE_ID,
+      department: clientDept._id,
+      jobRole: clientRole._id,
       company: companyExists._id,
       companyCode: cleanCompanyCode,
       employeeId,

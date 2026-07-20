@@ -121,13 +121,34 @@ router.get('/', async (req, res) => {
 
 router.get('/config', async (req, res) => {
   try {
-    const { companyId, branchId, departmentId, role } = req.query;
+    let { companyId, branchId, departmentId, role } = req.query;
     
     if (!companyId || !departmentId || !role) {
       return res.status(400).json({
         success: false,
         message: 'Company, department and role are required'
       });
+    }
+
+    // Map old client department / role IDs to the company's local client department/role if needed
+    if (departmentId === '69ae555c9a1e47e80a40204c') {
+      const localDept = await Department.findOne({
+        company: companyId,
+        name: { $regex: /^client$/i },
+        isActive: true
+      });
+      if (localDept) {
+        departmentId = String(localDept._id);
+        const localRole = await JobRole.findOne({
+          company: companyId,
+          department: localDept._id,
+          name: { $regex: /^client$/i },
+          isActive: true
+        });
+        if (localRole) {
+          role = String(localRole._id);
+        }
+      }
     }
 
     if (!mongoose.Types.ObjectId.isValid(companyId) || 
