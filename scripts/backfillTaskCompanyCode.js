@@ -14,7 +14,7 @@ const missingCompanyCodeFilter = {
 };
 
 const getUserCompanyCode = async (userId) => {
-  if (!userId) return null;
+  if (!userId) return null;   
 
   const user = await User.findById(userId)
     .select('companyCode company')
