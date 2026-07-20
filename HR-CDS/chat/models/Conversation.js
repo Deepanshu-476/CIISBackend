@@ -37,7 +37,40 @@ const conversationSchema = new mongoose.Schema(
     admins: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: "User"
-    }]
+    }],
+
+    notificationSettings: [{
+        user: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
+            required: true
+        },
+        muted: {
+            type: Boolean,
+            default: false
+        },
+        mutedUntil: {
+            type: Date,
+            default: null
+        }
+    }],
+
+    disappearingMode: {
+        type: String,
+        enum: ["off", "24h", "7d", "90d"],
+        default: "off"
+    },
+
+    disappearingUpdatedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        default: null
+    },
+
+    disappearingUpdatedAt: {
+        type: Date,
+        default: null
+    }
 },
 { timestamps: true }
 );
