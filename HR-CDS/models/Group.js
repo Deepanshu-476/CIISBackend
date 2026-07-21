@@ -1,6 +1,16 @@
 const mongoose = require('mongoose');
 
 const groupSchema = new mongoose.Schema({
+  company: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    index: true
+  },
+  companyCode: {
+    type: String,
+    trim: true,
+    index: true
+  },
   name: {
     type: String,
     required: true,
@@ -30,5 +40,7 @@ const groupSchema = new mongoose.Schema({
 
 groupSchema.index({ createdBy: 1, isActive: 1 });
 groupSchema.index({ members: 1 });
+groupSchema.index({ company: 1, isActive: 1 });
+groupSchema.index({ companyCode: 1, isActive: 1 });
 
 module.exports = mongoose.model('Group', groupSchema);

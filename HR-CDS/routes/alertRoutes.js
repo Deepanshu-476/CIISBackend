@@ -8,7 +8,7 @@ const { protect, authorize } = require('../../middleware/authMiddleware');
 
 const canManageAlerts = (req, res, next) => {
   const role = req.user?.role?.toLowerCase();
-  if (['admin', 'hr', 'manager'].includes(role)) {
+  if (['admin', 'hr', 'manager', 'owner', 'company_admin', 'company admin'].includes(role)) {
     return next();
   }
   return res.status(403).json({
@@ -134,5 +134,4 @@ router.get('/test/system-check', protect, async (req, res) => {
 });
 
 module.exports = router;
-
 
