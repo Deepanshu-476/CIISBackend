@@ -3,7 +3,11 @@
 const nodemailer = require('nodemailer');
 const { getCompanyRegistrationEmailTemplate } = require('../utils/emailTemplates/companyRegistration');
 const {notifyEmailRecipients} = require('../HR-CDS/utils/systemNotificationService');
-const { createEmailTransporter } = require('./emailSettingsService');
+const {
+  createEmailTransporter,
+  isEmailModuleEnabled,
+  resolveEmailModuleKey,
+} = require('./emailSettingsService');
 
 class EmailService {
   constructor() {
@@ -59,6 +63,19 @@ class EmailService {
       }
 
       const isDev = process.env.NODE_ENV !== 'production';
+      const emailModuleKey = resolveEmailModuleKey(subject, options);
+      const moduleEnabled = await isEmailModuleEnabled(emailModuleKey);
+
+      if (!moduleEnabled) {
+        console.warn(`Email skipped because module is disabled. Module: ${emailModuleKey}, To: ${to}, Subject: ${subject}`);
+        return {
+          success: true,
+          skipped: true,
+          disabled: true,
+          moduleKey: emailModuleKey,
+          message: 'Email module is disabled'
+        };
+      }
 
       let emailTransport;
       try {
@@ -119,6 +136,7 @@ class EmailService {
       
       return {
         success: true,
+        moduleKey: emailModuleKey,
         messageId: info.messageId,
         response: info.response,
         accepted: info.accepted,

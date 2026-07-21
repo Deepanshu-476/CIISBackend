@@ -1,5 +1,64 @@
 const mongoose = require("mongoose");
 
+const senderProfileSchema = new mongoose.Schema(
+  {
+    profileId: {
+      type: String,
+      required: true,
+    },
+    label: {
+      type: String,
+      trim: true,
+      default: "",
+      maxlength: 120,
+    },
+    senderName: {
+      type: String,
+      trim: true,
+      default: "CIIS NETWORK",
+      maxlength: 120,
+    },
+    emailUser: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      default: "",
+    },
+    encryptedEmailPass: {
+      type: String,
+      default: "",
+      select: false,
+    },
+    emailService: {
+      type: String,
+      trim: true,
+      default: "Gmail",
+    },
+    emailHost: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    emailPort: {
+      type: Number,
+      default: 465,
+      min: 1,
+      max: 65535,
+    },
+    emailSecure: {
+      type: Boolean,
+      default: true,
+    },
+    replyTo: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      default: "",
+    },
+  },
+  { _id: false, timestamps: true }
+);
+
 const emailSettingsSchema = new mongoose.Schema(
   {
     key: {
@@ -54,6 +113,30 @@ const emailSettingsSchema = new mongoose.Schema(
       trim: true,
       lowercase: true,
       default: "",
+    },
+    activeSenderProfileId: {
+      type: String,
+      trim: true,
+      default: "default",
+    },
+    senderProfiles: {
+      type: [senderProfileSchema],
+      default: [],
+    },
+    moduleSettings: {
+      type: Map,
+      of: Boolean,
+      default: {},
+    },
+    loginSettings: {
+      companyLoginOtpEnabled: {
+        type: Boolean,
+        default: true,
+      },
+      superAdminLoginOtpEnabled: {
+        type: Boolean,
+        default: true,
+      },
     },
     lastTestedAt: {
       type: Date,

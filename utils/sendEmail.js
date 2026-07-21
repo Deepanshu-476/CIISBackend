@@ -1,5 +1,9 @@
 const {notifyEmailRecipients} = require('../HR-CDS/utils/systemNotificationService');
-const { createEmailTransporter } = require('../services/emailSettingsService');
+const {
+  createEmailTransporter,
+  isEmailModuleEnabled,
+  resolveEmailModuleKey,
+} = require('../services/emailSettingsService');
 
 const notifyEmailSent = ({to, subject, options = {}}) => {
   if (options.skipNotification) return;
@@ -20,6 +24,8 @@ const notifyEmailSent = ({to, subject, options = {}}) => {
 };
 
 const sendEmail = async (to, subject, html, options = {}) => {
+  const emailModuleKey = resolveEmailModuleKey(subject, options);
+
   try {
     
     if (!to || !subject || !html) {
@@ -27,6 +33,18 @@ const sendEmail = async (to, subject, html, options = {}) => {
     }
 
     const isDev = process.env.NODE_ENV !== 'production';
+    const moduleEnabled = await isEmailModuleEnabled(emailModuleKey);
+
+    if (!moduleEnabled) {
+      console.warn(`Email skipped because module is disabled. Module: ${emailModuleKey}, To: ${to}, Subject: ${subject}`);
+      return {
+        success: true,
+        skipped: true,
+        disabled: true,
+        moduleKey: emailModuleKey,
+        message: 'Email module is disabled'
+      };
+    }
 
     let emailTransport;
     try {
@@ -71,7 +89,7 @@ const sendEmail = async (to, subject, html, options = {}) => {
 
     void 0;
     notifyEmailSent({to, subject, options});
-    return { success: true, messageId: info.messageId };
+    return { success: true, messageId: info.messageId, moduleKey: emailModuleKey };
 
   } catch (error) {
     const isDev = process.env.NODE_ENV !== 'production';
@@ -86,7 +104,7 @@ const sendEmail = async (to, subject, html, options = {}) => {
       if (otpMatch) {
         console.warn(`[DEV ONLY] OTP: ${otpMatch[1]}`);
       }
-      return { success: true, messageId: `dev-fallback-${Date.now()}`, mocked: true };
+      return { success: true, messageId: `dev-fallback-${Date.now()}`, mocked: true, moduleKey: emailModuleKey };
     }
     
     throw new Error(`Failed to send email: ${error.message}`);

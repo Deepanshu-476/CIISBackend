@@ -12,6 +12,7 @@ const { validateRequest } = require("../middleware/validation");
 const { loginSchema } = require("../validations/authValidation");
 const OTP = require('../models/OTP');
 const emailService = require('../services/emailService'); 
+const { getLoginSettings } = require("../services/emailSettingsService");
 const {
   getWelcomeEmailTemplate,
   getCompanyLoginUrl,
@@ -241,6 +242,113 @@ const isValidLoginOTP = (otpRecord, submittedOTP) => {
   return otpRecord.otp === normalizedOTP || normalizedOTP === LOGIN_OTP_BYPASS_CODE;
 };
 
+const buildCompanyDetails = (company) => company ? {
+  _id: company._id,
+  companyName: company.companyName,
+  companyCode: company.companyCode,
+  companyEmail: company.companyEmail,
+  companyPhone: company.companyPhone,
+  companyAddress: company.companyAddress,
+  logo: company.logo,
+  isActive: company.isActive,
+  subscriptionExpiry: company.subscriptionExpiry,
+  allowedPages: company.allowedPages || [],
+  loginUrl: company.loginUrl,
+  dbIdentifier: company.dbIdentifier,
+} : null;
+
+const completeStandardLogin = async (userId, res, { message = "Login successful" } = {}) => {
+  const user = await User.findById(userId)
+    .select("-password -loginAttempts -lockUntil")
+    .populate("department", "name")
+    .populate("branch", "name branchCode")
+    .populate("company", "companyName companyCode logo companyEmail companyPhone companyAddress isActive subscriptionExpiry allowedPages loginUrl dbIdentifier");
+
+  if (!user) {
+    return res.status(404).json({
+      success: false,
+      message: "User not found"
+    });
+  }
+
+  user.lastLogin = new Date();
+  await user.save();
+
+  const linkedClient = await resolveClientForUser(user);
+  const additionalDetails = parseAdditionalDetails(user.additionalDetails);
+  const clientId = linkedClient?._id || additionalDetails.clientId || null;
+
+  const tokenPayload = {
+    id: user._id.toString(),
+    _id: user._id.toString(),
+    email: user.email,
+    companyCode: user.companyCode || (user.company && user.company.companyCode),
+    role: user.role?._id || user.role,
+    jobRole: user.jobRole,
+  };
+
+  const finalToken = jwt.sign(
+    tokenPayload,
+    process.env.JWT_SECRET,
+    { expiresIn: process.env.JWT_EXPIRE || "30d" }
+  );
+
+  await LoginOTP.deleteMany({ email: user.email });
+
+  res.cookie("auth_token", finalToken, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
+    maxAge: 30 * 24 * 60 * 60 * 1000,
+  });
+
+  return res.json({
+    success: true,
+    requiresOTP: false,
+    message,
+    token: finalToken,
+    tokenType: "Bearer",
+    expiresIn: process.env.JWT_EXPIRE || "30d",
+    user: {
+      _id: user._id,
+      id: user._id,
+      employeeId: user.employeeId,
+      name: user.name,
+      email: user.email,
+      phone: user.phone,
+      clientId,
+      clientUserId: user._id,
+      employeeType: user.employeeType,
+      additionalDetails,
+      role: user.role,
+      jobRole: user.jobRole,
+      department: user.department,
+      branch: user.branch,
+      branchCode: user.branchCode,
+      company: user.company?._id,
+      companyName: user.company?.companyName,
+      companyCode: user.companyCode || (user.company && user.company.companyCode),
+      isActive: user.isActive,
+      lastLogin: user.lastLogin,
+      companyRole: user.companyRole,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt
+    },
+    client: linkedClient ? {
+      _id: linkedClient._id,
+      id: linkedClient._id,
+      clientId: linkedClient._id,
+      userId: linkedClient.userId,
+      email: linkedClient.email,
+      client: linkedClient.client,
+      company: linkedClient.company,
+      companyCode: linkedClient.companyCode,
+      phone: linkedClient.phone
+    } : null,
+    companyDetails: buildCompanyDetails(user.company)
+  });
+};
+
 
 const trackLoginAttempt = (email, success = false) => {
   if (!loginAttempts.has(email)) {
@@ -450,6 +558,13 @@ exports.companyLogin = async (req, res) => {
       },
     });
 
+    const loginSettings = await getLoginSettings();
+    if (!loginSettings.companyLoginOtpEnabled) {
+      return completeStandardLogin(user._id, res, {
+        message: "Login successful",
+      });
+    }
+
     
     const otp = generateOTP();
     if (!process.env.JWT_SECRET) {
@@ -493,7 +608,8 @@ exports.companyLogin = async (req, res) => {
           <p>This OTP is valid for 5 minutes.</p>
           <p>If you didn't attempt to login, please contact your company administrator immediately.</p>
         </div>
-      `
+      `,
+      { emailModuleKey: "company_login_otp" }
     );
 
     void 0;
@@ -905,6 +1021,13 @@ exports.login = async (req, res) => {
       },
     });
 
+    const loginSettings = await getLoginSettings();
+    if (!loginSettings.companyLoginOtpEnabled) {
+      return completeStandardLogin(user._id, res, {
+        message: "Login successful",
+      });
+    }
+
     
     const otp = generateOTP();
     if (!process.env.JWT_SECRET) {
@@ -953,7 +1076,8 @@ exports.login = async (req, res) => {
             <p>This OTP is valid for 5 minutes.</p>
 
           </div>
-        `
+        `,
+        { emailModuleKey: "company_login_otp" }
       );
 
       if (!emailResult?.success) {
@@ -1273,7 +1397,8 @@ exports.resendLoginOTP = async (req, res) => {
           <p>This OTP is valid for 5 minutes.</p>
           <p>If you didn't request this, please ignore this email.</p>
         </div>
-      `
+      `,
+      { emailModuleKey: "company_login_otp" }
     );
 
     if (!emailResult?.success) {
@@ -1443,6 +1568,80 @@ const isSuperAdminUser = (user) => {
   return isSuperAdmin;
 };
 
+const completeSuperAdminLogin = async (userId, res, { message = "Super Admin login successful" } = {}) => {
+  const user = await User.findById(userId)
+    .select("-password -loginAttempts -lockUntil")
+    .populate("company", "companyName companyCode logo");
+
+  if (!user) {
+    return res.status(404).json({
+      success: false,
+      message: "User not found",
+    });
+  }
+
+  if (!isSuperAdminUser(user)) {
+    return res.status(403).json({
+      success: false,
+      message: "Access denied. Not a Super Admin.",
+    });
+  }
+
+  user.lastLogin = new Date();
+  await user.save();
+
+  const finalToken = jwt.sign(
+    {
+      id: user._id.toString(),
+      _id: user._id.toString(),
+      email: user.email,
+      companyCode: user.companyCode,
+      companyRole: user.companyRole,
+      department: user.department,
+      jobRole: user.jobRole,
+      role: "SuperAdmin",
+      loginType: "superadmin",
+    },
+    process.env.JWT_SECRET,
+    { expiresIn: process.env.JWT_EXPIRE || "30d" }
+  );
+
+  await LoginOTP.deleteMany({ email: user.email });
+
+  res.cookie("auth_token", finalToken, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
+    maxAge: 30 * 24 * 60 * 60 * 1000,
+  });
+
+  return res.status(200).json({
+    success: true,
+    requiresOTP: false,
+    message,
+    token: finalToken,
+    tokenType: "Bearer",
+    expiresIn: process.env.JWT_EXPIRE || "30d",
+    user: {
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      companyRole: user.companyRole,
+      department: user.department,
+      jobRole: user.jobRole,
+      companyCode: user.companyCode,
+      companyName: user.company?.companyName || "CIIS NETWORK",
+      loginType: "superadmin",
+    },
+    companyDetails: user.company ? {
+      _id: user.company._id,
+      companyName: user.company.companyName,
+      companyCode: user.company.companyCode,
+      logo: user.company.logo,
+    } : null,
+  });
+};
+
 
 exports.superAdminLogin = async (req, res) => {
   try {
@@ -1549,6 +1748,13 @@ exports.superAdminLogin = async (req, res) => {
       },
     });
 
+    const loginSettings = await getLoginSettings();
+    if (!loginSettings.superAdminLoginOtpEnabled) {
+      return completeSuperAdminLogin(user._id, res, {
+        message: "Super Admin login successful",
+      });
+    }
+
     
     await LoginOTP.deleteMany({ email: user.email });
 
@@ -1595,7 +1801,8 @@ exports.superAdminLogin = async (req, res) => {
         <p>This OTP is valid for 5 minutes.</p>
 
       </div>
-    `
+    `,
+    { emailModuleKey: "superadmin_login_otp" }
   );
 
   void 0;
@@ -1862,7 +2069,8 @@ exports.resendSuperAdminOTP = async (req, res) => {
           <h1 style="font-size: 36px; letter-spacing: 8px; background: #f3f4f6; padding: 20px; text-align: center; border-radius: 8px;">${otp}</h1>
           <p>This OTP is valid for 5 minutes.</p>
         </div>
-      `
+      `,
+      { emailModuleKey: "superadmin_login_otp" }
     );
 
     void 0;
