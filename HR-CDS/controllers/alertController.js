@@ -2,21 +2,88 @@ const Alert = require('../models/alertModel');
 const User = require('../../models/User');
 const Group = require('../models/Group');
 
+const getId = value => {
+  if (!value) return null;
+  if (value._id) return value._id;
+  if (value.id) return value.id;
+  return value;
+};
+
+const getCompanyId = user => getId(user?.company || user?.companyId || user?.companyDetails);
+const getCompanyCode = user => user?.companyCode || user?.company?.companyCode || user?.companyDetails?.companyCode || '';
+
+const getCompanyUserIds = async user => {
+  const companyId = getCompanyId(user);
+  const companyCode = getCompanyCode(user);
+  const filters = [];
+  if (companyId) filters.push({ company: companyId });
+  if (companyCode) filters.push({ companyCode });
+  if (!filters.length) return [];
+
+  const users = await User.find(filters.length > 1 ? { $or: filters } : filters[0]).select('_id').lean();
+  return users.map(item => item._id);
+};
+
+const buildCompanyAlertQuery = async user => {
+  const companyId = getCompanyId(user);
+  const companyCode = getCompanyCode(user);
+  const companyUserIds = await getCompanyUserIds(user);
+  const filters = [];
+
+  if (companyId) filters.push({ company: companyId });
+  if (companyCode) filters.push({ companyCode });
+  if (companyUserIds.length) {
+    filters.push({
+      company: { $exists: false },
+      companyCode: { $exists: false },
+      createdBy: { $in: companyUserIds }
+    });
+  }
+
+  return filters.length ? { $or: filters } : {};
+};
+
+const mergeQueries = (...queries) => {
+  const parts = queries.filter(query => query && Object.keys(query).length);
+  if (!parts.length) return {};
+  if (parts.length === 1) return parts[0];
+  return { $and: parts };
+};
+
+const canViewCompanyAlerts = role => ['admin', 'hr', 'manager', 'owner', 'company_admin', 'company admin'].includes(String(role || '').toLowerCase());
+
+const assertAlertInCompany = async (alert, user) => {
+  const companyId = String(getCompanyId(user) || '');
+  const companyCode = String(getCompanyCode(user) || '');
+  if (!companyId && !companyCode) return true;
+
+  const alertCompanyId = String(getId(alert.company) || '');
+  const alertCompanyCode = String(alert.companyCode || '');
+  if ((companyId && alertCompanyId === companyId) || (companyCode && alertCompanyCode === companyCode)) return true;
+
+  if (!alertCompanyId && !alertCompanyCode && alert.createdBy) {
+    const creator = await User.findById(alert.createdBy).select('company companyCode').lean();
+    return String(getId(creator?.company) || '') === companyId || String(creator?.companyCode || '') === companyCode;
+  }
+
+  return false;
+};
 
 const getAlerts = async (req, res) => {
   try {
     const userId = req.user?._id;
     const userRole = req.user?.role?.toLowerCase();
+    const companyQuery = await buildCompanyAlertQuery(req.user);
     
-    let query = {};
+    let assignmentQuery = {};
     
     
-    if (userRole && !['admin', 'hr', 'manager'].includes(userRole)) {
+    if (userRole && !canViewCompanyAlerts(userRole)) {
 
       const userGroups = await Group.find({ members: userId }).select('_id');
       const userGroupIds = userGroups.map(group => group._id);
       
-      query = {
+      assignmentQuery = {
         $or: [
           { assignedUsers: { $in: [userId] } },
           { assignedGroups: { $in: userGroupIds } },
@@ -26,7 +93,7 @@ const getAlerts = async (req, res) => {
       };
     }
     
-    const alerts = await Alert.find(query)
+    const alerts = await Alert.find(mergeQueries(companyQuery, assignmentQuery))
       .populate('assignedUsers', 'name email')
       .populate('assignedGroups', 'name')
       .populate('createdBy', 'name email')
@@ -52,23 +119,24 @@ const getUnreadCount = async (req, res) => {
   try {
     const userId = req.user._id;
     const userRole = req.user?.role?.toLowerCase();
+    const companyQuery = await buildCompanyAlertQuery(req.user);
     
-    let query = {
+    let query = mergeQueries(companyQuery, {
       readBy: { $ne: userId }
-    };
+    });
     
     
-    if (userRole && !['admin', 'hr', 'manager'].includes(userRole)) {
+    if (userRole && !canViewCompanyAlerts(userRole)) {
       
       const userGroups = await Group.find({ members: userId }).select('_id');
       const userGroupIds = userGroups.map(group => group._id);
       
-      query.$or = [
+      query = mergeQueries(query, {$or: [
         { assignedUsers: { $in: [userId] } },
         { assignedGroups: { $in: userGroupIds } },
         { assignedUsers: { $size: 0 } },
         { assignedGroups: { $size: 0 } }
-      ];
+      ]});
     }
     
     const count = await Alert.countDocuments(query);
@@ -91,6 +159,8 @@ const addAlert = async (req, res) => {
   try {
     const { type, message, assignedUsers = [], assignedGroups = [] } = req.body;
     const createdBy = req.user._id;
+    const company = getCompanyId(req.user);
+    const companyCode = getCompanyCode(req.user);
     
     
     if (!message || !message.trim()) {
@@ -106,7 +176,9 @@ const addAlert = async (req, res) => {
       message: message.trim(),
       assignedUsers: Array.isArray(assignedUsers) ? assignedUsers : [],
       assignedGroups: Array.isArray(assignedGroups) ? assignedGroups : [],
-      createdBy
+      createdBy,
+      company,
+      companyCode
     });
     
     await alert.save();
@@ -140,6 +212,12 @@ const updateAlert = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: 'Alert not found'
+      });
+    }
+    if (!(await assertAlertInCompany(alert, req.user))) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized for this company alert'
       });
     }
     
@@ -180,6 +258,12 @@ const deleteAlert = async (req, res) => {
         message: 'Alert not found'
       });
     }
+    if (!(await assertAlertInCompany(alert, req.user))) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized for this company alert'
+      });
+    }
     
     await alert.deleteOne();
     
@@ -210,6 +294,12 @@ const markAsRead = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: 'Alert not found'
+      });
+    }
+    if (!(await assertAlertInCompany(alert, req.user))) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized for this company alert'
       });
     }
     

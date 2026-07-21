@@ -1156,8 +1156,31 @@ exports.getUserActivityTimeline = async (req, res) => {
 
 exports.getAssignableUsers = async (req, res) => {
   try {
-    const users = await User.find({ isActive: true, _id: { $ne: req.user._id } }).select('_id name email role jobRole').lean();
-    const groups = await Group.find({ isActive: true }).populate('members', 'name role email').select('name description members').lean();
+    const companyId = req.user.company?._id || req.user.company || req.user.companyId;
+    const companyCode = req.user.companyCode || req.user.company?.companyCode;
+    const userCompanyFilters = [];
+    if (companyId) userCompanyFilters.push({company: companyId});
+    if (companyCode) userCompanyFilters.push({companyCode});
+    const userCompanyQuery = userCompanyFilters.length > 1 ? {$or: userCompanyFilters} : userCompanyFilters[0] || {};
+
+    const users = await User.find({ isActive: true, _id: { $ne: req.user._id }, ...userCompanyQuery }).select('_id name email role jobRole company companyCode').lean();
+    const companyUserIds = users.map(user => user._id);
+    const groupCompanyFilters = [];
+    if (companyId) groupCompanyFilters.push({company: companyId});
+    if (companyCode) groupCompanyFilters.push({companyCode});
+    if (companyUserIds.length) {
+      groupCompanyFilters.push({
+        company: {$exists: false},
+        companyCode: {$exists: false},
+        $or: [
+          {createdBy: {$in: companyUserIds}},
+          {members: {$in: companyUserIds}},
+        ],
+      });
+    }
+    const groupCompanyQuery = groupCompanyFilters.length ? {$or: groupCompanyFilters} : {};
+
+    const groups = await Group.find({ isActive: true, ...groupCompanyQuery }).populate('members', 'name role email company companyCode').select('name description members company companyCode').lean();
     res.json({ success: true, users, groups });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });

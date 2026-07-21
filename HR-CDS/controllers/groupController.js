@@ -4,6 +4,59 @@ const User = require('../../models/User');
 const {notifyDirectUsers} = require('../utils/systemNotificationService');
 const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
 
+const getId = value => {
+  if (!value) return null;
+  if (value._id) return value._id;
+  if (value.id) return value.id;
+  return value;
+};
+
+const getCompanyId = user => getId(user?.company || user?.companyId || user?.companyDetails);
+const getCompanyCode = user => user?.companyCode || user?.company?.companyCode || user?.companyDetails?.companyCode || '';
+
+const buildCompanyUserFilter = user => {
+  const companyId = getCompanyId(user);
+  const companyCode = getCompanyCode(user);
+  const filters = [];
+  if (companyId) filters.push({company: companyId});
+  if (companyCode) filters.push({companyCode});
+  return filters.length > 1 ? {$or: filters} : filters[0] || {};
+};
+
+const getCompanyUserIds = async user => {
+  const filter = buildCompanyUserFilter(user);
+  if (!Object.keys(filter).length) return [];
+  const users = await User.find(filter).select('_id').lean();
+  return users.map(item => item._id);
+};
+
+const buildGroupCompanyFilter = async user => {
+  const companyId = getCompanyId(user);
+  const companyCode = getCompanyCode(user);
+  const companyUserIds = await getCompanyUserIds(user);
+  const filters = [];
+  if (companyId) filters.push({company: companyId});
+  if (companyCode) filters.push({companyCode});
+  if (companyUserIds.length) {
+    filters.push({
+      company: {$exists: false},
+      companyCode: {$exists: false},
+      $or: [
+        {createdBy: {$in: companyUserIds}},
+        {members: {$in: companyUserIds}},
+      ],
+    });
+  }
+  return filters.length ? {$or: filters} : {};
+};
+
+const mergeQueries = (...queries) => {
+  const parts = queries.filter(query => query && Object.keys(query).length);
+  if (!parts.length) return {};
+  if (parts.length === 1) return parts[0];
+  return {$and: parts};
+};
+
 
 exports.createGroup = async (req, res) => {
   try {
@@ -29,7 +82,8 @@ exports.createGroup = async (req, res) => {
     const validMembers = Array.isArray(members) ? members : [];
     if (validMembers.length > 0) {
       const usersExist = await User.find({ 
-        _id: { $in: validMembers } 
+        _id: { $in: validMembers },
+        ...buildCompanyUserFilter(req.user),
       }).select('_id');
       
       if (usersExist.length !== validMembers.length) {
@@ -48,7 +102,9 @@ exports.createGroup = async (req, res) => {
       name,
       description,
       members: uniqueMembers,
-      createdBy: req.user._id
+      createdBy: req.user._id,
+      company: getCompanyId(req.user),
+      companyCode: getCompanyCode(req.user),
     });
 
     
@@ -85,13 +141,13 @@ exports.createGroup = async (req, res) => {
 exports.getGroups = async (req, res) => {
   try {
     const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
-    const filter = {
+    const filter = mergeQueries(await buildGroupCompanyFilter(req.user), {
       isActive: true,
       $or: [
         { createdBy: req.user._id },
         { members: req.user._id }
       ]
-    };
+    });
     const [groups, total] = await Promise.all([
       Group.find(filter)
         .populate('members', 'name role email')
