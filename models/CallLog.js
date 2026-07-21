@@ -12,6 +12,6 @@
       default: "answered",
     },      
     notes: String, 
-  }, { timestamps: true });
+  }, { timestamps: true });  
 
   module.exports = mongoose.model("CallLog", callLogSchema);
