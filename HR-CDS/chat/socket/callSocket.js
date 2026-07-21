@@ -1,4 +1,5 @@
 const activeCalls = new Map();
+const CALL_RING_TIMEOUT_MS = 45 * 1000;
 
 const getPublicUser = (user) => ({
     _id: user?._id?.toString(),
@@ -85,8 +86,20 @@ const maybeCloseRoom = (callId) => {
     );
 
     if (!hasActiveParticipant) {
+        if (room.ringTimeout) {
+            clearTimeout(room.ringTimeout);
+        }
         activeCalls.delete(callId?.toString());
     }
+};
+
+const closeCallRoom = (callId) => {
+    const room = getCallRoom(callId);
+    if (!room) return;
+    if (room.ringTimeout) {
+        clearTimeout(room.ringTimeout);
+    }
+    activeCalls.delete(callId?.toString());
 };
 
 const callSocket = (io, socket) => {
@@ -129,6 +142,7 @@ const callSocket = (io, socket) => {
             hostUserId: socket.userId,
             title: data.title || "",
             participants: new Map(),
+            ringTimeout: null,
         };
 
         room.participants.set(socket.userId, {
@@ -144,6 +158,21 @@ const callSocket = (io, socket) => {
         });
 
         activeCalls.set(callId, room);
+
+        room.ringTimeout = setTimeout(() => {
+            const latestRoom = getCallRoom(callId);
+            if (!latestRoom) return;
+            const hasAcceptedParticipant = Array.from(latestRoom.participants.entries())
+                .some(([userId, participant]) => userId !== latestRoom.hostUserId && participant.status === "joined");
+            if (hasAcceptedParticipant) return;
+
+            emitToCallParticipants(io, latestRoom, "call:missed", {
+                callId,
+                fromUserId: latestRoom.hostUserId,
+                reason: "No answer",
+            });
+            activeCalls.delete(callId);
+        }, CALL_RING_TIMEOUT_MS);
 
         onlineParticipantIds.forEach(userId => {
             emitToUser(io, userId, "call:incoming", {
@@ -185,6 +214,11 @@ const callSocket = (io, socket) => {
             status: "joined",
             user: participantUser,
         });
+
+        if (room.ringTimeout) {
+            clearTimeout(room.ringTimeout);
+            room.ringTimeout = null;
+        }
 
         emitToUser(io, socket.userId, "call:joined", {
             callId,
@@ -272,7 +306,7 @@ const callSocket = (io, socket) => {
                     callId,
                     fromUserId: socket.userId,
                 }, socket.userId);
-                activeCalls.delete(callId);
+                closeCallRoom(callId);
                 return;
             }
             emitToJoinedParticipants(io, room, "call:ended", {
