@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 const { Schema } = mongoose;
 
  
-const TASK_STATUS = ["pending", "in progress", "completed", "cancelled", "on hold"];
+const TASK_STATUS = ["pending", "in progress", "completed", "cancelled", "on hold", "overdue"];
 const PROJECT_STATUS = ["active", "on hold", "completed", "planning", "cancelled"];
 const PRIORITY_LEVELS = ["low", "medium", "high"];
 const ACTIVITY_TYPES = ["assignment", "remark", "creation", "update", "status_change"];
