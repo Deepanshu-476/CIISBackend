@@ -3,7 +3,9 @@ const router = express.Router();
 const {
   getPublicEmailSettings,
   updateEmailSettings,
+  updateGlobalEmailEnabled,
   createEmailTransporter,
+  isEmailModuleEnabled,
   markEmailTestResult,
 } = require("../services/emailSettingsService");
 const { protect } = require("../middleware/authMiddleware");
@@ -44,6 +46,15 @@ router.get("/", async (req, res) => {
 
 router.put("/", async (req, res) => {
   try {
+    if (req.body?.globalOnly === true) {
+      const settings = await updateGlobalEmailEnabled(req.body?.enabled, req.user?._id);
+      return res.json({
+        success: true,
+        message: settings.enabled ? "Global email switch enabled" : "Global email switch disabled",
+        settings,
+      });
+    }
+
     const settings = await updateEmailSettings(req.body, req.user?._id);
     res.json({ success: true, message: "Email settings saved successfully", settings });
   } catch (error) {
@@ -52,10 +63,46 @@ router.put("/", async (req, res) => {
   }
 });
 
+router.patch("/global-switch", async (req, res) => {
+  try {
+    const settings = await updateGlobalEmailEnabled(req.body?.enabled, req.user?._id);
+    res.json({
+      success: true,
+      message: settings.enabled ? "Global email switch enabled" : "Global email switch disabled",
+      settings,
+    });
+  } catch (error) {
+    console.error("Update global email switch error:", error);
+    res.status(400).json({ success: false, message: error.message || "Failed to update global email switch" });
+  }
+});
+
+router.post("/global-switch", async (req, res) => {
+  try {
+    const settings = await updateGlobalEmailEnabled(req.body?.enabled, req.user?._id);
+    res.json({
+      success: true,
+      message: settings.enabled ? "Global email switch enabled" : "Global email switch disabled",
+      settings,
+    });
+  } catch (error) {
+    console.error("Update global email switch error:", error);
+    res.status(400).json({ success: false, message: error.message || "Failed to update global email switch" });
+  }
+});
+
 router.post("/test", async (req, res) => {
   const testEmail = String(req.body?.testEmail || "").trim().toLowerCase();
 
   try {
+    const testEmailEnabled = await isEmailModuleEnabled("test_email");
+    if (!testEmailEnabled) {
+      return res.status(400).json({
+        success: false,
+        message: "Test Email module is disabled",
+      });
+    }
+
     const { config, transporter } = await createEmailTransporter();
     await transporter.verify();
     const info = await transporter.sendMail({
@@ -70,6 +117,9 @@ router.post("/test", async (req, res) => {
         </div>
       `,
       replyTo: config.replyTo || config.emailUser,
+      headers: {
+        "X-Email-Type": "test-email",
+      },
     });
 
     const settings = await markEmailTestResult({
@@ -84,13 +134,17 @@ router.post("/test", async (req, res) => {
       settings,
     });
   } catch (error) {
+    const rawMessage = error.message || "";
+    const friendlyMessage = rawMessage.includes("535") || rawMessage.includes("BadCredentials")
+      ? "Gmail ne SMTP login reject kiya. Sender Email aur 16-character Gmail App Password check karein. Normal Gmail password use nahi hoga."
+      : rawMessage;
     const settings = await markEmailTestResult({
       success: false,
-      message: error.message,
+      message: friendlyMessage,
     });
     res.status(400).json({
       success: false,
-      message: error.message || "Test email failed",
+      message: friendlyMessage || "Test email failed",
       settings,
     });
   }
