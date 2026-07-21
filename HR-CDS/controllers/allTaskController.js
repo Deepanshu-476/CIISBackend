@@ -21,6 +21,28 @@ const {
   getProjectTaskAssignedBy
 } = require('./taskHelper');
 
+const Attendance = require('../models/Attendance');
+
+const INDIA_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+const getIndiaDayRange = (value = new Date()) => {
+  const date = value instanceof Date ? value : new Date(value);
+  const validDate = Number.isNaN(date.getTime()) ? new Date() : date;
+  const shifted = new Date(validDate.getTime() + INDIA_OFFSET_MS);
+  const start = new Date(Date.UTC(
+    shifted.getUTCFullYear(),
+    shifted.getUTCMonth(),
+    shifted.getUTCDate(),
+  ) - INDIA_OFFSET_MS);
+  const end = new Date(start.getTime() + (24 * 60 * 60 * 1000) - 1);
+  return { start, end };
+};
+
+const isPresentForTaskCards = (attendance) => {
+  const status = String(attendance?.status || '').trim().toUpperCase();
+  return Boolean(status && status !== 'ABSENT' && !status.includes('LEAVE'));
+};
+
 
 const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
   const targetUser = await User.findById(userId).select('name email').lean();
@@ -485,15 +507,29 @@ exports.getCompanyAllTaskOverview = async (req, res) => {
       .select('name email role companyRole jobRole employeeType employeeId company department companyCode isActive createdAt')
       .sort({ name: 1 })
       .lean();
+    const { start: todayStart, end: todayEnd } = getIndiaDayRange();
+    const attendanceRecords = await Attendance.find({
+      user: { $in: users.map(user => user._id) },
+      date: { $gte: todayStart, $lte: todayEnd }
+    }).select('user status inTime outTime date isClockedIn').lean();
+    const attendanceByUser = new Map(
+      attendanceRecords.map(record => [String(record.user), record])
+    );
+    const presentUsers = users
+      .map(user => ({
+        ...user,
+        todayAttendance: attendanceByUser.get(String(user._id)) || null
+      }))
+      .filter(user => isPresentForTaskCards(user.todayAttendance));
 
     const includeStats = String(req.query.includeStats || '').toLowerCase() === 'true';
     if (!includeStats) {
       return res.json({
         success: true,
-        users,
+        users: presentUsers,
         statsByUser: {},
         summary: {
-          totalUsers: users.length,
+          totalUsers: presentUsers.length,
           totalTasks: 0,
           statsDeferred: true,
         }
@@ -509,7 +545,7 @@ exports.getCompanyAllTaskOverview = async (req, res) => {
       search: req.query.search || '',
     };
 
-    const entries = await mapWithConcurrency(users, 6, async (user) => {
+    const entries = await mapWithConcurrency(presentUsers, 6, async (user) => {
       const userId = String(user._id);
       try {
         const allTasks = await queryAllUserTasks(userId, req.user.companyCode || currentUser.companyCode, queryParams);
@@ -521,7 +557,7 @@ exports.getCompanyAllTaskOverview = async (req, res) => {
     });
 
     const statsByUser = Object.fromEntries(entries);
-    const usersWithStats = users.map(user => ({
+    const usersWithStats = presentUsers.map(user => ({
       ...user,
       taskStats: statsByUser[String(user._id)]
     }));
