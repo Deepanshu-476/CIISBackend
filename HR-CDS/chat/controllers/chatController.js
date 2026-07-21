@@ -6,7 +6,39 @@ const {notifyDirectUsers} = require("../../utils/systemNotificationService");
 
 const getUserId = req => req.user._id?.toString() || req.user.id?.toString();
 
-const populateMessage = query => query.populate("sender", "name email profileImage");
+const populateMessage = query => query
+  .populate("sender", "name email profileImage")
+  .populate({
+    path: "replyTo",
+    select: "sender text file fileType deletedForEveryone",
+    populate: {path: "sender", select: "name email profileImage"},
+  })
+  .populate("reactions.user", "name profileImage")
+  .populate("systemEvent.actor", "name profileImage");
+
+const DISAPPEARING_DURATIONS = {
+  "24h": 24 * 60 * 60 * 1000,
+  "7d": 7 * 24 * 60 * 60 * 1000,
+  "90d": 90 * 24 * 60 * 60 * 1000,
+};
+
+const activeMessageFilter = () => ({
+  $or: [
+    {expiresAt: null},
+    {expiresAt: {$exists: false}},
+    {expiresAt: {$gt: new Date()}},
+  ],
+});
+
+const getConversationMuteState = (conversation, userId) => {
+  const setting = (conversation.notificationSettings || [])
+    .find(item => item.user?.toString() === userId?.toString());
+  if (!setting?.muted) return {muted: false, mutedUntil: null};
+  if (setting.mutedUntil && new Date(setting.mutedUntil) <= new Date()) {
+    return {muted: false, mutedUntil: null};
+  }
+  return {muted: true, mutedUntil: setting.mutedUntil || null};
+};
 
 const getUnreadCount = (conversationId, userId, companyId) => Message.countDocuments({
   conversationId,
@@ -15,12 +47,14 @@ const getUnreadCount = (conversationId, userId, companyId) => Message.countDocum
   seenBy: {$ne: userId},
   deletedFor: {$ne: userId},
   deletedForEveryone: false,
+  ...activeMessageFilter(),
 });
 
 const getLastVisibleMessage = (conversationId, userId, companyId) => Message.findOne({
   conversationId,
   companyId,
   deletedFor: {$ne: userId},
+  ...activeMessageFilter(),
 })
   .populate("sender", "name email profileImage")
   .sort({createdAt: -1});
@@ -34,6 +68,8 @@ const withConversationMeta = async (conversation, userId, companyId) => {
 
   return {
     ...plain,
+    notificationSettings: undefined,
+    notificationPreference: getConversationMuteState(plain, userId),
     lastMessage,
     unreadCount,
   };
@@ -110,7 +146,15 @@ exports.createConversation = async (req, res) => {
       });
     }
 
-    res.status(200).json({success: true, conversation});
+    const plain = conversation.toObject();
+    res.status(200).json({
+      success: true,
+      conversation: {
+        ...plain,
+        notificationSettings: undefined,
+        notificationPreference: getConversationMuteState(plain, getUserId(req)),
+      },
+    });
   } catch (error) {
     res.status(500).json({success: false, message: error.message});
   }
@@ -162,7 +206,15 @@ exports.createGroupConversation = async (req, res) => {
       await conversation.save();
     }
 
-    res.status(200).json({success: true, conversation});
+    const plain = conversation.toObject();
+    res.status(200).json({
+      success: true,
+      conversation: {
+        ...plain,
+        notificationSettings: undefined,
+        notificationPreference: getConversationMuteState(plain, requesterId),
+      },
+    });
   } catch (error) {
     res.status(500).json({success: false, message: error.message});
   }
@@ -229,7 +281,15 @@ exports.getConversation = async (req, res) => {
       return res.status(404).json({success: false, message: "Conversation not found"});
     }
 
-    res.status(200).json({success: true, conversation});
+    const plain = conversation.toObject();
+    res.status(200).json({
+      success: true,
+      conversation: {
+        ...plain,
+        notificationSettings: undefined,
+        notificationPreference: getConversationMuteState(plain, getUserId(req)),
+      },
+    });
   } catch (error) {
     res.status(500).json({success: false, message: error.message});
   }
@@ -252,7 +312,7 @@ exports.getCompanyGroups = async (req, res) => {
 
 exports.sendMessage = async (req, res) => {
   try {
-    const {conversationId, text} = req.body;
+    const {conversationId, text, replyToMessageId} = req.body;
     const senderId = getUserId(req);
     const conversation = await Conversation.findOne({
       _id: conversationId,
@@ -270,6 +330,24 @@ exports.sendMessage = async (req, res) => {
 
     const file = req.file ? `/api/uploads/chat/${req.file.filename}` : "";
     const fileType = req.file ? req.file.mimetype : "";
+    let replyTo = null;
+
+    if (replyToMessageId) {
+      replyTo = await Message.findOne({
+        _id: replyToMessageId,
+        conversationId,
+        companyId: req.user.company,
+        deletedForEveryone: false,
+        ...activeMessageFilter(),
+      }).select("_id");
+
+      if (!replyTo) {
+        return res.status(400).json({success: false, message: "Reply message is unavailable"});
+      }
+    }
+
+    const duration = DISAPPEARING_DURATIONS[conversation.disappearingMode];
+    const expiresAt = duration ? new Date(Date.now() + duration) : null;
 
     const message = await Message.create({
       companyId: req.user.company,
@@ -278,6 +356,8 @@ exports.sendMessage = async (req, res) => {
       text,
       file,
       fileType,
+      replyTo: replyTo?._id || null,
+      expiresAt,
       seenBy: [senderId],
     });
 
@@ -292,7 +372,8 @@ exports.sendMessage = async (req, res) => {
 
     const recipients = conversation.members
       .map(member => member.toString())
-      .filter(memberId => memberId !== senderId);
+      .filter(memberId => memberId !== senderId)
+      .filter(memberId => !getConversationMuteState(conversation, memberId).muted);
 
     void 0;
 
@@ -347,8 +428,16 @@ exports.getMessages = async (req, res) => {
       conversationId: req.params.id,
       companyId: req.user.company,
       deletedFor: {$ne: userId},
+      ...activeMessageFilter(),
     })
       .populate("sender", "name email profileImage")
+      .populate({
+        path: "replyTo",
+        select: "sender text file fileType deletedForEveryone",
+        populate: {path: "sender", select: "name email profileImage"},
+      })
+      .populate("reactions.user", "name profileImage")
+      .populate("systemEvent.actor", "name profileImage")
       .sort({createdAt: 1});
 
     const normalizedMessages = messages.map(message => {
@@ -370,6 +459,7 @@ exports.getMessages = async (req, res) => {
         companyId: req.user.company,
         sender: {$ne: userId},
         seenBy: {$ne: userId},
+        ...activeMessageFilter(),
       },
       {$addToSet: {seenBy: userId}}
     );
@@ -377,6 +467,150 @@ exports.getMessages = async (req, res) => {
     await emitUnreadCounts(conversation, userId);
 
     res.status(200).json({success: true, messages: normalizedMessages});
+  } catch (error) {
+    res.status(500).json({success: false, message: error.message});
+  }
+};
+
+exports.updateConversationMute = async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const {muted, mutedUntil = null} = req.body;
+    const conversation = await Conversation.findOne({
+      _id: req.params.id,
+      companyId: req.user.company,
+      members: userId,
+    });
+
+    if (!conversation) {
+      return res.status(404).json({success: false, message: "Conversation not found"});
+    }
+
+    const normalizedMutedUntil = muted && mutedUntil ? new Date(mutedUntil) : null;
+    if (normalizedMutedUntil && Number.isNaN(normalizedMutedUntil.getTime())) {
+      return res.status(400).json({success: false, message: "Invalid mute expiry"});
+    }
+
+    const existing = conversation.notificationSettings
+      .find(item => item.user.toString() === userId);
+    if (existing) {
+      existing.muted = Boolean(muted);
+      existing.mutedUntil = normalizedMutedUntil;
+    } else {
+      conversation.notificationSettings.push({
+        user: userId,
+        muted: Boolean(muted),
+        mutedUntil: normalizedMutedUntil,
+      });
+    }
+    await conversation.save();
+
+    const notificationPreference = getConversationMuteState(conversation, userId);
+    global.io?.to(`user:${userId}`).emit("chat:mute-updated", {
+      conversationId: conversation._id,
+      notificationPreference,
+    });
+
+    res.status(200).json({success: true, notificationPreference});
+  } catch (error) {
+    res.status(500).json({success: false, message: error.message});
+  }
+};
+
+exports.updateDisappearingMessages = async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const {mode} = req.body;
+    if (!["off", "24h", "7d", "90d"].includes(mode)) {
+      return res.status(400).json({success: false, message: "Invalid disappearing-message timer"});
+    }
+
+    const conversation = await Conversation.findOne({
+      _id: req.params.id,
+      companyId: req.user.company,
+      members: userId,
+    });
+    if (!conversation) {
+      return res.status(404).json({success: false, message: "Conversation not found"});
+    }
+
+    conversation.disappearingMode = mode;
+    conversation.disappearingUpdatedBy = userId;
+    conversation.disappearingUpdatedAt = new Date();
+    await conversation.save();
+
+    const systemMessage = await Message.create({
+      companyId: req.user.company,
+      conversationId: conversation._id,
+      sender: userId,
+      messageType: "system",
+      systemEvent: {
+        type: "disappearing_messages_changed",
+        actor: userId,
+        mode,
+      },
+      seenBy: conversation.members,
+    });
+    const populatedMessage = await populateMessage(Message.findById(systemMessage._id));
+
+    global.io?.to(`conversation:${conversation._id}`).emit("chat:receive-message", populatedMessage);
+    global.io?.to(`conversation:${conversation._id}`).emit("chat:disappearing-updated", {
+      conversationId: conversation._id,
+      mode,
+      updatedBy: userId,
+      updatedAt: conversation.disappearingUpdatedAt,
+    });
+
+    res.status(200).json({
+      success: true,
+      disappearingMode: mode,
+      message: populatedMessage,
+    });
+  } catch (error) {
+    res.status(500).json({success: false, message: error.message});
+  }
+};
+
+exports.updateMessageReaction = async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const emoji = String(req.body.emoji || "").trim();
+    if (emoji.length > 16) {
+      return res.status(400).json({success: false, message: "Invalid reaction"});
+    }
+
+    const message = await Message.findOne({
+      _id: req.params.messageId,
+      companyId: req.user.company,
+      deletedForEveryone: false,
+      ...activeMessageFilter(),
+    });
+    if (!message) {
+      return res.status(404).json({success: false, message: "Message not found"});
+    }
+
+    const conversation = await Conversation.findOne({
+      _id: message.conversationId,
+      companyId: req.user.company,
+      members: userId,
+    });
+    if (!conversation) {
+      return res.status(403).json({success: false, message: "You are not a member of this conversation"});
+    }
+
+    message.reactions = (message.reactions || [])
+      .filter(reaction => reaction.user.toString() !== userId);
+    if (emoji) message.reactions.push({user: userId, emoji});
+    await message.save();
+
+    const populatedMessage = await populateMessage(Message.findById(message._id));
+    global.io?.to(`conversation:${conversation._id}`).emit("chat:message-reaction", {
+      messageId: message._id,
+      conversationId: conversation._id,
+      reactions: populatedMessage.reactions,
+    });
+
+    res.status(200).json({success: true, reactions: populatedMessage.reactions});
   } catch (error) {
     res.status(500).json({success: false, message: error.message});
   }

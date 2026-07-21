@@ -51,6 +51,7 @@ const Holiday = require("./HR-CDS/models/Holiday");
 const User = require("./models/User");
 require("./models/Company");
 const {notifyDirectUsers, sendSystemNotification} = require("./HR-CDS/utils/systemNotificationService");
+const {sendEmail} = require("./utils/sendEmail");
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -107,6 +108,35 @@ const getTaskCompanyCode = (task) => {
 
   return typeof companyCode === 'string' ? companyCode.trim().toUpperCase() : companyCode;
 };
+
+const escapeHtml = value => String(value || '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+
+const formatTaskDueDate = dueDateTime => {
+  const dueDate = new Date(dueDateTime);
+  if (Number.isNaN(dueDate.getTime())) return 'the scheduled due time';
+
+  return dueDate.toLocaleString('en-IN', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+    timeZone: process.env.TZ || 'Asia/Kolkata',
+  });
+};
+
+const buildPendingTaskReminderEmail = ({userName, taskTitle, dueDateText}) => `
+  <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #1f2937; padding: 20px;">
+    <h2 style="margin: 0 0 12px; color: #111827;">Pending Task Reminder</h2>
+    <p>Hello <strong>${escapeHtml(userName || 'User')}</strong>,</p>
+    <p>Your task <strong>${escapeHtml(taskTitle)}</strong> is still pending.</p>
+    <p>This is a reminder that the task is due at <strong>${escapeHtml(dueDateText)}</strong>. Please complete it before the due time.</p>
+    <p style="margin-top: 20px;">Regards,<br/>CIIS Network</p>
+    <p style="font-size: 12px; color: #6b7280;">This is an automated reminder. Please do not reply to this email.</p>
+  </div>
+`;
 
 
 
@@ -234,30 +264,72 @@ const checkAndMarkOverdueTasks = async () => {
 
 const sendPendingTaskReminders = async () => {
   try {
-    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    const now = new Date();
+    const oneHourFromNow = new Date(now.getTime() + 60 * 60 * 1000);
     const tasks = await Task.find({
       isActive: true,
+      dueDateTime: {$gt: now, $lte: oneHourFromNow},
       'statusByUser.status': 'pending',
-      updatedAt: {$lte: twoHoursAgo},
     })
       .populate('assignedUsers', 'name email')
-      .select('title assignedUsers statusByUser updatedAt');
+      .select('title assignedUsers statusByUser dueDateTime');
 
     for (const task of tasks) {
-      const pendingUserIds = (task.statusByUser || [])
-        .filter(item => item.status === 'pending')
-        .map(item => item.user?.toString())
-        .filter(Boolean);
-
-      await notifyDirectUsers({
-        userIds: pendingUserIds,
-        targetPath: '/ciisUser/task-management',
-        type: 'task_pending_reminder',
-        title: 'Pending Task Reminder',
-        message: `Task "${task.title}" is still pending`,
-        data: {taskId: task._id, taskTitle: task.title},
-        priority: 'medium',
+      const dueDateText = formatTaskDueDate(task.dueDateTime);
+      const dueTimestamp = new Date(task.dueDateTime).getTime();
+      const usersById = new Map(
+        (task.assignedUsers || []).map(user => [String(user._id || user.id || user), user])
+      );
+      const pendingStatuses = (task.statusByUser || []).filter(item => {
+        if (item.status !== 'pending' || !item.user) return false;
+        const reminderDueTimestamp = item.pendingDueReminderDueAt
+          ? new Date(item.pendingDueReminderDueAt).getTime()
+          : null;
+        return reminderDueTimestamp !== dueTimestamp;
       });
+
+      if (!pendingStatuses.length) continue;
+
+      for (const statusItem of pendingStatuses) {
+        const userId = statusItem.user.toString();
+        const assignedUser = usersById.get(userId);
+
+        try {
+          await notifyDirectUsers({
+            userIds: [userId],
+            targetPath: '/ciisUser/task-management',
+            type: 'task_pending_reminder',
+            title: 'Pending Task Reminder',
+            message: `Your task "${task.title}" is still pending. Please complete it before the due time.`,
+            data: {taskId: task._id, taskTitle: task.title, dueDateTime: task.dueDateTime},
+            priority: 'high',
+          });
+
+          if (assignedUser?.email) {
+            await sendEmail(
+              assignedUser.email,
+              `Pending Task Reminder: ${task.title}`,
+              buildPendingTaskReminderEmail({
+                userName: assignedUser.name,
+                taskTitle: task.title,
+                dueDateText,
+              }),
+              {
+                skipNotification: true,
+                priority: 'high',
+                text: `Hello ${assignedUser.name || 'User'}, your task "${task.title}" is still pending and is due at ${dueDateText}. Please complete it before the due time.`,
+              }
+            );
+          }
+
+          statusItem.pendingDueReminderSentAt = new Date();
+          statusItem.pendingDueReminderDueAt = task.dueDateTime;
+        } catch (reminderError) {
+          console.error(`❌ Pending task reminder failed for task ${task._id} and user ${userId}:`, reminderError.message);
+        }
+      }
+
+      await task.save();
     }
   } catch (error) {
     if (isTransientMongoError(error)) throw error;
@@ -493,7 +565,7 @@ schedule.scheduleJob('30 10 * * *', async () => {
   await runDbJobWithRetry('Daily absent marking', markDailyAbsent);
 });
 
-schedule.scheduleJob('0 */2 * * *', async () => {
+schedule.scheduleJob('* * * * *', async () => {
   void 0;
   await runDbJobWithRetry('Pending task reminders', sendPendingTaskReminders);
 });

@@ -5,6 +5,7 @@ const Department = require("../models/Department");
 const mongoose = require("mongoose");
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
+const escapeRegExp = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 
 exports.createBranch = async (req, res) => {
@@ -25,6 +26,23 @@ exports.createBranch = async (req, res) => {
       });
     }
 
+    const cleanName = String(name).trim();
+    const cleanBranchCode = String(branchCode).trim().toUpperCase();
+
+    if (cleanName.length > 100) {
+      return res.status(400).json({
+        success: false,
+        message: "Branch name cannot exceed 100 characters",
+      });
+    }
+
+    if (cleanBranchCode.length < 5 || cleanBranchCode.length > 20) {
+      return res.status(400).json({
+        success: false,
+        message: "Branch code must be between 5 and 20 characters",
+      });
+    }
+
     
     const company = await Company.findById(companyId);
     if (!company) {
@@ -34,11 +52,8 @@ exports.createBranch = async (req, res) => {
       });
     }
 
-    const cleanBranchCode = branchCode.trim().toUpperCase();
-
-    
     const [existingName, existingCode] = await Promise.all([
-      Branch.findOne({ company: companyId, name: { $regex: new RegExp(`^${name.trim()}$`, "i") } }),
+      Branch.findOne({ company: companyId, name: { $regex: new RegExp(`^${escapeRegExp(cleanName)}$`, "i") } }),
       Branch.findOne({ company: companyId, branchCode: cleanBranchCode }),
     ]);
 
@@ -57,12 +72,12 @@ exports.createBranch = async (req, res) => {
     }
 
     const branch = await Branch.create({
-      name: name.trim(),
+      name: cleanName,
       branchCode: cleanBranchCode,
       company: companyId,
       companyCode: company.companyCode,
-      address: address?.trim() || "",
-      phone: phone?.trim() || "",
+      address: typeof address === "string" ? address.trim() : "",
+      phone: typeof phone === "string" ? phone.trim() : "",
       isDefault: false,
     });
 
@@ -73,9 +88,16 @@ exports.createBranch = async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Create branch error:", error);
-    return res.status(500).json({
+    const isDuplicate = error?.code === 11000;
+    const isValidation = error?.name === "ValidationError";
+    const status = isDuplicate ? 409 : isValidation ? 400 : 500;
+    return res.status(status).json({
       success: false,
-      message: "Failed to create branch",
+      message: isDuplicate
+        ? "A branch with this name or code already exists in this company"
+        : isValidation
+          ? Object.values(error.errors || {})[0]?.message || "Invalid branch details"
+          : "Failed to create branch",
       error: error.message,
     });
   }

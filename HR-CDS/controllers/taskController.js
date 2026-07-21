@@ -373,21 +373,6 @@ const sendTaskCreationEmail = async (task, assignedUsers) => {
   }
 };
 
-const sendTaskStatusUpdateEmail = async (task, updatedUser, oldStatus, newStatus) => {
-  try {
-    const subject = `🔄 Task Status Updated: ${task.title}`;
-    const html = `<div style="font-family: Arial; padding: 20px;">
-      <h2>Task Status Updated</h2>
-      <p>Hello <strong>${task.createdBy.name}</strong>,</p>
-      <p><strong>${updatedUser.name}</strong> has updated the task status:</p>
-      <p>Task: ${task.title}</p>
-      <p>Status: ${oldStatus.toUpperCase()} → ${newStatus.toUpperCase()}</p>
-    </div>`;
-    await sendEmail(task.createdBy.email, subject, html, { skipNotification: true });
-  } catch (err) {
-    console.error('❌ Email failed:', err);
-  }
-};
 
  
 
@@ -1045,7 +1030,6 @@ exports.updateStatus = async (req, res) => {
 
     if (!isCreator) {
       await createNotification(task.createdBy._id, 'Task Status Updated', `${updatedUser.name} updated task status to ${status}`, 'status_updated', task._id);
-      await sendTaskStatusUpdateEmail(task, updatedUser, oldStatus, status);
     }
 
     await createActivityLog(req.user, 'status_updated', task._id, `Updated task status to ${status}`, { status: oldStatus }, { status, remarks }, req);

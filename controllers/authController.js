@@ -422,9 +422,9 @@ exports.companyLogin = async (req, res) => {
     const isPasswordValid = await bcrypt.compare(password, user.password);
 
     if (!isPasswordValid) {
-      const updatedAttempts = (user.loginAttempts || 0) + 1;
+      const updatedAttempts = (user.failedLoginAttempts || 0) + 1;
       const updateData = {
-        loginAttempts: updatedAttempts,
+        failedLoginAttempts: updatedAttempts,
       };
 
       if (updatedAttempts >= 5) {
@@ -444,7 +444,7 @@ exports.companyLogin = async (req, res) => {
     
     await User.findByIdAndUpdate(user._id, {
       $set: {
-        loginAttempts: 0,
+        failedLoginAttempts: 0,
         lockUntil: null,
         lastLogin: new Date(),
       },
@@ -739,40 +739,9 @@ exports.login = async (req, res) => {
     }
 
     const cleanEmail = email.toLowerCase().trim();
-    const rawCompanyCode = companyCode || companyIdentifier;
-    let providedCompanyCode = rawCompanyCode;
-    let expectedBranchCode = null;
-    let companyScope = null;
 
-    if (rawCompanyCode && typeof rawCompanyCode === "string" && rawCompanyCode.includes("-")) {
-      const parts = rawCompanyCode.split("-");
-      providedCompanyCode = parts[0];
-      expectedBranchCode = parts.slice(1).join("-").toUpperCase();
-    }
-
-    if (providedCompanyCode) {
-      companyScope = await resolveCompanyScope(providedCompanyCode);
-      if (!companyScope?.company) {
-        return res.status(404).json({
-          success: false,
-          message: "Company not found or invalid company code",
-          errorCode: "COMPANY_NOT_FOUND",
-        });
-      }
-    }
-
-    const userQuery = { email: cleanEmail };
-    if (companyScope?.companyId || companyScope?.companyCode) {
-      userQuery.$or = [
-        companyScope.companyId ? { company: companyScope.companyId } : null,
-        companyScope.companyCode ? { companyCode: companyScope.companyCode } : null,
-      ].filter(Boolean);
-    }
-    if (expectedBranchCode) {
-      userQuery.branchCode = expectedBranchCode;
-    }
-
-    const user = await User.findOne(userQuery)
+    
+    const user = await User.findOne({ email: cleanEmail })
       .select("+password +isActive +loginAttempts +lockUntil")
       .populate("department", "name")
       .populate("branch", "name branchCode")
@@ -782,9 +751,7 @@ exports.login = async (req, res) => {
       void 0;
       return res.status(401).json({
         success: false,
-        message: providedCompanyCode
-          ? "Invalid email or password for this company"
-          : "Invalid email or password",
+        message: "Invalid email or password",
         errorCode: "INVALID_CREDENTIALS",
       });
     }
@@ -813,9 +780,9 @@ exports.login = async (req, res) => {
     const isPasswordValid = await bcrypt.compare(password, user.password);
 
     if (!isPasswordValid) {
-      const updatedAttempts = (user.loginAttempts || 0) + 1;
+      const updatedAttempts = (user.failedLoginAttempts || 0) + 1;
       const updateData = {
-        loginAttempts: updatedAttempts,
+        failedLoginAttempts: updatedAttempts,
       };
 
       if (updatedAttempts >= 5) {
@@ -832,6 +799,16 @@ exports.login = async (req, res) => {
       });
     }
 
+    
+    const rawCompanyCode = companyCode || companyIdentifier;
+    let providedCompanyCode = rawCompanyCode;
+    let expectedBranchCode = null;
+    if (rawCompanyCode && typeof rawCompanyCode === "string" && rawCompanyCode.includes("-")) {
+      const parts = rawCompanyCode.split("-");
+      providedCompanyCode = parts[0];
+      expectedBranchCode = parts.slice(1).join("-").toUpperCase();
+    }
+    
     
     if (providedCompanyCode) {
       void 0;
@@ -923,7 +900,7 @@ exports.login = async (req, res) => {
     
     await User.findByIdAndUpdate(user._id, {
       $set: {
-        loginAttempts: 0,
+        failedLoginAttempts: 0,
         lockUntil: null,
       },
     });
@@ -2293,3 +2270,4 @@ const blacklistToken = async (token, expiry) => {
 };
 
 void 0;
+

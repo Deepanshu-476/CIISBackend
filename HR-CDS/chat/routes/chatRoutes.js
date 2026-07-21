@@ -14,10 +14,20 @@ const {
   deleteMessageForEveryone,
   forwardMessage,
   markMessageSeen,
+  updateConversationMute,
+  updateDisappearingMessages,
+  updateMessageReaction,
 } = require("../controllers/chatController");
 
 const authMiddleware = require("../../middlewares/auth");
 const upload = require("../middleware/upload");
+const statusUpload = require("../middleware/statusUpload");
+const {
+  getStatuses,
+  createStatus,
+  markViewed,
+  deleteStatus,
+} = require("../controllers/statusController");
 
 router.get("/users", authMiddleware, getCompanyUsers);
 router.get("/conversations", authMiddleware, getConversations);
@@ -31,6 +41,13 @@ router.patch("/message/:messageId/delete-for-me", authMiddleware, deleteMessageF
 router.patch("/message/:messageId/delete-for-everyone", authMiddleware, deleteMessageForEveryone);
 router.post("/message/:messageId/forward", authMiddleware, forwardMessage);
 router.patch("/message/:messageId/seen", authMiddleware, markMessageSeen);
+router.patch("/conversation/:id/mute", authMiddleware, updateConversationMute);
+router.patch("/conversation/:id/disappearing-messages", authMiddleware, updateDisappearingMessages);
+router.patch("/message/:messageId/reaction", authMiddleware, updateMessageReaction);
+router.get("/statuses", authMiddleware, getStatuses);
+router.post("/statuses", authMiddleware, statusUpload.single("file"), createStatus);
+router.patch("/statuses/:statusId/view", authMiddleware, markViewed);
+router.delete("/statuses/:statusId", authMiddleware, deleteStatus);
 
 router.get("/turn-credentials", authMiddleware, async (_req, res) => {
   const apiKey = process.env.METERED_TURN_API_KEY;
