@@ -690,7 +690,7 @@ app.use("/api/holidays", require("./HR-CDS/routes/Holiday.js"));
 app.use("/api/client-documents", require("./HR-CDS/routes/clientDocumentRoutes.js"));
 app.use('/api/branches', require('./routes/branchRoutes.js'));
 app.use('/api/support', require('./routes/supportRoutes.js'));
-app.use('/api/app-version', require('./routes/appVersionRoutes.js'));
+app.use('/api/email-settings', require('./routes/emailSettingsRoutes.js'));
 
 
 

@@ -3,6 +3,7 @@
 const nodemailer = require('nodemailer');
 const { getCompanyRegistrationEmailTemplate } = require('../utils/emailTemplates/companyRegistration');
 const {notifyEmailRecipients} = require('../HR-CDS/utils/systemNotificationService');
+const { createEmailTransporter } = require('./emailSettingsService');
 
 class EmailService {
   constructor() {
@@ -59,8 +60,20 @@ class EmailService {
 
       const isDev = process.env.NODE_ENV !== 'production';
 
-      
-      if (!this.transporter) {
+      let emailTransport;
+      try {
+        emailTransport = await createEmailTransporter();
+      } catch (configError) {
+        if (configError.code === 'EMAIL_DISABLED') {
+          console.warn(`Email skipped because service is disabled. To: ${to}, Subject: ${subject}`);
+          return {
+            success: true,
+            skipped: true,
+            disabled: true,
+            message: 'Email service is disabled'
+          };
+        }
+
         if (isDev) {
           console.warn('⚠️ [DEV ONLY] Email credentials not configured. Mocking email send:');
           console.warn(`[DEV ONLY] To: ${to}`);
@@ -79,12 +92,13 @@ class EmailService {
         throw new Error('Email service not configured');
       }
 
+      const { config, transporter } = emailTransport;
       const mailOptions = {
-        from: `"CIIS NETWORK" <${process.env.EMAIL_USER}>`,
+        from: `"${config.senderName || 'CIIS NETWORK'}" <${config.emailUser}>`,
         to: Array.isArray(to) ? to.join(', ') : to,
         subject: subject,
         html: html,
-        replyTo: process.env.EMAIL_REPLY_TO || process.env.EMAIL_USER,
+        replyTo: config.replyTo || config.emailUser,
         priority: options.priority || 'high',
         headers: {
           'X-Entity-Ref-ID': options.referenceId || `email-${Date.now()}`,
@@ -98,7 +112,7 @@ class EmailService {
         mailOptions.attachments = options.attachments;
       }
 
-      const info = await this.transporter.sendMail(mailOptions);
+      const info = await transporter.sendMail(mailOptions);
       
       void 0;
       this.notifyEmailSent(to, subject, options);
