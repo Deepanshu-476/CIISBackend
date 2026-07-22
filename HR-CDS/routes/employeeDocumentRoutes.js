@@ -75,10 +75,14 @@ router.post('/', upload.single('document'), async (req, res) => {
     return res.status(403).json({ message: 'You do not have permission to upload documents for this employee' });
   }
   if (!req.file) return res.status(400).json({ message: 'No document received. Please select the file again.' });
+  if (!req.body.name?.trim()) {
+    fs.unlink(req.file.path, () => {});
+    return res.status(400).json({ message: 'Document name is required' });
+  }
 
   const document = {
     _id: new mongoose.Types.ObjectId(),
-    name: req.body.name?.trim() || req.file.originalname,
+    name: req.body.name.trim(),
     type: req.file.mimetype,
     url: req.file.filename,
     uploadedAt: new Date()
