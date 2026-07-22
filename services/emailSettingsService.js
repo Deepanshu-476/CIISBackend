@@ -418,6 +418,31 @@ const updateGlobalEmailEnabled = async (enabled, updatedBy) => {
   return sanitizeSettings(settings);
 };
 
+const updateEmailModuleEnabled = async (moduleKey, enabled, updatedBy) => {
+  const normalizedModuleKey = String(moduleKey || "").trim();
+  const moduleExists = EMAIL_MODULES.some(moduleItem => moduleItem.key === normalizedModuleKey);
+
+  if (!moduleExists) {
+    throw new Error("Invalid email module");
+  }
+
+  const current = await getSettingsDocument({ includeSecret: true, fresh: true });
+  const moduleSettings = normalizeModuleSettings(current.moduleSettings);
+  moduleSettings[normalizedModuleKey] = parseBoolean(enabled);
+
+  const settings = await EmailSettings.findOneAndUpdate(
+    { key: SETTINGS_KEY },
+    {
+      moduleSettings,
+      updatedBy: updatedBy || current.updatedBy || null,
+    },
+    { new: true, runValidators: true, upsert: true, setDefaultsOnInsert: true }
+  ).select("+encryptedEmailPass +senderProfiles.encryptedEmailPass");
+
+  clearEmailSettingsCache();
+  return sanitizeSettings(settings);
+};
+
 const getEmailRuntimeConfig = async () => {
   const settings = await getSettingsDocument({ includeSecret: true });
   const activeProfile = getActiveSenderProfile(settings);
@@ -553,6 +578,7 @@ module.exports = {
   getLoginSettings,
   getModuleSettings,
   getPublicEmailSettings,
+  updateEmailModuleEnabled,
   isEmailModuleEnabled,
   resolveEmailModuleKey,
   updateEmailSettings,
