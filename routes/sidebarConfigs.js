@@ -13,18 +13,51 @@ const getRouteKey = item => {
   return rawPath.split('/').filter(Boolean).pop();
 };
 
+const getRouteAccessKeys = item => {
+  const id = String(item?.id || '').trim();
+  const rawPath = String(item?.path || '').trim();
+  const cleanPath = rawPath.replace(/^\/+/, '');
+  const keys = new Set([id, rawPath, cleanPath, getRouteKey(item)].filter(Boolean));
+
+  if (id) {
+    keys.add(`/ciisUser/${id}`);
+    keys.add(`ciisUser/${id}`);
+  }
+
+  if (cleanPath) {
+    keys.add(`/ciisUser/${cleanPath}`);
+    keys.add(`ciisUser/${cleanPath}`);
+  }
+
+  const clientKey = id.startsWith('client-')
+    ? id.substring(7)
+    : cleanPath.startsWith('client-')
+      ? cleanPath.substring(7)
+      : cleanPath.startsWith('client/')
+        ? cleanPath.substring(7)
+        : '';
+
+  if (clientKey) {
+    keys.add(clientKey);
+    keys.add(`/client/${clientKey}`);
+    keys.add(`client/${clientKey}`);
+  }
+
+  return keys;
+};
+
 const filterMenuItemsByCompanyAccess = async (companyId, menuItems) => {
   const company = await Company.findById(companyId).select('allowedPages');
   const allowedPages = Array.isArray(company?.allowedPages) ? company.allowedPages : [];
 
   if (allowedPages.length === 0) return menuItems;
 
-  const allowedSet = new Set(allowedPages.map(page => String(page).trim()).filter(Boolean));
-  return menuItems.filter(item => (
-    allowedSet.has(item.id) ||
-    allowedSet.has(item.path) ||
-    allowedSet.has(getRouteKey(item))
-  ));
+  const normalizeKey = value => String(value || '').trim().replace(/^\/+/, '').toLowerCase();
+  const allowedSet = new Set(allowedPages.map(page => normalizeKey(page)).filter(Boolean));
+  return menuItems.filter(item => {
+    const itemKeys = [...getRouteAccessKeys(item)].map(key => normalizeKey(key)).filter(Boolean);
+    return itemKeys.some(key => allowedSet.has(key));
+  });
 };
 
 const escapeRegex = value => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

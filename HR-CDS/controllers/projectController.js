@@ -72,6 +72,16 @@ const isPendingTaskPastDue = (task = {}) => {
   return !Number.isNaN(dueDate.getTime()) && dueDate < new Date();
 };
 
+const syncTaskStatusWithDueDate = (task) => {
+  if (!task?.dueDate) return;
+  const dueDate = new Date(task.dueDate);
+  if (Number.isNaN(dueDate.getTime())) return;
+
+  const status = normalizeTaskStatus(task.status);
+  if (!["pending", "overdue"].includes(status)) return;
+  task.status = dueDate < new Date() ? "overdue" : "pending";
+};
+
 const isProjectAdmin = (user = {}) => {
   const roles = [user.role, user.jobRole, user.companyRole].map(normalizeRole);
   return roles.some(role => ["admin", "super-admin", "superadmin", "owner"].includes(role));
@@ -922,6 +932,7 @@ exports.addTask = async (req, res) => {
         task.assignedTo = assignedUserIds[0];
       }
       if (dueDate) task.dueDate = dueDate;
+      syncTaskStatusWithDueDate(task);
 
       
       if (req.file) {
@@ -1082,6 +1093,7 @@ exports.updateTask = async (req, res) => {
 
       task[key] = updateData[key];
     });
+    syncTaskStatusWithDueDate(task);
     task.updatedAt = new Date();
 
     

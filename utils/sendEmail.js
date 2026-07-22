@@ -1,5 +1,9 @@
-const nodemailer = require('nodemailer');
 const {notifyEmailRecipients} = require('../HR-CDS/utils/systemNotificationService');
+const {
+  createEmailTransporter,
+  isEmailModuleEnabled,
+  resolveEmailModuleKey,
+} = require('../services/emailSettingsService');
 
 const notifyEmailSent = ({to, subject, options = {}}) => {
   if (options.skipNotification) return;
@@ -20,6 +24,8 @@ const notifyEmailSent = ({to, subject, options = {}}) => {
 };
 
 const sendEmail = async (to, subject, html, options = {}) => {
+  const emailModuleKey = resolveEmailModuleKey(subject, options);
+
   try {
     
     if (!to || !subject || !html) {
@@ -27,9 +33,28 @@ const sendEmail = async (to, subject, html, options = {}) => {
     }
 
     const isDev = process.env.NODE_ENV !== 'production';
+    const moduleEnabled = await isEmailModuleEnabled(emailModuleKey);
 
-    
-    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+    if (!moduleEnabled) {
+      console.warn(`Email skipped because module is disabled. Module: ${emailModuleKey}, To: ${to}, Subject: ${subject}`);
+      return {
+        success: true,
+        skipped: true,
+        disabled: true,
+        moduleKey: emailModuleKey,
+        message: 'Email module is disabled'
+      };
+    }
+
+    let emailTransport;
+    try {
+      emailTransport = await createEmailTransporter();
+    } catch (configError) {
+      if (configError.code === 'EMAIL_DISABLED') {
+        console.warn(`Email skipped because service is disabled. To: ${to}, Subject: ${subject}`);
+        return { success: true, skipped: true, disabled: true, message: 'Email service is disabled' };
+      }
+
       console.error('❌ Email credentials not configured in environment variables');
       if (isDev) {
         console.warn('⚠️ [DEV ONLY] Email credentials not configured. Mocking email send:');
@@ -45,29 +70,7 @@ const sendEmail = async (to, subject, html, options = {}) => {
       throw new Error('Email service not configured');
     }
 
-    
-    const transportConfig = {
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS
-      },
-      tls: {
-        rejectUnauthorized: false 
-      },
-      pool: true, 
-      maxConnections: 5,
-      maxMessages: 100
-    };
-
-    if (process.env.EMAIL_HOST) {
-      transportConfig.host = process.env.EMAIL_HOST;
-      transportConfig.port = parseInt(process.env.EMAIL_PORT || '465', 10);
-      transportConfig.secure = process.env.EMAIL_SECURE === 'true' || transportConfig.port === 465;
-    } else {
-      transportConfig.service = 'Gmail';
-    }
-
-    const transporter = nodemailer.createTransport(transportConfig);
+    const { config, transporter } = emailTransport;
 
     
     await transporter.verify();
@@ -75,18 +78,18 @@ const sendEmail = async (to, subject, html, options = {}) => {
 
     
     const info = await transporter.sendMail({
-      from: `"CIIS NETWORK" <${process.env.EMAIL_USER}>`,
+      from: `"${config.senderName || 'CIIS NETWORK'}" <${config.emailUser}>`,
       to: Array.isArray(to) ? to.join(', ') : to,
       subject: subject,
       html: html,
       text: options.text || undefined,
-      replyTo: process.env.EMAIL_USER,
+      replyTo: config.replyTo || config.emailUser,
       priority: options.priority || 'normal'
     });
 
     void 0;
     notifyEmailSent({to, subject, options});
-    return { success: true, messageId: info.messageId };
+    return { success: true, messageId: info.messageId, moduleKey: emailModuleKey };
 
   } catch (error) {
     const isDev = process.env.NODE_ENV !== 'production';
@@ -101,7 +104,7 @@ const sendEmail = async (to, subject, html, options = {}) => {
       if (otpMatch) {
         console.warn(`[DEV ONLY] OTP: ${otpMatch[1]}`);
       }
-      return { success: true, messageId: `dev-fallback-${Date.now()}`, mocked: true };
+      return { success: true, messageId: `dev-fallback-${Date.now()}`, mocked: true, moduleKey: emailModuleKey };
     }
     
     throw new Error(`Failed to send email: ${error.message}`);
