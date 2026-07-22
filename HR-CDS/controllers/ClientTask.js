@@ -36,6 +36,12 @@ const getLocalDateStart = (value = new Date()) => {
 const getClientTaskOverdueCutoff = () => new Date();
 const CLIENT_TASK_OVERDUE_EXCLUDED_STATUSES = ['completed', 'onhold', 'on hold'];
 
+const isCompanyAllTaskEdit = (req) => (
+  req.body?.allowCompanyAllTaskEdit === true ||
+  req.body?.allowCompanyAllTaskEdit === 'true' ||
+  req.headers?.['x-company-all-task-edit'] === 'true'
+);
+
 const isClientTaskOverdue = task => {
   if (!task?.dueDate || task.completed) return false;
   const status = String(task.status || 'pending').trim().toLowerCase();
@@ -55,6 +61,28 @@ const normalizeClientTaskStatusForDueDate = task => {
   if (isClientTaskOverdue(task)) return 'overdue';
   const status = String(task?.status || 'pending').trim().toLowerCase();
   return status === 'overdue' ? 'pending' : (task?.status || 'pending');
+};
+
+const parseTaskCheckpoints = value => {
+  if (!value || value === 'null') return [];
+  const raw = typeof value === 'string' ? JSON.parse(value) : value;
+  if (!Array.isArray(raw)) return [];
+
+  return raw
+    .map(item => {
+      const title = typeof item === 'string' ? item : item?.title;
+      const cleanTitle = String(title || '').trim();
+      if (!cleanTitle) return null;
+
+      const completed = Boolean(typeof item === 'object' ? item.completed : false);
+      return {
+        title: cleanTitle,
+        completed,
+        completedAt: completed ? (item?.completedAt ? new Date(item.completedAt) : new Date()) : null,
+        completedBy: item?.completedBy || null
+      };
+    })
+    .filter(Boolean);
 };
 
 const getLatestSubscription = client => {
@@ -1192,7 +1220,8 @@ const updateAssignedTaskStatus = async (req, res) => {
 
     if (
       targetStatus !== 'overdue' &&
-      (previousStatus === 'overdue' || isClientTaskOverdue(task))
+      (previousStatus === 'overdue' || isClientTaskOverdue(task)) &&
+      !isCompanyAllTaskEdit(req)
     ) {
       if (previousStatus !== 'overdue' && isClientTaskOverdue(task)) {
         task.status = 'overdue';
@@ -1480,6 +1509,7 @@ const getAssignedToMeTasks = async (req, res) => {
         clientId: task.clientId,
         clientEmail: task.clientId?.email,
         clientCompany: task.clientId?.company,
+        checkpoints: task.checkpoints || [],
         files: task.files || [],
         remarks: task.remarks || [],
         activityLogs: task.activityLogs || [],
@@ -1643,6 +1673,7 @@ const getAssignedTasksByUserId = async (req, res) => {
       clientId: task.clientId,
       clientEmail: task.clientId?.email,
       clientCompany: task.clientId?.company,
+      checkpoints: task.checkpoints || [],
       files: task.files || [],
       remarks: task.remarks || [],
       activityLogs: task.activityLogs || [],
@@ -1863,7 +1894,7 @@ const getClientTaskSummaries = async (req, res) => {
 const addTask = async (req, res) => {
   try {
     const { clientId, service } = req.params;
-    const { name, dueDate, dueDateTime, assignee, assigneeId, priority, description, subscriptionId, subscriptionNo } = req.body;
+    const { name, dueDate, dueDateTime, assignee, assigneeId, priority, description, subscriptionId, subscriptionNo, checkpoints } = req.body;
     const currentUser = req.user;
     const requestedDueDate = dueDateTime || dueDate;
     const parsedDueDate = parseClientDueDate(requestedDueDate);
@@ -1928,6 +1959,7 @@ const addTask = async (req, res) => {
       priority: priority || 'Medium',
       status: 'pending',
       completed: false,
+      checkpoints: parseTaskCheckpoints(checkpoints),
       activityLogs: [],
       remarks: []
     });
@@ -2040,7 +2072,8 @@ const updateTask = async (req, res) => {
     if (
       (updates.status || updates.completed !== undefined) &&
       updates.status !== 'overdue' &&
-      (previousStatus === 'overdue' || isClientTaskOverdue(task))
+      (previousStatus === 'overdue' || isClientTaskOverdue(task)) &&
+      !isCompanyAllTaskEdit(req)
     ) {
       if (previousStatus !== 'overdue' && isClientTaskOverdue(task)) {
         task.status = 'overdue';
@@ -2137,6 +2170,10 @@ const updateTask = async (req, res) => {
         }
         task.dueDate = parsedDueDate;
         task.dueDateSource = 'manual';
+      } else if (key === 'checkpoints') {
+        const parsedCheckpoints = parseTaskCheckpoints(newValue);
+        changes.push(`checkpoints updated`);
+        task.checkpoints = parsedCheckpoints;
       } else if (updates[key] !== undefined) {
         task[key] = updates[key];
       }
@@ -2330,6 +2367,88 @@ const toggleTaskCompletion = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error updating task',
+      error: error.message
+    });
+  }
+};
+
+const updateTaskCheckpoint = async (req, res) => {
+  try {
+    const { taskId, checkpointId } = req.params;
+    const { completed } = req.body;
+    const currentUser = req.user;
+
+    const task = await Task.findById(taskId);
+    if (!task) {
+      return res.status(404).json({ success: false, message: 'Task not found' });
+    }
+
+    const isAssignedToUser =
+      task.assigneeId?.toString() === currentUser.id?.toString() ||
+      task.assigneeId?.toString() === currentUser._id?.toString() ||
+      task.assignee === currentUser.id?.toString() ||
+      task.assignee === currentUser._id?.toString() ||
+      task.assignee === currentUser.name ||
+      task.assignee === currentUser.email;
+
+    if (!isAssignedToUser) {
+      return res.status(403).json({ success: false, message: 'You are not authorized to update this task' });
+    }
+
+    const checkpoint = task.checkpoints.id(checkpointId);
+    if (!checkpoint) {
+      return res.status(404).json({ success: false, message: 'Checkpoint not found' });
+    }
+
+    const previousStatus = task.status;
+    const previousCompleted = task.completed;
+    const now = new Date();
+    const isCompleted = completed !== false;
+
+    checkpoint.completed = isCompleted;
+    checkpoint.completedAt = isCompleted ? now : null;
+    checkpoint.completedBy = isCompleted ? (currentUser?.id || currentUser?._id) : null;
+
+    const allCompleted = task.checkpoints.length > 0 && task.checkpoints.every(item => item.completed);
+    if (allCompleted) {
+      task.completed = true;
+      task.completedAt = task.completedAt || now;
+      task.status = 'completed';
+      task.inProgressSince = null;
+    } else if (previousCompleted) {
+      task.completed = false;
+      task.completedAt = null;
+      task.status = 'in-progress';
+    } else if (previousStatus === 'pending' && isCompleted) {
+      task.status = 'in-progress';
+      task.inProgressSince = task.inProgressSince || now;
+    }
+
+    await addClientActivityLogHelper(task, {
+      action: 'checkpoint_updated',
+      description: `${isCompleted ? 'Completed' : 'Reopened'} checkpoint: ${checkpoint.title}`,
+      oldValues: {status: previousStatus, completed: previousCompleted},
+      newValues: {status: task.status, completed: task.completed, checkpointId, checkpointCompleted: isCompleted},
+      user: currentUser?.id || currentUser?._id,
+      userName: currentUser?.name || currentUser?.username || 'System'
+    }, req);
+
+    await task.save();
+
+    if (!previousCompleted && task.completed) {
+      await notifyClientTaskCompleted({task, actor: currentUser, req});
+    }
+
+    res.json({
+      success: true,
+      message: 'Checkpoint updated successfully',
+      data: task
+    });
+  } catch (error) {
+    console.error('Error updating task checkpoint:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error updating checkpoint',
       error: error.message
     });
   }
@@ -2621,6 +2740,7 @@ module.exports = {
   getClientTaskSummaries,
   addTask,
   updateTask,
+  updateTaskCheckpoint,
   toggleTaskCompletion,
   deleteTask,
   getTaskStats,

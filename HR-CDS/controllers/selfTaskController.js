@@ -6,6 +6,7 @@ const {
   normalizeTaskStatus,
   isOnHoldStatus,
   canChangeFromOnHold,
+  parseTaskCheckpoints,
   isTaskOverdueForStatus,
   calculateUnifiedTaskStats,
   groupTasksByDate,
@@ -17,6 +18,7 @@ const {
   enrichStatusInfo,
   applyCleanListFilters,
   sendCleanTaskList,
+  User,
   fs,
   path,
   sharp
@@ -39,10 +41,45 @@ const fetchPersonalTaskList = async (req) => {
   return enriched.map(t => ({ ...t, status: normalizeTaskStatus(t.overallStatus), taskSource: 'self', __taskSource: 'self' }));
 };
 
+const normalizeCodeBase = (code) => {
+  if (!code) return '';
+  return String(code).split('-')[0].trim().toUpperCase();
+};
+
+const isPrivilegedCompanyUser = (user) => {
+  const roles = [user?.role, user?.companyRole, user?.jobRole]
+    .map(role => String(role || '').toLowerCase().replace(/[\s_]/g, '-'));
+  return roles.some(role => ['admin', 'super-admin', 'superadmin', 'owner', 'company-admin', 'hr', 'manager'].includes(role));
+};
+
+const isCompanyAllTaskEdit = (req) => (
+  req.body?.allowCompanyAllTaskEdit === true ||
+  req.body?.allowCompanyAllTaskEdit === 'true' ||
+  req.headers?.['x-company-all-task-edit'] === 'true'
+);
+
+const canManagePersonalTask = async (req, task) => {
+  if (task.taskFor !== 'self') return false;
+  const currentUserId = (req.user._id || req.user.id).toString();
+  if (task.createdBy.toString() === currentUserId) return true;
+  if (!isPrivilegedCompanyUser(req.user)) return false;
+
+  const requesterCompany = normalizeCodeBase(getRequestCompanyCode(req));
+  const taskCompany = normalizeCodeBase(task.companyCode);
+  if (requesterCompany && taskCompany && requesterCompany === taskCompany) return true;
+
+  const owner = await User.findById(task.createdBy).select('companyCode company').lean();
+  return Boolean(
+    requesterCompany &&
+    normalizeCodeBase(owner?.companyCode) &&
+    requesterCompany === normalizeCodeBase(owner.companyCode)
+  );
+};
+
 
 exports.createTaskForSelf = async (req, res) => {
   try {
-    const { title, description, dueDateTime, whatsappNumber, priorityDays, priority } = req.body;
+    const { title, description, dueDateTime, whatsappNumber, priorityDays, priority, checkpoints } = req.body;
     const companyCode = getRequestCompanyCode(req);
     
     if (!companyCode) {
@@ -60,6 +97,7 @@ exports.createTaskForSelf = async (req, res) => {
     }
 
     const statusByUser = parsedUsers.map(uid => ({ user: uid, status: 'pending' }));
+    const parsedCheckpoints = parseTaskCheckpoints(checkpoints);
 
     const task = await Task.create({
       title,
@@ -72,6 +110,7 @@ exports.createTaskForSelf = async (req, res) => {
       assignedUsers: parsedUsers,
       assignedGroups: [],
       statusByUser,
+      checkpoints: parsedCheckpoints,
       files,
       voiceNote,
       createdBy: req.user._id,
@@ -116,7 +155,7 @@ exports.updateTask = async (req, res) => {
     const { taskId } = req.params;
     const task = await Task.findById(taskId);
     if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
-    if (task.createdBy.toString() !== req.user._id.toString()) return res.status(403).json({ success: false, error: 'Not authorized' });
+    if (!(await canManagePersonalTask(req, task))) return res.status(403).json({ success: false, error: 'Not authorized' });
 
     const oldTask = task.toObject();
 
@@ -131,6 +170,9 @@ exports.updateTask = async (req, res) => {
     fields.forEach(f => {
       if (req.body[f] !== undefined && req.body[f] !== 'null') task[f] = req.body[f];
     });
+    if (req.body.checkpoints !== undefined) {
+      task.checkpoints = parseTaskCheckpoints(req.body.checkpoints);
+    }
 
     await task.save();
     await createActivityLog(req.user, 'task_updated', task._id, `Updated task details`, oldTask, task.toObject(), req);
@@ -167,10 +209,12 @@ exports.updateStatus = async (req, res) => {
 
     const task = await Task.findById(taskId);
     if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
-    if (task.createdBy.toString() !== req.user._id.toString()) return res.status(403).json({ success: false, error: 'Not authorized' });
+    if (!(await canManagePersonalTask(req, task))) return res.status(403).json({ success: false, error: 'Not authorized' });
 
     const oldStatus = task.overallStatus || 'pending';
     const normalizedStatus = normalizeTaskStatus(status);
+    const ownerUserId = task.createdBy;
+    const allowCompanyAllEdit = isCompanyAllTaskEdit(req);
 
     if (isOnHoldStatus(oldStatus) && !canChangeFromOnHold(normalizedStatus)) {
       return res.status(400).json({
@@ -181,26 +225,28 @@ exports.updateStatus = async (req, res) => {
 
     if (
       normalizedStatus !== 'overdue' &&
-      normalizeTaskStatus(oldStatus) === 'overdue'
+      normalizeTaskStatus(oldStatus) === 'overdue' &&
+      !allowCompanyAllEdit
     ) {
       return res.status(400).json({ success: false, error: 'Cannot change status of an overdue task' });
     }
 
     if (
       !['overdue', 'onhold'].includes(normalizedStatus) &&
-      isTaskOverdueForStatus(task.dueDateTime || task.dueDate, oldStatus, task)
+      isTaskOverdueForStatus(task.dueDateTime || task.dueDate, oldStatus, task) &&
+      !allowCompanyAllEdit
     ) {
       if (!['onhold', 'completed', 'approved', 'rejected', 'cancelled', 'overdue'].includes(normalizeTaskStatus(oldStatus))) {
-        task.markUserStatusOverdue(req.user._id, 'Automatically marked overdue after due time passed');
+        task.markUserStatusOverdue(ownerUserId, 'Automatically marked overdue after due time passed');
         task.overallStatus = 'overdue';
         await task.save();
       }
       return res.status(400).json({ success: false, error: 'Cannot change status of an overdue task' });
     }
 
-    const idx = task.statusByUser.findIndex(s => s.user?.toString() === req.user._id.toString());
+    const idx = task.statusByUser.findIndex(s => s.user?.toString() === ownerUserId.toString());
     if (idx === -1) {
-      task.statusByUser.push({ user: req.user._id, status: status, updatedAt: new Date(), remarks });
+      task.statusByUser.push({ user: ownerUserId, status: status, updatedAt: new Date(), remarks });
     } else {
       task.statusByUser[idx].status = status;
       task.statusByUser[idx].updatedAt = new Date();
@@ -224,6 +270,62 @@ exports.updateStatus = async (req, res) => {
     await task.save();
     await createActivityLog(req.user, 'status_updated', task._id, `Updated task status to ${status}`, { status: oldStatus }, { status, remarks }, req);
     res.json({ success: true, message: 'Status updated successfully', data: { taskId, newStatus: status, overallStatus: task.overallStatus } });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+exports.updateCheckpoint = async (req, res) => {
+  try {
+    const { taskId, checkpointId } = req.params;
+    const { completed } = req.body;
+
+    const task = await Task.findById(taskId);
+    if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
+    if (!(await canManagePersonalTask(req, task))) return res.status(403).json({ success: false, error: 'Not authorized' });
+
+    const checkpoint = task.checkpoints.id(checkpointId);
+    if (!checkpoint) return res.status(404).json({ success: false, error: 'Checkpoint not found' });
+
+    const isCompleted = completed !== false;
+    const oldStatus = task.overallStatus || 'pending';
+    checkpoint.completed = isCompleted;
+    checkpoint.completedAt = isCompleted ? new Date() : null;
+    checkpoint.completedBy = isCompleted ? req.user._id : null;
+
+    const hasCheckpoints = task.checkpoints.length > 0;
+    const allCompleted = hasCheckpoints && task.checkpoints.every(item => item.completed);
+    const ownerUserId = task.createdBy;
+    const idx = task.statusByUser.findIndex(s => s.user?.toString() === ownerUserId.toString());
+
+    if (allCompleted) {
+      task.overallStatus = 'completed';
+      task.completionDate = new Date();
+      if (idx === -1) {
+        task.statusByUser.push({ user: ownerUserId, status: 'completed', updatedAt: new Date(), remarks: 'All checkpoints completed' });
+      } else {
+        task.statusByUser[idx].status = 'completed';
+        task.statusByUser[idx].updatedAt = new Date();
+        task.statusByUser[idx].remarks = 'All checkpoints completed';
+      }
+      if (oldStatus !== 'completed') {
+        task.statusHistory.push({ status: 'completed', changedBy: req.user._id, remarks: 'All checkpoints completed' });
+      }
+    } else if (oldStatus === 'completed') {
+      task.overallStatus = 'in-progress';
+      task.completionDate = null;
+      if (idx !== -1) {
+        task.statusByUser[idx].status = 'in-progress';
+        task.statusByUser[idx].updatedAt = new Date();
+        task.statusByUser[idx].remarks = 'Checkpoint reopened';
+      }
+      task.statusHistory.push({ status: 'in-progress', changedBy: req.user._id, remarks: 'Checkpoint reopened' });
+    }
+
+    await task.save();
+    await createActivityLog(req.user, 'checkpoint_updated', task._id, `${isCompleted ? 'Completed' : 'Reopened'} checkpoint: ${checkpoint.title}`, null, { checkpointId, completed: isCompleted }, req);
+
+    res.json({ success: true, message: 'Checkpoint updated successfully', task });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

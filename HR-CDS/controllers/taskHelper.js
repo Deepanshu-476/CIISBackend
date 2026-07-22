@@ -151,6 +151,28 @@ const canChangeFromOnHold = nextStatus => {
   return ['in-progress', 'completed'].includes(normalizeTaskStatus(nextStatus));
 };
 
+const parseTaskCheckpoints = value => {
+  if (!value || value === 'null') return [];
+  const raw = typeof value === 'string' ? JSON.parse(value) : value;
+  if (!Array.isArray(raw)) return [];
+
+  return raw
+    .map(item => {
+      const title = typeof item === 'string' ? item : item?.title;
+      const cleanTitle = String(title || '').trim();
+      if (!cleanTitle) return null;
+
+      const completed = Boolean(typeof item === 'object' ? item.completed : false);
+      return {
+        title: cleanTitle,
+        completed,
+        completedAt: completed ? (item?.completedAt ? new Date(item.completedAt) : new Date()) : null,
+        completedBy: item?.completedBy || null
+      };
+    })
+    .filter(Boolean);
+};
+
 const calculateUnifiedTaskStats = (tasks, userId) => {
   const counts = {
     pending: 0,
@@ -590,6 +612,7 @@ const fetchAssignedClientTaskList = async (req) => {
       priority: (t.priority || 'Medium').toLowerCase(),
       clientName: t.clientId?.client || t.clientId?.name || 'Unknown Client',
       clientId: t.clientId,
+      checkpoints: t.checkpoints || [],
       files: t.files || [],
       remarks: t.remarks || [],
       createdAt: t.createdAt,
@@ -642,6 +665,7 @@ const fetchAssignedProjectTaskList = async (req) => {
         assignedToEmail: task.assignedTo?.email || '',
         projectName: project.projectName,
         projectTaskId: task._id,
+        checkpoints: task.checkpoints || [],
         files: task.pdfFile?.path ? [{
           filename: task.pdfFile.filename,
           originalName: task.pdfFile.filename,
@@ -684,6 +708,7 @@ module.exports = {
   normalizeTaskStatus,
   isOnHoldStatus,
   canChangeFromOnHold,
+  parseTaskCheckpoints,
   isTaskOverdueForStatus,
   calculateUnifiedTaskStats,
   groupTasksByDate,

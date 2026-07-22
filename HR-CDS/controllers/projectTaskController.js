@@ -11,6 +11,7 @@ module.exports = {
   updateTask: projectController.updateTask,
   deleteTask: projectController.deleteTask,
   updateTaskStatus: projectController.updateTaskStatus,
+  updateTaskCheckpoint: projectController.updateTaskCheckpoint,
   getTaskActivityLogs: projectController.getTaskActivityLogs,
   getTaskRemarks: projectController.getTaskRemarks,
   addRemark: projectController.addRemark

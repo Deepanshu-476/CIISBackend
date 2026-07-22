@@ -17,6 +17,7 @@ router.get('/stats', protect, selfTaskController.getPersonalTaskStats);
 router.put('/:taskId', protect, uploadFields, selfTaskController.updateTask);
 router.delete('/:taskId', protect, selfTaskController.deleteTask);
 router.patch('/:taskId/status', protect, selfTaskController.updateStatus);
+router.patch('/:taskId/checkpoints/:checkpointId', protect, selfTaskController.updateCheckpoint);
 router.post('/:taskId/remarks', protect, uploadRemarkImage, selfTaskController.addRemark);
 router.get('/:taskId/remarks', protect, selfTaskController.getRemarks);
 

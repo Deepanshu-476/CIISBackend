@@ -146,6 +146,7 @@ router.get('/summary/bulk', authMiddleware, taskController.getClientTaskSummarie
 router.get('/client/:clientId', taskController.getClientTasks);
 router.get('/client/:clientId/stats', taskController.getTaskStats);
 router.put('/:taskId', authMiddleware, taskController.updateTask);
+router.patch('/:taskId/checkpoints/:checkpointId', authMiddleware, taskController.updateTaskCheckpoint);
 router.patch('/:taskId/toggle', authMiddleware, taskController.toggleTaskCompletion);
 router.delete('/:taskId', authMiddleware, taskController.deleteTask);
 
