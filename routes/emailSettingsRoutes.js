@@ -3,6 +3,7 @@ const router = express.Router();
 const {
   getPublicEmailSettings,
   updateEmailSettings,
+  updateEmailModuleEnabled,
   updateGlobalEmailEnabled,
   createEmailTransporter,
   isEmailModuleEnabled,
@@ -74,6 +75,21 @@ router.patch("/global-switch", async (req, res) => {
   } catch (error) {
     console.error("Update global email switch error:", error);
     res.status(400).json({ success: false, message: error.message || "Failed to update global email switch" });
+  }
+});
+
+router.patch("/module-settings/:moduleKey", async (req, res) => {
+  try {
+    const settings = await updateEmailModuleEnabled(req.params.moduleKey, req.body?.enabled, req.user?._id);
+    const moduleInfo = settings.emailModules?.find(item => item.key === req.params.moduleKey);
+    res.json({
+      success: true,
+      message: moduleInfo?.enabled ? "Email module enabled" : "Email module disabled",
+      settings,
+    });
+  } catch (error) {
+    console.error("Update email module setting error:", error);
+    res.status(400).json({ success: false, message: error.message || "Failed to update email module" });
   }
 });
 
