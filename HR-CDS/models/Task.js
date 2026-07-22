@@ -113,6 +113,16 @@ const fileSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const checkpointSchema = new mongoose.Schema(
+  {
+    title: { type: String, required: true, trim: true },
+    completed: { type: Boolean, default: false },
+    completedAt: { type: Date, default: null },
+    completedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    createdAt: { type: Date, default: Date.now },
+  }
+);
+
  
 const taskSchema = new mongoose.Schema(
   {
@@ -144,6 +154,7 @@ const taskSchema = new mongoose.Schema(
 
     statusByUser: [statusSchema],
     statusHistory: [statusHistorySchema],
+    checkpoints: [checkpointSchema],
     remarks: [remarkSchema],
     snoozedUntil: {type: Date, default: null},
     isSnoozed: {

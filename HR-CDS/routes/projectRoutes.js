@@ -44,6 +44,7 @@ router.delete("/:id/tasks/:taskId", protect, projectController.deleteTask);
 router.patch("/:projectId/tasks/:taskId/status", protect, [
   check("status").notEmpty().withMessage("Status is required")
 ], projectController.updateTaskStatus);
+router.patch("/:projectId/tasks/:taskId/checkpoints/:checkpointId", protect, projectController.updateTaskCheckpoint);
 
 router.get("/:projectId/tasks/:taskId/activity", protect, projectController.getTaskActivityLogs);
 router.get("/:projectId/tasks/:taskId/remarks", protect, projectController.getTaskRemarks);

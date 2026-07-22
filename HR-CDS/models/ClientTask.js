@@ -110,6 +110,13 @@ const clienttaskSchema = new mongoose.Schema({
     uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     uploadedAt: { type: Date, default: Date.now }
   }],
+  checkpoints: [{
+    title: { type: String, required: true, trim: true },
+    completed: { type: Boolean, default: false },
+    completedAt: { type: Date, default: null },
+    completedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    createdAt: { type: Date, default: Date.now }
+  }],
   remarks: [{
     text: String,
     images: [{

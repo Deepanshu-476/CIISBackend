@@ -3,6 +3,7 @@ const Task = require('../models/Task');
 const ClientTask = require('../models/ClientTask');
 const Client = require('../models/Client');
 const { Project } = require('../models/Project');
+const Attendance = require('../models/Attendance');
 const User = require('../../models/User');
 const Group = require('../models/Group');
 const Notification = require('../models/Notification');
@@ -151,6 +152,226 @@ const isOnHoldStatus = status => normalizeTaskStatus(status) === 'onhold';
 
 const canChangeFromOnHold = nextStatus => {
   return ['in-progress', 'completed'].includes(normalizeTaskStatus(nextStatus));
+};
+
+const secondsToDurationLabel = seconds => {
+  const total = Math.max(0, Math.floor(Number(seconds) || 0));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (hours <= 0 && minutes <= 0) return '0m';
+  if (hours <= 0) return `${minutes}m`;
+  return `${hours}h ${minutes}m`;
+};
+
+const getTaskReportDateRange = query => {
+  const range = getCleanTaskDateRange({
+    period: query?.fromDate || query?.toDate ? 'all' : (query?.period || 'today'),
+    fromDate: query?.fromDate,
+    toDate: query?.toDate
+  });
+  if (range) return { start: range.$gte || null, end: range.$lte || null };
+
+  const now = new Date();
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(now);
+  end.setHours(23, 59, 59, 999);
+  return { start, end };
+};
+
+const toValidWorkDate = value => {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const getOverlapSeconds = (start, end, windowStart, windowEnd) => {
+  const safeStart = toValidWorkDate(start);
+  const safeEnd = toValidWorkDate(end);
+  if (!safeStart || !safeEnd || !windowStart || !windowEnd) return 0;
+  const from = Math.max(safeStart.getTime(), windowStart.getTime());
+  const to = Math.min(safeEnd.getTime(), windowEnd.getTime());
+  return to > from ? Math.floor((to - from) / 1000) : 0;
+};
+
+const getClippedInterval = (start, end, windowStart, windowEnd) => {
+  const safeStart = toValidWorkDate(start);
+  const safeEnd = toValidWorkDate(end);
+  if (!safeStart || !safeEnd || !windowStart || !windowEnd) return null;
+  const from = Math.max(safeStart.getTime(), windowStart.getTime());
+  const to = Math.min(safeEnd.getTime(), windowEnd.getTime());
+  return to > from ? { start: new Date(from), end: new Date(to) } : null;
+};
+
+const getMergedIntervalSeconds = (intervals = []) => {
+  const sorted = intervals
+    .filter(interval => interval?.start && interval?.end)
+    .map(interval => ({
+      start: new Date(interval.start).getTime(),
+      end: new Date(interval.end).getTime()
+    }))
+    .filter(interval => Number.isFinite(interval.start) && Number.isFinite(interval.end) && interval.end > interval.start)
+    .sort((a, b) => a.start - b.start);
+
+  if (sorted.length === 0) return 0;
+
+  const merged = [];
+  sorted.forEach(interval => {
+    const last = merged[merged.length - 1];
+    if (!last || interval.start > last.end) {
+      merged.push({ ...interval });
+      return;
+    }
+    last.end = Math.max(last.end, interval.end);
+  });
+
+  return merged.reduce((sum, interval) => sum + Math.floor((interval.end - interval.start) / 1000), 0);
+};
+
+const buildFirstProgressToCompletedSession = (events = [], currentStatus, windowEnd) => {
+  const sorted = [...events]
+    .map(event => ({
+      status: normalizeTaskStatus(event.status),
+      at: toValidWorkDate(event.at)
+    }))
+    .filter(event => event.status && event.at)
+    .sort((a, b) => a.at - b.at);
+
+  const firstInProgress = sorted.find(event => event.status === 'in-progress');
+  if (!firstInProgress) return null;
+
+  const completedEvents = sorted.filter(
+    event => event.status === 'completed' && event.at >= firstInProgress.at
+  );
+  const lastCompleted = completedEvents[completedEvents.length - 1];
+
+  if (lastCompleted) {
+    return { start: firstInProgress.at, end: lastCompleted.at };
+  }
+
+  if (normalizeTaskStatus(currentStatus) === 'in-progress') {
+    return { start: firstInProgress.at, end: windowEnd || new Date() };
+  }
+
+  return null;
+};
+
+const getTaskStatusEvents = task => {
+  if (Array.isArray(task.statusHistory) && task.statusHistory.length > 0) {
+    return task.statusHistory.map(entry => ({
+      status: entry.status,
+      at: entry.changedAt || entry.createdAt || entry.updatedAt
+    }));
+  }
+
+  if (Array.isArray(task.activityLogs) && task.activityLogs.length > 0) {
+    return task.activityLogs
+      .map(entry => ({
+        status: entry.newValue || entry.newValues?.status || entry.status,
+        at: entry.performedAt || entry.createdAt || entry.updatedAt
+      }))
+      .filter(entry => entry.status);
+  }
+
+  return [];
+};
+
+const calculateTaskWork = (task, workWindow) => {
+  if (!workWindow?.start || !workWindow?.end) return { seconds: 0, interval: null };
+
+  const session = buildFirstProgressToCompletedSession(
+    getTaskStatusEvents(task),
+    task.userStatus || task.status || task.overallStatus,
+    workWindow.end
+  );
+
+  let interval = session
+    ? getClippedInterval(session.start, session.end, workWindow.start, workWindow.end)
+    : null;
+  let total = interval ? getOverlapSeconds(interval.start, interval.end, workWindow.start, workWindow.end) : 0;
+
+  if (total === 0 && task.taskSource === 'client') {
+    const storedSeconds = Number(task.timeSpent || 0);
+    const activeInterval = normalizeTaskStatus(task.status) === 'in-progress' && task.inProgressSince
+      ? getClippedInterval(task.inProgressSince, workWindow.end, workWindow.start, workWindow.end)
+      : null;
+    const activeSeconds = activeInterval ? getOverlapSeconds(activeInterval.start, activeInterval.end, workWindow.start, workWindow.end) : 0;
+    total = storedSeconds + activeSeconds;
+    interval = activeInterval;
+  }
+
+  return { seconds: Math.max(0, total), interval };
+};
+
+const getUserWorkWindow = async (userId, query) => {
+  const range = getTaskReportDateRange(query);
+  const attendance = await Attendance.findOne({
+    user: userId,
+    date: { $gte: range.start, $lte: range.end }
+  }).sort({ date: -1 }).lean();
+
+  const clockIn = toValidWorkDate(attendance?.inTime);
+  const rawClockOut = toValidWorkDate(attendance?.outTime);
+  const clockOut = rawClockOut || (attendance?.isClockedIn ? new Date() : null);
+  const start = clockIn || range.start;
+  const end = clockOut || range.end;
+  const totalSeconds = clockIn && end ? Math.max(0, Math.floor((end - clockIn) / 1000)) : 0;
+
+  return {
+    start,
+    end,
+    attendance,
+    summary: {
+      clockIn,
+      clockOut: rawClockOut,
+      isClockedIn: Boolean(attendance?.isClockedIn),
+      totalClockedSeconds: totalSeconds,
+      totalClockedLabel: secondsToDurationLabel(totalSeconds)
+    }
+  };
+};
+
+const normalizeCodeBase = (code) => {
+  if (!code) return '';
+  return String(code).split('-')[0].trim().toUpperCase();
+};
+
+const isCompanyAllTaskEdit = (req) => (
+  req.body?.allowCompanyAllTaskEdit === true ||
+  req.body?.allowCompanyAllTaskEdit === 'true' ||
+  req.headers?.['x-company-all-task-edit'] === 'true'
+);
+
+const isSameCompanyTaskRequest = (req, task) => {
+  const requesterCompany = normalizeCodeBase(getRequestCompanyCode(req));
+  const taskCompany = normalizeCodeBase(task?.companyCode);
+  return Boolean(requesterCompany && taskCompany && requesterCompany === taskCompany);
+};
+
+const canManageTaskFromCompanyAll = (req, task) => (
+  isCompanyAllTaskEdit(req) && isSameCompanyTaskRequest(req, task)
+);
+
+const parseTaskCheckpoints = value => {
+  if (!value || value === 'null') return [];
+  const raw = typeof value === 'string' ? JSON.parse(value) : value;
+  if (!Array.isArray(raw)) return [];
+
+  return raw
+    .map(item => {
+      const title = typeof item === 'string' ? item : item?.title;
+      const cleanTitle = String(title || '').trim();
+      if (!cleanTitle) return null;
+
+      const completed = Boolean(typeof item === 'object' ? item.completed : false);
+      return {
+        title: cleanTitle,
+        completed,
+        completedAt: completed ? (item?.completedAt ? new Date(item.completedAt) : new Date()) : null,
+        completedBy: item?.completedBy || null
+      };
+    })
+    .filter(Boolean);
 };
 
 const calculateUnifiedTaskStats = (tasks, userId) => {
@@ -518,6 +739,7 @@ const fetchAssignedProjectTaskList = async (req) => {
         assignedToEmail: task.assignedTo?.email || '',
         projectName: project.projectName,
         projectTaskId: task._id,
+        checkpoints: task.checkpoints || [],
         files: task.pdfFile?.path ? [{
           filename: task.pdfFile.filename,
           originalName: task.pdfFile.filename,
@@ -750,7 +972,7 @@ exports.getAssignedTasks = async (req, res) => {
 };
 
 const handleTaskCreation = async (req, res, isSelf) => {
-  const { title, description, dueDateTime, whatsappNumber, priorityDays, priority, assignedUsers, assignedGroups } = req.body;
+  const { title, description, dueDateTime, whatsappNumber, priorityDays, priority, assignedUsers, assignedGroups, checkpoints } = req.body;
   const companyCode = getRequestCompanyCode(req);
   
   if (!companyCode) {
@@ -775,6 +997,7 @@ const handleTaskCreation = async (req, res, isSelf) => {
   }
 
   const statusByUser = parsedUsers.map(uid => ({ user: uid, status: 'pending' }));
+  const parsedCheckpoints = parseTaskCheckpoints(checkpoints);
 
   const task = await Task.create({
     title,
@@ -787,6 +1010,7 @@ const handleTaskCreation = async (req, res, isSelf) => {
     assignedUsers: parsedUsers,
     assignedGroups: parsedGroups,
     statusByUser,
+    checkpoints: parsedCheckpoints,
     files,
     voiceNote,
     createdBy: req.user._id,
@@ -828,10 +1052,11 @@ exports.updateTask = async (req, res) => {
     const { taskId } = req.params;
     const task = await Task.findById(taskId);
     if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
-    if (task.createdBy.toString() !== req.user._id.toString()) return res.status(403).json({ success: false, error: 'Not authorized' });
+    const allowCompanyAllEdit = canManageTaskFromCompanyAll(req, task);
+    if (task.createdBy.toString() !== req.user._id.toString() && !allowCompanyAllEdit) return res.status(403).json({ success: false, error: 'Not authorized' });
 
     const hasStatusChangedFromPending = task.overallStatus !== 'pending' || task.statusByUser.some(s => s.status !== 'pending');
-    if (hasStatusChangedFromPending) {
+    if (hasStatusChangedFromPending && !allowCompanyAllEdit) {
       return res.status(400).json({ success: false, error: 'Task cannot be edited after its status has changed from pending' });
     }
 
@@ -852,6 +1077,9 @@ exports.updateTask = async (req, res) => {
     if (req.body.assignedUsers) {
       task.assignedUsers = typeof req.body.assignedUsers === 'string' ? JSON.parse(req.body.assignedUsers) : req.body.assignedUsers;
       task.statusByUser = task.assignedUsers.map(uid => ({ user: uid, status: 'pending' }));
+    }
+    if (req.body.checkpoints !== undefined) {
+      task.checkpoints = parseTaskCheckpoints(req.body.checkpoints);
     }
 
     await task.save();
@@ -902,8 +1130,9 @@ exports.updateStatus = async (req, res) => {
     
     const isSameCompany = task.companyCode && userCompanyCode && 
       task.companyCode.toUpperCase() === userCompanyCode.toUpperCase();
+    const allowCompanyAllEdit = canManageTaskFromCompanyAll(req, task);
 
-    if (!isCreator && !isAssigned && !isGroupAssigned && !isSameCompany) {
+    if (!isCreator && !isAssigned && !isGroupAssigned && !isSameCompany && !allowCompanyAllEdit) {
       return res.status(403).json({ success: false, error: 'Not authorized' });
     }
 
@@ -920,14 +1149,16 @@ exports.updateStatus = async (req, res) => {
 
     if (
       normalizedStatus !== 'overdue' &&
-      normalizeTaskStatus(oldStatus) === 'overdue'
+      normalizeTaskStatus(oldStatus) === 'overdue' &&
+      !allowCompanyAllEdit
     ) {
       return res.status(400).json({ success: false, error: 'Cannot change status of an overdue task' });
     }
 
     if (
       !['overdue', 'onhold'].includes(normalizedStatus) &&
-      isTaskOverdueForStatus(task.dueDateTime || task.dueDate, oldStatus, task)
+      isTaskOverdueForStatus(task.dueDateTime || task.dueDate, oldStatus, task) &&
+      !allowCompanyAllEdit
     ) {
       if (!['onhold', 'completed', 'approved', 'rejected', 'cancelled', 'overdue'].includes(normalizeTaskStatus(oldStatus))) {
         task.markUserStatusOverdue(currentUserId, 'Automatically marked overdue after due time passed');
@@ -1299,15 +1530,16 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
 
   const [personalTasks, clientTasks, projectTasks] = await Promise.all([
     Task.find(personalQuery)
-      .select('title description dueDate dueDateTime priority overallStatus statusByUser assignedUsers assignedGroups createdBy companyCode taskFor onHoldReleasedAt createdAt updatedAt')
+      .select('title description dueDate dueDateTime priority priorityDays checkpoints overallStatus statusByUser statusHistory assignedUsers assignedGroups createdBy companyCode taskFor onHoldReleasedAt createdAt updatedAt')
       .populate('assignedUsers', 'name email')
       .populate('createdBy', 'name email')
       .sort({ createdAt: -1 })
       .lean(),
     
     ClientTask.find(clientQuery)
-      .select('name description dueDate priority status completed clientId createdAt updatedAt assignee assigneeId')
-      .populate('clientId', 'name email company phone companyCode')
+      .select('name description dueDate priority status completed checkpoints service timeSpent inProgressSince activityLogs clientId createdAt updatedAt assignee assigneeId')
+      .populate('clientId', 'client name email company phone companyCode')
+      .populate('assigneeId', 'name email role')
       .sort({ createdAt: -1 })
       .lean(),
 
@@ -1326,8 +1558,7 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
     );
     const createdById = (t.createdBy?._id || t.createdBy)?.toString();
     const taskSource = createdById === userId.toString() ? 'self' : 'assigned';
-    const isOverdue = isTaskOverdueForStatus(t.dueDateTime || t.dueDate, userStatus, t);
-    const displayStatus = isOverdue ? 'overdue' : userStatus;
+    const displayStatus = userStatus;
 
     return {
       ...t,
@@ -1346,8 +1577,7 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
 
   const clientFormatted = clientTasks.map(t => {
     const clientStatus = t.completed ? 'completed' : normalizeTaskStatus(t.status || 'pending');
-    const isOverdue = isTaskOverdueForStatus(t.dueDate, clientStatus, t);
-    const displayStatus = isOverdue ? 'overdue' : clientStatus;
+    const displayStatus = clientStatus;
 
     return {
       _id: t._id,
@@ -1356,11 +1586,19 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
       dueDate: t.dueDate,
       dueDateTime: t.dueDate,
       completed: t.completed,
+      checkpoints: t.checkpoints || [],
       priority: String(t.priority || 'Medium').toLowerCase(),
       status: displayStatus,
       userStatus: clientStatus,
-      clientName: t.clientId?.name || 'Unknown Client',
+      clientName: t.clientId?.client || t.clientId?.name || 'Unknown Client',
       createdAt: t.createdAt,
+      service: t.service || '',
+      assignee: t.assignee || '',
+      assigneeId: t.assigneeId,
+      assigneeName: t.assigneeId?.name || t.assignee || 'Unassigned',
+      timeSpent: t.timeSpent || 0,
+      inProgressSince: t.inProgressSince || null,
+      activityLogs: t.activityLogs || [],
       source: 'client',
       taskSource: 'client',
       __taskSource: 'client'
@@ -1376,8 +1614,7 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
       if (!isAssignedToUser) return;
 
       const projectStatus = normalizeProjectTaskStatus(task.status);
-      const isOverdue = isTaskOverdueForStatus(task.dueDate, projectStatus, task);
-      const displayStatus = isOverdue ? 'overdue' : projectStatus;
+      const displayStatus = projectStatus;
       const assignedBy = getProjectTaskAssignedBy(task, project);
 
       projectFormatted.push({
@@ -1398,6 +1635,7 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
         assignedByName: assignedBy?.name || assignedBy?.email || 'Unknown',
         assignedToName: task.assignedTo?.name || 'Unknown',
         assignedToEmail: task.assignedTo?.email || '',
+        checkpoints: task.checkpoints || [],
         files: task.pdfFile?.path ? [{
           filename: task.pdfFile.filename,
           originalName: task.pdfFile.filename,
@@ -1641,10 +1879,22 @@ exports.getUserAllTasksPaginated = async (req, res) => {
 
     const allTasks = await queryAllUserTasks(userId, req.user.companyCode, req.query);
     const filtered = filterUserTasks(allTasks, req.query);
+    const workWindow = await getUserWorkWindow(userId, req.query);
+    const filteredWithWorkTime = filtered.map(task => {
+      const work = calculateTaskWork(task, workWindow);
+      return {
+        ...task,
+        workTime: {
+          seconds: work.seconds,
+          label: secondsToDurationLabel(work.seconds)
+        },
+        __workInterval: work.interval
+      };
+    });
 
     
     
-    const sortedFiltered = sortTasksNewestFirst(filtered);
+    const sortedFiltered = sortTasksNewestFirst(filteredWithWorkTime);
 
     
     const total = sortedFiltered.length;
@@ -1663,7 +1913,7 @@ exports.getUserAllTasksPaginated = async (req, res) => {
       onhold: 0
     };
 
-    filtered.forEach(task => {
+    filteredWithWorkTime.forEach(task => {
       const status = task.status;
       if (counts[status] !== undefined) {
         counts[status] += 1;
@@ -1685,11 +1935,21 @@ exports.getUserAllTasksPaginated = async (req, res) => {
       overdue: toStat(counts.overdue),
       onhold: toStat(counts.onhold)
     };
+    const trackedTaskSeconds = getMergedIntervalSeconds(filteredWithWorkTime.map(task => task.__workInterval));
+    const untrackedSeconds = Math.max(0, (workWindow.summary.totalClockedSeconds || 0) - trackedTaskSeconds);
+    const cleanTasks = tasks.map(({ __workInterval, ...task }) => task);
 
     res.json({
       success: true,
       userId,
-      tasks,
+      tasks: cleanTasks,
+      workSummary: {
+        ...workWindow.summary,
+        trackedTaskSeconds,
+        trackedTaskLabel: secondsToDurationLabel(trackedTaskSeconds),
+        untrackedSeconds,
+        untrackedLabel: secondsToDurationLabel(untrackedSeconds)
+      },
       pagination: {
         page: safePage,
         limit,

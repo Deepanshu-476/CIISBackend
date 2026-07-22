@@ -66,6 +66,34 @@ const canChangeFromOnHold = (nextStatus) => {
   return ["in-progress", "completed"].includes(normalizeTaskStatus(nextStatus));
 };
 
+const isCompanyAllTaskEdit = (req) => (
+  req.body?.allowCompanyAllTaskEdit === true ||
+  req.body?.allowCompanyAllTaskEdit === "true" ||
+  req.headers?.["x-company-all-task-edit"] === "true"
+);
+
+const parseTaskCheckpoints = value => {
+  if (!value || value === "null") return [];
+  const raw = typeof value === "string" ? JSON.parse(value) : value;
+  if (!Array.isArray(raw)) return [];
+
+  return raw
+    .map(item => {
+      const title = typeof item === "string" ? item : item?.title;
+      const cleanTitle = String(title || "").trim();
+      if (!cleanTitle) return null;
+
+      const completed = Boolean(typeof item === "object" ? item.completed : false);
+      return {
+        title: cleanTitle,
+        completed,
+        completedAt: completed ? (item?.completedAt ? new Date(item.completedAt) : new Date()) : null,
+        completedBy: item?.completedBy || null
+      };
+    })
+    .filter(Boolean);
+};
+
 const isPendingTaskPastDue = (task = {}) => {
   if (normalizeTaskStatus(task.status) !== "pending" || !task.dueDate) return false;
   const dueDate = new Date(task.dueDate);
@@ -868,7 +896,7 @@ exports.addTask = async (req, res) => {
       }
 
       const { id } = req.params;
-      const { title, description, assignedTo, dueDate, priority, status } = req.body;
+      const { title, description, assignedTo, dueDate, priority, status, checkpoints } = req.body;
       void 0;
       void 0;
       void 0;
@@ -921,6 +949,7 @@ exports.addTask = async (req, res) => {
         description: description?.trim() || "",
         priority: priority?.toLowerCase(),
         status: status?.toLowerCase() || 'pending',
+        checkpoints: parseTaskCheckpoints(checkpoints),
         createdBy: req.user.id,
         createdAt: now,
         updatedAt: now
@@ -1088,6 +1117,11 @@ exports.updateTask = async (req, res) => {
 
       if (key === 'priority' || key === 'status') {
         if (updateData[key]) task[key] = updateData[key].toLowerCase();
+        return;
+      }
+
+      if (key === 'checkpoints') {
+        task.checkpoints = parseTaskCheckpoints(updateData[key]);
         return;
       }
 
@@ -1297,14 +1331,16 @@ exports.updateTaskStatus = async (req, res) => {
       });
     }
 
-    if (nextStatus !== "overdue" && normalizedOldStatus === "overdue") {
+    const allowCompanyAllEdit = isCompanyAllTaskEdit(req);
+
+    if (nextStatus !== "overdue" && normalizedOldStatus === "overdue" && !allowCompanyAllEdit) {
       return res.status(400).json({
         success: false,
         message: "Cannot change status of an overdue task"
       });
     }
 
-    if (!["overdue", "onhold"].includes(nextStatus) && isPendingTaskPastDue(task)) {
+    if (!["overdue", "onhold"].includes(nextStatus) && isPendingTaskPastDue(task) && !allowCompanyAllEdit) {
       if (isPendingTaskPastDue(task)) {
         task.status = "overdue";
         task.updatedAt = new Date();
@@ -1383,6 +1419,75 @@ exports.updateTaskStatus = async (req, res) => {
     res.status(500).json({ 
       success: false, 
       message: "Error updating task status" 
+    });
+  }
+};
+
+exports.updateTaskCheckpoint = async (req, res) => {
+  try {
+    const { projectId, taskId, checkpointId } = req.params;
+    const { completed } = req.body;
+
+    const project = await Project.findById(projectId);
+    if (!project) {
+      return res.status(404).json({ success: false, message: "Project not found" });
+    }
+
+    const task = project.tasks.id(taskId);
+    if (!task) {
+      return res.status(404).json({ success: false, message: "Task not found" });
+    }
+
+    const isAssignedUser = isTaskAssignedToUser(task, req.user.id);
+    const hasAccessToProject = hasProjectAccess(project, req.user.id, req.user.role, req.user);
+    if (!hasAccessToProject && !isAssignedUser) {
+      return res.status(403).json({ success: false, message: "Access denied to update checkpoint" });
+    }
+
+    const checkpoint = task.checkpoints.id(checkpointId);
+    if (!checkpoint) {
+      return res.status(404).json({ success: false, message: "Checkpoint not found" });
+    }
+
+    const oldStatus = task.status || "pending";
+    const isCompleted = completed !== false;
+    const now = new Date();
+
+    checkpoint.completed = isCompleted;
+    checkpoint.completedAt = isCompleted ? now : null;
+    checkpoint.completedBy = isCompleted ? req.user.id : null;
+
+    const allCompleted = task.checkpoints.length > 0 && task.checkpoints.every(item => item.completed);
+    if (allCompleted) {
+      task.status = "completed";
+    } else if (normalizeTaskStatus(oldStatus) === "completed") {
+      task.status = "in progress";
+    } else if (normalizeTaskStatus(oldStatus) === "pending" && isCompleted) {
+      task.status = "in progress";
+    }
+    task.updatedAt = now;
+
+    task.activityLogs.push({
+      type: "status_change",
+      description: `${isCompleted ? "Completed" : "Reopened"} checkpoint: ${checkpoint.title}`,
+      oldValue: oldStatus,
+      newValue: task.status,
+      performedBy: req.user.id,
+      remark: `Checkpoint ${isCompleted ? "completed" : "reopened"}`
+    });
+
+    await project.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Checkpoint updated successfully",
+      task
+    });
+  } catch (error) {
+    console.error("❌ Error updating project task checkpoint:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error updating checkpoint"
     });
   }
 };

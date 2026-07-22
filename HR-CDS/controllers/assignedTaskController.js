@@ -8,6 +8,7 @@ const {
   normalizeTaskStatus,
   isOnHoldStatus,
   canChangeFromOnHold,
+  parseTaskCheckpoints,
   isTaskOverdueForStatus,
   calculateUnifiedTaskStats,
   groupTasksByDate,
@@ -57,7 +58,7 @@ const fetchAssignedToMeTaskList = async (req) => {
 
 exports.createTaskForOthers = async (req, res) => {
   try {
-    const { title, description, dueDateTime, whatsappNumber, priorityDays, priority, assignedUsers, assignedGroups } = req.body;
+    const { title, description, dueDateTime, whatsappNumber, priorityDays, priority, assignedUsers, assignedGroups, checkpoints } = req.body;
     const companyCode = getRequestCompanyCode(req);
     
     if (!companyCode) {
@@ -82,6 +83,7 @@ exports.createTaskForOthers = async (req, res) => {
     }
 
     const statusByUser = parsedUsers.map(uid => ({ user: uid, status: 'pending' }));
+    const parsedCheckpoints = parseTaskCheckpoints(checkpoints);
 
     const task = await Task.create({
       title,
@@ -94,6 +96,7 @@ exports.createTaskForOthers = async (req, res) => {
       assignedUsers: parsedUsers,
       assignedGroups: parsedGroups,
       statusByUser,
+      checkpoints: parsedCheckpoints,
       files,
       voiceNote,
       createdBy: req.user._id,
@@ -122,6 +125,72 @@ exports.createTaskForOthers = async (req, res) => {
     return res.status(201).json({ success: true, task, message: 'Task created successfully' });
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+exports.updateCheckpoint = async (req, res) => {
+  try {
+    const { taskId, checkpointId } = req.params;
+    const { completed } = req.body;
+
+    const task = await Task.findById(taskId);
+    if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
+
+    const currentUserId = (req.user._id || req.user.id).toString();
+    const userGroups = await Group.find({ members: req.user._id, isActive: true }).select('_id').lean();
+    const groupIds = userGroups.map(g => g._id.toString());
+    const isCreator = task.createdBy.toString() === currentUserId;
+    const isAssigned = task.assignedUsers.some(uid => uid.toString() === currentUserId);
+    const isGroupAssigned = task.assignedGroups?.some(gid => groupIds.includes(gid.toString()));
+
+    if (!isCreator && !isAssigned && !isGroupAssigned) {
+      return res.status(403).json({ success: false, error: 'Not authorized' });
+    }
+
+    const checkpoint = task.checkpoints.id(checkpointId);
+    if (!checkpoint) return res.status(404).json({ success: false, error: 'Checkpoint not found' });
+
+    const isCompleted = completed !== false;
+    const oldStatus = task.overallStatus || 'pending';
+    checkpoint.completed = isCompleted;
+    checkpoint.completedAt = isCompleted ? new Date() : null;
+    checkpoint.completedBy = isCompleted ? req.user._id : null;
+
+    const hasCheckpoints = task.checkpoints.length > 0;
+    const allCompleted = hasCheckpoints && task.checkpoints.every(item => item.completed);
+
+    if (allCompleted) {
+      task.overallStatus = 'completed';
+      task.completionDate = new Date();
+      task.statusByUser.forEach(item => {
+        item.status = 'completed';
+        item.updatedAt = new Date();
+        item.remarks = 'All checkpoints completed';
+      });
+      if (oldStatus !== 'completed') {
+        task.statusHistory.push({ status: 'completed', changedBy: req.user._id, remarks: 'All checkpoints completed' });
+      }
+    } else if (oldStatus === 'completed') {
+      task.overallStatus = 'in-progress';
+      task.completionDate = null;
+      task.statusByUser.forEach(item => {
+        if (item.status === 'completed') {
+          item.status = 'in-progress';
+          item.updatedAt = new Date();
+          item.remarks = 'Checkpoint reopened';
+        }
+      });
+      task.statusHistory.push({ status: 'in-progress', changedBy: req.user._id, remarks: 'Checkpoint reopened' });
+    } else if (oldStatus === 'pending' && isCompleted) {
+      task.overallStatus = 'in-progress';
+    }
+
+    await task.save();
+    await createActivityLog(req.user, 'checkpoint_updated', task._id, `${isCompleted ? 'Completed' : 'Reopened'} checkpoint: ${checkpoint.title}`, null, { checkpointId, completed: isCompleted }, req);
+
+    res.json({ success: true, message: 'Checkpoint updated successfully', task });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 };
 

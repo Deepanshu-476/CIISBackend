@@ -16,6 +16,7 @@ router.get('/to-me', protect, assignedTaskController.getAssignedToMeTasks);
 router.get('/by-me', protect, assignedTaskController.getAssignedTasks);
 router.get('/to-me/stats', protect, assignedTaskController.getAssignedToMeTaskStats);
 router.patch('/:taskId/status', protect, assignedTaskController.updateStatus);
+router.patch('/:taskId/checkpoints/:checkpointId', protect, assignedTaskController.updateCheckpoint);
 router.post('/:taskId/remarks', protect, uploadRemarkImage, assignedTaskController.addRemark);
 router.get('/:taskId/remarks', protect, assignedTaskController.getRemarks);
 

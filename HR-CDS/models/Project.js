@@ -48,6 +48,17 @@ const RemarkSchema = new Schema(
   { _id: true }
 );
 
+const CheckpointSchema = new Schema(
+  {
+    title: { type: String, required: true, trim: true },
+    completed: { type: Boolean, default: false },
+    completedAt: { type: Date, default: null },
+    completedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+    createdAt: { type: Date, default: Date.now }
+  },
+  { _id: true }
+);
+
  
 const TaskSchema = new Schema(
   {
@@ -63,6 +74,7 @@ const TaskSchema = new Schema(
       path: String,
       uploadedAt: { type: Date, default: Date.now }
     },
+    checkpoints: [CheckpointSchema],
     remarks: [RemarkSchema],
     activityLogs: [ActivityLogSchema],
     createdBy: { type: Schema.Types.ObjectId, ref: "User" }
