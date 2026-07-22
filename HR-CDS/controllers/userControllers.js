@@ -196,6 +196,8 @@ exports.getMe = async (req, res) => {
         fatherName: user.fatherName,
         motherName: user.motherName,
         spouseName: user.spouseName,
+        aadhaar: user.aadhaar || user.aadhar || user.aadharCard,
+        panCard: user.panCard || user.pan,
         children: user.children,
         documents: user.documents,
         emergencyName: user.emergencyName,
@@ -232,14 +234,62 @@ exports.updateMe = async (req, res) => {
   try {
     const userId = req.user.id;
     const updateData = {};
+    const existingUser = await User.findById(userId).lean();
+    if (!existingUser) return errorResponse(res, 404, "User not found");
+
+    const currentAadhaar = existingUser.aadhaar || existingUser.aadhar || existingUser.aadharCard || '';
+    const currentPan = existingUser.panCard || existingUser.pan || '';
+    const requiredProfileFields = [
+      ['name', 'Full Name', existingUser.name],
+      ['phone', 'Mobile Number', existingUser.phone],
+      ['bankHolderName', 'Account Holder Name', existingUser.bankHolderName],
+      ['accountNumber', 'Account Number', existingUser.accountNumber],
+      ['ifsc', 'IFSC Code', existingUser.ifsc],
+      ['bankName', 'Bank Name', existingUser.bankName],
+      ['fatherName', "Father's Name", existingUser.fatherName],
+      ['motherName', "Mother's Name", existingUser.motherName],
+      ['aadhaar', 'Aadhaar Number', currentAadhaar],
+      ['panCard', 'PAN Number', currentPan],
+    ];
+    const missingFields = requiredProfileFields
+      .filter(([field, , existingValue]) => !String(req.body[field] !== undefined ? req.body[field] : existingValue || '').trim())
+      .map(([, label]) => label);
+
+    if (missingFields.length) {
+      return errorResponse(res, 400, `Please complete all required profile fields: ${missingFields.join(', ')}`);
+    }
+
+    if (req.body.accountNumber !== undefined) {
+      const nextAccountNumber = String(req.body.accountNumber).trim();
+      const accountChanged = nextAccountNumber !== String(existingUser.accountNumber || '').trim();
+      if (accountChanged && String(req.body.confirmAccountNumber || '').trim() !== nextAccountNumber) {
+        return errorResponse(res, 400, "Account Number and Confirm Account Number do not match");
+      }
+    }
+
+    if (req.body.accountNumber !== undefined && !/^\d{9,18}$/.test(String(req.body.accountNumber).trim())) {
+      return errorResponse(res, 400, "Account Number must contain 9 to 18 digits");
+    }
+    if (req.body.ifsc !== undefined && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(String(req.body.ifsc).trim().toUpperCase())) {
+      return errorResponse(res, 400, "Invalid IFSC Code format");
+    }
+    if (req.body.aadhaar !== undefined && !/^\d{12}$/.test(String(req.body.aadhaar).trim())) {
+      return errorResponse(res, 400, "Aadhaar Number must contain exactly 12 digits");
+    }
+    if (req.body.panCard !== undefined && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(String(req.body.panCard).trim().toUpperCase())) {
+      return errorResponse(res, 400, "Invalid PAN Number format");
+    }
     
     
     Object.keys(req.body).forEach(key => {
       
-      if (key !== 'password' && key !== 'resetToken' && key !== 'resetTokenExpiry' && key !== '__v') {
+      if (key !== 'password' && key !== 'resetToken' && key !== 'resetTokenExpiry' && key !== 'confirmAccountNumber' && key !== '__v') {
         updateData[key] = req.body[key];
       }
     });
+
+    if (updateData.ifsc) updateData.ifsc = String(updateData.ifsc).trim().toUpperCase();
+    if (updateData.panCard) updateData.panCard = String(updateData.panCard).trim().toUpperCase();
     
     
     if (req.body.children !== undefined) {
