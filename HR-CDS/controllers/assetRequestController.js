@@ -4,6 +4,8 @@ const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagin
 const CompanyAsset = require('../../models/CompanyAsset');
 const Department = require('../../models/Department');
 const User = require('../../models/User');
+const Company = require('../../models/Company');
+const PagePermission = require('../../models/PagePermission');
 const { sendNotification, notifyCompanyOwners } = require('../../HR-CDS/utils/notificationHelper');
 const {notifyPageUsers, notifyDirectUsers} = require('../utils/systemNotificationService');
 const { sendEmail } = require('../../utils/sendEmail');
@@ -20,6 +22,77 @@ const formatDate = (date) => {
 const titleCase = (value) => {
   if (!value) return '';
   return value.charAt(0).toUpperCase() + value.slice(1).toLowerCase();
+};
+
+const normalizeId = (value) => {
+  if (!value) return '';
+  if (value._id && value._id !== value) return normalizeId(value._id);
+  if (typeof value.toString === 'function') return value.toString();
+  return String(value);
+};
+
+const normalizeRoleValue = (value) => String(value || '')
+  .trim()
+  .toLowerCase()
+  .replace(/[\s_-]+/g, '');
+
+const getUserCompanyId = async (user = {}) => {
+  const companyId = normalizeId(user.company || user.companyId);
+  if (companyId && mongoose.Types.ObjectId.isValid(companyId)) return companyId;
+
+  const companyCode = String(user.companyCode || user.company?.companyCode || '').trim();
+  if (!companyCode) return '';
+
+  const company = await Company.findOne({ companyCode }).select('_id').lean();
+  return normalizeId(company?._id);
+};
+
+const getEmployeeAssetsPageAccess = async (user = {}) => {
+  const companyId = await getUserCompanyId(user);
+  const userId = normalizeId(user._id || user.id);
+
+  if (!companyId || !mongoose.Types.ObjectId.isValid(companyId) || !userId) {
+    return {
+      hasConfig: false,
+      isApprover: false,
+      isDeleteUser: false,
+      hasPageAccess: false
+    };
+  }
+
+  const pagePermission = await PagePermission.findOne({
+    company: companyId,
+    path: '/ciisUser/emp-assets'
+  }).lean();
+
+  const approverIds = (pagePermission?.approvers || [])
+    .map(item => normalizeId(item.user))
+    .filter(Boolean);
+  const deleteUserIds = (pagePermission?.deleteUsers || [])
+    .map(item => normalizeId(item.user))
+    .filter(Boolean);
+  const isApprover = approverIds.includes(userId);
+  const isDeleteUser = deleteUserIds.includes(userId);
+
+  return {
+    hasConfig: Boolean(pagePermission),
+    isApprover,
+    isDeleteUser,
+    hasPageAccess: isApprover || isDeleteUser
+  };
+};
+
+const getUserRoleScope = (user = {}) => {
+  const roles = [
+    user.companyRole,
+    user.role,
+    user.jobRole
+  ].map(normalizeRoleValue);
+
+  return {
+    canManage: roles.some(role => ['owner', 'admin', 'hr', 'manager', 'superadmin'].includes(role)),
+    canDelete: roles.some(role => ['owner', 'admin', 'hr', 'manager', 'superadmin'].includes(role))
+  };
 };
 
 const getDepartmentName = async (department, companyCode) => {
@@ -460,9 +533,22 @@ exports.getAllRequests = async (req, res) => {
     const { status, department, assetId, branch } = req.query;
     const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
     const filter = { companyCode: req.user.companyCode };
+    const pageAccess = await getEmployeeAssetsPageAccess(req.user);
+    const roleScope = getUserRoleScope(req.user);
 
     if (status) filter.status = status;
-    if (department) filter.department = department;
+    if (!pageAccess.hasPageAccess && !roleScope.canManage) {
+      const ownDepartment = normalizeId(req.user.department || req.user.departmentId);
+      if (!ownDepartment) {
+        return res.status(403).json({
+          success: false,
+          error: 'Department information missing for asset request access.'
+        });
+      }
+      filter.department = ownDepartment;
+    } else if (department && !pageAccess.hasPageAccess) {
+      filter.department = department;
+    }
     if (assetId && mongoose.Types.ObjectId.isValid(assetId)) {
       filter.asset = assetId;
     }
@@ -530,6 +616,7 @@ exports.getAllRequests = async (req, res) => {
       count: requests.length,
       total,
       pagination: buildPaginationMeta({ page, limit, total }),
+      pageAccess,
       requests
     });
 
@@ -548,6 +635,18 @@ exports.updateRequestStatus = async (req, res) => {
     const { id } = req.params;
     const { status, adminComment } = req.body;
     const commentImage = req.file ? `/uploads/asset-comments/${req.file.filename}` : '';
+    const pageAccess = await getEmployeeAssetsPageAccess(req.user);
+    const roleScope = getUserRoleScope(req.user);
+    const canUpdateRequest = pageAccess.hasConfig ? pageAccess.hasPageAccess : roleScope.canManage;
+
+    if (!canUpdateRequest) {
+      return res.status(403).json({
+        success: false,
+        error: pageAccess.hasConfig
+          ? 'You are not selected for employee assets page access.'
+          : 'You do not have permission to update asset requests.'
+      });
+    }
     
     const validStatuses = ['approved', 'rejected', 'completed'];
           
@@ -712,6 +811,18 @@ try {
 exports.deleteRequest = async (req, res) => {
   try {
     const { id } = req.params;
+    const pageAccess = await getEmployeeAssetsPageAccess(req.user);
+    const roleScope = getUserRoleScope(req.user);
+    const canDeleteRequest = pageAccess.hasConfig ? pageAccess.isDeleteUser : roleScope.canDelete;
+
+    if (!canDeleteRequest) {
+      return res.status(403).json({
+        success: false,
+        error: pageAccess.hasConfig
+          ? 'You are not selected as a delete user for employee assets.'
+          : 'You do not have permission to delete asset requests.'
+      });
+    }
 
     const request = await AssetRequest.findOne({
       _id: id,

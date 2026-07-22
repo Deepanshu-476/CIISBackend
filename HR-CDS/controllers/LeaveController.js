@@ -110,6 +110,50 @@ const getLeaveApprovalStepsForCompany = async (companyId) => {
     }));
 };
 
+const getEmployeeLeavesPageAccess = async (companyId, userId) => {
+  if (!companyId || !mongoose.isValidObjectId(companyId) || !userId) {
+    return {
+      hasConfig: false,
+      isApprover: false,
+      isDeleteUser: false,
+      hasPageAccess: false
+    };
+  }
+
+  const pagePermission = await PagePermission.findOne({
+    company: companyId,
+    path: '/ciisUser/emp-leaves'
+  }).lean();
+
+  const currentUserId = normalizeId(userId);
+  const approverIds = (pagePermission?.approvers || [])
+    .map(item => normalizeId(item.user))
+    .filter(Boolean);
+  const deleteUserIds = (pagePermission?.deleteUsers || [])
+    .map(item => normalizeId(item.user))
+    .filter(Boolean);
+  const isApprover = approverIds.includes(currentUserId);
+  const isDeleteUser = deleteUserIds.includes(currentUserId);
+
+  return {
+    hasConfig: Boolean(pagePermission),
+    isApprover,
+    isDeleteUser,
+    hasPageAccess: isApprover || isDeleteUser
+  };
+};
+
+const getCompanyUserIds = async (companyId) => {
+  const companyUsers = await User.find({
+    $or: [
+      { company: companyId },
+      { companyId }
+    ]
+  }).select('_id');
+
+  return companyUsers.map(user => user._id);
+};
+
 
 exports.applyLeave = async (req, res) => {
   void 0;
@@ -407,14 +451,8 @@ exports.getAllLeaves = async (req, res) => {
     void 0;
 
     
-    const companyUsers = await User.find({ 
-      $or: [
-        { company: userCompanyId },
-        { companyId: userCompanyId }
-      ]
-    }).select('_id');
-    
-    const companyUserIds = companyUsers.map(user => user._id);
+    const companyUserIds = await getCompanyUserIds(userCompanyId);
+    const pageAccess = await getEmployeeLeavesPageAccess(userCompanyId, req.user._id);
     
     void 0;
 
@@ -469,7 +507,7 @@ exports.getAllLeaves = async (req, res) => {
     }
 
     
-    if (department) {
+    if (department && !pageAccess.hasPageAccess) {
       const departmentUsers = await User.find({ 
         _id: { $in: companyUserIds },
         department: department 
@@ -648,7 +686,8 @@ exports.getAllLeaves = async (req, res) => {
           id: req.user._id,
           name: req.user.name,
           role: req.user.jobRole || req.user.role,
-          department: req.user.department
+          department: req.user.department,
+          pageAccess
         }
       }
     });

@@ -5,9 +5,7 @@ const fs = require('fs');
 const multer = require('multer');
 const path = require('path');
 const assetController = require('../controllers/assetRequestController');
-const { protect, authorize } = require('../../middleware/authMiddleware');
-const isAdmin = require('../../middleware/isAdmin');
-const isManager = require('../../middleware/isManager');
+const { protect } = require('../../middleware/authMiddleware');
 
 const commentUploadDir = path.join(__dirname, '../../uploads/asset-comments');
 fs.mkdirSync(commentUploadDir, { recursive: true });
@@ -32,9 +30,9 @@ router.post('/request', protect, assetController.requestAsset);
 router.get('/my-requests', protect, assetController.getMyRequests);
 
 
-router.get('/all', protect, isAdmin, assetController.getAllRequests);          
-router.patch('/update/:id', protect, isAdmin, uploadCommentImage.single('commentImage'), assetController.updateRequestStatus); 
-router.delete('/delete/:id', protect, isManager, assetController.deleteRequest);      
+router.get('/all', protect, assetController.getAllRequests);          
+router.patch('/update/:id', protect, uploadCommentImage.single('commentImage'), assetController.updateRequestStatus); 
+router.delete('/delete/:id', protect, assetController.deleteRequest);      
 
 
 router.get('/test', protect, (req, res) => {
