@@ -416,7 +416,9 @@ const clockIn = async (req, res) => {
       });
     }
 
-    const lateBy = now > shiftStart ? formatDuration(now - shiftStart) : "00:00:00";
+    // The shift has a grace window: do not record/display lateness until the
+    // configured grace threshold has actually passed.
+    const lateBy = now > graceThreshold ? formatDuration(now - shiftStart) : "00:00:00";
 
     // 5. Determine dynamic status
     let status = "PRESENT";
