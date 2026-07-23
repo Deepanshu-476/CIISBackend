@@ -11,7 +11,7 @@ const branchSchema = new mongoose.Schema(
     },
         
     branchCode: {  
-      type: String,
+      type: String,  
       required: [true, "Branch code is required"],
       uppercase: true,
       trim: true,
