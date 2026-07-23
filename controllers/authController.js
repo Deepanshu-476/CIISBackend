@@ -6,6 +6,7 @@ const jwt = require("jsonwebtoken");
 const { sendEmail } = require("../utils/sendEmail");
 const Department = require("../models/Department");
 const Branch = require("../models/Branch");
+const JobRole = require("../models/JobRole");
 const crypto = require("crypto");
 const mongoose = require("mongoose");
 const { validateRequest } = require("../middleware/validation");
@@ -649,6 +650,9 @@ exports.register = async (req, res) => {
       password,
       department,
       jobRole,
+      shiftId,
+      shiftName,
+      shiftType,
       company, 
       companyCode, 
       branch, 
@@ -666,6 +670,7 @@ exports.register = async (req, res) => {
       { field: 'password', label: 'Password' },
       { field: 'department', label: 'Department' },
       { field: 'jobRole', label: 'Job Role' },
+      { field: 'shiftId', label: 'Shift' },
       { field: 'company', label: 'Company' },
       { field: 'companyCode', label: 'Company Code' }
     ];
@@ -701,14 +706,6 @@ exports.register = async (req, res) => {
       return errorResponse(res, 409, "Email already in use", "EMAIL_EXISTS");
     }
 
-    
-    const departmentExists = await Department.findById(department).session(session);
-    if (!departmentExists) {
-      await session.abortTransaction();
-      return errorResponse(res, 404, "Department not found", "DEPARTMENT_NOT_FOUND");
-    }
-
-    
     const companyExists = await Company.findOne({ 
       $or: [
         { _id: company },
@@ -742,6 +739,10 @@ exports.register = async (req, res) => {
         await session.abortTransaction();
         return errorResponse(res, 404, "Branch not found", "BRANCH_NOT_FOUND");
       }
+      if (branchExists.company?.toString() !== companyExists._id.toString()) {
+        await session.abortTransaction();
+        return errorResponse(res, 403, "Branch does not belong to selected company", "BRANCH_COMPANY_MISMATCH");
+      }
       cleanBranchCode = branchExists.branchCode;
     } else {
       
@@ -750,6 +751,40 @@ exports.register = async (req, res) => {
         cleanBranch = defaultBranch._id;
         cleanBranchCode = defaultBranch.branchCode;
       }
+    }
+
+    const departmentExists = await Department.findOne({
+      _id: department,
+      company: companyExists._id,
+      ...(cleanBranch ? { branch: cleanBranch } : {}),
+      isActive: true,
+    }).session(session);
+    if (!departmentExists) {
+      await session.abortTransaction();
+      return errorResponse(res, 404, "Department not found for selected branch", "DEPARTMENT_NOT_FOUND");
+    }
+
+    const jobRoleExists = await JobRole.findOne({
+      _id: jobRole,
+      department,
+      company: companyExists._id,
+      isActive: true,
+    }).session(session);
+    if (!jobRoleExists) {
+      await session.abortTransaction();
+      return errorResponse(res, 404, "Job role not found for selected department", "JOB_ROLE_NOT_FOUND");
+    }
+
+    const availableShifts = Array.isArray(jobRoleExists.shifts) && jobRoleExists.shifts.length > 0
+      ? jobRoleExists.shifts
+      : (jobRoleExists.shiftSettings ? [jobRoleExists.shiftSettings] : []);
+    const selectedShift = availableShifts.find(shift =>
+      String(shift.shiftId || shift._id || shift.id) === String(shiftId)
+    );
+
+    if (!selectedShift) {
+      await session.abortTransaction();
+      return errorResponse(res, 404, "Shift not found for selected job role", "SHIFT_NOT_FOUND");
     }
 
     
@@ -762,6 +797,9 @@ exports.register = async (req, res) => {
       password: password,
       department,
       jobRole,
+      shiftId: String(selectedShift.shiftId || shiftId),
+      shiftName: selectedShift.shiftName || shiftName,
+      shiftType: selectedShift.shiftType || shiftType,
       company,
       companyCode,
       branch: cleanBranch,
@@ -817,6 +855,9 @@ exports.register = async (req, res) => {
         email: createdUser.email,
         department: createdUser.department,
         jobRole: createdUser.jobRole,
+        shiftId: createdUser.shiftId,
+        shiftName: createdUser.shiftName,
+        shiftType: createdUser.shiftType,
         company: createdUser.company,
         companyCode: createdUser.companyCode,
         createdAt: createdUser.createdAt,

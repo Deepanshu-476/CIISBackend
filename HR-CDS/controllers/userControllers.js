@@ -1,6 +1,7 @@
 
 const User = require('../../models/User');
 const Department = require('../../models/Department');
+const JobRole = require('../../models/JobRole');
 const bcrypt = require('bcryptjs');
 const { errorResponse, successResponse } = require('../utils/responseHelper.js');
 const Task = require('../../HR-CDS/models/Task.js');
@@ -52,6 +53,46 @@ const validateAssignableDepartment = async (departmentId, companyId) => {
   }
 
   return null;
+};
+
+const resolveAssignableShift = async ({ jobRole, shiftId, company, department }) => {
+  if (!jobRole || !shiftId) return null;
+
+  const roleQuery = {
+    company,
+    isActive: true
+  };
+
+  if (department) {
+    roleQuery.department = department;
+  }
+
+  if (String(jobRole).match(/^[0-9a-fA-F]{24}$/)) {
+    roleQuery._id = jobRole;
+  } else {
+    roleQuery.name = { $regex: new RegExp(`^${String(jobRole)}$`, 'i') };
+  }
+
+  const role = await JobRole.findOne(roleQuery);
+  if (!role) {
+    return { error: { status: 404, message: "Job role not found for selected department" } };
+  }
+
+  const shifts = Array.isArray(role.shifts) && role.shifts.length > 0
+    ? role.shifts
+    : (role.shiftSettings ? [role.shiftSettings] : []);
+  const selectedShift = shifts.find(shift =>
+    String(shift.shiftId || shift._id || shift.id) === String(shiftId)
+  );
+
+  if (!selectedShift) {
+    return { error: { status: 404, message: "Shift not found for selected job role" } };
+  }
+
+  return {
+    role,
+    shift: selectedShift
+  };
 };
 
 const getUserPresence = (user, socketOnlineIds) => {
@@ -309,6 +350,23 @@ exports.updateMe = async (req, res) => {
       if (departmentError) {
         return errorResponse(res, departmentError.status, departmentError.message);
       }
+    }
+
+    if (updateData.shiftId) {
+      const shiftResult = await resolveAssignableShift({
+        jobRole: updateData.jobRole || existingUser.jobRole,
+        shiftId: updateData.shiftId,
+        company: existingUser.company || req.user.company,
+        department: updateData.department || existingUser.department
+      });
+
+      if (shiftResult?.error) {
+        return errorResponse(res, shiftResult.error.status, shiftResult.error.message);
+      }
+
+      updateData.shiftId = String(shiftResult.shift.shiftId || updateData.shiftId);
+      updateData.shiftName = shiftResult.shift.shiftName || updateData.shiftName;
+      updateData.shiftType = shiftResult.shift.shiftType || updateData.shiftType;
     }
     
     const updatedUser = await User.findByIdAndUpdate(
@@ -706,6 +764,23 @@ exports.updateUser = async (req, res) => {
       }
     }
 
+    if (updateData.shiftId) {
+      const shiftResult = await resolveAssignableShift({
+        jobRole: updateData.jobRole || user.jobRole,
+        shiftId: updateData.shiftId,
+        company: user.company || requestingUser.company,
+        department: updateData.department || user.department
+      });
+
+      if (shiftResult?.error) {
+        return errorResponse(res, shiftResult.error.status, shiftResult.error.message);
+      }
+
+      updateData.shiftId = String(shiftResult.shift.shiftId || updateData.shiftId);
+      updateData.shiftName = shiftResult.shift.shiftName || updateData.shiftName;
+      updateData.shiftType = shiftResult.shift.shiftType || updateData.shiftType;
+    }
+
     
     if (req.body.password) {
       updateData.password = req.body.password;
@@ -792,6 +867,23 @@ exports.updateSelfUser = async (req, res) => {
       if (departmentError) {
         return errorResponse(res, departmentError.status, departmentError.message);
       }
+    }
+
+    if (updateData.shiftId) {
+      const shiftResult = await resolveAssignableShift({
+        jobRole: updateData.jobRole || user.jobRole,
+        shiftId: updateData.shiftId,
+        company: user.company || requestingUser.company,
+        department: updateData.department || user.department
+      });
+
+      if (shiftResult?.error) {
+        return errorResponse(res, shiftResult.error.status, shiftResult.error.message);
+      }
+
+      updateData.shiftId = String(shiftResult.shift.shiftId || updateData.shiftId);
+      updateData.shiftName = shiftResult.shift.shiftName || updateData.shiftName;
+      updateData.shiftType = shiftResult.shift.shiftType || updateData.shiftType;
     }
 
     const updatedUser = await User.findByIdAndUpdate(
@@ -990,7 +1082,7 @@ exports.getCompanydepartmentUsers = async (req, res) => {
     const users = await User.find(filter)
       .select('-password -resetToken -resetTokenExpiry')
       .populate('department', 'name description')
-      .populate('company', 'name companyCode companyEmail companyPhone companyAddress logo')
+      .populate('company', 'name companyName companyCode companyEmail companyPhone companyAddress logo')
       .populate('createdBy', 'name email')
       .sort({ createdAt: -1 });
     const socketOnlineIds = getSocketOnlineUserIds(companyId);
@@ -1083,7 +1175,7 @@ exports.getCompanyUsers = async (req, res) => {
     const users = await User.find(filter)
       .select("-password -resetToken -resetTokenExpiry")
       .populate("department", "name description")
-      .populate("company", "name companyCode")
+      .populate("company", "name companyName companyCode")
       .lean();
     const socketOnlineIds = getSocketOnlineUserIds(companyId);
 

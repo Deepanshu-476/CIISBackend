@@ -78,6 +78,19 @@ const userSchema = new mongoose.Schema({
     required: [true, "Job role is required"],
     default: 'user'
   },
+
+  shiftId: {
+    type: String,
+    trim: true
+  },
+  shiftName: {
+    type: String,
+    trim: true
+  },
+  shiftType: {
+    type: String,
+    trim: true
+  },
   
   
   

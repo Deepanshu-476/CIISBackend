@@ -1613,13 +1613,14 @@ exports.addRemark = async (req, res) => {
   try {
     const { projectId, taskId } = req.params;
     const { text } = req.body;
+    const remarkText = String(text || "").trim();
 
     void 0;
     void 0;
     void 0;
     void 0;
 
-    if ((!text || text.trim() === "") && !req.file) {
+    if (!remarkText && !req.file) {
       return res.status(400).json({ 
         success: false, 
         message: "Remark text or image is required" 
@@ -1666,7 +1667,7 @@ exports.addRemark = async (req, res) => {
 
     
     task.remarks.push({
-      text: text || "",
+      text: remarkText || (imgPath ? "Image attachment" : ""),
       createdBy: req.user.id,
       image: imgPath || undefined
     });
@@ -1675,7 +1676,7 @@ exports.addRemark = async (req, res) => {
     
     task.activityLogs.push({
       type: "remark",
-      description: `Remark added: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`,
+      description: `Remark added: "${(remarkText || (imgPath ? 'Image attachment' : '')).substring(0, 50)}${remarkText.length > 50 ? '...' : ''}"`,
       performedBy: req.user.id
     });
 
