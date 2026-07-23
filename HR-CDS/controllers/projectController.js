@@ -1101,7 +1101,16 @@ exports.updateTask = async (req, res) => {
       }
 
       if (key === 'dueDate') {
-        task.dueDate = updateData[key] || undefined;
+        if (!updateData[key]) {
+          task.dueDate = undefined;
+          return;
+        }
+
+        const nextDueDate = new Date(updateData[key]);
+        if (Number.isNaN(nextDueDate.getTime())) {
+          throw new Error("Invalid task due date");
+        }
+        task.dueDate = nextDueDate;
         return;
       }
 
@@ -1129,6 +1138,7 @@ exports.updateTask = async (req, res) => {
     });
     syncTaskStatusWithDueDate(task);
     task.updatedAt = new Date();
+    project.markModified("tasks");
 
     
     task.activityLogs.push({
@@ -1198,6 +1208,55 @@ exports.updateTask = async (req, res) => {
       success: false, 
       message: "Error updating task" 
     });
+  }
+};
+
+exports.deleteTaskAttachment = async (req, res) => {
+  try {
+    const { id, taskId } = req.params;
+    const project = await Project.findById(id);
+
+    if (!project) {
+      return res.status(404).json({ success: false, message: "Project not found" });
+    }
+
+    if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
+      return res.status(403).json({ success: false, message: "Access denied to update task" });
+    }
+
+    const task = project.tasks.id(taskId);
+    if (!task) {
+      return res.status(404).json({ success: false, message: "Task not found" });
+    }
+
+    if (!task.pdfFile?.path) {
+      return res.status(404).json({ success: false, message: "Task attachment not found" });
+    }
+
+    const attachmentPath = task.pdfFile.path;
+    task.pdfFile = undefined;
+    task.updatedAt = new Date();
+    task.activityLogs.push({
+      type: "update",
+      description: "Task attachment was deleted",
+      performedBy: req.user.id
+    });
+    await project.save();
+
+    fs.unlink(attachmentPath, fileError => {
+      if (fileError && fileError.code !== "ENOENT") {
+        console.error("Error deleting task attachment file:", fileError);
+      }
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Task attachment deleted successfully",
+      task
+    });
+  } catch (error) {
+    console.error("Error deleting task attachment:", error);
+    return res.status(500).json({ success: false, message: "Error deleting task attachment" });
   }
 };
 
