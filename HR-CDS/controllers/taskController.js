@@ -963,6 +963,7 @@ exports.getAssignedTasks = async (req, res) => {
       success: true,
       tasks: paginated.tasks,
       groupedTasks: groupTasksByDate(paginated.tasks, 'createdAt', 'assignedSerialNo'),
+      stats: calculateUnifiedTaskStats(filtered),
       total: paginated.total,
       pagination: paginated
     });

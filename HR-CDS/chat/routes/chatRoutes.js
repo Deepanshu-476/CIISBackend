@@ -22,6 +22,7 @@ const {
 const authMiddleware = require("../../middlewares/auth");
 const upload = require("../middleware/upload");
 const statusUpload = require("../middleware/statusUpload");
+const compressUploadedMedia = require("../middleware/compressMedia");
 const {
   getStatuses,
   createStatus,
@@ -29,13 +30,20 @@ const {
   deleteStatus,
 } = require("../controllers/statusController");
 
+const uploadChatFile = (req, res, next) => {
+  upload.single("file")(req, res, error => {
+    if (!error) return next();
+    return next(error);
+  });
+};
+
 router.get("/users", authMiddleware, getCompanyUsers);
 router.get("/conversations", authMiddleware, getConversations);
 router.get("/conversation/:id", authMiddleware, getConversation);
 router.post("/conversation", authMiddleware, createConversation);
 router.post("/conversation/group", authMiddleware, createGroupConversation);
 router.get("/groups", authMiddleware, getCompanyGroups);
-router.post("/message", authMiddleware, upload.single("file"), sendMessage);
+router.post("/message", authMiddleware, uploadChatFile, compressUploadedMedia, sendMessage);
 router.get("/messages/:id", authMiddleware, getMessages);
 router.patch("/message/:messageId/delete-for-me", authMiddleware, deleteMessageForMe);
 router.patch("/message/:messageId/delete-for-everyone", authMiddleware, deleteMessageForEveryone);
@@ -45,7 +53,7 @@ router.patch("/conversation/:id/mute", authMiddleware, updateConversationMute);
 router.patch("/conversation/:id/disappearing-messages", authMiddleware, updateDisappearingMessages);
 router.patch("/message/:messageId/reaction", authMiddleware, updateMessageReaction);
 router.get("/statuses", authMiddleware, getStatuses);
-router.post("/statuses", authMiddleware, statusUpload.single("file"), createStatus);
+router.post("/statuses", authMiddleware, statusUpload.single("file"), compressUploadedMedia, createStatus);
 router.patch("/statuses/:statusId/view", authMiddleware, markViewed);
 router.delete("/statuses/:statusId", authMiddleware, deleteStatus);
 
