@@ -1,6 +1,7 @@
 const Attendance = require("../models/Attendance");
 const User = require("../../models/User");
 const Company = require("../../models/Company");
+const Branch = require("../../models/Branch");
 const Department = require("../../models/Department");
 const JobRole = require("../../models/JobRole");
 const mongoose = require("mongoose");
@@ -183,6 +184,57 @@ const validateCompanyLocationRange = ({ company, latitude, longitude, actionLabe
   };
 };
 
+const getAttendanceSettingsContext = async ({ companyCode, userId }) => {
+  const [company, userObj] = await Promise.all([
+    Company.findOne({ companyCode }),
+    User.findById(userId),
+  ]);
+  const branchId = userObj?.branch || userObj?.branchId;
+  const branch = branchId
+    ? await Branch.findById(branchId).select("dashboardConfig officeLocation")
+    : null;
+
+  return {
+    company,
+    userObj,
+    attendanceSettings: branch || company,
+  };
+};
+
+const resolveSelectedShiftSettings = async (userObj) => {
+  if (!userObj?.jobRole || !userObj?.company) return null;
+
+  let jobRoleDoc = null;
+  const jobRoleValue = String(userObj.jobRole);
+
+  if (mongoose.Types.ObjectId.isValid(jobRoleValue)) {
+    jobRoleDoc = await JobRole.findOne({
+      _id: jobRoleValue,
+      company: userObj.company,
+      isActive: true
+    });
+  }
+
+  if (!jobRoleDoc) {
+    jobRoleDoc = await JobRole.findOne({
+      name: { $regex: new RegExp(`^${jobRoleValue}$`, 'i') },
+      company: userObj.company,
+      isActive: true
+    });
+  }
+
+  if (!jobRoleDoc) return null;
+
+  const shifts = Array.isArray(jobRoleDoc.shifts) && jobRoleDoc.shifts.length > 0
+    ? jobRoleDoc.shifts
+    : (jobRoleDoc.shiftSettings ? [jobRoleDoc.shiftSettings] : []);
+
+  return shifts.find(shift => String(shift.shiftId || shift._id || shift.id) === String(userObj.shiftId))
+    || jobRoleDoc.shiftSettings
+    || shifts[0]
+    || null;
+};
+
 
 const isValidObjectId = (id) => {
   return mongoose.Types.ObjectId.isValid(id);
@@ -321,9 +373,9 @@ const clockIn = async (req, res) => {
       });
     }
 
-    // 1. Fetch Company settings to read attendance mode
-    const company = await Company.findOne({ companyCode: userCompanyCode });
-    const clockInConfig = company?.dashboardConfig?.find(c => c.componentId === 'clock-in');
+    // 1. Fetch branch-scoped settings to read attendance mode
+    const { attendanceSettings, userObj } = await getAttendanceSettingsContext({ companyCode: userCompanyCode, userId });
+    const clockInConfig = attendanceSettings?.dashboardConfig?.find(c => c.componentId === 'clock-in');
     const attendanceMode = clockInConfig?.settings?.attendanceMode || 'normal';
 
     const { latitude, longitude, accuracy, selfieUrl } = req.body;
@@ -338,7 +390,7 @@ const clockIn = async (req, res) => {
       }
 
       locationRange = validateCompanyLocationRange({
-        company,
+        company: attendanceSettings,
         latitude,
         longitude,
         actionLabel: "Clock-in"
@@ -380,19 +432,8 @@ const clockIn = async (req, res) => {
       });
     }
 
-    // 3. Fetch JobRole shift timing configuration
-    const userObj = await User.findById(userId);
-    let shiftSettings = null;
-    if (userObj) {
-      const jobRoleDoc = await JobRole.findOne({
-        name: { $regex: new RegExp(`^${userObj.jobRole}$`, 'i') },
-        company: userObj.company,
-        isActive: true
-      });
-      if (jobRoleDoc) {
-        shiftSettings = jobRoleDoc.shiftSettings;
-      }
-    }
+    // 3. Fetch selected JobRole shift timing configuration
+    const shiftSettings = await resolveSelectedShiftSettings(userObj);
 
     const shiftStartStr = shiftSettings?.shiftStart || "09:00";
     const earlyClockInStartStr = shiftSettings?.earlyClockInStart || "08:30";
@@ -501,9 +542,9 @@ const clockOut = async (req, res) => {
     const userId = req.user._id || req.user.id;
     const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     
-    // 1. Fetch Company settings to read attendance mode requirements
-    const company = await Company.findOne({ companyCode: userCompanyCode });
-    const clockInConfig = company?.dashboardConfig?.find(c => c.componentId === 'clock-in');
+    // 1. Fetch branch-scoped settings to read attendance mode requirements
+    const { attendanceSettings, userObj } = await getAttendanceSettingsContext({ companyCode: userCompanyCode, userId });
+    const clockInConfig = attendanceSettings?.dashboardConfig?.find(c => c.componentId === 'clock-in');
     const attendanceMode = clockInConfig?.settings?.attendanceMode || 'normal';
 
     const { latitude, longitude, accuracy, selfieUrl } = req.body;
@@ -518,7 +559,7 @@ const clockOut = async (req, res) => {
       }
 
       locationRange = validateCompanyLocationRange({
-        company,
+        company: attendanceSettings,
         latitude,
         longitude,
         actionLabel: "Clock-out"
@@ -555,19 +596,8 @@ const clockOut = async (req, res) => {
       });
     }
 
-    // 3. Fetch JobRole shift settings
-    const userObj = await User.findById(userId);
-    let shiftSettings = null;
-    if (userObj) {
-      const jobRoleDoc = await JobRole.findOne({
-        name: { $regex: new RegExp(`^${userObj.jobRole}$`, 'i') },
-        company: userObj.company,
-        isActive: true
-      });
-      if (jobRoleDoc) {
-        shiftSettings = jobRoleDoc.shiftSettings;
-      }
-    }
+    // 3. Fetch selected JobRole shift settings
+    const shiftSettings = await resolveSelectedShiftSettings(userObj);
 
     const shiftEndStr = shiftSettings?.shiftEnd || "19:00";
     const shortLeaveEarlyLimitStr = shiftSettings?.shortLeaveEarlyLimit || "18:30";

@@ -8,6 +8,7 @@ const Meeting = require("../models/Meeting");
 const Holiday = require("../models/Holiday");
 const User = require("../../models/User");
 const Company = require("../../models/Company");
+const Branch = require("../../models/Branch");
 const JobRole = require("../../models/JobRole");
 
 const formatIndiaTime = value => {
@@ -34,6 +35,11 @@ const getScopedCompanyId = user => {
   return company?._id || company || user?.companyId || null;
 };
 
+const getScopedBranchId = user => {
+  const branch = user?.branch || user?.branchId;
+  return branch?._id || branch || null;
+};
+
 const normalizeRoleForDashboard = role => ({
   _id: role._id || role.id || "employee",
   roleName: role.roleName || role.name || role.jobRole || role.title || "Employee",
@@ -52,6 +58,7 @@ const getEmployeeDashboardSummary = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
     const companyId = getScopedCompanyId(req.user);
+    const branchId = getScopedBranchId(req.user);
     const companyCode = String(req.user.companyCode || req.user.company?.companyCode || "").trim();
 
     if (!userId || !companyCode) {
@@ -110,6 +117,8 @@ const getEmployeeDashboardSummary = async (req, res) => {
         .limit(8)
         .lean(),
     ]);
+    const branch = branchId ? await Branch.findById(branchId).select("dashboardConfig officeLocation").lean() : null;
+    const scopedDashboardConfig = branch?.dashboardConfig?.length ? branch.dashboardConfig : (company?.dashboardConfig || []);
 
     const attendanceStatus = todayAttendance
       ? {
@@ -127,7 +136,7 @@ const getEmployeeDashboardSummary = async (req, res) => {
     return res.status(200).json({
       success: true,
       data: {
-        dashboardConfig: company?.dashboardConfig || [],
+        dashboardConfig: scopedDashboardConfig,
         jobRoles: jobRoles.map(normalizeRoleForDashboard),
         holidays,
         attendance,

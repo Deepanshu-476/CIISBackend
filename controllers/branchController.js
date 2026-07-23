@@ -186,7 +186,7 @@ exports.getBranchById = async (req, res) => {
 exports.updateBranch = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, branchCode, address, phone, isActive } = req.body;
+    const { name, branchCode, address, phone, isActive, dashboardConfig, officeLocation } = req.body;
 
     if (!isValidObjectId(id)) {
       return res.status(400).json({
@@ -255,6 +255,16 @@ exports.updateBranch = async (req, res) => {
     if (address !== undefined) updates.address = address.trim();
     if (phone !== undefined) updates.phone = phone.trim();
     if (isActive !== undefined) updates.isActive = isActive;
+    if (Array.isArray(dashboardConfig)) updates.dashboardConfig = dashboardConfig;
+    if (officeLocation && typeof officeLocation === "object") {
+      updates.officeLocation = {
+        latitude: officeLocation.latitude,
+        longitude: officeLocation.longitude,
+        allowedRadiusMeters: officeLocation.allowedRadiusEnabled === false ? null : officeLocation.allowedRadiusMeters,
+        allowedRadiusEnabled: officeLocation.allowedRadiusEnabled !== false,
+        updatedAt: new Date(),
+      };
+    }
 
     const updatedBranch = await Branch.findByIdAndUpdate(id, updates, {
       new: true,
