@@ -1141,7 +1141,7 @@ exports.updateStatus = async (req, res) => {
     const oldStatus = oldStatusEntry?.status || task.overallStatus || 'pending';
     const normalizedStatus = normalizeTaskStatus(status);
 
-    if (isOnHoldStatus(oldStatus) && !canChangeFromOnHold(normalizedStatus)) {
+    if (isOnHoldStatus(oldStatus) && !canChangeFromOnHold(normalizedStatus) && !allowCompanyAllEdit) {
       return res.status(400).json({
         success: false,
         error: 'On hold tasks can only be changed to in-progress or completed'
@@ -1168,10 +1168,10 @@ exports.updateStatus = async (req, res) => {
       return res.status(400).json({ success: false, error: 'Cannot change status of an overdue task' });
     }
 
-    if (oldStatus === 'completed' && status !== 'completed' && status !== 'reopen') {
+    if (oldStatus === 'completed' && status !== 'completed' && status !== 'reopen' && !allowCompanyAllEdit) {
       return res.status(400).json({ success: false, error: 'Completed tasks can only be reopened.' });
     }
-    if (oldStatus === 'reopen' && status !== 'reopen' && status !== 'completed') {
+    if (oldStatus === 'reopen' && status !== 'reopen' && status !== 'completed' && !allowCompanyAllEdit) {
       return res.status(400).json({ success: false, error: 'Reopened tasks can only be completed.' });
     }
 
