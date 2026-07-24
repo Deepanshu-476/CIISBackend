@@ -34,6 +34,12 @@ const userSchema = new mongoose.Schema({
     ref: "Branch",
     index: true
   },
+
+  assignedBranches: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Branch",
+    index: true
+  }],
   
   branchCode: {
     type: String, 

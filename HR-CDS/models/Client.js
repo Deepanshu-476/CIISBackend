@@ -91,6 +91,12 @@ const clientSchema = new mongoose.Schema({
     uppercase: true,
     trim: true
   },
+  branch: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Branch',
+    default: null,
+    index: true
+  },
   projectManager: {
     type: [String],
     required: [true, 'At least one project manager is required'],

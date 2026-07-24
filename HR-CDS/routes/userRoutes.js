@@ -26,6 +26,8 @@ router.get('/company-users', userController.getCompanyUsers);
 router.get('/all', userController.getAllUsers);
 router.get('/deleted', userController.getDeletedUsers);
 router.put('/restore/:id', userController.restoreUser);
+router.put('/admin-update/:id', userController.updateUser);
+router.put('/admin-update-by-email', userController.updateUser);
 router.delete('/:id', userController.deleteUser);
 
 

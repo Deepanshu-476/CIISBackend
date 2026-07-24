@@ -62,6 +62,30 @@ const filterMenuItemsByCompanyAccess = async (companyId, menuItems) => {
 
 const escapeRegex = value => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+const normalizeNameKey = value => String(value || '')
+  .trim()
+  .replace(/[_-]+/g, ' ')
+  .replace(/\s+/g, ' ')
+  .toLowerCase();
+
+const resolveDepartmentId = async (companyId, departmentValue) => {
+  const rawValue = String(departmentValue || '').trim();
+  if (!rawValue) return '';
+  if (mongoose.Types.ObjectId.isValid(rawValue)) return rawValue;
+
+  const targetKey = normalizeNameKey(rawValue);
+  const departments = await Department.find({
+    company: companyId,
+    isActive: { $ne: false }
+  }).select('_id name').lean();
+
+  const matchedDepartment = departments.find(department => (
+    normalizeNameKey(department.name) === targetKey
+  ));
+
+  return matchedDepartment ? String(matchedDepartment._id) : rawValue;
+};
+
 const buildRoleQuery = async (companyId, departmentId, role) => {
   const roleValue = String(role || '').trim();
   const aliases = new Set([roleValue]);
@@ -74,11 +98,13 @@ const buildRoleQuery = async (companyId, departmentId, role) => {
       department: departmentId
     }).select('_id name');
   } else {
-    jobRole = await JobRole.findOne({
+    const targetRoleKey = normalizeNameKey(roleValue);
+    const roles = await JobRole.find({
       company: companyId,
       department: departmentId,
-      name: { $regex: `^${escapeRegex(roleValue)}$`, $options: 'i' }
-    }).select('_id name');
+      isActive: { $ne: false }
+    }).select('_id name').lean();
+    jobRole = roles.find(item => normalizeNameKey(item.name) === targetRoleKey) || null;
   }
 
   if (jobRole) {
@@ -112,7 +138,7 @@ const findSidebarConfig = async ({ companyId, branchId, departmentId, role }) =>
 
 router.get('/', async (req, res) => {
   try {
-    const { companyId, branchId, departmentId, role } = req.query;
+    let { companyId, branchId, departmentId, role } = req.query;
     
     if (companyId && !mongoose.Types.ObjectId.isValid(companyId)) {
       return res.json({ success: true, count: 0, data: [] });
@@ -120,6 +146,10 @@ router.get('/', async (req, res) => {
     if (branchId && !mongoose.Types.ObjectId.isValid(branchId)) {
       return res.json({ success: true, count: 0, data: [] });
     }
+    if (companyId && departmentId && mongoose.Types.ObjectId.isValid(companyId)) {
+      departmentId = await resolveDepartmentId(companyId, departmentId);
+    }
+
     if (departmentId && !mongoose.Types.ObjectId.isValid(departmentId)) {
       return res.json({ success: true, count: 0, data: [] });
     }
@@ -161,6 +191,10 @@ router.get('/config', async (req, res) => {
         success: false,
         message: 'Company, department and role are required'
       });
+    }
+
+    if (mongoose.Types.ObjectId.isValid(companyId)) {
+      departmentId = await resolveDepartmentId(companyId, departmentId);
     }
 
     // Map old client department / role IDs to the company's local client department/role if needed
@@ -255,16 +289,6 @@ router.post('/', async (req, res) => {
       });
     }
     
-    const allowedMenuItems = await filterMenuItemsByCompanyAccess(companyId, menuItems);
-
-    if (allowedMenuItems.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Selected menu items are not allowed for this company'
-      });
-    }
-
-    
     const query = { companyId, departmentId, role };
     if (branchId) query.branchId = branchId;
 
@@ -284,7 +308,7 @@ router.post('/', async (req, res) => {
       branchId: branchId || null,
       departmentId,
       role,
-      menuItems: allowedMenuItems,
+      menuItems,
     });
     
     const savedConfig = await newConfig.save();
@@ -350,19 +374,10 @@ router.put('/:id', async (req, res) => {
       });
     }
 
-    const allowedMenuItems = await filterMenuItemsByCompanyAccess(existingConfig.companyId, menuItems);
-
-    if (allowedMenuItems.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Selected menu items are not allowed for this company'
-      });
-    }
-
     const updatedConfig = await SidebarConfig.findByIdAndUpdate(
       id,
       {
-        menuItems: allowedMenuItems,
+        menuItems,
         updatedAt: Date.now()
       },
       { 

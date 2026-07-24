@@ -38,6 +38,49 @@ const getIndiaDateParts = (value = new Date()) => {
   };
 };
 
+const normalizeIdList = (value) => {
+  const input = Array.isArray(value) ? value : value ? [value] : [];
+  return [...new Set(input
+    .map(item => {
+      if (!item) return '';
+      if (typeof item === 'object') return String(item._id || item.id || item.value || '').trim();
+      return String(item).trim();
+    })
+    .filter(Boolean)
+  )];
+};
+
+const canViewAllBranchData = (user = {}) => {
+  const roleText = String(user.companyRole || user.jobRole || user.role || '').trim().toLowerCase();
+  return ['owner', 'super_admin', 'admin', 'hr'].includes(roleText);
+};
+
+const getUserBranchIds = (user = {}) => normalizeIdList([
+  user.branch,
+  ...(Array.isArray(user.assignedBranches) ? user.assignedBranches : [])
+]);
+
+const getBranchScopedUserIds = async (req, companyCode) => {
+  const requestedBranch = req.query?.branch || req.query?.branchId;
+  if (!requestedBranch || !isValidObjectId(requestedBranch)) return null;
+
+  const requestedBranchId = String(requestedBranch);
+  const accessibleBranchIds = getUserBranchIds(req.user || {});
+  if (!canViewAllBranchData(req.user) && !accessibleBranchIds.includes(requestedBranchId)) {
+    return [];
+  }
+
+  const users = await User.find({
+    companyCode,
+    $or: [
+      { branch: requestedBranchId },
+      { assignedBranches: requestedBranchId }
+    ]
+  }).select('_id').lean();
+
+  return users.map(user => user._id);
+};
+
 const indiaDateTimeToUtc = (year, monthIndex, day, hour = 0, minute = 0, second = 0, millisecond = 0) =>
   new Date(Date.UTC(year, monthIndex, day, hour, minute, second, millisecond) - INDIA_OFFSET_MS);
 
@@ -917,10 +960,27 @@ const getAllUsersAttendance = async (req, res) => {
     }
     
     let filter = { companyCode: userCompanyCode };
+    const branchUserIds = await getBranchScopedUserIds(req, userCompanyCode);
+    if (branchUserIds) {
+      if (branchUserIds.length === 0) {
+        return res.status(200).json({
+          message: "All attendance records fetched successfully",
+          data: [],
+          count: 0,
+          total: 0,
+          pagination: buildPaginationMeta({ page, limit, total: 0 })
+        });
+      }
+      filter.user = { $in: branchUserIds };
+    }
     
     
     if (userId && isValidObjectId(userId)) {
-      filter.user = userId;
+      if (filter.user?.$in) {
+        filter.user = filter.user.$in.some(id => String(id) === String(userId)) ? userId : null;
+      } else {
+        filter.user = userId;
+      }
     }
 
     if (date) {
@@ -1416,6 +1476,16 @@ const getAttendanceStats = async (req, res) => {
     }
     
     let matchStage = { companyCode: userCompanyCode };
+    const branchUserIds = await getBranchScopedUserIds(req, userCompanyCode);
+    if (branchUserIds) {
+      if (branchUserIds.length === 0) {
+        return res.status(200).json({
+          message: "Attendance statistics fetched successfully",
+          data: { total: 0, present: 0, late: 0, halfDay: 0, absent: 0 }
+        });
+      }
+      matchStage.user = { $in: branchUserIds };
+    }
     
     if (startDate && endDate) {
       const start = parseIndiaDateOnly(startDate);

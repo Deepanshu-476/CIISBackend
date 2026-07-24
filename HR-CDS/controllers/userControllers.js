@@ -2,6 +2,7 @@
 const User = require('../../models/User');
 const Department = require('../../models/Department');
 const JobRole = require('../../models/JobRole');
+const Branch = require('../../models/Branch');
 const bcrypt = require('bcryptjs');
 const { errorResponse, successResponse } = require('../utils/responseHelper.js');
 const Task = require('../../HR-CDS/models/Task.js');
@@ -133,6 +134,90 @@ const getCompanyScope = (req) => {
       companyCode: new RegExp(`^${escapeRegExp(companyCode)}$`, 'i')
     }
   };
+};
+
+const normalizeIdList = (value) => {
+  const input = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(',')
+      : value
+        ? [value]
+        : [];
+
+  return [...new Set(input
+    .map(item => {
+      if (!item) return '';
+      if (typeof item === 'object') return String(item._id || item.id || item.value || '');
+      return String(item);
+    })
+    .map(item => item.trim())
+    .filter(Boolean)
+  )];
+};
+
+const isObjectIdLike = value => /^[a-f\d]{24}$/i.test(String(value || '').trim());
+
+const getUserBranchIds = (user = {}) => normalizeIdList([
+  user.branch,
+  ...(Array.isArray(user.assignedBranches) ? user.assignedBranches : [])
+]);
+
+const canViewAllCompanyBranches = (user = {}) => {
+  const roleText = String(user.companyRole || user.jobRole || user.role || '').trim().toLowerCase();
+  return ['owner', 'super_admin', 'admin', 'hr'].includes(roleText);
+};
+
+const applyBranchAccessFilter = (filter, req) => {
+  const bypassBranchRestriction = ['true', '1', 'all', 'yes'].includes(
+    String(req.query?.ignoreBranchRestriction || req.query?.allBranches || '').toLowerCase()
+  );
+  if (bypassBranchRestriction) {
+    return filter;
+  }
+
+  const requestedBranch = req.query?.branch || req.query?.branchId;
+  const currentUser = req.user || {};
+  const accessibleBranchIds = getUserBranchIds(currentUser);
+
+  if (requestedBranch) {
+    const requestedBranchId = String(requestedBranch);
+    if (!canViewAllCompanyBranches(currentUser) && !accessibleBranchIds.includes(requestedBranchId)) {
+      filter._id = null;
+      return filter;
+    }
+
+    filter.$or = [
+      { branch: requestedBranchId },
+      { assignedBranches: requestedBranchId }
+    ];
+    return filter;
+  }
+
+  if (!canViewAllCompanyBranches(currentUser) && accessibleBranchIds.length > 0) {
+    filter.$or = [
+      { branch: { $in: accessibleBranchIds } },
+      { assignedBranches: { $in: accessibleBranchIds } }
+    ];
+  }
+
+  return filter;
+};
+
+const validateAssignedBranches = async (branchIds, companyId) => {
+  if (branchIds.length === 0) return null;
+
+  const count = await Branch.countDocuments({
+    _id: { $in: branchIds },
+    company: companyId,
+    isActive: { $ne: false }
+  });
+
+  if (count !== branchIds.length) {
+    return { status: 403, message: "One or more assigned branches are invalid for this company" };
+  }
+
+  return null;
 };
 
 
@@ -621,6 +706,8 @@ exports.getUser = async (req, res) => {
     const user = await User.findById(req.params.id)
       .select('-password -resetToken -resetTokenExpiry')
       .populate('department', 'name description')
+      .populate('branch', 'name branchCode')
+      .populate('assignedBranches', 'name branchCode')
       .populate('company', 'name companyCode')
       .populate('createdBy', 'name email');
 
@@ -645,6 +732,8 @@ exports.getUser = async (req, res) => {
       email: user.email,
       company: user.company,
       department: user.department,
+      branch: user.branch,
+      assignedBranches: user.assignedBranches || [],
       jobRole: user.jobRole,
       phone: user.phone,
       address: user.address,
@@ -706,7 +795,15 @@ exports.updateUser = async (req, res) => {
     }
 
     
-    const user = await User.findById(id);
+    let user = id ? await User.findById(id) : null;
+    if (!user && req.body.email && requestingUser.company) {
+      const requesterCompanyId = requestingUser.company._id || requestingUser.company;
+      user = await User.findOne({
+        email: String(req.body.email).trim().toLowerCase(),
+        company: requesterCompanyId
+      });
+    }
+
     if (!user) {
       return errorResponse(res, 404, "User not found");
     }
@@ -757,11 +854,37 @@ exports.updateUser = async (req, res) => {
     
 
     
-    if (updateData.department) {
+    if (updateData.department && isObjectIdLike(updateData.department)) {
       const departmentError = await validateAssignableDepartment(updateData.department, user.company || requestingUser.company);
       if (departmentError) {
         return errorResponse(res, departmentError.status, departmentError.message);
       }
+    }
+
+    if (updateData.branch && isObjectIdLike(updateData.branch)) {
+      const branch = await Branch.findOne({
+        _id: updateData.branch,
+        company: user.company || requestingUser.company,
+        isActive: { $ne: false }
+      });
+
+      if (!branch) {
+        return errorResponse(res, 404, "Branch not found for selected company");
+      }
+
+      updateData.branchCode = branch.branchCode;
+    }
+
+    if (req.body.assignedBranches !== undefined || updateData.branch) {
+      const assignedBranchIds = normalizeIdList([
+        ...(Array.isArray(req.body.assignedBranches) ? req.body.assignedBranches : normalizeIdList(req.body.assignedBranches)),
+        updateData.branch || user.branch
+      ]).filter(isObjectIdLike);
+      const branchError = await validateAssignedBranches(assignedBranchIds, user.company || requestingUser.company);
+      if (branchError) {
+        return errorResponse(res, branchError.status, branchError.message);
+      }
+      updateData.assignedBranches = assignedBranchIds;
     }
 
     if (updateData.shiftId) {
@@ -788,7 +911,7 @@ exports.updateUser = async (req, res) => {
 
     
     const updatedUser = await User.findByIdAndUpdate(
-      id,
+      user._id,
       { $set: updateData },
       { 
         new: true, 
@@ -798,6 +921,8 @@ exports.updateUser = async (req, res) => {
     )
     .select('-password -resetToken -resetTokenExpiry')
     .populate('department', 'name description')
+    .populate('branch', 'name branchCode')
+    .populate('assignedBranches', 'name branchCode')
     .populate('company', 'name companyCode')
     .populate('createdBy', 'name email');
 
@@ -1072,6 +1197,7 @@ exports.getCompanydepartmentUsers = async (req, res) => {
     if (requestedDepartment) {
       filter.department = requestedDepartment;
     }
+    applyBranchAccessFilter(filter, req);
     
     
     const authorizedRoles = ['admin', 'hr', 'manager', 'super_admin', 'employee'];
@@ -1082,6 +1208,8 @@ exports.getCompanydepartmentUsers = async (req, res) => {
     const users = await User.find(filter)
       .select('-password -resetToken -resetTokenExpiry')
       .populate('department', 'name description')
+      .populate('branch', 'name branchCode')
+      .populate('assignedBranches', 'name branchCode')
       .populate('company', 'name companyName companyCode companyEmail companyPhone companyAddress logo')
       .populate('createdBy', 'name email')
       .sort({ createdAt: -1 });
@@ -1102,6 +1230,8 @@ exports.getCompanydepartmentUsers = async (req, res) => {
         email: user.email,
         company: user.company,
         department: user.department,
+        branch: user.branch,
+        assignedBranches: user.assignedBranches || [],
         jobRole: user.jobRole,
         phone: user.phone,
         address: user.address,
@@ -1171,10 +1301,13 @@ exports.getCompanyUsers = async (req, res) => {
     if (!shouldIncludeInactiveUsers(req.query)) {
       filter.isActive = { $ne: false };
     }
+    applyBranchAccessFilter(filter, req);
 
     const users = await User.find(filter)
       .select("-password -resetToken -resetTokenExpiry")
       .populate("department", "name description")
+      .populate("branch", "name branchCode")
+      .populate("assignedBranches", "name branchCode")
       .populate("company", "name companyName companyCode")
       .lean();
     const socketOnlineIds = getSocketOnlineUserIds(companyId);

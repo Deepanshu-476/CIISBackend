@@ -263,6 +263,7 @@ const completeStandardLogin = async (userId, res, { message = "Login successful"
     .select("-password -loginAttempts -lockUntil")
     .populate("department", "name")
     .populate("branch", "name branchCode")
+    .populate("assignedBranches", "name branchCode")
     .populate("company", "companyName companyCode logo companyEmail companyPhone companyAddress isActive subscriptionExpiry allowedPages loginUrl dbIdentifier");
 
   if (!user) {
@@ -325,6 +326,7 @@ const completeStandardLogin = async (userId, res, { message = "Login successful"
       jobRole: user.jobRole,
       department: user.department,
       branch: user.branch,
+      assignedBranches: user.assignedBranches || [],
       branchCode: user.branchCode,
       company: user.company?._id,
       companyName: user.company?.companyName,
@@ -496,6 +498,7 @@ exports.companyLogin = async (req, res) => {
       .select("+password +isActive +loginAttempts +lockUntil")
       .populate("department", "name")
       .populate("branch", "name branchCode")
+      .populate("assignedBranches", "name branchCode")
       .populate("company", "companyName companyCode logo")
 
     if (!user) {
@@ -656,6 +659,7 @@ exports.register = async (req, res) => {
       company, 
       companyCode, 
       branch, 
+      assignedBranches,
       phone, address, gender, maritalStatus, dob, salary,
       accountNumber, ifsc, bankName, bankHolderName,
       employeeType, properties, propertyOwned, additionalDetails,
@@ -732,6 +736,18 @@ exports.register = async (req, res) => {
     
     let cleanBranch = branch;
     let cleanBranchCode = null;
+    const assignedBranchInput = Array.isArray(assignedBranches)
+      ? assignedBranches
+      : typeof assignedBranches === "string"
+        ? assignedBranches.split(",")
+        : [];
+    let cleanAssignedBranchIds = [...new Set([
+      ...assignedBranchInput,
+      cleanBranch
+    ]
+      .map(value => String(value || "").trim())
+      .filter(Boolean)
+    )];
 
     if (branch) {
       const branchExists = await Branch.findById(branch).session(session);
@@ -750,6 +766,23 @@ exports.register = async (req, res) => {
       if (defaultBranch) {
         cleanBranch = defaultBranch._id;
         cleanBranchCode = defaultBranch.branchCode;
+      }
+    }
+
+    if (cleanBranch) {
+      cleanAssignedBranchIds = [...new Set([...cleanAssignedBranchIds, String(cleanBranch)])];
+    }
+
+    if (cleanAssignedBranchIds.length > 0) {
+      const assignedBranchCount = await Branch.countDocuments({
+        _id: { $in: cleanAssignedBranchIds },
+        company: companyExists._id,
+        isActive: { $ne: false }
+      }).session(session);
+
+      if (assignedBranchCount !== cleanAssignedBranchIds.length) {
+        await session.abortTransaction();
+        return errorResponse(res, 403, "One or more assigned branches are invalid for selected company", "ASSIGNED_BRANCH_MISMATCH");
       }
     }
 
@@ -803,6 +836,7 @@ exports.register = async (req, res) => {
       company,
       companyCode,
       branch: cleanBranch,
+      assignedBranches: cleanAssignedBranchIds,
       branchCode: cleanBranchCode,
       employeeId,
       phone: phone?.trim(),
@@ -860,6 +894,8 @@ exports.register = async (req, res) => {
         shiftType: createdUser.shiftType,
         company: createdUser.company,
         companyCode: createdUser.companyCode,
+        branch: createdUser.branch,
+        assignedBranches: createdUser.assignedBranches,
         createdAt: createdUser.createdAt,
       },
     });
@@ -902,6 +938,7 @@ exports.login = async (req, res) => {
       .select("+password +isActive +loginAttempts +lockUntil")
       .populate("department", "name")
       .populate("branch", "name branchCode")
+      .populate("assignedBranches", "name branchCode")
       .populate("company", "companyName companyCode isActive subscriptionExpiry logo companyEmail companyPhone companyAddress dbIdentifier loginUrl");
 
     if (!user) {
@@ -1248,6 +1285,8 @@ exports.verifyLoginOTP = async (req, res) => {
     const user = await User.findOne({ _id: decoded.userId, email })
       .select("-password -loginAttempts -lockUntil")
       .populate("department", "name")
+      .populate("branch", "name branchCode")
+      .populate("assignedBranches", "name branchCode")
       .populate("company", "companyName companyCode logo companyEmail companyPhone companyAddress isActive subscriptionExpiry allowedPages loginUrl dbIdentifier");
 
     if (!user) {
@@ -1322,6 +1361,7 @@ exports.verifyLoginOTP = async (req, res) => {
         jobRole: user.jobRole,
         department: user.department,
         branch: user.branch,
+        assignedBranches: user.assignedBranches || [],
         branchCode: user.branchCode,
         company: user.company?._id,
         companyName: user.company?.companyName,

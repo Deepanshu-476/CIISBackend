@@ -641,6 +641,27 @@ const fetchAssignedToMeTaskList = async (req) => {
   });
 };
 
+const getBranchScopedUserIds = async (req) => {
+  const requestedBranchId = req.query?.branch || req.query?.branchId;
+  if (!requestedBranchId) return null;
+
+  const companyCode = getRequestCompanyCode(req);
+  if (!companyCode) return [];
+
+  const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
+  const companyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : companyCode;
+  const users = await User.find({
+    companyCode: companyFilter,
+    $or: [
+      { branch: requestedBranchId },
+      { branchId: requestedBranchId },
+      { assignedBranches: requestedBranchId }
+    ]
+  }).select('_id').lean();
+
+  return users.map(user => user._id);
+};
+
 const fetchAssignedClientTaskList = async (req) => {
   const companyCode = getRequestCompanyCode(req);
   const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
@@ -947,12 +968,31 @@ exports.getMyTasks = async (req, res) => {
 exports.getAssignedTasks = async (req, res) => {
   try {
     const currentUserId = req.user._id || req.user.id;
-    const tasks = await Task.find({
+    const branchUserIds = await getBranchScopedUserIds(req);
+    const companyCode = getRequestCompanyCode(req);
+    const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
+    const groupCompanyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : req.user.companyCode;
+    const taskFilter = {
       companyCode: req.user.companyCode,
       createdBy: currentUserId,
       taskFor: 'others',
       isActive: true
-    }).populate('assignedUsers', 'name role email').populate('createdBy', 'name email').sort({ createdAt: -1 }).lean();
+    };
+
+    if (branchUserIds) {
+      const branchGroupIds = await Group.find({
+        companyCode: groupCompanyFilter,
+        isActive: true,
+        members: { $in: branchUserIds }
+      }).distinct('_id');
+
+      taskFilter.$or = [
+        { assignedUsers: { $in: branchUserIds } },
+        ...(branchGroupIds.length ? [{ assignedGroups: { $in: branchGroupIds } }] : [])
+      ];
+    }
+
+    const tasks = await Task.find(taskFilter).populate('assignedUsers', 'name role email').populate('createdBy', 'name email').sort({ createdAt: -1 }).lean();
 
     const enriched = await enrichStatusInfo(tasks);
     const mapped = enriched.map(t => ({ ...t, status: normalizeTaskStatus(t.overallStatus) }));

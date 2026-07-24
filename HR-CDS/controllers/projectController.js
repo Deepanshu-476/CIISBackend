@@ -9,6 +9,51 @@ const User = require("../../models/User");
 const mongoose = require("mongoose");
 const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagination");
 
+const normalizeIdList = (value) => {
+  const input = Array.isArray(value) ? value : value ? [value] : [];
+  return [...new Set(input
+    .map(item => {
+      if (!item) return '';
+      if (typeof item === 'object') return String(item._id || item.id || item.value || '').trim();
+      return String(item).trim();
+    })
+    .filter(Boolean)
+  )];
+};
+
+const canViewAllBranchData = (user = {}) => {
+  const roleText = String(user.companyRole || user.jobRole || user.role || '').trim().toLowerCase();
+  return ['owner', 'super_admin', 'admin', 'hr'].includes(roleText);
+};
+
+const getUserBranchIds = (user = {}) => normalizeIdList([
+  user.branch,
+  ...(Array.isArray(user.assignedBranches) ? user.assignedBranches : [])
+]);
+
+const getBranchScopedCompanyUserIds = async (req, fallbackUserIds = []) => {
+  const requestedBranch = req.query?.branch || req.query?.branchId;
+  if (!requestedBranch || !mongoose.Types.ObjectId.isValid(requestedBranch)) return fallbackUserIds;
+
+  const requestedBranchId = String(requestedBranch);
+  const accessibleBranchIds = getUserBranchIds(req.user || {});
+  if (!canViewAllBranchData(req.user) && !accessibleBranchIds.includes(requestedBranchId)) {
+    return [];
+  }
+
+  const companyCode = getUserCompanyCode(req.user);
+  const companyId = getUserCompanyId(req.user);
+  const users = await User.find({
+    ...(companyId ? { company: companyId } : companyCode ? { companyCode } : {}),
+    $or: [
+      { branch: requestedBranchId },
+      { assignedBranches: requestedBranchId }
+    ]
+  }).select('_id').lean();
+
+  return users.map(user => user._id);
+};
+
 
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -369,7 +414,7 @@ exports.listProjects = async (req, res) => {
 
     const companyId = getUserCompanyId(req.user);
     const companyCode = getUserCompanyCode(req.user);
-    const companyUserIds = await getCompanyUserIds(req.user);
+    const companyUserIds = await getBranchScopedCompanyUserIds(req, await getCompanyUserIds(req.user));
     const companyUserFilter = {
       $or: [
         { users: { $in: companyUserIds } },
@@ -382,7 +427,10 @@ exports.listProjects = async (req, res) => {
     if (companyCode) companyFilters.push({ companyCode });
     companyFilters.push(companyUserFilter);
 
-    let query = { $or: companyFilters };
+    const branchRequested = Boolean(req.query?.branch || req.query?.branchId);
+    let query = branchRequested
+      ? { $and: [{ $or: companyFilters }, companyUserFilter] }
+      : { $or: companyFilters };
 
     
     if (!isProjectAdmin(req.user)) {
