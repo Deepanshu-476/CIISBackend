@@ -120,7 +120,13 @@ exports.getAllBranches = async (req, res) => {
     
     const branchesWithStats = await Promise.all(
       branches.map(async (branch) => {
-        const userCount = await User.countDocuments({ branch: branch._id, isActive: true });
+        const userCount = await User.countDocuments({
+          isActive: true,
+          $or: [
+            { branch: branch._id },
+            { assignedBranches: branch._id }
+          ]
+        });
         return {
           ...branch.toObject(),
           totalUsers: userCount,
@@ -163,7 +169,13 @@ exports.getBranchById = async (req, res) => {
       });
     }
 
-    const userCount = await User.countDocuments({ branch: branch._id, isActive: true });
+    const userCount = await User.countDocuments({
+      isActive: true,
+      $or: [
+        { branch: branch._id },
+        { assignedBranches: branch._id }
+      ]
+    });
 
     return res.status(200).json({
       success: true,

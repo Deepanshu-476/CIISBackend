@@ -43,6 +43,46 @@ const isPresentForTaskCards = (attendance) => {
   return Boolean(status && status !== 'ABSENT' && !status.includes('LEAVE'));
 };
 
+const normalizeIdList = (value) => {
+  const input = Array.isArray(value) ? value : value ? [value] : [];
+  return [...new Set(input
+    .map(item => {
+      if (!item) return '';
+      if (typeof item === 'object') return String(item._id || item.id || item.value || '').trim();
+      return String(item).trim();
+    })
+    .filter(Boolean)
+  )];
+};
+
+const canViewAllBranchData = (user = {}) => {
+  const roleText = String(user.companyRole || user.jobRole || user.role || '').trim().toLowerCase();
+  return ['owner', 'super_admin', 'admin', 'hr'].includes(roleText);
+};
+
+const getUserBranchIds = (user = {}) => normalizeIdList([
+  user.branch,
+  ...(Array.isArray(user.assignedBranches) ? user.assignedBranches : [])
+]);
+
+const applyBranchUserFilter = (query, req, currentUser = req.user || {}) => {
+  const requestedBranch = req.query?.branch || req.query?.branchId;
+  if (!requestedBranch) return query;
+
+  const requestedBranchId = String(requestedBranch);
+  const accessibleBranchIds = getUserBranchIds(req.user || {});
+  if (!canViewAllBranchData(req.user) && !accessibleBranchIds.includes(requestedBranchId)) {
+    query._id = null;
+    return query;
+  }
+
+  query.$or = [
+    { branch: requestedBranchId },
+    { assignedBranches: requestedBranchId }
+  ];
+  return query;
+};
+
 
 const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
   const targetUser = await User.findById(userId).select('name email').lean();
@@ -502,9 +542,10 @@ exports.getCompanyAllTaskOverview = async (req, res) => {
     if (!isOwnerScope && currentUser.department) {
       query.department = currentUser.department;
     }
+    applyBranchUserFilter(query, req, currentUser);
 
     const users = await User.find(query)
-      .select('name email role companyRole jobRole employeeType employeeId company department companyCode isActive createdAt')
+      .select('name email role companyRole jobRole employeeType employeeId company department companyCode branch assignedBranches isActive createdAt')
       .sort({ name: 1 })
       .lean();
     const { start: todayStart, end: todayEnd } = getIndiaDayRange();
