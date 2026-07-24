@@ -101,7 +101,7 @@ const USER_FIELDS = {
   
   
   PERSONAL: ['phone', 'address', 'gender', 'maritalStatus', 'dob', 
-             'fatherName', 'motherName', 'city', 'state', 'zipCode', 'country'],
+             'fatherName', 'motherName', 'city', 'state', 'pinCode', 'zipCode', 'country'],
   
   
   EMPLOYMENT: ['employeeType', 'salary', 'properties', 'propertyOwned', 
@@ -214,6 +214,7 @@ exports.getMe = async (req, res) => {
         workLocation: user.workLocation,
         city: user.city,
         state: user.state,
+        pinCode: user.pinCode || user.zipCode,
         zipCode: user.zipCode,
         country: user.country,
         chatSettings: user.chatSettings,
@@ -252,7 +253,7 @@ exports.updateMe = async (req, res) => {
       ['panCard', 'PAN Number', currentPan],
     ];
     const missingFields = requiredProfileFields
-      .filter(([field, , existingValue]) => !String(req.body[field] !== undefined ? req.body[field] : existingValue || '').trim())
+      .filter(([field]) => req.body[field] !== undefined && !String(req.body[field] || '').trim())
       .map(([, label]) => label);
 
     if (missingFields.length) {
@@ -279,38 +280,46 @@ exports.updateMe = async (req, res) => {
     if (req.body.panCard !== undefined && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(String(req.body.panCard).trim().toUpperCase())) {
       return errorResponse(res, 400, "Invalid PAN Number format");
     }
+    if (
+      req.body.pinCode !== undefined &&
+      String(req.body.pinCode).trim() &&
+      !/^\d{6}$/.test(String(req.body.pinCode).trim())
+    ) {
+      return errorResponse(res, 400, "PIN Code must contain exactly 6 digits");
+    }
     
     
+    const selfEditableFields = new Set([
+      'name', 'phone', 'dob', 'gender', 'maritalStatus',
+      'address', 'city', 'state', 'pinCode', 'country',
+      'bankHolderName', 'accountNumber', 'ifsc', 'bankName',
+      'fatherName', 'motherName', 'spouseName', 'children',
+      'emergencyName', 'emergencyPhone', 'emergencyRelation', 'emergencyAddress',
+      'aadhaar', 'aadhar', 'aadharCard', 'panCard', 'pan',
+      'chatSettings', 'notificationPreferences', 'properties',
+      'propertyOwned', 'additionalDetails'
+    ]);
+
     Object.keys(req.body).forEach(key => {
-      
-      if (key !== 'password' && key !== 'resetToken' && key !== 'resetTokenExpiry' && key !== 'confirmAccountNumber' && key !== '__v') {
-        updateData[key] = req.body[key];
-      }
+      if (selfEditableFields.has(key)) updateData[key] = req.body[key];
     });
 
     if (updateData.ifsc) updateData.ifsc = String(updateData.ifsc).trim().toUpperCase();
     if (updateData.panCard) updateData.panCard = String(updateData.panCard).trim().toUpperCase();
+    if (updateData.pinCode) {
+      updateData.pinCode = String(updateData.pinCode).trim();
+      updateData.zipCode = updateData.pinCode;
+    }
     
     
     if (req.body.children !== undefined) {
       updateData.children = req.body.children;
     }
     
-    if (req.body.documents !== undefined) {
-      updateData.documents = req.body.documents;
-    }
-    
     if (req.body.properties !== undefined) {
       updateData.properties = req.body.properties;
     }
 
-    if (updateData.department) {
-      const departmentError = await validateAssignableDepartment(updateData.department, req.user.company);
-      if (departmentError) {
-        return errorResponse(res, departmentError.status, departmentError.message);
-      }
-    }
-    
     const updatedUser = await User.findByIdAndUpdate(
       userId,
       { $set: updateData },
@@ -382,7 +391,7 @@ exports.register = async (req, res) => {
     });
     
     
-    const extraFields = ['city', 'state', 'zipCode', 'country', 'spouseName', 'children', 'documents', 'employeeId', 'companyRole', 'reportingManager', 'dateOfJoining', 'workLocation'];
+    const extraFields = ['city', 'state', 'pinCode', 'zipCode', 'country', 'spouseName', 'children', 'documents', 'employeeId', 'companyRole', 'reportingManager', 'dateOfJoining', 'workLocation'];
     extraFields.forEach(field => {
       if (req.body[field] !== undefined) {
         userData[field] = req.body[field];
@@ -537,6 +546,7 @@ exports.getAllUsers = async (req, res) => {
       workLocation: user.workLocation,
       city: user.city,
       state: user.state,
+      pinCode: user.pinCode || user.zipCode,
       zipCode: user.zipCode,
       country: user.country,
       isActive: user.isActive,
@@ -618,6 +628,7 @@ exports.getUser = async (req, res) => {
       workLocation: user.workLocation,
       city: user.city,
       state: user.state,
+      pinCode: user.pinCode || user.zipCode,
       zipCode: user.zipCode,
       country: user.country,
       isActive: user.isActive,
@@ -1041,6 +1052,7 @@ exports.getCompanydepartmentUsers = async (req, res) => {
         workLocation: user.workLocation,
         city: user.city,
         state: user.state,
+        pinCode: user.pinCode || user.zipCode,
         zipCode: user.zipCode,
         country: user.country,
         isActive: user.isActive,
@@ -1238,6 +1250,7 @@ exports.getCompanyUsersPaginated = async (req, res) => {
         workLocation: user.workLocation,
         city: user.city,
         state: user.state,
+        pinCode: user.pinCode || user.zipCode,
         zipCode: user.zipCode,
         country: user.country,
         isActive: user.isActive,
