@@ -87,6 +87,11 @@ const userSchema = new mongoose.Schema({
   
   phone: String,
   address: String,
+  city: String,
+  state: String,
+  country: String,
+  pinCode: String,
+  zipCode: String,
   gender: {
     type: String,
     enum: ['male', 'female', 'other']
@@ -114,6 +119,10 @@ const userSchema = new mongoose.Schema({
     type: String,
     
   },
+  workLocation: String,
+  noticePeriod: String,
+  shift: String,
+  dateOfJoining: Date,
   employeeId: {
     type: String,
     unique: true,
