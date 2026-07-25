@@ -304,7 +304,7 @@ exports.updateMe = async (req, res) => {
       updateData.properties = req.body.properties;
     }
 
-    if (updateData.department) {
+    if (updateData.department && /^[a-f\d]{24}$/i.test(String(updateData.department))) {
       const departmentError = await validateAssignableDepartment(updateData.department, req.user.company);
       if (departmentError) {
         return errorResponse(res, departmentError.status, departmentError.message);
@@ -699,7 +699,7 @@ exports.updateUser = async (req, res) => {
     
 
     
-    if (updateData.department) {
+    if (updateData.department && /^[a-f\d]{24}$/i.test(String(updateData.department))) {
       const departmentError = await validateAssignableDepartment(updateData.department, user.company || requestingUser.company);
       if (departmentError) {
         return errorResponse(res, departmentError.status, departmentError.message);
@@ -787,7 +787,7 @@ exports.updateSelfUser = async (req, res) => {
     
     
 
-    if (updateData.department) {
+    if (updateData.department && /^[a-f\d]{24}$/i.test(String(updateData.department))) {
       const departmentError = await validateAssignableDepartment(updateData.department, user.company || requestingUser.company);
       if (departmentError) {
         return errorResponse(res, departmentError.status, departmentError.message);
