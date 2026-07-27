@@ -26,6 +26,28 @@ const normalizeName = (value) => value?.trim();
 const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 let clientMultiCompanyIndexPromise = null;
 
+const buildCompanyScopeFilter = ({ companyCode, companyName } = {}) => {
+  const scopeFilter = [];
+  const normalizedCompanyCode = normalizeCompanyCode(companyCode);
+  const normalizedCompanyName = normalizeName(companyName);
+
+  if (normalizedCompanyCode) {
+    scopeFilter.push({ companyCode: normalizedCompanyCode });
+  }
+
+  if (normalizedCompanyName) {
+    scopeFilter.push({
+      company: {
+        $regex: `^${escapeRegExp(normalizedCompanyName)}$`,
+        $options: 'i'
+      }
+    });
+  }
+
+  if (scopeFilter.length === 0) return null;
+  return scopeFilter.length === 1 ? scopeFilter[0] : { $or: scopeFilter };
+};
+
 const getBranchClientFilter = async (companyCode, branchId) => {
   if (!companyCode || !branchId || !mongoose.Types.ObjectId.isValid(branchId)) return null;
 
@@ -960,7 +982,7 @@ const getAllClients = async (req, res) => {
   try {
     const {
       page = 1,
-      limit = 10,
+      limit = 1000,
       sortBy = 'createdAt',
       sortOrder = 'desc',
       search,
@@ -968,22 +990,23 @@ const getAllClients = async (req, res) => {
       projectManager,
       service,
       companyCode,
+      companyName,
       branch,
       branchId,
       groupByClient = 'false'
     } = req.query;
 
-    const filter = {};
-    
-    if (!companyCode) {
+    const filter = buildCompanyScopeFilter({ companyCode, companyName });
+
+    if (!filter) {
       console.warn('⚠️ No companyCode provided in request');
       return res.status(400).json({
         success: false,
-        message: 'Company code is required'
+        message: 'Company code or company name is required'
       });
     }
-    filter.companyCode = companyCode.toUpperCase();
-    const branchFilter = await getBranchClientFilter(filter.companyCode, branch || branchId);
+
+    const branchFilter = await getBranchClientFilter(normalizeCompanyCode(companyCode), branch || branchId);
     if (branchFilter) {
       filter.$and = [...(filter.$and || []), branchFilter];
     }
@@ -1019,7 +1042,7 @@ const getAllClients = async (req, res) => {
       sortOptions.createdAt = -1;
     }
 
-    const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 100);
+    const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 1000, 1), 1000);
     const safePage = Math.max(parseInt(page, 10) || 1, 1);
     const skip = (safePage - 1) * safeLimit;
     
@@ -2158,9 +2181,9 @@ const deleteClient = async (req, res) => {
 const getClientStats = async (req, res) => {
   void 0;
   try {
-    const { companyCode, branch, branchId } = req.query;
+    const { companyCode, companyName, branch, branchId } = req.query;
     const normalizedCompanyCode = normalizeCompanyCode(companyCode);
-    const filter = normalizedCompanyCode ? { companyCode: normalizedCompanyCode } : {};
+    const filter = buildCompanyScopeFilter({ companyCode, companyName }) || {};
     const branchManagerFilter = await getBranchClientFilter(normalizedCompanyCode, branch || branchId);
 
     if (branchManagerFilter) {
