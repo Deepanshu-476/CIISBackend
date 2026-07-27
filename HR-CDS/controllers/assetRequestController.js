@@ -1,4 +1,6 @@
 const mongoose = require('mongoose');
+const fs = require('fs');
+const path = require('path');
 const AssetRequest = require('../models/AssetRequest');
 const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
 const CompanyAsset = require('../../models/CompanyAsset');
@@ -564,6 +566,7 @@ exports.getAllRequests = async (req, res) => {
     const [rawRequests, total] = await Promise.all([
       AssetRequest.find(filter)
         .populate('user', 'name email department')
+        .populate('adminComments.addedBy', 'name email')
         .populate({
           path: 'asset',
           select: 'name description status branch',
@@ -635,7 +638,10 @@ exports.updateRequestStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { status, adminComment } = req.body;
-    const commentImage = req.file ? `/uploads/asset-comments/${req.file.filename}` : '';
+    const uploadedFiles = [
+      ...(req.files?.commentImage || []),
+      ...(req.files?.commentImages || [])
+    ].slice(0, 5);
     const pageAccess = await getEmployeeAssetsPageAccess(req.user);
     const roleScope = getUserRoleScope(req.user);
     const canUpdateRequest = pageAccess.hasConfig ? pageAccess.hasPageAccess : roleScope.canManage;
@@ -651,7 +657,7 @@ exports.updateRequestStatus = async (req, res) => {
     
     const validStatuses = ['approved', 'rejected', 'completed'];
           
-      if (!status && !adminComment && !commentImage) {
+      if (!status && !adminComment && !uploadedFiles.length) {
         return res.status(400).json({
           success: false,
           error: 'Status, comment, or image required'
@@ -703,12 +709,25 @@ exports.updateRequestStatus = async (req, res) => {
           request.adminComments = [];
         }
 
-        if (adminComment || commentImage) {
+        if (adminComment || uploadedFiles.length) {
+          if (!uploadedFiles.length) {
+            request.adminComments.push({
+              text: adminComment || '',
+              addedBy: req.user._id,
+              addedAt: new Date()
+            });
+          }
+
+          uploadedFiles.forEach((file, index) => {
           request.adminComments.push({
-            text: adminComment || '',
-            image: commentImage,
+            text: index === 0 ? (adminComment || '') : '',
+            image: `/uploads/asset-comments/${file.filename}`,
+            originalName: file.originalname || '',
+            size: file.size || 0,
+            mimeType: file.mimetype || '',
             addedBy: req.user._id,
             addedAt: new Date()
+          });
           });
         }
     request.decisionDate = new Date();
@@ -775,8 +794,10 @@ try {
   await sendNotification({
     recipient: request.user?._id || request.user,
     type: 'asset_request_status',
-    title: `Asset Request ${status}`,
-    message: `Your request for "${request.asset.name}" has been ${status}${adminComment ? ': ' + adminComment : ''}`,
+    title: `Asset Request ${titleCase(status || 'Updated')}`,
+    message: status
+      ? `Your request for "${request.asset.name}" has been ${status}${adminComment ? ': ' + adminComment : ''}`
+      : `${req.user.name || 'Admin'} commented on your request for "${request.asset.name}"${adminComment ? ': ' + adminComment : ''}`,
     data: {
       requestId: request._id,
       assetId: request.asset._id,
@@ -805,6 +826,63 @@ try {
       success: false, 
       error: 'Server error while updating status' 
     });
+  }
+};
+
+exports.deleteCommentAttachment = async (req, res) => {
+  try {
+    const pageAccess = await getEmployeeAssetsPageAccess(req.user);
+    const roleScope = getUserRoleScope(req.user);
+    const canUpdateRequest = pageAccess.hasConfig ? pageAccess.hasPageAccess : roleScope.canManage;
+
+    if (!canUpdateRequest) {
+      return res.status(403).json({ success: false, error: 'You do not have permission to delete attachments.' });
+    }
+
+    const request = await AssetRequest.findOne({
+      _id: req.params.id,
+      companyCode: req.user.companyCode,
+      'adminComments._id': req.params.commentId
+    });
+    if (!request) return res.status(404).json({ success: false, error: 'Request not found' });
+
+    const comment = request.adminComments.id(req.params.commentId);
+    if (!comment || !comment.image) {
+      return res.status(404).json({ success: false, error: 'Attachment not found' });
+    }
+
+    const uploadRoot = path.resolve(__dirname, '../../uploads/asset-comments');
+    const storedName = path.basename(String(comment.image).replace(/\\/g, '/'));
+    const storedFile = path.resolve(uploadRoot, storedName);
+    if (storedFile.startsWith(uploadRoot) && fs.existsSync(storedFile)) {
+      try {
+        await fs.promises.unlink(storedFile);
+      } catch (fileError) {
+        console.warn('Attachment record deleted but physical file cleanup failed:', fileError.message);
+      }
+    }
+
+    await AssetRequest.updateOne(
+      { _id: request._id, 'adminComments._id': req.params.commentId },
+      {
+        $set: {
+          'adminComments.$.image': '',
+          'adminComments.$.originalName': '',
+          'adminComments.$.size': 0,
+          'adminComments.$.mimeType': ''
+        }
+      }
+    );
+
+    const updatedRequest = await AssetRequest.findById(request._id)
+      .populate('user', 'name email department')
+      .populate('adminComments.addedBy', 'name email')
+      .lean();
+
+    return res.status(200).json({ success: true, message: 'Attachment deleted', request: updatedRequest });
+  } catch (err) {
+    console.error('Delete comment attachment error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to delete attachment' });
   }
 };
 

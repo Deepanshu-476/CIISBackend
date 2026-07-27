@@ -188,6 +188,18 @@ exports.applyLeave = async (req, res) => {
       return res.status(400).json({ error: 'All fields are required.' });
     }
 
+    if (reason.trim().length < 20) {
+      return res.status(400).json({
+        error: 'Please enter at least 20 characters.'
+      });
+    }
+
+    if (reason.trim().length > 500) {
+      return res.status(400).json({
+        error: 'Reason must not exceed 500 characters.'
+      });
+    }
+
     const start = new Date(startDate);
     const end = new Date(endDate);
     const today = new Date();
