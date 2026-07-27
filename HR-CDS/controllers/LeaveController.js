@@ -154,6 +154,28 @@ const getCompanyUserIds = async (companyId) => {
   return companyUsers.map(user => user._id);
 };
 
+const getBranchScopedCompanyUserIds = async (companyId, branchId) => {
+  if (!branchId || !mongoose.isValidObjectId(branchId)) {
+    return getCompanyUserIds(companyId);
+  }
+
+  const companyUsers = await User.find({
+    $or: [
+      { company: companyId },
+      { companyId }
+    ],
+    $and: [{
+      $or: [
+        { branch: branchId },
+        { branchId },
+        { assignedBranches: branchId }
+      ]
+    }]
+  }).select('_id');
+
+  return companyUsers.map(user => user._id);
+};
+
 
 exports.applyLeave = async (req, res) => {
   void 0;
@@ -451,7 +473,8 @@ exports.getAllLeaves = async (req, res) => {
     void 0;
 
     
-    const companyUserIds = await getCompanyUserIds(userCompanyId);
+    const requestedBranchId = req.query.branch || req.query.branchId;
+    const companyUserIds = await getBranchScopedCompanyUserIds(userCompanyId, requestedBranchId);
     const pageAccess = await getEmployeeLeavesPageAccess(userCompanyId, req.user._id);
     
     void 0;

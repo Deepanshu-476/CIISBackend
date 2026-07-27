@@ -206,7 +206,10 @@ exports.getAllDepartments = async (req, res) => {
       void 0;
       query.company = company;
     } else {
-      void 0;
+      if (!user.company) {
+        return errorResponse(res, 400, "User company not found");
+      }
+      query.company = user.company;
     }
 
     if (branch) {

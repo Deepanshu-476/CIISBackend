@@ -1,57 +1,17 @@
-const multer =
-require("multer");
+const multer = require("multer");
+const fs = require("fs");
+const path = require("path");
 
-const fs =
-require("fs");
+const chatUploadDir = path.join(__dirname, "../../../../uploads/chat");
 
-const storage =
-multer.diskStorage({
-
-    destination: (
-        req,
-        file,
-        cb
-    ) => {
-
-
-        const dir =
-        "uploads/chat";
-
-        if (
-            !fs.existsSync(dir)
-        ) {
-
-            fs.mkdirSync(
-                dir,
-                {
-                    recursive: true
-                }
-            );
-        }
-
-        cb(
-            null,
-            dir
-        );
-    },
-
-    filename: (
-        req,
-        file,
-        cb
-    ) => {
-
-        cb(
-            null,
-
-            Date.now()
-            + "-"
-            + file.originalname
-        );
-    }
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => {
+    if (!fs.existsSync(chatUploadDir)) fs.mkdirSync(chatUploadDir, { recursive: true });
+    cb(null, chatUploadDir);
+  },
+  filename: (_req, file, cb) => {
+    cb(null, `${Date.now()}-${file.originalname}`);
+  },
 });
 
-const upload =
-multer({ storage });
-
-module.exports = upload;
+module.exports = multer({ storage });
