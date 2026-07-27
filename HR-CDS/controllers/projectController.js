@@ -6,8 +6,122 @@ const sharp = require("sharp");
 const {notifyDirectUsers} = require("../utils/systemNotificationService");
 const { sendEmail } = require("../../utils/sendEmail");
 const User = require("../../models/User");
+const Branch = require("../../models/Branch");
 const mongoose = require("mongoose");
 const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagination");
+
+const normalizeIdList = (value) => {
+  const input = Array.isArray(value) ? value : value ? [value] : [];
+  return [...new Set(input
+    .map(item => {
+      if (!item) return '';
+      if (typeof item === 'object') return String(item._id || item.id || item.value || '').trim();
+      return String(item).trim();
+    })
+    .filter(Boolean)
+  )];
+};
+
+const canViewAllBranchData = (user = {}) => {
+  const roleText = String(user.companyRole || user.jobRole || user.role || '').trim().toLowerCase();
+  return ['owner', 'super_admin', 'admin', 'hr'].includes(roleText);
+};
+
+const getUserBranchIds = (user = {}) => normalizeIdList([
+  user.branch,
+  ...(Array.isArray(user.assignedBranches) ? user.assignedBranches : [])
+]);
+
+const getBranchScopedCompanyUserIds = async (req, fallbackUserIds = []) => {
+  const requestedBranch = req.query?.branch || req.query?.branchId;
+  if (!requestedBranch || !mongoose.Types.ObjectId.isValid(requestedBranch)) return fallbackUserIds;
+
+  const requestedBranchId = String(requestedBranch);
+  const accessibleBranchIds = getUserBranchIds(req.user || {});
+  if (!canViewAllBranchData(req.user) && !accessibleBranchIds.includes(requestedBranchId)) {
+    return [];
+  }
+
+  const companyCode = getUserCompanyCode(req.user);
+  const companyId = getUserCompanyId(req.user);
+  const users = await User.find({
+    ...(companyId ? { company: companyId } : companyCode ? { companyCode } : {}),
+    $or: [
+      { branch: requestedBranchId },
+      { assignedBranches: requestedBranchId }
+    ]
+  }).select('_id').lean();
+
+  return users.map(user => user._id);
+};
+
+const getRequestedBranchId = (req) => {
+  const value = req.body?.branchId || req.body?.branch || req.query?.branchId || req.query?.branch;
+  return value ? String(value).trim() : "";
+};
+
+const validateProjectBranchAccess = async (req, branchId) => {
+  if (!branchId) return { branchId: null };
+  if (!mongoose.Types.ObjectId.isValid(branchId)) {
+    return { error: { status: 400, message: "Invalid branch selected" } };
+  }
+
+  const companyId = getUserCompanyId(req.user);
+  const companyCode = getUserCompanyCode(req.user);
+  const branch = await Branch.findOne({
+    _id: branchId,
+    isActive: { $ne: false },
+    ...(companyId ? { company: companyId } : companyCode ? { companyCode } : {})
+  }).select("_id branchCode company companyCode").lean();
+
+  if (!branch) {
+    return { error: { status: 403, message: "Selected branch is not available for this company" } };
+  }
+
+  const accessibleBranchIds = getUserBranchIds(req.user || {});
+  if (!canViewAllBranchData(req.user) && !accessibleBranchIds.includes(branchId)) {
+    return { error: { status: 403, message: "You do not have access to the selected branch" } };
+  }
+
+  return { branchId, branch };
+};
+
+const getBranchUserIds = async (req, branchId) => {
+  if (!branchId) return (await getCompanyUserIds(req.user)).map(id => normalizeId(id));
+
+  const companyId = getUserCompanyId(req.user);
+  const companyCode = getUserCompanyCode(req.user);
+  const users = await User.find({
+    ...(companyId ? { company: companyId } : companyCode ? { companyCode } : {}),
+    $or: [
+      { branch: branchId },
+      { assignedBranches: branchId }
+    ]
+  }).select("_id").lean();
+
+  return users.map(user => normalizeId(user._id));
+};
+
+const getPrimaryBranchId = (value) => normalizeId(value?.branch || value?.branchId);
+
+const getLegacyProjectBranchId = (project = {}) => {
+  const savedBranchId = normalizeId(project.branch);
+  if (savedBranchId) return savedBranchId;
+
+  const creatorBranchId = getPrimaryBranchId(project.createdBy);
+  if (creatorBranchId) return creatorBranchId;
+
+  const userBranchIds = [...new Set((project.users || [])
+    .map(getPrimaryBranchId)
+    .filter(Boolean)
+  )];
+
+  return userBranchIds.length === 1 ? userBranchIds[0] : "";
+};
+
+const projectMatchesRequestedBranch = (project, branchId) => (
+  !branchId || getLegacyProjectBranchId(project) === String(branchId)
+);
 
 
 const storage = multer.diskStorage({
@@ -369,7 +483,16 @@ exports.listProjects = async (req, res) => {
 
     const companyId = getUserCompanyId(req.user);
     const companyCode = getUserCompanyCode(req.user);
-    const companyUserIds = await getCompanyUserIds(req.user);
+    const requestedBranchId = getRequestedBranchId(req);
+    const branchAccess = await validateProjectBranchAccess(req, requestedBranchId);
+    if (branchAccess.error) {
+      return res.status(branchAccess.error.status).json({
+        success: false,
+        message: branchAccess.error.message
+      });
+    }
+
+    const companyUserIds = await getBranchScopedCompanyUserIds(req, await getCompanyUserIds(req.user));
     const companyUserFilter = {
       $or: [
         { users: { $in: companyUserIds } },
@@ -382,7 +505,21 @@ exports.listProjects = async (req, res) => {
     if (companyCode) companyFilters.push({ companyCode });
     companyFilters.push(companyUserFilter);
 
-    let query = { $or: companyFilters };
+    const branchRequested = Boolean(requestedBranchId);
+    let query = branchRequested
+      ? {
+          $and: [
+            { $or: companyFilters },
+            {
+              $or: [
+                { branch: requestedBranchId },
+                { branch: { $exists: false }, ...companyUserFilter },
+                { branch: null, ...companyUserFilter }
+              ]
+            }
+          ]
+        }
+      : { $or: companyFilters };
 
     
     if (!isProjectAdmin(req.user)) {
@@ -405,8 +542,9 @@ exports.listProjects = async (req, res) => {
     const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
     const [projects, total] = await Promise.all([
       Project.find(query)
-      .populate('users', 'name email role company companyCode')
-      .populate('createdBy', 'name email')
+      .populate('users', 'name email role company companyCode branch assignedBranches')
+      .populate('branch', 'name branchCode')
+      .populate('createdBy', 'name email branch assignedBranches')
       .populate('tasks.assignedTo', 'name email')
       .populate('tasks.assignedUsers', 'name email')
       .populate('tasks.createdBy', 'name email')
@@ -419,6 +557,7 @@ exports.listProjects = async (req, res) => {
 
     const scopedProjects = projects
       .filter(project => projectBelongsToUserCompany(project, req.user))
+      .filter(project => projectMatchesRequestedBranch(project, requestedBranchId))
       .map(withSortedProjectTasks);
 
     void 0;
@@ -447,8 +586,9 @@ exports.getProjectById = async (req, res) => {
     void 0;
     
     const project = await Project.findById(req.params.id)
-      .populate('users', 'name email role _id')
+      .populate('users', 'name email role _id branch assignedBranches')
       .populate('createdBy', 'name email _id')
+      .populate('branch', 'name branchCode')
       .populate('tasks.assignedTo', 'name email')
       .populate('tasks.assignedUsers', 'name email')
       .populate('tasks.createdBy', 'name email')
@@ -513,6 +653,14 @@ exports.createProject = async (req, res) => {
       }
 
       const { projectName, description, startDate, endDate, priority, status, users } = req.body;
+      const requestedBranchId = getRequestedBranchId(req);
+      const branchAccess = await validateProjectBranchAccess(req, requestedBranchId);
+      if (branchAccess.error) {
+        return res.status(branchAccess.error.status).json({
+          success: false,
+          message: branchAccess.error.message
+        });
+      }
       
       void 0;
       void 0;
@@ -528,11 +676,20 @@ exports.createProject = async (req, res) => {
 
       
       usersArray = [...new Set(usersArray.filter(Boolean).map(id => String(id)))];
-      const companyUserIds = (await getCompanyUserIds(req.user)).map(id => normalizeId(id));
-      usersArray = usersArray.filter(id => companyUserIds.includes(id));
+      const allowedUserIds = await getBranchUserIds(req, branchAccess.branchId);
+      usersArray = usersArray.filter(id => allowedUserIds.includes(id));
+
+      if (usersArray.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: branchAccess.branchId
+            ? "Select at least one member from the selected branch"
+            : "Select at least one member"
+        });
+      }
 
       
-      if (!usersArray.includes(String(req.user.id))) {
+      if (allowedUserIds.includes(String(req.user.id)) && !usersArray.includes(String(req.user.id))) {
         usersArray.push(String(req.user.id));
         void 0;
       }
@@ -543,6 +700,7 @@ exports.createProject = async (req, res) => {
         description,
         company: getUserCompanyId(req.user),
         companyCode: getUserCompanyCode(req.user),
+        branch: branchAccess.branchId,
         users: usersArray,
         startDate,
         endDate,
@@ -617,6 +775,7 @@ exports.updateProject = async (req, res) => {
 
       const { id } = req.params;
       const { projectName, description, startDate, endDate, priority, status, users } = req.body;
+      const requestedBranchId = getRequestedBranchId(req);
       
       void 0;
       void 0;
@@ -638,6 +797,14 @@ exports.updateProject = async (req, res) => {
         });
       }
 
+      const branchAccess = await validateProjectBranchAccess(req, requestedBranchId || normalizeId(project.branch));
+      if (branchAccess.error) {
+        return res.status(branchAccess.error.status).json({
+          success: false,
+          message: branchAccess.error.message
+        });
+      }
+
       let usersArray = [];
       try {
         usersArray = JSON.parse(users);
@@ -647,12 +814,22 @@ exports.updateProject = async (req, res) => {
 
       
       usersArray = [...new Set(usersArray.filter(Boolean).map(id => String(id)))];
-      const companyUserIds = (await getCompanyUserIds(req.user)).map(id => normalizeId(id));
-      usersArray = usersArray.filter(id => companyUserIds.includes(id));
+      const allowedUserIds = await getBranchUserIds(req, branchAccess.branchId);
+      usersArray = usersArray.filter(id => allowedUserIds.includes(id));
+
+      if (usersArray.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: branchAccess.branchId
+            ? "Select at least one member from the selected branch"
+            : "Select at least one member"
+        });
+      }
 
       
       project.projectName = projectName || project.projectName;
       project.description = description || project.description;
+      project.branch = branchAccess.branchId || project.branch;
       project.users = usersArray;
       project.startDate = startDate || project.startDate;
       project.endDate = endDate || project.endDate;
@@ -1101,7 +1278,16 @@ exports.updateTask = async (req, res) => {
       }
 
       if (key === 'dueDate') {
-        task.dueDate = updateData[key] || undefined;
+        if (!updateData[key]) {
+          task.dueDate = undefined;
+          return;
+        }
+
+        const nextDueDate = new Date(updateData[key]);
+        if (Number.isNaN(nextDueDate.getTime())) {
+          throw new Error("Invalid task due date");
+        }
+        task.dueDate = nextDueDate;
         return;
       }
 
@@ -1129,6 +1315,7 @@ exports.updateTask = async (req, res) => {
     });
     syncTaskStatusWithDueDate(task);
     task.updatedAt = new Date();
+    project.markModified("tasks");
 
     
     task.activityLogs.push({
@@ -1198,6 +1385,55 @@ exports.updateTask = async (req, res) => {
       success: false, 
       message: "Error updating task" 
     });
+  }
+};
+
+exports.deleteTaskAttachment = async (req, res) => {
+  try {
+    const { id, taskId } = req.params;
+    const project = await Project.findById(id);
+
+    if (!project) {
+      return res.status(404).json({ success: false, message: "Project not found" });
+    }
+
+    if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
+      return res.status(403).json({ success: false, message: "Access denied to update task" });
+    }
+
+    const task = project.tasks.id(taskId);
+    if (!task) {
+      return res.status(404).json({ success: false, message: "Task not found" });
+    }
+
+    if (!task.pdfFile?.path) {
+      return res.status(404).json({ success: false, message: "Task attachment not found" });
+    }
+
+    const attachmentPath = task.pdfFile.path;
+    task.pdfFile = undefined;
+    task.updatedAt = new Date();
+    task.activityLogs.push({
+      type: "update",
+      description: "Task attachment was deleted",
+      performedBy: req.user.id
+    });
+    await project.save();
+
+    fs.unlink(attachmentPath, fileError => {
+      if (fileError && fileError.code !== "ENOENT") {
+        console.error("Error deleting task attachment file:", fileError);
+      }
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Task attachment deleted successfully",
+      task
+    });
+  } catch (error) {
+    console.error("Error deleting task attachment:", error);
+    return res.status(500).json({ success: false, message: "Error deleting task attachment" });
   }
 };
 
@@ -1613,13 +1849,14 @@ exports.addRemark = async (req, res) => {
   try {
     const { projectId, taskId } = req.params;
     const { text } = req.body;
+    const remarkText = String(text || "").trim();
 
     void 0;
     void 0;
     void 0;
     void 0;
 
-    if ((!text || text.trim() === "") && !req.file) {
+    if (!remarkText && !req.file) {
       return res.status(400).json({ 
         success: false, 
         message: "Remark text or image is required" 
@@ -1666,7 +1903,7 @@ exports.addRemark = async (req, res) => {
 
     
     task.remarks.push({
-      text: text || "",
+      text: remarkText || (imgPath ? "Image attachment" : ""),
       createdBy: req.user.id,
       image: imgPath || undefined
     });
@@ -1675,7 +1912,7 @@ exports.addRemark = async (req, res) => {
     
     task.activityLogs.push({
       type: "remark",
-      description: `Remark added: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`,
+      description: `Remark added: "${(remarkText || (imgPath ? 'Image attachment' : '')).substring(0, 50)}${remarkText.length > 50 ? '...' : ''}"`,
       performedBy: req.user.id
     });
 

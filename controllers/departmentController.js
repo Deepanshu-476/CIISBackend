@@ -9,11 +9,16 @@ const errorResponse = (res, status, message) => {
 
 const isSuperAdmin = (user) => {
   if (!user) return false;
-  
-  
-  const isSuper = user.role === 'super-admin' && 
-                 user.department === 'Management' && 
-                 user.jobRole === 'super_admin';
+
+  const normalizedRole = String(user.role || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, '-');
+  const normalizedJobRole = String(user.jobRole?.roleName || user.jobRole || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[-\s]+/g, '_');
+  const isSuper = normalizedRole === 'super-admin' || normalizedJobRole === 'super_admin';
 
   void 0;
   
@@ -72,7 +77,12 @@ exports.createDepartment = async (req, res) => {
       void 0;
       
       companyId = req.body.company || user.company;
-      companyCode = req.body.companyCode || user.companyCode;
+      const Company = require("../models/Company");
+      const selectedCompany = await Company.findById(companyId).select("companyCode");
+      if (!selectedCompany) {
+        return errorResponse(res, 400, "Selected company not found");
+      }
+      companyCode = selectedCompany.companyCode;
     } else {
       void 0;
       
@@ -196,7 +206,10 @@ exports.getAllDepartments = async (req, res) => {
       void 0;
       query.company = company;
     } else {
-      void 0;
+      if (!user.company) {
+        return errorResponse(res, 400, "User company not found");
+      }
+      query.company = user.company;
     }
 
     if (branch) {

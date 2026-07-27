@@ -17,6 +17,7 @@ const activityLogSchema = new mongoose.Schema({
       'remark_added', 
       'file_uploaded',
       'task_assigned',
+      'task_created_for_others',
       'task_completed',
       'self_task_created'
     ]

@@ -6,6 +6,7 @@ const jwt = require("jsonwebtoken");
 const { sendEmail } = require("../utils/sendEmail");
 const Department = require("../models/Department");
 const Branch = require("../models/Branch");
+const JobRole = require("../models/JobRole");
 const crypto = require("crypto");
 const mongoose = require("mongoose");
 const { validateRequest } = require("../middleware/validation");
@@ -262,6 +263,7 @@ const completeStandardLogin = async (userId, res, { message = "Login successful"
     .select("-password -loginAttempts -lockUntil")
     .populate("department", "name")
     .populate("branch", "name branchCode")
+    .populate("assignedBranches", "name branchCode")
     .populate("company", "companyName companyCode logo companyEmail companyPhone companyAddress isActive subscriptionExpiry allowedPages loginUrl dbIdentifier");
 
   if (!user) {
@@ -324,6 +326,7 @@ const completeStandardLogin = async (userId, res, { message = "Login successful"
       jobRole: user.jobRole,
       department: user.department,
       branch: user.branch,
+      assignedBranches: user.assignedBranches || [],
       branchCode: user.branchCode,
       company: user.company?._id,
       companyName: user.company?.companyName,
@@ -495,6 +498,7 @@ exports.companyLogin = async (req, res) => {
       .select("+password +isActive +loginAttempts +lockUntil")
       .populate("department", "name")
       .populate("branch", "name branchCode")
+      .populate("assignedBranches", "name branchCode")
       .populate("company", "companyName companyCode logo")
 
     if (!user) {
@@ -649,9 +653,13 @@ exports.register = async (req, res) => {
       password,
       department,
       jobRole,
+      shiftId,
+      shiftName,
+      shiftType,
       company, 
       companyCode, 
       branch, 
+      assignedBranches,
       phone, address, gender, maritalStatus, dob, salary,
       accountNumber, ifsc, bankName, bankHolderName,
       employeeType, properties, propertyOwned, additionalDetails,
@@ -666,6 +674,7 @@ exports.register = async (req, res) => {
       { field: 'password', label: 'Password' },
       { field: 'department', label: 'Department' },
       { field: 'jobRole', label: 'Job Role' },
+      { field: 'shiftId', label: 'Shift' },
       { field: 'company', label: 'Company' },
       { field: 'companyCode', label: 'Company Code' }
     ];
@@ -701,14 +710,6 @@ exports.register = async (req, res) => {
       return errorResponse(res, 409, "Email already in use", "EMAIL_EXISTS");
     }
 
-    
-    const departmentExists = await Department.findById(department).session(session);
-    if (!departmentExists) {
-      await session.abortTransaction();
-      return errorResponse(res, 404, "Department not found", "DEPARTMENT_NOT_FOUND");
-    }
-
-    
     const companyExists = await Company.findOne({ 
       $or: [
         { _id: company },
@@ -735,12 +736,28 @@ exports.register = async (req, res) => {
     
     let cleanBranch = branch;
     let cleanBranchCode = null;
+    const assignedBranchInput = Array.isArray(assignedBranches)
+      ? assignedBranches
+      : typeof assignedBranches === "string"
+        ? assignedBranches.split(",")
+        : [];
+    let cleanAssignedBranchIds = [...new Set([
+      ...assignedBranchInput,
+      cleanBranch
+    ]
+      .map(value => String(value || "").trim())
+      .filter(Boolean)
+    )];
 
     if (branch) {
       const branchExists = await Branch.findById(branch).session(session);
       if (!branchExists) {
         await session.abortTransaction();
         return errorResponse(res, 404, "Branch not found", "BRANCH_NOT_FOUND");
+      }
+      if (branchExists.company?.toString() !== companyExists._id.toString()) {
+        await session.abortTransaction();
+        return errorResponse(res, 403, "Branch does not belong to selected company", "BRANCH_COMPANY_MISMATCH");
       }
       cleanBranchCode = branchExists.branchCode;
     } else {
@@ -750,6 +767,57 @@ exports.register = async (req, res) => {
         cleanBranch = defaultBranch._id;
         cleanBranchCode = defaultBranch.branchCode;
       }
+    }
+
+    if (cleanBranch) {
+      cleanAssignedBranchIds = [...new Set([...cleanAssignedBranchIds, String(cleanBranch)])];
+    }
+
+    if (cleanAssignedBranchIds.length > 0) {
+      const assignedBranchCount = await Branch.countDocuments({
+        _id: { $in: cleanAssignedBranchIds },
+        company: companyExists._id,
+        isActive: { $ne: false }
+      }).session(session);
+
+      if (assignedBranchCount !== cleanAssignedBranchIds.length) {
+        await session.abortTransaction();
+        return errorResponse(res, 403, "One or more assigned branches are invalid for selected company", "ASSIGNED_BRANCH_MISMATCH");
+      }
+    }
+
+    const departmentExists = await Department.findOne({
+      _id: department,
+      company: companyExists._id,
+      ...(cleanBranch ? { branch: cleanBranch } : {}),
+      isActive: true,
+    }).session(session);
+    if (!departmentExists) {
+      await session.abortTransaction();
+      return errorResponse(res, 404, "Department not found for selected branch", "DEPARTMENT_NOT_FOUND");
+    }
+
+    const jobRoleExists = await JobRole.findOne({
+      _id: jobRole,
+      department,
+      company: companyExists._id,
+      isActive: true,
+    }).session(session);
+    if (!jobRoleExists) {
+      await session.abortTransaction();
+      return errorResponse(res, 404, "Job role not found for selected department", "JOB_ROLE_NOT_FOUND");
+    }
+
+    const availableShifts = Array.isArray(jobRoleExists.shifts) && jobRoleExists.shifts.length > 0
+      ? jobRoleExists.shifts
+      : (jobRoleExists.shiftSettings ? [jobRoleExists.shiftSettings] : []);
+    const selectedShift = availableShifts.find(shift =>
+      String(shift.shiftId || shift._id || shift.id) === String(shiftId)
+    );
+
+    if (!selectedShift) {
+      await session.abortTransaction();
+      return errorResponse(res, 404, "Shift not found for selected job role", "SHIFT_NOT_FOUND");
     }
 
     
@@ -762,9 +830,13 @@ exports.register = async (req, res) => {
       password: password,
       department,
       jobRole,
+      shiftId: String(selectedShift.shiftId || shiftId),
+      shiftName: selectedShift.shiftName || shiftName,
+      shiftType: selectedShift.shiftType || shiftType,
       company,
       companyCode,
       branch: cleanBranch,
+      assignedBranches: cleanAssignedBranchIds,
       branchCode: cleanBranchCode,
       employeeId,
       phone: phone?.trim(),
@@ -817,8 +889,13 @@ exports.register = async (req, res) => {
         email: createdUser.email,
         department: createdUser.department,
         jobRole: createdUser.jobRole,
+        shiftId: createdUser.shiftId,
+        shiftName: createdUser.shiftName,
+        shiftType: createdUser.shiftType,
         company: createdUser.company,
         companyCode: createdUser.companyCode,
+        branch: createdUser.branch,
+        assignedBranches: createdUser.assignedBranches,
         createdAt: createdUser.createdAt,
       },
     });
@@ -861,6 +938,7 @@ exports.login = async (req, res) => {
       .select("+password +isActive +loginAttempts +lockUntil")
       .populate("department", "name")
       .populate("branch", "name branchCode")
+      .populate("assignedBranches", "name branchCode")
       .populate("company", "companyName companyCode isActive subscriptionExpiry logo companyEmail companyPhone companyAddress dbIdentifier loginUrl");
 
     if (!user) {
@@ -1207,6 +1285,8 @@ exports.verifyLoginOTP = async (req, res) => {
     const user = await User.findOne({ _id: decoded.userId, email })
       .select("-password -loginAttempts -lockUntil")
       .populate("department", "name")
+      .populate("branch", "name branchCode")
+      .populate("assignedBranches", "name branchCode")
       .populate("company", "companyName companyCode logo companyEmail companyPhone companyAddress isActive subscriptionExpiry allowedPages loginUrl dbIdentifier");
 
     if (!user) {
@@ -1281,6 +1361,7 @@ exports.verifyLoginOTP = async (req, res) => {
         jobRole: user.jobRole,
         department: user.department,
         branch: user.branch,
+        assignedBranches: user.assignedBranches || [],
         branchCode: user.branchCode,
         company: user.company?._id,
         companyName: user.company?.companyName,

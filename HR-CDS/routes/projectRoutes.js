@@ -38,6 +38,7 @@ router.delete("/:id", protect, projectController.deleteProject);
 router.post("/:id/tasks", protect, projectController.addTask);
 
 router.patch("/:id/tasks/:taskId", protect, projectController.updateTask);
+router.delete("/:id/tasks/:taskId/attachment", protect, projectController.deleteTaskAttachment);
 router.delete("/:id/tasks/:taskId", protect, projectController.deleteTask);
 
 

@@ -146,6 +146,13 @@ const taskSchema = new mongoose.Schema(
       default: ''
     },
 
+    branch: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Branch",
+      index: true,
+      default: null
+    },
+
     assignedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     assignedGroups: [{
       type: mongoose.Schema.Types.ObjectId,

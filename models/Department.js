@@ -58,6 +58,23 @@ departmentSchema.index({ name: 1, company: 1 }, {
   partialFilterExpression: { isActive: true }
 });
 
+// Older deployments used a global unique `{ name: 1 }` index. MongoDB keeps
+// that index even after the schema changes, which incorrectly blocks the same
+// department name in different companies.
+departmentSchema.statics.removeLegacyGlobalNameIndex = async function() {
+  const indexes = await this.collection.indexes();
+  const legacyIndex = indexes.find(index => (
+    index.unique === true &&
+    Object.keys(index.key || {}).length === 1 &&
+    index.key.name === 1
+  ));
+
+  if (legacyIndex) {
+    await this.collection.dropIndex(legacyIndex.name);
+    console.log(`Removed legacy global Department index: ${legacyIndex.name}`);
+  }
+};
+
 
 departmentSchema.pre('save', async function(next) {
   if (this.isModified('isActive') && !this.isActive) {
