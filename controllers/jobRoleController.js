@@ -1,9 +1,47 @@
 const JobRole = require("../models/JobRole");
 const User = require("../models/User");
 const Department = require("../models/Department");
+const mongoose = require("mongoose");
 
 const errorResponse = (res, status, message) => {
   return res.status(status).json({ success: false, message });
+};
+
+const DEFAULT_SHIFT_SETTINGS = {
+  shiftName: "General Shift",
+  shiftType: "general",
+  shiftStart: "09:00",
+  shiftEnd: "19:00",
+  earlyClockInStart: "08:30",
+  lateGraceLimit: "09:10",
+  halfDayLateLimit: "11:00",
+  shortLeaveEarlyLimit: "18:30",
+  halfDayEarlyLimit: "15:00",
+  secondHalfStart: "14:00",
+  secondHalfClockInWindow: {
+    start: "13:30",
+    end: "14:30"
+  }
+};
+
+const normalizeShift = (shift = {}, index = 0) => {
+  const source = shift && typeof shift === "object" ? shift : {};
+  return {
+    ...DEFAULT_SHIFT_SETTINGS,
+    ...source,
+    shiftId: String(source.shiftId || source.id || source._id || new mongoose.Types.ObjectId()),
+    shiftName: String(source.shiftName || source.name || `Shift ${index + 1}`).trim(),
+    shiftType: String(source.shiftType || "custom").trim(),
+    secondHalfClockInWindow: {
+      ...DEFAULT_SHIFT_SETTINGS.secondHalfClockInWindow,
+      ...(source.secondHalfClockInWindow || {})
+    }
+  };
+};
+
+const normalizeShifts = (shifts, shiftSettings) => {
+  const list = Array.isArray(shifts) && shifts.length > 0 ? shifts : [shiftSettings || DEFAULT_SHIFT_SETTINGS];
+  return list.map(normalizeShift).filter(shift => shift.shiftName);
 };
 
 
@@ -34,7 +72,7 @@ exports.createJobRole = async (req, res) => {
     void 0;
     void 0;
     
-    const { name, description, department, shiftSettings } = req.body;
+    const { name, description, department, shiftSettings, shifts } = req.body;
     const createdBy = req.user ? req.user.id : null;
 
     if (!createdBy) {
@@ -50,6 +88,11 @@ exports.createJobRole = async (req, res) => {
     if (!department) {
       void 0;
       return errorResponse(res, 400, "Department is required");
+    }
+
+    const normalizedShifts = normalizeShifts(shifts, shiftSettings);
+    if (normalizedShifts.length === 0) {
+      return errorResponse(res, 400, "At least one shift is required");
     }
 
     void 0;
@@ -140,7 +183,8 @@ exports.createJobRole = async (req, res) => {
       company: companyId,
       companyCode,
       createdBy,
-      shiftSettings
+      shiftSettings: normalizedShifts[0],
+      shifts: normalizedShifts
     });
 
     void 0;
@@ -213,7 +257,10 @@ exports.getAllJobRoles = async (req, res) => {
       void 0;
       query.company = company;
     } else {
-      void 0;
+      if (!user.company) {
+        return errorResponse(res, 400, "User company not found");
+      }
+      query.company = user.company;
     }
     
     
@@ -344,6 +391,15 @@ exports.updateJobRole = async (req, res) => {
       void 0;
       delete updateData.company;
       delete updateData.companyCode;
+    }
+
+    if (updateData.shifts || updateData.shiftSettings) {
+      const normalizedShifts = normalizeShifts(updateData.shifts, updateData.shiftSettings || jobRole.shiftSettings);
+      if (normalizedShifts.length === 0) {
+        return errorResponse(res, 400, "At least one shift is required");
+      }
+      updateData.shifts = normalizedShifts;
+      updateData.shiftSettings = normalizedShifts[0];
     }
 
     void 0;

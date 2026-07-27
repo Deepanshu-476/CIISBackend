@@ -616,7 +616,14 @@ app.use(cookieParser());
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use("/api/uploads", express.static(path.join(__dirname, "uploads")));
+const uploadStaticDirs = [
+  path.join(__dirname, "uploads"),
+  path.join(__dirname, "HR-CDS", "uploads"),
+];
+
+uploadStaticDirs.forEach(uploadDir => {
+  app.use("/api/uploads", express.static(uploadDir));
+});
 app.use(
     "/uploads",
     express.static(

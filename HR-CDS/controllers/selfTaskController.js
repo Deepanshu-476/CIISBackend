@@ -58,15 +58,21 @@ const isCompanyAllTaskEdit = (req) => (
   req.headers?.['x-company-all-task-edit'] === 'true'
 );
 
+const isSameCompanyTaskRequest = (req, task) => {
+  const requesterCompany = normalizeCodeBase(getRequestCompanyCode(req));
+  const taskCompany = normalizeCodeBase(task?.companyCode);
+  return Boolean(requesterCompany && taskCompany && requesterCompany === taskCompany);
+};
+
 const canManagePersonalTask = async (req, task) => {
   if (task.taskFor !== 'self') return false;
   const currentUserId = (req.user._id || req.user.id).toString();
   if (task.createdBy.toString() === currentUserId) return true;
+  if (isCompanyAllTaskEdit(req) && isSameCompanyTaskRequest(req, task)) return true;
   if (!isPrivilegedCompanyUser(req.user)) return false;
 
   const requesterCompany = normalizeCodeBase(getRequestCompanyCode(req));
-  const taskCompany = normalizeCodeBase(task.companyCode);
-  if (requesterCompany && taskCompany && requesterCompany === taskCompany) return true;
+  if (isSameCompanyTaskRequest(req, task)) return true;
 
   const owner = await User.findById(task.createdBy).select('companyCode company').lean();
   return Boolean(
@@ -216,7 +222,7 @@ exports.updateStatus = async (req, res) => {
     const ownerUserId = task.createdBy;
     const allowCompanyAllEdit = isCompanyAllTaskEdit(req);
 
-    if (isOnHoldStatus(oldStatus) && !canChangeFromOnHold(normalizedStatus)) {
+    if (isOnHoldStatus(oldStatus) && !canChangeFromOnHold(normalizedStatus) && !allowCompanyAllEdit) {
       return res.status(400).json({
         success: false,
         error: 'On hold tasks can only be changed to in-progress or completed'

@@ -532,7 +532,8 @@ exports.cancelRequest = async (req, res) => {
 
 exports.getAllRequests = async (req, res) => {
   try {
-    const { status, department, assetId, branch } = req.query;
+    const { status, department, assetId } = req.query;
+    const branch = req.query.branch || req.query.branchId;
     const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
     const filter = { companyCode: req.user.companyCode };
     const pageAccess = await getEmployeeAssetsPageAccess(req.user);

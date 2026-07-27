@@ -9,6 +9,7 @@ const Group = require('../models/Group');
 const Notification = require('../models/Notification');
 const ActivityLog = require('../models/ActivityLog');
 const moment = require('moment');
+const mongoose = require('mongoose');
 const { sendEmail } = require('../../utils/sendEmail');
 const fs = require('fs');
 const path = require('path');
@@ -21,6 +22,17 @@ const parsePositiveInt = (value, fallback, max = 100) => {
   const parsed = parseInt(value, 10);
   if (isNaN(parsed) || parsed < 1) return fallback;
   return Math.min(parsed, max);
+};
+
+const normalizeId = (value) => {
+  if (!value) return '';
+  if (value._id && value._id !== value) return normalizeId(value._id);
+  return String(value).trim();
+};
+
+const getRequestedTaskBranchId = (req) => {
+  const value = req.body?.branchId || req.body?.branch || req.query?.branchId || req.query?.branch;
+  return value ? String(value).trim() : '';
 };
 
 const getCleanTaskDateRange = ({ period = 'all', fromDate, toDate }) => {
@@ -641,6 +653,27 @@ const fetchAssignedToMeTaskList = async (req) => {
   });
 };
 
+const getBranchScopedUserIds = async (req) => {
+  const requestedBranchId = req.query?.branch || req.query?.branchId;
+  if (!requestedBranchId) return null;
+
+  const companyCode = getRequestCompanyCode(req);
+  if (!companyCode) return [];
+
+  const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
+  const companyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : companyCode;
+  const users = await User.find({
+    companyCode: companyFilter,
+    $or: [
+      { branch: requestedBranchId },
+      { branchId: requestedBranchId },
+      { assignedBranches: requestedBranchId }
+    ]
+  }).select('_id').lean();
+
+  return users.map(user => user._id);
+};
+
 const fetchAssignedClientTaskList = async (req) => {
   const companyCode = getRequestCompanyCode(req);
   const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
@@ -947,12 +980,31 @@ exports.getMyTasks = async (req, res) => {
 exports.getAssignedTasks = async (req, res) => {
   try {
     const currentUserId = req.user._id || req.user.id;
-    const tasks = await Task.find({
+    const branchUserIds = await getBranchScopedUserIds(req);
+    const companyCode = getRequestCompanyCode(req);
+    const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
+    const groupCompanyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : req.user.companyCode;
+    const taskFilter = {
       companyCode: req.user.companyCode,
       createdBy: currentUserId,
       taskFor: 'others',
       isActive: true
-    }).populate('assignedUsers', 'name role email').populate('createdBy', 'name email').sort({ createdAt: -1 }).lean();
+    };
+
+    if (branchUserIds) {
+      const branchGroupIds = await Group.find({
+        companyCode: groupCompanyFilter,
+        isActive: true,
+        members: { $in: branchUserIds }
+      }).distinct('_id');
+
+      taskFilter.$or = [
+        { assignedUsers: { $in: branchUserIds } },
+        ...(branchGroupIds.length ? [{ assignedGroups: { $in: branchGroupIds } }] : [])
+      ];
+    }
+
+    const tasks = await Task.find(taskFilter).populate('assignedUsers', 'name role email').populate('createdBy', 'name email').sort({ createdAt: -1 }).lean();
 
     const enriched = await enrichStatusInfo(tasks);
     const mapped = enriched.map(t => ({ ...t, status: normalizeTaskStatus(t.overallStatus) }));
@@ -963,6 +1015,7 @@ exports.getAssignedTasks = async (req, res) => {
       success: true,
       tasks: paginated.tasks,
       groupedTasks: groupTasksByDate(paginated.tasks, 'createdAt', 'assignedSerialNo'),
+      stats: calculateUnifiedTaskStats(filtered),
       total: paginated.total,
       pagination: paginated
     });
@@ -974,14 +1027,40 @@ exports.getAssignedTasks = async (req, res) => {
 const handleTaskCreation = async (req, res, isSelf) => {
   const { title, description, dueDateTime, whatsappNumber, priorityDays, priority, assignedUsers, assignedGroups, checkpoints } = req.body;
   const companyCode = getRequestCompanyCode(req);
+  const branchId = getRequestedTaskBranchId(req);
   
   if (!companyCode) {
     return res.status(400).json({ success: false, error: 'Company code is missing. Please login again.' });
   }
 
+  if (branchId && !mongoose.Types.ObjectId.isValid(branchId)) {
+    return res.status(400).json({ success: false, error: 'Invalid branch selected' });
+  }
+
   let parsedUsers = isSelf ? [req.user._id.toString()] : [];
   if (!isSelf && assignedUsers && assignedUsers !== 'null') {
     parsedUsers = typeof assignedUsers === 'string' ? JSON.parse(assignedUsers) : assignedUsers;
+  }
+  parsedUsers = parsedUsers.map(userId => normalizeId(userId)).filter(Boolean);
+
+  if (!isSelf && branchId && parsedUsers.length > 0) {
+    const branchUsers = await User.find({
+      companyCode,
+      _id: { $in: parsedUsers },
+      $or: [
+        { branch: branchId },
+        { assignedBranches: branchId }
+      ]
+    }).select('_id').lean();
+    const allowedUserIds = new Set(branchUsers.map(user => normalizeId(user._id)));
+    parsedUsers = parsedUsers.filter(userId => allowedUserIds.has(String(userId)));
+
+    if (parsedUsers.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Select at least one user from the selected branch'
+      });
+    }
   }
 
   const parsedGroups = !isSelf && assignedGroups && assignedGroups !== 'null' ? 
@@ -1007,6 +1086,7 @@ const handleTaskCreation = async (req, res, isSelf) => {
     priorityDays,
     priority: priority || 'medium',
     companyCode,
+    branch: branchId || null,
     assignedUsers: parsedUsers,
     assignedGroups: parsedGroups,
     statusByUser,
@@ -1140,7 +1220,7 @@ exports.updateStatus = async (req, res) => {
     const oldStatus = oldStatusEntry?.status || task.overallStatus || 'pending';
     const normalizedStatus = normalizeTaskStatus(status);
 
-    if (isOnHoldStatus(oldStatus) && !canChangeFromOnHold(normalizedStatus)) {
+    if (isOnHoldStatus(oldStatus) && !canChangeFromOnHold(normalizedStatus) && !allowCompanyAllEdit) {
       return res.status(400).json({
         success: false,
         error: 'On hold tasks can only be changed to in-progress or completed'
@@ -1167,10 +1247,10 @@ exports.updateStatus = async (req, res) => {
       return res.status(400).json({ success: false, error: 'Cannot change status of an overdue task' });
     }
 
-    if (oldStatus === 'completed' && status !== 'completed' && status !== 'reopen') {
+    if (oldStatus === 'completed' && status !== 'completed' && status !== 'reopen' && !allowCompanyAllEdit) {
       return res.status(400).json({ success: false, error: 'Completed tasks can only be reopened.' });
     }
-    if (oldStatus === 'reopen' && status !== 'reopen' && status !== 'completed') {
+    if (oldStatus === 'reopen' && status !== 'reopen' && status !== 'completed' && !allowCompanyAllEdit) {
       return res.status(400).json({ success: false, error: 'Reopened tasks can only be completed.' });
     }
 

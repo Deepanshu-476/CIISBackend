@@ -34,6 +34,12 @@ const userSchema = new mongoose.Schema({
     ref: "Branch",
     index: true
   },
+
+  assignedBranches: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Branch",
+    index: true
+  }],
   
   branchCode: {
     type: String, 
@@ -77,6 +83,19 @@ const userSchema = new mongoose.Schema({
    
     required: [true, "Job role is required"],
     default: 'user'
+  },
+
+  shiftId: {
+    type: String,
+    trim: true
+  },
+  shiftName: {
+    type: String,
+    trim: true
+  },
+  shiftType: {
+    type: String,
+    trim: true
   },
   
   

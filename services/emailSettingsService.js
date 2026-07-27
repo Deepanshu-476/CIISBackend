@@ -6,7 +6,7 @@ const SETTINGS_KEY = "global";
 let cachedSettings = null;
 let cachedAt = 0;
 let cachedIncludesSecret = false;
-const CACHE_TTL_MS = 5000;
+const CACHE_TTL_MS = 5000;  
 const DEFAULT_PROFILE_ID = "default";
 
 const EMAIL_MODULES = [
@@ -37,6 +37,10 @@ const DEFAULT_LOGIN_SETTINGS = {
   companyLoginOtpEnabled: true,
   superAdminLoginOtpEnabled: true,
 };
+
+
+
+
 
 const parseBoolean = (value) => (
   value === true ||
