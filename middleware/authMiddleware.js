@@ -117,6 +117,7 @@ exports.protect = async (req, res, next) => {
       const user = await User.findById(userId)
         .select('+lastPasswordChange')
         .populate('company', 'companyName companyCode logo isActive')
+        .populate('assignedBranches', 'name branchCode')
         .populate('department', 'name');
         
       
@@ -184,6 +185,7 @@ exports.protect = async (req, res, next) => {
         employeeId: user.employeeId,
         phone: user.phone,
         branch: user.branch,
+        assignedBranches: user.assignedBranches || [],
         branchCode: user.branchCode,
         department: user.department,
         departmentName: user.department?.name,

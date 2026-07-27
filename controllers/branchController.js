@@ -120,7 +120,13 @@ exports.getAllBranches = async (req, res) => {
     
     const branchesWithStats = await Promise.all(
       branches.map(async (branch) => {
-        const userCount = await User.countDocuments({ branch: branch._id, isActive: true });
+        const userCount = await User.countDocuments({
+          isActive: true,
+          $or: [
+            { branch: branch._id },
+            { assignedBranches: branch._id }
+          ]
+        });
         return {
           ...branch.toObject(),
           totalUsers: userCount,
@@ -163,7 +169,13 @@ exports.getBranchById = async (req, res) => {
       });
     }
 
-    const userCount = await User.countDocuments({ branch: branch._id, isActive: true });
+    const userCount = await User.countDocuments({
+      isActive: true,
+      $or: [
+        { branch: branch._id },
+        { assignedBranches: branch._id }
+      ]
+    });
 
     return res.status(200).json({
       success: true,
@@ -186,7 +198,7 @@ exports.getBranchById = async (req, res) => {
 exports.updateBranch = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, branchCode, address, phone, isActive } = req.body;
+    const { name, branchCode, address, phone, isActive, dashboardConfig, officeLocation } = req.body;
 
     if (!isValidObjectId(id)) {
       return res.status(400).json({
@@ -255,6 +267,16 @@ exports.updateBranch = async (req, res) => {
     if (address !== undefined) updates.address = address.trim();
     if (phone !== undefined) updates.phone = phone.trim();
     if (isActive !== undefined) updates.isActive = isActive;
+    if (Array.isArray(dashboardConfig)) updates.dashboardConfig = dashboardConfig;
+    if (officeLocation && typeof officeLocation === "object") {
+      updates.officeLocation = {
+        latitude: officeLocation.latitude,
+        longitude: officeLocation.longitude,
+        allowedRadiusMeters: officeLocation.allowedRadiusEnabled === false ? null : officeLocation.allowedRadiusMeters,
+        allowedRadiusEnabled: officeLocation.allowedRadiusEnabled !== false,
+        updatedAt: new Date(),
+      };
+    }
 
     const updatedBranch = await Branch.findByIdAndUpdate(id, updates, {
       new: true,

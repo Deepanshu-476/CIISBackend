@@ -833,6 +833,13 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, async () => {
   await dbConnectionPromise;
 
+  try {
+    const migrateTenantIndexes = require("./utils/tenantIndexMigration");
+    await migrateTenantIndexes();
+  } catch (err) {
+    console.error("Failed to migrate tenant indexes:", err);
+  }
+
   
   try {
     const { initMeetingScheduler } = require("./services/meetingSchedulerService");

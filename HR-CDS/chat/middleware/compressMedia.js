@@ -1,8 +1,14 @@
 const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
-const ffmpegPath = require("ffmpeg-static");
 const sharp = require("sharp");
+
+let ffmpegPath = null;
+try {
+  ffmpegPath = require("ffmpeg-static");
+} catch {
+  ffmpegPath = null;
+}
 
 const IMAGE_MAX_DIMENSION = 1600;
 const IMAGE_QUALITY = 76;

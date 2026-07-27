@@ -34,6 +34,12 @@ const userSchema = new mongoose.Schema({
     ref: "Branch",
     index: true
   },
+
+  assignedBranches: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Branch",
+    index: true
+  }],
   
   branchCode: {
     type: String, 
@@ -78,6 +84,19 @@ const userSchema = new mongoose.Schema({
     required: [true, "Job role is required"],
     default: 'user'
   },
+
+  shiftId: {
+    type: String,
+    trim: true
+  },
+  shiftName: {
+    type: String,
+    trim: true
+  },
+  shiftType: {
+    type: String,
+    trim: true
+  },
   
   
   
@@ -87,6 +106,11 @@ const userSchema = new mongoose.Schema({
   
   phone: String,
   address: String,
+  city: String,
+  state: String,
+  country: String,
+  pinCode: String,
+  zipCode: String,
   gender: {
     type: String,
     enum: ['male', 'female', 'other']
@@ -114,6 +138,10 @@ const userSchema = new mongoose.Schema({
     type: String,
     
   },
+  workLocation: String,
+  noticePeriod: String,
+  shift: String,
+  dateOfJoining: Date,
   employeeId: {
     type: String,
     unique: true,

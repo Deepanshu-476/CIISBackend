@@ -8,6 +8,7 @@ const Meeting = require("../models/Meeting");
 const Holiday = require("../models/Holiday");
 const User = require("../../models/User");
 const Company = require("../../models/Company");
+const Branch = require("../../models/Branch");
 const JobRole = require("../../models/JobRole");
 
 const formatIndiaTime = value => {
@@ -34,11 +35,29 @@ const getScopedCompanyId = user => {
   return company?._id || company || user?.companyId || null;
 };
 
+const getScopedBranchId = user => {
+  const branch = user?.branch || user?.branchId;
+  return branch?._id || branch || null;
+};
+
 const normalizeRoleForDashboard = role => ({
   _id: role._id || role.id || "employee",
   roleName: role.roleName || role.name || role.jobRole || role.title || "Employee",
   roleNumber: role.roleNumber || role.roleNo || role.code || "N/A",
+  shifts: role.shifts || [],
+  shiftSettings: role.shiftSettings,
 });
+
+const normalizeShiftForDashboard = shift => {
+  if (!shift) return null;
+  return {
+    shiftId: String(shift.shiftId || shift._id || shift.id || ""),
+    shiftName: shift.shiftName || shift.name || "Assigned Shift",
+    shiftType: shift.shiftType || "custom",
+    shiftStart: shift.shiftStart || "09:00",
+    shiftEnd: shift.shiftEnd || "19:00",
+  };
+};
 
 const mapTaskActivity = task => ({
   type: "task",
@@ -52,6 +71,7 @@ const getEmployeeDashboardSummary = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
     const companyId = getScopedCompanyId(req.user);
+    const branchId = getScopedBranchId(req.user);
     const companyCode = String(req.user.companyCode || req.user.company?.companyCode || "").trim();
 
     if (!userId || !companyCode) {
@@ -71,12 +91,13 @@ const getEmployeeDashboardSummary = async (req, res) => {
       todayAttendance,
       leaves,
       tasks,
+      currentUser,
     ] = await Promise.all([
       companyId ? Company.findById(companyId).select("dashboardConfig officeLocation").lean() : null,
       JobRole.find({
         isActive: true,
         ...(companyId ? {company: companyId} : {companyCode}),
-      }).select("_id name roleName roleNumber roleNo code jobRole title shiftSettings department").lean(),
+      }).select("_id name roleName roleNumber roleNo code jobRole title shiftSettings shifts department").lean(),
       Holiday.find({
         isActive: true,
         $or: [
@@ -109,7 +130,34 @@ const getEmployeeDashboardSummary = async (req, res) => {
         .sort({updatedAt: -1, createdAt: -1})
         .limit(8)
         .lean(),
+      User.findById(userId).select("_id name email employeeId jobRole department employeeType shiftId shiftName shiftType").lean(),
     ]);
+    const branch = branchId ? await Branch.findById(branchId).select("dashboardConfig officeLocation").lean() : null;
+    const scopedDashboardConfig = branch?.dashboardConfig?.length ? branch.dashboardConfig : (company?.dashboardConfig || []);
+
+    const userJobRole = String(currentUser?.jobRole || req.user.jobRole || "");
+    const matchedJobRole = jobRoles.find(role =>
+      String(role._id || "") === userJobRole ||
+      role.name === userJobRole ||
+      role.roleName === userJobRole ||
+      role.jobRole === userJobRole ||
+      role.roleNumber === userJobRole ||
+      role.roleNo === userJobRole ||
+      role.code === userJobRole
+    );
+    const roleShifts = Array.isArray(matchedJobRole?.shifts) && matchedJobRole.shifts.length
+      ? matchedJobRole.shifts
+      : (matchedJobRole?.shiftSettings ? [matchedJobRole.shiftSettings] : []);
+    const selectedShift = roleShifts.find(shift =>
+      String(shift.shiftId || shift._id || shift.id) === String(currentUser?.shiftId || req.user.shiftId || "")
+    );
+    const dashboardShift = normalizeShiftForDashboard(selectedShift)
+      || (currentUser?.shiftName ? normalizeShiftForDashboard({
+        shiftId: currentUser.shiftId,
+        shiftName: currentUser.shiftName,
+        shiftType: currentUser.shiftType,
+      }) : null)
+      || normalizeShiftForDashboard(roleShifts[0]);
 
     const attendanceStatus = todayAttendance
       ? {
@@ -127,8 +175,12 @@ const getEmployeeDashboardSummary = async (req, res) => {
     return res.status(200).json({
       success: true,
       data: {
-        dashboardConfig: company?.dashboardConfig || [],
+        dashboardConfig: scopedDashboardConfig,
         jobRoles: jobRoles.map(normalizeRoleForDashboard),
+        currentUser: {
+          ...(currentUser || {}),
+          shift: dashboardShift,
+        },
         holidays,
         attendance,
         attendanceStatus,

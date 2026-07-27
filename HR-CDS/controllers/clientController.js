@@ -26,6 +26,30 @@ const normalizeName = (value) => value?.trim();
 const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 let clientMultiCompanyIndexPromise = null;
 
+const getBranchClientFilter = async (companyCode, branchId) => {
+  if (!companyCode || !branchId || !mongoose.Types.ObjectId.isValid(branchId)) return null;
+
+  const branchClientUsers = await User.find({
+    companyCode,
+    isActive: true,
+    companyRole: /^client$/i,
+    $or: [
+      { branch: branchId },
+      { branchId },
+      { assignedBranches: branchId }
+    ]
+  }).select('_id').lean();
+
+  const branchUserIds = branchClientUsers.map(user => user._id).filter(Boolean);
+
+  return {
+    $or: [
+      { branch: branchId },
+      ...(branchUserIds.length ? [{ userId: { $in: branchUserIds } }] : [])
+    ]
+  };
+};
+
 const isIndexKey = (index, expectedKey) => {
   const key = index?.key || {};
   const keyNames = Object.keys(key);
@@ -944,6 +968,8 @@ const getAllClients = async (req, res) => {
       projectManager,
       service,
       companyCode,
+      branch,
+      branchId,
       groupByClient = 'false'
     } = req.query;
 
@@ -957,6 +983,10 @@ const getAllClients = async (req, res) => {
       });
     }
     filter.companyCode = companyCode.toUpperCase();
+    const branchFilter = await getBranchClientFilter(filter.companyCode, branch || branchId);
+    if (branchFilter) {
+      filter.$and = [...(filter.$and || []), branchFilter];
+    }
     
     if (status && status !== 'All') filter.status = status;
     
@@ -1333,6 +1363,8 @@ const addClient = async (req, res) => {
       company,
       city,
       companyCode,
+      branch,
+      branchId,
       projectManager,
       services,
       status,
@@ -1404,6 +1436,8 @@ const addClient = async (req, res) => {
     const cleanCompanyName = normalizeName(company);
     const cleanCity = normalizeName(city);
     const cleanProjectManagers = projectManager.map(manager => normalizeName(manager));
+    const cleanBranchId = branch || branchId;
+    const validBranchId = mongoose.Types.ObjectId.isValid(cleanBranchId) ? cleanBranchId : null;
     let selectedClientPlan = null;
     if (clientPlanId) {
       selectedClientPlan = await ClientPlan.findOne({
@@ -1599,6 +1633,8 @@ const addClient = async (req, res) => {
       jobRole: clientRole._id,
       company: companyExists._id,
       companyCode: cleanCompanyCode,
+      branch: validBranchId,
+      assignedBranches: validBranchId ? [validBranchId] : [],
       employeeId,
       phone: phone?.trim() || '',
       address: address?.trim() || '',
@@ -1664,6 +1700,7 @@ const addClient = async (req, res) => {
       pincode: pincode ? pincode.trim() : '',
       city: cleanCity,
       companyCode: cleanCompanyCode,
+      branch: validBranchId,
       projectManager: cleanProjectManagers,
       services: finalServices || [],
       activeClientPlan: selectedClientPlan?._id || null,
@@ -1702,6 +1739,10 @@ const addClient = async (req, res) => {
     const userLinkUpdate = {
       additionalDetails: JSON.stringify(updatedAdditionalDetails)
     };
+    if (validBranchId) {
+      userLinkUpdate.branch = validBranchId;
+      userLinkUpdate.assignedBranches = [validBranchId];
+    }
     if (!reusableClientUser) {
       userLinkUpdate.employeeType = newClient._id.toString();
     }
@@ -1806,6 +1847,8 @@ const updateClient = async (req, res) => {
       state,
       country,
       pincode,
+      branch,
+      branchId,
       projectManager,
       services,
       status,
@@ -1955,6 +1998,10 @@ const updateClient = async (req, res) => {
     if (pincode !== undefined) updateData.pincode = pincode.trim();
     if (city !== undefined) updateData.city = city.trim();
     if (companyCode !== undefined) updateData.companyCode = companyCode.trim().toUpperCase();
+    if (branch !== undefined || branchId !== undefined) {
+      const requestedBranchId = branch || branchId;
+      updateData.branch = mongoose.Types.ObjectId.isValid(requestedBranchId) ? requestedBranchId : null;
+    }
     
     if (projectManager !== undefined) {
       updateData.projectManager = projectManager
@@ -1994,6 +2041,17 @@ const updateClient = async (req, res) => {
       updateData,
       { new: true, runValidators: true }
     );
+
+    if ((branch !== undefined || branchId !== undefined) && updatedClient?.userId) {
+      const requestedBranchId = branch || branchId;
+      const validBranchId = mongoose.Types.ObjectId.isValid(requestedBranchId) ? requestedBranchId : null;
+      await User.findByIdAndUpdate(updatedClient.userId, {
+        $set: {
+          branch: validBranchId,
+          assignedBranches: validBranchId ? [validBranchId] : []
+        }
+      });
+    }
 
     void 0;
     void 0;
@@ -2100,9 +2158,23 @@ const deleteClient = async (req, res) => {
 const getClientStats = async (req, res) => {
   void 0;
   try {
-    const { companyCode } = req.query;
-    
-    const stats = await Client.getStats(companyCode);
+    const { companyCode, branch, branchId } = req.query;
+    const normalizedCompanyCode = normalizeCompanyCode(companyCode);
+    const filter = normalizedCompanyCode ? { companyCode: normalizedCompanyCode } : {};
+    const branchManagerFilter = await getBranchClientFilter(normalizedCompanyCode, branch || branchId);
+
+    if (branchManagerFilter) {
+      filter.$and = [branchManagerFilter];
+    }
+
+    const [total, active, onHold, inactive] = await Promise.all([
+      Client.countDocuments(filter),
+      Client.countDocuments({ ...filter, status: 'Active' }),
+      Client.countDocuments({ ...filter, status: 'On Hold' }),
+      Client.countDocuments({ ...filter, status: 'Inactive' })
+    ]);
+
+    const stats = { total, active, onHold, inactive, avgProgress: 0 };
     
     res.json({
       success: true,
