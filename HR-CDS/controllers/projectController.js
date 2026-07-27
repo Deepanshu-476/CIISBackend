@@ -1863,11 +1863,17 @@ exports.addRemark = async (req, res) => {
       });
     }
 
-    const project = await Project.findById(projectId);
+    const project = await Project.findOne({
+      _id: projectId,
+      "tasks._id": taskId
+    })
+      .select("company companyCode users createdBy tasks.$")
+      .lean();
+
     if (!project) {
       return res.status(404).json({ 
         success: false, 
-        message: "Project not found" 
+        message: "Project or task not found" 
       });
     }
 
@@ -1879,7 +1885,7 @@ exports.addRemark = async (req, res) => {
       });
     }
 
-    const task = project.tasks.id(taskId);
+    const task = project.tasks?.[0];
     if (!task) {
       return res.status(404).json({ 
         success: false, 
@@ -1902,40 +1908,70 @@ exports.addRemark = async (req, res) => {
     }
 
     
-    task.remarks.push({
+    const now = new Date();
+    const remark = {
+      _id: new mongoose.Types.ObjectId(),
       text: remarkText || (imgPath ? "Image attachment" : ""),
       createdBy: req.user.id,
-      image: imgPath || undefined
-    });
-    task.updatedAt = new Date();
+      image: imgPath || undefined,
+      createdAt: now
+    };
 
-    
-    task.activityLogs.push({
+    const activityLog = {
+      _id: new mongoose.Types.ObjectId(),
       type: "remark",
       description: `Remark added: "${(remarkText || (imgPath ? 'Image attachment' : '')).substring(0, 50)}${remarkText.length > 50 ? '...' : ''}"`,
-      performedBy: req.user.id
-    });
+      performedBy: req.user.id,
+      performedAt: now
+    };
 
-    await project.save();
-
-    
     const notification = {
+      _id: new mongoose.Types.ObjectId(),
       title: "New Remark Added",
       message: `${req.user.name} added a remark to task "${task.title}"`,
       type: "remark_added",
       relatedTo: "task",
       referenceId: task._id,
-      createdBy: req.user.id
+      createdBy: req.user.id,
+      createdAt: now,
+      isRead: false
     };
 
-    await project.addNotification(notification);
+    const updateResult = await Project.updateOne(
+      { _id: projectId, "tasks._id": taskId },
+      {
+        $push: {
+          "tasks.$.remarks": remark,
+          "tasks.$.activityLogs": activityLog,
+          notifications: notification
+        },
+        $set: {
+          "tasks.$.updatedAt": now,
+          updatedAt: now
+        }
+      }
+    );
 
-    void 0;
+    if (updateResult.matchedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Project or task not found"
+      });
+    }
+
+    const savedRemark = {
+      ...remark,
+      createdBy: {
+      _id: req.user.id,
+      name: req.user.name,
+      email: req.user.email
+      }
+    };
 
     res.status(201).json({
       success: true,
       message: "Remark added successfully",
-      remark: task.remarks[task.remarks.length - 1]
+      remark: savedRemark
     });
   } catch (error) {
     console.error("❌ Error adding remark:", error);

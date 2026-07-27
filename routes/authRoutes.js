@@ -19,6 +19,9 @@ router.post("/resend-login-otp", authController.resendLoginOTP);
 router.post("/superadmin/login", authController.superAdminLogin);
 router.post("/superadmin/verify-otp", authController.verifySuperAdminOTP);
 router.post("/superadmin/resend-otp", authController.resendSuperAdminOTP);
+router.post("/superadmin/forgot-password", authController.requestSuperAdminPasswordReset);
+router.post("/superadmin/verify-reset-otp", authController.verifySuperAdminResetOTP);
+router.post("/superadmin/reset-password", authController.resetSuperAdminPassword);
 
 
 router.post("/company/:companyCode/login", authController.companyLoginRoute);

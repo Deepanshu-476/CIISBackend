@@ -1899,6 +1899,13 @@ const addTask = async (req, res) => {
     const requestedDueDate = dueDateTime || dueDate;
     const parsedDueDate = parseClientDueDate(requestedDueDate);
 
+    if (!mongoose.Types.ObjectId.isValid(clientId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid client ID'
+      });
+    }
+
     if (!name || name.trim().length === 0) {
       return res.status(400).json({
         success: false,
@@ -1914,18 +1921,27 @@ const addTask = async (req, res) => {
       });
     }
 
-    if (!client.services || !client.services.includes(service)) {
+    const requestedService = String(service || '').trim();
+    const clientServices = Array.isArray(client.services) ? client.services : [];
+    const matchedService = clientServices.find(item => (
+      String(item || '').trim().toLowerCase() === requestedService.toLowerCase()
+    ));
+
+    if (!matchedService) {
       return res.status(400).json({
         success: false,
         message: 'Service not found for this client'
       });
     }
 
-    const selectedSubscription = subscriptionId
-      ? client.subscription.id(subscriptionId)
+    const subscriptions = Array.isArray(client.subscription) ? client.subscription : [];
+    const selectedSubscription = subscriptionId && mongoose.Types.ObjectId.isValid(subscriptionId)
+      ? (typeof client.subscription?.id === 'function'
+          ? client.subscription.id(subscriptionId)
+          : subscriptions.find(sub => String(sub?._id) === String(subscriptionId)))
       : subscriptionNo
-        ? client.subscription.find(sub => Number(sub.subscriptionNo) === Number(subscriptionNo))
-        : client.subscription?.[client.subscription.length - 1];
+        ? subscriptions.find(sub => Number(sub.subscriptionNo) === Number(subscriptionNo))
+        : subscriptions[subscriptions.length - 1];
     const effectiveDueDate = parsedDueDate || getSubscriptionTaskDueDate(selectedSubscription);
 
     if (!effectiveDueDate) {
@@ -1935,28 +1951,46 @@ const addTask = async (req, res) => {
       });
     }
 
-    let resolvedAssigneeId = assigneeId || null;
+    let resolvedAssigneeId = mongoose.Types.ObjectId.isValid(String(assigneeId || ''))
+      ? assigneeId
+      : null;
     if (!resolvedAssigneeId && assignee) {
-      const user = await User.findOne({ name: assignee });
+      const user = await User.findOne({
+        name: assignee,
+        ...(client.companyCode ? { companyCode: client.companyCode } : {})
+      });
       if (user) {
         resolvedAssigneeId = user._id;
       }
     }
+    if (!resolvedAssigneeId) {
+      const currentUserId = currentUser?.id || currentUser?._id;
+      if (mongoose.Types.ObjectId.isValid(String(currentUserId || ''))) {
+        resolvedAssigneeId = currentUserId;
+      }
+    }
+
+    const safePlanId = mongoose.Types.ObjectId.isValid(String(selectedSubscription?.planId || ''))
+      ? selectedSubscription.planId
+      : null;
+    const normalizedPriority = ['Low', 'Medium', 'High'].includes(priority)
+      ? priority
+      : 'Medium';
 
     const task = new Task({
       clientId,
       subscriptionId: selectedSubscription?._id || null,
       subscriptionNo: selectedSubscription?.subscriptionNo || null,
-      planId: selectedSubscription?.planId || null,
+      planId: safePlanId,
       planName: selectedSubscription?.planName || '',
-      service,
+      service: String(matchedService).trim(),
       name: name.trim(),
       description: description || name.trim(),
       dueDate: effectiveDueDate,
       dueDateSource: parsedDueDate ? 'manual' : 'subscription',
       assignee: assignee || '',
       assigneeId: resolvedAssigneeId,
-      priority: priority || 'Medium',
+      priority: normalizedPriority,
       status: 'pending',
       completed: false,
       checkpoints: parseTaskCheckpoints(checkpoints),
@@ -2035,9 +2069,10 @@ const addTask = async (req, res) => {
     });
   } catch (error) {
     console.error('Error adding task:', error);
-    res.status(500).json({
+    const isInputError = error?.name === 'ValidationError' || error?.name === 'CastError';
+    res.status(isInputError ? 400 : 500).json({
       success: false,
-      message: 'Error adding task',
+      message: isInputError ? 'Invalid client task data' : 'Error adding task',
       error: error.message
     });
   }
