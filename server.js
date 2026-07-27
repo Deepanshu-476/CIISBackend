@@ -58,12 +58,26 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const isDbReady = () => mongoose.connection.readyState === 1;
 
 const isTransientMongoError = error => {
-  const message = String(error?.message || '');
-  return error?.code === 'EPIPE' ||
+  const message = String(error?.message || '').toLowerCase();
+  const transientNames = new Set([
+    'MongoNetworkError',
+    'MongoNetworkTimeoutError',
+    'MongoServerSelectionError',
+  ]);
+  const transientCodes = new Set(['EPIPE', 'ECONNRESET', 'ETIMEDOUT']);
+  const hasRetryableLabel =
+    error?.hasErrorLabel?.('RetryableReadError') ||
+    error?.hasErrorLabel?.('RetryableWriteError') ||
+    error?.errorLabelSet?.has?.('RetryableReadError') ||
+    error?.errorLabelSet?.has?.('RetryableWriteError');
+
+  return transientNames.has(error?.name) ||
+    transientCodes.has(error?.code) ||
+    hasRetryableLabel ||
     message.includes('socket has been ended') ||
-    message.includes('ECONNRESET') ||
     message.includes('connection timed out') ||
-    message.includes('server selection timed out');
+    message.includes('server selection timed out') ||
+    /\bconnection\b.*\btimed out\b/.test(message);
 };
 
 const runDbJobWithRetry = async (label, job, {retries = 2, delayMs = 1000} = {}) => {

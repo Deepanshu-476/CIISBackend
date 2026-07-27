@@ -13,7 +13,12 @@ router.use(authMiddleware.protect);
 router.post('/apply', 
   [
     body('type').isIn(['Casual', 'Sick', 'Paid', 'Unpaid', 'Halfday', 'Other']).withMessage('Invalid leave type'),
-    body('reason').trim().notEmpty().withMessage('Reason is required').isLength({ max: 500 }).withMessage('Reason must be less than 500 characters'),
+    body('reason')
+      .trim()
+      .isLength({ min: 20 })
+      .withMessage('Please enter at least 20 characters.')
+      .isLength({ max: 500 })
+      .withMessage('Reason must not exceed 500 characters.'),
     body('startDate').isISO8601().withMessage('Invalid start date format'),
     body('endDate').isISO8601().withMessage('Invalid end date format'),
     validateRequest
