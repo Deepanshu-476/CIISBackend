@@ -645,6 +645,20 @@ const fetchAssignedProjectTaskList = async (req) => {
       const status = normalizeProjectTaskStatus(task.status);
       const lastActivityAt = task.updatedAt || task.createdAt || project.updatedAt || project.createdAt;
       const assignedBy = getProjectTaskAssignedBy(task, project);
+      const activityLogs = Array.isArray(task.activityLogs) ? task.activityLogs : [];
+      const latestActivityDate = (predicate) => activityLogs
+        .filter(predicate)
+        .map(log => log.performedAt || log.createdAt)
+        .filter(Boolean)
+        .sort((a, b) => new Date(b) - new Date(a))[0] || null;
+      const assignedAt = latestActivityDate(log => log.type === 'assignment');
+      const statusUpdatedAt = latestActivityDate(log => (
+        log.type === 'status_change' || log.type === 'status_changed'
+      ));
+      const completedAt = latestActivityDate(log => (
+        (log.type === 'status_change' || log.type === 'status_changed') &&
+        normalizeTaskStatus(log.newValue) === 'completed'
+      ));
 
       tasks.push({
         _id: task._id,
@@ -676,6 +690,9 @@ const fetchAssignedProjectTaskList = async (req) => {
         createdAt: task.createdAt || project.createdAt,
         updatedAt: task.updatedAt || project.updatedAt,
         lastActivityAt,
+        assignedAt,
+        statusUpdatedAt,
+        completedAt,
         source: 'project',
         taskSource: 'project',
         __taskSource: 'project',

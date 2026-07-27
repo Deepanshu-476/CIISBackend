@@ -85,13 +85,18 @@ const applyBranchUserFilter = (query, req, currentUser = req.user || {}) => {
 
 
 const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
-  const targetUser = await User.findById(userId).select('name email').lean();
   const targetUserId = userId.toString();
-  const groups = await Group.find({ members: userId, isActive: true }).select('_id').lean();
-  const groupIds = groups.map(g => g._id);
 
   const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
   const companyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : companyCode;
+  const [targetUser, groups, clients] = await Promise.all([
+    User.findById(userId).select('name email').lean(),
+    Group.find({ members: userId, isActive: true }).select('_id').lean(),
+    Client.find(companyFilter ? { companyCode: companyFilter } : {}).select('_id').lean()
+  ]);
+  const groupIds = groups.map(g => g._id);
+  const clientIds = clients.map(c => c._id);
+
   const range = getCleanTaskDateRange({
     period: queryOptions.fromDate || queryOptions.toDate ? 'all' : queryOptions.period,
     fromDate: queryOptions.fromDate,
@@ -121,9 +126,6 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
       { $or: [{ title: new RegExp(hasSearch, 'i') }, { description: new RegExp(hasSearch, 'i') }] }
     ];
   }
-
-  const clients = await Client.find(companyFilter ? { companyCode: companyFilter } : {}).select('_id').lean();
-  const clientIds = clients.map(c => c._id);
 
   const clientQuery = {
     ...(companyFilter ? { clientId: { $in: clientIds } } : {}),
@@ -170,11 +172,26 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
       .lean(),
 
     Project.find(projectQuery)
-      .select('projectName description createdBy tasks createdAt updatedAt')
+      .select([
+        'projectName',
+        'description',
+        'createdBy',
+        'createdAt',
+        'updatedAt',
+        'tasks._id',
+        'tasks.title',
+        'tasks.description',
+        'tasks.assignedTo',
+        'tasks.dueDate',
+        'tasks.priority',
+        'tasks.status',
+        'tasks.createdBy',
+        'tasks.createdAt',
+        'tasks.updatedAt'
+      ].join(' '))
       .populate('createdBy', 'name email')
       .populate('tasks.assignedTo', 'name email')
       .populate('tasks.createdBy', 'name email')
-      .populate('tasks.activityLogs.performedBy', 'name email')
       .lean()
   ]);
 

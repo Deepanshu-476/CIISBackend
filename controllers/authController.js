@@ -2170,6 +2170,209 @@ exports.resendSuperAdminOTP = async (req, res) => {
   }
 };
 
+const hashResetOTP = (otp) => crypto.createHash("sha256").update(String(otp)).digest("hex");
+
+exports.requestSuperAdminPasswordReset = async (req, res) => {
+  try {
+    const email = String(req.body.email || "").trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({ success: false, message: "Email is required" });
+    }
+
+    const user = await User.findOne({ email })
+      .select("+isActive +companyRole +jobRole +department +userType +isSuperAdmin");
+
+    // Keep this response generic so the endpoint cannot be used to discover admin accounts.
+    if (!user || !isSuperAdminUser(user) || user.isActive === false) {
+      return res.json({
+        success: true,
+        message: "If an active Super Admin account exists, a reset OTP has been sent.",
+      });
+    }
+
+    const recentRequests = await LoginOTP.countDocuments({
+      email,
+      createdAt: { $gt: new Date(Date.now() - 15 * 60 * 1000) },
+      tempToken: { $regex: "^superadmin-reset:" },
+    });
+    if (recentRequests >= 5) {
+      return res.status(429).json({
+        success: false,
+        message: "Too many reset requests. Please try again after 15 minutes.",
+      });
+    }
+
+    const otp = generateOTP();
+    const sessionToken = jwt.sign(
+      { userId: user._id.toString(), email, purpose: "superadmin-password-reset-otp" },
+      process.env.JWT_SECRET + "-temp",
+      { expiresIn: "10m" },
+    );
+
+    await LoginOTP.create({
+      email,
+      otp: hashResetOTP(otp),
+      tempToken: `superadmin-reset:${sessionToken}`,
+      expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+    });
+
+    const emailResult = await emailService.sendEmail(
+      email,
+      "Super Admin Password Reset OTP",
+      `
+        <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:24px">
+          <h2 style="color:#3730a3">Super Admin Password Reset</h2>
+          <p>Hello ${user.name || "Super Admin"},</p>
+          <p>Use this one-time code to reset your password:</p>
+          <div style="font-size:34px;font-weight:700;letter-spacing:8px;text-align:center;padding:18px;background:#f3f4f6;border-radius:10px">${otp}</div>
+          <p>This code expires in 5 minutes. If you did not request this, you can safely ignore this email.</p>
+        </div>
+      `,
+      { emailModuleKey: "password_reset" },
+    );
+
+    if (!emailResult?.success && process.env.NODE_ENV === "production") {
+      await LoginOTP.deleteOne({ tempToken: `superadmin-reset:${sessionToken}` });
+      return res.status(503).json({
+        success: false,
+        message: "Email service is unavailable. Please try again later.",
+      });
+    }
+
+    const response = {
+      success: true,
+      message: "Reset OTP sent successfully",
+      resetSessionToken: sessionToken,
+    };
+    if (process.env.NODE_ENV !== "production") response.devOtp = otp;
+    return res.json(response);
+  } catch (error) {
+    console.error("SuperAdmin password reset request error:", error);
+    return res.status(500).json({ success: false, message: "Failed to send reset OTP" });
+  }
+};
+
+exports.verifySuperAdminResetOTP = async (req, res) => {
+  try {
+    const email = String(req.body.email || "").trim().toLowerCase();
+    const otp = String(req.body.otp || "").trim();
+    const sessionToken = String(req.body.resetSessionToken || "");
+    if (!email || !/^\d{6}$/.test(otp) || !sessionToken) {
+      return res.status(400).json({ success: false, message: "Email, valid OTP and reset session are required" });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(sessionToken, process.env.JWT_SECRET + "-temp");
+    } catch {
+      return res.status(401).json({ success: false, message: "Reset session expired. Request a new OTP." });
+    }
+    if (decoded.purpose !== "superadmin-password-reset-otp" || decoded.email !== email) {
+      return res.status(401).json({ success: false, message: "Invalid reset session" });
+    }
+
+    const record = await LoginOTP.findOne({
+      email,
+      tempToken: `superadmin-reset:${sessionToken}`,
+    }).sort({ createdAt: -1 });
+    if (!record || record.expiresAt < new Date()) {
+      return res.status(400).json({ success: false, message: "OTP expired. Request a new OTP." });
+    }
+    if (record.attempts >= 5) {
+      await LoginOTP.deleteOne({ _id: record._id });
+      return res.status(429).json({ success: false, message: "Too many invalid attempts. Request a new OTP." });
+    }
+    if (record.otp !== hashResetOTP(otp)) {
+      record.attempts += 1;
+      await record.save();
+      return res.status(400).json({ success: false, message: "Invalid OTP" });
+    }
+
+    const user = await User.findById(decoded.userId)
+      .select("+isActive +companyRole +jobRole +department +userType +isSuperAdmin");
+    if (!user || !isSuperAdminUser(user) || user.isActive === false) {
+      await LoginOTP.deleteOne({ _id: record._id });
+      return res.status(403).json({ success: false, message: "Super Admin account is unavailable" });
+    }
+
+    const resetToken = jwt.sign(
+      { userId: user._id.toString(), email, purpose: "superadmin-password-reset" },
+      process.env.JWT_SECRET + "-temp",
+      { expiresIn: "10m" },
+    );
+    record.verified = true;
+    record.tempToken = `superadmin-reset-verified:${resetToken}`;
+    record.expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    await record.save();
+
+    return res.json({ success: true, message: "OTP verified", resetToken });
+  } catch (error) {
+    console.error("SuperAdmin reset OTP verification error:", error);
+    return res.status(500).json({ success: false, message: "Failed to verify reset OTP" });
+  }
+};
+
+exports.resetSuperAdminPassword = async (req, res) => {
+  try {
+    const resetToken = String(req.body.resetToken || "");
+    const newPassword = String(req.body.newPassword || "");
+    if (!resetToken || newPassword.length < 8 || !/[A-Za-z]/.test(newPassword) || !/\d/.test(newPassword)) {
+      return res.status(400).json({
+        success: false,
+        message: "Password must be at least 8 characters and include a letter and number",
+      });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(resetToken, process.env.JWT_SECRET + "-temp");
+    } catch {
+      return res.status(401).json({ success: false, message: "Reset link expired. Start again." });
+    }
+    if (decoded.purpose !== "superadmin-password-reset") {
+      return res.status(401).json({ success: false, message: "Invalid reset token" });
+    }
+
+    const record = await LoginOTP.findOne({
+      email: decoded.email,
+      tempToken: `superadmin-reset-verified:${resetToken}`,
+      verified: true,
+      expiresAt: { $gt: new Date() },
+    });
+    if (!record) {
+      return res.status(401).json({ success: false, message: "Reset token is invalid or already used" });
+    }
+
+    const user = await User.findById(decoded.userId)
+      .select("+password +isActive +companyRole +jobRole +department +userType +isSuperAdmin");
+    if (!user || !isSuperAdminUser(user) || user.isActive === false) {
+      return res.status(403).json({ success: false, message: "Super Admin account is unavailable" });
+    }
+    if (await bcrypt.compare(newPassword, user.password)) {
+      return res.status(400).json({ success: false, message: "New password cannot be the same as the old password" });
+    }
+
+    user.password = newPassword;
+    user.passwordChangedAt = new Date();
+    user.loginAttempts = 0;
+    user.lockUntil = undefined;
+    await user.save();
+    await LoginOTP.deleteMany({ email: decoded.email, tempToken: { $regex: "^superadmin-reset" } });
+
+    emailService.sendEmail(
+      decoded.email,
+      "Super Admin Password Changed",
+      "<div style='font-family:Arial,sans-serif;padding:24px'><h2>Password changed successfully</h2><p>Your Super Admin password was changed. If this was not you, contact support immediately.</p></div>",
+      { emailModuleKey: "password_reset" },
+    ).catch((emailError) => console.error("Password reset confirmation email failed:", emailError));
+
+    return res.json({ success: true, message: "Password reset successfully" });
+  } catch (error) {
+    console.error("SuperAdmin password reset error:", error);
+    return res.status(500).json({ success: false, message: "Failed to reset password" });
+  }
+};
+
 
 exports.resetPassword = async (req, res) => {
   try {
