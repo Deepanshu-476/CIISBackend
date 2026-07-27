@@ -1489,10 +1489,13 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
     { updatedAt: range }
   ] : null;
 
+  const assignedOnly = String(queryOptions.scope || '').trim().toLowerCase() === 'assigned';
   const personalQuery = {
     isActive: true,
     companyCode: companyFilter,
-    $or: [{ assignedUsers: userId }, { assignedGroups: { $in: groupIds } }, { createdBy: userId }]
+    $or: assignedOnly
+      ? [{ assignedUsers: userId }, { assignedGroups: { $in: groupIds } }]
+      : [{ assignedUsers: userId }, { assignedGroups: { $in: groupIds } }, { createdBy: userId }]
   };
   if (dateOr) personalQuery.$and = [{ $or: dateOr }];
   if (priority) personalQuery.priority = new RegExp(`^${priority}$`, 'i');

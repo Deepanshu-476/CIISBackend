@@ -45,6 +45,9 @@ const assetRequestSchema = new mongoose.Schema({
   {
     text: { type: String },
     image: { type: String },
+    originalName: { type: String, default: '' },
+    size: { type: Number, default: 0 },
+    mimeType: { type: String, default: '' },
     addedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     addedAt: { type: Date, default: Date.now }
   }

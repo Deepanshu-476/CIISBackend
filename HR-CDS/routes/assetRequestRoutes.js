@@ -20,9 +20,14 @@ const uploadCommentImage = multer({
   }),
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
-    const allowedTypes = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif']);
+    const allowedTypes = new Set([
+      'image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif',
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    ]);
     if (allowedTypes.has(file.mimetype)) return cb(null, true);
-    cb(new Error('Only JPG, PNG, WEBP, or GIF images are allowed'));
+    cb(new Error('Only JPG, PNG, WEBP, GIF, PDF, DOC, or DOCX files are allowed'));
   }
 });
 
@@ -31,7 +36,16 @@ router.get('/my-requests', protect, assetController.getMyRequests);
 
 
 router.get('/all', protect, assetController.getAllRequests);          
-router.patch('/update/:id', protect, uploadCommentImage.single('commentImage'), assetController.updateRequestStatus); 
+router.patch(
+  '/update/:id',
+  protect,
+  uploadCommentImage.fields([
+    { name: 'commentImages', maxCount: 5 },
+    { name: 'commentImage', maxCount: 1 }
+  ]),
+  assetController.updateRequestStatus
+);
+router.delete('/update/:id/comments/:commentId/attachment', protect, assetController.deleteCommentAttachment);
 router.delete('/delete/:id', protect, assetController.deleteRequest);      
 
 

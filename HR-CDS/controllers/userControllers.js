@@ -304,6 +304,9 @@ exports.updateMe = async (req, res) => {
       if (selfEditableFields.has(key)) updateData[key] = req.body[key];
     });
 
+    ['bankHolderName', 'accountNumber', 'bankName'].forEach((field) => {
+      if (updateData[field] !== undefined) updateData[field] = String(updateData[field]).trim();
+    });
     if (updateData.ifsc) updateData.ifsc = String(updateData.ifsc).trim().toUpperCase();
     if (updateData.panCard) updateData.panCard = String(updateData.panCard).trim().toUpperCase();
     if (updateData.pinCode) {
