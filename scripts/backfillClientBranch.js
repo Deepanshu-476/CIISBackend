@@ -6,7 +6,7 @@ const Company = require('../models/Company');
 const Branch = require('../models/Branch');
 
 const args = new Set(process.argv.slice(2));
-const applyChanges = args.has('--apply');
+const applyChanges = args.has('--apply'); 
 const dryRun = !applyChanges || args.has('--dry-run');
 
 const normalizeText = (value) => String(value || '').trim();
