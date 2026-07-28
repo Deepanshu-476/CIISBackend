@@ -114,6 +114,183 @@ const getIndiaThreshold = (value, hour, minute = 0) => {
   return indiaDateTimeToUtc(year, monthIndex, day, hour, minute);
 };
 
+const parseTimeToMinutes = (value, fallback = "00:00") => {
+  const [rawHour, rawMinute] = String(value || fallback).split(":");
+  const hour = Number(rawHour);
+  const minute = Number(rawMinute);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
+    return parseTimeToMinutes(fallback, "00:00");
+  }
+  return ((hour % 24) * 60) + Math.max(0, Math.min(59, minute));
+};
+
+const getShiftTime = (shiftSettings, key, fallback) => {
+  const value = shiftSettings?.[key];
+  return typeof value === "string" && /^\d{1,2}:\d{2}$/.test(value.trim())
+    ? value.trim()
+    : fallback;
+};
+
+const buildShiftSchedule = (referenceDate, shiftSettings = {}) => {
+  const shiftStartStr = getShiftTime(shiftSettings, "shiftStart", "09:00");
+  const shiftEndStr = getShiftTime(shiftSettings, "shiftEnd", "19:00");
+  const earlyClockInStartStr = getShiftTime(shiftSettings, "earlyClockInStart", shiftStartStr);
+  const lateGraceLimitStr = getShiftTime(shiftSettings, "lateGraceLimit", shiftStartStr);
+  const halfDayLateLimitStr = getShiftTime(shiftSettings, "halfDayLateLimit", lateGraceLimitStr);
+  const shortLeaveEarlyLimitStr = getShiftTime(shiftSettings, "shortLeaveEarlyLimit", shiftEndStr);
+  const halfDayEarlyLimitStr = getShiftTime(shiftSettings, "halfDayEarlyLimit", shortLeaveEarlyLimitStr);
+
+  const startMinutes = parseTimeToMinutes(shiftStartStr);
+  const endMinutes = parseTimeToMinutes(shiftEndStr);
+  const isOvernight = endMinutes <= startMinutes;
+  const referenceMinutes = getIndiaMinutesSinceMidnight(referenceDate);
+  const anchorReference = isOvernight && referenceMinutes <= endMinutes
+    ? addIndiaDays(referenceDate, -1)
+    : referenceDate;
+
+  const { year, monthIndex, day } = getIndiaDateParts(anchorReference);
+  const atMinutes = minutes => indiaDateTimeToUtc(
+    year,
+    monthIndex,
+    day,
+    Math.floor(minutes / 60),
+    minutes % 60
+  );
+  const addDayIfBeforeStart = date => date < atMinutes(startMinutes) ? addIndiaDays(date, 1) : date;
+
+  let shiftStart = atMinutes(startMinutes);
+  let shiftEnd = atMinutes(endMinutes);
+  if (isOvernight) shiftEnd = addIndiaDays(shiftEnd, 1);
+
+  const earlyClockInStart = atMinutes(parseTimeToMinutes(earlyClockInStartStr));
+  const lateGraceLimit = addDayIfBeforeStart(atMinutes(parseTimeToMinutes(lateGraceLimitStr)));
+  const halfDayLateLimit = addDayIfBeforeStart(atMinutes(parseTimeToMinutes(halfDayLateLimitStr)));
+  const shortLeaveEarlyLimit = addDayIfBeforeStart(atMinutes(parseTimeToMinutes(shortLeaveEarlyLimitStr)));
+  const halfDayEarlyLimit = addDayIfBeforeStart(atMinutes(parseTimeToMinutes(halfDayEarlyLimitStr)));
+
+  return {
+    shiftStartStr,
+    shiftEndStr,
+    earlyClockInStartStr,
+    lateGraceLimitStr,
+    halfDayLateLimitStr,
+    shortLeaveEarlyLimitStr,
+    halfDayEarlyLimitStr,
+    shiftStart,
+    shiftEnd,
+    earlyClockInStart,
+    lateGraceLimit,
+    halfDayLateLimit,
+    shortLeaveEarlyLimit,
+    halfDayEarlyLimit,
+    dateStart: getIndiaDayStart(shiftStart),
+    dateEnd: getIndiaDayEnd(shiftStart),
+  };
+};
+
+const buildShiftSnapshot = (shiftSettings = {}, schedule) => {
+  const source = shiftSettings || {};
+  return {
+    shiftId: String(source.shiftId || source.id || source._id || ""),
+    shiftName: source.shiftName || source.name || "General Shift",
+    shiftType: source.shiftType || "general",
+    shiftStart: schedule.shiftStartStr,
+    shiftEnd: schedule.shiftEndStr,
+    earlyClockInStart: schedule.earlyClockInStartStr,
+    lateGraceLimit: schedule.lateGraceLimitStr,
+    halfDayLateLimit: schedule.halfDayLateLimitStr,
+    shortLeaveEarlyLimit: schedule.shortLeaveEarlyLimitStr,
+    halfDayEarlyLimit: schedule.halfDayEarlyLimitStr,
+    shiftWindow: {
+      start: schedule.shiftStart,
+      end: schedule.shiftEnd
+    }
+  };
+};
+
+const applyShiftSnapshot = (record, snapshot = {}) => {
+  record.shiftId = snapshot.shiftId;
+  record.shiftName = snapshot.shiftName;
+  record.shiftType = snapshot.shiftType;
+  record.shiftStart = snapshot.shiftStart;
+  record.shiftEnd = snapshot.shiftEnd;
+  record.earlyClockInStart = snapshot.earlyClockInStart;
+  record.lateGraceLimit = snapshot.lateGraceLimit;
+  record.halfDayLateLimit = snapshot.halfDayLateLimit;
+  record.shortLeaveEarlyLimit = snapshot.shortLeaveEarlyLimit;
+  record.halfDayEarlyLimit = snapshot.halfDayEarlyLimit;
+  record.shiftWindow = snapshot.shiftWindow;
+};
+
+const getRecordShiftSettings = (record) => ({
+  shiftId: record.shiftId,
+  shiftName: record.shiftName,
+  shiftType: record.shiftType,
+  shiftStart: record.shiftStart || "09:00",
+  shiftEnd: record.shiftEnd || "19:00",
+  earlyClockInStart: record.earlyClockInStart || record.shiftStart || "09:00",
+  lateGraceLimit: record.lateGraceLimit || record.shiftStart || "09:00",
+  halfDayLateLimit: record.halfDayLateLimit || record.shiftStart || "09:00",
+  shortLeaveEarlyLimit: record.shortLeaveEarlyLimit || record.shiftEnd || "19:00",
+  halfDayEarlyLimit: record.halfDayEarlyLimit || record.shiftEnd || "19:00"
+});
+
+const calculateAttendanceByShift = ({ inTime, outTime, shiftSettings, currentStatus }) => {
+  if (!inTime) {
+    return {
+      status: currentStatus || "ABSENT",
+      lateBy: "00:00:00",
+      earlyLeave: "00:00:00",
+      overTime: "00:00:00",
+      totalTime: "00:00:00"
+    };
+  }
+
+  const schedule = buildShiftSchedule(inTime, shiftSettings);
+  const lateBy = inTime > schedule.lateGraceLimit ? formatDuration(inTime - schedule.shiftStart) : "00:00:00";
+  let status = "PRESENT";
+
+  if (inTime >= schedule.halfDayLateLimit) {
+    status = "HALF DAY";
+  } else if (inTime > schedule.lateGraceLimit && inTime < schedule.halfDayLateLimit) {
+    status = "LATE";
+  }
+
+  if (!outTime) {
+    return {
+      status,
+      lateBy,
+      earlyLeave: "00:00:00",
+      overTime: "00:00:00",
+      totalTime: "00:00:00"
+    };
+  }
+
+  const totalMs = outTime - inTime;
+  const totalHours = totalMs / (1000 * 60 * 60);
+  const scheduledHours = Math.max((schedule.shiftEnd - schedule.shiftStart) / (1000 * 60 * 60), 1);
+  const halfDayHours = scheduledHours / 2;
+  let finalStatus = status;
+
+  if (finalStatus !== "HALF DAY" && finalStatus !== "ABSENT") {
+    if (outTime < schedule.shiftEnd) {
+      finalStatus = outTime < schedule.shortLeaveEarlyLimit ? "HALF DAY" : "SHORT LEAVE";
+    } else if (totalHours < scheduledHours && totalHours >= halfDayHours) {
+      finalStatus = "HALF DAY";
+    } else if (totalHours < halfDayHours) {
+      finalStatus = "ABSENT";
+    }
+  }
+
+  return {
+    status: finalStatus,
+    lateBy,
+    earlyLeave: outTime < schedule.shiftEnd ? formatDuration(schedule.shiftEnd - outTime) : "00:00:00",
+    overTime: outTime > schedule.shiftEnd ? formatDuration(outTime - schedule.shiftEnd) : "00:00:00",
+    totalTime: formatDuration(Math.max(totalMs, 0))
+  };
+};
+
 const getIndiaMinutesSinceMidnight = value => {
   const {hour, minute} = getIndiaDateParts(value);
   return (hour * 60) + minute;
@@ -457,11 +634,28 @@ const clockIn = async (req, res) => {
     }
     
     const now = new Date();
-    const {start: todayStart, end: todayEnd} = getIndiaDayRange(now);
+    // 3. Fetch selected JobRole shift timing configuration
+    const shiftSettings = await resolveSelectedShiftSettings(userObj);
+
+    const schedule = buildShiftSchedule(now, shiftSettings);
+    const shiftSnapshot = buildShiftSnapshot(shiftSettings, schedule);
+
+    // 4. Validate Early Clock-In
+    if (now < schedule.earlyClockInStart) {
+      return res.status(400).json({
+        message: `You cannot clock in too early. Clock-in for ${shiftSnapshot.shiftName} is allowed from ${schedule.earlyClockInStartStr}.`
+      });
+    }
+
+    if (now > schedule.shiftEnd) {
+      return res.status(400).json({
+        message: `Your ${shiftSnapshot.shiftName} window is over. Clock-in was allowed between ${schedule.earlyClockInStartStr} and ${schedule.shiftEndStr}.`
+      });
+    }
 
     const existingRecord = await Attendance.findOne({
-      user: userId, 
-      date: { $gte: todayStart, $lte: todayEnd } 
+      user: userId,
+      date: { $gte: schedule.dateStart, $lte: schedule.dateEnd }
     });
 
     const isAbsentPlaceholder = existingRecord
@@ -470,50 +664,25 @@ const clockIn = async (req, res) => {
       && !existingRecord.isClockedIn;
 
     if (existingRecord && !isAbsentPlaceholder) {
-      return res.status(400).json({ 
-        message: "✅ You've already logged your attendance today." 
-      });
-    }
-
-    // 3. Fetch selected JobRole shift timing configuration
-    const shiftSettings = await resolveSelectedShiftSettings(userObj);
-
-    const shiftStartStr = shiftSettings?.shiftStart || "09:00";
-    const earlyClockInStartStr = shiftSettings?.earlyClockInStart || "08:30";
-    const lateGraceLimitStr = shiftSettings?.lateGraceLimit || "09:10";
-    const halfDayLateLimitStr = shiftSettings?.halfDayLateLimit || "11:00";
-
-    const [startHour, startMin] = shiftStartStr.split(':').map(Number);
-    const [earlyHour, earlyMin] = earlyClockInStartStr.split(':').map(Number);
-    const [graceHour, graceMin] = lateGraceLimitStr.split(':').map(Number);
-    const [halfDayHour, halfDayMin] = halfDayLateLimitStr.split(':').map(Number);
-
-    const shiftStart = getIndiaThreshold(now, startHour, startMin);
-    const earlyThreshold = getIndiaThreshold(now, earlyHour, earlyMin);
-    const graceThreshold = getIndiaThreshold(now, graceHour, graceMin);
-    const halfDayThreshold = getIndiaThreshold(now, halfDayHour, halfDayMin);
-
-    // 4. Validate Early Clock-In
-    if (now < earlyThreshold) {
       return res.status(400).json({
-        message: `You cannot clock in too early. Clock-in is allowed from ${earlyClockInStartStr}.`
+        message: "✅ You've already logged your attendance for this shift."
       });
     }
 
     // The shift has a grace window: do not record/display lateness until the
     // configured grace threshold has actually passed.
-    const lateBy = now > graceThreshold ? formatDuration(now - shiftStart) : "00:00:00";
+    const lateBy = now > schedule.lateGraceLimit ? formatDuration(now - schedule.shiftStart) : "00:00:00";
 
     // 5. Determine dynamic status
     let status = "PRESENT";
-    if (now >= halfDayThreshold) {
+    if (now >= schedule.halfDayLateLimit) {
       status = "HALF DAY";
-    } else if (now > graceThreshold && now < halfDayThreshold) {
+    } else if (now > schedule.lateGraceLimit && now < schedule.halfDayLateLimit) {
       status = "LATE";
     }
 
     const attendanceRecord = existingRecord || new Attendance({ user: userId });
-    attendanceRecord.date = now;
+    attendanceRecord.date = schedule.dateStart;
     attendanceRecord.inTime = now;
     attendanceRecord.outTime = null;
     attendanceRecord.lateBy = lateBy;
@@ -523,6 +692,7 @@ const clockIn = async (req, res) => {
     attendanceRecord.overTime = "00:00:00";
     attendanceRecord.earlyLeave = "00:00:00";
     attendanceRecord.companyCode = userCompanyCode;
+    applyShiftSnapshot(attendanceRecord, shiftSnapshot);
 
     // Save Location & Selfie
     if (latitude !== undefined && longitude !== undefined) {
@@ -546,7 +716,7 @@ const clockIn = async (req, res) => {
     const populatedRecord = await Attendance.findById(attendanceRecord._id)
       .populate({
         path: "user",
-        select: "name email employeeType companyCode",
+        select: "name email employeeType companyCode jobRole shiftId shiftName shiftType department",
         populate: {
           path: "company",
           select: "companyCode companyName"
@@ -630,10 +800,19 @@ const clockOut = async (req, res) => {
     const now = new Date();
     const {start: todayStart, end: todayEnd} = getIndiaDayRange(now);
 
-    const record = await Attendance.findOne({ 
-      user: userId, 
-      date: { $gte: todayStart, $lte: todayEnd } 
+    let record = await Attendance.findOne({
+      user: userId,
+      date: { $gte: todayStart, $lte: todayEnd },
+      isClockedIn: true
     });
+
+    if (!record) {
+      record = await Attendance.findOne({
+        user: userId,
+        isClockedIn: true,
+        inTime: { $gte: addIndiaDays(todayStart, -1), $lte: now }
+      }).sort({ inTime: -1 });
+    }
 
     if (!record || record.outTime) {
       return res.status(400).json({ 
@@ -642,28 +821,29 @@ const clockOut = async (req, res) => {
     }
 
     // 3. Fetch selected JobRole shift settings
-    const shiftSettings = await resolveSelectedShiftSettings(userObj);
+    const shiftSettings = record.shiftStart && record.shiftEnd
+      ? getRecordShiftSettings(record)
+      : await resolveSelectedShiftSettings(userObj);
+    const schedule = buildShiftSchedule(record.inTime || now, shiftSettings);
+    const shiftSnapshot = buildShiftSnapshot(shiftSettings, schedule);
 
-    const shiftEndStr = shiftSettings?.shiftEnd || "19:00";
-    const shortLeaveEarlyLimitStr = shiftSettings?.shortLeaveEarlyLimit || "18:30";
-    const halfDayEarlyLimitStr = shiftSettings?.halfDayEarlyLimit || "15:00";
-
-    const [endHour, endMin] = shiftEndStr.split(':').map(Number);
-    const [shortHour, shortMin] = shortLeaveEarlyLimitStr.split(':').map(Number);
-    const [halfHour, halfMin] = halfDayEarlyLimitStr.split(':').map(Number);
-
-    const shiftEnd = getIndiaThreshold(now, endHour, endMin);
-    const shortLeaveThreshold = getIndiaThreshold(now, shortHour, shortMin);
-    const halfDayOutThreshold = getIndiaThreshold(now, halfHour, halfMin);
+    if (now > addIndiaDays(schedule.shiftEnd, 1)) {
+      return res.status(400).json({
+        message: `Clock-out for ${shiftSnapshot.shiftName} is no longer available. Please contact HR to update this attendance.`
+      });
+    }
 
     const totalMs = now - new Date(record.inTime);
     const totalHours = totalMs / (1000 * 60 * 60);
+    const scheduledHours = Math.max((schedule.shiftEnd - schedule.shiftStart) / (1000 * 60 * 60), 1);
+    const halfDayHours = scheduledHours / 2;
 
     record.outTime = now;
     record.isClockedIn = false;
     record.totalTime = formatDuration(totalMs);
-    record.overTime = now > shiftEnd ? formatDuration(now - shiftEnd) : "00:00:00";
-    record.earlyLeave = now < shiftEnd ? formatDuration(shiftEnd - now) : "00:00:00";
+    record.overTime = now > schedule.shiftEnd ? formatDuration(now - schedule.shiftEnd) : "00:00:00";
+    record.earlyLeave = now < schedule.shiftEnd ? formatDuration(schedule.shiftEnd - now) : "00:00:00";
+    applyShiftSnapshot(record, shiftSnapshot);
 
     // Save Location & Selfie
     if (latitude !== undefined && longitude !== undefined) {
@@ -681,18 +861,18 @@ const clockOut = async (req, res) => {
     // 4. Calculate final status based on early leaves and total hours
     let finalStatus = record.status; // starts as PRESENT, LATE, or HALF DAY
     if (finalStatus !== "HALF DAY" && finalStatus !== "ABSENT") {
-      if (now < shiftEnd) {
-        if (now < halfDayOutThreshold) {
+      if (now < schedule.shiftEnd) {
+        if (now < schedule.halfDayEarlyLimit) {
           finalStatus = "HALF DAY";
-        } else if (now < shortLeaveThreshold) {
+        } else if (now < schedule.shortLeaveEarlyLimit) {
           finalStatus = "HALF DAY";
         } else {
           finalStatus = "SHORT LEAVE";
         }
       } else {
-        if (totalHours < 9 && totalHours >= 5) {
+        if (totalHours < scheduledHours && totalHours >= halfDayHours) {
           finalStatus = "HALF DAY";
-        } else if (totalHours < 5) {
+        } else if (totalHours < halfDayHours) {
           finalStatus = "ABSENT";
         }
       }
@@ -708,7 +888,7 @@ const clockOut = async (req, res) => {
     const populatedRecord = await Attendance.findById(record._id)
       .populate({
         path: "user",
-        select: "name email employeeType companyCode",
+        select: "name email employeeType companyCode jobRole shiftId shiftName shiftType department",
         populate: {
           path: "company",
           select: "companyCode companyName"
@@ -756,26 +936,42 @@ const getTodayStatus = async (req, res) => {
     const now = new Date();
     const {start: todayStart, end: todayEnd} = getIndiaDayRange(now);
 
-    const today = await Attendance.findOne({ 
+    let today = await Attendance.findOne({ 
       user: userId, 
       date: { $gte: todayStart, $lte: todayEnd } 
     });
 
     if (!today) {
-      const currentTime = new Date();
-      const endOfDay = getIndiaDayEnd(currentTime);
-      const absentThreshold = getIndiaThreshold(currentTime, 10, 0);
+      today = await Attendance.findOne({
+        user: userId,
+        isClockedIn: true,
+        inTime: { $gte: addIndiaDays(todayStart, -1), $lte: now }
+      }).sort({ inTime: -1 });
+    }
+
+    if (!today) {
+      const { userObj } = await getAttendanceSettingsContext({ companyCode: userCompanyCode, userId });
+      const shiftSettings = await resolveSelectedShiftSettings(userObj);
+      const schedule = buildShiftSchedule(now, shiftSettings);
       
-      if (currentTime >= absentThreshold && currentTime <= endOfDay) {
+      if (now > schedule.shiftEnd) {
         return res.status(200).json({
           isClockedIn: false,
           status: "ABSENT",
-          message: "No attendance recorded today"
+          shiftId: shiftSettings?.shiftId,
+          shiftName: shiftSettings?.shiftName,
+          shiftStart: schedule.shiftStartStr,
+          shiftEnd: schedule.shiftEndStr,
+          message: "No attendance recorded for your shift"
         });
       }
       
       return res.status(200).json({ 
         isClockedIn: false,
+        shiftId: shiftSettings?.shiftId,
+        shiftName: shiftSettings?.shiftName,
+        shiftStart: schedule.shiftStartStr,
+        shiftEnd: schedule.shiftEndStr,
         message: "No attendance recorded yet"
       });
     }
@@ -812,7 +1008,8 @@ const getAttendanceList = async (req, res) => {
     }
     
     
-    const targetUser = await User.findById(targetUserId).select('companyCode');
+    const targetUser = await User.findById(targetUserId)
+      .select('name email employeeType companyCode company jobRole shiftId shiftName shiftType createdAt');
     if (!targetUser || targetUser.companyCode !== userCompanyCode) {
       return res.status(403).json({ 
         message: "Access denied. User belongs to different company." 
@@ -863,10 +1060,12 @@ const getAttendanceList = async (req, res) => {
     void 0;
 
     
+    const targetShiftSettings = await resolveSelectedShiftSettings(targetUser);
+
     const list = await Attendance.find(query)
       .populate({
         path: "user",
-        select: "name email employeeType companyCode",
+        select: "name email employeeType companyCode jobRole shiftId shiftName shiftType department",
         populate: {
           path: "company",
           select: "companyCode companyName"
@@ -888,8 +1087,22 @@ const getAttendanceList = async (req, res) => {
       if (existingRecordsMap[dateKey]) {
         
         const record = existingRecordsMap[dateKey];
+        const recordObject = record.toObject ? record.toObject() : record;
+        const fallbackSchedule = buildShiftSchedule(record.date, targetShiftSettings);
+        const fallbackShift = buildShiftSnapshot(targetShiftSettings || {}, fallbackSchedule);
         return {
-          ...record.toObject ? record.toObject() : record,
+          ...recordObject,
+          shiftId: recordObject.shiftId || fallbackShift.shiftId,
+          shiftName: recordObject.shiftName || fallbackShift.shiftName,
+          shiftType: recordObject.shiftType || fallbackShift.shiftType,
+          shiftStart: recordObject.shiftStart || fallbackShift.shiftStart,
+          shiftEnd: recordObject.shiftEnd || fallbackShift.shiftEnd,
+          earlyClockInStart: recordObject.earlyClockInStart || fallbackShift.earlyClockInStart,
+          lateGraceLimit: recordObject.lateGraceLimit || fallbackShift.lateGraceLimit,
+          halfDayLateLimit: recordObject.halfDayLateLimit || fallbackShift.halfDayLateLimit,
+          shortLeaveEarlyLimit: recordObject.shortLeaveEarlyLimit || fallbackShift.shortLeaveEarlyLimit,
+          halfDayEarlyLimit: recordObject.halfDayEarlyLimit || fallbackShift.halfDayEarlyLimit,
+          shiftWindow: recordObject.shiftWindow || fallbackShift.shiftWindow,
           login: formatTime(record.inTime),
           logout: formatTime(record.outTime),
           status: record.status || 'ABSENT'
@@ -898,6 +1111,8 @@ const getAttendanceList = async (req, res) => {
         
         const dayOfWeek = new Date(date.getTime() + INDIA_OFFSET_MS).getUTCDay();
         const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+        const fallbackSchedule = buildShiftSchedule(date, targetShiftSettings);
+        const fallbackShift = buildShiftSnapshot(targetShiftSettings || {}, fallbackSchedule);
 
         return {
           _id: `absent_${targetUserId}_${dateKey}`,
@@ -918,6 +1133,17 @@ const getAttendanceList = async (req, res) => {
           totalTime: "00:00:00",
           isClockedIn: false,
           companyCode: userCompanyCode,
+          shiftId: fallbackShift.shiftId,
+          shiftName: fallbackShift.shiftName,
+          shiftType: fallbackShift.shiftType,
+          shiftStart: fallbackShift.shiftStart,
+          shiftEnd: fallbackShift.shiftEnd,
+          earlyClockInStart: fallbackShift.earlyClockInStart,
+          lateGraceLimit: fallbackShift.lateGraceLimit,
+          halfDayLateLimit: fallbackShift.halfDayLateLimit,
+          shortLeaveEarlyLimit: fallbackShift.shortLeaveEarlyLimit,
+          halfDayEarlyLimit: fallbackShift.halfDayEarlyLimit,
+          shiftWindow: fallbackShift.shiftWindow,
           notes: isWeekend ? "Weekend" : "No attendance recorded",
           createdAt: date,
           updatedAt: date,
@@ -992,7 +1218,7 @@ const getAllUsersAttendance = async (req, res) => {
       Attendance.find(filter)
         .populate({
           path: "user",
-          select: "name email employeeType companyCode",
+          select: "name email employeeType companyCode jobRole shiftId shiftName shiftType department",
           populate: {
             path: "company",
             select: "companyCode companyName"
@@ -1134,6 +1360,22 @@ const updateAttendanceRecord = async (req, res) => {
       }
     }
     
+    if ((updateData.inTime || updateData.outTime) && !updateData.status) {
+      const attendanceUser = await User.findById(record.user).select('company jobRole shiftId shiftName shiftType');
+      const shiftSettings = record.shiftStart && record.shiftEnd
+        ? getRecordShiftSettings(record)
+        : await resolveSelectedShiftSettings(attendanceUser);
+      const schedule = buildShiftSchedule(record.inTime || record.date, shiftSettings);
+      applyShiftSnapshot(record, buildShiftSnapshot(shiftSettings || {}, schedule));
+      const recalculated = calculateAttendanceByShift({
+        inTime: record.inTime,
+        outTime: record.outTime,
+        shiftSettings,
+        currentStatus: record.status
+      });
+      Object.assign(record, recalculated);
+    }
+
     if (updateData.status && updateData.status.trim() !== '') {
       record.status = updateData.status.toUpperCase();
     }
@@ -1167,7 +1409,7 @@ const updateAttendanceRecord = async (req, res) => {
     const populatedRecord = await Attendance.findById(record._id)
       .populate({
         path: "user",
-        select: "name email employeeType companyCode",
+        select: "name email employeeType companyCode jobRole shiftId shiftName shiftType department",
         populate: {
           path: "company",
           select: "companyCode companyName"
@@ -1223,6 +1465,17 @@ const createManualAttendance = async (req, res) => {
         message: "Cannot create attendance for user from different company" 
       });
     }
+
+    const shiftSettings = await resolveSelectedShiftSettings(userExists);
+    const scheduleReference = inTime ? new Date(inTime) : parseIndiaDateOnly(date);
+    const schedule = buildShiftSchedule(scheduleReference, shiftSettings);
+    const shiftSnapshot = buildShiftSnapshot(shiftSettings || {}, schedule);
+    const calculated = calculateAttendanceByShift({
+      inTime: inTime ? new Date(inTime) : null,
+      outTime: outTime ? new Date(outTime) : null,
+      shiftSettings,
+      currentStatus: status ? status.toUpperCase() : "ABSENT"
+    });
     
     const existingDate = parseIndiaDateOnly(date);
     const endOfDay = getIndiaDayEnd(existingDate);
@@ -1241,6 +1494,15 @@ const createManualAttendance = async (req, res) => {
       existingAttendance.overTime = overTime || existingAttendance.overTime;
       existingAttendance.notes = notes || existingAttendance.notes;
       existingAttendance.companyCode = userCompanyCode;
+      applyShiftSnapshot(existingAttendance, shiftSnapshot);
+
+      if (!status) {
+        existingAttendance.status = calculated.status;
+        existingAttendance.lateBy = lateBy || calculated.lateBy;
+        existingAttendance.earlyLeave = earlyLeave || calculated.earlyLeave;
+        existingAttendance.overTime = overTime || calculated.overTime;
+        existingAttendance.totalTime = calculated.totalTime;
+      }
 
       await existingAttendance.save();
 
@@ -1255,21 +1517,23 @@ const createManualAttendance = async (req, res) => {
       date: existingDate,
       inTime: inTime ? new Date(inTime) : null,
       outTime: outTime ? new Date(outTime) : null,
-      status: status ? status.toUpperCase() : "ABSENT",
-      lateBy: lateBy || "00:00:00",
-      earlyLeave: earlyLeave || "00:00:00",
-      overTime: overTime || "00:00:00",
+      status: status ? status.toUpperCase() : calculated.status,
+      lateBy: lateBy || calculated.lateBy,
+      earlyLeave: earlyLeave || calculated.earlyLeave,
+      overTime: overTime || calculated.overTime,
+      totalTime: calculated.totalTime,
       notes: notes || "",
       isClockedIn: !outTime,
       companyCode: userCompanyCode
     });
+    applyShiftSnapshot(attendance, shiftSnapshot);
     
     await attendance.save();
     
     const populatedAttendance = await Attendance.findById(attendance._id)
       .populate({
         path: "user",
-        select: "name email employeeType companyCode",
+        select: "name email employeeType companyCode jobRole shiftId shiftName shiftType department",
         populate: {
           path: "company",
           select: "companyCode companyName"
@@ -1394,7 +1658,7 @@ const getAttendanceByUser = async (req, res) => {
     const records = await Attendance.find(query)
       .populate({
         path: "user",
-        select: "name email employeeType companyCode",
+        select: "name email employeeType companyCode jobRole shiftId shiftName shiftType department",
         populate: {
           path: "company",
           select: "companyCode companyName"

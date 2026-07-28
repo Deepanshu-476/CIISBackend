@@ -45,6 +45,50 @@ const attendanceSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  shiftId: {
+    type: String,
+    trim: true
+  },
+  shiftName: {
+    type: String,
+    trim: true
+  },
+  shiftType: {
+    type: String,
+    trim: true
+  },
+  shiftStart: {
+    type: String,
+    trim: true
+  },
+  shiftEnd: {
+    type: String,
+    trim: true
+  },
+  earlyClockInStart: {
+    type: String,
+    trim: true
+  },
+  lateGraceLimit: {
+    type: String,
+    trim: true
+  },
+  halfDayLateLimit: {
+    type: String,
+    trim: true
+  },
+  shortLeaveEarlyLimit: {
+    type: String,
+    trim: true
+  },
+  halfDayEarlyLimit: {
+    type: String,
+    trim: true
+  },
+  shiftWindow: {
+    start: { type: Date },
+    end: { type: Date }
+  },
   inLocation: {
     latitude: { type: Number },
     longitude: { type: Number },
