@@ -274,6 +274,13 @@ const getAssignedClientTaskFilter = async (currentUser) => {
   };
 };
 
+const normalizeClientTaskPriority = value => {
+  const priority = String(value || '').trim().toLowerCase();
+  if (priority === 'low') return 'Low';
+  if (priority === 'high') return 'High';
+  return 'Medium';
+};
+
 const calculateClientAssignedStats = tasks => {
   const total = tasks.length;
   const completed = tasks.filter(task => task.completed || task.status === 'completed').length;
@@ -1971,9 +1978,7 @@ const addTask = async (req, res) => {
     const safePlanId = mongoose.Types.ObjectId.isValid(String(selectedSubscription?.planId || ''))
       ? selectedSubscription.planId
       : null;
-    const normalizedPriority = ['Low', 'Medium', 'High'].includes(priority)
-      ? priority
-      : 'Medium';
+    const normalizedPriority = normalizeClientTaskPriority(priority);
 
     const task = new Task({
       clientId,
@@ -2180,9 +2185,12 @@ const updateTask = async (req, res) => {
         }
         
         task.status = completedTargetStatus;
-      } else if (key === 'priority' && oldValue !== newValue) {
-        changes.push(`priority from "${oldValue}" to "${newValue}"`);
-        task[key] = newValue;
+      } else if (key === 'priority') {
+        newValue = normalizeClientTaskPriority(newValue);
+        if (oldValue !== newValue) {
+          changes.push(`priority from "${oldValue}" to "${newValue}"`);
+          task[key] = newValue;
+        }
       } else if (key === 'assignee' && oldValue !== newValue) {
         changes.push(`assignee from "${oldValue}" to "${newValue}"`);
         task[key] = newValue;

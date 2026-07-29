@@ -1,5 +1,12 @@
 const mongoose = require('mongoose');
 
+const normalizeClientTaskPriority = value => {
+  const priority = String(value || '').trim().toLowerCase();
+  if (priority === 'low') return 'Low';
+  if (priority === 'high') return 'High';
+  return 'Medium';
+};
+
 const clienttaskSchema = new mongoose.Schema({
   clientId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -72,7 +79,8 @@ const clienttaskSchema = new mongoose.Schema({
   priority: {
     type: String,
     enum: ['Low', 'Medium', 'High'],
-    default: 'Medium'
+    default: 'Medium',
+    set: normalizeClientTaskPriority
   },
   status: {
     type: String,

@@ -371,7 +371,11 @@ const runAutoClockOutSweep = async () => {
   return { processed: records.length, updated };
 };
 
+let autoClockOutJob = null;
+
 const scheduleAutoClockOutJob = () => {
+  if (autoClockOutJob) return autoClockOutJob;
+
   schedule.scheduleJob('*/1 * * * *', async () => {
     try {
       await runAutoClockOutSweep();
@@ -379,6 +383,9 @@ const scheduleAutoClockOutJob = () => {
       console.error('[AutoClockOut] scheduled run failed:', error.message);
     }
   });
+
+  autoClockOutJob = true;
+  return autoClockOutJob;
 };
 
 scheduleAutoClockOutJob();
