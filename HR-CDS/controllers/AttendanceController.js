@@ -60,6 +60,11 @@ const getUserBranchIds = (user = {}) => normalizeIdList([
   ...(Array.isArray(user.assignedBranches) ? user.assignedBranches : [])
 ]);
 
+const isWorkFromHomeEmployee = (user = {}) => {
+  const employeeType = String(user.employeeType || '').trim().toLowerCase();
+  return ['work-from-home', 'work from home', 'wfh'].includes(employeeType);
+};
+
 const getBranchScopedUserIds = async (req, companyCode) => {
   const requestedBranch = req.query?.branch || req.query?.branchId;
   if (!requestedBranch || !isValidObjectId(requestedBranch)) return null;
@@ -607,7 +612,8 @@ const clockIn = async (req, res) => {
 
     // 2. Validate Geolocation/Selfie based on company requirements
     let locationRange = null;
-    if (attendanceMode === 'location' || attendanceMode === 'both') {
+    const shouldEnforceLocation = (attendanceMode === 'location' || attendanceMode === 'both') && !isWorkFromHomeEmployee(userObj);
+    if (shouldEnforceLocation) {
       if (latitude === undefined || longitude === undefined) {
         return res.status(400).json({
           message: "Location coordinates (latitude and longitude) are required for attendance."
@@ -771,7 +777,8 @@ const clockOut = async (req, res) => {
 
     // 2. Validate Geolocation/Selfie based on company requirements
     let locationRange = null;
-    if (attendanceMode === 'location' || attendanceMode === 'both') {
+    const shouldEnforceLocation = (attendanceMode === 'location' || attendanceMode === 'both') && !isWorkFromHomeEmployee(userObj);
+    if (shouldEnforceLocation) {
       if (latitude === undefined || longitude === undefined) {
         return res.status(400).json({
           message: "Location coordinates (latitude and longitude) are required to clock out."

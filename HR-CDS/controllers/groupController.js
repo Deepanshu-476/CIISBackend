@@ -172,6 +172,44 @@ exports.getGroups = async (req, res) => {
   }
 };
 
+exports.getUserGroups = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      return res.status(400).json({ error: 'User id is required' });
+    }
+
+    const user = await User.findOne({
+      _id: id,
+      ...buildCompanyUserFilter(req.user)
+    }).select('_id').lean();
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const filter = mergeQueries(await buildGroupCompanyFilter(req.user), {
+      isActive: true,
+      members: user._id
+    });
+
+    const groups = await Group.find(filter)
+      .populate('members', 'name role email')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.json({
+      success: true,
+      groups,
+      count: groups.length
+    });
+  } catch (error) {
+    console.error('âŒ Error fetching user groups:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 
 exports.getGroupById = async (req, res) => {
   try {
