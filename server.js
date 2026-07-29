@@ -778,7 +778,7 @@ app.get("/api/manual-overdue-check", async (req, res) => {
   } catch (error) {
     console.error('❌ Error in manual overdue check:', error);
     res.status(500).json({ error: "Manual overdue check failed" });
-  }
+  } 
 });
 
 
