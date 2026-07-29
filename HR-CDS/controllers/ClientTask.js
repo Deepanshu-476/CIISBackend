@@ -1483,6 +1483,7 @@ const getAssignedToMeTasks = async (req, res) => {
 
       const groupDate = task.dueDate || task.createdAt;
       const dateKey = new Date(groupDate).toLocaleDateString('en-IN', {
+        timeZone: 'Asia/Kolkata',
         weekday: 'short',
         year: 'numeric',
         month: 'short',
