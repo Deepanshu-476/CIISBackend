@@ -667,6 +667,7 @@ const dashboardRoutes = require('./HR-CDS/routes/dashboardRoutes.js');
 
 
 app.use("/api/auth", require("./routes/authRoutes.js"));
+app.use("/api/app-version", require("./routes/appVersionRoutes.js"));
 app.use("/api/attendance", require("./HR-CDS/routes/attendanceRoutes.js"));
 app.use("/api/leaves", require("./HR-CDS/routes/LeaveRoutes.js"));
 app.use("/api/asset-requests", require("./HR-CDS/routes/assetRequestRoutes.js"));
