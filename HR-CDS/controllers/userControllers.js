@@ -287,6 +287,34 @@ const validateUserData = (data, isUpdate = false) => {
   return errors;
 };
 
+const normalizeEmployeeType = (value) => String(value || '').trim().toLowerCase();
+
+const isWorkFromHomeEmployeeType = (value) => {
+  const normalized = normalizeEmployeeType(value);
+  return ['work-from-home', 'work from home', 'wfh'].includes(normalized);
+};
+
+const normalizeEmploymentLocationFields = (updateData, existingUser = {}) => {
+  const employeeTypeTouched = updateData.employeeType !== undefined;
+  const workLocationTouched = updateData.workLocation !== undefined;
+  const nextEmployeeType = normalizeEmployeeType(employeeTypeTouched ? updateData.employeeType : existingUser.employeeType);
+
+  if (isWorkFromHomeEmployeeType(nextEmployeeType)) {
+    updateData.workLocation = '';
+    return null;
+  }
+
+  if (workLocationTouched) {
+    updateData.workLocation = String(updateData.workLocation || '').trim();
+  }
+
+  return null;
+};
+
+const hasChangedValue = (nextValue, currentValue) => {
+  if (nextValue === undefined) return false;
+  return String(nextValue ?? '').trim() !== String(currentValue ?? '').trim();
+};
 
 exports.getMe = async (req, res) => {
   try {
@@ -423,7 +451,8 @@ exports.updateMe = async (req, res) => {
       'emergencyName', 'emergencyPhone', 'emergencyRelation', 'emergencyAddress',
       'aadhaar', 'aadhar', 'aadharCard', 'panCard', 'pan',
       'chatSettings', 'notificationPreferences', 'properties',
-      'propertyOwned', 'additionalDetails'
+      'propertyOwned', 'additionalDetails',
+      'employeeType', 'workLocation'
     ]);
 
     Object.keys(req.body).forEach(key => {
@@ -447,6 +476,11 @@ exports.updateMe = async (req, res) => {
     
     if (req.body.properties !== undefined) {
       updateData.properties = req.body.properties;
+    }
+
+    const employmentLocationError = normalizeEmploymentLocationFields(updateData, existingUser);
+    if (employmentLocationError) {
+      return errorResponse(res, 400, employmentLocationError);
     }
 
     if (updateData.department && /^[a-f\d]{24}$/i.test(String(updateData.department))) {
@@ -718,7 +752,6 @@ exports.getUser = async (req, res) => {
       return errorResponse(res, 404, "User not found");
     }
 
-    
     if (user.company && req.user.company) {
       const userCompanyId = user.company._id ? user.company._id.toString() : user.company.toString();
       const reqCompanyId = req.user.company._id ? req.user.company._id.toString() : req.user.company.toString();
@@ -799,7 +832,12 @@ exports.updateUser = async (req, res) => {
     }
 
     
-    let user = id ? await User.findById(id) : null;
+    const bodyUserId = req.body.userId || req.body.id || req.body._id;
+
+    let user = id && isObjectIdLike(id) ? await User.findById(id) : null;
+    if (!user && bodyUserId && isObjectIdLike(bodyUserId)) {
+      user = await User.findById(bodyUserId);
+    }
     if (!user && req.body.email && requestingUser.company) {
       const requesterCompanyId = requestingUser.company._id || requestingUser.company;
       user = await User.findOne({
@@ -812,7 +850,6 @@ exports.updateUser = async (req, res) => {
       return errorResponse(res, 404, "User not found");
     }
 
-    
     if (user.company && requestingUser.company) {
       const userCompanyId = user.company._id ? user.company._id.toString() : user.company.toString();
       const reqCompanyId = requestingUser.company._id ? requestingUser.company._id.toString() : requestingUser.company.toString();
@@ -839,6 +876,9 @@ exports.updateUser = async (req, res) => {
         updateData[key] = req.body[key];
       }
     });
+
+    delete updateData.userId;
+    delete updateData.targetUserId;
     
     
     if (req.body.children !== undefined) {
@@ -858,14 +898,21 @@ exports.updateUser = async (req, res) => {
     
 
     
-    if (updateData.department && /^[a-f\d]{24}$/i.test(String(updateData.department))) {
+    const departmentChanged = hasChangedValue(updateData.department, user.department);
+    const jobRoleChanged = hasChangedValue(updateData.jobRole, user.jobRole);
+    const branchChanged = hasChangedValue(updateData.branch, user.branch);
+    const shiftChanged = hasChangedValue(updateData.shiftId, user.shiftId) ||
+      hasChangedValue(updateData.shiftName, user.shiftName) ||
+      hasChangedValue(updateData.shiftType, user.shiftType);
+
+    if (departmentChanged && updateData.department && /^[a-f\d]{24}$/i.test(String(updateData.department))) {
       const departmentError = await validateAssignableDepartment(updateData.department, user.company || requestingUser.company);
       if (departmentError) {
         return errorResponse(res, departmentError.status, departmentError.message);
       }
     }
 
-    if (updateData.branch && isObjectIdLike(updateData.branch)) {
+    if (branchChanged && updateData.branch && isObjectIdLike(updateData.branch)) {
       const branch = await Branch.findOne({
         _id: updateData.branch,
         company: user.company || requestingUser.company,
@@ -879,7 +926,7 @@ exports.updateUser = async (req, res) => {
       updateData.branchCode = branch.branchCode;
     }
 
-    if (req.body.assignedBranches !== undefined || updateData.branch) {
+    if (req.body.assignedBranches !== undefined || branchChanged) {
       const assignedBranchIds = normalizeIdList([
         ...(Array.isArray(req.body.assignedBranches) ? req.body.assignedBranches : normalizeIdList(req.body.assignedBranches)),
         updateData.branch || user.branch
@@ -891,7 +938,7 @@ exports.updateUser = async (req, res) => {
       updateData.assignedBranches = assignedBranchIds;
     }
 
-    if (updateData.shiftId) {
+    if ((departmentChanged || jobRoleChanged || shiftChanged) && updateData.shiftId) {
       const shiftResult = await resolveAssignableShift({
         jobRole: updateData.jobRole || user.jobRole,
         shiftId: updateData.shiftId,
@@ -911,6 +958,11 @@ exports.updateUser = async (req, res) => {
     
     if (req.body.password) {
       updateData.password = req.body.password;
+    }
+
+    const employmentLocationError = normalizeEmploymentLocationFields(updateData, user);
+    if (employmentLocationError) {
+      return errorResponse(res, 400, employmentLocationError);
     }
 
     
@@ -987,18 +1039,26 @@ exports.updateSelfUser = async (req, res) => {
     if (req.body.properties !== undefined) {
       updateData.properties = req.body.properties;
     }
-    
-    
-    
 
-    if (updateData.department && /^[a-f\d]{24}$/i.test(String(updateData.department))) {
+    const employmentLocationError = normalizeEmploymentLocationFields(updateData, user);
+    if (employmentLocationError) {
+      return errorResponse(res, 400, employmentLocationError);
+    }
+
+    const departmentChanged = hasChangedValue(updateData.department, user.department);
+    const jobRoleChanged = hasChangedValue(updateData.jobRole, user.jobRole);
+    const shiftChanged = hasChangedValue(updateData.shiftId, user.shiftId) ||
+      hasChangedValue(updateData.shiftName, user.shiftName) ||
+      hasChangedValue(updateData.shiftType, user.shiftType);
+
+    if (departmentChanged && updateData.department && /^[a-f\d]{24}$/i.test(String(updateData.department))) {
       const departmentError = await validateAssignableDepartment(updateData.department, user.company || requestingUser.company);
       if (departmentError) {
         return errorResponse(res, departmentError.status, departmentError.message);
       }
     }
 
-    if (updateData.shiftId) {
+    if ((departmentChanged || jobRoleChanged || shiftChanged) && updateData.shiftId) {
       const shiftResult = await resolveAssignableShift({
         jobRole: updateData.jobRole || user.jobRole,
         shiftId: updateData.shiftId,
@@ -1471,9 +1531,9 @@ exports.getCompanyUsersPaginated = async (req, res) => {
         pinCode: user.pinCode || user.zipCode,
         zipCode: user.zipCode,
         country: user.country,
-        isActive: user.isActive,
-        createdAt: user.createdAt,
-        updatedAt: user.updatedAt
+      isActive: user.isActive,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt
       }))
     });
     
