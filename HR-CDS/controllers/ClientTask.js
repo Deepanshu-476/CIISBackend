@@ -121,9 +121,7 @@ const syncExpiredSubscriptionClientTasks = async (clientIds = []) => {
         },
         update: {
           $set: {
-            status: 'overdue',
-            dueDate: subscriptionEnd,
-            dueDateSource: 'subscription'
+            status: 'overdue'
           },
           $push: {
             activityLogs: {
@@ -133,7 +131,7 @@ const syncExpiredSubscriptionClientTasks = async (clientIds = []) => {
               oldValues: { syncedAt: now },
               newValues: {
                 status: 'overdue',
-                dueDate: subscriptionEnd,
+                subscriptionEndDate: subscriptionEnd,
                 subscriptionNo: latestSubscription.subscriptionNo || null,
                 subscriptionId: latestSubscription._id || null
               },
