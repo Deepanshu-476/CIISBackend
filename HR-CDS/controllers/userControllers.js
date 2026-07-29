@@ -939,6 +939,9 @@ exports.updateUser = async (req, res) => {
     if (err.name === 'ValidationError') {
       return errorResponse(res, 400, err.message);
     }
+    if (err.name === 'CastError') {
+      return errorResponse(res, 400, `Invalid ${err.path || 'field'} value`);
+    }
     return errorResponse(res, 500, "Failed to update user: " + err.message);
   }
 };
