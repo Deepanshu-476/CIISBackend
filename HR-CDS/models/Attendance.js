@@ -17,6 +17,11 @@ const attendanceSchema = new mongoose.Schema({
   outTime: {
     type: Date
   },
+  clockOutMode: {
+    type: String,
+    enum: ['MANUAL', 'AUTO'],
+    default: null
+  },
   status: {
     type: String,
     enum: ['PRESENT', 'LATE', 'HALF DAY', 'ABSENT', 'WEEKEND','HALFDAY', 'SHORT LEAVE'],

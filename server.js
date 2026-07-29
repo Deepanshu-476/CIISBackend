@@ -11,6 +11,7 @@ const mongoose = require('mongoose');
 dotenv.config();
 
 require('./services/subscriptionReminderService');
+const { runAutoClockOutSweep } = require('./HR-CDS/cron/forceClockOut');
 
 const app = express();
 
@@ -595,6 +596,7 @@ setTimeout(async () => {
   void 0;
   await runDbJobWithRetry('Initial overdue tasks check', checkAndMarkOverdueTasks);
   await runDbJobWithRetry('Initial past absent records check', markPastAbsentRecords);
+  await runDbJobWithRetry('Initial auto clock-out sweep', runAutoClockOutSweep);
   
   
   try {

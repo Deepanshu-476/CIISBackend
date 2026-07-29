@@ -60,6 +60,11 @@ const getUserBranchIds = (user = {}) => normalizeIdList([
   ...(Array.isArray(user.assignedBranches) ? user.assignedBranches : [])
 ]);
 
+const isWorkFromHomeEmployee = (user = {}) => {
+  const employeeType = String(user.employeeType || '').trim().toLowerCase();
+  return ['work-from-home', 'work from home', 'wfh'].includes(employeeType);
+};
+
 const getBranchScopedUserIds = async (req, companyCode) => {
   const requestedBranch = req.query?.branch || req.query?.branchId;
   if (!requestedBranch || !isValidObjectId(requestedBranch)) return null;
@@ -234,6 +239,11 @@ const getRecordShiftSettings = (record) => ({
   shortLeaveEarlyLimit: record.shortLeaveEarlyLimit || record.shiftEnd || "19:00",
   halfDayEarlyLimit: record.halfDayEarlyLimit || record.shiftEnd || "19:00"
 });
+
+const normalizeClockOutMode = (value) => {
+  const mode = String(value || '').trim().toUpperCase();
+  return mode === 'AUTO' ? 'AUTO' : 'MANUAL';
+};
 
 const calculateAttendanceByShift = ({ inTime, outTime, shiftSettings, currentStatus }) => {
   if (!inTime) {
@@ -602,7 +612,8 @@ const clockIn = async (req, res) => {
 
     // 2. Validate Geolocation/Selfie based on company requirements
     let locationRange = null;
-    if (attendanceMode === 'location' || attendanceMode === 'both') {
+    const shouldEnforceLocation = (attendanceMode === 'location' || attendanceMode === 'both') && !isWorkFromHomeEmployee(userObj);
+    if (shouldEnforceLocation) {
       if (latitude === undefined || longitude === undefined) {
         return res.status(400).json({
           message: "Location coordinates (latitude and longitude) are required for attendance."
@@ -766,7 +777,8 @@ const clockOut = async (req, res) => {
 
     // 2. Validate Geolocation/Selfie based on company requirements
     let locationRange = null;
-    if (attendanceMode === 'location' || attendanceMode === 'both') {
+    const shouldEnforceLocation = (attendanceMode === 'location' || attendanceMode === 'both') && !isWorkFromHomeEmployee(userObj);
+    if (shouldEnforceLocation) {
       if (latitude === undefined || longitude === undefined) {
         return res.status(400).json({
           message: "Location coordinates (latitude and longitude) are required to clock out."
@@ -839,6 +851,7 @@ const clockOut = async (req, res) => {
     const halfDayHours = scheduledHours / 2;
 
     record.outTime = now;
+    record.clockOutMode = 'MANUAL';
     record.isClockedIn = false;
     record.totalTime = formatDuration(totalMs);
     record.overTime = now > schedule.shiftEnd ? formatDuration(now - schedule.shiftEnd) : "00:00:00";
@@ -1309,6 +1322,7 @@ const updateAttendanceRecord = async (req, res) => {
     
     if (updateData.outTime) {
       record.outTime = new Date(updateData.outTime);
+      record.clockOutMode = normalizeClockOutMode(updateData.clockOutMode || 'MANUAL');
       record.isClockedIn = false;
       
       if (record.inTime && record.outTime) {
@@ -1376,6 +1390,12 @@ const updateAttendanceRecord = async (req, res) => {
       Object.assign(record, recalculated);
     }
 
+    if (!record.outTime) {
+      record.clockOutMode = null;
+    } else if (!record.clockOutMode) {
+      record.clockOutMode = 'MANUAL';
+    }
+
     if (updateData.status && updateData.status.trim() !== '') {
       record.status = updateData.status.toUpperCase();
     }
@@ -1435,7 +1455,7 @@ const updateAttendanceRecord = async (req, res) => {
 
 const createManualAttendance = async (req, res) => {
   try {
-    const { user, date, inTime, outTime, status, lateBy, earlyLeave, overTime, notes } = req.body;
+    const { user, date, inTime, outTime, status, lateBy, earlyLeave, overTime, notes, clockOutMode } = req.body;
     const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     
     void 0;
@@ -1489,6 +1509,10 @@ const createManualAttendance = async (req, res) => {
       existingAttendance.status = status ? status.toUpperCase() : existingAttendance.status;
       existingAttendance.inTime = inTime ? new Date(inTime) : existingAttendance.inTime;
       existingAttendance.outTime = outTime ? new Date(outTime) : existingAttendance.outTime;
+      existingAttendance.isClockedIn = outTime ? false : existingAttendance.isClockedIn;
+      existingAttendance.clockOutMode = outTime
+        ? normalizeClockOutMode(clockOutMode || existingAttendance.clockOutMode || 'MANUAL')
+        : existingAttendance.clockOutMode;
       existingAttendance.lateBy = lateBy || existingAttendance.lateBy;
       existingAttendance.earlyLeave = earlyLeave || existingAttendance.earlyLeave;
       existingAttendance.overTime = overTime || existingAttendance.overTime;
@@ -1517,6 +1541,7 @@ const createManualAttendance = async (req, res) => {
       date: existingDate,
       inTime: inTime ? new Date(inTime) : null,
       outTime: outTime ? new Date(outTime) : null,
+      clockOutMode: outTime ? normalizeClockOutMode(clockOutMode || 'MANUAL') : null,
       status: status ? status.toUpperCase() : calculated.status,
       lateBy: lateBy || calculated.lateBy,
       earlyLeave: earlyLeave || calculated.earlyLeave,

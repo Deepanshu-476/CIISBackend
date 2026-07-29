@@ -29,6 +29,7 @@ router.put('/restore/:id', userController.restoreUser);
 router.put('/admin-update/:id', userController.updateUser);
 router.put('/admin-update-by-email', userController.updateUser);
 router.delete('/:id', userController.deleteUser);
+router.get('/:id/groups', require('../controllers/groupController').getUserGroups);
 
 
 router.get('/search', userController.searchUsers);

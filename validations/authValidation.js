@@ -65,7 +65,7 @@ const registerSchema = Joi.object({
   bankName: Joi.string().allow(""),
   bankHolderName: Joi.string().allow(""),
 
-  employeeType: Joi.string().valid("intern", "technical", "non-technical", "sales").allow(""),
+  employeeType: Joi.string().valid("intern", "technical", "non-technical", "sales", "work-from-home").allow(""),
   
   properties: Joi.array().items(Joi.string()).allow(null),
   propertyOwned: Joi.string().allow(""),
