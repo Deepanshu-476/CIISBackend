@@ -55,6 +55,8 @@ const calculateFinalLeaveStatus = (approvals) => {
   return 'Pending';
 };
 
+const isTerminalLeaveStatus = (status) => ['Approved', 'Rejected'].includes(status);
+
 const formatLeaveWithApprovals = (leave) => Leave.withApprovalDefaults(leave);
 
 const writeLeaveDebugLog = (label, data) => {
@@ -780,6 +782,13 @@ exports.updateLeaveApproval = async (req, res) => {
       });
     }
 
+    if (isTerminalLeaveStatus(leave.status)) {
+      return res.status(409).json({
+        success: false,
+        error: `This leave has already been ${leave.status.toLowerCase()}.`
+      });
+    }
+
     leave.approvals = Leave.normalizeApprovals(leave.approvals);
 
     const existingDecisions = APPROVAL_ROLES.map((role) => leave.approvals[role]);
@@ -816,9 +825,14 @@ exports.updateLeaveApproval = async (req, res) => {
     };
     leave.markModified('approvals');
 
-    leave.status = calculateFinalLeaveStatus(leave.approvals);
+    if (status === 'Approved' || status === 'Rejected') {
+      leave.status = status;
+      leave.approvedBy = currentUser._id;
+    } else {
+      leave.status = calculateFinalLeaveStatus(leave.approvals);
+    }
+
     leave.remarks = remarks || leave.remarks || '';
-    leave.approvedBy = decision === 'Approved' ? currentUser._id : leave.approvedBy;
 
     leave.history = leave.history || [];
     leave.history.push({
@@ -1050,9 +1064,7 @@ exports.updateLeaveStatus = async (req, res) => {
         targetPath: '/ciisUser/my-leaves',
         type: 'leave_status_changed',
         title: `Leave ${leave.status}`,
-        message: hasApprovalSteps && leave.status === 'Pending'
-          ? `${currentUser.name || 'Approver'} approved your ${leave.type} leave. Waiting for remaining approvals.`
-          : `${currentUser.name || 'Admin'} ${statusMessage} your ${leave.type} leave${remarks ? ': ' + remarks : ''}`,
+        message: `${currentUser.name || 'Admin'} ${statusMessage} your ${leave.type} leave${remarks ? ': ' + remarks : ''}`,
         actor: currentUser._id,
         company: leave.user.company || leave.user.companyId,
         data: {
@@ -1115,7 +1127,7 @@ exports.updateLeaveStatus = async (req, res) => {
     res.status(200).json({
       success: true,
       message: hasApprovalSteps && leave.status === 'Pending'
-        ? 'Your approval has been saved. Leave is waiting for remaining approvals.'
+        ? 'Your approval has been saved.'
         : `Leave ${leave.status.toLowerCase()} successfully`,
       data: {
         _id: leave._id,
