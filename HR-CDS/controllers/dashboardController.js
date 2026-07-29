@@ -22,11 +22,15 @@ const formatIndiaTime = value => {
   });
 };
 
-const getTodayRange = () => {
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const end = new Date();
-  end.setHours(23, 59, 59, 999);
+const INDIA_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+const getTodayRange = (value = new Date()) => {
+  const indiaTime = new Date(value.getTime() + INDIA_OFFSET_MS);
+  const indiaYear = indiaTime.getUTCFullYear();
+  const indiaMonth = indiaTime.getUTCMonth();
+  const indiaDate = indiaTime.getUTCDate();
+  const start = new Date(Date.UTC(indiaYear, indiaMonth, indiaDate) - INDIA_OFFSET_MS);
+  const end = new Date(start.getTime() + (24 * 60 * 60 * 1000) - 1);
   return {start, end};
 };
 
