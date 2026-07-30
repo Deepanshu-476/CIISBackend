@@ -128,6 +128,113 @@ exports.createTaskForOthers = async (req, res) => {
   }
 };
 
+exports.addCheckpoint = async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    const title = String(req.body.title || '').trim();
+
+    if (!title) {
+      return res.status(400).json({ success: false, error: 'Checkpoint title is required' });
+    }
+
+    const task = await Task.findById(taskId);
+    if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
+
+    const currentUserId = (req.user._id || req.user.id).toString();
+    const userGroups = await Group.find({ members: req.user._id, isActive: true }).select('_id').lean();
+    const groupIds = userGroups.map(group => group._id.toString());
+    const isCreator = task.createdBy.toString() === currentUserId;
+    const isAssigned = task.assignedUsers.some(userId => userId.toString() === currentUserId);
+    const isGroupAssigned = task.assignedGroups?.some(groupId => groupIds.includes(groupId.toString()));
+
+    if (!isCreator && !isAssigned && !isGroupAssigned) {
+      return res.status(403).json({ success: false, error: 'Not authorized' });
+    }
+
+    const userStatusEntry = task.statusByUser?.find(item => item.user?.toString() === currentUserId);
+    const effectiveStatus = String(userStatusEntry?.status || task.overallStatus || '')
+      .toLowerCase()
+      .replace(/[\s_]+/g, '-');
+
+    if (effectiveStatus !== 'in-progress') {
+      return res.status(400).json({
+        success: false,
+        error: 'Checkpoints can only be added to in-progress tasks'
+      });
+    }
+
+    const duplicateCheckpoint = task.checkpoints.some(
+      checkpoint => String(checkpoint.title || '').trim().toLowerCase() === title.toLowerCase()
+    );
+    if (duplicateCheckpoint) {
+      return res.status(409).json({ success: false, error: 'This checkpoint already exists' });
+    }
+
+    task.checkpoints.push({ title, completed: false });
+    await task.save();
+
+    const checkpoint = task.checkpoints[task.checkpoints.length - 1];
+    await createActivityLog(
+      req.user,
+      'checkpoint_added',
+      task._id,
+      `Added checkpoint: ${title}`,
+      null,
+      { checkpointId: checkpoint._id, title },
+      req
+    );
+
+    return res.status(201).json({
+      success: true,
+      message: 'Checkpoint added successfully',
+      checkpoint,
+      task
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+exports.deleteCheckpoint = async (req, res) => {
+  try {
+    const { taskId, checkpointId } = req.params;
+    const task = await Task.findById(taskId);
+    if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
+
+    const currentUserId = (req.user._id || req.user.id).toString();
+    const userGroups = await Group.find({ members: req.user._id, isActive: true }).select('_id').lean();
+    const groupIds = userGroups.map(group => group._id.toString());
+    const isCreator = task.createdBy.toString() === currentUserId;
+    const isAssigned = task.assignedUsers.some(userId => userId.toString() === currentUserId);
+    const isGroupAssigned = task.assignedGroups?.some(groupId => groupIds.includes(groupId.toString()));
+
+    if (!isCreator && !isAssigned && !isGroupAssigned) {
+      return res.status(403).json({ success: false, error: 'Not authorized' });
+    }
+
+    const checkpoint = task.checkpoints.id(checkpointId);
+    if (!checkpoint) return res.status(404).json({ success: false, error: 'Checkpoint not found' });
+
+    const checkpointTitle = checkpoint.title;
+    task.checkpoints.pull(checkpointId);
+    await task.save();
+
+    await createActivityLog(
+      req.user,
+      'checkpoint_deleted',
+      task._id,
+      `Deleted checkpoint: ${checkpointTitle}`,
+      null,
+      { checkpointId, title: checkpointTitle },
+      req
+    );
+
+    return res.json({ success: true, message: 'Checkpoint deleted successfully', task });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+};
+
 exports.updateCheckpoint = async (req, res) => {
   try {
     const { taskId, checkpointId } = req.params;
