@@ -39,6 +39,28 @@ const pagePermissionSchema = new mongoose.Schema({
       default: Date.now
     }
   }],
+  viewUsers: [{
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true
+    },
+    addedAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
+  editUsers: [{
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true
+    },
+    addedAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
   deleteUsers: [{
     user: {
       type: mongoose.Schema.Types.ObjectId,
