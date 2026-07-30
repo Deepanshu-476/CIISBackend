@@ -10,7 +10,7 @@ const mongoOptions = {
   minPoolSize: 0,  
   maxIdleTimeMS: 60000,
 };
-
+  
 let listenersRegistered = false;
 
 const registerConnectionListeners = () => {
