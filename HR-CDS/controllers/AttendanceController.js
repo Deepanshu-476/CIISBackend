@@ -7,6 +7,7 @@ const JobRole = require("../../models/JobRole");
 const mongoose = require("mongoose");
 const {notifyPageUsers, getCompanyId} = require("../utils/systemNotificationService");
 const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagination");
+const { runAutoClockOutSweep } = require("../cron/forceClockOut");
 
 
 const formatDuration = (ms) => {
@@ -61,8 +62,32 @@ const getUserBranchIds = (user = {}) => normalizeIdList([
 ]);
 
 const isWorkFromHomeEmployee = (user = {}) => {
-  const employeeType = String(user.employeeType || '').trim().toLowerCase();
-  return ['work-from-home', 'work from home', 'wfh'].includes(employeeType);
+  if (user.workFromHome === true || user.isWorkFromHome === true || user.isRemote === true) {
+    return true;
+  }
+
+  const values = [
+    user.employeeType,
+    user.workLocation,
+    user.attendanceType,
+    user.workMode,
+  ].map(value => String(value || '').trim().toLowerCase());
+
+  return values.some(value => {
+    const compact = value.replace(/[\s_-]+/g, '');
+    return ['workfromhome', 'wfh', 'remote', 'remotework', 'home'].includes(compact) ||
+      value.includes('work from home') ||
+      value.includes('work-from-home') ||
+      value.includes('remote');
+  });
+};
+
+const refreshAutoClockOuts = async () => {
+  try {
+    await runAutoClockOutSweep();
+  } catch (error) {
+    console.error("[AutoClockOut] refresh failed:", error.message);
+  }
 };
 
 const getBranchScopedUserIds = async (req, companyCode) => {
@@ -612,7 +637,11 @@ const clockIn = async (req, res) => {
 
     // 2. Validate Geolocation/Selfie based on company requirements
     let locationRange = null;
-    const shouldEnforceLocation = (attendanceMode === 'location' || attendanceMode === 'both') && !isWorkFromHomeEmployee(userObj);
+    const shouldEnforceLocation =
+      (attendanceMode === 'location' || attendanceMode === 'both') &&
+      !isWorkFromHomeEmployee(userObj) &&
+      !isWorkFromHomeEmployee(req.user) &&
+      !isWorkFromHomeEmployee(req.body);
     if (shouldEnforceLocation) {
       if (latitude === undefined || longitude === undefined) {
         return res.status(400).json({
@@ -777,7 +806,11 @@ const clockOut = async (req, res) => {
 
     // 2. Validate Geolocation/Selfie based on company requirements
     let locationRange = null;
-    const shouldEnforceLocation = (attendanceMode === 'location' || attendanceMode === 'both') && !isWorkFromHomeEmployee(userObj);
+    const shouldEnforceLocation =
+      (attendanceMode === 'location' || attendanceMode === 'both') &&
+      !isWorkFromHomeEmployee(userObj) &&
+      !isWorkFromHomeEmployee(req.user) &&
+      !isWorkFromHomeEmployee(req.body);
     if (shouldEnforceLocation) {
       if (latitude === undefined || longitude === undefined) {
         return res.status(400).json({
@@ -943,6 +976,8 @@ const clockOut = async (req, res) => {
 
 const getTodayStatus = async (req, res) => {
   try {
+    await refreshAutoClockOuts();
+
     const userId = req.user._id || req.user.id;
     const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     
@@ -1007,6 +1042,8 @@ const getTodayStatus = async (req, res) => {
 
 const getAttendanceList = async (req, res) => {
   try {
+    await refreshAutoClockOuts();
+
     const userId = req.user._id || req.user.id;
     const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     const { month, year } = req.query;
