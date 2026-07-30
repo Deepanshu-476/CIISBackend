@@ -84,8 +84,13 @@ const scheduleClientMeetingReminder = (meeting) => {
     if (reminderTime <= new Date()) return;
 
     const job = schedule.scheduleJob(reminderTime, async () => {
-      await sendClientMeetingEmail(meeting, 'Client Meeting Reminder: starts in 1 hour');
-      clientMeetingJobs.delete(meeting._id.toString());
+      try {
+        await sendClientMeetingEmail(meeting, 'Client Meeting Reminder: starts in 1 hour');
+      } catch (error) {
+        console.error('[ClientMeetingReminder] Send failed:', error);
+      } finally {
+        clientMeetingJobs.delete(meeting._id.toString());
+      }
     });
 
     if (job) clientMeetingJobs.set(meeting._id.toString(), job);

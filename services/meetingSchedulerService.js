@@ -74,7 +74,11 @@ const scheduleMeetingReminder = (meeting) => {
     void 0;
 
     const job = schedule.scheduleJob(reminderTime, async () => {
-      await sendMeetingReminder(meeting._id);
+      try {
+        await sendMeetingReminder(meeting._id);
+      } catch (error) {
+        console.error(`[MeetingScheduler] Reminder failed for meeting ${meeting._id}:`, error);
+      }
     });
 
     if (job) {

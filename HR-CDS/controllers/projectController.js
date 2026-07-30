@@ -376,6 +376,17 @@ const withSortedProjectTasks = (project) => {
   };
 };
 
+const withProjectSummary = (project) => {
+  const plainProject = typeof project?.toObject === "function" ? project.toObject() : project;
+  const taskCount = Array.isArray(plainProject?.tasks) ? plainProject.tasks.length : 0;
+  const { tasks, notifications, ...summary } = plainProject || {};
+
+  return {
+    ...summary,
+    taskCount
+  };
+};
+
 
 exports.getUserNotifications = async (req, res) => {
   try {
@@ -540,25 +551,33 @@ exports.listProjects = async (req, res) => {
     }
 
     const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
-    const [projects, total] = await Promise.all([
-      Project.find(query)
+    const summaryMode = ["1", "true", "yes"].includes(String(req.query.summary || "").toLowerCase());
+    const projectQuery = Project.find(query)
       .populate('users', 'name email role company companyCode branch assignedBranches')
       .populate('branch', 'name branchCode')
       .populate('createdBy', 'name email branch assignedBranches')
-      .populate('tasks.assignedTo', 'name email')
-      .populate('tasks.assignedUsers', 'name email')
-      .populate('tasks.createdBy', 'name email')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    if (summaryMode) {
+      projectQuery.select('projectName description company companyCode branch users status startDate endDate priority pdfFile createdBy createdAt updatedAt tasks._id');
+    } else {
+      projectQuery
+        .populate('tasks.assignedTo', 'name email')
+        .populate('tasks.assignedUsers', 'name email')
+        .populate('tasks.createdBy', 'name email');
+    }
+
+    const [projects, total] = await Promise.all([
+      projectQuery.lean(),
       Project.countDocuments(query)
     ]);
 
     const scopedProjects = projects
       .filter(project => projectBelongsToUserCompany(project, req.user))
       .filter(project => projectMatchesRequestedBranch(project, requestedBranchId))
-      .map(withSortedProjectTasks);
+      .map(summaryMode ? withProjectSummary : withSortedProjectTasks);
 
     void 0;
 
