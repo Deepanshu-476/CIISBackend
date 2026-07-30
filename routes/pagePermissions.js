@@ -7,17 +7,17 @@ const { protect, isCompanyOwner } = require('../middleware/authMiddleware');
 const router = express.Router();
 
 const APP_PAGES = [
-  { pageKey: 'emp-details', name: 'Employee Details', path: '/ciisUser/emp-details' },
-  { pageKey: 'emp-leaves', name: 'Employee Leaves', path: '/ciisUser/emp-leaves' },
-  { pageKey: 'emp-assets', name: 'Employee Assets', path: '/ciisUser/emp-assets' },
-  { pageKey: 'emp-attendance', name: 'Employee Attendance', path: '/ciisUser/emp-attendance' },
+  { pageKey: 'emp-details', name: 'Employee Details', path: '/ciisUser/emp-details', permissionPattern: 'viewEdit' },
+  { pageKey: 'emp-leaves', name: 'Employee Leaves', path: '/ciisUser/emp-leaves', permissionPattern: 'approveReject' },
+  { pageKey: 'emp-assets', name: 'Employee Assets', path: '/ciisUser/emp-assets', permissionPattern: 'approveReject' },
+  { pageKey: 'emp-attendance', name: 'Employee Attendance', path: '/ciisUser/emp-attendance', permissionPattern: 'viewEdit' },
   { pageKey: 'department', name: 'Department Management', path: '/ciisUser/department' },
   { pageKey: 'JobRoleManagement', name: 'Job Role Management', path: '/ciisUser/JobRoleManagement' },
   { pageKey: 'admin-task-create', name: 'Admin Task Create', path: '/ciisUser/admin-task-create' },
-  { pageKey: 'manage-groups', name: 'Manage Groups', path: '/ciisUser/manage-groups' },
+  { pageKey: 'manage-groups', name: 'Manage Groups', path: '/ciisUser/manage-groups', permissionPattern: 'viewEdit' },
   { pageKey: 'admin-meeting', name: 'Admin Meeting', path: '/ciisUser/admin-meeting' },
   { pageKey: 'adminproject', name: 'Admin Project', path: '/ciisUser/adminproject' },
-  { pageKey: 'company-all-task', name: 'Company All Task', path: '/ciisUser/company-all-task' },
+  { pageKey: 'company-all-task', name: 'Company All Task', path: '/ciisUser/company-all-task', permissionPattern: 'viewEdit' },
   { pageKey: 'emp-client', name: 'Client Management', path: '/ciisUser/emp-client' },
   { pageKey: 'active-clients', name: 'Active Clients', path: '/ciisUser/active-clients' },
   { pageKey: 'client-dashboard', name: 'Client Dashboard', path: '/client/dashboard' },
@@ -39,7 +39,7 @@ const APP_PAGES = [
   { pageKey: 'employee-meeting', name: 'Employee Meeting', path: '/ciisUser/employee-meeting' },
   { pageKey: 'client-meeting', name: 'Client Meeting', path: '/ciisUser/client-meeting' },
   { pageKey: 'create-user', name: 'Create User', path: '/ciisUser/create-user' },
-  { pageKey: 'SidebarManagement', name: 'Sidebar Management', path: '/ciisUser/SidebarManagement' },
+  { pageKey: 'SidebarManagement', name: 'Sidebar Management', path: '/ciisUser/SidebarManagement', permissionPattern: 'viewEdit' },
   { pageKey: 'create-alert', name: 'Create Alert', path: '/ciisUser/create-alert' },
   { pageKey: 'chat', name: 'Chat', path: '/ciisUser/chat' },
   { pageKey: 'support-desk', name: 'Support Desk', path: '/ciisUser/support-desk' },
@@ -54,9 +54,18 @@ const normalizePath = (path = '') => {
 
 const getCompanyId = (req) => req.user?.company?._id || req.user?.company || req.user?.companyId;
 
+const normalizePageUsers = (items = []) => {
+  const uniqueIds = [...new Set(items.map(item => String(item)).filter(id => mongoose.Types.ObjectId.isValid(id)))];
+  return uniqueIds.map(id => ({ user: id }));
+};
+
+const getPageUsers = (config, key) => (config?.[key] || []).map(item => item.user).filter(Boolean);
+
 const decoratePages = async (companyId) => {
   const configs = await PagePermission.find({ company: companyId })
     .populate('approvers.user', 'name email jobRole companyRole department')
+    .populate('viewUsers.user', 'name email jobRole companyRole department')
+    .populate('editUsers.user', 'name email jobRole companyRole department')
     .populate('deleteUsers.user', 'name email jobRole companyRole department')
     .lean();
   const configMap = new Map(configs.map(config => [config.path, config]));
@@ -65,8 +74,11 @@ const decoratePages = async (companyId) => {
     const config = configMap.get(page.path);
     return {
       ...page,
-      approvers: config?.approvers?.map(item => item.user).filter(Boolean) || [],
-      deleteUsers: config?.deleteUsers?.map(item => item.user).filter(Boolean) || [],
+      permissionPattern: page.permissionPattern || null,
+      approvers: getPageUsers(config, 'approvers'),
+      viewUsers: getPageUsers(config, 'viewUsers'),
+      editUsers: getPageUsers(config, 'editUsers'),
+      deleteUsers: getPageUsers(config, 'deleteUsers'),
       updatedAt: config?.updatedAt || null
     };
   });
@@ -99,6 +111,8 @@ router.get('/by-path', async (req, res) => {
 
     const config = await PagePermission.findOne({ company: companyId, path })
       .populate('approvers.user', 'name email jobRole companyRole department')
+      .populate('viewUsers.user', 'name email jobRole companyRole department')
+      .populate('editUsers.user', 'name email jobRole companyRole department')
       .populate('deleteUsers.user', 'name email jobRole companyRole department')
       .lean();
 
@@ -108,11 +122,17 @@ router.get('/by-path', async (req, res) => {
         pageKey: config.pageKey,
         name: config.name,
         path: config.path,
-        approvers: config.approvers.map(item => item.user).filter(Boolean),
-        deleteUsers: (config.deleteUsers || []).map(item => item.user).filter(Boolean)
+        permissionPattern: APP_PAGES.find(item => item.path === config.path)?.permissionPattern || null,
+        approvers: getPageUsers(config, 'approvers'),
+        viewUsers: getPageUsers(config, 'viewUsers'),
+        editUsers: getPageUsers(config, 'editUsers'),
+        deleteUsers: getPageUsers(config, 'deleteUsers')
       } : {
         path,
+        permissionPattern: APP_PAGES.find(item => item.path === path)?.permissionPattern || null,
         approvers: [],
+        viewUsers: [],
+        editUsers: [],
         deleteUsers: []
       }
     });
@@ -131,10 +151,14 @@ router.put('/:pageKey', isCompanyOwner, async (req, res) => {
     }
 
     const approverIds = Array.isArray(req.body.approverIds) ? req.body.approverIds : [];
+    const viewUserIds = Array.isArray(req.body.viewUserIds) ? req.body.viewUserIds : [];
+    const editUserIds = Array.isArray(req.body.editUserIds) ? req.body.editUserIds : [];
     const deleteUserIds = Array.isArray(req.body.deleteUserIds) ? req.body.deleteUserIds : [];
     const uniqueApproverIds = [...new Set(approverIds.map(id => String(id)).filter(id => mongoose.Types.ObjectId.isValid(id)))];
+    const uniqueViewUserIds = [...new Set(viewUserIds.map(id => String(id)).filter(id => mongoose.Types.ObjectId.isValid(id)))];
+    const uniqueEditUserIds = [...new Set(editUserIds.map(id => String(id)).filter(id => mongoose.Types.ObjectId.isValid(id)))];
     const uniqueDeleteUserIds = [...new Set(deleteUserIds.map(id => String(id)).filter(id => mongoose.Types.ObjectId.isValid(id)))];
-    const allUserIds = [...new Set([...uniqueApproverIds, ...uniqueDeleteUserIds])];
+    const allUserIds = [...new Set([...uniqueApproverIds, ...uniqueViewUserIds, ...uniqueEditUserIds, ...uniqueDeleteUserIds])];
 
     const validUsers = await User.find({
       _id: { $in: allUserIds },
@@ -145,8 +169,10 @@ router.put('/:pageKey', isCompanyOwner, async (req, res) => {
     }).select('_id');
 
     const validIdSet = new Set(validUsers.map(user => user._id.toString()));
-    const approvers = uniqueApproverIds.filter(id => validIdSet.has(id)).map(id => ({ user: id }));
-    const deleteUsers = uniqueDeleteUserIds.filter(id => validIdSet.has(id)).map(id => ({ user: id }));
+    const approvers = normalizePageUsers(uniqueApproverIds.filter(id => validIdSet.has(id)));
+    const viewUsers = normalizePageUsers(uniqueViewUserIds.filter(id => validIdSet.has(id)));
+    const editUsers = normalizePageUsers(uniqueEditUserIds.filter(id => validIdSet.has(id)));
+    const deleteUsers = normalizePageUsers(uniqueDeleteUserIds.filter(id => validIdSet.has(id)));
 
     const config = await PagePermission.findOneAndUpdate(
       { company: companyId, path: page.path },
@@ -157,11 +183,15 @@ router.put('/:pageKey', isCompanyOwner, async (req, res) => {
         name: page.name,
         path: page.path,
         approvers,
+        viewUsers,
+        editUsers,
         deleteUsers
       },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     )
       .populate('approvers.user', 'name email jobRole companyRole department')
+      .populate('viewUsers.user', 'name email jobRole companyRole department')
+      .populate('editUsers.user', 'name email jobRole companyRole department')
       .populate('deleteUsers.user', 'name email jobRole companyRole department');
 
     res.json({
@@ -171,8 +201,11 @@ router.put('/:pageKey', isCompanyOwner, async (req, res) => {
         pageKey: config.pageKey,
         name: config.name,
         path: config.path,
-        approvers: config.approvers.map(item => item.user).filter(Boolean),
-        deleteUsers: (config.deleteUsers || []).map(item => item.user).filter(Boolean)
+        permissionPattern: page.permissionPattern || null,
+        approvers: getPageUsers(config, 'approvers'),
+        viewUsers: getPageUsers(config, 'viewUsers'),
+        editUsers: getPageUsers(config, 'editUsers'),
+        deleteUsers: getPageUsers(config, 'deleteUsers')
       }
     });
   } catch (error) {
