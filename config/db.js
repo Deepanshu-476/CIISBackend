@@ -7,7 +7,7 @@ const mongoOptions = {
   socketTimeoutMS: 45000,
   heartbeatFrequencyMS: 10000,
   maxPoolSize: 20,
-  minPoolSize: 0,
+  minPoolSize: 0,  
   maxIdleTimeMS: 60000,
 };
 
