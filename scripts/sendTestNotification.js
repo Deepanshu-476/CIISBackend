@@ -14,7 +14,7 @@ const args = process.argv.slice(2).reduce((acc, item, index, list) => {
   return acc;
 }, {});
 
-const usage = () => {
+const usage = () => { 
   void 0;
 };
 

@@ -164,11 +164,11 @@ const getShiftTime = (shiftSettings, key, fallback) => {
 const buildShiftSchedule = (referenceDate, shiftSettings = {}) => {
   const shiftStartStr = getShiftTime(shiftSettings, "shiftStart", "09:00");
   const shiftEndStr = getShiftTime(shiftSettings, "shiftEnd", "19:00");
-  const earlyClockInStartStr = getShiftTime(shiftSettings, "earlyClockInStart", shiftStartStr);
-  const lateGraceLimitStr = getShiftTime(shiftSettings, "lateGraceLimit", shiftStartStr);
-  const halfDayLateLimitStr = getShiftTime(shiftSettings, "halfDayLateLimit", lateGraceLimitStr);
-  const shortLeaveEarlyLimitStr = getShiftTime(shiftSettings, "shortLeaveEarlyLimit", shiftEndStr);
-  const halfDayEarlyLimitStr = getShiftTime(shiftSettings, "halfDayEarlyLimit", shortLeaveEarlyLimitStr);
+  const earlyClockInStartStr = getShiftTime(shiftSettings, "earlyClockInStart", "08:30");
+  const lateGraceLimitStr = getShiftTime(shiftSettings, "lateGraceLimit", "09:10");
+  const halfDayLateLimitStr = getShiftTime(shiftSettings, "halfDayLateLimit", "11:00");
+  const shortLeaveEarlyLimitStr = getShiftTime(shiftSettings, "shortLeaveEarlyLimit", "18:30");
+  const halfDayEarlyLimitStr = getShiftTime(shiftSettings, "halfDayEarlyLimit", "15:00");
 
   const startMinutes = parseTimeToMinutes(shiftStartStr);
   const endMinutes = parseTimeToMinutes(shiftEndStr);
@@ -457,15 +457,18 @@ const getAttendanceSettingsContext = async ({ companyCode, userId }) => {
 };
 
 const resolveSelectedShiftSettings = async (userObj) => {
-  if (!userObj?.jobRole || !userObj?.company) return null;
+  if (!userObj?.jobRole) return null;
 
   let jobRoleDoc = null;
   const jobRoleValue = String(userObj.jobRole);
+  const companyScope = userObj.company
+    ? { company: userObj.company }
+    : (userObj.companyCode ? { companyCode: userObj.companyCode } : {});
 
   if (mongoose.Types.ObjectId.isValid(jobRoleValue)) {
     jobRoleDoc = await JobRole.findOne({
       _id: jobRoleValue,
-      company: userObj.company,
+      ...companyScope,
       isActive: true
     });
   }
@@ -473,7 +476,7 @@ const resolveSelectedShiftSettings = async (userObj) => {
   if (!jobRoleDoc) {
     jobRoleDoc = await JobRole.findOne({
       name: { $regex: new RegExp(`^${jobRoleValue}$`, 'i') },
-      company: userObj.company,
+      ...companyScope,
       isActive: true
     });
   }

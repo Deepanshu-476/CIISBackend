@@ -191,6 +191,43 @@ const getTaskReportDateRange = query => {
   return { start, end };
 };
 
+const INDIA_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+const parseIndiaReportDate = (value, endOfDay = false) => {
+  const match = String(value || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const monthIndex = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  return new Date(
+    Date.UTC(
+      year,
+      monthIndex,
+      day,
+      endOfDay ? 23 : 0,
+      endOfDay ? 59 : 0,
+      endOfDay ? 59 : 0,
+      endOfDay ? 999 : 0
+    ) - INDIA_OFFSET_MS
+  );
+};
+
+const getAttendanceReportDateRange = (query, fallbackRange) => ({
+  start: parseIndiaReportDate(query?.fromDate, false) || fallbackRange.start,
+  end: parseIndiaReportDate(query?.toDate || query?.fromDate, true) || fallbackRange.end,
+});
+
+const getIndiaWorkDateKey = value => {
+  const date = toValidWorkDate(value);
+  if (!date) return '';
+  const shifted = new Date(date.getTime() + INDIA_OFFSET_MS);
+  return [
+    shifted.getUTCFullYear(),
+    String(shifted.getUTCMonth() + 1).padStart(2, '0'),
+    String(shifted.getUTCDate()).padStart(2, '0')
+  ].join('-');
+};
+
 const toValidWorkDate = value => {
   if (!value) return null;
   const date = value instanceof Date ? value : new Date(value);
@@ -240,7 +277,7 @@ const getMergedIntervalSeconds = (intervals = []) => {
   return merged.reduce((sum, interval) => sum + Math.floor((interval.end - interval.start) / 1000), 0);
 };
 
-const buildFirstProgressToCompletedSession = (events = [], currentStatus, windowEnd) => {
+const buildProgressSessions = (events = [], currentStatus, windowEnd) => {
   const sorted = [...events]
     .map(event => ({
       status: normalizeTaskStatus(event.status),
@@ -249,23 +286,29 @@ const buildFirstProgressToCompletedSession = (events = [], currentStatus, window
     .filter(event => event.status && event.at)
     .sort((a, b) => a.at - b.at);
 
-  const firstInProgress = sorted.find(event => event.status === 'in-progress');
-  if (!firstInProgress) return null;
+  const sessions = [];
+  let activeStart = null;
 
-  const completedEvents = sorted.filter(
-    event => event.status === 'completed' && event.at >= firstInProgress.at
-  );
-  const lastCompleted = completedEvents[completedEvents.length - 1];
+  sorted.forEach(event => {
+    if (event.status === 'in-progress') {
+      if (!activeStart) activeStart = event.at;
+      return;
+    }
 
-  if (lastCompleted) {
-    return { start: firstInProgress.at, end: lastCompleted.at };
+    if (activeStart && event.at > activeStart) {
+      sessions.push({ start: activeStart, end: event.at });
+      activeStart = null;
+    }
+  });
+
+  if (activeStart && normalizeTaskStatus(currentStatus) === 'in-progress') {
+    const activeEnd = toValidWorkDate(windowEnd) || new Date();
+    if (activeEnd > activeStart) {
+      sessions.push({ start: activeStart, end: activeEnd });
+    }
   }
 
-  if (normalizeTaskStatus(currentStatus) === 'in-progress') {
-    return { start: firstInProgress.at, end: windowEnd || new Date() };
-  }
-
-  return null;
+  return sessions;
 };
 
 const getTaskStatusEvents = task => {
@@ -289,44 +332,77 @@ const getTaskStatusEvents = task => {
 };
 
 const calculateTaskWork = (task, workWindow) => {
-  if (!workWindow?.start || !workWindow?.end) return { seconds: 0, interval: null };
+  if (!workWindow?.start || !workWindow?.end) return { seconds: 0, intervals: [] };
 
-  const session = buildFirstProgressToCompletedSession(
+  const sessions = buildProgressSessions(
     getTaskStatusEvents(task),
     task.userStatus || task.status || task.overallStatus,
     workWindow.end
   );
 
-  let interval = session
-    ? getClippedInterval(session.start, session.end, workWindow.start, workWindow.end)
-    : null;
-  let total = interval ? getOverlapSeconds(interval.start, interval.end, workWindow.start, workWindow.end) : 0;
+  let intervals = sessions
+    .map(session => getClippedInterval(
+      session.start,
+      session.end,
+      workWindow.start,
+      workWindow.end
+    ))
+    .filter(Boolean);
+  let total = getMergedIntervalSeconds(intervals);
 
   if (total === 0 && task.taskSource === 'client') {
-    const storedSeconds = Number(task.timeSpent || 0);
     const activeInterval = normalizeTaskStatus(task.status) === 'in-progress' && task.inProgressSince
       ? getClippedInterval(task.inProgressSince, workWindow.end, workWindow.start, workWindow.end)
       : null;
     const activeSeconds = activeInterval ? getOverlapSeconds(activeInterval.start, activeInterval.end, workWindow.start, workWindow.end) : 0;
-    total = storedSeconds + activeSeconds;
-    interval = activeInterval;
+    // timeSpent is cumulative across the task's full lifetime and cannot be
+    // attributed to the selected report date. Only count today's clipped
+    // active interval here.
+    total = activeSeconds;
+    intervals = activeInterval ? [activeInterval] : [];
   }
 
-  return { seconds: Math.max(0, total), interval };
+  return { seconds: Math.max(0, total), intervals };
 };
 
 const getUserWorkWindow = async (userId, query) => {
-  const range = getTaskReportDateRange(query);
-  const attendance = await Attendance.findOne({
+  const taskRange = getTaskReportDateRange(query);
+  const range = getAttendanceReportDateRange(query, taskRange);
+  let attendance = await Attendance.findOne({
     user: userId,
-    date: { $gte: range.start, $lte: range.end }
+    $or: [
+      { date: { $gte: range.start, $lte: range.end } },
+      { inTime: { $gte: range.start, $lte: range.end } }
+    ]
   }).sort({ date: -1 }).lean();
+
+  // Older attendance records may have an inconsistent `date` value. Fall
+  // back to the nearest clock-in and validate its calendar day in IST.
+  if (!attendance && query?.fromDate) {
+    const nearbyAttendance = await Attendance.find({
+      user: userId,
+      inTime: {
+        $gte: new Date(range.start.getTime() - (24 * 60 * 60 * 1000)),
+        $lte: new Date(range.end.getTime() + (24 * 60 * 60 * 1000))
+      }
+    }).sort({ inTime: -1 }).lean();
+    const requestedDateKey = String(query.fromDate).slice(0, 10);
+    attendance = nearbyAttendance.find(record =>
+      getIndiaWorkDateKey(record.inTime || record.date) === requestedDateKey
+    ) || null;
+  }
 
   const clockIn = toValidWorkDate(attendance?.inTime);
   const rawClockOut = toValidWorkDate(attendance?.outTime);
   const clockOut = rawClockOut || (attendance?.isClockedIn ? new Date() : null);
-  const start = clockIn || range.start;
-  const end = clockOut || range.end;
+  // Without a real clock-in there is no employee work window. Using the full
+  // calendar day here incorrectly turns task status elapsed time into tracked
+  // work time.
+  const start = clockIn;
+  const rawWorkEnd = clockOut || range.end;
+  const end = clockIn
+    ? new Date(Math.min(rawWorkEnd.getTime(), range.end.getTime()))
+    : null;
   const totalSeconds = clockIn && end ? Math.max(0, Math.floor((end - clockIn) / 1000)) : 0;
 
   return {
@@ -1971,7 +2047,7 @@ exports.getUserAllTasksPaginated = async (req, res) => {
           seconds: work.seconds,
           label: secondsToDurationLabel(work.seconds)
         },
-        __workInterval: work.interval
+        __workIntervals: work.intervals
       };
     });
 
@@ -2018,9 +2094,11 @@ exports.getUserAllTasksPaginated = async (req, res) => {
       overdue: toStat(counts.overdue),
       onhold: toStat(counts.onhold)
     };
-    const trackedTaskSeconds = getMergedIntervalSeconds(filteredWithWorkTime.map(task => task.__workInterval));
+    const trackedTaskSeconds = getMergedIntervalSeconds(
+      filteredWithWorkTime.flatMap(task => task.__workIntervals || [])
+    );
     const untrackedSeconds = Math.max(0, (workWindow.summary.totalClockedSeconds || 0) - trackedTaskSeconds);
-    const cleanTasks = tasks.map(({ __workInterval, ...task }) => task);
+    const cleanTasks = tasks.map(({ __workIntervals, ...task }) => task);
 
     res.json({
       success: true,
