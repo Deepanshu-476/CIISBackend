@@ -2,14 +2,17 @@ const mongoose = require("mongoose");
 
 const mongoOptions = {
   family: 4,
-  serverSelectionTimeoutMS: 15000,
-  connectTimeoutMS: 15000,
-  socketTimeoutMS: 45000,
+  serverSelectionTimeoutMS: Number(process.env.MONGO_SERVER_SELECTION_TIMEOUT_MS || 30000),
+  connectTimeoutMS: Number(process.env.MONGO_CONNECT_TIMEOUT_MS || 30000),
+  socketTimeoutMS: Number(process.env.MONGO_SOCKET_TIMEOUT_MS || 120000),
   heartbeatFrequencyMS: 10000,
   maxPoolSize: 20,
   minPoolSize: 0,
   maxIdleTimeMS: 60000,
+  waitQueueTimeoutMS: Number(process.env.MONGO_WAIT_QUEUE_TIMEOUT_MS || 30000),
 };
+
+const INITIAL_CONNECT_RETRY_MS = Number(process.env.MONGO_INITIAL_CONNECT_RETRY_MS || 5000);
 
 let listenersRegistered = false;
 
@@ -35,16 +38,20 @@ const registerConnectionListeners = () => {
 };
 
 const connectDB = async () => {
-  try {
-    if (!process.env.MONGO_URI) {
-      throw new Error("MONGO_URI is missing in environment");
-    }
-
-    registerConnectionListeners();
-    await mongoose.connect(process.env.MONGO_URI, mongoOptions);
-  } catch (err) {
-    console.error("MongoDB connection failed:", err.message);
+  if (!process.env.MONGO_URI) {
+    console.error("MongoDB connection failed: MONGO_URI is missing in environment");
     process.exit(1);
+  }
+
+  registerConnectionListeners();
+
+  while (mongoose.connection.readyState !== 1) {
+    try {
+      await mongoose.connect(process.env.MONGO_URI, mongoOptions);
+    } catch (err) {
+      console.error(`MongoDB connection failed: ${err.message}. Retrying in ${INITIAL_CONNECT_RETRY_MS}ms`);
+      await new Promise(resolve => setTimeout(resolve, INITIAL_CONNECT_RETRY_MS));
+    }
   }
 };
 

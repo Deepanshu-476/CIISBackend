@@ -55,6 +55,12 @@ const {notifyDirectUsers, sendSystemNotification} = require("./HR-CDS/utils/syst
 const {sendEmail} = require("./utils/sendEmail");
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const INITIAL_DB_JOB_DELAY_MS = Number(process.env.INITIAL_DB_JOB_DELAY_MS || 60000);
+const runningDbJobs = new Set();
+
+process.on('unhandledRejection', error => {
+  console.error('Unhandled promise rejection:', error);
+});
 
 const isDbReady = () => mongoose.connection.readyState === 1;
 
@@ -111,6 +117,29 @@ const runDbJobWithRetry = async (label, job, {retries = 2, delayMs = 1000} = {})
   }
 
   return null;
+};
+
+const runDbJobOnce = async (label, job, options) => {
+  if (runningDbJobs.has(label)) {
+    console.warn(`${label} skipped: previous run is still active`);
+    return null;
+  }
+
+  runningDbJobs.add(label);
+  try {
+    return await runDbJobWithRetry(label, job, options);
+  } catch (error) {
+    console.error(`${label} crashed unexpectedly:`, error);
+    return null;
+  } finally {
+    runningDbJobs.delete(label);
+  }
+};
+
+const scheduleDbJob = (cronExpression, label, job, options) => {
+  return schedule.scheduleJob(cronExpression, () => {
+    runDbJobOnce(label, job, options);
+  });
 };
 
 const getTaskCompanyCode = (task) => {
@@ -563,49 +592,41 @@ const markDailyAbsent = async () => {
 
 
 
-schedule.scheduleJob('*/30 * * * *', async () => {
-  void 0;
-  await runDbJobWithRetry('Scheduled overdue tasks check', checkAndMarkOverdueTasks);
-});
+scheduleDbJob('*/30 * * * *', 'Scheduled overdue tasks check', checkAndMarkOverdueTasks);
 
 
-schedule.scheduleJob('0 9 * * *', async () => {
-  void 0;
-  await runDbJobWithRetry('Daily overdue summary', dailyOverdueSummary);
-});
+scheduleDbJob('0 9 * * *', 'Daily overdue summary', dailyOverdueSummary);
 
 
-schedule.scheduleJob('30 10 * * *', async () => {
-  void 0;
-  await runDbJobWithRetry('Daily absent marking', markDailyAbsent);
-});
+scheduleDbJob('30 10 * * *', 'Daily absent marking', markDailyAbsent);
 
-schedule.scheduleJob('* * * * *', async () => {
-  void 0;
-  await runDbJobWithRetry('Pending task reminders', sendPendingTaskReminders);
-});
+scheduleDbJob('* * * * *', 'Pending task reminders', sendPendingTaskReminders);
 
-schedule.scheduleJob('0 18 * * *', async () => {
-  void 0;
-  await runDbJobWithRetry('Holiday reminders', sendTomorrowHolidayReminders);
-});
+scheduleDbJob('0 18 * * *', 'Holiday reminders', sendTomorrowHolidayReminders);
 
 
 setTimeout(async () => {
-  await dbConnectionPromise;
-  void 0;
-  await runDbJobWithRetry('Initial overdue tasks check', checkAndMarkOverdueTasks);
-  await runDbJobWithRetry('Initial past absent records check', markPastAbsentRecords);
-  await runDbJobWithRetry('Initial auto clock-out sweep', runAutoClockOutSweep);
-  
-  
   try {
-    const backfillBranchSupport = require("./scripts/backfillBranchSupport");
-    await runDbJobWithRetry('Multi-branch database backfill migration', backfillBranchSupport);
-  } catch (migError) {
-    console.error("❌ Failed to trigger multi-branch data migration:", migError.message);
+    await dbConnectionPromise;
+    void 0;
+    await runDbJobOnce('Initial overdue tasks check', checkAndMarkOverdueTasks, {
+      retries: 4,
+      delayMs: 5000,
+    });
+    await runDbJobOnce('Initial past absent records check', markPastAbsentRecords);
+    await runDbJobOnce('Initial auto clock-out sweep', runAutoClockOutSweep);
+    
+    
+    try {
+      const backfillBranchSupport = require("./scripts/backfillBranchSupport");
+      await runDbJobOnce('Multi-branch database backfill migration', backfillBranchSupport);
+    } catch (migError) {
+      console.error("❌ Failed to trigger multi-branch data migration:", migError.message);
+    }
+  } catch (error) {
+    console.error("Initial background jobs failed:", error);
   }
-}, 10000);
+}, INITIAL_DB_JOB_DELAY_MS);
 
 
 const corsOptions = {

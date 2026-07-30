@@ -232,6 +232,8 @@ const taskSchema = new mongoose.Schema(
  
 taskSchema.index({ assignedUsers: 1, dueDateTime: 1 });
 taskSchema.index({ overallStatus: 1, dueDateTime: 1 });
+taskSchema.index({ isActive: 1, dueDateTime: 1, overallStatus: 1 });
+taskSchema.index({ isActive: 1, dueDateTime: 1, 'statusByUser.status': 1 });
 taskSchema.index({ createdBy: 1, createdAt: -1 });
 taskSchema.index({ 'statusByUser.user': 1, 'statusByUser.status': 1 });
 
