@@ -7,7 +7,7 @@ const mongoOptions = {
   socketTimeoutMS: Number(process.env.MONGO_SOCKET_TIMEOUT_MS || 120000),
   heartbeatFrequencyMS: 10000,
   maxPoolSize: 20,
-  minPoolSize: 0,
+  minPoolSize: 0,  
   maxIdleTimeMS: 60000,
   waitQueueTimeoutMS: Number(process.env.MONGO_WAIT_QUEUE_TIMEOUT_MS || 30000),
 };
