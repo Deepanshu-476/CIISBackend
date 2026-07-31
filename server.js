@@ -7,7 +7,7 @@ const schedule = require('node-schedule');
 const http = require('http');
 const socketIo = require('socket.io');
 const mongoose = require('mongoose');
-
+    
 dotenv.config();
 
 require('./services/subscriptionReminderService');
