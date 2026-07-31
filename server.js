@@ -11,6 +11,7 @@ const mongoose = require('mongoose');
 dotenv.config();
 
 require('./services/subscriptionReminderService');
+const { runWorkAnniversaryEmails } = require('./services/workAnniversaryService');
 const { runAutoClockOutSweep } = require('./HR-CDS/cron/forceClockOut');
 
 const app = express();
@@ -870,6 +871,14 @@ const PORT = process.env.PORT || 3000;
 
 server.listen(PORT, async () => {
   await dbConnectionPromise;
+
+  // Temporarily enabled for work-anniversary email template testing.
+  try {
+    const anniversarySummary = await runWorkAnniversaryEmails();
+    console.log("Startup work anniversary test completed:", anniversarySummary);
+  } catch (err) {
+    console.error("Startup work anniversary test failed:", err);
+  }
 
   try {
     const migrateTenantIndexes = require("./utils/tenantIndexMigration");
