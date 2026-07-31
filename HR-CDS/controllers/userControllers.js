@@ -868,19 +868,38 @@ exports.updateUser = async (req, res) => {
 
     
     const updateData = {};
-    
-    
+    const adminEditableFields = new Set([
+      ...USER_FIELDS.ALL(),
+      'branch', 'assignedBranches',
+      'shiftId', 'shiftName', 'shiftType', 'shift', 'noticePeriod',
+      'aadhaar', 'aadhar', 'aadharCard', 'panCard', 'pan',
+      'isActive'
+    ]);
+    // This legacy field may contain a structured object for older client-linked
+    // users, while the current User schema expects a string. It is not editable
+    // in Employee Details, so preserve the stored value instead of casting it
+    // during an unrelated profile update.
+    adminEditableFields.delete('additionalDetails');
+
+    // Employee detail responses contain populated and legacy-only properties.
+    // Sending those objects back into a validated update can make an otherwise
+    // valid edit fail, especially for older users imported by another company.
     Object.keys(req.body).forEach(key => {
-      
-      if (key !== 'password' && key !== 'resetToken' && key !== 'resetTokenExpiry' && key !== '__v') {
+      if (adminEditableFields.has(key)) {
         updateData[key] = req.body[key];
       }
     });
 
     delete updateData.userId;
     delete updateData.targetUserId;
-    
-    
+
+    ['gender', 'maritalStatus'].forEach(field => {
+      if (updateData[field] === undefined) return;
+      const normalizedValue = String(updateData[field] || '').trim().toLowerCase();
+      if (normalizedValue) updateData[field] = normalizedValue;
+      else delete updateData[field];
+    });
+
     if (req.body.children !== undefined) {
       updateData.children = req.body.children;
     }
@@ -891,6 +910,13 @@ exports.updateUser = async (req, res) => {
     
     if (req.body.properties !== undefined) {
       updateData.properties = req.body.properties;
+    }
+
+    if (Array.isArray(updateData.properties)) {
+      const allowedProperties = new Set(['sim', 'phone', 'laptop', 'desktop', 'headphones', 'tablet', 'vehicle']);
+      updateData.properties = updateData.properties
+        .map(value => String(value || '').trim().toLowerCase())
+        .filter(value => allowedProperties.has(value));
     }
     
     
