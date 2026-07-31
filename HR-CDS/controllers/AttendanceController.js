@@ -161,12 +161,19 @@ const getShiftTime = (shiftSettings, key, fallback) => {
     : fallback;
 };
 
+const formatMinutesAsTime = minutes => {
+  const normalized = ((minutes % 1440) + 1440) % 1440;
+  return `${String(Math.floor(normalized / 60)).padStart(2, "0")}:${String(normalized % 60).padStart(2, "0")}`;
+};
+
 const buildShiftSchedule = (referenceDate, shiftSettings = {}) => {
   const shiftStartStr = getShiftTime(shiftSettings, "shiftStart", "09:00");
   const shiftEndStr = getShiftTime(shiftSettings, "shiftEnd", "19:00");
   const earlyClockInStartStr = getShiftTime(shiftSettings, "earlyClockInStart", "08:30");
   const lateGraceLimitStr = getShiftTime(shiftSettings, "lateGraceLimit", "09:10");
-  const halfDayLateLimitStr = getShiftTime(shiftSettings, "halfDayLateLimit", "11:00");
+  // Half-day is an automatic attendance policy: two hours after this
+  // employee's assigned shift starts. It does not depend on a UI input.
+  const halfDayLateLimitStr = formatMinutesAsTime(parseTimeToMinutes(shiftStartStr) + 120);
   const shortLeaveEarlyLimitStr = getShiftTime(shiftSettings, "shortLeaveEarlyLimit", "18:30");
   const halfDayEarlyLimitStr = getShiftTime(shiftSettings, "halfDayEarlyLimit", "15:00");
 
@@ -302,18 +309,13 @@ const calculateAttendanceByShift = ({ inTime, outTime, shiftSettings, currentSta
   }
 
   const totalMs = outTime - inTime;
-  const totalHours = totalMs / (1000 * 60 * 60);
-  const scheduledHours = Math.max((schedule.shiftEnd - schedule.shiftStart) / (1000 * 60 * 60), 1);
-  const halfDayHours = scheduledHours / 2;
   let finalStatus = status;
 
   if (finalStatus !== "HALF DAY" && finalStatus !== "ABSENT") {
-    if (outTime < schedule.shiftEnd) {
-      finalStatus = outTime < schedule.shortLeaveEarlyLimit ? "HALF DAY" : "SHORT LEAVE";
-    } else if (totalHours < scheduledHours && totalHours >= halfDayHours) {
+    if (outTime < schedule.halfDayEarlyLimit) {
       finalStatus = "HALF DAY";
-    } else if (totalHours < halfDayHours) {
-      finalStatus = "ABSENT";
+    } else if (outTime < schedule.shortLeaveEarlyLimit) {
+      finalStatus = "SHORT LEAVE";
     }
   }
 
@@ -882,9 +884,6 @@ const clockOut = async (req, res) => {
     }
 
     const totalMs = now - new Date(record.inTime);
-    const totalHours = totalMs / (1000 * 60 * 60);
-    const scheduledHours = Math.max((schedule.shiftEnd - schedule.shiftStart) / (1000 * 60 * 60), 1);
-    const halfDayHours = scheduledHours / 2;
 
     record.outTime = now;
     record.clockOutMode = 'MANUAL';
@@ -893,6 +892,12 @@ const clockOut = async (req, res) => {
     record.overTime = now > schedule.shiftEnd ? formatDuration(now - schedule.shiftEnd) : "00:00:00";
     record.earlyLeave = now < schedule.shiftEnd ? formatDuration(schedule.shiftEnd - now) : "00:00:00";
     applyShiftSnapshot(record, shiftSnapshot);
+    Object.assign(record, calculateAttendanceByShift({
+      inTime: new Date(record.inTime),
+      outTime: now,
+      shiftSettings,
+      currentStatus: record.status
+    }));
 
     // Save Location & Selfie
     if (latitude !== undefined && longitude !== undefined) {
@@ -906,27 +911,6 @@ const clockOut = async (req, res) => {
     if (selfieUrl) {
       record.outSelfieUrl = selfieUrl;
     }
-
-    // 4. Calculate final status based on early leaves and total hours
-    let finalStatus = record.status; // starts as PRESENT, LATE, or HALF DAY
-    if (finalStatus !== "HALF DAY" && finalStatus !== "ABSENT") {
-      if (now < schedule.shiftEnd) {
-        if (now < schedule.halfDayEarlyLimit) {
-          finalStatus = "HALF DAY";
-        } else if (now < schedule.shortLeaveEarlyLimit) {
-          finalStatus = "HALF DAY";
-        } else {
-          finalStatus = "SHORT LEAVE";
-        }
-      } else {
-        if (totalHours < scheduledHours && totalHours >= halfDayHours) {
-          finalStatus = "HALF DAY";
-        } else if (totalHours < halfDayHours) {
-          finalStatus = "ABSENT";
-        }
-      }
-    }
-    record.status = finalStatus;
 
     if (!record.companyCode && userCompanyCode) {
       record.companyCode = userCompanyCode;
@@ -1335,83 +1319,14 @@ const updateAttendanceRecord = async (req, res) => {
     
     
     
-    if (updateData.inTime) {
-      record.inTime = new Date(updateData.inTime);
-      
-      const shiftStart = getIndiaThreshold(record.inTime, 9, 0);
-      
-      if (record.inTime > shiftStart) {
-        record.lateBy = formatDuration(record.inTime - shiftStart);
-      } else {
-        record.lateBy = "00:00:00";
-      }
-      
-      const loginTime = record.inTime;
-      const totalMinutes = getIndiaMinutesSinceMidnight(loginTime);
-      
-      if (totalMinutes >= 600) {
-        record.status = "HALF DAY";
-      } else if (totalMinutes >= 570) {
-        record.status = "HALF DAY";
-      } else if (totalMinutes >= 550) {
-        record.status = "LATE";
-      } else {
-        record.status = "PRESENT";
-      }
+    if (updateData.inTime !== undefined) {
+      record.inTime = updateData.inTime ? new Date(updateData.inTime) : null;
     }
     
     if (updateData.outTime) {
       record.outTime = new Date(updateData.outTime);
       record.clockOutMode = normalizeClockOutMode(updateData.clockOutMode || 'MANUAL');
       record.isClockedIn = false;
-      
-      if (record.inTime && record.outTime) {
-        const totalMs = record.outTime - record.inTime;
-        record.totalTime = formatDuration(totalMs);
-        
-        const shiftEnd = getIndiaThreshold(record.outTime, 19, 0);
-        
-        record.overTime = record.outTime > shiftEnd ? 
-          formatDuration(record.outTime - shiftEnd) : "00:00:00";
-        record.earlyLeave = record.outTime < shiftEnd ? 
-          formatDuration(shiftEnd - record.outTime) : "00:00:00";
-        
-        const totalHours = totalMs / (1000 * 60 * 60);
-        const loginTime = record.inTime;
-        const halfDayThreshold = getIndiaThreshold(loginTime, 10, 0);
-        const lateThresholdEnd = getIndiaThreshold(loginTime, 9, 30);
-        const lateThresholdStart = getIndiaThreshold(loginTime, 9, 10);
-        
-        if (loginTime >= halfDayThreshold) {
-          record.status = "HALF DAY";
-        } else if (loginTime > lateThresholdEnd && loginTime < halfDayThreshold) {
-          if (totalHours >= 9) {
-            record.status = "HALF DAY";
-          } else if (totalHours >= 5) {
-            record.status = "HALF DAY";
-          } else {
-            record.status = "ABSENT";
-          }
-        } else if (loginTime >= lateThresholdStart && loginTime <= lateThresholdEnd) {
-          if (totalHours >= 9) {
-            if (record.status !== "LATE") {
-              record.status = "PRESENT";
-            }
-          } else if (totalHours >= 5) {
-            record.status = "HALF DAY";
-          } else {
-            record.status = "ABSENT";
-          }
-        } else {
-          if (totalHours >= 9) {
-            record.status = "PRESENT";
-          } else if (totalHours >= 5) {
-            record.status = "HALF DAY";
-          } else {
-            record.status = "ABSENT";
-          }
-        }
-      }
     }
     
     if ((updateData.inTime || updateData.outTime) && !updateData.status) {
@@ -1769,16 +1684,19 @@ const markDailyAbsent = async () => {
         
         if (!existingAttendance) {
           const now = new Date();
-          const absentThreshold = getIndiaThreshold(now, 10, 0);
+          const shiftSettings = await resolveSelectedShiftSettings(user);
+          const schedule = buildShiftSchedule(now, shiftSettings);
+          const absentThreshold = schedule.shiftEnd;
           
           if (now >= absentThreshold) {
             const absentRecord = new Attendance({
               user: user._id,
-              date: todayStart,
+              date: schedule.dateStart,
               status: "ABSENT",
               isClockedIn: false,
               companyCode: company.companyCode
             });
+            applyShiftSnapshot(absentRecord, buildShiftSnapshot(shiftSettings || {}, schedule));
             
             await absentRecord.save();
           }

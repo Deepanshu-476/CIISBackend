@@ -61,6 +61,11 @@ const getShiftTime = (shiftSettings, key, fallback) => {
     : fallback;
 };
 
+const formatMinutesAsTime = minutes => {
+  const normalized = ((minutes % 1440) + 1440) % 1440;
+  return `${String(Math.floor(normalized / 60)).padStart(2, '0')}:${String(normalized % 60).padStart(2, '0')}`;
+};
+
 const addIndiaDays = (value, days) => new Date(value.getTime() + (days * DAY_MS));
 
 const addMinutes = (date, minutes) => new Date(date.getTime() + (minutes * 60 * 1000));
@@ -90,7 +95,7 @@ const buildShiftSchedule = (referenceDate, shiftSettings = {}) => {
   const shiftEndStr = getShiftTime(shiftSettings, 'shiftEnd', '19:00');
   const earlyClockInStartStr = getShiftTime(shiftSettings, 'earlyClockInStart', shiftStartStr);
   const lateGraceLimitStr = getShiftTime(shiftSettings, 'lateGraceLimit', shiftStartStr);
-  const halfDayLateLimitStr = getShiftTime(shiftSettings, 'halfDayLateLimit', lateGraceLimitStr);
+  const halfDayLateLimitStr = formatMinutesAsTime(parseTimeToMinutes(shiftStartStr) + 120);
   const shortLeaveEarlyLimitStr = getShiftTime(shiftSettings, 'shortLeaveEarlyLimit', shiftEndStr);
   const halfDayEarlyLimitStr = getShiftTime(shiftSettings, 'halfDayEarlyLimit', shortLeaveEarlyLimitStr);
 
@@ -222,18 +227,13 @@ const calculateAttendanceByShift = ({ inTime, outTime, shiftSettings, currentSta
   }
 
   const totalMs = outTime - inTime;
-  const totalHours = totalMs / (1000 * 60 * 60);
-  const scheduledHours = Math.max((schedule.shiftEnd - schedule.shiftStart) / (1000 * 60 * 60), 1);
-  const halfDayHours = scheduledHours / 2;
   let finalStatus = status;
 
   if (finalStatus !== 'HALF DAY' && finalStatus !== 'ABSENT') {
-    if (outTime < schedule.shiftEnd) {
-      finalStatus = outTime < schedule.shortLeaveEarlyLimit ? 'HALF DAY' : 'SHORT LEAVE';
-    } else if (totalHours < scheduledHours && totalHours >= halfDayHours) {
+    if (outTime < schedule.halfDayEarlyLimit) {
       finalStatus = 'HALF DAY';
-    } else if (totalHours < halfDayHours) {
-      finalStatus = 'ABSENT';
+    } else if (outTime < schedule.shortLeaveEarlyLimit) {
+      finalStatus = 'SHORT LEAVE';
     }
   }
 
