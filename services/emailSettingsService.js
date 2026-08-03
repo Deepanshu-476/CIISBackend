@@ -6,7 +6,7 @@ const SETTINGS_KEY = "global";
 let cachedSettings = null;
 let cachedAt = 0;
 let cachedIncludesSecret = false;
-const CACHE_TTL_MS = 5000;  
+const CACHE_TTL_MS = 5000;    
 const DEFAULT_PROFILE_ID = "default";
 
 const EMAIL_MODULES = [
@@ -16,6 +16,7 @@ const EMAIL_MODULES = [
   { key: "company_registration", label: "Company Registration", area: "Companies", description: "Company registration and owner access emails." },
   { key: "user_welcome", label: "User Welcome", area: "Users", description: "New user welcome and account-created emails." },
   { key: "leave_notifications", label: "Leave Notifications", area: "HR", description: "Leave applied, updated, deleted, and status emails." },
+  { key: "work_anniversary", label: "Work Anniversary", area: "HR", description: "Annual employee work anniversary celebration emails." },
   { key: "asset_requests", label: "Asset Requests", area: "HR", description: "Asset request submitted, assigned, and status emails." },
   { key: "meeting_notifications", label: "Meeting Notifications", area: "Meetings", description: "Employee and client meeting schedule, update, and reminder emails." },
   { key: "task_notifications", label: "Task Notifications", area: "Tasks", description: "Task assignment, update, overdue, and pending reminder emails." },
@@ -502,6 +503,7 @@ const resolveEmailModuleKey = (subject = "", options = {}) => {
   if (text.includes("company registration") || text.includes("company-reg") || headerType.includes("company-registration")) return "company_registration";
   if (text.includes("welcome") || headerType.includes("user-welcome") || headerType.includes("owner-registration")) return "user_welcome";
   if (text.includes("leave")) return "leave_notifications";
+  if (text.includes("work anniversary") || headerType.includes("work-anniversary")) return "work_anniversary";
   if (text.includes("asset request")) return "asset_requests";
   if (text.includes("meeting")) return "meeting_notifications";
   if (text.includes("client task")) return "client_tasks";
