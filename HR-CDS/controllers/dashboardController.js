@@ -71,6 +71,143 @@ const mapTaskActivity = task => ({
   status: task.overallStatus || task.status || task.creatorStatus?.status || "pending",
 });
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+const startOfDay = value => { const date = new Date(value); date.setHours(0, 0, 0, 0); return date; };
+const endOfDay = value => { const date = new Date(value); date.setHours(23, 59, 59, 999); return date; };
+const dateKey = value => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+};
+const normalizeProductivityStatus = value => String(value || "").trim().toLowerCase().replace(/[_ ]+/g, "-");
+const completedStatuses = new Set(["completed", "approved", "done"]);
+const excludedTaskStatuses = new Set(["cancelled", "rejected"]);
+
+const getProductivityRange = query => {
+  const today = startOfDay(new Date());
+  const period = String(query.period || "weekly");
+  let start;
+  let end = endOfDay(today);
+  if (period === "custom") {
+    start = startOfDay(query.from);
+    end = endOfDay(query.to);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) throw new Error("Please select a valid from and to date");
+  } else if (period === "today") {
+    start = startOfDay(today);
+    end = new Date();
+  } else if (period === "monthly") {
+    start = new Date(today.getFullYear(), today.getMonth(), 1);
+  } else if (period === "sixMonths") {
+    start = new Date(today.getFullYear(), today.getMonth() - 5, 1);
+  } else if (period === "yearly") {
+    start = new Date(today.getFullYear(), today.getMonth() - 11, 1);
+  } else {
+    start = new Date(today.getTime() - (6 * DAY_MS));
+  }
+  if (start > end) throw new Error("From date cannot be after to date");
+  if (end > endOfDay(today)) end = endOfDay(today);
+  if ((end - start) / DAY_MS > 366) throw new Error("Date range cannot exceed 366 days");
+  return {start, end, period};
+};
+
+const getTaskCompletionDate = (task, userId) => {
+  const userStatus = (task.statusByUser || []).find(item => String(item.user) === String(userId));
+  const status = normalizeProductivityStatus(userStatus?.status || task.overallStatus);
+  if (!completedStatuses.has(status)) return null;
+  const history = [...(task.statusHistory || [])].reverse().find(item => completedStatuses.has(normalizeProductivityStatus(item.status)));
+  const value = userStatus?.updatedAt || task.completionDate || history?.changedAt || task.updatedAt;
+  const date = value ? new Date(value) : null;
+  return date && !Number.isNaN(date.getTime()) ? date : null;
+};
+
+const productivityBand = score => score >= 90 ? ["Excellent", "high"] : score >= 75 ? ["Very Good", "high"] : score >= 60 ? ["Good", "good"] : score >= 40 ? ["Needs Improvement", "warning"] : ["Poor", "danger"];
+
+const calculateProductivityMetrics = ({start, end, attendance, tasks, excludedDates, userId}) => {
+  const attendanceRows = attendance.filter(row => {
+    const date = new Date(row.date || row.inTime || row.createdAt);
+    return date >= start && date <= end && !excludedDates.has(dateKey(date));
+  });
+  const attendancePoints = attendanceRows.map(row => {
+    const status = String(row.status || "").trim().toUpperCase().replace("HALFDAY", "HALF DAY");
+    return status === "PRESENT" ? 100 : status === "LATE" || status === "SHORT LEAVE" ? 75 : status === "HALF DAY" ? 50 : status === "ABSENT" ? 0 : null;
+  }).filter(Number.isFinite);
+  const relevantTasks = tasks.filter(task => {
+    const statusRow = (task.statusByUser || []).find(item => String(item.user) === String(userId));
+    const status = normalizeProductivityStatus(statusRow?.status || task.overallStatus);
+    if (excludedTaskStatuses.has(status)) return false;
+    const created = new Date(task.createdAt);
+    const due = task.dueDateTime ? new Date(task.dueDateTime) : null;
+    const completed = getTaskCompletionDate(task, userId);
+    return (created >= start && created <= end) || (due && due >= start && due <= end) || (completed && completed >= start && completed <= end) || (due && due < start && (!completed || completed > end));
+  });
+  const completed = relevantTasks.filter(task => { const date = getTaskCompletionDate(task, userId); return date && date <= end; });
+  const deliveryEligible = relevantTasks.filter(task => task.dueDateTime && (new Date(task.dueDateTime) <= end || getTaskCompletionDate(task, userId)));
+  const onTime = deliveryEligible.filter(task => { const done = getTaskCompletionDate(task, userId); return done && done <= new Date(task.dueDateTime); });
+  const components = [
+    {key: "taskCompletion", score: relevantTasks.length ? completed.length / relevantTasks.length * 100 : null, weight: 50},
+    {key: "onTimeDelivery", score: deliveryEligible.length ? onTime.length / deliveryEligible.length * 100 : null, weight: 25},
+    {key: "attendance", score: attendancePoints.length ? attendancePoints.reduce((sum, value) => sum + value, 0) / attendancePoints.length : null, weight: 25},
+  ];
+  const available = components.filter(item => Number.isFinite(item.score));
+  const weight = available.reduce((sum, item) => sum + item.weight, 0);
+  const score = weight ? Math.round(available.reduce((sum, item) => sum + item.score * item.weight, 0) / weight) : 0;
+  const breakdown = Object.fromEntries(components.map(item => [item.key, Number.isFinite(item.score) ? Math.round(item.score) : null]));
+  return {score, hasData: available.length > 0, breakdown, counts: {attendanceDays: attendancePoints.length, tasks: relevantTasks.length, completed: completed.length, onTime: onTime.length, deliveryEligible: deliveryEligible.length}};
+};
+
+const buildProductivityBuckets = (start, end, period) => {
+  const days = Math.floor((endOfDay(end) - startOfDay(start)) / DAY_MS) + 1;
+  const buckets = [];
+  if (period === "today") {
+    const dayStart = startOfDay(start);
+    const currentHour = end.getHours();
+    const hourStep = currentHour <= 8 ? 1 : currentHour <= 16 ? 2 : 3;
+    for (let hour = 0; hour <= currentHour; hour += hourStep) {
+      const pointEnd = new Date(dayStart);
+      pointEnd.setHours(hour, 59, 59, 999);
+      const displayHour = hour % 12 || 12;
+      buckets.push({start: dayStart, end: pointEnd > end ? end : pointEnd, label: `${displayHour} ${hour < 12 ? "AM" : "PM"}`});
+    }
+    if (!buckets.length || buckets[buckets.length - 1].end < end) {
+      const displayHour = currentHour % 12 || 12;
+      buckets.push({start: dayStart, end, label: `${displayHour} ${currentHour < 12 ? "AM" : "PM"}`});
+    }
+    return {buckets, granularity: "hourly"};
+  }
+  if (days <= 31) {
+    for (let cursor = startOfDay(start); cursor <= end; cursor = new Date(cursor.getTime() + DAY_MS)) buckets.push({start: cursor, end: endOfDay(cursor), label: cursor.toLocaleDateString("en-US", {day: "numeric", month: "short"})});
+  } else if (days <= 120) {
+    for (let cursor = startOfDay(start); cursor <= end; cursor = new Date(cursor.getTime() + 7 * DAY_MS)) { const bucketEnd = endOfDay(new Date(Math.min(end.getTime(), cursor.getTime() + 6 * DAY_MS))); buckets.push({start: cursor, end: bucketEnd, label: cursor.toLocaleDateString("en-US", {day: "numeric", month: "short"})}); }
+  } else {
+    for (let cursor = new Date(start.getFullYear(), start.getMonth(), 1); cursor <= end; cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1)) { const bucketStart = cursor < start ? start : cursor; const monthEnd = endOfDay(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0)); buckets.push({start: bucketStart, end: monthEnd > end ? end : monthEnd, label: cursor.toLocaleDateString("en-US", {month: "short", year: "2-digit"})}); }
+  }
+  return {buckets, granularity: days <= 31 ? "daily" : days <= 120 ? "weekly" : "monthly"};
+};
+
+const getEmployeeProductivity = async (req, res) => {
+  try {
+    const userId = req.user._id || req.user.id;
+    const companyCode = String(req.user.companyCode || req.user.company?.companyCode || "").trim();
+    const {start, end, period} = getProductivityRange(req.query);
+    const [attendance, tasks, leaves, holidays] = await Promise.all([
+      Attendance.find({user: userId, companyCode, date: {$gte: start, $lte: end}}).lean(),
+      EmployeeTask.find({companyCode, isActive: {$ne: false}, createdAt: {$lte: end}, $or: [{assignedUsers: userId}, {"statusByUser.user": userId}]}).select("createdAt updatedAt dueDateTime completionDate overallStatus statusByUser statusHistory").lean(),
+      Leave.find({user: userId, status: /^approved$/i, startDate: {$lte: end}, endDate: {$gte: start}}).select("startDate endDate").lean(),
+      Holiday.find({companyCode, isActive: true, date: {$gte: start, $lte: end}}).select("date").lean(),
+    ]);
+    const excludedDates = new Set(holidays.map(item => dateKey(item.date)));
+    leaves.forEach(leave => { for (let cursor = startOfDay(leave.startDate); cursor <= endOfDay(leave.endDate); cursor = new Date(cursor.getTime() + DAY_MS)) excludedDates.add(dateKey(cursor)); });
+    const overall = calculateProductivityMetrics({start, end, attendance, tasks, excludedDates, userId});
+    const {buckets, granularity} = buildProductivityBuckets(start, end, period);
+    const series = buckets.map(bucket => ({...bucket, ...calculateProductivityMetrics({...bucket, attendance, tasks, excludedDates, userId})})).map(item => ({date: granularity === "hourly" ? item.end : item.start, label: item.label, score: item.score, hasData: item.hasData, breakdown: item.breakdown, counts: item.counts}));
+    const [label, tone] = productivityBand(overall.score);
+    return res.json({success: true, data: {period, from: dateKey(start), to: dateKey(end), granularity, score: overall.score, label, tone, hasData: overall.hasData, limitedData: [overall.breakdown.taskCompletion, overall.breakdown.onTimeDelivery, overall.breakdown.attendance].filter(Number.isFinite).length < 3, breakdown: overall.breakdown, counts: overall.counts, series}});
+  } catch (error) {
+    const clientError = /date|range/i.test(error.message);
+    return res.status(clientError ? 400 : 500).json({success: false, message: error.message || "Unable to calculate productivity"});
+  }
+};
+
 const getEmployeeDashboardSummary = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
@@ -723,4 +860,5 @@ const formatOwnerActivities = (leaves, assets, tasks, meetings) => {
 module.exports = {
   getDashboardActivity,
   getEmployeeDashboardSummary,
+  getEmployeeProductivity,
 };
