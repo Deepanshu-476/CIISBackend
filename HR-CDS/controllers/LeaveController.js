@@ -280,7 +280,7 @@ exports.applyLeave = async (req, res) => {
       approvals: Leave.defaultApprovals(),
       approvedBy: null,
       approvalSteps,
-      approvalMode: approvalSteps.length > 0 ? 'all' : 'single',
+      approvalMode: 'single',
       remarks: '',
       companyCode: userCompanyCode,
       history: [
@@ -1013,12 +1013,12 @@ exports.updateLeaveStatus = async (req, res) => {
       leave.approvalSteps[approvalStepIndex].actionedAt = new Date();
 
       const hasRejected = leave.approvalSteps.some(step => step.status === 'Rejected');
-      const allApproved = leave.approvalSteps.every(step => step.status === 'Approved');
+      const hasApproved = leave.approvalSteps.some(step => step.status === 'Approved');
 
       if (hasRejected) {
         leave.status = 'Rejected';
         leave.approvedBy = currentUser._id;
-      } else if (allApproved) {
+      } else if (hasApproved) {
         leave.status = 'Approved';
         leave.approvedBy = currentUser._id;
       } else {
