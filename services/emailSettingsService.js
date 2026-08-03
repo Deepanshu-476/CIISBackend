@@ -431,16 +431,12 @@ const updateEmailModuleEnabled = async (moduleKey, enabled, updatedBy) => {
     throw new Error("Invalid email module");
   }
 
-  const current = await getSettingsDocument({ includeSecret: true, fresh: true });
-  const moduleSettings = normalizeModuleSettings(current.moduleSettings);
-  moduleSettings[normalizedModuleKey] = parseBoolean(enabled);
-
   const settings = await EmailSettings.findOneAndUpdate(
     { key: SETTINGS_KEY },
-    {
-      moduleSettings,
-      updatedBy: updatedBy || current.updatedBy || null,
-    },
+    { $set: {
+      [`moduleSettings.${normalizedModuleKey}`]: parseBoolean(enabled),
+      ...(updatedBy ? { updatedBy } : {}),
+    } },
     { new: true, runValidators: true, upsert: true, setDefaultsOnInsert: true }
   ).select("+encryptedEmailPass +senderProfiles.encryptedEmailPass");
 
