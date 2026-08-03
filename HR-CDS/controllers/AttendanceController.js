@@ -768,7 +768,7 @@ const clockIn = async (req, res) => {
         }
       });
 
-    await notifyEmployeeAttendancePage({
+    notifyEmployeeAttendancePage({
       req,
       userId,
       type: 'attendance_clock_in',
@@ -928,7 +928,7 @@ const clockOut = async (req, res) => {
         }
       });
 
-    await notifyEmployeeAttendancePage({
+    notifyEmployeeAttendancePage({
       req,
       userId,
       type: 'attendance_clock_out',

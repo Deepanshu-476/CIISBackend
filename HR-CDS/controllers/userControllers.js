@@ -311,6 +311,75 @@ const normalizeEmploymentLocationFields = (updateData, existingUser = {}) => {
   return null;
 };
 
+const parseFlexibleDate = (value) => {
+  if (value === undefined) return { ok: true, value: undefined };
+  if (value === null || value === '') return { ok: true, value: null };
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? { ok: false } : { ok: true, value };
+  }
+
+  const raw = String(value).trim();
+  if (!raw) return { ok: true, value: null };
+
+  let year;
+  let month;
+  let day;
+
+  const isoMatch = raw.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+  const indianMatch = raw.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+
+  if (isoMatch) {
+    year = Number(isoMatch[1]);
+    month = Number(isoMatch[2]);
+    day = Number(isoMatch[3]);
+  } else if (indianMatch) {
+    day = Number(indianMatch[1]);
+    month = Number(indianMatch[2]);
+    year = Number(indianMatch[3]);
+  } else {
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) return { ok: false };
+    return { ok: true, value: parsed };
+  }
+
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  const isSameDate = parsed.getUTCFullYear() === year &&
+    parsed.getUTCMonth() === month - 1 &&
+    parsed.getUTCDate() === day;
+
+  return isSameDate ? { ok: true, value: parsed } : { ok: false };
+};
+
+const normalizeUserDateFields = (data = {}) => {
+  for (const field of ['dob', 'dateOfJoining']) {
+    if (data[field] !== undefined) {
+      const parsed = parseFlexibleDate(data[field]);
+      if (!parsed.ok) {
+        return `${field === 'dob' ? 'Date of Birth' : 'Date of Joining'} must be a valid date`;
+      }
+      data[field] = parsed.value;
+    }
+  }
+
+  if (Array.isArray(data.children)) {
+    const normalizedChildren = [];
+    for (const child of data.children) {
+      if (!child || typeof child !== 'object' || child.dob === undefined) {
+        normalizedChildren.push(child);
+        continue;
+      }
+      const parsed = parseFlexibleDate(child.dob);
+      if (!parsed.ok) {
+        return 'Child DOB must be a valid date';
+      }
+      normalizedChildren.push({...child, dob: parsed.value});
+    }
+    data.children = normalizedChildren;
+  }
+
+  return null;
+};
+
 const hasChangedValue = (nextValue, currentValue) => {
   if (nextValue === undefined) return false;
   return String(nextValue ?? '').trim() !== String(currentValue ?? '').trim();
@@ -478,6 +547,11 @@ exports.updateMe = async (req, res) => {
       updateData.properties = req.body.properties;
     }
 
+    const dateFieldError = normalizeUserDateFields(updateData);
+    if (dateFieldError) {
+      return errorResponse(res, 400, dateFieldError);
+    }
+
     const employmentLocationError = normalizeEmploymentLocationFields(updateData, existingUser);
     if (employmentLocationError) {
       return errorResponse(res, 400, employmentLocationError);
@@ -567,6 +641,11 @@ exports.register = async (req, res) => {
         userData[field] = req.body[field];
       }
     });
+
+    const dateFieldError = normalizeUserDateFields(userData);
+    if (dateFieldError) {
+      return errorResponse(res, 400, dateFieldError);
+    }
 
     
     if (req.user?.id) {
@@ -918,7 +997,11 @@ exports.updateUser = async (req, res) => {
         .map(value => String(value || '').trim().toLowerCase())
         .filter(value => allowedProperties.has(value));
     }
-    
+
+    const dateFieldError = normalizeUserDateFields(updateData);
+    if (dateFieldError) {
+      return errorResponse(res, 400, dateFieldError);
+    }
     
     
     
@@ -1067,6 +1150,11 @@ exports.updateSelfUser = async (req, res) => {
     
     if (req.body.properties !== undefined) {
       updateData.properties = req.body.properties;
+    }
+
+    const dateFieldError = normalizeUserDateFields(updateData);
+    if (dateFieldError) {
+      return errorResponse(res, 400, dateFieldError);
     }
 
     const employmentLocationError = normalizeEmploymentLocationFields(updateData, user);
