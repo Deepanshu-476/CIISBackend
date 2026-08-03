@@ -26,6 +26,29 @@ const titleCase = (value) => {
   return value.charAt(0).toUpperCase() + value.slice(1).toLowerCase();
 };
 
+const normalizeRequestStatus = (status) => String(status || '').trim().toLowerCase();
+
+const requestStatusLabel = (status) => {
+  const normalized = normalizeRequestStatus(status);
+  switch (normalized) {
+    case 'return_requested':
+      return 'Return Requested';
+    case 'pending_verification':
+      return 'Pending Verification';
+    case 'deposited':
+      return 'Deposited';
+    default:
+      return titleCase(normalized);
+  }
+};
+
+const loadAssetRequest = (filter = {}) => AssetRequest.findOne(filter)
+  .populate('asset')
+  .populate('user', 'name email department')
+  .populate('approvedBy', 'name email')
+  .populate('returnRequestedBy', 'name email')
+  .populate('verifiedBy', 'name email');
+
 const normalizeId = (value) => {
   if (!value) return '';
   if (value._id && value._id !== value) return normalizeId(value._id);
@@ -825,6 +848,295 @@ try {
     res.status(500).json({ 
       success: false, 
       error: 'Server error while updating status' 
+    });
+  }
+};
+
+exports.requestAssetReturn = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const pageAccess = await getEmployeeAssetsPageAccess(req.user);
+    const roleScope = getUserRoleScope(req.user);
+    const canManageRequest = pageAccess.hasConfig ? pageAccess.hasPageAccess : roleScope.canManage;
+
+    if (!canManageRequest) {
+      return res.status(403).json({
+        success: false,
+        error: pageAccess.hasConfig
+          ? 'You are not selected for employee assets page access.'
+          : 'You do not have permission to raise return requests.'
+      });
+    }
+
+    const request = await loadAssetRequest({
+      _id: id,
+      companyCode: req.user.companyCode
+    });
+
+    if (!request) {
+      return res.status(404).json({
+        success: false,
+        error: 'Request not found'
+      });
+    }
+
+    const currentStatus = normalizeRequestStatus(request.status);
+    if (currentStatus === 'return_requested' || currentStatus === 'pending_verification' || currentStatus === 'deposited') {
+      return res.status(200).json({
+        success: true,
+        message: 'Return request already active',
+        request
+      });
+    }
+
+    if (currentStatus !== 'approved') {
+      return res.status(400).json({
+        success: false,
+        error: 'Return request can only be raised for an assigned asset'
+      });
+    }
+
+    if (!request.asset) {
+      return res.status(400).json({
+        success: false,
+        error: 'Asset is not linked to this request'
+      });
+    }
+
+    const assignedUserId = normalizeId(request.user?._id || request.user);
+    const assetStatus = normalizeRequestStatus(request.asset?.status);
+    const assignedTo = normalizeId(request.asset?.assignedTo);
+
+    if (assetStatus !== 'assigned' || assignedTo !== assignedUserId || !request.asset?.assignedDate) {
+      await CompanyAsset.findByIdAndUpdate(request.asset._id, {
+        status: 'Assigned',
+        assignedTo: request.user?._id || request.user,
+        assignedDate: request.asset?.assignedDate || request.decisionDate || new Date()
+      });
+    }
+
+    request.status = 'return_requested';
+    request.returnRequestedBy = req.user._id;
+    request.returnRequestedAt = new Date();
+    await request.save();
+
+    await notifyDirectUsers({
+      userIds: [request.user?._id || request.user],
+      targetPath: '/ciisUser/my-assets',
+      type: 'asset_return_requested',
+      title: 'Asset Return Requested',
+      message: `${req.user.name || 'Admin'} requested return of "${request.asset.name}"`,
+      actor: req.user._id,
+      data: {
+        requestId: request._id,
+        assetId: request.asset._id,
+        assetName: request.asset.name,
+        status: request.status,
+        returnRequestedBy: req.user._id
+      },
+      priority: 'high'
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Return request raised successfully',
+      request
+    });
+  } catch (err) {
+    console.error('Return request error:', err);
+    return res.status(500).json({
+      success: false,
+      error: 'Server error while raising return request'
+    });
+  }
+};
+
+exports.depositAsset = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const request = await loadAssetRequest({
+      _id: id,
+      companyCode: req.user.companyCode,
+      user: req.user._id
+    });
+
+    if (!request) {
+      return res.status(404).json({
+        success: false,
+        error: 'Return request not found'
+      });
+    }
+
+    const currentStatus = normalizeRequestStatus(request.status);
+    if (currentStatus === 'pending_verification' || currentStatus === 'deposited') {
+      return res.status(200).json({
+        success: true,
+        message: 'Deposit already submitted',
+        request
+      });
+    }
+
+    if (currentStatus !== 'return_requested') {
+      return res.status(400).json({
+        success: false,
+        error: 'Deposit can only be submitted for a pending return request'
+      });
+    }
+
+    request.status = 'pending_verification';
+    request.depositSubmittedAt = new Date();
+    await request.save();
+
+    await notifyPageUsers({
+      companyId: req.user.company || req.user.companyId,
+      targetPath: '/ciisUser/emp-assets',
+      excludeUserIds: [req.user._id],
+      type: 'asset_return_deposit_submitted',
+      title: 'Asset Ready for Verification',
+      message: `${req.user.name || 'Employee'} marked "${request.asset.name}" as deposited`,
+      actor: req.user._id,
+      data: {
+        requestId: request._id,
+        assetId: request.asset._id,
+        assetName: request.asset.name,
+        status: request.status,
+        employeeId: req.user._id
+      },
+      priority: 'high'
+    });
+
+    await notifyCompanyOwners({
+      companyId: req.user.company || req.user.companyId,
+      type: 'asset_return_deposit_submitted',
+      title: 'Asset Ready for Verification',
+      message: `${req.user.name || 'Employee'} marked "${request.asset.name}" as deposited`,
+      data: {
+        requestId: request._id,
+        assetId: request.asset._id,
+        assetName: request.asset.name,
+        status: request.status,
+        employeeId: req.user._id
+      },
+      excludeUser: req.user._id
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Deposit submitted successfully',
+      request
+    });
+  } catch (err) {
+    console.error('Deposit submission error:', err);
+    return res.status(500).json({
+      success: false,
+      error: 'Server error while submitting deposit'
+    });
+  }
+};
+
+exports.confirmAssetDeposit = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const pageAccess = await getEmployeeAssetsPageAccess(req.user);
+    const roleScope = getUserRoleScope(req.user);
+    const canManageRequest = pageAccess.hasConfig ? pageAccess.hasPageAccess : roleScope.canManage;
+
+    if (!canManageRequest) {
+      return res.status(403).json({
+        success: false,
+        error: pageAccess.hasConfig
+          ? 'You are not selected for employee assets page access.'
+          : 'You do not have permission to confirm deposits.'
+      });
+    }
+
+    const request = await loadAssetRequest({
+      _id: id,
+      companyCode: req.user.companyCode
+    });
+
+    if (!request) {
+      return res.status(404).json({
+        success: false,
+        error: 'Request not found'
+      });
+    }
+
+    const currentStatus = normalizeRequestStatus(request.status);
+    if (currentStatus === 'deposited') {
+      return res.status(200).json({
+        success: true,
+        message: 'Deposit already confirmed',
+        request
+      });
+    }
+
+    if (currentStatus !== 'pending_verification') {
+      return res.status(400).json({
+        success: false,
+        error: 'Only pending verification requests can be confirmed'
+      });
+    }
+
+    request.status = 'deposited';
+    request.verifiedBy = req.user._id;
+    request.verifiedAt = new Date();
+    request.actualReturnDate = new Date();
+    await request.save();
+
+    if (request.asset?._id) {
+      await CompanyAsset.findByIdAndUpdate(request.asset._id, {
+        status: 'Available',
+        assignedTo: null,
+        assignedDate: null
+      });
+    }
+
+    await notifyDirectUsers({
+      userIds: [request.user?._id || request.user],
+      targetPath: '/ciisUser/my-assets',
+      type: 'asset_return_verified',
+      title: 'Asset Deposit Confirmed',
+      message: `${req.user.name || 'Admin'} confirmed deposit of "${request.asset.name}"`,
+      actor: req.user._id,
+      data: {
+        requestId: request._id,
+        assetId: request.asset._id,
+        assetName: request.asset.name,
+        status: request.status,
+        verifiedBy: req.user._id
+      },
+      priority: 'high'
+    });
+
+    await notifyPageUsers({
+      companyId: req.user.company || req.user.companyId,
+      targetPath: '/ciisUser/emp-assets',
+      excludeUserIds: [req.user._id],
+      type: 'asset_return_verified',
+      title: 'Asset Deposit Confirmed',
+      message: `${req.user.name || 'Admin'} confirmed deposit of "${request.asset.name}"`,
+      actor: req.user._id,
+      data: {
+        requestId: request._id,
+        assetId: request.asset._id,
+        assetName: request.asset.name,
+        status: request.status,
+        verifiedBy: req.user._id
+      },
+      priority: 'high'
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Deposit confirmed successfully',
+      request
+    });
+  } catch (err) {
+    console.error('Confirm deposit error:', err);
+    return res.status(500).json({
+      success: false,
+      error: 'Server error while confirming deposit'
     });
   }
 };
