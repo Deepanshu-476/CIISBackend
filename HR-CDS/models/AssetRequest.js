@@ -26,7 +26,16 @@ const assetRequestSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'approved', 'rejected', 'completed', 'cancelled'],
+    enum: [
+      'pending',
+      'approved',
+      'rejected',
+      'completed',
+      'cancelled',
+      'return_requested',
+      'pending_verification',
+      'deposited'
+    ],
     default: 'pending'
   },
   companyCode: {
@@ -56,11 +65,28 @@ const assetRequestSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
   },
+  returnRequestedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  verifiedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
   requestDate: {
     type: Date,
     default: Date.now
   },
   decisionDate: {
+    type: Date
+  },
+  returnRequestedAt: {
+    type: Date
+  },
+  depositSubmittedAt: {
+    type: Date
+  },
+  verifiedAt: {
     type: Date
   },
   expectedReturnDate: {

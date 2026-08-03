@@ -2085,7 +2085,7 @@ const addTask = async (req, res) => {
 const updateTask = async (req, res) => {
   try {
     const { taskId } = req.params;
-    const updates = req.body;
+    const updates = { ...(req.body || {}) };
     const currentUser = req.user;
 
     const task = await Task.findById(taskId);
@@ -2103,6 +2103,24 @@ const updateTask = async (req, res) => {
       });
     }
 
+    // `dueDateTime` is a client-side alias for `dueDate`; only persist the schema field.
+    if (updates.dueDate === undefined && updates.dueDateTime !== undefined) {
+      updates.dueDate = updates.dueDateTime;
+    }
+    delete updates.dueDateTime;
+
+    const allowedKeys = new Set([
+      'name',
+      'status',
+      'completed',
+      'priority',
+      'assignee',
+      'assigneeId',
+      'dueDate',
+      'checkpoints',
+      'description'
+    ]);
+
     const changes = [];
     const previousCompleted = task.completed;
     const previousStatus = task.status;
@@ -2117,7 +2135,7 @@ const updateTask = async (req, res) => {
       if (previousStatus !== 'overdue' && isClientTaskOverdue(task)) {
         task.status = 'overdue';
         task.completed = false;
-        await task.save();
+        await task.save({ validateModifiedOnly: true });
       }
       return res.status(400).json({
         success: false,
@@ -2127,6 +2145,8 @@ const updateTask = async (req, res) => {
     
     
     for (const key of Object.keys(updates)) {
+      if (!allowedKeys.has(key)) continue;
+
       const oldValue = task[key];
       let newValue = updates[key];
       
@@ -2230,7 +2250,7 @@ const updateTask = async (req, res) => {
       }, req);
     }
 
-    await task.save();
+    await task.save({ validateModifiedOnly: true });
 
     if (!previousCompleted && task.completed) {
       await notifyClientTaskCompleted({task, actor: currentUser, req});
@@ -2297,9 +2317,11 @@ const updateTask = async (req, res) => {
     });
   } catch (error) {
     console.error('Error updating task:', error);
-    res.status(500).json({
+    const isInputError = error?.name === 'ValidationError' || error?.name === 'CastError';
+    res.status(isInputError ? 400 : 500).json({
       success: false,
-      message: 'Error updating task',
+      message: isInputError ? 'Invalid client task data' : 'Error updating task',
+      ...(isInputError ? { details: error.message } : {}),
       error: error.message
     });
   }
