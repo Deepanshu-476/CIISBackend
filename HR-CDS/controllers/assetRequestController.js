@@ -500,6 +500,10 @@ exports.getMyRequests = async (req, res) => {
     })
       .populate('asset', 'name description status')
       .populate('approvedBy', 'name email')
+      .populate('adminComments.addedBy', 'name email')
+      .populate('approvalDetails.updatedBy', 'name email')
+      .populate('approvalDetails.images.uploadedBy', 'name email')
+      .populate('updateHistory.updatedBy', 'name email')
       .sort({ createdAt: -1 });
 
     return res.status(200).json({
@@ -596,6 +600,9 @@ exports.getAllRequests = async (req, res) => {
           populate: { path: 'branch', select: 'name branchCode' }
         })
         .populate('approvedBy', 'name email')
+        .populate('approvalDetails.updatedBy', 'name email')
+        .populate('approvalDetails.images.uploadedBy', 'name email')
+        .populate('updateHistory.updatedBy', 'name email')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -661,10 +668,11 @@ exports.updateRequestStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { status, adminComment } = req.body;
+    const approvalAbout = String(req.body.approvalAbout || req.body.about || '').trim();
     const uploadedFiles = [
       ...(req.files?.commentImage || []),
       ...(req.files?.commentImages || [])
-    ].slice(0, 5);
+    ].slice(0, 3);
     const pageAccess = await getEmployeeAssetsPageAccess(req.user);
     const roleScope = getUserRoleScope(req.user);
     const canUpdateRequest = pageAccess.hasConfig ? pageAccess.hasPageAccess : roleScope.canManage;
@@ -680,10 +688,10 @@ exports.updateRequestStatus = async (req, res) => {
     
     const validStatuses = ['approved', 'rejected', 'completed'];
           
-      if (!status && !adminComment && !uploadedFiles.length) {
+      if (!status && !adminComment && !approvalAbout && !uploadedFiles.length) {
         return res.status(400).json({
           success: false,
-          error: 'Status, comment, or image required'
+          error: 'Status, comment, about, or image required'
         });
       }
 
@@ -712,11 +720,26 @@ exports.updateRequestStatus = async (req, res) => {
       });
     }
 
+    const previousSnapshot = {
+      status: request.status,
+      approvalAbout: request.approvalDetails?.about || '',
+      approvalImages: Array.isArray(request.approvalDetails?.images)
+        ? request.approvalDetails.images.map(item => item.image).filter(Boolean)
+        : [],
+      adminCommentsCount: Array.isArray(request.adminComments) ? request.adminComments.length : 0
+    };
     
     if (status === 'approved' && request.asset.quantity <= 0) {
       return res.status(400).json({ 
         success: false, 
         error: `Asset is no longer available (Current: ${request.asset.status})` 
+      });
+    }
+
+    if (status === 'approved' && !approvalAbout && !(request.approvalDetails?.about || '').trim()) {
+      return res.status(400).json({
+        success: false,
+        error: 'About is required while approving an asset request'
       });
     }
 
@@ -732,6 +755,27 @@ exports.updateRequestStatus = async (req, res) => {
           request.adminComments = [];
         }
 
+        const approvalImages = uploadedFiles.map(file => ({
+          image: `/api/uploads/asset-comments/${file.filename}`,
+          originalName: file.originalname || '',
+          size: file.size || 0,
+          mimeType: file.mimetype || '',
+          uploadedBy: req.user._id,
+          uploadedAt: new Date()
+        }));
+
+        if (approvalAbout || approvalImages.length) {
+          request.approvalDetails = {
+            ...(request.approvalDetails?.toObject ? request.approvalDetails.toObject() : request.approvalDetails || {}),
+            about: approvalAbout || request.approvalDetails?.about || '',
+            images: approvalImages.length
+              ? approvalImages
+              : (Array.isArray(request.approvalDetails?.images) ? request.approvalDetails.images : []),
+            updatedBy: req.user._id,
+            updatedAt: new Date()
+          };
+        }
+
         if (adminComment || uploadedFiles.length) {
           if (!uploadedFiles.length) {
             request.adminComments.push({
@@ -744,7 +788,7 @@ exports.updateRequestStatus = async (req, res) => {
           uploadedFiles.forEach((file, index) => {
           request.adminComments.push({
             text: index === 0 ? (adminComment || '') : '',
-            image: `/uploads/asset-comments/${file.filename}`,
+            image: `/api/uploads/asset-comments/${file.filename}`,
             originalName: file.originalname || '',
             size: file.size || 0,
             mimeType: file.mimetype || '',
@@ -753,6 +797,25 @@ exports.updateRequestStatus = async (req, res) => {
           });
           });
         }
+    if (!request.updateHistory) {
+      request.updateHistory = [];
+    }
+    const currentSnapshot = {
+      status: status || request.status,
+      approvalAbout: request.approvalDetails?.about || '',
+      approvalImages: Array.isArray(request.approvalDetails?.images)
+        ? request.approvalDetails.images.map(item => item.image).filter(Boolean)
+        : [],
+      adminComment: adminComment || '',
+      adminCommentsCount: Array.isArray(request.adminComments) ? request.adminComments.length : 0
+    };
+    request.updateHistory.push({
+      action: status ? `status:${status}` : 'details-updated',
+      previous: previousSnapshot,
+      current: currentSnapshot,
+      updatedBy: req.user._id,
+      updatedAt: new Date()
+    });
     request.decisionDate = new Date();
     request.approvedBy = req.user._id;
 

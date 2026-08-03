@@ -61,6 +61,30 @@ const assetRequestSchema = new mongoose.Schema({
     addedAt: { type: Date, default: Date.now }
   }
 ],
+  approvalDetails: {
+    about: { type: String, default: '' },
+    images: [
+      {
+        image: { type: String },
+        originalName: { type: String, default: '' },
+        size: { type: Number, default: 0 },
+        mimeType: { type: String, default: '' },
+        uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        uploadedAt: { type: Date, default: Date.now }
+      }
+    ],
+    updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    updatedAt: { type: Date }
+  },
+  updateHistory: [
+    {
+      action: { type: String, default: 'updated' },
+      previous: { type: mongoose.Schema.Types.Mixed },
+      current: { type: mongoose.Schema.Types.Mixed },
+      updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      updatedAt: { type: Date, default: Date.now }
+    }
+  ],
   approvedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
