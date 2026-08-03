@@ -2504,8 +2504,11 @@ exports.refreshToken = async (req, res) => {
     
     const newToken = jwt.sign(
       {
-        userId: user._id,
+        id: user._id.toString(),
+        _id: user._id.toString(),
+        userId: user._id.toString(),
         email: user.email,
+        companyCode: user.companyCode,
         role: user.jobRole
       },
       process.env.JWT_SECRET,
@@ -2762,4 +2765,3 @@ const blacklistToken = async (token, expiry) => {
 };
 
 void 0;
-

@@ -40,7 +40,7 @@ router.patch(
   '/update/:id',
   protect,
   uploadCommentImage.fields([
-    { name: 'commentImages', maxCount: 5 },
+    { name: 'commentImages', maxCount: 3 },
     { name: 'commentImage', maxCount: 1 }
   ]),
   assetController.updateRequestStatus
