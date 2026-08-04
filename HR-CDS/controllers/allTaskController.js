@@ -573,21 +573,20 @@ exports.getCompanyAllTaskOverview = async (req, res) => {
     const attendanceByUser = new Map(
       attendanceRecords.map(record => [String(record.user), record])
     );
-    const presentUsers = users
+    const usersWithAttendance = users
       .map(user => ({
         ...user,
         todayAttendance: attendanceByUser.get(String(user._id)) || null
-      }))
-      .filter(user => isPresentForTaskCards(user.todayAttendance));
+      }));
 
     const includeStats = String(req.query.includeStats || '').toLowerCase() === 'true';
     if (!includeStats) {
       return res.json({
         success: true,
-        users: presentUsers,
+        users: usersWithAttendance,
         statsByUser: {},
         summary: {
-          totalUsers: presentUsers.length,
+          totalUsers: usersWithAttendance.length,
           totalTasks: 0,
           statsDeferred: true,
         }
@@ -605,7 +604,7 @@ exports.getCompanyAllTaskOverview = async (req, res) => {
       branchId: req.query.branchId,
     };
 
-    const entries = await mapWithConcurrency(presentUsers, 6, async (user) => {
+    const entries = await mapWithConcurrency(usersWithAttendance, 6, async (user) => {
       const userId = String(user._id);
       try {
         const allTasks = await queryAllUserTasks(userId, req.user.companyCode || currentUser.companyCode, queryParams);
@@ -617,7 +616,7 @@ exports.getCompanyAllTaskOverview = async (req, res) => {
     });
 
     const statsByUser = Object.fromEntries(entries);
-    const usersWithStats = presentUsers.map(user => ({
+    const usersWithStats = usersWithAttendance.map(user => ({
       ...user,
       taskStats: statsByUser[String(user._id)]
     }));

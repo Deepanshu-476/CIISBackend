@@ -11,9 +11,9 @@ router.get('/', (req, res) => {
   const platform = String(req.query.platform || 'android').toLowerCase();
 
   if (platform === 'ios') {
-    const latestBuildNumber = parseNumber(process.env.IOS_LATEST_BUILD_NUMBER, 23);
+    const latestBuildNumber = parseNumber(process.env.IOS_LATEST_BUILD_NUMBER, 26);
     const minimumBuildNumber = parseNumber(process.env.IOS_MIN_BUILD_NUMBER, 1);
-    const latestVersionName = process.env.IOS_LATEST_VERSION_NAME || '1.1.9';
+    const latestVersionName = process.env.IOS_LATEST_VERSION_NAME || '1.1.11';
     const bundleId = process.env.IOS_BUNDLE_ID || 'ciisnetwork.in';
     const appStoreId = process.env.IOS_APP_STORE_ID || '6780872642';
 
@@ -34,9 +34,9 @@ router.get('/', (req, res) => {
     });
   }
 
-  const latestVersionCode = parseNumber(process.env.ANDROID_LATEST_VERSION_CODE, 19);
+  const latestVersionCode = parseNumber(process.env.ANDROID_LATEST_VERSION_CODE, 22);
   const minimumVersionCode = parseNumber(process.env.ANDROID_MIN_VERSION_CODE, 1);
-  const latestVersionName = process.env.ANDROID_LATEST_VERSION_NAME || '1.1.9';
+  const latestVersionName = process.env.ANDROID_LATEST_VERSION_NAME || '1.1.11';
   const packageName = process.env.ANDROID_PACKAGE_NAME || 'ciisnetwork.in';
 
   res.json({
