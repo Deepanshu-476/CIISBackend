@@ -2,11 +2,24 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const rateLimit = require('express-rate-limit');
 const Company = require('../models/Company');
 const User = require('../models/User');
+const { protect, restrictTo } = require('../middleware/authMiddleware');
+
+const superAdminLoginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many super admin login attempts. Please try again later.',
+  },
+});
 
 
-router.post('/login', async (req, res) => {
+router.post('/login', superAdminLoginLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
     
@@ -92,7 +105,7 @@ router.post('/login', async (req, res) => {
         department: user.department,
         jobRole: user.jobRole
       },
-      process.env.JWT_SECRET || 'your-secret-key',
+      process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRE || '30d' }
     );
     
@@ -131,6 +144,8 @@ router.post('/login', async (req, res) => {
     });
   }
 });
+
+router.use(protect, restrictTo('super_admin'));
 
 
 router.get('/stats', async (req, res) => {

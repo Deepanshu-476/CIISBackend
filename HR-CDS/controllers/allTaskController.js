@@ -83,6 +83,35 @@ const applyBranchUserFilter = (query, req, currentUser = req.user || {}) => {
   return query;
 };
 
+const escapeRegex = value => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const getAssigneeNameAliases = value => {
+  const name = String(value || '').trim();
+  if (!name) return [];
+
+  const aliases = new Set([name]);
+  const firstName = name.split(/\s+/).find(Boolean);
+  if (firstName && firstName.length >= 3) {
+    aliases.add(firstName);
+  }
+
+  return [...aliases];
+};
+
+const buildAssigneeNameConditions = names => {
+  const aliases = [...new Set(
+    (Array.isArray(names) ? names : [names])
+      .flatMap(getAssigneeNameAliases)
+      .map(name => String(name || '').trim())
+      .filter(Boolean)
+  )];
+
+  return aliases.flatMap(name => ([
+    { assignee: name },
+    { assignee: { $regex: `^${escapeRegex(name)}$`, $options: 'i' } }
+  ]));
+};
+
 
 const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
   const targetUserId = userId.toString();
@@ -132,8 +161,7 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
     $or: [
       { assigneeId: userId },
       { assignee: targetUserId },
-      { assignee: targetUser?.name },
-      { assignee: targetUser?.email }
+      ...buildAssigneeNameConditions([targetUser?.name, targetUser?.email])
     ].filter(condition => Object.values(condition)[0])
   };
   if (dateOr) clientQuery.$and = [{ $or: [{ dueDate: range }, { createdAt: range }, { updatedAt: range }] }];
@@ -573,21 +601,20 @@ exports.getCompanyAllTaskOverview = async (req, res) => {
     const attendanceByUser = new Map(
       attendanceRecords.map(record => [String(record.user), record])
     );
-    const presentUsers = users
+    const usersWithAttendance = users
       .map(user => ({
         ...user,
         todayAttendance: attendanceByUser.get(String(user._id)) || null
-      }))
-      .filter(user => isPresentForTaskCards(user.todayAttendance));
+      }));
 
     const includeStats = String(req.query.includeStats || '').toLowerCase() === 'true';
     if (!includeStats) {
       return res.json({
         success: true,
-        users: presentUsers,
+        users: usersWithAttendance,
         statsByUser: {},
         summary: {
-          totalUsers: presentUsers.length,
+          totalUsers: usersWithAttendance.length,
           totalTasks: 0,
           statsDeferred: true,
         }
@@ -605,7 +632,7 @@ exports.getCompanyAllTaskOverview = async (req, res) => {
       branchId: req.query.branchId,
     };
 
-    const entries = await mapWithConcurrency(presentUsers, 6, async (user) => {
+    const entries = await mapWithConcurrency(usersWithAttendance, 6, async (user) => {
       const userId = String(user._id);
       try {
         const allTasks = await queryAllUserTasks(userId, req.user.companyCode || currentUser.companyCode, queryParams);
@@ -617,7 +644,7 @@ exports.getCompanyAllTaskOverview = async (req, res) => {
     });
 
     const statsByUser = Object.fromEntries(entries);
-    const usersWithStats = presentUsers.map(user => ({
+    const usersWithStats = usersWithAttendance.map(user => ({
       ...user,
       taskStats: statsByUser[String(user._id)]
     }));
