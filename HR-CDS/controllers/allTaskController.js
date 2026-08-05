@@ -83,6 +83,35 @@ const applyBranchUserFilter = (query, req, currentUser = req.user || {}) => {
   return query;
 };
 
+const escapeRegex = value => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const getAssigneeNameAliases = value => {
+  const name = String(value || '').trim();
+  if (!name) return [];
+
+  const aliases = new Set([name]);
+  const firstName = name.split(/\s+/).find(Boolean);
+  if (firstName && firstName.length >= 3) {
+    aliases.add(firstName);
+  }
+
+  return [...aliases];
+};
+
+const buildAssigneeNameConditions = names => {
+  const aliases = [...new Set(
+    (Array.isArray(names) ? names : [names])
+      .flatMap(getAssigneeNameAliases)
+      .map(name => String(name || '').trim())
+      .filter(Boolean)
+  )];
+
+  return aliases.flatMap(name => ([
+    { assignee: name },
+    { assignee: { $regex: `^${escapeRegex(name)}$`, $options: 'i' } }
+  ]));
+};
+
 
 const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
   const targetUserId = userId.toString();
@@ -132,8 +161,7 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
     $or: [
       { assigneeId: userId },
       { assignee: targetUserId },
-      { assignee: targetUser?.name },
-      { assignee: targetUser?.email }
+      ...buildAssigneeNameConditions([targetUser?.name, targetUser?.email])
     ].filter(condition => Object.values(condition)[0])
   };
   if (dateOr) clientQuery.$and = [{ $or: [{ dueDate: range }, { createdAt: range }, { updatedAt: range }] }];

@@ -30,6 +30,34 @@ const normalizeId = (value) => {
   return String(value).trim();
 };
 
+const escapeRegex = value => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const getAssigneeNameAliases = value => {
+  const name = String(value || '').trim();
+  if (!name) return [];
+
+  const aliases = new Set([name]);
+  const firstName = name.split(/\s+/).find(Boolean);
+  if (firstName && firstName.length >= 3) aliases.add(firstName);
+
+  return [...aliases];
+};
+
+const buildAssigneeNameConditions = names => {
+  const aliases = [...new Set(
+    (Array.isArray(names) ? names : [names])
+      .flatMap(getAssigneeNameAliases)
+      .map(name => String(name || '').trim())
+      .filter(Boolean)
+  )];
+
+  return aliases.flatMap(name => ([
+    { assignee: name },
+    { assignee: { $regex: `^${escapeRegex(name)}$`, $options: 'i' } },
+    { assignee: { $regex: `^${escapeRegex(name)}(?:\\s|$)`, $options: 'i' } }
+  ]));
+};
+
 const getRequestedTaskBranchId = (req) => {
   const value = req.body?.branchId || req.body?.branch || req.query?.branchId || req.query?.branch;
   return value ? String(value).trim() : '';
@@ -1623,7 +1651,10 @@ exports.getUserDetailedAnalytics = async (req, res) => {
 };
 
 const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
-  const groups = await Group.find({ members: userId, isActive: true }).select('_id').lean();
+  const [targetUser, groups] = await Promise.all([
+    User.findById(userId).select('name email').lean(),
+    Group.find({ members: userId, isActive: true }).select('_id').lean()
+  ]);
   const groupIds = groups.map(g => g._id);
 
   
@@ -1665,8 +1696,9 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
   const clientQuery = {
     $or: [
       { assigneeId: userId },
-      { assignee: userId.toString() }
-    ]
+      { assignee: userId.toString() },
+      ...buildAssigneeNameConditions([targetUser?.name, targetUser?.email])
+    ].filter(condition => Object.values(condition)[0])
   };
   if (range) clientQuery.$and = [{ $or: [{ dueDate: range }, { createdAt: range }, { updatedAt: range }] }];
   if (priority) clientQuery.priority = new RegExp(`^${priority}$`, 'i');
