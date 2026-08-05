@@ -23,6 +23,7 @@ const {
   path,
   sharp
 } = require('./taskHelper');
+const { enqueueCompletionJob } = require('../utils/backgroundJobQueue');
 
 
 const fetchPersonalTaskList = async (req) => {
@@ -274,8 +275,29 @@ exports.updateStatus = async (req, res) => {
     task.statusHistory.push({ status, changedBy: req.user._id, remarks: remarks || `Status changed from ${oldStatus} to ${status}` });
 
     await task.save();
-    await createActivityLog(req.user, 'status_updated', task._id, `Updated task status to ${status}`, { status: oldStatus }, { status, remarks }, req);
     res.json({ success: true, message: 'Status updated successfully', data: { taskId, newStatus: status, overallStatus: task.overallStatus } });
+
+    const runStatusPostProcessing = async () => {
+      await createActivityLog(req.user, 'status_updated', task._id, `Updated task status to ${status}`, { status: oldStatus }, { status, remarks }, req);
+    };
+
+    if (status === 'completed') {
+      enqueueCompletionJob(async () => {
+        try {
+          await runStatusPostProcessing();
+        } catch (asyncErr) {
+          console.error('❌ Background self task post-processing failed:', asyncErr);
+        }
+      });
+    } else {
+      void (async () => {
+        try {
+          await runStatusPostProcessing();
+        } catch (asyncErr) {
+          console.error('❌ Background self task post-processing failed:', asyncErr);
+        }
+      })();
+    }
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -361,8 +383,20 @@ exports.addRemark = async (req, res) => {
     task.remarks.push(remark);
     await task.save();
 
-    await task.populate('remarks.user', 'name role email avatar');
-    res.json({ success: true, message: 'Remark added successfully', remark: task.remarks[task.remarks.length - 1] });
+    const savedRemark = task.remarks[task.remarks.length - 1];
+    const responseRemark = {
+      ...(typeof savedRemark.toObject === 'function' ? savedRemark.toObject() : savedRemark),
+      user: {
+        _id: req.user._id,
+        name: req.user.name,
+        email: req.user.email,
+        role: req.user.role,
+        avatar: req.user.avatar || null
+      },
+      userName: req.user.name || ''
+    };
+
+    res.status(201).json({ success: true, message: 'Remark added successfully', remark: responseRemark });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
