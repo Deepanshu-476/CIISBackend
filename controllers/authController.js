@@ -2494,7 +2494,12 @@ exports.refreshToken = async (req, res) => {
       return errorResponse(res, 400, "Refresh token is required");
     }
 
-    const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
+    const refreshSecret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
+    if (!refreshSecret) {
+      return errorResponse(res, 500, "Authentication service is not configured");
+    }
+
+    const decoded = jwt.verify(refreshToken, refreshSecret);
     
     const user = await User.findById(decoded.userId);
     if (!user) {

@@ -1084,9 +1084,13 @@ const getAttendanceList = async (req, res) => {
       
       const queryMonth = parseInt(month);
       const queryYear = parseInt(year);
+      const todayEnd = getIndiaDayEnd(new Date());
       
       startDate = indiaDateTimeToUtc(queryYear, queryMonth, 1);
       endDate = indiaDateTimeToUtc(queryYear, queryMonth + 1, 0, 23, 59, 59, 999);
+      if (endDate > todayEnd) {
+        endDate = todayEnd;
+      }
       
       query.date = { $gte: startDate, $lte: endDate };
     }
