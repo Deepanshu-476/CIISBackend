@@ -631,7 +631,6 @@ const fetchAssignedProjectTaskList = async (req) => {
     .populate('createdBy', 'name email')
     .populate('tasks.assignedTo', 'name email')
     .populate('tasks.createdBy', 'name email')
-    .populate('tasks.activityLogs.performedBy', 'name email')
     .lean();
 
   const tasks = [];
