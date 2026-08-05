@@ -6,6 +6,7 @@ const path = require('path');
 const sharp = require('sharp');
 const User = require('../../models/User');
 const { notifyPageUsers, notifyDirectUsers } = require('../utils/systemNotificationService');
+const { enqueueCompletionJob, enqueueBackgroundJob } = require('../utils/backgroundJobQueue');
 const { sendEmail } = require('../../utils/sendEmail');
 const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
 
@@ -703,85 +704,91 @@ const addClientRemarkWithImages = async (req, res) => {
     
     task.remarks.push(remark);
     
-    await addClientActivityLogHelper(task, {
-      action: 'remark_added',
-      description: `Added remark with ${images.length} image(s)${text ? `: ${text.substring(0, 50)}` : ''}`,
-      user: currentUser?.id || currentUser?._id,
-      userName: currentUser?.name || currentUser?.username || 'System'
-    }, req);
-    
     await task.save();
-    
-    
     const addedRemark = task.remarks[task.remarks.length - 1];
-    if (addedRemark.user) {
-      await task.populate('remarks.user', 'name email');
-    }
-    
-    void 0;
-    
-    try {
-      const client = await Client.findById(task.clientId).select('company companyCode');
-      await notifyPageUsers({
-        companyId: getNotificationCompanyId(client, req.user),
-        targetPath: '/ciisUser/company-all-task',
-        type: 'task_remark_added',
-        title: 'Client Task Remark',
-        message: `${currentUser?.name || 'User'} added a remark on client task "${task.name || task.title}"`,
-        data: { taskId: task._id, remarkId: addedRemark._id },
-        priority: 'medium'
-      });
-    } catch (notifyErr) {
-      console.error('Error notifying page users for client remark:', notifyErr);
-    }
+    const responseRemark = {
+      ...(typeof addedRemark.toObject === 'function' ? addedRemark.toObject() : addedRemark),
+      user: {
+        _id: currentUser?.id || currentUser?._id,
+        name: currentUser?.name || currentUser?.username || 'System',
+        email: currentUser?.email || ''
+      },
+      userName: currentUser?.name || currentUser?.username || 'System'
+    };
 
-    try {
-      const client = await Client.findById(task.clientId).select('client name email company companyCode userId');
-      await notifyClientPortalUsers({
-        client,
-        task,
-        actor: currentUser,
-        title: 'Client Task Remark',
-        message: `${currentUser?.name || 'A user'} added a remark on "${task.name || task.title}"`,
-        data: {remarkId: addedRemark._id},
-        priority: 'medium',
-      });
-      await notifyAssignedClientTaskUser({
-        task,
-        actor: currentUser,
-        title: 'Client Task Remark',
-        message: `${currentUser?.name || 'A user'} added a remark on client task "${task.name || task.title}"`,
-        data: {remarkId: addedRemark._id},
-        priority: 'medium',
-      });
-    } catch (notifyErr) {
-      console.error('Error notifying client/assignee for client remark:', notifyErr);
-    }
-
-    
-    try {
-      const client = await Client.findById(task.clientId).select('name email');
-      if (client && client.email) {
-        const subject = `New remark on your task: ${task.name || task.title}`;
-        const html = `<p>Hello ${client.name || 'Client'},</p><p>${currentUser?.name || 'A user'} added a remark on task "${task.name || task.title}".</p><p>Remark: ${text || ''}</p><p>View details in your portal.</p>`;
-        await sendEmail(client.email, subject, html, {
-          skipNotification: true,
-          notificationType: 'task_remark_added',
-          notificationTargetPath: '/ciisUser/ClientDashboard',
-          notificationMessage: `${currentUser?.name || 'A user'} added a remark on "${task.name || task.title}"`,
-          notificationData: {taskId: task._id, remarkId: addedRemark._id, source: 'client_task'},
-          notificationPriority: 'medium',
-        });
-      }
-    } catch (emailErr) {
-      console.error('Error sending client email for remark:', emailErr);
-    }
-    void 0;
-    
     res.status(201).json({
       success: true,
       message: 'Remark with images added successfully',
-      data: addedRemark
+      data: responseRemark
+    });
+
+    void enqueueBackgroundJob(async () => {
+      try {
+        await addClientActivityLogHelper(task, {
+          action: 'remark_added',
+          description: `Added remark with ${images.length} image(s)${text ? `: ${text.substring(0, 50)}` : ''}`,
+          user: currentUser?.id || currentUser?._id,
+          userName: currentUser?.name || currentUser?.username || 'System'
+        }, req);
+      } catch (activityErr) {
+        console.error('Error logging client remark activity:', activityErr);
+      }
+
+      try {
+        const client = await Client.findById(task.clientId).select('company companyCode');
+        await notifyPageUsers({
+          companyId: getNotificationCompanyId(client, req.user),
+          targetPath: '/ciisUser/company-all-task',
+          type: 'task_remark_added',
+          title: 'Client Task Remark',
+          message: `${currentUser?.name || 'User'} added a remark on client task "${task.name || task.title}"`,
+          data: { taskId: task._id, remarkId: addedRemark._id },
+          priority: 'medium'
+        });
+      } catch (notifyErr) {
+        console.error('Error notifying page users for client remark:', notifyErr);
+      }
+
+      try {
+        const client = await Client.findById(task.clientId).select('client name email company companyCode userId');
+        await notifyClientPortalUsers({
+          client,
+          task,
+          actor: currentUser,
+          title: 'Client Task Remark',
+          message: `${currentUser?.name || 'A user'} added a remark on "${task.name || task.title}"`,
+          data: {remarkId: addedRemark._id},
+          priority: 'medium',
+        });
+        await notifyAssignedClientTaskUser({
+          task,
+          actor: currentUser,
+          title: 'Client Task Remark',
+          message: `${currentUser?.name || 'A user'} added a remark on client task "${task.name || task.title}"`,
+          data: {remarkId: addedRemark._id},
+          priority: 'medium',
+        });
+      } catch (notifyErr) {
+        console.error('Error notifying client/assignee for client remark:', notifyErr);
+      }
+
+      try {
+        const client = await Client.findById(task.clientId).select('name email');
+        if (client && client.email) {
+          const subject = `New remark on your task: ${task.name || task.title}`;
+          const html = `<p>Hello ${client.name || 'Client'},</p><p>${currentUser?.name || 'A user'} added a remark on task "${task.name || task.title}".</p><p>Remark: ${text || ''}</p><p>View details in your portal.</p>`;
+          await sendEmail(client.email, subject, html, {
+            skipNotification: true,
+            notificationType: 'task_remark_added',
+            notificationTargetPath: '/ciisUser/ClientDashboard',
+            notificationMessage: `${currentUser?.name || 'A user'} added a remark on "${task.name || task.title}"`,
+            notificationData: {taskId: task._id, remarkId: addedRemark._id, source: 'client_task'},
+            notificationPriority: 'medium',
+          });
+        }
+      } catch (emailErr) {
+        console.error('Error sending client email for remark:', emailErr);
+      }
     });
     
   } catch (error) {
@@ -849,28 +856,36 @@ const addClientRemark = async (req, res) => {
 
     task.remarks.push(remark);
     
-    await addClientActivityLogHelper(task, {
-      action: 'remark_added',
-      description: `Added remark: ${text.substring(0, 100)}${text.length > 100 ? '...' : ''}`,
-      user: currentUser?.id || currentUser?._id,
-      userName: currentUser?.name || currentUser?.username || 'System'
-    }, req);
-
     await task.save();
-    
-    
     const addedRemark = task.remarks[task.remarks.length - 1];
-    if (addedRemark.user) {
-      await task.populate('remarks.user', 'name email');
-    }
+    const responseRemark = {
+      ...(typeof addedRemark.toObject === 'function' ? addedRemark.toObject() : addedRemark),
+      user: {
+        _id: currentUser?.id || currentUser?._id,
+        name: currentUser?.name || currentUser?.username || 'System',
+        email: currentUser?.email || ''
+      },
+      userName: currentUser?.name || currentUser?.username || 'System'
+    };
 
-    void 0;
-    void 0;
+    res.status(201).json({
+      success: true,
+      message: 'Remark added successfully',
+      data: responseRemark
+    });
 
-      void 0;
-      void 0;
+    void enqueueBackgroundJob(async () => {
+      try {
+        await addClientActivityLogHelper(task, {
+          action: 'remark_added',
+          description: `Added remark: ${text.substring(0, 100)}${text.length > 100 ? '...' : ''}`,
+          user: currentUser?.id || currentUser?._id,
+          userName: currentUser?.name || currentUser?.username || 'System'
+        }, req);
+      } catch (activityErr) {
+        console.error('Error logging client remark activity:', activityErr);
+      }
 
-      
       try {
         const client = await Client.findById(task.clientId).select('company companyCode');
         await notifyPageUsers({
@@ -909,7 +924,6 @@ const addClientRemark = async (req, res) => {
         console.error('Error notifying client/assignee for client remark:', notifyErr);
       }
 
-      
       try {
         const client = await Client.findById(task.clientId).select('name email');
         if (client && client.email) {
@@ -927,12 +941,7 @@ const addClientRemark = async (req, res) => {
       } catch (emailErr) {
         console.error('Error sending client email for remark:', emailErr);
       }
-
-      res.status(201).json({
-        success: true,
-        message: 'Remark added successfully',
-        data: addedRemark
-      });
+    });
 
   } catch (error) {
     console.error('❌ Error in addClientRemark:', error);
@@ -1393,16 +1402,30 @@ const updateAssignedTaskStatus = async (req, res) => {
 
     await task.save();
 
-    if (!previousCompleted && task.completed) {
-      await notifyClientTaskCompleted({task, actor: currentUser, req});
-    }
+    res.json({
+      success: true,
+      message: 'Task status updated successfully',
+      data: {
+        _id: task._id,
+        name: task.name,
+        completed: task.completed,
+        status: task.status,
+        completedAt: task.completedAt,
+        remarks: task.remarks,
+        activityLogs: task.activityLogs
+      }
+    });
 
-    if (previousStatus !== task.status || previousCompleted !== task.completed || (remarks && remarks.trim())) {
-      const statusMessage = previousStatus !== task.status
-        ? `${currentUser?.name || 'User'} changed task "${task.name}" status to ${task.status}`
-        : `${currentUser?.name || 'User'} updated task "${task.name}"`;
+    const runStatusPostProcessing = async () => {
+      if (!previousCompleted && task.completed) {
+        await notifyClientTaskCompleted({task, actor: currentUser, req});
+      }
 
-      try {
+      if (previousStatus !== task.status || previousCompleted !== task.completed || (remarks && remarks.trim())) {
+        const statusMessage = previousStatus !== task.status
+          ? `${currentUser?.name || 'User'} changed task "${task.name}" status to ${task.status}`
+          : `${currentUser?.name || 'User'} updated task "${task.name}"`;
+
         const client = await Client.findById(task.clientId).select('client name email company companyCode userId');
         await notifyPageUsers({
           companyId: getNotificationCompanyId(client, req.user),
@@ -1422,26 +1445,26 @@ const updateAssignedTaskStatus = async (req, res) => {
           data: {status: task.status},
           priority: task.completed ? 'high' : 'medium',
         });
-      } catch (notifyErr) {
-        console.error('Error notifying client task status update:', notifyErr);
       }
+    };
+
+    if (task.completed && !previousCompleted) {
+      enqueueCompletionJob(async () => {
+        try {
+          await runStatusPostProcessing();
+        } catch (notifyErr) {
+          console.error('Error notifying client task status update:', notifyErr);
+        }
+      });
+    } else {
+      void (async () => {
+        try {
+          await runStatusPostProcessing();
+        } catch (notifyErr) {
+          console.error('Error notifying client task status update:', notifyErr);
+        }
+      })();
     }
-
-    void 0;
-
-    res.json({
-      success: true,
-      message: 'Task status updated successfully',
-      data: {
-        _id: task._id,
-        name: task.name,
-        completed: task.completed,
-        status: task.status,
-        completedAt: task.completedAt,
-        remarks: task.remarks,
-        activityLogs: task.activityLogs
-      }
-    });
 
   } catch (error) {
     console.error('❌ Error updating assigned task:', error);

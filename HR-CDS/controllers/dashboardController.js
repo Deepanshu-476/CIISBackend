@@ -200,9 +200,19 @@ const getEmployeeProductivity = async (req, res) => {
     const [attendance, employeeTasks, projects, leaves, holidays] = await Promise.all([
       Attendance.find({user: userId, companyCode, date: {$gte: start, $lte: end}}).lean(),
       EmployeeTask.find({companyCode, isActive: {$ne: false}, createdAt: {$lte: end}, $or: [{assignedUsers: userId}, {"statusByUser.user": userId}]}).select("createdAt updatedAt dueDateTime completionDate overallStatus statusByUser statusHistory").lean(),
-      Project.find({tasks: {$elemMatch: {assignedTo: userId, createdAt: {$lte: end}}}})
-        .select("tasks._id tasks.title tasks.assignedTo tasks.createdAt tasks.updatedAt tasks.dueDate tasks.status")
-        .lean(),
+      Project.aggregate([
+        {$match: {tasks: {$elemMatch: {assignedTo: new mongoose.Types.ObjectId(userId), createdAt: {$lte: end}}}}},
+        {$project: {
+          tasks: {$filter: {
+            input: "$tasks",
+            as: "task",
+            cond: {$and: [
+              {$eq: ["$$task.assignedTo", new mongoose.Types.ObjectId(userId)]},
+              {$lte: ["$$task.createdAt", end]},
+            ]},
+          }},
+        }},
+      ]),
       Leave.find({user: userId, status: /^approved$/i, startDate: {$lte: end}, endDate: {$gte: start}}).select("startDate endDate").lean(),
       Holiday.find({companyCode, isActive: true, date: {$gte: start, $lte: end}}).select("date").lean(),
     ]);
