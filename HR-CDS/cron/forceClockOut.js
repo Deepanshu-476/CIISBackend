@@ -229,7 +229,9 @@ const calculateAttendanceByShift = ({ inTime, outTime, shiftSettings, currentSta
   const totalMs = outTime - inTime;
   let finalStatus = status;
 
-  if (finalStatus !== 'HALF DAY' && finalStatus !== 'ABSENT') {
+  // Keep LATE determined from clock-in from being overwritten when the
+  // auto-clock-out sweep recalculates the record.
+  if (finalStatus === 'PRESENT') {
     if (outTime < schedule.halfDayEarlyLimit) {
       finalStatus = 'HALF DAY';
     } else if (outTime < schedule.shortLeaveEarlyLimit) {
