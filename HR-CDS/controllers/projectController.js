@@ -4,6 +4,7 @@ const path = require("path");
 const fs = require("fs");
 const sharp = require("sharp");
 const {notifyDirectUsers} = require("../utils/systemNotificationService");
+const { enqueueCompletionJob } = require("../utils/backgroundJobQueue");
 const { sendEmail } = require("../../utils/sendEmail");
 const User = require("../../models/User");
 const Branch = require("../../models/Branch");
@@ -1630,7 +1631,6 @@ exports.updateTaskStatus = async (req, res) => {
 
     await project.save();
 
-    
     const notification = {
       title: "Task Status Updated",
       message: `Task "${task.title}" status changed from ${oldStatus} to ${nextProjectStatus}`,
@@ -1640,35 +1640,53 @@ exports.updateTaskStatus = async (req, res) => {
       createdBy: req.user.id
     };
 
-    await project.addNotification(notification);
-
-    const statusNotificationUsers = [project.createdBy, ...getTaskAssigneeIds(task)]
-      .filter(userId => userId && !idsEqual(userId, req.user.id));
-
-    await notifyDirectUsers({
-      userIds: statusNotificationUsers,
-      targetPath: '/ciisUser/task-management',
-      type: 'project_task_status_changed',
-      title: 'Project Task Updated',
-      message: `${req.user.name} changed "${task.title}" status from ${oldStatus} to ${nextProjectStatus}${remark ? ': ' + remark : ''}`,
-      actor: req.user.id,
-      data: {
-        projectId: project._id,
-        taskId: task._id,
-        oldStatus,
-        newStatus: nextProjectStatus,
-        remark,
-      },
-      priority: 'medium',
-    });
-
-    void 0;
-
     res.status(200).json({
       success: true,
       message: "Task status updated successfully",
       task
     });
+
+    const runStatusPostProcessing = async () => {
+      await project.addNotification(notification);
+
+      const statusNotificationUsers = [project.createdBy, ...getTaskAssigneeIds(task)]
+        .filter(userId => userId && !idsEqual(userId, req.user.id));
+
+      await notifyDirectUsers({
+        userIds: statusNotificationUsers,
+        targetPath: '/ciisUser/task-management',
+        type: 'project_task_status_changed',
+        title: 'Project Task Updated',
+        message: `${req.user.name} changed "${task.title}" status from ${oldStatus} to ${nextProjectStatus}${remark ? ': ' + remark : ''}`,
+        actor: req.user.id,
+        data: {
+          projectId: project._id,
+          taskId: task._id,
+          oldStatus,
+          newStatus: nextProjectStatus,
+          remark,
+        },
+        priority: 'medium',
+      });
+    };
+
+    if (nextProjectStatus === 'completed') {
+      enqueueCompletionJob(async () => {
+        try {
+          await runStatusPostProcessing();
+        } catch (asyncErr) {
+          console.error('❌ Background project task post-processing failed:', asyncErr);
+        }
+      });
+    } else {
+      void (async () => {
+        try {
+          await runStatusPostProcessing();
+        } catch (asyncErr) {
+          console.error('❌ Background project task post-processing failed:', asyncErr);
+        }
+      })();
+    }
   } catch (error) {
     console.error("❌ Error updating task status:", error);
     res.status(500).json({ 

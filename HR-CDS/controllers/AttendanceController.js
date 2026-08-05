@@ -311,7 +311,11 @@ const calculateAttendanceByShift = ({ inTime, outTime, shiftSettings, currentSta
   const totalMs = outTime - inTime;
   let finalStatus = status;
 
-  if (finalStatus !== "HALF DAY" && finalStatus !== "ABSENT") {
+  // Preserve a late clock-in classification during clock-out recalculation.
+  // Early clock-out rules apply only to employees who clocked in on time;
+  // otherwise a valid LATE record (for example, 10:00 for a 09:00 shift)
+  // was incorrectly overwritten as HALF DAY.
+  if (finalStatus === "PRESENT") {
     if (outTime < schedule.halfDayEarlyLimit) {
       finalStatus = "HALF DAY";
     } else if (outTime < schedule.shortLeaveEarlyLimit) {
