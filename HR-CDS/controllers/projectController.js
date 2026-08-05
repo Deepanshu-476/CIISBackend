@@ -561,7 +561,7 @@ exports.listProjects = async (req, res) => {
       .limit(limit);
 
     if (summaryMode) {
-      projectQuery.select('projectName description company companyCode branch users status startDate endDate priority pdfFile createdBy createdAt updatedAt tasks._id');
+      projectQuery.select('projectName description company companyCode branch users status startDate endDate priority pdfFile createdBy createdAt updatedAt');
     } else {
       projectQuery
         .populate('tasks.assignedTo', 'name email')

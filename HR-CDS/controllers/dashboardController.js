@@ -4,6 +4,7 @@ const Leave = require("../models/Leave");
 const AssetRequest = require("../models/AssetRequest");
 const Task = require("../models/ClientTask");
 const EmployeeTask = require("../models/Task");
+const {Project} = require("../models/Project");
 const Meeting = require("../models/Meeting");
 const Holiday = require("../models/Holiday");
 const User = require("../../models/User");
@@ -138,7 +139,14 @@ const calculateProductivityMetrics = ({start, end, attendance, tasks, excludedDa
     const created = new Date(task.createdAt);
     const due = task.dueDateTime ? new Date(task.dueDateTime) : null;
     const completed = getTaskCompletionDate(task, userId);
-    return (created >= start && created <= end) || (due && due >= start && due <= end) || (completed && completed >= start && completed <= end) || (due && due < start && (!completed || completed > end));
+    const createdInRange = created >= start && created <= end;
+    const completedInRange = completed && completed >= start && completed <= end;
+    const dueByPeriodEnd = due && due <= end;
+    const openDuringRange = !completed || completed >= start;
+
+    // Upcoming work must not reduce the current period's productivity before
+    // its due date. Keep completed, due/overdue, and undated current work.
+    return completedInRange || (dueByPeriodEnd && openDuringRange) || (!due && createdInRange);
   });
   const completed = relevantTasks.filter(task => { const date = getTaskCompletionDate(task, userId); return date && date <= end; });
   const deliveryEligible = relevantTasks.filter(task => task.dueDateTime && (new Date(task.dueDateTime) <= end || getTaskCompletionDate(task, userId)));
@@ -189,12 +197,28 @@ const getEmployeeProductivity = async (req, res) => {
     const userId = req.user._id || req.user.id;
     const companyCode = String(req.user.companyCode || req.user.company?.companyCode || "").trim();
     const {start, end, period} = getProductivityRange(req.query);
-    const [attendance, tasks, leaves, holidays] = await Promise.all([
+    const [attendance, employeeTasks, projects, leaves, holidays] = await Promise.all([
       Attendance.find({user: userId, companyCode, date: {$gte: start, $lte: end}}).lean(),
       EmployeeTask.find({companyCode, isActive: {$ne: false}, createdAt: {$lte: end}, $or: [{assignedUsers: userId}, {"statusByUser.user": userId}]}).select("createdAt updatedAt dueDateTime completionDate overallStatus statusByUser statusHistory").lean(),
+      Project.find({tasks: {$elemMatch: {assignedTo: userId, createdAt: {$lte: end}}}})
+        .select("tasks._id tasks.title tasks.assignedTo tasks.createdAt tasks.updatedAt tasks.dueDate tasks.status")
+        .lean(),
       Leave.find({user: userId, status: /^approved$/i, startDate: {$lte: end}, endDate: {$gte: start}}).select("startDate endDate").lean(),
       Holiday.find({companyCode, isActive: true, date: {$gte: start, $lte: end}}).select("date").lean(),
     ]);
+    const projectTasks = projects.flatMap(project => (project.tasks || [])
+      .filter(task => String(task.assignedTo) === String(userId) && new Date(task.createdAt) <= end)
+      .map(task => ({
+        _id: task._id,
+        createdAt: task.createdAt,
+        updatedAt: task.updatedAt,
+        dueDateTime: task.dueDate,
+        overallStatus: task.status,
+        completionDate: completedStatuses.has(normalizeProductivityStatus(task.status)) ? task.updatedAt : null,
+        statusByUser: [],
+        statusHistory: [],
+      })));
+    const tasks = [...employeeTasks, ...projectTasks];
     const excludedDates = new Set(holidays.map(item => dateKey(item.date)));
     leaves.forEach(leave => { for (let cursor = startOfDay(leave.startDate); cursor <= endOfDay(leave.endDate); cursor = new Date(cursor.getTime() + DAY_MS)) excludedDates.add(dateKey(cursor)); });
     const overall = calculateProductivityMetrics({start, end, attendance, tasks, excludedDates, userId});

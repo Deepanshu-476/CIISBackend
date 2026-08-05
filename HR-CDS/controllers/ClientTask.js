@@ -256,20 +256,70 @@ const addDueDateCondition = (filter, condition) => {
   filter.dueDate = condition;
 };
 
+const escapeRegex = value => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const getAssigneeNameAliases = value => {
+  const name = String(value || '').trim();
+  if (!name) return [];
+
+  const aliases = new Set([name]);
+  const firstName = name.split(/\s+/).find(Boolean);
+  if (firstName && firstName.length >= 3) {
+    aliases.add(firstName);
+  }
+
+  return [...aliases];
+};
+
+const buildAssigneeNameConditions = names => {
+  const aliases = [...new Set(
+    (Array.isArray(names) ? names : [names])
+      .flatMap(getAssigneeNameAliases)
+      .map(name => String(name || '').trim())
+      .filter(Boolean)
+  )];
+
+  return aliases.flatMap(name => ([
+    { assignee: name },
+    { assignee: { $regex: `^${escapeRegex(name)}$`, $options: 'i' } }
+  ]));
+};
+
+const resolveAssigneeUser = async (assignee, companyCode = '') => {
+  const aliases = getAssigneeNameAliases(assignee);
+  if (!aliases.length) return null;
+
+  const companyCondition = companyCode ? { companyCode } : {};
+  const exactUser = await User.findOne({
+    ...companyCondition,
+    $or: aliases.flatMap(name => ([
+      { name },
+      { email: name.toLowerCase() }
+    ]))
+  }).select('_id');
+
+  if (exactUser) return exactUser;
+
+  return User.findOne({
+    ...companyCondition,
+    $or: aliases.map(name => ({ name: { $regex: `^${escapeRegex(name)}(?:\\s|$)`, $options: 'i' } }))
+  }).select('_id');
+};
+
 const getAssignedClientTaskFilter = async (currentUser) => {
   const companyCode = currentUser?.companyCode ? String(currentUser.companyCode).trim().toUpperCase() : '';
   const clientFilter = companyCode ? { companyCode } : {};
   const clients = await Client.find(clientFilter).select('_id').lean();
   const clientIds = clients.map(client => client._id);
+  const currentUserId = currentUser.id || currentUser._id;
 
   return {
     clientId: { $in: clientIds },
     $or: [
-      { assigneeId: currentUser.id || currentUser._id },
+      mongoose.Types.ObjectId.isValid(String(currentUserId || '')) ? { assigneeId: currentUserId } : null,
       { assignee: currentUser.id?.toString() },
       { assignee: currentUser._id?.toString() },
-      { assignee: currentUser.name },
-      { assignee: currentUser.email }
+      ...buildAssigneeNameConditions([currentUser.name, currentUser.email])
     ].filter(Boolean)
   };
 };
@@ -1648,11 +1698,11 @@ const getAssignedTasksByUserId = async (req, res) => {
 
     const tasks = await Task.find({
       $or: [
+        mongoose.Types.ObjectId.isValid(String(userId || '')) ? { assigneeId: userId } : null,
         { assignee: userId.toString() },
         { assignee: userId },
-        { assignee: user.name },
-        { assignee: user.email }
-      ]
+        ...buildAssigneeNameConditions([user.name, user.email])
+      ].filter(Boolean)
     })
       .populate('clientId', 'name email company phone')
       .sort({ createdAt: -1 });
@@ -1961,10 +2011,7 @@ const addTask = async (req, res) => {
       ? assigneeId
       : null;
     if (!resolvedAssigneeId && assignee) {
-      const user = await User.findOne({
-        name: assignee,
-        ...(client.companyCode ? { companyCode: client.companyCode } : {})
-      });
+      const user = await resolveAssigneeUser(assignee, client.companyCode);
       if (user) {
         resolvedAssigneeId = user._id;
       }
@@ -2125,6 +2172,18 @@ const updateTask = async (req, res) => {
     const previousCompleted = task.completed;
     const previousStatus = task.status;
     const now = new Date();
+    const hasAssigneeIdUpdate = Object.prototype.hasOwnProperty.call(updates, 'assigneeId');
+    const isValidAssigneeIdUpdate = mongoose.Types.ObjectId.isValid(String(updates.assigneeId || ''));
+
+    if (hasAssigneeIdUpdate && !isValidAssigneeIdUpdate) {
+      updates.assigneeId = null;
+    }
+
+    if (updates.assignee && !updates.assigneeId) {
+      const client = await Client.findById(task.clientId).select('companyCode').lean();
+      const user = await resolveAssigneeUser(updates.assignee, client?.companyCode);
+      updates.assigneeId = user ? user._id : null;
+    }
 
     if (
       (updates.status || updates.completed !== undefined) &&
@@ -2217,8 +2276,9 @@ const updateTask = async (req, res) => {
         task[key] = newValue;
         
         
-        if (updates.assigneeId === undefined) {
-          const user = await User.findOne({ name: newValue });
+        if (!updates.assigneeId) {
+          const client = await Client.findById(task.clientId).select('companyCode').lean();
+          const user = await resolveAssigneeUser(newValue, client?.companyCode);
           task.assigneeId = user ? user._id : null;
         }
       } else if (key === 'assigneeId' && oldValue !== newValue) {
