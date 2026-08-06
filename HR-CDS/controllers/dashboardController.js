@@ -168,17 +168,22 @@ const buildProductivityBuckets = (start, end, period) => {
   const buckets = [];
   if (period === "today") {
     const dayStart = startOfDay(start);
+    const workdayStartHour = 9;
     const currentHour = end.getHours();
-    const hourStep = currentHour <= 8 ? 1 : currentHour <= 16 ? 2 : 3;
-    for (let hour = 0; hour <= currentHour; hour += hourStep) {
+    if (currentHour < workdayStartHour) return {buckets, granularity: "hourly"};
+
+    const workdayStart = new Date(dayStart);
+    workdayStart.setHours(workdayStartHour, 0, 0, 0);
+    const hourStep = Math.max(1, Math.ceil((currentHour - workdayStartHour + 1) / 7));
+    for (let hour = workdayStartHour; hour <= currentHour; hour += hourStep) {
       const pointEnd = new Date(dayStart);
       pointEnd.setHours(hour, 59, 59, 999);
       const displayHour = hour % 12 || 12;
-      buckets.push({start: dayStart, end: pointEnd > end ? end : pointEnd, label: `${displayHour} ${hour < 12 ? "AM" : "PM"}`});
+      buckets.push({start: workdayStart, end: pointEnd > end ? end : pointEnd, label: `${displayHour} ${hour < 12 ? "AM" : "PM"}`});
     }
     if (!buckets.length || buckets[buckets.length - 1].end < end) {
       const displayHour = currentHour % 12 || 12;
-      buckets.push({start: dayStart, end, label: `${displayHour} ${currentHour < 12 ? "AM" : "PM"}`});
+      buckets.push({start: workdayStart, end, label: `${displayHour} ${currentHour < 12 ? "AM" : "PM"}`});
     }
     return {buckets, granularity: "hourly"};
   }
