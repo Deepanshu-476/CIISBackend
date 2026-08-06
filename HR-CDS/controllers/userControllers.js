@@ -227,7 +227,7 @@ const USER_FIELDS = {
   
   
   PERSONAL: ['phone', 'address', 'gender', 'maritalStatus', 'dob', 
-             'fatherName', 'motherName', 'city', 'state', 'pinCode', 'zipCode', 'country'],
+             'fatherName', 'motherName', 'city', 'state', 'pinCode', 'zipCode', 'country', 'profileImage'],
   
   
   EMPLOYMENT: ['employeeType', 'salary', 'properties', 'propertyOwned', 
@@ -404,9 +404,10 @@ exports.getMe = async (req, res) => {
         email: user.email,
         company: user.company,
         department: user.department,
-        jobRole: user.jobRole,
-        phone: user.phone,
-        address: user.address,
+      jobRole: user.jobRole,
+      phone: user.phone,
+      profileImage: user.profileImage,
+      address: user.address,
         gender: user.gender,
         maritalStatus: user.maritalStatus,
         dob: user.dob,
@@ -521,7 +522,7 @@ exports.updateMe = async (req, res) => {
       'aadhaar', 'aadhar', 'aadharCard', 'panCard', 'pan',
       'chatSettings', 'notificationPreferences', 'properties',
       'propertyOwned', 'additionalDetails',
-      'employeeType', 'workLocation'
+      'employeeType', 'workLocation', 'profileImage'
     ]);
 
     Object.keys(req.body).forEach(key => {
@@ -766,6 +767,7 @@ exports.getAllUsers = async (req, res) => {
       department: user.department,
       jobRole: user.jobRole,
       phone: user.phone,
+      profileImage: user.profileImage,
       address: user.address,
       gender: user.gender,
       maritalStatus: user.maritalStatus,
@@ -851,6 +853,7 @@ exports.getUser = async (req, res) => {
       assignedBranches: user.assignedBranches || [],
       jobRole: user.jobRole,
       phone: user.phone,
+      profileImage: user.profileImage,
       address: user.address,
       gender: user.gender,
       maritalStatus: user.maritalStatus,
@@ -1413,9 +1416,10 @@ exports.getCompanydepartmentUsers = async (req, res) => {
         department: user.department,
         branch: user.branch,
         assignedBranches: user.assignedBranches || [],
-        jobRole: user.jobRole,
-        phone: user.phone,
-        address: user.address,
+      jobRole: user.jobRole,
+      phone: user.phone,
+      profileImage: user.profileImage,
+      address: user.address,
         gender: user.gender,
         maritalStatus: user.maritalStatus,
         dob: user.dob,
