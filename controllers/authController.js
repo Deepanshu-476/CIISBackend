@@ -1598,6 +1598,51 @@ exports.forgotPassword = async (req, res) => {
   }
 };
 
+exports.verifyPasswordResetOTP = async (req, res) => {
+  try {
+    const cleanEmail = String(req.body.email || '').trim().toLowerCase();
+    const otp = String(req.body.otp || '').trim();
+    const companyScope = await resolveCompanyScope(req.body.companyCode || req.body.companyIdentifier);
+
+    if (!cleanEmail || !/^\d{6}$/.test(otp)) {
+      return res.status(400).json({ success: false, message: 'Email and valid 6-digit OTP are required' });
+    }
+
+    const otpQuery = { email: cleanEmail, otp };
+    if (companyScope?.companyCode) otpQuery.companyCode = companyScope.companyCode;
+    const otpRecord = await OTP.findOne(otpQuery).sort({ createdAt: -1 });
+
+    if (!otpRecord) return res.status(400).json({ success: false, message: 'Invalid OTP' });
+    if (otpRecord.expiresAt < new Date()) {
+      await OTP.deleteOne({ _id: otpRecord._id });
+      return res.status(400).json({ success: false, message: 'OTP expired. Request a new OTP.' });
+    }
+
+    const account = await findClientPasswordAccount(cleanEmail, companyScope);
+    if (!account.user && !account.client) {
+      return res.status(404).json({ success: false, message: 'Account not found' });
+    }
+
+    const resetTokenId = crypto.randomBytes(24).toString('hex');
+    const resetToken = jwt.sign({
+      email: cleanEmail,
+      companyCode: otpRecord.companyCode || companyScope?.companyCode || null,
+      resetTokenId,
+      purpose: 'password-reset'
+    }, process.env.JWT_SECRET + '-temp', { expiresIn: '10m' });
+
+    otpRecord.verified = true;
+    otpRecord.resetTokenId = resetTokenId;
+    otpRecord.expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    await otpRecord.save();
+
+    return res.json({ success: true, message: 'OTP verified successfully', resetToken });
+  } catch (error) {
+    console.error('Password reset OTP verification error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to verify OTP' });
+  }
+};
+
 
 
 
@@ -2376,15 +2421,32 @@ exports.resetSuperAdminPassword = async (req, res) => {
 
 exports.resetPassword = async (req, res) => {
   try {
-    const { email, otp, newPassword, companyCode, companyIdentifier } = req.body;
+    const { email, otp, newPassword, companyCode, companyIdentifier, resetToken } = req.body;
     const cleanEmail = email?.trim().toLowerCase();
 
-    if (!cleanEmail || !otp || !newPassword) {
-      return res.status(400).json({ message: 'Email, OTP and new password are required' });
+    if (!cleanEmail || !newPassword || (!otp && !resetToken)) {
+      return res.status(400).json({ message: 'Verified reset session and new password are required' });
     }
 
     const companyScope = await resolveCompanyScope(companyCode || companyIdentifier);
-    const otpQuery = { email: cleanEmail, otp };
+    let otpQuery;
+    if (resetToken) {
+      let decoded;
+      try {
+        decoded = jwt.verify(resetToken, process.env.JWT_SECRET + '-temp');
+      } catch {
+        return res.status(401).json({ message: 'Reset session expired. Request a new OTP.' });
+      }
+      if (decoded.purpose !== 'password-reset' || decoded.email !== cleanEmail) {
+        return res.status(401).json({ message: 'Invalid reset session' });
+      }
+      if (companyScope?.companyCode && decoded.companyCode !== companyScope.companyCode) {
+        return res.status(401).json({ message: 'Invalid company reset session' });
+      }
+      otpQuery = { email: cleanEmail, verified: true, resetTokenId: decoded.resetTokenId };
+    } else {
+      otpQuery = { email: cleanEmail, otp };
+    }
 
     if (companyScope?.companyCode) {
       otpQuery.companyCode = companyScope.companyCode;
