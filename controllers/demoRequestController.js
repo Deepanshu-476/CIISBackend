@@ -1,4 +1,40 @@
 const DemoRequest = require('../models/DemoRequest');
+const ServiceEnquiry = require('../HR-CDS/models/ServiceEnquiry');
+
+const legacyDemoQuery = {
+  $or: [
+    { serviceName: /demo/i },
+    { requirement: /Demo Request:/i }
+  ]
+};
+
+const legacyStatusMap = {
+  Pending: 'New',
+  Approved: 'Completed',
+  Contacted: 'Contacted',
+  'Proposal Sent': 'Scheduled',
+  Closed: 'Completed'
+};
+
+const normalizeLegacyDemo = (item) => {
+  const requirement = String(item.requirement || '');
+  const match = (pattern) => requirement.match(pattern)?.[1]?.trim() || '';
+  return {
+    _id: item._id,
+    name: item.clientName || 'Demo Lead',
+    email: match(/Email:\s*([^\s,]+)/i),
+    phone: match(/Phone:\s*([^\s,]+)/i),
+    companyName: item.companyName || '',
+    employeeCount: match(/Demo Request:\s*([^.]+)/i).replace(/Employees/i, '').trim(),
+    requirements: match(/Requirements:\s*(.*?)(?=\.\s*Message:|\.\s*Phone:|$)/i),
+    message: match(/Message:\s*(.*?)(?=\.\s*Phone:|\.\s*Email:|$)/i),
+    status: item.demoStatus || legacyStatusMap[item.status] || 'New',
+    notes: item.notes || '',
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+    isLegacy: true
+  };
+};
 
 // Create a new Demo Request (Public submission from landing page)
 const createDemoRequest = async (req, res) => {
@@ -65,7 +101,14 @@ const getDemoRequests = async (req, res) => {
       ];
     }
 
-    const demoRequests = await DemoRequest.find(query).sort({ createdAt: -1 });
+    const [demoRequests, legacyRequests] = await Promise.all([
+      DemoRequest.find(query).sort({ createdAt: -1 }),
+      ServiceEnquiry.find(legacyDemoQuery).sort({ createdAt: -1 }).lean()
+    ]);
+    const combinedRequests = [
+      ...demoRequests.map(item => item.toObject()),
+      ...legacyRequests.map(normalizeLegacyDemo)
+    ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
     const stats = {
       total: await DemoRequest.countDocuments(),
@@ -79,8 +122,8 @@ const getDemoRequests = async (req, res) => {
 
     res.json({
       success: true,
-      data: demoRequests,
-      count: demoRequests.length,
+      data: combinedRequests,
+      count: combinedRequests.length,
       stats
     });
   } catch (error) {
@@ -119,7 +162,22 @@ const updateDemoRequest = async (req, res) => {
     );
 
     if (!demoRequest) {
-      return res.status(404).json({ success: false, message: 'Demo request not found' });
+      const legacyRequest = await ServiceEnquiry.findOneAndUpdate(
+        { _id: id, ...legacyDemoQuery },
+        { $set: {
+          ...(status ? { demoStatus: status } : {}),
+          ...(notes !== undefined ? { notes } : {})
+        } },
+        { new: true, runValidators: true }
+      );
+      if (!legacyRequest) {
+        return res.status(404).json({ success: false, message: 'Demo request not found' });
+      }
+      return res.json({
+        success: true,
+        message: 'Demo request updated successfully',
+        data: normalizeLegacyDemo(legacyRequest.toObject())
+      });
     }
 
     res.json({
@@ -145,7 +203,10 @@ const deleteDemoRequest = async (req, res) => {
     const demoRequest = await DemoRequest.findByIdAndDelete(id);
 
     if (!demoRequest) {
-      return res.status(404).json({ success: false, message: 'Demo request not found' });
+      const legacyRequest = await ServiceEnquiry.findOneAndDelete({ _id: id, ...legacyDemoQuery });
+      if (!legacyRequest) {
+        return res.status(404).json({ success: false, message: 'Demo request not found' });
+      }
     }
 
     res.json({
