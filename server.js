@@ -1,14 +1,22 @@
 const express = require("express");
 const dotenv = require("dotenv");
 const cors = require("cors");
+const rateLimit = require("express-rate-limit");
 const connectDB = require("./config/db");
 const path = require("path");
 const schedule = require('node-schedule');
 const http = require('http');
 const socketIo = require('socket.io');
 const mongoose = require('mongoose');
+const { protect, restrictTo } = require("./middleware/authMiddleware");
     
 dotenv.config();
+
+const requiredEnvVars = ["JWT_SECRET"];
+const missingEnvVars = requiredEnvVars.filter((name) => !process.env[name]);
+if (missingEnvVars.length > 0) {
+  throw new Error(`Missing required environment variables: ${missingEnvVars.join(", ")}`);
+}
 
 require('./services/subscriptionReminderService');
 const { runWorkAnniversaryEmails } = require('./services/workAnniversaryService');
@@ -21,6 +29,22 @@ const server = http.createServer(app);
 
 
 app.set("trust proxy", 1);
+app.disable("x-powered-by");
+
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-site");
+
+  if (process.env.NODE_ENV === "production") {
+    res.setHeader("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
+  }
+
+  next();
+});
 
 
 const dbConnectionPromise = connectDB();
@@ -45,6 +69,17 @@ const isAllowedOrigin = (origin) => {
     return false;
   }
 };
+
+const sensitiveActionLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: "Too many requests. Please try again later.",
+  },
+});
 
 
 const Task = require("./HR-CDS/models/Task");
@@ -769,7 +804,7 @@ app.get("/api", (req, res) => {
 });
 
 
-app.get("/api/socket-status", (req, res) => {
+app.get("/api/socket-status", protect, restrictTo("super_admin"), sensitiveActionLimiter, (req, res) => {
   try {
     const socketStatus = {
       initialized: !!global.io,
@@ -791,7 +826,7 @@ app.get("/api/socket-status", (req, res) => {
 });
 
 
-app.get("/api/manual-overdue-check", async (req, res) => {
+app.get("/api/manual-overdue-check", protect, restrictTo("super_admin"), sensitiveActionLimiter, async (req, res) => {
   try {
     void 0;
     await checkAndMarkOverdueTasks();
@@ -807,7 +842,7 @@ app.get("/api/manual-overdue-check", async (req, res) => {
 });
 
 
-app.get("/api/manual-attendance-check", async (req, res) => {
+app.get("/api/manual-attendance-check", protect, restrictTo("super_admin"), sensitiveActionLimiter, async (req, res) => {
   try {
     void 0;
     await markDailyAbsent();
