@@ -25,11 +25,13 @@ const normalizeIdList = (value) => {
 
 const canViewAllBranchData = (user = {}) => {
   const roleText = String(user.companyRole || user.jobRole || user.role || '').trim().toLowerCase();
-  return ['owner', 'super_admin', 'admin', 'hr'].includes(roleText);
+  return ['owner', 'company_owner', 'companyowner', 'super_admin', 'superadmin'].includes(roleText);
 };
 
 const getUserBranchIds = (user = {}) => normalizeIdList([
   user.branch,
+  user.branchId,
+  user.branchDetails,
   ...(Array.isArray(user.assignedBranches) ? user.assignedBranches : [])
 ]);
 

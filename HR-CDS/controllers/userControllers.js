@@ -160,19 +160,28 @@ const isObjectIdLike = value => /^[a-f\d]{24}$/i.test(String(value || '').trim()
 
 const getUserBranchIds = (user = {}) => normalizeIdList([
   user.branch,
-  ...(Array.isArray(user.assignedBranches) ? user.assignedBranches : [])
+  user.branchId,
+  user.branchDetails,
+  ...(Array.isArray(user.assignedBranches) ? user.assignedBranches : []),
+  ...(Array.isArray(user.branchIds) ? user.branchIds : [])
 ]);
 
 const canViewAllCompanyBranches = (user = {}) => {
   const roleText = String(user.companyRole || user.jobRole || user.role || '').trim().toLowerCase();
-  return ['owner', 'super_admin', 'admin', 'hr'].includes(roleText);
+  return ['owner', 'company_owner', 'companyowner', 'super_admin', 'superadmin'].includes(roleText);
+};
+
+const appendAndCondition = (filter, condition) => {
+  if (!condition || Object.keys(condition).length === 0) return filter;
+  filter.$and = Array.isArray(filter.$and) ? [...filter.$and, condition] : [condition];
+  return filter;
 };
 
 const applyBranchAccessFilter = (filter, req) => {
   const bypassBranchRestriction = ['true', '1', 'all', 'yes'].includes(
     String(req.query?.ignoreBranchRestriction || req.query?.allBranches || '').toLowerCase()
   );
-  if (bypassBranchRestriction) {
+  if (bypassBranchRestriction && canViewAllCompanyBranches(req.user || {})) {
     return filter;
   }
 
@@ -187,21 +196,29 @@ const applyBranchAccessFilter = (filter, req) => {
       return filter;
     }
 
-    filter.$or = [
+    appendAndCondition(filter, { $or: [
       { branch: requestedBranchId },
       { assignedBranches: requestedBranchId }
-    ];
+    ] });
     return filter;
   }
 
   if (!canViewAllCompanyBranches(currentUser) && accessibleBranchIds.length > 0) {
-    filter.$or = [
+    appendAndCondition(filter, { $or: [
       { branch: { $in: accessibleBranchIds } },
       { assignedBranches: { $in: accessibleBranchIds } }
-    ];
+    ] });
   }
 
   return filter;
+};
+
+const userMatchesBranchScope = (targetUser, currentUser = {}) => {
+  if (canViewAllCompanyBranches(currentUser)) return true;
+  const accessibleBranchIds = getUserBranchIds(currentUser);
+  if (!accessibleBranchIds.length) return true;
+  const targetBranchIds = getUserBranchIds(targetUser);
+  return targetBranchIds.some(branchId => accessibleBranchIds.includes(branchId));
 };
 
 const validateAssignedBranches = async (branchIds, companyId) => {
@@ -733,6 +750,8 @@ exports.getAllUsers = async (req, res) => {
       filter.department = userDepartment;
     }
 
+    applyBranchAccessFilter(filter, req);
+
     const search = String(req.query.search || req.query.q || '').trim();
     if (search) {
       const searchRegex = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
@@ -838,6 +857,10 @@ exports.getUser = async (req, res) => {
       if (userCompanyId !== reqCompanyId) {
         return errorResponse(res, 403, "Access denied. User belongs to a different company.");
       }
+    }
+
+    if (!userMatchesBranchScope(user, req.user)) {
+      return errorResponse(res, 403, "Access denied. User belongs to a different branch.");
     }
 
     
@@ -1322,12 +1345,17 @@ exports.getDeletedUsers = async (req, res) => {
       return errorResponse(res, 400, "Company information is required");
     }
 
-    const users = await User.find({ 
+    const filter = {
       isActive: false,
       company: userCompany  
-    })
+    };
+    applyBranchAccessFilter(filter, req);
+
+    const users = await User.find(filter)
       .select('-password -resetToken -resetTokenExpiry')
       .populate('department', 'name description')
+      .populate('branch', 'name branchCode')
+      .populate('assignedBranches', 'name branchCode')
       .populate('company', 'name companyCode')
       .sort({ deletedAt: -1 });
 
@@ -1584,12 +1612,15 @@ exports.getCompanyUsersPaginated = async (req, res) => {
       filter.department = currentUser.department;
       void 0;
     }
+    applyBranchAccessFilter(filter, req);
     
     void 0;
     
     const users = await User.find(filter)
       .select('-password -resetToken -resetTokenExpiry')
       .populate('department', 'name description')
+      .populate('branch', 'name branchCode')
+      .populate('assignedBranches', 'name branchCode')
       .populate('company', 'name companyCode companyEmail companyPhone companyAddress logo')
       .populate('createdBy', 'name email')
       .sort({ createdAt: -1 });
@@ -1685,6 +1716,7 @@ exports.searchUsers = async (req, res) => {
     if (!isAuthorized && userDepartment) {
       filter.department = userDepartment;
     }
+    applyBranchAccessFilter(filter, req);
 
     if (name) filter.name = { $regex: name, $options: 'i' };
     if (email) filter.email = { $regex: email, $options: 'i' };
@@ -1698,6 +1730,8 @@ exports.searchUsers = async (req, res) => {
     const users = await User.find(filter)
       .select('-password -resetToken -resetTokenExpiry')
       .populate('department', 'name description')
+      .populate('branch', 'name branchCode')
+      .populate('assignedBranches', 'name branchCode')
       .populate('company', 'name companyCode')
       .sort({ createdAt: -1 });
 
