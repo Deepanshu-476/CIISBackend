@@ -61,6 +61,23 @@ const normalizePageUsers = (items = []) => {
 
 const getPageUsers = (config, key) => (config?.[key] || []).map(item => item.user).filter(Boolean);
 
+const uniqueUsers = (users = []) => {
+  const seen = new Set();
+  return users.filter(user => {
+    const id = String(user?._id || user?.id || user || '');
+    if (!id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+};
+
+const getEffectiveViewUsers = (config) => uniqueUsers([
+  ...getPageUsers(config, 'viewUsers'),
+  ...getPageUsers(config, 'editUsers'),
+  ...getPageUsers(config, 'approvers'),
+  ...getPageUsers(config, 'deleteUsers')
+]);
+
 const decoratePages = async (companyId) => {
   const configs = await PagePermission.find({ company: companyId })
     .populate('approvers.user', 'name email jobRole companyRole department')
@@ -124,7 +141,7 @@ router.get('/by-path', async (req, res) => {
         path: config.path,
         permissionPattern: APP_PAGES.find(item => item.path === config.path)?.permissionPattern || null,
         approvers: getPageUsers(config, 'approvers'),
-        viewUsers: getPageUsers(config, 'viewUsers'),
+        viewUsers: getEffectiveViewUsers(config),
         editUsers: getPageUsers(config, 'editUsers'),
         deleteUsers: getPageUsers(config, 'deleteUsers')
       } : {
