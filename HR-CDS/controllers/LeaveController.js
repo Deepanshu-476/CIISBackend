@@ -3,6 +3,7 @@ const Leave = require('../models/Leave');
 const User = require('../../models/User');
 const Company = require('../../models/Company');
 const PagePermission = require('../../models/PagePermission');
+const LeavePolicy = require('../../models/LeavePolicy');
 const nodemailer = require('nodemailer');
 const fs = require('fs');
 const path = require('path');
@@ -86,6 +87,134 @@ const getUserCompanyId = (user = {}) => {
 
 const getUserCompanyCode = (user = {}) => {
   return String(user.companyCode || user.company?.companyCode || '').trim();
+};
+
+const normalizePolicyValue = (value) => String(value || '')
+  .trim()
+  .toLowerCase()
+  .replace(/[\s_-]+/g, '');
+
+const inclusiveDays = (start, end) => {
+  const from = new Date(start);
+  const to = new Date(end);
+  from.setHours(0, 0, 0, 0);
+  to.setHours(0, 0, 0, 0);
+  if (from > to) return 0;
+  return Math.floor((to - from) / 86400000) + 1;
+};
+
+const overlapDays = (startA, endA, startB, endB) => {
+  const start = new Date(Math.max(new Date(startA).getTime(), new Date(startB).getTime()));
+  const end = new Date(Math.min(new Date(endA).getTime(), new Date(endB).getTime()));
+  return inclusiveDays(start, end);
+};
+
+const findApplicableLeavePolicy = async ({ companyId, user, leaveType }) => {
+  const policies = await LeavePolicy.find({
+    company: companyId,
+    status: 'Active',
+    leaveType: { $regex: new RegExp(`^${String(leaveType).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+  })
+    .populate('department', 'name')
+    .populate('jobRoles', 'name')
+    .sort({ sortOrder: 1, createdAt: 1 })
+    .lean();
+
+  const userDepartment = normalizePolicyValue(user.department?._id || user.department);
+  const userDepartmentName = normalizePolicyValue(user.department?.name || user.departmentName || user.department);
+  const userJobRole = normalizePolicyValue(user.jobRole?._id || user.jobRole);
+  const userJobRoleName = normalizePolicyValue(user.jobRole?.name || user.jobRoleName || user.jobRole);
+
+  return policies.find(policy => {
+    const policyDepartmentId = normalizePolicyValue(policy.department?._id || policy.department);
+    const policyDepartmentName = normalizePolicyValue(policy.department?.name || policy.department);
+    const departmentMatches = [userDepartment, userDepartmentName]
+      .filter(Boolean)
+      .some(value => value === policyDepartmentId || value === policyDepartmentName);
+
+    const roleValues = [
+      ...(policy.jobRoles || []).flatMap(role => [
+        normalizePolicyValue(role?._id || role),
+        normalizePolicyValue(role?.name || role)
+      ]),
+      ...(policy.jobRoleNames || []).map(normalizePolicyValue)
+    ].filter(Boolean);
+    const roleMatches = [userJobRole, userJobRoleName].filter(Boolean).some(value => roleValues.includes(value));
+    return departmentMatches && roleMatches;
+  }) || null;
+};
+
+const validateLeaveAgainstPolicy = async ({ policy, user, start, end, excludeLeaveId = null }) => {
+  const isOnProbation = normalizePolicyValue(user.employeeType).includes('probation');
+  if (isOnProbation && policy.probationApplicable !== 'Yes') {
+    return 'This leave policy is not available during probation.';
+  }
+
+  const years = [];
+  for (let year = start.getFullYear(); year <= end.getFullYear(); year += 1) years.push(year);
+
+  for (const year of years) {
+    const yearStart = new Date(year, 0, 1);
+    const yearEnd = new Date(year, 11, 31, 23, 59, 59, 999);
+    const requestedDays = overlapDays(start, end, yearStart, yearEnd);
+    const existing = await Leave.find({
+      ...(excludeLeaveId ? { _id: { $ne: excludeLeaveId } } : {}),
+      user: user._id,
+      type: { $regex: new RegExp(`^${String(policy.leaveType).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+      status: { $in: ['Pending', 'Approved'] },
+      startDate: { $lte: yearEnd },
+      endDate: { $gte: yearStart }
+    }).select('startDate endDate days').lean();
+    const usedDays = existing.reduce((sum, leave) => sum + overlapDays(leave.startDate, leave.endDate, yearStart, yearEnd), 0);
+
+    let carryForwardDays = 0;
+    if (policy.carryForward === 'Yes') {
+      const previousStart = new Date(year - 1, 0, 1);
+      const previousEnd = new Date(year - 1, 11, 31, 23, 59, 59, 999);
+      const previousLeaves = await Leave.find({
+        user: user._id,
+        type: { $regex: new RegExp(`^${String(policy.leaveType).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+        status: 'Approved',
+        startDate: { $lte: previousEnd },
+        endDate: { $gte: previousStart }
+      }).select('startDate endDate').lean();
+      const previousUsed = previousLeaves.reduce((sum, leave) => sum + overlapDays(leave.startDate, leave.endDate, previousStart, previousEnd), 0);
+      carryForwardDays = Math.min(
+        Math.max(Number(policy.entitledDays || 0) - previousUsed, 0),
+        Number(policy.maxCarryForwardDays || 0)
+      );
+    }
+
+    const available = Number(policy.entitledDays || 0) + carryForwardDays;
+    if (usedDays + requestedDays > available) {
+      return `Annual ${policy.leaveType} limit exceeded. ${Math.max(available - usedDays, 0)} day(s) remaining.`;
+    }
+  }
+
+  if (Number(policy.monthlyAllowed || 0) > 0) {
+    const cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+    const finalMonth = new Date(end.getFullYear(), end.getMonth(), 1);
+    while (cursor <= finalMonth) {
+      const monthStart = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
+      const monthEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0, 23, 59, 59, 999);
+      const requestedDays = overlapDays(start, end, monthStart, monthEnd);
+      const monthLeaves = await Leave.find({
+        ...(excludeLeaveId ? { _id: { $ne: excludeLeaveId } } : {}),
+        user: user._id,
+        type: { $regex: new RegExp(`^${String(policy.leaveType).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+        status: { $in: ['Pending', 'Approved'] },
+        startDate: { $lte: monthEnd },
+        endDate: { $gte: monthStart }
+      }).select('startDate endDate').lean();
+      const usedDays = monthLeaves.reduce((sum, leave) => sum + overlapDays(leave.startDate, leave.endDate, monthStart, monthEnd), 0);
+      if (usedDays + requestedDays > Number(policy.monthlyAllowed)) {
+        return `Monthly ${policy.leaveType} limit exceeded. ${Math.max(Number(policy.monthlyAllowed) - usedDays, 0)} day(s) remaining this month.`;
+      }
+      cursor.setMonth(cursor.getMonth() + 1);
+    }
+  }
+
+  return null;
 };
 
 const getLeaveApprovalStepsForCompany = async (companyId) => {
@@ -235,7 +364,7 @@ exports.applyLeave = async (req, res) => {
     
     
     const user = await User.findById(req.user._id)
-      .select('name email department jobRole employeeId phone company companyCode')
+      .select('name email department jobRole employeeId phone company companyCode employeeType dateOfJoining')
       .populate('company', 'companyName companyCode isActive')
       .lean();
 
@@ -266,12 +395,45 @@ exports.applyLeave = async (req, res) => {
       });
     }
 
+    const companyHasPolicies = await LeavePolicy.exists({ company: userCompanyId, status: 'Active' });
+    const leavePolicy = await findApplicableLeavePolicy({
+      companyId: userCompanyId,
+      user,
+      leaveType: type.trim()
+    });
+
+    if (companyHasPolicies && !leavePolicy) {
+      return res.status(400).json({
+        success: false,
+        message: `No active ${type.trim()} policy is assigned to your department and job role.`
+      });
+    }
+
+    if (leavePolicy) {
+      const policyError = await validateLeaveAgainstPolicy({ policy: leavePolicy, user, start, end });
+      if (policyError) {
+        return res.status(400).json({ success: false, message: policyError });
+      }
+    }
+
     const approvalSteps = await getLeaveApprovalStepsForCompany(userCompanyId);
 
     
     const leave = new Leave({
       user: req.user._id,
       type: type.trim(),
+      leavePolicy: leavePolicy?._id || null,
+      payType: leavePolicy?.payType || (type.trim().toLowerCase() === 'unpaid' ? 'Unpaid' : 'Paid'),
+      policySnapshot: leavePolicy ? {
+        policyName: leavePolicy.policyName,
+        payType: leavePolicy.payType,
+        entitledDays: leavePolicy.entitledDays,
+        monthlyAllowed: leavePolicy.monthlyAllowed,
+        carryForward: leavePolicy.carryForward,
+        maxCarryForwardDays: leavePolicy.maxCarryForwardDays,
+        encashmentAllowed: leavePolicy.encashmentAllowed,
+        probationApplicable: leavePolicy.probationApplicable
+      } : undefined,
       reason: reason.trim(),
       startDate: start,
       endDate: end,
@@ -437,6 +599,7 @@ exports.getUserLeaves = async (req, res) => {
     
     const leaves = await Leave.find({ user: userId })
       .populate('user', 'name email jobRole department')
+      .populate('approvedBy', 'name email jobRole companyRole')
       .populate('approvalSteps.user', 'name email jobRole companyRole')
       .populate('history.by', 'name email')
       .sort({ createdAt: -1 })
@@ -468,6 +631,9 @@ exports.getAllLeaves = async (req, res) => {
       type, 
       department, 
       search, 
+      userId,
+      month,
+      year,
       page = 1, 
       limit = 20 
     } = req.query;
@@ -518,6 +684,26 @@ exports.getAllLeaves = async (req, res) => {
 
     
     filter.user = { $in: companyUserIds };
+
+    if (userId) {
+      if (!mongoose.Types.ObjectId.isValid(userId) || !companyUserIds.some(id => String(id) === String(userId))) {
+        return res.status(403).json({ success: false, error: 'Employee is not available in your company scope' });
+      }
+      filter.user = userId;
+    }
+
+    if (month !== undefined && year !== undefined) {
+      const queryMonth = Number(month);
+      const queryYear = Number(year);
+      if (!Number.isInteger(queryMonth) || queryMonth < 0 || queryMonth > 11 ||
+          !Number.isInteger(queryYear) || queryYear < 2000 || queryYear > 2100) {
+        return res.status(400).json({ success: false, error: 'Month must be 0-11 and year must be valid' });
+      }
+      const monthStart = new Date(queryYear, queryMonth, 1);
+      const monthEnd = new Date(queryYear, queryMonth + 1, 0, 23, 59, 59, 999);
+      filter.startDate = { $lte: monthEnd };
+      filter.endDate = { $gte: monthStart };
+    }
 
     
     if (date) {
@@ -951,10 +1137,53 @@ exports.updateLeaveApproval = async (req, res) => {
 
 
 
+exports.getLeaveApprovalOptions = async (req, res) => {
+  try {
+    const leave = await Leave.findById(req.params.id)
+      .populate('user', 'name company companyId department jobRole employeeType')
+      .populate('approvalSteps.user', 'name');
+    if (!leave) return res.status(404).json({ success: false, error: 'Leave not found' });
+
+    if (normalizeId(getUserCompanyId(leave.user)) !== normalizeId(getUserCompanyId(req.user))) {
+      return res.status(403).json({ success: false, error: 'You cannot access another company\'s leave request.' });
+    }
+
+    const currentUserId = normalizeId(req.user._id);
+    const isOwner = String(req.user.companyRole || '').toLowerCase() === 'owner';
+    const hasApprovalSteps = Array.isArray(leave.approvalSteps) && leave.approvalSteps.length > 0;
+    const isConfiguredApprover = hasApprovalSteps && leave.approvalSteps.some(step => normalizeId(step.user) === currentUserId);
+    if (!(isConfiguredApprover || (!hasApprovalSteps && isOwner))) {
+      return res.status(403).json({ success: false, error: 'You are not authorized to approve this leave.' });
+    }
+
+    const companyId = getUserCompanyId(leave.user);
+    const configuredTypes = await LeavePolicy.find({ company: companyId, status: 'Active' }).distinct('leaveType');
+    const policies = (await Promise.all(configuredTypes.map(type =>
+      findApplicableLeavePolicy({ companyId, user: leave.user, leaveType: type })
+    ))).filter(Boolean);
+
+    return res.json({
+      success: true,
+      data: {
+        currentLeaveType: leave.type,
+        currentPayType: leave.payType,
+        options: policies.map(policy => ({
+          leaveType: policy.leaveType,
+          policyName: policy.policyName,
+          payType: policy.payType
+        }))
+      }
+    });
+  } catch (error) {
+    console.error('Leave approval options error:', error);
+    return res.status(500).json({ success: false, error: 'Unable to load approval options' });
+  }
+};
+
 exports.updateLeaveStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, remarks } = req.body;
+    const { status, remarks, leaveType, payType } = req.body;
     const currentUser = req.user;
     
     void 0;
@@ -964,7 +1193,7 @@ exports.updateLeaveStatus = async (req, res) => {
 
     
     const leave = await Leave.findById(id)
-      .populate('user', 'name email phone company companyId')
+      .populate('user', 'name email phone company companyId department jobRole employeeType')
       .populate('approvalSteps.user', 'name email jobRole companyRole');
     
     if (!leave) {
@@ -978,7 +1207,7 @@ exports.updateLeaveStatus = async (req, res) => {
     void 0;
 
     
-    const validStatuses = ['Pending', 'Approved', 'Rejected', 'Cancelled'];
+    const validStatuses = ['Approved', 'Rejected'];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({
         success: false,
@@ -988,6 +1217,19 @@ exports.updateLeaveStatus = async (req, res) => {
 
     
     const oldStatus = leave.status;
+    const oldLeaveType = leave.type;
+    const oldPayType = leave.payType;
+
+    if (oldStatus !== 'Pending') {
+      return res.status(409).json({
+        success: false,
+        error: `Only pending leave requests can be approved or rejected. This request is already ${oldStatus}.`
+      });
+    }
+
+    if (normalizeId(getUserCompanyId(leave.user)) !== normalizeId(getUserCompanyId(currentUser))) {
+      return res.status(403).json({ success: false, error: 'You cannot update another company\'s leave request.' });
+    }
     const currentUserId = normalizeId(currentUser._id);
     const isOwner = String(currentUser.companyRole || '').toLowerCase() === 'owner';
     const hasApprovalSteps = Array.isArray(leave.approvalSteps) && leave.approvalSteps.length > 0;
@@ -1005,6 +1247,57 @@ exports.updateLeaveStatus = async (req, res) => {
           ? 'You are not selected as an approver for this leave.'
           : 'You do not have permission to update leave status. Please configure approvers in Page Management.'
       });
+    }
+
+    if (status === 'Approved') {
+      const companyId = getUserCompanyId(leave.user);
+      const finalLeaveType = String(leaveType || leave.type || '').trim();
+      const finalPolicy = await findApplicableLeavePolicy({ companyId, user: leave.user, leaveType: finalLeaveType });
+      if (!finalPolicy) {
+        return res.status(400).json({ success: false, error: 'The selected leave type is not applicable to this employee.' });
+      }
+
+      const policyError = await validateLeaveAgainstPolicy({
+        policy: finalPolicy,
+        user: leave.user,
+        start: new Date(leave.startDate),
+        end: new Date(leave.endDate),
+        excludeLeaveId: leave._id
+      });
+      if (policyError) return res.status(400).json({ success: false, error: policyError });
+
+      const overlappingLeave = await Leave.exists({
+        _id: { $ne: leave._id },
+        user: leave.user._id,
+        status: { $in: ['Pending', 'Approved'] },
+        startDate: { $lte: leave.endDate },
+        endDate: { $gte: leave.startDate }
+      });
+      if (overlappingLeave) {
+        return res.status(400).json({ success: false, error: 'This employee already has another pending or approved leave for these dates.' });
+      }
+
+      let finalPayType = finalPolicy.payType;
+      if (finalPolicy.payType === 'Admin Choice') {
+        if (!['Paid', 'Unpaid'].includes(payType)) {
+          return res.status(400).json({ success: false, error: 'Select Paid or Unpaid before approving this leave.' });
+        }
+        finalPayType = payType;
+      }
+
+      leave.type = finalLeaveType;
+      leave.leavePolicy = finalPolicy._id;
+      leave.payType = finalPayType;
+      leave.policySnapshot = {
+        policyName: finalPolicy.policyName,
+        payType: finalPolicy.payType,
+        entitledDays: finalPolicy.entitledDays,
+        monthlyAllowed: finalPolicy.monthlyAllowed,
+        carryForward: finalPolicy.carryForward,
+        maxCarryForwardDays: finalPolicy.maxCarryForwardDays,
+        encashmentAllowed: finalPolicy.encashmentAllowed,
+        probationApplicable: finalPolicy.probationApplicable
+      };
     }
 
     if (hasApprovalSteps) {
@@ -1039,9 +1332,12 @@ exports.updateLeaveStatus = async (req, res) => {
       from: oldStatus,
       to: leave.status,
       by: currentUser._id,
-      byName: currentUser.name || currentUser.email || 'Owner',
-      byRole: currentUser.companyRole || currentUser.jobRole || 'Approver',
+      role: currentUser.companyRole || currentUser.jobRole || 'Approver',
       remarks: remarks || '',
+      previousLeaveType: oldLeaveType,
+      newLeaveType: leave.type,
+      previousPayType: oldPayType,
+      newPayType: leave.payType,
       at: new Date()
     });
 
@@ -1132,6 +1428,9 @@ exports.updateLeaveStatus = async (req, res) => {
       data: {
         _id: leave._id,
         status: leave.status,
+        type: leave.type,
+        payType: leave.payType,
+        leavePolicy: leave.leavePolicy,
         remarks: leave.remarks,
         approvedBy: leave.approvedBy,
         approvalSteps: leave.approvalSteps,
@@ -1154,6 +1453,118 @@ exports.updateLeaveStatus = async (req, res) => {
 
 
 
+
+exports.cancelOwnLeave = async (req, res) => {
+  try {
+    const leave = await Leave.findById(req.params.id);
+    if (!leave) {
+      return res.status(404).json({ success: false, error: 'Leave request not found.' });
+    }
+
+    if (normalizeId(leave.user) !== normalizeId(req.user?._id)) {
+      return res.status(403).json({ success: false, error: 'You can only cancel your own leave request.' });
+    }
+
+    if (!['Pending', 'Approved'].includes(leave.status)) {
+      return res.status(409).json({
+        success: false,
+        error: `Only pending or approved leave can be cancelled. This request is ${String(leave.status).toLowerCase()}.`
+      });
+    }
+
+    const leaveDateKey = new Date(leave.startDate).toISOString().slice(0, 10);
+    const cancellationDeadline = new Date(`${leaveDateKey}T23:59:59.999+05:30`);
+    if (new Date() > cancellationDeadline) {
+      return res.status(409).json({
+        success: false,
+        error: 'This leave can no longer be cancelled because the leave start date has passed.'
+      });
+    }
+
+    const oldStatus = leave.status;
+    const remarks = String(req.body?.remarks || 'Cancelled by employee').trim().slice(0, 500);
+    leave.status = 'Cancelled';
+    leave.cancellationReason = remarks;
+    leave.cancelledAt = new Date();
+    leave.cancelledBy = req.user._id;
+    leave.history.push({
+      action: 'cancelled',
+      by: req.user._id,
+      role: 'employee',
+      remarks,
+      from: oldStatus,
+      to: 'Cancelled',
+      at: new Date()
+    });
+    await leave.save();
+
+    try {
+      const approverIds = (leave.approvalSteps || []).map(step => step.user).filter(Boolean);
+      const notificationPayload = {
+        targetPath: '/ciisUser/emp-leaves',
+        type: 'leave_cancelled',
+        title: 'Leave Cancelled by Employee',
+        message: `${req.user?.name || 'Employee'} cancelled their ${leave.type} leave from ${leaveDateKey}`,
+        actor: req.user._id,
+        company: getUserCompanyId(req.user),
+        data: {
+          leaveId: leave._id,
+          userId: leave.user,
+          userName: req.user?.name,
+          leaveType: leave.type,
+          startDate: leave.startDate,
+          endDate: leave.endDate,
+          days: leave.days,
+          oldStatus,
+          newStatus: 'Cancelled',
+          remarks
+        },
+        priority: 'high'
+      };
+
+      if (approverIds.length > 0) {
+        await notifyDirectUsers({ ...notificationPayload, userIds: approverIds });
+      } else {
+        await notifyPageUsers({
+          ...notificationPayload,
+          companyId: getUserCompanyId(req.user),
+          excludeUserIds: [req.user._id]
+        });
+      }
+    } catch (notificationError) {
+      console.error('Failed to notify approvers about leave cancellation:', notificationError.message);
+    }
+
+    try {
+      if (global.io) {
+        emitLeaveEvents.leaveStatusChanged(global.io, {
+          leaveId: leave._id,
+          userId: leave.user,
+          oldStatus,
+          newStatus: 'Cancelled',
+          remarks,
+          leave: leave.toObject()
+        });
+      }
+    } catch (socketError) {
+      console.error('Failed to emit leave cancellation event:', socketError.message);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Leave cancelled successfully. Reserved leave balance has been credited back.',
+      data: {
+        _id: leave._id,
+        status: leave.status,
+        remarks: leave.remarks,
+        history: leave.history
+      }
+    });
+  } catch (error) {
+    console.error('Cancel own leave error:', error);
+    return res.status(500).json({ success: false, error: 'Unable to cancel leave request.' });
+  }
+};
 
 exports.deleteLeave = async (req, res) => {
   try {
@@ -1885,55 +2296,72 @@ exports.getAnalytics = async (req, res) => {
 
 exports.getLeaveBalance = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const user = await User.findById(req.user._id)
+      .select('department jobRole employeeType company companyCode')
+      .populate('company', 'companyCode')
+      .lean();
+    if (!user) return res.status(404).json({ success: false, message: 'User account not found' });
+
+    const companyId = getUserCompanyId(user) || getUserCompanyId(req.user);
     const currentYear = new Date().getFullYear();
-    
-    
     const startOfYear = new Date(currentYear, 0, 1);
-    const endOfYear = new Date(currentYear, 11, 31);
-    
-    const leaves = await Leave.find({
-      user: userId,
-      startDate: { $gte: startOfYear, $lte: endOfYear }
-    }).lean();
-    
-    
-    const leavePolicies = {
-      Casual: { maxDays: 12, description: 'For personal work' },
-      Sick: { maxDays: 10, description: 'For health issues' },
-      Paid: { maxDays: 20, description: 'Earned leave with pay' },
-      Unpaid: { maxDays: 30, description: 'Leave without pay' },
-      Halfday: { maxDays: 1, description: 'Half day leave' },
-      Other: { maxDays: 5, description: 'Other leave types' }
-    };
-    
-    
-    const usedLeaves = {};
-    leaves.forEach(leave => {
-      if (leave.status === 'Approved') {
-        if (!usedLeaves[leave.type]) {
-          usedLeaves[leave.type] = 0;
-        }
-        usedLeaves[leave.type] += leave.days || 0;
-      }
-    });
-    
-    
+    const endOfYear = new Date(currentYear, 11, 31, 23, 59, 59, 999);
+    const previousStart = new Date(currentYear - 1, 0, 1);
+    const previousEnd = new Date(currentYear - 1, 11, 31, 23, 59, 59, 999);
+
+    const companyPolicies = await LeavePolicy.find({ company: companyId, status: 'Active' })
+      .distinct('leaveType');
+    const applicablePolicies = (await Promise.all(companyPolicies.map(leaveType =>
+      findApplicableLeavePolicy({ companyId, user, leaveType })
+    ))).filter(Boolean);
+
     const balance = {};
-    Object.keys(leavePolicies).forEach(type => {
-      const policy = leavePolicies[type];
-      const used = usedLeaves[type] || 0;
-      balance[type] = {
-        allocated: policy.maxDays,
-        used: used,
-        remaining: Math.max(0, policy.maxDays - used),
-        description: policy.description
+    for (const policy of applicablePolicies) {
+      const escapedType = String(policy.leaveType).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const typeQuery = { $regex: new RegExp(`^${escapedType}$`, 'i') };
+      const [currentLeaves, previousLeaves] = await Promise.all([
+        Leave.find({
+          user: user._id,
+          type: typeQuery,
+          status: { $in: ['Pending', 'Approved'] },
+          startDate: { $lte: endOfYear },
+          endDate: { $gte: startOfYear }
+        }).select('startDate endDate status').lean(),
+        policy.carryForward === 'Yes'
+          ? Leave.find({
+              user: user._id,
+              type: typeQuery,
+              status: 'Approved',
+              startDate: { $lte: previousEnd },
+              endDate: { $gte: previousStart }
+            }).select('startDate endDate').lean()
+          : []
+      ]);
+      const approvedLeaves = currentLeaves.filter(leave => leave.status === 'Approved');
+      const pendingLeaves = currentLeaves.filter(leave => leave.status === 'Pending');
+      const used = approvedLeaves.reduce((sum, leave) => sum + overlapDays(leave.startDate, leave.endDate, startOfYear, endOfYear), 0);
+      const pending = pendingLeaves.reduce((sum, leave) => sum + overlapDays(leave.startDate, leave.endDate, startOfYear, endOfYear), 0);
+      const previousUsed = previousLeaves.reduce((sum, leave) => sum + overlapDays(leave.startDate, leave.endDate, previousStart, previousEnd), 0);
+      const carriedForward = policy.carryForward === 'Yes'
+        ? Math.min(Math.max(Number(policy.entitledDays) - previousUsed, 0), Number(policy.maxCarryForwardDays) || 0)
+        : 0;
+      const allocated = Number(policy.entitledDays) + carriedForward;
+      balance[policy.leaveType] = {
+        allocated,
+        baseEntitlement: Number(policy.entitledDays),
+        carriedForward,
+        used,
+        pending,
+        remaining: Math.max(allocated - used - pending, 0),
+        description: policy.policyName,
+        payType: policy.payType,
+        monthlyAllowed: Number(policy.monthlyAllowed)
       };
-    });
-    
-    
+    }
+
     const totalAllocated = Object.values(balance).reduce((sum, b) => sum + b.allocated, 0);
     const totalUsed = Object.values(balance).reduce((sum, b) => sum + b.used, 0);
+    const totalPending = Object.values(balance).reduce((sum, b) => sum + b.pending, 0);
     const totalRemaining = Object.values(balance).reduce((sum, b) => sum + b.remaining, 0);
     
     res.status(200).json({
@@ -1944,12 +2372,12 @@ exports.getLeaveBalance = async (req, res) => {
         summary: {
           totalAllocated,
           totalUsed,
+          totalPending,
           totalRemaining,
           utilizationRate: totalAllocated > 0 ? (totalUsed / totalAllocated * 100).toFixed(1) : 0
         }
       }
     });
-    
   } catch (error) {
     console.error('Leave balance error:', error);
     res.status(500).json({ 
