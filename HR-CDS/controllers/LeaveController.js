@@ -1556,7 +1556,9 @@ exports.cancelOwnLeave = async (req, res) => {
       data: {
         _id: leave._id,
         status: leave.status,
-        remarks: leave.remarks,
+        cancellationReason: leave.cancellationReason,
+        cancelledAt: leave.cancelledAt,
+        cancelledBy: leave.cancelledBy,
         history: leave.history
       }
     });
