@@ -12,7 +12,7 @@ router.use(authMiddleware.protect);
 
 router.post('/apply', 
   [
-    body('type').isIn(['Casual', 'Sick', 'Paid', 'Unpaid', 'Halfday', 'Other']).withMessage('Invalid leave type'),
+    body('type').trim().notEmpty().isLength({ max: 80 }).withMessage('Invalid leave type'),
     body('reason')
       .trim()
       .isLength({ min: 20 })
@@ -29,7 +29,7 @@ router.post('/apply',
 router.get('/status',  
   [
     query('status').optional().isIn(['Pending', 'Approved', 'Rejected', 'Cancelled', 'All']).withMessage('Invalid status'),
-    query('type').optional().isIn(['Casual', 'Sick', 'Paid', 'Unpaid', 'Halfday', 'Other', 'all']).withMessage('Invalid type'),
+    query('type').optional().trim().isLength({ max: 80 }).withMessage('Invalid type'),
     query('date').optional().isISO8601().withMessage('Invalid date format'),
     query('year').optional().isInt({ min: 2000, max: 2100 }).withMessage('Invalid year'),
     query('month').optional().isInt({ min: 1, max: 12 }).withMessage('Invalid month'),
@@ -54,20 +54,39 @@ router.get('/stats', leaveController.getLeaveStats);
 
 router.get('/all', leaveController.getAllLeaves);
 
+router.get('/approval-options/:id',
+  [
+    param('id').isMongoId().withMessage('Invalid leave ID format'),
+    validateRequest
+  ],
+  leaveController.getLeaveApprovalOptions
+);
+
 router.patch('/status/:id',
   [
     param('id').isMongoId().withMessage('Invalid leave ID format'),
     body('status')
-      .isIn(['Approved', 'Rejected', 'Pending', 'Cancelled'])
-      .withMessage('Status must be Approved, Rejected, Pending, or Cancelled'),
+      .isIn(['Approved', 'Rejected'])
+      .withMessage('Status must be Approved or Rejected'),
     body('remarks')
       .optional()
       .trim()
       .isLength({ max: 500 })
       .withMessage('Remarks must be less than 500 characters'),
+    body('leaveType').optional().trim().isLength({ min: 1, max: 80 }).withMessage('Invalid leave type'),
+    body('payType').optional().isIn(['Paid', 'Unpaid']).withMessage('Pay type must be Paid or Unpaid'),
     validateRequest
   ],
   leaveController.updateLeaveStatus
+);
+
+router.patch('/:id/cancel',
+  [
+    param('id').isMongoId().withMessage('Invalid leave ID format'),
+    body('remarks').optional().trim().isLength({ max: 500 }).withMessage('Remarks must be less than 500 characters'),
+    validateRequest
+  ],
+  leaveController.cancelOwnLeave
 );
 
 
@@ -84,7 +103,7 @@ router.get('/department/:department',
   [
     param('department').trim().notEmpty().withMessage('Department is required'),
     query('status').optional().isIn(['Pending', 'Approved', 'Rejected', 'Cancelled', 'All']).withMessage('Invalid status value'),
-    query('type').optional().isIn(['Casual', 'Sick', 'Paid', 'Unpaid', 'Halfday', 'Other', 'all']).withMessage('Invalid type value'),
+    query('type').optional().trim().isLength({ max: 80 }).withMessage('Invalid type value'),
     query('date').optional().isISO8601().withMessage('Invalid date format'),
     validateRequest
   ],

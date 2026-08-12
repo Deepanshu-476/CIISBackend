@@ -772,6 +772,9 @@ app.use("/api/client-documents", require("./HR-CDS/routes/clientDocumentRoutes.j
 app.use('/api/branches', require('./routes/branchRoutes.js'));
 app.use('/api/support', require('./routes/supportRoutes.js'));
 app.use('/api/email-settings', require('./routes/emailSettingsRoutes.js'));
+app.use('/api/demo-requests', require('./routes/demoRequestRoutes.js'));
+app.use('/api/leave-types', require('./routes/leaveTypeRoutes.js'));
+app.use('/api/leave-policies', require('./routes/leavePolicyRoutes.js'));
 
 
 

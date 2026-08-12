@@ -3,6 +3,7 @@ const User = require('../../models/User');
 const Department = require('../../models/Department');
 const JobRole = require('../../models/JobRole');
 const Branch = require('../../models/Branch');
+const PagePermission = require('../../models/PagePermission');
 const bcrypt = require('bcryptjs');
 const { errorResponse, successResponse } = require('../utils/responseHelper.js');
 const Task = require('../../HR-CDS/models/Task.js');
@@ -244,12 +245,12 @@ const USER_FIELDS = {
   
   
   PERSONAL: ['phone', 'address', 'gender', 'maritalStatus', 'dob', 
-             'fatherName', 'motherName', 'city', 'state', 'pinCode', 'zipCode', 'country'],
+             'fatherName', 'motherName', 'city', 'state', 'pinCode', 'country'],
   
   
   EMPLOYMENT: ['employeeType', 'salary', 'properties', 'propertyOwned', 
                'additionalDetails', 'employeeId', 'companyRole', 'reportingManager',
-               'dateOfJoining', 'workLocation'],
+               'dateOfJoining'],
   
   
   BANKING: ['accountNumber', 'ifsc', 'bankName', 'bankHolderName'],
@@ -257,9 +258,6 @@ const USER_FIELDS = {
   
   EMERGENCY: ['emergencyName', 'emergencyPhone', 'emergencyRelation', 
               'emergencyAddress'],
-  
-  
-  FAMILY: ['children', 'spouseName'],
   
   
   DOCUMENTS: ['documents'],
@@ -272,7 +270,6 @@ const USER_FIELDS = {
       ...this.EMPLOYMENT,
       ...this.BANKING,
       ...this.EMERGENCY,
-      ...this.FAMILY,
       ...this.DOCUMENTS
     ];
   }
@@ -312,19 +309,6 @@ const isWorkFromHomeEmployeeType = (value) => {
 };
 
 const normalizeEmploymentLocationFields = (updateData, existingUser = {}) => {
-  const employeeTypeTouched = updateData.employeeType !== undefined;
-  const workLocationTouched = updateData.workLocation !== undefined;
-  const nextEmployeeType = normalizeEmployeeType(employeeTypeTouched ? updateData.employeeType : existingUser.employeeType);
-
-  if (isWorkFromHomeEmployeeType(nextEmployeeType)) {
-    updateData.workLocation = '';
-    return null;
-  }
-
-  if (workLocationTouched) {
-    updateData.workLocation = String(updateData.workLocation || '').trim();
-  }
-
   return null;
 };
 
@@ -378,28 +362,118 @@ const normalizeUserDateFields = (data = {}) => {
     }
   }
 
-  if (Array.isArray(data.children)) {
-    const normalizedChildren = [];
-    for (const child of data.children) {
-      if (!child || typeof child !== 'object' || child.dob === undefined) {
-        normalizedChildren.push(child);
-        continue;
-      }
-      const parsed = parseFlexibleDate(child.dob);
-      if (!parsed.ok) {
-        return 'Child DOB must be a valid date';
-      }
-      normalizedChildren.push({...child, dob: parsed.value});
-    }
-    data.children = normalizedChildren;
-  }
-
   return null;
 };
 
 const hasChangedValue = (nextValue, currentValue) => {
   if (nextValue === undefined) return false;
   return String(nextValue ?? '').trim() !== String(currentValue ?? '').trim();
+};
+
+const REGISTER_REQUEST_PATH = '/ciisUser/register-request';
+
+const REGISTER_REQUEST_SECTIONS = [
+  'personalInformation',
+  'companyAssignment',
+  'additionalDetails',
+  'workDetails',
+  'addressInformation',
+  'identityDocuments',
+  'salaryBankDetails',
+  'familyDetails',
+  'emergencyContact',
+  'assetsExtraDetails'
+];
+
+const REGISTER_REQUEST_EDITABLE_FIELDS = new Set([
+  'name', 'email', 'phone', 'dob', 'gender', 'maritalStatus',
+  'branch', 'assignedBranches', 'department', 'jobRole', 'shiftId', 'shiftName', 'shiftType', 'companyRole',
+  'employeeType', 'dateOfJoining', 'experienceType', 'additionalDocumentDetails',
+  'address', 'city', 'state', 'country', 'pinCode',
+  'aadharCard', 'panCard',
+  'salary', 'accountNumber', 'ifsc', 'bankName', 'bankHolderName',
+  'fatherName', 'motherName',
+  'emergencyName', 'emergencyPhone', 'emergencyRelation', 'emergencyAddress',
+  'properties', 'propertyOwned', 'additionalDetails'
+]);
+
+const getRequestUserId = (user = {}) => String(user._id || user.id || '');
+
+const getRequestUserName = (user = {}) => String(user.name || user.email || 'Unknown User');
+
+const isRegisterRequestAdmin = (user = {}) => {
+  const role = String(user.companyRole || user.jobRole || user.role || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  return ['owner', 'admin', 'hr', 'super_admin', 'superadmin', 'company_owner', 'companyowner'].includes(role);
+};
+
+const getRegisterRequestPagePermission = async req => {
+  const company = req.user?.company;
+  const companyId = company?._id || company?.id || company;
+  if (!companyId) return null;
+  return PagePermission.findOne({ company: companyId, path: REGISTER_REQUEST_PATH }).lean();
+};
+
+const pageUserIds = (page, key) => (page?.[key] || [])
+  .map(item => String(item?.user?._id || item?.user || ''))
+  .filter(Boolean);
+
+const hasRegisterRequestViewAccess = async req => {
+  if (isRegisterRequestAdmin(req.user)) return true;
+  const page = await getRegisterRequestPagePermission(req);
+  if (!page) return false;
+  const currentUserId = getRequestUserId(req.user);
+  const ids = new Set([
+    ...pageUserIds(page, 'viewUsers'),
+    ...pageUserIds(page, 'editUsers'),
+    ...pageUserIds(page, 'approvers'),
+    ...pageUserIds(page, 'deleteUsers')
+  ]);
+  return ids.has(currentUserId);
+};
+
+const hasRegisterRequestVerifyAccess = async req => {
+  if (isRegisterRequestAdmin(req.user)) return true;
+  const page = await getRegisterRequestPagePermission(req);
+  if (!page) return false;
+  const currentUserId = getRequestUserId(req.user);
+  return pageUserIds(page, 'approvers').includes(currentUserId);
+};
+
+const buildDocumentUrl = (userId, doc, action = 'view') => (
+  `/users/${userId}/documents/${doc._id}/${action}`
+);
+
+const serializeRegisterRequest = user => {
+  const item = typeof user.toObject === 'function' ? user.toObject() : user;
+  const documents = (item.documents || []).map(doc => ({
+    ...doc,
+    viewUrl: buildDocumentUrl(item._id, doc, 'view'),
+    downloadUrl: buildDocumentUrl(item._id, doc, 'download')
+  }));
+
+  return {
+    ...item,
+    documents,
+    verificationSections: REGISTER_REQUEST_SECTIONS.map(key => ({
+      key,
+      ...(item.registrationVerification?.sections?.[key] || {})
+    })),
+    canActivate: REGISTER_REQUEST_SECTIONS.every(key => (
+      Boolean(item.registrationVerification?.sections?.[key]?.verified)
+    ))
+  };
+};
+
+const findScopedRegisterRequest = async (req, id) => {
+  const companyScope = getCompanyScope(req);
+  if (companyScope.error) return { error: companyScope.error };
+  const user = await User.findOne({
+    _id: id,
+    ...companyScope.filter,
+    registrationSource: 'self_register'
+  });
+  if (!user) return { error: { status: 404, message: 'Register request not found' } };
+  return { user };
 };
 
 exports.getMe = async (req, res) => {
@@ -435,10 +509,8 @@ exports.getMe = async (req, res) => {
         bankHolderName: user.bankHolderName,
         fatherName: user.fatherName,
         motherName: user.motherName,
-        spouseName: user.spouseName,
-        aadhaar: user.aadhaar || user.aadhar || user.aadharCard,
-        panCard: user.panCard || user.pan,
-        children: user.children,
+        aadharCard: user.aadharCard,
+        panCard: user.panCard,
         documents: user.documents,
         emergencyName: user.emergencyName,
         emergencyPhone: user.emergencyPhone,
@@ -451,11 +523,9 @@ exports.getMe = async (req, res) => {
         companyRole: user.companyRole,
         reportingManager: user.reportingManager,
         dateOfJoining: user.dateOfJoining,
-        workLocation: user.workLocation,
         city: user.city,
         state: user.state,
-        pinCode: user.pinCode || user.zipCode,
-        zipCode: user.zipCode,
+        pinCode: user.pinCode,
         country: user.country,
         chatSettings: user.chatSettings,
         notificationPreferences: user.notificationPreferences,
@@ -478,8 +548,8 @@ exports.updateMe = async (req, res) => {
     const existingUser = await User.findById(userId).lean();
     if (!existingUser) return errorResponse(res, 404, "User not found");
 
-    const currentAadhaar = existingUser.aadhaar || existingUser.aadhar || existingUser.aadharCard || '';
-    const currentPan = existingUser.panCard || existingUser.pan || '';
+    const currentAadhaar = existingUser.aadharCard || '';
+    const currentPan = existingUser.panCard || '';
     const requiredProfileFields = [
       ['name', 'Full Name', existingUser.name],
       ['phone', 'Mobile Number', existingUser.phone],
@@ -489,7 +559,7 @@ exports.updateMe = async (req, res) => {
       ['bankName', 'Bank Name', existingUser.bankName],
       ['fatherName', "Father's Name", existingUser.fatherName],
       ['motherName', "Mother's Name", existingUser.motherName],
-      ['aadhaar', 'Aadhaar Number', currentAadhaar],
+      ['aadharCard', 'Aadhar Card Number', currentAadhaar],
       ['panCard', 'PAN Number', currentPan],
     ];
     const missingFields = requiredProfileFields
@@ -514,8 +584,8 @@ exports.updateMe = async (req, res) => {
     if (req.body.ifsc !== undefined && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(String(req.body.ifsc).trim().toUpperCase())) {
       return errorResponse(res, 400, "Invalid IFSC Code format");
     }
-    if (req.body.aadhaar !== undefined && !/^\d{12}$/.test(String(req.body.aadhaar).trim())) {
-      return errorResponse(res, 400, "Aadhaar Number must contain exactly 12 digits");
+    if (req.body.aadharCard !== undefined && !/^\d{12}$/.test(String(req.body.aadharCard).trim())) {
+      return errorResponse(res, 400, "Aadhar Card Number must contain exactly 12 digits");
     }
     if (req.body.panCard !== undefined && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(String(req.body.panCard).trim().toUpperCase())) {
       return errorResponse(res, 400, "Invalid PAN Number format");
@@ -533,12 +603,12 @@ exports.updateMe = async (req, res) => {
       'name', 'phone', 'dob', 'gender', 'maritalStatus',
       'address', 'city', 'state', 'pinCode', 'country',
       'bankHolderName', 'accountNumber', 'ifsc', 'bankName',
-      'fatherName', 'motherName', 'spouseName', 'children',
+      'fatherName', 'motherName',
       'emergencyName', 'emergencyPhone', 'emergencyRelation', 'emergencyAddress',
-      'aadhaar', 'aadhar', 'aadharCard', 'panCard', 'pan',
+      'aadharCard', 'panCard',
       'chatSettings', 'notificationPreferences', 'properties',
       'propertyOwned', 'additionalDetails',
-      'employeeType', 'workLocation'
+      'employeeType'
     ]);
 
     Object.keys(req.body).forEach(key => {
@@ -552,13 +622,8 @@ exports.updateMe = async (req, res) => {
     if (updateData.panCard) updateData.panCard = String(updateData.panCard).trim().toUpperCase();
     if (updateData.pinCode) {
       updateData.pinCode = String(updateData.pinCode).trim();
-      updateData.zipCode = updateData.pinCode;
     }
     
-    
-    if (req.body.children !== undefined) {
-      updateData.children = req.body.children;
-    }
     
     if (req.body.properties !== undefined) {
       updateData.properties = req.body.properties;
@@ -652,7 +717,7 @@ exports.register = async (req, res) => {
     });
     
     
-    const extraFields = ['city', 'state', 'pinCode', 'zipCode', 'country', 'spouseName', 'children', 'documents', 'employeeId', 'companyRole', 'reportingManager', 'dateOfJoining', 'workLocation'];
+    const extraFields = ['city', 'state', 'pinCode', 'country', 'documents', 'employeeId', 'companyRole', 'reportingManager', 'dateOfJoining'];
     extraFields.forEach(field => {
       if (req.body[field] !== undefined) {
         userData[field] = req.body[field];
@@ -721,6 +786,281 @@ exports.register = async (req, res) => {
   } catch (err) {
     console.error("❌ Registration error:", err);
     return errorResponse(res, 500, "Registration failed");
+  }
+};
+
+exports.getRegisterRequests = async (req, res) => {
+  try {
+    const canView = await hasRegisterRequestViewAccess(req);
+    if (!canView) {
+      return errorResponse(res, 403, "You do not have access to Register Request page");
+    }
+
+    const companyScope = getCompanyScope(req);
+    if (companyScope.error) {
+      return errorResponse(res, companyScope.error.status, companyScope.error.message);
+    }
+
+    const status = String(req.query.status || 'pending').trim().toLowerCase();
+    const filter = {
+      ...companyScope.filter,
+      registrationSource: 'self_register'
+    };
+
+    if (status === 'all') {
+      filter.registrationStatus = { $in: ['pending', 'active', 'rejected'] };
+    } else if (['pending', 'active', 'rejected'].includes(status)) {
+      filter.registrationStatus = status;
+    } else {
+      filter.registrationStatus = 'pending';
+    }
+
+    const requests = await User.find(filter)
+      .select('-password -resetToken -resetTokenExpiry')
+      .populate('company', 'companyName companyCode name')
+      .populate('branch', 'name branchCode')
+      .populate('assignedBranches', 'name branchCode')
+      .populate('department', 'name description branch')
+      .populate('createdBy', 'name email')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const canVerify = await hasRegisterRequestVerifyAccess(req);
+
+    return res.status(200).json({
+      success: true,
+      requests: requests.map(serializeRegisterRequest),
+      sections: REGISTER_REQUEST_SECTIONS,
+      canVerify
+    });
+  } catch (err) {
+    console.error("❌ Get register requests error:", err);
+    return errorResponse(res, 500, "Failed to load register requests");
+  }
+};
+
+exports.updateRegisterRequest = async (req, res) => {
+  try {
+    const canVerify = await hasRegisterRequestVerifyAccess(req);
+    if (!canVerify) {
+      return errorResponse(res, 403, "You do not have permission to update register requests");
+    }
+
+    const { user, error } = await findScopedRegisterRequest(req, req.params.id);
+    if (error) return errorResponse(res, error.status, error.message);
+
+    const updateData = {};
+    Object.keys(req.body || {}).forEach(key => {
+      if (REGISTER_REQUEST_EDITABLE_FIELDS.has(key)) {
+        updateData[key] = req.body[key];
+      }
+    });
+
+    ['email', 'phone', 'aadharCard', 'panCard', 'ifsc'].forEach(field => {
+      if (updateData[field] !== undefined) {
+        updateData[field] = String(updateData[field] || '').trim();
+      }
+    });
+    if (updateData.email) updateData.email = updateData.email.toLowerCase();
+    if (updateData.panCard) updateData.panCard = updateData.panCard.toUpperCase();
+    if (updateData.ifsc) updateData.ifsc = updateData.ifsc.toUpperCase();
+
+    ['gender', 'maritalStatus', 'experienceType', 'companyRole'].forEach(field => {
+      if (updateData[field] === undefined) return;
+      const normalized = String(updateData[field] || '').trim().toLowerCase().replace(/\s+/g, '_');
+      if (normalized) updateData[field] = normalized;
+      else delete updateData[field];
+    });
+
+    if (updateData.salary === '' || updateData.salary === null) {
+      updateData.salary = undefined;
+    }
+
+    if (Array.isArray(updateData.properties)) {
+      const allowedProperties = new Set(['sim', 'phone', 'laptop', 'desktop', 'headphones', 'tablet', 'vehicle']);
+      updateData.properties = updateData.properties
+        .map(value => String(value || '').trim().toLowerCase())
+        .filter(value => allowedProperties.has(value));
+    }
+
+    const dateFieldError = normalizeUserDateFields(updateData);
+    if (dateFieldError) {
+      return errorResponse(res, 400, dateFieldError);
+    }
+
+    if (updateData.department && isObjectIdLike(updateData.department)) {
+      const departmentError = await validateAssignableDepartment(updateData.department, user.company || req.user.company);
+      if (departmentError) {
+        return errorResponse(res, departmentError.status, departmentError.message);
+      }
+    }
+
+    if (updateData.branch && isObjectIdLike(updateData.branch)) {
+      const branch = await Branch.findOne({
+        _id: updateData.branch,
+        company: user.company || req.user.company,
+        isActive: { $ne: false }
+      });
+      if (!branch) {
+        return errorResponse(res, 404, "Branch not found for selected company");
+      }
+      updateData.branchCode = branch.branchCode;
+    }
+
+    if (req.body.assignedBranches !== undefined || updateData.branch !== undefined) {
+      const assignedBranchIds = normalizeIdList([
+        ...(Array.isArray(req.body.assignedBranches) ? req.body.assignedBranches : normalizeIdList(req.body.assignedBranches)),
+        updateData.branch || user.branch
+      ]).filter(isObjectIdLike);
+      const branchError = await validateAssignedBranches(assignedBranchIds, user.company || req.user.company);
+      if (branchError) {
+        return errorResponse(res, branchError.status, branchError.message);
+      }
+      updateData.assignedBranches = assignedBranchIds;
+    }
+
+    if ((updateData.department || updateData.jobRole || updateData.shiftId) && (updateData.shiftId || user.shiftId)) {
+      const shiftResult = await resolveAssignableShift({
+        jobRole: updateData.jobRole || user.jobRole,
+        shiftId: updateData.shiftId || user.shiftId,
+        company: user.company || req.user.company,
+        department: updateData.department || user.department
+      });
+      if (shiftResult?.error) {
+        return errorResponse(res, shiftResult.error.status, shiftResult.error.message);
+      }
+      updateData.shiftId = String(shiftResult.shift.shiftId || updateData.shiftId || user.shiftId);
+      updateData.shiftName = shiftResult.shift.shiftName || updateData.shiftName;
+      updateData.shiftType = shiftResult.shift.shiftType || updateData.shiftType;
+    }
+
+    updateData['registrationVerification.lastUpdatedBy'] = req.user.id || req.user._id;
+    updateData['registrationVerification.lastUpdatedByName'] = getRequestUserName(req.user);
+    updateData['registrationVerification.lastUpdatedAt'] = new Date();
+
+    const updatedUser = await User.findByIdAndUpdate(
+      user._id,
+      { $set: updateData },
+      { new: true, runValidators: true, context: 'query' }
+    )
+      .select('-password -resetToken -resetTokenExpiry')
+      .populate('company', 'companyName companyCode name')
+      .populate('branch', 'name branchCode')
+      .populate('assignedBranches', 'name branchCode')
+      .populate('department', 'name description branch')
+      .populate('createdBy', 'name email')
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      message: "Register request updated successfully",
+      request: serializeRegisterRequest(updatedUser)
+    });
+  } catch (err) {
+    console.error("❌ Update register request error:", err);
+    if (err.name === 'ValidationError') {
+      return errorResponse(res, 400, err.message);
+    }
+    return errorResponse(res, 500, "Failed to update register request");
+  }
+};
+
+exports.verifyRegisterRequestSection = async (req, res) => {
+  try {
+    const canVerify = await hasRegisterRequestVerifyAccess(req);
+    if (!canVerify) {
+      return errorResponse(res, 403, "You do not have permission to verify register requests");
+    }
+
+    const { sectionKey, verified } = req.body || {};
+    if (!REGISTER_REQUEST_SECTIONS.includes(sectionKey)) {
+      return errorResponse(res, 400, "Invalid verification section");
+    }
+
+    const { user, error } = await findScopedRegisterRequest(req, req.params.id);
+    if (error) return errorResponse(res, error.status, error.message);
+
+    const now = new Date();
+    const verifierName = getRequestUserName(req.user);
+    const prefix = `registrationVerification.sections.${sectionKey}`;
+    const setData = {
+      [`${prefix}.verified`]: Boolean(verified),
+      [`${prefix}.verifiedBy`]: verified ? (req.user.id || req.user._id) : null,
+      [`${prefix}.verifierName`]: verified ? verifierName : '',
+      [`${prefix}.verifiedAt`]: verified ? now : null
+    };
+
+    const updatedUser = await User.findByIdAndUpdate(
+      user._id,
+      { $set: setData },
+      { new: true, runValidators: true, context: 'query' }
+    )
+      .select('-password -resetToken -resetTokenExpiry')
+      .populate('company', 'companyName companyCode name')
+      .populate('branch', 'name branchCode')
+      .populate('assignedBranches', 'name branchCode')
+      .populate('department', 'name description branch')
+      .populate('createdBy', 'name email')
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      message: verified ? "Section verified successfully" : "Section verification removed",
+      request: serializeRegisterRequest(updatedUser)
+    });
+  } catch (err) {
+    console.error("❌ Verify register request section error:", err);
+    return errorResponse(res, 500, "Failed to verify register request section");
+  }
+};
+
+exports.activateRegisterRequest = async (req, res) => {
+  try {
+    const canVerify = await hasRegisterRequestVerifyAccess(req);
+    if (!canVerify) {
+      return errorResponse(res, 403, "You do not have permission to activate register requests");
+    }
+
+    const { user, error } = await findScopedRegisterRequest(req, req.params.id);
+    if (error) return errorResponse(res, error.status, error.message);
+
+    const allVerified = REGISTER_REQUEST_SECTIONS.every(key => (
+      Boolean(user.registrationVerification?.sections?.[key]?.verified)
+    ));
+    if (!allVerified) {
+      return errorResponse(res, 400, "Please verify all sections before activating this user");
+    }
+
+    const now = new Date();
+    const updatedUser = await User.findByIdAndUpdate(
+      user._id,
+      {
+        $set: {
+          isActive: true,
+          registrationStatus: 'active',
+          'registrationVerification.activatedBy': req.user.id || req.user._id,
+          'registrationVerification.activatedByName': getRequestUserName(req.user),
+          'registrationVerification.activatedAt': now
+        }
+      },
+      { new: true, runValidators: true, context: 'query' }
+    )
+      .select('-password -resetToken -resetTokenExpiry')
+      .populate('company', 'companyName companyCode name')
+      .populate('branch', 'name branchCode')
+      .populate('assignedBranches', 'name branchCode')
+      .populate('department', 'name description branch')
+      .populate('createdBy', 'name email')
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      message: "User activated successfully",
+      request: serializeRegisterRequest(updatedUser)
+    });
+  } catch (err) {
+    console.error("❌ Activate register request error:", err);
+    return errorResponse(res, 500, "Failed to activate register request");
   }
 };
 
@@ -797,8 +1137,6 @@ exports.getAllUsers = async (req, res) => {
       bankHolderName: user.bankHolderName,
       fatherName: user.fatherName,
       motherName: user.motherName,
-      spouseName: user.spouseName,
-      children: user.children,
       documents: user.documents,
       emergencyName: user.emergencyName,
       emergencyPhone: user.emergencyPhone,
@@ -811,11 +1149,9 @@ exports.getAllUsers = async (req, res) => {
       companyRole: user.companyRole,
       reportingManager: user.reportingManager,
       dateOfJoining: user.dateOfJoining,
-      workLocation: user.workLocation,
       city: user.city,
       state: user.state,
-      pinCode: user.pinCode || user.zipCode,
-      zipCode: user.zipCode,
+      pinCode: user.pinCode,
       country: user.country,
       isActive: user.isActive,
       createdAt: user.createdAt,
@@ -886,8 +1222,6 @@ exports.getUser = async (req, res) => {
       bankHolderName: user.bankHolderName,
       fatherName: user.fatherName,
       motherName: user.motherName,
-      spouseName: user.spouseName,
-      children: user.children,
       documents: user.documents,
       emergencyName: user.emergencyName,
       emergencyPhone: user.emergencyPhone,
@@ -900,11 +1234,9 @@ exports.getUser = async (req, res) => {
       companyRole: user.companyRole,
       reportingManager: user.reportingManager,
       dateOfJoining: user.dateOfJoining,
-      workLocation: user.workLocation,
       city: user.city,
       state: user.state,
-      pinCode: user.pinCode || user.zipCode,
-      zipCode: user.zipCode,
+      pinCode: user.pinCode,
       country: user.country,
       isActive: user.isActive,
       createdAt: user.createdAt,
@@ -973,8 +1305,8 @@ exports.updateUser = async (req, res) => {
     const adminEditableFields = new Set([
       ...USER_FIELDS.ALL(),
       'branch', 'assignedBranches',
-      'shiftId', 'shiftName', 'shiftType', 'shift', 'noticePeriod',
-      'aadhaar', 'aadhar', 'aadharCard', 'panCard', 'pan',
+      'shiftId', 'shiftName', 'shiftType',
+      'aadharCard', 'panCard',
       'isActive'
     ]);
     // This legacy field may contain a structured object for older client-linked
@@ -1002,10 +1334,6 @@ exports.updateUser = async (req, res) => {
       else delete updateData[field];
     });
 
-    if (req.body.children !== undefined) {
-      updateData.children = req.body.children;
-    }
-    
     if (req.body.documents !== undefined) {
       updateData.documents = req.body.documents;
     }
@@ -1156,16 +1484,13 @@ exports.updateSelfUser = async (req, res) => {
     const updateData = {};
     
     
+    const blockedUpdateFields = new Set(['password', 'resetToken', 'resetTokenExpiry', '__v', 'spouseName', 'children', 'zipCode', 'workLocation', 'noticePeriod', 'aadhaar', 'aadhar', 'pan']);
+
     Object.keys(req.body).forEach(key => {
-      if (key !== 'password' && key !== 'resetToken' && key !== 'resetTokenExpiry' && key !== '__v') {
+      if (!blockedUpdateFields.has(key)) {
         updateData[key] = req.body[key];
       }
     });
-    
-    
-    if (req.body.children !== undefined) {
-      updateData.children = req.body.children;
-    }
     
     if (req.body.documents !== undefined) {
       updateData.documents = req.body.documents;
@@ -1455,8 +1780,6 @@ exports.getCompanydepartmentUsers = async (req, res) => {
         bankHolderName: user.bankHolderName,
         fatherName: user.fatherName,
         motherName: user.motherName,
-        spouseName: user.spouseName,
-        children: user.children,
         documents: user.documents,
         emergencyName: user.emergencyName,
         emergencyPhone: user.emergencyPhone,
@@ -1469,11 +1792,9 @@ exports.getCompanydepartmentUsers = async (req, res) => {
         companyRole: user.companyRole,
         reportingManager: user.reportingManager,
         dateOfJoining: user.dateOfJoining,
-        workLocation: user.workLocation,
         city: user.city,
         state: user.state,
-        pinCode: user.pinCode || user.zipCode,
-        zipCode: user.zipCode,
+        pinCode: user.pinCode,
         country: user.country,
         isActive: user.isActive,
         ...getUserPresence(user, socketOnlineIds),
@@ -1659,8 +1980,6 @@ exports.getCompanyUsersPaginated = async (req, res) => {
         bankHolderName: user.bankHolderName,
         fatherName: user.fatherName,
         motherName: user.motherName,
-        spouseName: user.spouseName,
-        children: user.children,
         documents: user.documents,
         emergencyName: user.emergencyName,
         emergencyPhone: user.emergencyPhone,
@@ -1673,11 +1992,9 @@ exports.getCompanyUsersPaginated = async (req, res) => {
         companyRole: user.companyRole,
         reportingManager: user.reportingManager,
         dateOfJoining: user.dateOfJoining,
-        workLocation: user.workLocation,
         city: user.city,
         state: user.state,
-        pinCode: user.pinCode || user.zipCode,
-        zipCode: user.zipCode,
+        pinCode: user.pinCode,
         country: user.country,
       isActive: user.isActive,
       createdAt: user.createdAt,

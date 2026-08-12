@@ -401,6 +401,7 @@ exports.createCompany = async (req, res) => {
         subscriptionStartDate.getTime() + selectedPlan.durationDays * 24 * 60 * 60 * 1000
       );
       const cleanAllowedPages = cleanStringArray(selectedPlan.allowedPages);
+      const cleanAllowedSuperAdminPages = cleanStringArray(selectedPlan.allowedSuperAdminPages);
       const cleanFeatures = cleanStringArray(selectedPlan.features);
       
       const companyData = {
@@ -425,6 +426,7 @@ exports.createCompany = async (req, res) => {
         planDurationDays: selectedPlan.durationDays,
         planFeatures: cleanFeatures,
         allowedPages: cleanAllowedPages,
+        allowedSuperAdminPages: cleanAllowedSuperAdminPages,
         accessConfiguredAt: new Date(),
         subscriptionPayments: [{
           amount: selectedPlan.price,
@@ -707,9 +709,9 @@ exports.getAllCompanies = async (req, res) => {
       Company.find(filter)
       .select(
         "_id companyName companyEmail companyAddress companyPhone ownerName logo companyDomain loginToken isActive deactivatedAt subscriptionExpiry createdAt updatedAt companyCode dbIdentifier loginUrl"
-          + " allowedPages accessConfiguredAt accessUpdatedBy selectedPlan subscriptionPlan subscriptionAmount subscriptionPaymentStatus subscriptionPayments planDurationDays planFeatures"
+          + " allowedPages allowedSuperAdminPages accessConfiguredAt accessUpdatedBy selectedPlan subscriptionPlan subscriptionAmount subscriptionPaymentStatus subscriptionPayments planDurationDays planFeatures"
       )
-      .populate("selectedPlan", "name price durationDays features allowedPages")
+      .populate("selectedPlan", "name price durationDays features allowedPages allowedSuperAdminPages")
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -766,7 +768,7 @@ exports.getCompanyById = async (req, res) => {
 
     const company = await Company.findById(id)
       .select("-loginToken")
-      .populate("selectedPlan", "name price durationDays features allowedPages")
+      .populate("selectedPlan", "name price durationDays features allowedPages allowedSuperAdminPages")
       .lean();
 
     if (!company) {
@@ -988,9 +990,11 @@ exports.updateCompany = async (req, res) => {
     
     const allowedFields = [
       "companyName",
+      "companyCode",
       "companyEmail",
       "companyAddress",
       "companyPhone",
+      "companyDomain",
       "ownerName",
       "logo",
       "subscriptionExpiry",
@@ -1003,6 +1007,16 @@ exports.updateCompany = async (req, res) => {
     for (const key of allowedFields) {
       if (req.body[key] !== undefined) {
         updateData[key] = req.body[key];
+      }
+    }
+
+    if (updateData.companyCode !== undefined) {
+      updateData.companyCode = String(updateData.companyCode || "").trim().toUpperCase();
+      if (!/^[A-Z0-9_-]{3,10}$/.test(updateData.companyCode)) {
+        return res.status(400).json({
+          success: false,
+          message: "Company code must be 3-10 characters and can contain letters, numbers, underscore or hyphen",
+        });
       }
     }
 
@@ -1037,23 +1051,77 @@ exports.updateCompany = async (req, res) => {
       updateData.subscriptionPaymentStatus = normalizePaymentStatus(updateData.subscriptionPaymentStatus);
     }
 
-    const updatedCompany = await Company.findByIdAndUpdate(
-      id,
-      { $set: updateData },
-      { new: true, runValidators: true }
-    ).select("-loginToken");
-
-    if (!updatedCompany) {
+    const existingCompany = await Company.findById(id).select("companyCode");
+    if (!existingCompany) {
       return res.status(404).json({
         success: false,
         message: "Company not found",
       });
     }
 
+    const previousCompanyCode = String(existingCompany.companyCode || "").trim().toUpperCase();
+    const nextCompanyCode = updateData.companyCode || previousCompanyCode;
+    const companyCodeChanged = Boolean(nextCompanyCode && nextCompanyCode !== previousCompanyCode);
+
+    if (companyCodeChanged) {
+      const duplicateCompany = await Company.findOne({
+        _id: { $ne: id },
+        companyCode: nextCompanyCode,
+      }).select("_id");
+
+      if (duplicateCompany) {
+        return res.status(409).json({
+          success: false,
+          message: "Company code already exists",
+        });
+      }
+
+      updateData.loginUrl = `/company/${nextCompanyCode}/login`;
+      updateData.dbIdentifier = `company_${nextCompanyCode}`;
+    }
+
+    const updatedCompany = await Company.findByIdAndUpdate(
+      id,
+      { $set: updateData },
+      { new: true, runValidators: true }
+    ).select("-loginToken");
+
+    let syncSummary = null;
+    if (companyCodeChanged) {
+      const syncResults = await Promise.all([
+        User.updateMany(
+          { company: updatedCompany._id, isActive: true },
+          { $set: { companyCode: nextCompanyCode } }
+        ),
+        Branch.updateMany(
+          { company: updatedCompany._id, isActive: { $ne: false } },
+          { $set: { companyCode: nextCompanyCode } }
+        ),
+        Department.updateMany(
+          { company: updatedCompany._id, isActive: { $ne: false } },
+          { $set: { companyCode: nextCompanyCode } }
+        ),
+        JobRole.updateMany(
+          { company: updatedCompany._id, isActive: { $ne: false } },
+          { $set: { companyCode: nextCompanyCode } }
+        ),
+      ]);
+
+      syncSummary = {
+        usersUpdated: syncResults[0].modifiedCount || 0,
+        branchesUpdated: syncResults[1].modifiedCount || 0,
+        departmentsUpdated: syncResults[2].modifiedCount || 0,
+        jobRolesUpdated: syncResults[3].modifiedCount || 0,
+      };
+    }
+
     return res.status(200).json({
       success: true,
-      message: "Company updated successfully",
+      message: companyCodeChanged
+        ? "Company updated successfully and active records synced"
+        : "Company updated successfully",
       company: updatedCompany,
+      syncSummary,
     });
   } catch (err) {
     console.error("❌ Update company error:", err);
@@ -1072,6 +1140,81 @@ exports.updateCompany = async (req, res) => {
   }
 };
 
+exports.getSelfRegistrationConfig = async (req, res) => {
+  try {
+    const companyCode = String(req.params.companyCode || "").trim().toUpperCase();
+
+    if (!companyCode) {
+      return res.status(400).json({
+        success: false,
+        message: "Company code is required",
+      });
+    }
+
+    const company = await Company.findOne({ companyCode })
+      .select("_id companyName companyCode logo companyEmail companyPhone companyAddress isActive subscriptionExpiry loginUrl");
+
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: "Company not found",
+      });
+    }
+
+    if (!company.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: "Company account is deactivated",
+      });
+    }
+
+    if (new Date() > new Date(company.subscriptionExpiry)) {
+      return res.status(403).json({
+        success: false,
+        message: "Company subscription has expired",
+      });
+    }
+
+    const [branches, departments, jobRoles] = await Promise.all([
+      Branch.find({ company: company._id, isActive: { $ne: false } })
+        .select("_id name branchCode isDefault")
+        .sort({ isDefault: -1, name: 1 })
+        .lean(),
+      Department.find({ company: company._id, isActive: true })
+        .select("_id name branch branchCode")
+        .sort({ name: 1 })
+        .lean(),
+      JobRole.find({ company: company._id, isActive: true })
+        .select("_id name department shifts shiftSettings")
+        .sort({ name: 1 })
+        .lean(),
+    ]);
+
+    return res.json({
+      success: true,
+      company: {
+        _id: company._id,
+        companyName: company.companyName,
+        companyCode: company.companyCode,
+        logo: company.logo,
+        companyEmail: company.companyEmail,
+        companyPhone: company.companyPhone,
+        companyAddress: company.companyAddress,
+        loginUrl: company.loginUrl || `/company/${company.companyCode}/login`,
+      },
+      branches,
+      departments,
+      jobRoles,
+    });
+  } catch (error) {
+    console.error("Self registration config error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to load company registration details",
+    });
+  }
+};
+
 
 
 
@@ -1081,6 +1224,7 @@ exports.updateCompanyAccess = async (req, res) => {
     const { id } = req.params;
     const {
       allowedPages = [],
+      allowedSuperAdminPages = [],
       activeDays = 30,
       isActive = true,
       subscriptionExpiry,
@@ -1101,8 +1245,20 @@ exports.updateCompanyAccess = async (req, res) => {
       });
     }
 
+    if (!Array.isArray(allowedSuperAdminPages) || allowedSuperAdminPages.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Please select at least one super admin page for this company",
+      });
+    }
+
     const cleanAllowedPages = [...new Set(
       allowedPages
+        .map(page => String(page || "").trim())
+        .filter(Boolean)
+    )];
+    const cleanAllowedSuperAdminPages = [...new Set(
+      allowedSuperAdminPages
         .map(page => String(page || "").trim())
         .filter(Boolean)
     )];
@@ -1121,6 +1277,7 @@ exports.updateCompanyAccess = async (req, res) => {
 
     const updateData = {
       allowedPages: cleanAllowedPages,
+      allowedSuperAdminPages: cleanAllowedSuperAdminPages,
       subscriptionExpiry: computedExpiry,
       isActive: Boolean(isActive),
       deactivatedAt: isActive ? null : new Date(),
@@ -1266,6 +1423,7 @@ exports.renewCompanySubscription = async (req, res) => {
     const cleanPlanName = selectedPlan?.name || String(planName || "Standard").trim() || "Standard";
     const planFeatures = selectedPlan ? cleanStringArray(selectedPlan.features) : null;
     const planAllowedPages = selectedPlan ? cleanStringArray(selectedPlan.allowedPages) : null;
+    const planAllowedSuperAdminPages = selectedPlan ? cleanStringArray(selectedPlan.allowedSuperAdminPages) : null;
 
     const paymentRecord = {
       amount: paymentAmount,
@@ -1299,6 +1457,7 @@ exports.renewCompanySubscription = async (req, res) => {
       updateData.planDurationDays = selectedPlan.durationDays;
       updateData.planFeatures = planFeatures;
       updateData.allowedPages = planAllowedPages;
+      updateData.allowedSuperAdminPages = planAllowedSuperAdminPages;
     }
 
     if (isActive !== undefined) {
@@ -1317,7 +1476,7 @@ exports.renewCompanySubscription = async (req, res) => {
       { new: true, runValidators: true }
     )
       .select("-loginToken")
-      .populate("selectedPlan", "name price durationDays features allowedPages");
+      .populate("selectedPlan", "name price durationDays features allowedPages allowedSuperAdminPages");
 
     if (!company) {
       return res.status(404).json({
@@ -1666,7 +1825,7 @@ exports.getCompanyOverview = async (req, res) => {
 
     const company = await Company.findOne(companyQuery)
       .select("-loginToken")
-      .populate("selectedPlan", "name price durationDays features allowedPages")
+      .populate("selectedPlan", "name price durationDays features allowedPages allowedSuperAdminPages")
       .lean();
 
     if (!company) {

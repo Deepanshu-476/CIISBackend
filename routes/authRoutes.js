@@ -1,7 +1,54 @@
 const express = require("express");
 const rateLimit = require("express-rate-limit");
+const fs = require("fs");
+const path = require("path");
+const multer = require("multer");
 const router = express.Router();
 const authController = require("../controllers/authController");
+
+const registerDocumentDir = path.join(__dirname, "../uploads/employee-documents");
+fs.mkdirSync(registerDocumentDir, { recursive: true });
+
+const registerDocumentUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, registerDocumentDir),
+    filename: (_req, file, cb) => {
+      const extension = path.extname(file.originalname || "").toLowerCase();
+      cb(null, `${Date.now()}-${Math.round(Math.random() * 1e9)}${extension}`);
+    }
+  }),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const mimetype = String(file.mimetype || "");
+    if (mimetype.startsWith("image/") || mimetype === "application/pdf") return cb(null, true);
+    const error = new Error("Only image or PDF files are allowed for registration documents");
+    error.code = "INVALID_FILE_TYPE";
+    cb(error);
+  }
+}).fields([
+  { name: "aadharFront", maxCount: 1 },
+  { name: "aadharBack", maxCount: 1 },
+  { name: "panFront", maxCount: 1 },
+  { name: "panBack", maxCount: 1 },
+  { name: "bankStatement", maxCount: 1 },
+  { name: "experienceLetter", maxCount: 1 },
+  { name: "salarySlip", maxCount: 1 },
+  { name: "additionalDocument", maxCount: 1 }
+]);
+
+const handleRegisterDocumentUpload = (req, res, next) => {
+  registerDocumentUpload(req, res, error => {
+    if (!error) return next();
+    const message = error?.code === "LIMIT_FILE_SIZE"
+      ? "Document file is too large. Maximum file size is 10 MB."
+      : error?.message || "Document upload failed";
+    return res.status(400).json({
+      success: false,
+      message,
+      code: error?.code || "UPLOAD_ERROR"
+    });
+  });
+};
 
 const authAttemptLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -37,9 +84,10 @@ const passwordResetLimiter = rateLimit({
 });
 
 
-router.post("/register", authAttemptLimiter, authController.register);
+router.post("/register", authAttemptLimiter, handleRegisterDocumentUpload, authController.register);
 router.post("/login", authAttemptLimiter, authController.login); 
 router.post("/forgot-password", passwordResetLimiter, authController.forgotPassword);
+router.post("/verify-reset-otp", passwordResetLimiter, authController.verifyPasswordResetOTP);
 router.post("/reset-password", passwordResetLimiter, authController.resetPassword);   
 router.get("/verify-email/:token", authController.verifyEmail);
 router.post("/refresh-token", authController.refreshToken);
