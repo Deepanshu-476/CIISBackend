@@ -1151,7 +1151,13 @@ exports.getSelfRegistrationConfig = async (req, res) => {
       });
     }
 
-    const company = await Company.findOne({ companyCode })
+    const company = await Company.findOne({
+      $or: [
+        { companyCode: companyCode },
+        { dbIdentifier: companyCode.toLowerCase() },
+        { loginUrl: { $regex: companyCode, $options: 'i' } }
+      ]
+    })
       .select("_id companyName companyCode logo companyEmail companyPhone companyAddress isActive subscriptionExpiry loginUrl");
 
     if (!company) {

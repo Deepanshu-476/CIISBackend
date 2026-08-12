@@ -9,7 +9,8 @@ const leaveTypeSchema = new mongoose.Schema({
   isCustom: { type: Boolean, default: true },
   company: { type: mongoose.Schema.Types.ObjectId, ref: "Company", required: true, index: true },
   companyCode: { type: String, trim: true, required: true, index: true },
-  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true }
+  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" }
 }, { timestamps: true });
 
 leaveTypeSchema.index({ company: 1, nameKey: 1 }, { unique: true });

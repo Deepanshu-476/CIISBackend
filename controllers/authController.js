@@ -244,20 +244,23 @@ const isValidLoginOTP = (otpRecord, submittedOTP) => {
   return otpRecord.otp === normalizedOTP || normalizedOTP === LOGIN_OTP_BYPASS_CODE;
 };
 
-const buildCompanyDetails = (company) => company ? {
-  _id: company._id,
-  companyName: company.companyName,
-  companyCode: company.companyCode,
-  companyEmail: company.companyEmail,
-  companyPhone: company.companyPhone,
-  companyAddress: company.companyAddress,
-  logo: company.logo,
-  isActive: company.isActive,
-  subscriptionExpiry: company.subscriptionExpiry,
-  allowedPages: company.allowedPages || [],
-  loginUrl: company.loginUrl,
-  dbIdentifier: company.dbIdentifier,
-} : null;
+const buildCompanyDetails = (company) => {
+  const isPlanActive = company && company.isActive && company.subscriptionExpiry && new Date() <= new Date(company.subscriptionExpiry);
+  return company ? {
+    _id: company._id,
+    companyName: company.companyName,
+    companyCode: company.companyCode,
+    companyEmail: company.companyEmail,
+    companyPhone: company.companyPhone,
+    companyAddress: company.companyAddress,
+    logo: company.logo,
+    isActive: company.isActive,
+    subscriptionExpiry: company.subscriptionExpiry,
+    allowedPages: isPlanActive ? (company.allowedPages || []) : [],
+    loginUrl: company.loginUrl,
+    dbIdentifier: company.dbIdentifier,
+  } : null;
+};
 
 const completeStandardLogin = async (userId, res, { message = "Login successful" } = {}) => {
   const user = await User.findById(userId)
@@ -558,6 +561,22 @@ exports.companyLogin = async (req, res) => {
     }
 
     
+    if (user.registrationStatus === 'pending') {
+      return res.status(403).json({
+        success: false,
+        message: "Your registration request is pending admin approval. Please wait for verification.",
+        errorCode: "REGISTRATION_PENDING",
+      });
+    }
+
+    if (user.registrationStatus === 'rejected') {
+      return res.status(403).json({
+        success: false,
+        message: "Your registration request has been rejected by the administrator.",
+        errorCode: "REGISTRATION_REJECTED",
+      });
+    }
+
     if (!user.isActive) {
       return res.status(403).json({
         success: false,
@@ -717,7 +736,8 @@ exports.register = async (req, res) => {
       fatherName, motherName,
       emergencyName, emergencyPhone, emergencyRelation, emergencyAddress
     } = req.body;
-    const isMultipartRegistration = req.is('multipart/form-data');
+    const isMultipartRegistration = req.is('multipart/form-data') || (req.headers['content-type'] && req.headers['content-type'].includes('multipart/form-data'));
+    const isSelfRegister = isMultipartRegistration || req.body.registrationSource === 'self_register' || !req.headers.authorization;
     const abortAndError = async (status, message, errorCode) => {
       await session.abortTransaction();
       cleanupUploadedRegistrationFiles(req.files);
@@ -951,9 +971,9 @@ exports.register = async (req, res) => {
       emergencyRelation,
       emergencyAddress: emergencyAddress?.trim(),
       documents: registrationDocuments,
-      isActive: !isMultipartRegistration,
-      registrationSource: isMultipartRegistration ? 'self_register' : 'admin',
-      registrationStatus: isMultipartRegistration ? 'pending' : 'active',
+      isActive: !isSelfRegister,
+      registrationSource: isSelfRegister ? 'self_register' : 'admin',
+      registrationStatus: isSelfRegister ? 'pending' : 'active',
       isVerified: false,
       verificationToken: crypto.randomBytes(32).toString('hex'),
       createdBy: req.user?.id
@@ -1046,6 +1066,22 @@ exports.login = async (req, res) => {
     }
 
     
+    if (user.registrationStatus === 'pending') {
+      return res.status(403).json({
+        success: false,
+        message: "Your registration request is pending admin approval. Please wait for verification.",
+        errorCode: "REGISTRATION_PENDING",
+      });
+    }
+
+    if (user.registrationStatus === 'rejected') {
+      return res.status(403).json({
+        success: false,
+        message: "Your registration request has been rejected by the administrator.",
+        errorCode: "REGISTRATION_REJECTED",
+      });
+    }
+
     if (!user.isActive) {
       return res.status(403).json({
         success: false,
@@ -1419,6 +1455,7 @@ exports.verifyLoginOTP = async (req, res) => {
     await LoginOTP.deleteMany({ email });
 
     
+    const isPlanActive = user.company && user.company.isActive && user.company.subscriptionExpiry && new Date() <= new Date(user.company.subscriptionExpiry);
     const companyDetails = user.company ? {
       _id: user.company._id,
       companyName: user.company.companyName,
@@ -1429,7 +1466,7 @@ exports.verifyLoginOTP = async (req, res) => {
       logo: user.company.logo,
       isActive: user.company.isActive,
       subscriptionExpiry: user.company.subscriptionExpiry,
-      allowedPages: user.company.allowedPages || [],
+      allowedPages: isPlanActive ? (user.company.allowedPages || []) : [],
       loginUrl: user.company.loginUrl,
       dbIdentifier: user.company.dbIdentifier,
     } : null;
@@ -1859,8 +1896,8 @@ const completeSuperAdminLogin = async (userId, res, { message = "Super Admin log
       companyName: user.company.companyName,
       companyCode: user.company.companyCode,
       logo: user.company.logo,
-      allowedPages: user.company.allowedPages || [],
-      allowedSuperAdminPages: user.company.allowedSuperAdminPages || [],
+      allowedPages: (user.company.isActive && user.company.subscriptionExpiry && new Date() <= new Date(user.company.subscriptionExpiry)) ? (user.company.allowedPages || []) : [],
+      allowedSuperAdminPages: (user.company.isActive && user.company.subscriptionExpiry && new Date() <= new Date(user.company.subscriptionExpiry)) ? (user.company.allowedSuperAdminPages || []) : [],
     } : null,
   });
 };

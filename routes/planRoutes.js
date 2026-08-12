@@ -32,6 +32,10 @@ const buildPlanPayload = body => {
   };
 };
 
+const populatePlanAudit = query => query
+  .populate("createdBy", "name email")
+  .populate("updatedBy", "name email");
+
 const validatePlanPayload = payload => {
   const errors = [];
   if (!payload.name) errors.push("Plan name is required");
@@ -45,7 +49,7 @@ const validatePlanPayload = payload => {
 router.get("/", async (req, res) => {
   try {
     const query = req.query.includeInactive === "true" ? {} : { isActive: true };
-    const plans = await Plan.find(query).sort({ createdAt: -1 });
+    const plans = await populatePlanAudit(Plan.find(query).sort({ createdAt: -1 }));
     res.json({ success: true, count: plans.length, plans });
   } catch (error) {
     console.error("❌ Get plans error:", error);
@@ -66,7 +70,8 @@ router.post("/", async (req, res) => {
       payload.updatedBy = req.body.createdBy;
     }
 
-    const plan = await Plan.create(payload);
+    const createdPlan = await Plan.create(payload);
+    const plan = await populatePlanAudit(Plan.findById(createdPlan._id));
     res.status(201).json({ success: true, message: "Plan created successfully", plan });
   } catch (error) {
     console.error("❌ Create plan error:", error);
@@ -93,10 +98,10 @@ router.put("/:id", async (req, res) => {
       payload.updatedBy = req.body.updatedBy;
     }
 
-    const plan = await Plan.findByIdAndUpdate(req.params.id, payload, {
+    const plan = await populatePlanAudit(Plan.findByIdAndUpdate(req.params.id, payload, {
       new: true,
       runValidators: true,
-    });
+    }));
 
     if (!plan) {
       return res.status(404).json({ success: false, message: "Plan not found" });
@@ -118,11 +123,11 @@ router.patch("/:id/status", async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid plan id" });
     }
 
-    const plan = await Plan.findByIdAndUpdate(
+    const plan = await populatePlanAudit(Plan.findByIdAndUpdate(
       req.params.id,
       { isActive: Boolean(req.body.isActive) },
       { new: true, runValidators: true }
-    );
+    ));
 
     if (!plan) {
       return res.status(404).json({ success: false, message: "Plan not found" });
