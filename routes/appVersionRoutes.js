@@ -55,17 +55,23 @@ const getFallbackSettings = () => {
 const mergeWithFallback = (settings) => {
   const fallback = getFallbackSettings();
   const raw = settings?.toObject ? settings.toObject() : settings;
+  const updatedBy = raw?.updatedBy || null;
 
   return {
     ios: { ...fallback.ios, ...(raw?.ios || {}) },
     android: { ...fallback.android, ...(raw?.android || {}) },
     updatedAt: raw?.updatedAt || null,
-    updatedBy: raw?.updatedBy || null,
+    updatedBy,
+    updatedByName: updatedBy && typeof updatedBy === 'object'
+      ? updatedBy.name || updatedBy.email || ''
+      : '',
   };
 };
 
 const getSettings = async () => {
-  const settings = await AppVersionSettings.findOne({ key: 'global' }).lean();
+  const settings = await AppVersionSettings.findOne({ key: 'global' })
+    .populate('updatedBy', 'name email')
+    .lean();
   return mergeWithFallback(settings);
 };
 
@@ -170,7 +176,9 @@ router.put('/admin', protect, requireOwnerSuperAdmin, async (req, res) => {
       { key: 'global' },
       { $set: nextSettings, $setOnInsert: { key: 'global' } },
       { new: true, upsert: true, runValidators: true }
-    ).lean();
+    )
+      .populate('updatedBy', 'name email')
+      .lean();
 
     res.json({
       success: true,

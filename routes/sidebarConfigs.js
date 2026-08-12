@@ -47,9 +47,11 @@ const getRouteAccessKeys = item => {
 };
 
 const filterMenuItemsByCompanyAccess = async (companyId, menuItems) => {
-  const company = await Company.findById(companyId).select('allowedPages');
-  const allowedPages = Array.isArray(company?.allowedPages) ? company.allowedPages : [];
+  const company = await Company.findById(companyId).select('allowedPages isActive subscriptionExpiry');
+  const isPlanActive = company && company.isActive && company.subscriptionExpiry && new Date() <= new Date(company.subscriptionExpiry);
+  const allowedPages = isPlanActive && Array.isArray(company?.allowedPages) ? company.allowedPages : [];
 
+  if (!isPlanActive) return [];
   if (allowedPages.length === 0) return menuItems;
 
   const normalizeKey = value => String(value || '').trim().replace(/^\/+/, '').toLowerCase();
@@ -262,7 +264,7 @@ router.get('/config', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    const { companyId, branchId, departmentId, role, menuItems } = req.body;
+    const { companyId, branchId, departmentId, role, menuItems, ranges } = req.body;
     
     void 0;
     
@@ -309,6 +311,7 @@ router.post('/', async (req, res) => {
       departmentId,
       role,
       menuItems,
+      ranges: ranges || []
     });
     
     const savedConfig = await newConfig.save();
@@ -356,7 +359,7 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { menuItems } = req.body;
+    const { menuItems, ranges } = req.body;
     
     if (!menuItems || !Array.isArray(menuItems)) {
       return res.status(400).json({
@@ -378,6 +381,7 @@ router.put('/:id', async (req, res) => {
       id,
       {
         menuItems,
+        ranges: ranges || [],
         updatedAt: Date.now()
       },
       { 

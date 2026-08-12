@@ -66,6 +66,20 @@ const sidebarConfigSchema = new mongoose.Schema({
       
   },
   menuItems: [menuItemSchema],
+  ranges: [{
+    min: {
+      type: Number,
+      required: true
+    },
+    max: {
+      type: Number,
+      required: true
+    },
+    heading: {
+      type: String,
+      required: true
+    }
+  }],
   isActive: {
     type: Boolean,
     default: true

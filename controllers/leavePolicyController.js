@@ -82,6 +82,8 @@ exports.getLeaveTypes = async (req, res, next) => {
     const companyScope = scope(req, res);
     if (!companyScope) return;
     const leaveTypes = await LeaveType.find({ company: companyScope.company })
+      .populate("createdBy", "name email")
+      .populate("updatedBy", "name email")
       .sort({ sortOrder: 1, name: 1 }).lean();
     res.json({ success: true, leaveTypes });
   } catch (error) { next(error); }
@@ -102,8 +104,13 @@ exports.createLeaveType = async (req, res, next) => {
       status: req.body?.status || "Active",
       isCustom: true,
       ...companyScope,
-      createdBy: req.user._id
+      createdBy: req.user._id,
+      updatedBy: req.user._id
     });
+    await leaveType.populate([
+      { path: "createdBy", select: "name email" },
+      { path: "updatedBy", select: "name email" }
+    ]);
     res.status(201).json({ success: true, leaveType });
   } catch (error) {
     if (error?.code === 11000) return fail(res, 409, "This leave type already exists");
