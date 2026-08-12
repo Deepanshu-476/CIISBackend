@@ -18,6 +18,7 @@ const buildPlanPayload = body => {
   const description = String(body.description || "").trim();
   const features = cleanStringArray(body.features);
   const allowedPages = cleanStringArray(body.allowedPages);
+  const allowedSuperAdminPages = cleanStringArray(body.allowedSuperAdminPages);
 
   return {
     name,
@@ -26,6 +27,7 @@ const buildPlanPayload = body => {
     description,
     features,
     allowedPages,
+    allowedSuperAdminPages,
     isActive: body.isActive !== undefined ? Boolean(body.isActive) : true,
   };
 };
@@ -36,6 +38,7 @@ const validatePlanPayload = payload => {
   if (!Number.isFinite(payload.price) || payload.price < 0) errors.push("Valid plan price is required");
   if (!Number.isFinite(payload.durationDays) || payload.durationDays < 1) errors.push("Valid plan duration is required");
   if (!payload.allowedPages.length) errors.push("Select at least one page for this plan");
+  if (!payload.allowedSuperAdminPages.length) errors.push("Select at least one super admin page for this plan");
   return errors;
 };
 

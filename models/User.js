@@ -13,6 +13,27 @@ const userDocumentSchema = new mongoose.Schema({
   }
 }, { _id: true });
 
+const verificationSectionSchema = new mongoose.Schema({
+  verified: {
+    type: Boolean,
+    default: false
+  },
+  verifiedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    default: null
+  },
+  verifierName: {
+    type: String,
+    trim: true,
+    default: ""
+  },
+  verifiedAt: {
+    type: Date,
+    default: null
+  }
+}, { _id: false });
+
 const userSchema = new mongoose.Schema({
   
   company: {
@@ -110,7 +131,6 @@ const userSchema = new mongoose.Schema({
   state: String,
   country: String,
   pinCode: String,
-  zipCode: String,
   gender: {
     type: String,
     enum: ['male', 'female', 'other']
@@ -121,10 +141,7 @@ const userSchema = new mongoose.Schema({
   },
   dob: Date,
   aadharCard: String,
-  aadhaar: String,
-  aadhar: String,
   panCard: String,
-  pan: String,
   salary: Number,
   
   
@@ -138,9 +155,6 @@ const userSchema = new mongoose.Schema({
     type: String,
     
   },
-  workLocation: String,
-  noticePeriod: String,
-  shift: String,
   dateOfJoining: Date,
   employeeId: {
     type: String,
@@ -156,16 +170,15 @@ const userSchema = new mongoose.Schema({
   },
   propertyOwned: String,
   additionalDetails: String,
+  experienceType: {
+    type: String,
+    enum: ['fresher', 'experienced']
+  },
+  additionalDocumentDetails: String,
   
   
   fatherName: String,
   motherName: String,
-  spouseName: String,
-  children: [{
-    name: String,
-    age: Number,
-    dob: Date
-  }],
   
   
   emergencyName: String,
@@ -209,6 +222,60 @@ const userSchema = new mongoose.Schema({
   isActive: {
     type: Boolean,
     default: true
+  },
+  registrationSource: {
+    type: String,
+    enum: ["admin", "self_register"],
+    default: "admin",
+    index: true
+  },
+  registrationStatus: {
+    type: String,
+    enum: ["active", "pending", "rejected"],
+    default: "active",
+    index: true
+  },
+  registrationVerification: {
+    sections: {
+      personalInformation: { type: verificationSectionSchema, default: () => ({}) },
+      companyAssignment: { type: verificationSectionSchema, default: () => ({}) },
+      additionalDetails: { type: verificationSectionSchema, default: () => ({}) },
+      workDetails: { type: verificationSectionSchema, default: () => ({}) },
+      addressInformation: { type: verificationSectionSchema, default: () => ({}) },
+      identityDocuments: { type: verificationSectionSchema, default: () => ({}) },
+      salaryBankDetails: { type: verificationSectionSchema, default: () => ({}) },
+      familyDetails: { type: verificationSectionSchema, default: () => ({}) },
+      emergencyContact: { type: verificationSectionSchema, default: () => ({}) },
+      assetsExtraDetails: { type: verificationSectionSchema, default: () => ({}) }
+    },
+    activatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null
+    },
+    activatedByName: {
+      type: String,
+      trim: true,
+      default: ""
+    },
+    activatedAt: {
+      type: Date,
+      default: null
+    },
+    lastUpdatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null
+    },
+    lastUpdatedByName: {
+      type: String,
+      trim: true,
+      default: ""
+    },
+    lastUpdatedAt: {
+      type: Date,
+      default: null
+    }
   },
   isOnline: {
     type: Boolean,

@@ -521,7 +521,7 @@ const findAttendanceRecord = async (id, updateData = {}) => {
     const userId = parts[1];
     const dateStr = parts[2];
     
-    const user = await User.findById(userId);
+    const user = await User.findById(userId).select('companyCode').lean();
     if (!user) {
       throw new Error("User not found");
     }
@@ -1606,7 +1606,7 @@ const deleteAttendanceRecord = async (req, res) => {
 const getAttendanceByUser = async (req, res) => {
   try {
     const { userId } = req.params;
-    const { date } = req.query;
+    const { date, month, year } = req.query;
     const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     
     if (!userCompanyCode) {
@@ -1640,26 +1640,56 @@ const getAttendanceByUser = async (req, res) => {
       companyCode: userCompanyCode
     };
     
-    if (date) {
+    if (month !== undefined || year !== undefined) {
+      const queryMonth = Number(month);
+      const queryYear = Number(year);
+      if (!Number.isInteger(queryMonth) || queryMonth < 0 || queryMonth > 11 ||
+          !Number.isInteger(queryYear) || queryYear < 2000 || queryYear > 2100) {
+        return res.status(400).json({ message: "Month must be 0-11 and year must be valid" });
+      }
+      query.date = {
+        $gte: indiaDateTimeToUtc(queryYear, queryMonth, 1),
+        $lte: indiaDateTimeToUtc(queryYear, queryMonth + 1, 0, 23, 59, 59, 999)
+      };
+    } else if (date) {
       const {start, end} = getIndiaDayRange(parseIndiaDateOnly(date));
       query.date = { $gte: start, $lte: end };
     }
     
     const records = await Attendance.find(query)
-      .populate({
-        path: "user",
-        select: "name email employeeType companyCode jobRole shiftId shiftName shiftType department",
-        populate: {
-          path: "company",
-          select: "companyCode companyName"
-        }
-      })
-      .sort({ date: -1 });
+      .select('date status inTime outTime totalTime lateBy earlyLeave overTime notes')
+      .sort({ date: -1 })
+      .lean();
+
+    let responseRecords = records;
+    if (month !== undefined && year !== undefined) {
+      const queryMonth = Number(month);
+      const queryYear = Number(year);
+      const recordsByDate = new Map(records.map(record => [formatIndiaDateKey(record.date), record]));
+      const daysInMonth = new Date(queryYear, queryMonth + 1, 0).getDate();
+      const todayKey = formatIndiaDateKey(new Date());
+
+      responseRecords = Array.from({ length: daysInMonth }, (_, index) => {
+        const day = index + 1;
+        const date = indiaDateTimeToUtc(queryYear, queryMonth, day);
+        const dateKey = formatIndiaDateKey(date);
+        const savedRecord = recordsByDate.get(dateKey);
+        if (savedRecord) return savedRecord;
+
+        const weekDay = new Date(queryYear, queryMonth, day).getDay();
+        return {
+          _id: `calendar-${dateKey}`,
+          date,
+          status: dateKey > todayKey ? 'UPCOMING' : (weekDay === 0 ? 'WEEKEND' : 'NO RECORD'),
+          isGenerated: true
+        };
+      });
+    }
     
     res.status(200).json({ 
       message: "Attendance records fetched successfully", 
-      data: records.map(record => ({
-        ...record.toObject(),
+      data: responseRecords.map(record => ({
+        ...record,
         status: record.status || 'ABSENT'
       }))
     });

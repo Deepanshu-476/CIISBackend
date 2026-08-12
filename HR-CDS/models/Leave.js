@@ -22,6 +22,13 @@ const historySchema = new mongoose.Schema({
     default: ''
   },
 
+  from: { type: String, trim: true, default: '' },
+  to: { type: String, trim: true, default: '' },
+  previousLeaveType: { type: String, trim: true, default: '' },
+  newLeaveType: { type: String, trim: true, default: '' },
+  previousPayType: { type: String, trim: true, default: '' },
+  newPayType: { type: String, trim: true, default: '' },
+
 
 
   at: {
@@ -64,6 +71,26 @@ const leaveSchema = new mongoose.Schema({
     type: String,
 
     required: true
+  },
+  leavePolicy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'LeavePolicy',
+    default: null
+  },
+  payType: {
+    type: String,
+    enum: ['Paid', 'Unpaid', 'Admin Choice'],
+    default: 'Paid'
+  },
+  policySnapshot: {
+    policyName: String,
+    payType: String,
+    entitledDays: Number,
+    monthlyAllowed: Number,
+    carryForward: String,
+    maxCarryForwardDays: Number,
+    encashmentAllowed: String,
+    probationApplicable: String
   },
   startDate: {
     type: Date,
@@ -113,6 +140,21 @@ const leaveSchema = new mongoose.Schema({
     trim: true,
     default: '',
     maxlength: 500
+  },
+  cancellationReason: {
+    type: String,
+    trim: true,
+    default: '',
+    maxlength: 500
+  },
+  cancelledAt: {
+    type: Date,
+    default: null
+  },
+  cancelledBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
   },
 
   companyCode: {

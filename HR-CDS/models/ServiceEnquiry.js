@@ -81,6 +81,17 @@ const serviceEnquirySchema = new mongoose.Schema({
     enum: ['Pending', 'Approved', 'Contacted', 'Proposal Sent', 'Closed'],
     default: 'Pending',
     index: true
+  },
+  demoStatus: {
+    type: String,
+    enum: ['New', 'Pending', 'Contacted', 'Scheduled', 'Completed', 'Rejected'],
+    default: undefined
+  },
+  notes: {
+    type: String,
+    trim: true,
+    maxlength: [2000, 'Notes cannot exceed 2000 characters'],
+    default: ''
   }
 }, {
   timestamps: true

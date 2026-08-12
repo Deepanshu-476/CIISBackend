@@ -9,6 +9,7 @@ const router = express.Router();
 const APP_PAGES = [
   { pageKey: 'emp-details', name: 'Employee Details', path: '/ciisUser/emp-details', permissionPattern: 'viewEdit' },
   { pageKey: 'emp-leaves', name: 'Employee Leaves', path: '/ciisUser/emp-leaves', permissionPattern: 'approveReject' },
+  { pageKey: 'leave-policy', name: 'Leave Policy', path: '/ciisUser/leave-policy', permissionPattern: 'viewEdit' },
   { pageKey: 'emp-assets', name: 'Employee Assets', path: '/ciisUser/emp-assets', permissionPattern: 'approveReject' },
   { pageKey: 'emp-attendance', name: 'Employee Attendance', path: '/ciisUser/emp-attendance', permissionPattern: 'viewEdit' },
   { pageKey: 'department', name: 'Department Management', path: '/ciisUser/department', permissionPattern: 'viewEdit' },
@@ -39,6 +40,7 @@ const APP_PAGES = [
   { pageKey: 'employee-meeting', name: 'Employee Meeting', path: '/ciisUser/employee-meeting', permissionPattern: 'viewEdit' },
   { pageKey: 'client-meeting', name: 'Client Meeting', path: '/ciisUser/client-meeting', permissionPattern: 'viewEdit' },
   { pageKey: 'create-user', name: 'Create User', path: '/ciisUser/create-user', permissionPattern: 'viewEdit' },
+  { pageKey: 'register-request', name: 'Register Request', path: '/ciisUser/register-request', permissionPattern: 'approveReject' },
   { pageKey: 'SidebarManagement', name: 'Sidebar Management', path: '/ciisUser/SidebarManagement', permissionPattern: 'viewEdit' },
   { pageKey: 'create-alert', name: 'Create Alert', path: '/ciisUser/create-alert', permissionPattern: 'viewEdit' },
   { pageKey: 'chat', name: 'Chat', path: '/ciisUser/chat', permissionPattern: 'viewEdit' },

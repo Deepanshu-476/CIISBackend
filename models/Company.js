@@ -216,6 +216,11 @@ const companySchema = new mongoose.Schema(
       default: [],
     },
 
+    allowedSuperAdminPages: {
+      type: [String],
+      default: [],
+    },
+
     dashboardConfig: {
       type: [{
         componentId: { type: String, required: true },

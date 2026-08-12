@@ -36,6 +36,14 @@ const planSchema = new mongoose.Schema(
         message: "Select at least one page for this plan",
       },
     },
+    allowedSuperAdminPages: {
+      type: [String],
+      default: [],
+      validate: {
+        validator: pages => Array.isArray(pages) && pages.length > 0,
+        message: "Select at least one super admin page for this plan",
+      },
+    },
     isActive: {
       type: Boolean,
       default: true,

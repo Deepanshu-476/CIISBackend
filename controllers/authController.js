@@ -1,6 +1,7 @@
 const User = require("../models/User");
 const Company = require("../models/Company");
 const Client = require("../HR-CDS/models/Client");
+const fs = require("fs");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const { sendEmail } = require("../utils/sendEmail");
@@ -401,6 +402,52 @@ const errorResponse = (res, status, message, errorCode = null) => {
   });
 };
 
+const parseArrayField = value => {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return value.split(',').map(item => item.trim()).filter(Boolean);
+  }
+};
+
+const cleanupUploadedRegistrationFiles = files => {
+  Object.values(files || {})
+    .flat()
+    .forEach(file => {
+      if (file?.path) fs.unlink(file.path, () => {});
+    });
+};
+
+const buildRegistrationDocuments = files => {
+  const labels = {
+    aadharFront: 'Aadhar Card Front',
+    aadharBack: 'Aadhar Card Back',
+    panFront: 'PAN Card Front',
+    panBack: 'PAN Card Back',
+    bankStatement: 'Bank Statement',
+    experienceLetter: 'Experience Letter',
+    salarySlip: 'Salary Slip',
+    additionalDocument: 'Additional Document'
+  };
+
+  return Object.entries(labels)
+    .map(([fieldName, label]) => {
+      const file = files?.[fieldName]?.[0];
+      if (!file) return null;
+      return {
+        _id: new mongoose.Types.ObjectId(),
+        name: label,
+        type: file.mimetype,
+        url: file.filename,
+        uploadedAt: new Date()
+      };
+    })
+    .filter(Boolean);
+};
+
 
 exports.companyLoginRoute = [
   (req, res, next) => {
@@ -660,12 +707,22 @@ exports.register = async (req, res) => {
       companyCode, 
       branch, 
       assignedBranches,
-      phone, address, gender, maritalStatus, dob, salary,
+      companyRole,
+      phone, address, city, state, country, pinCode,
+      gender, maritalStatus, dob, aadharCard, panCard, salary,
       accountNumber, ifsc, bankName, bankHolderName,
       employeeType, properties, propertyOwned, additionalDetails,
+      experienceType, additionalDocumentDetails,
+      dateOfJoining,
       fatherName, motherName,
       emergencyName, emergencyPhone, emergencyRelation, emergencyAddress
     } = req.body;
+    const isMultipartRegistration = req.is('multipart/form-data');
+    const abortAndError = async (status, message, errorCode) => {
+      await session.abortTransaction();
+      cleanupUploadedRegistrationFiles(req.files);
+      return errorResponse(res, status, message, errorCode);
+    };
 
     
     const requiredFields = [
@@ -676,13 +733,13 @@ exports.register = async (req, res) => {
       { field: 'jobRole', label: 'Job Role' },
       { field: 'shiftId', label: 'Shift' },
       { field: 'company', label: 'Company' },
-      { field: 'companyCode', label: 'Company Code' }
+      { field: 'companyCode', label: 'Company Code' },
+      ...(isMultipartRegistration ? [{ field: 'companyRole', label: 'Company Role' }] : [])
     ];
 
     const missingFields = requiredFields.filter(f => !req.body[f.field]);
     if (missingFields.length > 0) {
-      await session.abortTransaction();
-      return errorResponse(res, 400, 
+      return abortAndError(400,
         `Missing required fields: ${missingFields.map(f => f.label).join(', ')}`,
         'MISSING_FIELDS'
       );
@@ -693,21 +750,53 @@ exports.register = async (req, res) => {
     
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(cleanEmail)) {
-      await session.abortTransaction();
-      return errorResponse(res, 400, "Invalid email format", "INVALID_EMAIL");
+      return abortAndError(400, "Invalid email format", "INVALID_EMAIL");
     }
 
     
     if (password.length < 8) {
-      await session.abortTransaction();
-      return errorResponse(res, 400, "Password must be at least 8 characters", "WEAK_PASSWORD");
+      return abortAndError(400, "Password must be at least 8 characters", "WEAK_PASSWORD");
+    }
+
+    const normalizedExperienceType = String(experienceType || '').trim().toLowerCase();
+    if (normalizedExperienceType && !['fresher', 'experienced'].includes(normalizedExperienceType)) {
+      return abortAndError(400, "Experience type must be fresher or experienced", "INVALID_EXPERIENCE_TYPE");
+    }
+
+    const normalizedCompanyRole = String(companyRole || 'employee').trim().toLowerCase().replace(/\s+/g, '_');
+    const allowedCompanyRoles = new Set(['employee', 'manager', 'hr', 'admin', 'owner']);
+    if (!allowedCompanyRoles.has(normalizedCompanyRole)) {
+      return abortAndError(400, "Company role must be Employee, Manager, HR, Admin, or Owner", "INVALID_COMPANY_ROLE");
+    }
+
+    if (normalizedExperienceType === 'fresher' && !req.files?.bankStatement?.[0]) {
+      return abortAndError(400, "Bank statement PDF is required for fresher", "BANK_STATEMENT_REQUIRED");
+    }
+
+    if (normalizedExperienceType === 'fresher' && req.files?.bankStatement?.[0]?.mimetype !== 'application/pdf') {
+      return abortAndError(400, "Bank statement must be a PDF file", "BANK_STATEMENT_PDF_REQUIRED");
+    }
+
+    if (normalizedExperienceType === 'experienced') {
+      const missingExperiencedDocument = [
+        ['experienceLetter', 'Experience letter'],
+        ['salarySlip', 'Salary slip'],
+        ['additionalDocument', 'Additional document']
+      ].find(([field]) => !req.files?.[field]?.[0]);
+
+      if (missingExperiencedDocument) {
+        return abortAndError(400, `${missingExperiencedDocument[1]} is required for experienced user`, "EXPERIENCE_DOCUMENT_REQUIRED");
+      }
+
+      if (!String(additionalDocumentDetails || '').trim()) {
+        return abortAndError(400, "Additional document details are required", "ADDITIONAL_DOCUMENT_DETAILS_REQUIRED");
+      }
     }
 
     
     const existingUser = await User.findOne({ email: cleanEmail }).session(session);
     if (existingUser) {
-      await session.abortTransaction();
-      return errorResponse(res, 409, "Email already in use", "EMAIL_EXISTS");
+      return abortAndError(409, "Email already in use", "EMAIL_EXISTS");
     }
 
     const companyExists = await Company.findOne({ 
@@ -718,29 +807,22 @@ exports.register = async (req, res) => {
     }).session(session);
 
     if (!companyExists) {
-      await session.abortTransaction();
-      return errorResponse(res, 404, "Company not found", "COMPANY_NOT_FOUND");
+      return abortAndError(404, "Company not found", "COMPANY_NOT_FOUND");
     }
 
     if (!companyExists.isActive) {
-      await session.abortTransaction();
-      return errorResponse(res, 403, "Company account is deactivated", "COMPANY_DEACTIVATED");
+      return abortAndError(403, "Company account is deactivated", "COMPANY_DEACTIVATED");
     }
 
     
     if (new Date() > new Date(companyExists.subscriptionExpiry)) {
-      await session.abortTransaction();
-      return errorResponse(res, 403, "Company subscription has expired", "SUBSCRIPTION_EXPIRED");
+      return abortAndError(403, "Company subscription has expired", "SUBSCRIPTION_EXPIRED");
     }
 
     
     let cleanBranch = branch;
     let cleanBranchCode = null;
-    const assignedBranchInput = Array.isArray(assignedBranches)
-      ? assignedBranches
-      : typeof assignedBranches === "string"
-        ? assignedBranches.split(",")
-        : [];
+    const assignedBranchInput = parseArrayField(assignedBranches);
     let cleanAssignedBranchIds = [...new Set([
       ...assignedBranchInput,
       cleanBranch
@@ -752,17 +834,15 @@ exports.register = async (req, res) => {
     if (branch) {
       const branchExists = await Branch.findById(branch).session(session);
       if (!branchExists) {
-        await session.abortTransaction();
-        return errorResponse(res, 404, "Branch not found", "BRANCH_NOT_FOUND");
+        return abortAndError(404, "Branch not found", "BRANCH_NOT_FOUND");
       }
       if (branchExists.company?.toString() !== companyExists._id.toString()) {
-        await session.abortTransaction();
-        return errorResponse(res, 403, "Branch does not belong to selected company", "BRANCH_COMPANY_MISMATCH");
+        return abortAndError(403, "Branch does not belong to selected company", "BRANCH_COMPANY_MISMATCH");
       }
       cleanBranchCode = branchExists.branchCode;
     } else {
       
-      const defaultBranch = await Branch.findOne({ company: company, isDefault: true }).session(session);
+      const defaultBranch = await Branch.findOne({ company: companyExists._id, isDefault: true }).session(session);
       if (defaultBranch) {
         cleanBranch = defaultBranch._id;
         cleanBranchCode = defaultBranch.branchCode;
@@ -781,8 +861,7 @@ exports.register = async (req, res) => {
       }).session(session);
 
       if (assignedBranchCount !== cleanAssignedBranchIds.length) {
-        await session.abortTransaction();
-        return errorResponse(res, 403, "One or more assigned branches are invalid for selected company", "ASSIGNED_BRANCH_MISMATCH");
+        return abortAndError(403, "One or more assigned branches are invalid for selected company", "ASSIGNED_BRANCH_MISMATCH");
       }
     }
 
@@ -793,8 +872,7 @@ exports.register = async (req, res) => {
       isActive: true,
     }).session(session);
     if (!departmentExists) {
-      await session.abortTransaction();
-      return errorResponse(res, 404, "Department not found for selected branch", "DEPARTMENT_NOT_FOUND");
+      return abortAndError(404, "Department not found for selected branch", "DEPARTMENT_NOT_FOUND");
     }
 
     const jobRoleExists = await JobRole.findOne({
@@ -804,8 +882,7 @@ exports.register = async (req, res) => {
       isActive: true,
     }).session(session);
     if (!jobRoleExists) {
-      await session.abortTransaction();
-      return errorResponse(res, 404, "Job role not found for selected department", "JOB_ROLE_NOT_FOUND");
+      return abortAndError(404, "Job role not found for selected department", "JOB_ROLE_NOT_FOUND");
     }
 
     const availableShifts = Array.isArray(jobRoleExists.shifts) && jobRoleExists.shifts.length > 0
@@ -816,12 +893,16 @@ exports.register = async (req, res) => {
     );
 
     if (!selectedShift) {
-      await session.abortTransaction();
-      return errorResponse(res, 404, "Shift not found for selected job role", "SHIFT_NOT_FOUND");
+      return abortAndError(404, "Shift not found for selected job role", "SHIFT_NOT_FOUND");
     }
 
     
-    const employeeId = `EMP${Date.now()}${Math.floor(Math.random() * 1000)}`;
+    const finalEmployeeId = `EMP${Date.now()}${Math.floor(Math.random() * 1000)}`;
+    const parsedProperties = parseArrayField(properties);
+    const registrationDocuments = buildRegistrationDocuments(req.files);
+    const cleanProperties = parsedProperties
+      .map(item => String(item || '').trim())
+      .filter(Boolean);
 
     
     const user = await User.create([{
@@ -833,33 +914,46 @@ exports.register = async (req, res) => {
       shiftId: String(selectedShift.shiftId || shiftId),
       shiftName: selectedShift.shiftName || shiftName,
       shiftType: selectedShift.shiftType || shiftType,
-      company,
-      companyCode,
+      company: companyExists._id,
+      companyCode: companyExists.companyCode || companyCode,
       branch: cleanBranch,
       assignedBranches: cleanAssignedBranchIds,
       branchCode: cleanBranchCode,
-      employeeId,
+      employeeId: finalEmployeeId,
+      companyRole: normalizedCompanyRole,
       phone: phone?.trim(),
       address: address?.trim(),
+      city: city?.trim(),
+      state: state?.trim(),
+      country: country?.trim(),
+      pinCode: pinCode?.trim(),
       gender,
       maritalStatus,
       dob: dob ? new Date(dob) : null,
-      salary,
+      aadharCard: aadharCard?.trim(),
+      panCard: panCard?.trim(),
+      salary: salary === '' || salary === undefined || salary === null ? undefined : Number(salary),
       accountNumber,
       ifsc,
       bankName,
       bankHolderName,
       employeeType,
-      properties,
+      dateOfJoining: dateOfJoining ? new Date(dateOfJoining) : undefined,
+      properties: cleanProperties,
       propertyOwned,
       additionalDetails,
+      experienceType: normalizedExperienceType || undefined,
+      additionalDocumentDetails: additionalDocumentDetails?.trim(),
       fatherName: fatherName?.trim(),
       motherName: motherName?.trim(),
       emergencyName: emergencyName?.trim(),
       emergencyPhone,
       emergencyRelation,
       emergencyAddress: emergencyAddress?.trim(),
-      isActive: true,
+      documents: registrationDocuments,
+      isActive: !isMultipartRegistration,
+      registrationSource: isMultipartRegistration ? 'self_register' : 'admin',
+      registrationStatus: isMultipartRegistration ? 'pending' : 'active',
       isVerified: false,
       verificationToken: crypto.randomBytes(32).toString('hex'),
       createdBy: req.user?.id
@@ -902,6 +996,7 @@ exports.register = async (req, res) => {
 
   } catch (err) {
     await session.abortTransaction();
+    cleanupUploadedRegistrationFiles(req.files);
     console.error("❌ Registration error:", err);
     
     if (err.code === 11000) {
@@ -1598,6 +1693,51 @@ exports.forgotPassword = async (req, res) => {
   }
 };
 
+exports.verifyPasswordResetOTP = async (req, res) => {
+  try {
+    const cleanEmail = String(req.body.email || '').trim().toLowerCase();
+    const otp = String(req.body.otp || '').trim();
+    const companyScope = await resolveCompanyScope(req.body.companyCode || req.body.companyIdentifier);
+
+    if (!cleanEmail || !/^\d{6}$/.test(otp)) {
+      return res.status(400).json({ success: false, message: 'Email and valid 6-digit OTP are required' });
+    }
+
+    const otpQuery = { email: cleanEmail, otp };
+    if (companyScope?.companyCode) otpQuery.companyCode = companyScope.companyCode;
+    const otpRecord = await OTP.findOne(otpQuery).sort({ createdAt: -1 });
+
+    if (!otpRecord) return res.status(400).json({ success: false, message: 'Invalid OTP' });
+    if (otpRecord.expiresAt < new Date()) {
+      await OTP.deleteOne({ _id: otpRecord._id });
+      return res.status(400).json({ success: false, message: 'OTP expired. Request a new OTP.' });
+    }
+
+    const account = await findClientPasswordAccount(cleanEmail, companyScope);
+    if (!account.user && !account.client) {
+      return res.status(404).json({ success: false, message: 'Account not found' });
+    }
+
+    const resetTokenId = crypto.randomBytes(24).toString('hex');
+    const resetToken = jwt.sign({
+      email: cleanEmail,
+      companyCode: otpRecord.companyCode || companyScope?.companyCode || null,
+      resetTokenId,
+      purpose: 'password-reset'
+    }, process.env.JWT_SECRET + '-temp', { expiresIn: '10m' });
+
+    otpRecord.verified = true;
+    otpRecord.resetTokenId = resetTokenId;
+    otpRecord.expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    await otpRecord.save();
+
+    return res.json({ success: true, message: 'OTP verified successfully', resetToken });
+  } catch (error) {
+    console.error('Password reset OTP verification error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to verify OTP' });
+  }
+};
+
 
 
 
@@ -1652,7 +1792,7 @@ const isSuperAdminUser = (user) => {
 const completeSuperAdminLogin = async (userId, res, { message = "Super Admin login successful" } = {}) => {
   const user = await User.findById(userId)
     .select("-password -loginAttempts -lockUntil")
-    .populate("company", "companyName companyCode logo");
+    .populate("company", "companyName companyCode logo allowedPages allowedSuperAdminPages");
 
   if (!user) {
     return res.status(404).json({
@@ -1719,6 +1859,8 @@ const completeSuperAdminLogin = async (userId, res, { message = "Super Admin log
       companyName: user.company.companyName,
       companyCode: user.company.companyCode,
       logo: user.company.logo,
+      allowedPages: user.company.allowedPages || [],
+      allowedSuperAdminPages: user.company.allowedSuperAdminPages || [],
     } : null,
   });
 };
@@ -2376,15 +2518,32 @@ exports.resetSuperAdminPassword = async (req, res) => {
 
 exports.resetPassword = async (req, res) => {
   try {
-    const { email, otp, newPassword, companyCode, companyIdentifier } = req.body;
+    const { email, otp, newPassword, companyCode, companyIdentifier, resetToken } = req.body;
     const cleanEmail = email?.trim().toLowerCase();
 
-    if (!cleanEmail || !otp || !newPassword) {
-      return res.status(400).json({ message: 'Email, OTP and new password are required' });
+    if (!cleanEmail || !newPassword || (!otp && !resetToken)) {
+      return res.status(400).json({ message: 'Verified reset session and new password are required' });
     }
 
     const companyScope = await resolveCompanyScope(companyCode || companyIdentifier);
-    const otpQuery = { email: cleanEmail, otp };
+    let otpQuery;
+    if (resetToken) {
+      let decoded;
+      try {
+        decoded = jwt.verify(resetToken, process.env.JWT_SECRET + '-temp');
+      } catch {
+        return res.status(401).json({ message: 'Reset session expired. Request a new OTP.' });
+      }
+      if (decoded.purpose !== 'password-reset' || decoded.email !== cleanEmail) {
+        return res.status(401).json({ message: 'Invalid reset session' });
+      }
+      if (companyScope?.companyCode && decoded.companyCode !== companyScope.companyCode) {
+        return res.status(401).json({ message: 'Invalid company reset session' });
+      }
+      otpQuery = { email: cleanEmail, verified: true, resetTokenId: decoded.resetTokenId };
+    } else {
+      otpQuery = { email: cleanEmail, otp };
+    }
 
     if (companyScope?.companyCode) {
       otpQuery.companyCode = companyScope.companyCode;

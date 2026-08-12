@@ -25,6 +25,10 @@ router.get('/company-users', userController.getCompanyUsers);
 
 router.get('/all', userController.getAllUsers);
 router.get('/deleted', userController.getDeletedUsers);
+router.get('/register-requests', userController.getRegisterRequests);
+router.put('/register-requests/:id', userController.updateRegisterRequest);
+router.patch('/register-requests/:id/verify-section', userController.verifyRegisterRequestSection);
+router.patch('/register-requests/:id/activate', userController.activateRegisterRequest);
 router.put('/restore/:id', userController.restoreUser);
 router.put('/admin-update/:id', userController.updateUser);
 router.put('/admin-update-by-email', userController.updateUser);
