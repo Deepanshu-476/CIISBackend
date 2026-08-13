@@ -45,12 +45,16 @@ const hasLeavePolicyPermission = async (req, permission) => {
   const userId = String(req.user?._id || req.user?.id || "");
   if (!validId(company) || !userId) return false;
 
+  // Company owners and administrative managers retain full control even
+  // when a Page Management record contains explicit user assignments.
+  if (isFallbackLeavePolicyManager(req.user)) return true;
+
   const page = await PagePermission.findOne({
     company,
     path: "/ciisUser/leave-policy"
   }).lean();
 
-  if (!page) return isFallbackLeavePolicyManager(req.user);
+  if (!page) return false;
 
   if (permission === "delete") {
     return pageUserIds(page, "deleteUsers").includes(userId);
