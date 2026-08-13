@@ -1,7 +1,10 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const PagePermission = require('../models/PagePermission');
+const PageDataVisibility = require('../models/PageDataVisibility');
 const User = require('../models/User');
+const Branch = require('../models/Branch');
+const Department = require('../models/Department');
 const { protect, isCompanyOwner } = require('../middleware/authMiddleware');
 
 const router = express.Router();
@@ -56,6 +59,13 @@ const normalizePath = (path = '') => {
 
 const getCompanyId = (req) => req.user?.company?._id || req.user?.company || req.user?.companyId;
 
+const normalizeSubjectKey = (value) => String(value || '').trim().toLowerCase();
+
+const normalizeRuleIds = (items = []) => {
+  const ids = [...new Set(items.map(item => String(item)).filter(id => mongoose.Types.ObjectId.isValid(id)))];
+  return ids;
+};
+
 const normalizePageUsers = (items = []) => {
   const uniqueIds = [...new Set(items.map(item => String(item)).filter(id => mongoose.Types.ObjectId.isValid(id)))];
   return uniqueIds.map(id => ({ user: id }));
@@ -103,6 +113,116 @@ const decoratePages = async (companyId) => {
   });
 };
 
+const normalizeVisibilityRule = (rule = {}) => {
+  const subjectType = String(rule.subjectType || '').trim().toLowerCase();
+  const subjectKey = normalizeSubjectKey(rule.subjectKey);
+  const subjectLabel = String(rule.subjectLabel || rule.label || rule.subjectKey || '').trim();
+  const scope = ['all', 'branches', 'departments', 'custom'].includes(String(rule.scope || '').trim().toLowerCase())
+    ? String(rule.scope || '').trim().toLowerCase()
+    : 'custom';
+
+  return {
+    subjectType,
+    subjectKey,
+    subjectLabel,
+    scope,
+    branchIds: normalizeRuleIds(rule.branchIds || []),
+    departmentIds: normalizeRuleIds(rule.departmentIds || [])
+  };
+};
+
+const buildVisibilityRuleResponse = (rule, branchMap, departmentMap) => {
+  if (!rule) return null;
+  const branchIds = (rule.branchIds || []).map(item => String(item)).filter(Boolean);
+  const departmentIds = (rule.departmentIds || []).map(item => String(item)).filter(Boolean);
+
+  return {
+    id: String(rule._id),
+    subjectType: rule.subjectType,
+    subjectKey: rule.subjectKey,
+    subjectLabel: rule.subjectLabel,
+    scope: rule.scope,
+    branchIds,
+    departmentIds,
+    branches: branchIds.map(id => branchMap.get(id)).filter(Boolean),
+    departments: departmentIds.map(id => departmentMap.get(id)).filter(Boolean),
+    updatedAt: rule.updatedAt || null,
+    updatedBy: rule.updatedBy || null
+  };
+};
+
+const loadVisibilityContext = async (companyId) => {
+  const [users, branches, departments, rules] = await Promise.all([
+    User.find({ company: companyId })
+      .select('_id name email jobRole companyRole branch department assignedBranches isActive')
+      .populate('branch', 'name branchCode')
+      .populate('assignedBranches', 'name branchCode')
+      .sort({ name: 1 })
+      .lean(),
+    Branch.find({ company: companyId })
+      .select('_id name branchCode isDefault isActive')
+      .sort({ isDefault: -1, name: 1 })
+      .lean(),
+    Department.find({ company: companyId })
+      .select('_id name branch branchCode isActive')
+      .populate('branch', 'name branchCode')
+      .sort({ name: 1 })
+      .lean(),
+    PageDataVisibility.find({ company: companyId })
+      .populate('updatedBy', 'name email')
+      .lean()
+  ]);
+
+  const roleMap = new Map();
+  users.forEach(user => {
+    [user.jobRole, user.companyRole].filter(Boolean).forEach(role => {
+      const key = normalizeSubjectKey(role);
+      if (!key) return;
+      if (!roleMap.has(key)) {
+        roleMap.set(key, { key, label: String(role).trim() });
+      }
+    });
+  });
+
+  const branchMap = new Map(branches.map(branch => [String(branch._id), branch]));
+  const departmentMap = new Map(departments.map(department => [String(department._id), department]));
+  const roleRules = rules.filter(rule => rule.subjectType === 'role');
+  const userRules = rules.filter(rule => rule.subjectType === 'user');
+
+  return {
+    users,
+    branches,
+    departments,
+    roleOptions: [...roleMap.values()].sort((a, b) => a.label.localeCompare(b.label)),
+    roleRules: roleRules.map(rule => buildVisibilityRuleResponse(rule, branchMap, departmentMap)),
+    userRules: userRules.map(rule => buildVisibilityRuleResponse(rule, branchMap, departmentMap))
+  };
+};
+
+const resolveVisibilityForUser = async (companyId, userId) => {
+  const user = await User.findOne({ _id: userId, company: companyId })
+    .select('_id name email jobRole companyRole')
+    .lean();
+
+  if (!user) {
+    return null;
+  }
+
+  const context = await loadVisibilityContext(companyId);
+  const userKey = normalizeSubjectKey(user._id);
+  const roleKey = normalizeSubjectKey(user.jobRole || user.companyRole || '');
+
+  const overrideRule = context.userRules.find(rule => normalizeSubjectKey(rule.subjectKey) === userKey) || null;
+  const roleRule = context.roleRules.find(rule => normalizeSubjectKey(rule.subjectKey) === roleKey) || null;
+  const effectiveRule = overrideRule || roleRule || null;
+
+  return {
+    user,
+    effectiveRule,
+    source: overrideRule ? 'user-override' : roleRule ? 'role-default' : 'none'
+  };
+};
+
 router.use(protect);
 
 router.get('/pages', async (req, res) => {
@@ -117,6 +237,60 @@ router.get('/pages', async (req, res) => {
   } catch (error) {
     console.error('Page permissions list error:', error);
     res.status(500).json({ success: false, error: 'Failed to load page permissions' });
+  }
+});
+
+router.get('/data-visibility/context', async (req, res) => {
+  try {
+    const companyId = getCompanyId(req);
+    if (!companyId) {
+      return res.status(400).json({ success: false, error: 'Company not found for current user' });
+    }
+
+    const context = await loadVisibilityContext(companyId);
+    res.json({ success: true, context });
+  } catch (error) {
+    console.error('Data visibility context error:', error);
+    res.status(500).json({ success: false, error: 'Failed to load data visibility context' });
+  }
+});
+
+router.get('/data-visibility', async (req, res) => {
+  try {
+    const companyId = getCompanyId(req);
+    if (!companyId) {
+      return res.status(400).json({ success: false, error: 'Company not found for current user' });
+    }
+
+    const context = await loadVisibilityContext(companyId);
+    res.json({ success: true, ...context });
+  } catch (error) {
+    console.error('Data visibility list error:', error);
+    res.status(500).json({ success: false, error: 'Failed to load data visibility rules' });
+  }
+});
+
+router.get('/data-visibility/effective', async (req, res) => {
+  try {
+    const companyId = getCompanyId(req);
+    if (!companyId) {
+      return res.status(400).json({ success: false, error: 'Company not found for current user' });
+    }
+
+    const userId = req.query.userId || req.user?._id;
+    if (!userId) {
+      return res.status(400).json({ success: false, error: 'User ID is required' });
+    }
+
+    const result = await resolveVisibilityForUser(companyId, userId);
+    if (!result) {
+      return res.status(404).json({ success: false, error: 'User not found for this company' });
+    }
+
+    res.json({ success: true, ...result });
+  } catch (error) {
+    console.error('Data visibility effective resolve error:', error);
+    res.status(500).json({ success: false, error: 'Failed to resolve data visibility' });
   }
 });
 
@@ -158,6 +332,90 @@ router.get('/by-path', async (req, res) => {
   } catch (error) {
     console.error('Page permission by path error:', error);
     res.status(500).json({ success: false, error: 'Failed to load page permission' });
+  }
+});
+
+router.put('/data-visibility', isCompanyOwner, async (req, res) => {
+  try {
+    const companyId = getCompanyId(req);
+    if (!companyId) {
+      return res.status(400).json({ success: false, error: 'Company not found for current user' });
+    }
+
+    const rawRoleRules = Array.isArray(req.body.roleRules) ? req.body.roleRules : [];
+    const rawUserRules = Array.isArray(req.body.userRules) ? req.body.userRules : [];
+
+    const normalizedRoleRules = rawRoleRules
+      .map(normalizeVisibilityRule)
+      .filter(rule => rule.subjectType === 'role' && rule.subjectKey);
+    const normalizedUserRules = rawUserRules
+      .map(normalizeVisibilityRule)
+      .filter(rule => rule.subjectType === 'user' && rule.subjectKey);
+
+    const userIds = normalizedUserRules.map(rule => rule.subjectKey);
+    const validUsers = userIds.length
+      ? await User.find({
+          _id: { $in: userIds },
+          company: companyId
+        }).select('_id')
+      : [];
+
+    const validUserIdSet = new Set(validUsers.map(user => String(user._id)));
+    const validRoleRules = normalizedRoleRules.filter(rule => rule.subjectKey);
+    const validUserRules = normalizedUserRules.filter(rule => validUserIdSet.has(rule.subjectKey));
+
+    const upsertRule = async (rule) => PageDataVisibility.findOneAndUpdate(
+      {
+        company: companyId,
+        subjectType: rule.subjectType,
+        subjectKey: rule.subjectKey
+      },
+      {
+        company: companyId,
+        companyCode: req.user.companyCode || '',
+        subjectType: rule.subjectType,
+        subjectKey: rule.subjectKey,
+        subjectLabel: rule.subjectLabel,
+        scope: rule.scope,
+        branchIds: rule.scope === 'all' ? [] : rule.branchIds,
+        departmentIds: rule.scope === 'all' ? [] : rule.departmentIds,
+        updatedBy: req.user._id
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+
+    const savedRules = await Promise.all([
+      ...validRoleRules.map(upsertRule),
+      ...validUserRules.map(upsertRule)
+    ]);
+
+    const desiredRoleKeys = validRoleRules.map(rule => rule.subjectKey);
+    const desiredUserKeys = validUserRules.map(rule => rule.subjectKey);
+
+    await Promise.all([
+      PageDataVisibility.deleteMany({
+        company: companyId,
+        subjectType: 'role',
+        subjectKey: { $nin: desiredRoleKeys }
+      }),
+      PageDataVisibility.deleteMany({
+        company: companyId,
+        subjectType: 'user',
+        subjectKey: { $nin: desiredUserKeys }
+      })
+    ]);
+
+    const context = await loadVisibilityContext(companyId);
+
+    res.json({
+      success: true,
+      message: 'Data visibility rules saved successfully',
+      savedRules: savedRules.length,
+      ...context
+    });
+  } catch (error) {
+    console.error('Data visibility save error:', error);
+    res.status(500).json({ success: false, error: 'Failed to save data visibility rules' });
   }
 });
 

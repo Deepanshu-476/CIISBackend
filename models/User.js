@@ -126,6 +126,7 @@ const userSchema = new mongoose.Schema({
 
   
   phone: String,
+  profileImage: String,
   address: String,
   city: String,
   state: String,

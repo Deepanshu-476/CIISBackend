@@ -359,6 +359,66 @@ const formatTime = (date) => {
     : "";
 };
 
+const getAttendanceRecordScore = (record = {}) => {
+  const status = String(record.status || "").trim().toUpperCase();
+  const hasInTime = Boolean(record.inTime);
+  const hasOutTime = Boolean(record.outTime);
+  let score = 0;
+
+  if (hasInTime) score += 1000;
+  if (hasOutTime) score += 1000;
+  if (hasInTime && hasOutTime) score += 500;
+  if (!["ABSENT", "WEEKEND"].includes(status)) score += 100;
+  if (String(record.companyCode || "").trim() && String(record.companyCode || "").trim().toUpperCase() !== "UNKNOWN") score += 50;
+  if (record.clockOutMode) score += 20;
+  if (String(record.totalTime || "00:00:00") !== "00:00:00") score += 10;
+  if (record.updatedAt) {
+    const updatedAt = new Date(record.updatedAt);
+    if (!Number.isNaN(updatedAt.getTime())) {
+      score += Math.min(Math.floor(updatedAt.getTime() / 1000), 1000);
+    }
+  }
+
+  return score;
+};
+
+const pickBestAttendanceRecord = (records = []) => {
+  return records.reduce((best, candidate) => {
+    if (!best) return candidate;
+
+    const bestScore = getAttendanceRecordScore(best);
+    const candidateScore = getAttendanceRecordScore(candidate);
+    if (candidateScore !== bestScore) {
+      return candidateScore > bestScore ? candidate : best;
+    }
+
+    const candidateUpdatedAt = new Date(candidate.updatedAt || candidate.createdAt || 0).getTime();
+    const bestUpdatedAt = new Date(best.updatedAt || best.createdAt || 0).getTime();
+    if (candidateUpdatedAt !== bestUpdatedAt) {
+      return candidateUpdatedAt > bestUpdatedAt ? candidate : best;
+    }
+
+    return best;
+  }, null);
+};
+
+const dedupeAttendanceRecordsByIndiaDate = (records = []) => {
+  const grouped = new Map();
+
+  for (const record of records) {
+    const dateKey = formatIndiaDateKey(record.date);
+    const bucket = grouped.get(dateKey) || [];
+    bucket.push(record);
+    grouped.set(dateKey, bucket);
+  }
+
+  return [...grouped.entries()].map(([dateKey, bucket]) => ({
+    dateKey,
+    record: pickBestAttendanceRecord(bucket),
+    records: bucket,
+  }));
+};
+
 const buildLocationPayload = ({ latitude, longitude, accuracy, distanceFromOfficeMeters }) => {
   if (latitude === undefined || longitude === undefined) return null;
 
@@ -1122,8 +1182,7 @@ const getAttendanceList = async (req, res) => {
 
     
     const existingRecordsMap = {};
-    list.forEach(record => {
-      const dateKey = formatIndiaDateKey(record.date);
+    dedupeAttendanceRecordsByIndiaDate(list).forEach(({ dateKey, record }) => {
       existingRecordsMap[dateKey] = record;
     });
 
@@ -1686,6 +1745,10 @@ const getAttendanceByUser = async (req, res) => {
       });
     }
     
+    const dedupedRecords = dedupeAttendanceRecordsByIndiaDate(records)
+      .map(({ record }) => record)
+      .sort((a, b) => new Date(b.date) - new Date(a.date));
+
     res.status(200).json({ 
       message: "Attendance records fetched successfully", 
       data: responseRecords.map(record => ({
