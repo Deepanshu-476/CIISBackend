@@ -121,7 +121,7 @@
   function getDefaultAccess(jobRole) {
     const defaults = {
   
-      user: ['dashboard', 'attendance', 'my-leaves', 'my-assets', 'create-task', 'employee-project', 'alerts', 'employee-meeting'],
+      user: ['dashboard', 'attendance', 'my-leaves', 'my-assets', 'create-task', 'employee-project', 'alerts', 'create-alert', 'employee-meeting'],
      
     };
     

@@ -1,4 +1,5 @@
 const Attendance = require("../models/Attendance");
+const Leave = require("../models/Leave");
 const User = require("../../models/User");
 const Company = require("../../models/Company");
 const Branch = require("../../models/Branch");
@@ -345,6 +346,29 @@ const formatIndiaDateKey = value => {
 };
 
 const addIndiaDays = (value, days) => new Date(value.getTime() + (days * DAY_MS));
+
+const getLeaveCoverageDateKeys = async ({ userId, companyCode, startDate, endDate }) => {
+  if (!userId || !companyCode || !startDate || !endDate) return new Set();
+
+  const leaves = await Leave.find({
+    user: userId,
+    companyCode,
+    status: { $in: ["Pending", "Approved"] },
+    startDate: { $lte: endDate },
+    endDate: { $gte: startDate }
+  }).select("startDate endDate").lean();
+
+  const coveredDates = new Set();
+  leaves.forEach(leave => {
+    const rangeStart = getIndiaDayStart(leave.startDate);
+    const rangeEnd = getIndiaDayEnd(leave.endDate);
+    for (let cursor = rangeStart; cursor <= rangeEnd; cursor = addIndiaDays(cursor, 1)) {
+      coveredDates.add(formatIndiaDateKey(cursor));
+    }
+  });
+
+  return coveredDates;
+};
 
 
 const formatTime = (date) => {
@@ -1168,6 +1192,12 @@ const getAttendanceList = async (req, res) => {
 
     
     const targetShiftSettings = await resolveSelectedShiftSettings(targetUser);
+    const leaveCoverageDateKeys = await getLeaveCoverageDateKeys({
+      userId: targetUserId,
+      companyCode: userCompanyCode,
+      startDate,
+      endDate
+    });
 
     const list = await Attendance.find(query)
       .populate({
@@ -1196,6 +1226,7 @@ const getAttendanceList = async (req, res) => {
         const recordObject = record.toObject ? record.toObject() : record;
         const fallbackSchedule = buildShiftSchedule(record.date, targetShiftSettings);
         const fallbackShift = buildShiftSnapshot(targetShiftSettings || {}, fallbackSchedule);
+        const isLeaveCoveredDay = leaveCoverageDateKeys.has(dateKey) && !recordObject.inTime && !recordObject.outTime;
         return {
           ...recordObject,
           shiftId: recordObject.shiftId || fallbackShift.shiftId,
@@ -1211,7 +1242,7 @@ const getAttendanceList = async (req, res) => {
           shiftWindow: recordObject.shiftWindow || fallbackShift.shiftWindow,
           login: formatTime(record.inTime),
           logout: formatTime(record.outTime),
-          status: record.status || 'ABSENT'
+          status: isLeaveCoveredDay ? 'LEAVE' : (record.status || 'ABSENT')
         };
       } else {
         
@@ -1219,6 +1250,7 @@ const getAttendanceList = async (req, res) => {
         const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
         const fallbackSchedule = buildShiftSchedule(date, targetShiftSettings);
         const fallbackShift = buildShiftSnapshot(targetShiftSettings || {}, fallbackSchedule);
+        const isLeaveCoveredDay = leaveCoverageDateKeys.has(dateKey);
 
         return {
           _id: `absent_${targetUserId}_${dateKey}`,
@@ -1232,7 +1264,7 @@ const getAttendanceList = async (req, res) => {
           date: date,
           inTime: null,
           outTime: null,
-          status: isWeekend ? "WEEKEND" : "ABSENT",
+          status: isWeekend ? "WEEKEND" : (isLeaveCoveredDay ? "LEAVE" : "ABSENT"),
           lateBy: "00:00:00",
           earlyLeave: "00:00:00",
           overTime: "00:00:00",
@@ -1250,7 +1282,7 @@ const getAttendanceList = async (req, res) => {
           shortLeaveEarlyLimit: fallbackShift.shortLeaveEarlyLimit,
           halfDayEarlyLimit: fallbackShift.halfDayEarlyLimit,
           shiftWindow: fallbackShift.shiftWindow,
-          notes: isWeekend ? "Weekend" : "No attendance recorded",
+          notes: isWeekend ? "Weekend" : (isLeaveCoveredDay ? "On leave" : "No attendance recorded"),
           createdAt: date,
           updatedAt: date,
           login: "",
@@ -1748,12 +1780,20 @@ const getAttendanceByUser = async (req, res) => {
     const dedupedRecords = dedupeAttendanceRecordsByIndiaDate(records)
       .map(({ record }) => record)
       .sort((a, b) => new Date(b.date) - new Date(a.date));
+    const leaveCoverageKeysForRange = await getLeaveCoverageDateKeys({
+      userId,
+      companyCode: userCompanyCode,
+      startDate: query.date?.$gte || (records[0]?.date ? getIndiaDayStart(records[0].date) : null),
+      endDate: query.date?.$lte || (records[0]?.date ? getIndiaDayEnd(records[0].date) : null)
+    });
 
     res.status(200).json({ 
       message: "Attendance records fetched successfully", 
       data: responseRecords.map(record => ({
         ...record,
-        status: record.status || 'ABSENT'
+        status: leaveCoverageKeysForRange.has(formatIndiaDateKey(record.date)) && !record.inTime && !record.outTime
+          ? 'LEAVE'
+          : (record.status || 'ABSENT')
       }))
     });
   } catch (err) {
