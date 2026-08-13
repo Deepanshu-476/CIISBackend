@@ -111,8 +111,6 @@ const shouldIncludeInactiveUsers = (query = {}) => {
   return value === true || value === 'true' || value === '1' || value === 'all';
 };
 
-const escapeRegExp = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
 const getCompanyScope = (req) => {
   const company = req.user?.company;
   const companyId = company?._id || company?.id || company;
@@ -131,8 +129,10 @@ const getCompanyScope = (req) => {
     companyId,
     companyCode,
     filter: {
-      company: companyId,
-      companyCode: new RegExp(`^${escapeRegExp(companyCode)}$`, 'i')
+      // The company reference is the authoritative tenant boundary. Requiring
+      // the duplicated companyCode field here hides valid legacy/self-register
+      // records when that denormalized value is missing or was later changed.
+      company: companyId
     }
   };
 };
@@ -372,18 +372,7 @@ const hasChangedValue = (nextValue, currentValue) => {
 
 const REGISTER_REQUEST_PATH = '/ciisUser/register-request';
 
-const REGISTER_REQUEST_SECTIONS = [
-  'personalInformation',
-  'companyAssignment',
-  'additionalDetails',
-  'workDetails',
-  'addressInformation',
-  'identityDocuments',
-  'salaryBankDetails',
-  'familyDetails',
-  'emergencyContact',
-  'assetsExtraDetails'
-];
+const REGISTER_REQUEST_SECTIONS = ['applicationReview'];
 
 const REGISTER_REQUEST_EDITABLE_FIELDS = new Set([
   'name', 'email', 'phone', 'dob', 'gender', 'maritalStatus',
@@ -445,6 +434,7 @@ const buildDocumentUrl = (userId, doc, action = 'view') => (
 
 const serializeRegisterRequest = user => {
   const item = typeof user.toObject === 'function' ? user.toObject() : user;
+  const registrationStatus = item.registrationStatus || (item.isActive ? 'active' : 'pending');
   const documents = (item.documents || []).map(doc => ({
     ...doc,
     viewUrl: buildDocumentUrl(item._id, doc, 'view'),
@@ -453,6 +443,8 @@ const serializeRegisterRequest = user => {
 
   return {
     ...item,
+    registrationSource: item.registrationSource || 'self_register',
+    registrationStatus,
     documents,
     verificationSections: REGISTER_REQUEST_SECTIONS.map(key => ({
       key,
@@ -467,10 +459,24 @@ const serializeRegisterRequest = user => {
 const findScopedRegisterRequest = async (req, id) => {
   const companyScope = getCompanyScope(req);
   if (companyScope.error) return { error: companyScope.error };
+  const companyFilter = companyScope.filter;
   const user = await User.findOne({
     _id: id,
-    ...companyScope.filter,
-    registrationSource: 'self_register'
+    ...companyFilter,
+    $or: [
+      { registrationSource: 'self_register' },
+      {
+        registrationSource: { $exists: false },
+        registrationStatus: { $exists: false },
+        isActive: false
+      },
+      {
+        registrationSource: { $exists: false },
+        registrationStatus: 'active',
+        isActive: true,
+        'registrationVerification.activatedAt': { $ne: null }
+      }
+    ]
   });
   if (!user) return { error: { status: 404, message: 'Register request not found' } };
   return { user };
@@ -801,19 +807,49 @@ exports.getRegisterRequests = async (req, res) => {
     if (companyScope.error) {
       return errorResponse(res, companyScope.error.status, companyScope.error.message);
     }
+    const companyFilter = companyScope.filter;
 
     const status = String(req.query.status || 'pending').trim().toLowerCase();
-    const filter = {
-      ...companyScope.filter,
-      registrationSource: 'self_register'
+    const legacyPendingFilter = {
+      registrationSource: { $exists: false },
+      registrationStatus: { $exists: false },
+      isActive: false
     };
+    const legacyActivatedFilter = {
+      registrationSource: { $exists: false },
+      registrationStatus: 'active',
+      isActive: true,
+      'registrationVerification.activatedAt': { $ne: null }
+    };
+    const filter = { ...companyFilter };
 
     if (status === 'all') {
-      filter.registrationStatus = { $in: ['pending', 'active', 'rejected'] };
-    } else if (['pending', 'active', 'rejected'].includes(status)) {
-      filter.registrationStatus = status;
+      filter.$or = [
+        {
+          registrationSource: 'self_register',
+          registrationStatus: { $in: ['pending', 'active', 'rejected'] }
+        },
+        legacyPendingFilter,
+        legacyActivatedFilter
+      ];
+    } else if (status === 'pending') {
+      filter.$or = [
+        { registrationSource: 'self_register', registrationStatus: 'pending' },
+        legacyPendingFilter
+      ];
+    } else if (status === 'active') {
+      filter.$or = [
+        { registrationSource: 'self_register', registrationStatus: 'active' },
+        legacyActivatedFilter
+      ];
+    } else if (status === 'rejected') {
+      filter.registrationSource = 'self_register';
+      filter.registrationStatus = 'rejected';
     } else {
-      filter.registrationStatus = 'pending';
+      filter.$or = [
+        { registrationSource: 'self_register', registrationStatus: 'pending' },
+        legacyPendingFilter
+      ];
     }
 
     const requests = await User.find(filter)
@@ -826,11 +862,31 @@ exports.getRegisterRequests = async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
 
+    const jobRoleIds = [...new Set(requests
+      .map(request => String(request.jobRole || '').trim())
+      .filter(isObjectIdLike))];
+    const jobRoleRecords = jobRoleIds.length
+      ? await JobRole.find({ _id: { $in: jobRoleIds } }).select('name').lean()
+      : [];
+    const jobRoleNames = new Map(jobRoleRecords.map(role => [String(role._id), role.name]));
+    const departmentIds = [...new Set(requests
+      .map(request => String(request.department?._id || request.department || '').trim())
+      .filter(isObjectIdLike))];
+    const departmentRecords = departmentIds.length
+      ? await Department.find({ _id: { $in: departmentIds } }).select('name').lean()
+      : [];
+    const departmentNames = new Map(departmentRecords.map(department => [String(department._id), department.name]));
+    const enrichedRequests = requests.map(request => ({
+      ...request,
+      jobRoleName: jobRoleNames.get(String(request.jobRole || '')) || String(request.jobRole || '').trim() || 'Unassigned Role',
+      departmentName: request.department?.name || departmentNames.get(String(request.department?._id || request.department || '')) || String(request.department || '').trim() || 'Not provided'
+    }));
+
     const canVerify = await hasRegisterRequestVerifyAccess(req);
 
     return res.status(200).json({
       success: true,
-      requests: requests.map(serializeRegisterRequest),
+      requests: enrichedRequests.map(serializeRegisterRequest),
       sections: REGISTER_REQUEST_SECTIONS,
       canVerify
     });
@@ -849,6 +905,9 @@ exports.updateRegisterRequest = async (req, res) => {
 
     const { user, error } = await findScopedRegisterRequest(req, req.params.id);
     if (error) return errorResponse(res, error.status, error.message);
+    if ((user.registrationStatus || (user.isActive ? 'active' : 'pending')) !== 'pending') {
+      return errorResponse(res, 400, "Only pending register requests can be updated");
+    }
 
     const updateData = {};
     Object.keys(req.body || {}).forEach(key => {
@@ -980,6 +1039,9 @@ exports.verifyRegisterRequestSection = async (req, res) => {
 
     const { user, error } = await findScopedRegisterRequest(req, req.params.id);
     if (error) return errorResponse(res, error.status, error.message);
+    if ((user.registrationStatus || (user.isActive ? 'active' : 'pending')) !== 'pending') {
+      return errorResponse(res, 400, "Only pending register requests can be verified");
+    }
 
     const now = new Date();
     const verifierName = getRequestUserName(req.user);
@@ -1024,12 +1086,15 @@ exports.activateRegisterRequest = async (req, res) => {
 
     const { user, error } = await findScopedRegisterRequest(req, req.params.id);
     if (error) return errorResponse(res, error.status, error.message);
+    if ((user.registrationStatus || (user.isActive ? 'active' : 'pending')) !== 'pending') {
+      return errorResponse(res, 400, "Only pending register requests can be activated");
+    }
 
     const allVerified = REGISTER_REQUEST_SECTIONS.every(key => (
       Boolean(user.registrationVerification?.sections?.[key]?.verified)
     ));
     if (!allVerified) {
-      return errorResponse(res, 400, "Please verify all sections before activating this user");
+      return errorResponse(res, 400, "Please review the application before activating this user");
     }
 
     const now = new Date();
@@ -1062,6 +1127,101 @@ exports.activateRegisterRequest = async (req, res) => {
   } catch (err) {
     console.error("❌ Activate register request error:", err);
     return errorResponse(res, 500, "Failed to activate register request");
+  }
+};
+
+exports.rejectRegisterRequest = async (req, res) => {
+  try {
+    const canVerify = await hasRegisterRequestVerifyAccess(req);
+    if (!canVerify) {
+      return errorResponse(res, 403, "You do not have permission to reject register requests");
+    }
+
+    const { user, error } = await findScopedRegisterRequest(req, req.params.id);
+    if (error) return errorResponse(res, error.status, error.message);
+    if ((user.registrationStatus || (user.isActive ? 'active' : 'pending')) === 'active') {
+      return errorResponse(res, 400, "An active registration cannot be rejected from this page");
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(
+      user._id,
+      {
+        $set: {
+          isActive: false,
+          registrationStatus: 'rejected',
+          'registrationVerification.rejectedBy': req.user.id || req.user._id,
+          'registrationVerification.rejectedByName': getRequestUserName(req.user),
+          'registrationVerification.rejectedAt': new Date()
+        }
+      },
+      { new: true, runValidators: true, context: 'query' }
+    )
+      .select('-password -resetToken -resetTokenExpiry')
+      .populate('company', 'companyName companyCode name')
+      .populate('branch', 'name branchCode')
+      .populate('assignedBranches', 'name branchCode')
+      .populate('department', 'name description branch')
+      .populate('createdBy', 'name email')
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      message: "Register request rejected successfully",
+      request: serializeRegisterRequest(updatedUser)
+    });
+  } catch (err) {
+    console.error("Reject register request error:", err);
+    return errorResponse(res, 500, "Failed to reject register request");
+  }
+};
+
+exports.setRegisterRequestStatus = async (req, res) => {
+  try {
+    const canVerify = await hasRegisterRequestVerifyAccess(req);
+    if (!canVerify) {
+      return errorResponse(res, 403, "You do not have permission to change user status");
+    }
+
+    const { user, error } = await findScopedRegisterRequest(req, req.params.id);
+    if (error) return errorResponse(res, error.status, error.message);
+
+    const isActive = req.body?.isActive === true;
+    const now = new Date();
+    const setData = {
+      isActive,
+      registrationSource: 'self_register',
+      registrationStatus: isActive ? 'active' : 'pending'
+    };
+
+    if (isActive) {
+      setData['registrationVerification.sections.applicationReview.verified'] = true;
+      setData['registrationVerification.sections.applicationReview.verifiedBy'] = req.user.id || req.user._id;
+      setData['registrationVerification.sections.applicationReview.verifierName'] = getRequestUserName(req.user);
+      setData['registrationVerification.sections.applicationReview.verifiedAt'] = now;
+      setData['registrationVerification.activatedBy'] = req.user.id || req.user._id;
+      setData['registrationVerification.activatedByName'] = getRequestUserName(req.user);
+      setData['registrationVerification.activatedAt'] = now;
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(
+      user._id,
+      { $set: setData },
+      { new: true, runValidators: true, context: 'query' }
+    )
+      .select('-password -resetToken -resetTokenExpiry')
+      .populate('company', 'companyName companyCode name')
+      .populate('branch', 'name branchCode')
+      .populate('department', 'name description branch')
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      message: isActive ? "User activated successfully" : "User deactivated successfully",
+      request: serializeRegisterRequest(updatedUser)
+    });
+  } catch (err) {
+    console.error("Set register request status error:", err);
+    return errorResponse(res, 500, "Failed to update user status");
   }
 };
 
