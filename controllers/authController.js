@@ -733,6 +733,7 @@ exports.register = async (req, res) => {
       accountNumber, ifsc, bankName, bankHolderName,
       employeeType, properties, propertyOwned, additionalDetails,
       experienceType, additionalDocumentDetails,
+      registrationSource,
       dateOfJoining,
       fatherName, motherName,
       emergencyName, emergencyPhone, emergencyRelation, emergencyAddress
@@ -755,7 +756,7 @@ exports.register = async (req, res) => {
       { field: 'shiftId', label: 'Shift' },
       { field: 'company', label: 'Company' },
       { field: 'companyCode', label: 'Company Code' },
-      ...(isMultipartRegistration ? [{ field: 'companyRole', label: 'Company Role' }] : [])
+      ...(isSelfRegister ? [{ field: 'companyRole', label: 'Company Role' }] : [])
     ];
 
     const missingFields = requiredFields.filter(f => !req.body[f.field]);
@@ -948,8 +949,8 @@ exports.register = async (req, res) => {
       state: state?.trim(),
       country: country?.trim(),
       pinCode: pinCode?.trim(),
-      gender,
-      maritalStatus,
+      gender: String(gender || '').trim().toLowerCase() || undefined,
+      maritalStatus: String(maritalStatus || '').trim().toLowerCase() || undefined,
       dob: dob ? new Date(dob) : null,
       aadharCard: aadharCard?.trim(),
       panCard: panCard?.trim(),
@@ -1016,12 +1017,42 @@ exports.register = async (req, res) => {
     });
 
   } catch (err) {
-    await session.abortTransaction();
+    if (session.inTransaction()) {
+      await session.abortTransaction().catch(abortError => {
+        console.error("Registration transaction abort failed:", abortError);
+      });
+    }
     cleanupUploadedRegistrationFiles(req.files);
-    console.error("❌ Registration error:", err);
+    console.error("Registration error:", {
+      name: err?.name,
+      code: err?.code,
+      message: err?.message,
+      errors: err?.errors
+    });
     
     if (err.code === 11000) {
       return errorResponse(res, 409, "Duplicate entry found", "DUPLICATE_ENTRY");
+    }
+
+    if (err?.name === "ValidationError") {
+      const validationMessage = Object.values(err.errors || {})
+        .map(error => error?.message)
+        .filter(Boolean)
+        .join(", ");
+      return errorResponse(res, 400, validationMessage || "Registration data is invalid", "VALIDATION_ERROR");
+    }
+
+    if (err?.name === "CastError") {
+      return errorResponse(res, 400, `Invalid value for ${err.path}`, "INVALID_FIELD_VALUE");
+    }
+
+    if (/transaction numbers are only allowed|replica set member or mongos/i.test(err?.message || "")) {
+      return errorResponse(
+        res,
+        503,
+        "Registration database does not support transactions. Please contact the administrator.",
+        "TRANSACTION_NOT_SUPPORTED"
+      );
     }
     
     return errorResponse(res, 500, "Registration failed. Please try again.", "REGISTRATION_FAILED");

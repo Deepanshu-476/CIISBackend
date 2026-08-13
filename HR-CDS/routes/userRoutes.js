@@ -29,6 +29,8 @@ router.get('/register-requests', userController.getRegisterRequests);
 router.put('/register-requests/:id', userController.updateRegisterRequest);
 router.patch('/register-requests/:id/verify-section', userController.verifyRegisterRequestSection);
 router.patch('/register-requests/:id/activate', userController.activateRegisterRequest);
+router.patch('/register-requests/:id/status', userController.setRegisterRequestStatus);
+router.delete('/register-requests/:id', userController.rejectRegisterRequest);
 router.put('/restore/:id', userController.restoreUser);
 router.put('/admin-update/:id', userController.updateUser);
 router.put('/admin-update-by-email', userController.updateUser);

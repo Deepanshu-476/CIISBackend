@@ -263,6 +263,20 @@ const userSchema = new mongoose.Schema({
       type: Date,
       default: null
     },
+    rejectedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null
+    },
+    rejectedByName: {
+      type: String,
+      trim: true,
+      default: ""
+    },
+    rejectedAt: {
+      type: Date,
+      default: null
+    },
     lastUpdatedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
