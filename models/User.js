@@ -238,6 +238,7 @@ const userSchema = new mongoose.Schema({
   },
   registrationVerification: {
     sections: {
+      applicationReview: { type: verificationSectionSchema, default: () => ({}) },
       personalInformation: { type: verificationSectionSchema, default: () => ({}) },
       companyAssignment: { type: verificationSectionSchema, default: () => ({}) },
       additionalDetails: { type: verificationSectionSchema, default: () => ({}) },
