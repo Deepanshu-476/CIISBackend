@@ -221,6 +221,7 @@ const getTaskReportDateRange = query => {
 };
 
 const INDIA_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 const parseIndiaReportDate = (value, endOfDay = false) => {
   const match = String(value || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -255,6 +256,40 @@ const getIndiaWorkDateKey = value => {
     String(shifted.getUTCMonth() + 1).padStart(2, '0'),
     String(shifted.getUTCDate()).padStart(2, '0')
   ].join('-');
+};
+
+const getAttendanceComparableDateKeys = (record = {}) => ([
+  record.date,
+  record.inTime,
+  record.outTime,
+  record.createdAt,
+  record.updatedAt
+].map(getIndiaWorkDateKey).filter(Boolean));
+
+const isMeaningfulAttendanceRecord = (record = {}) => (
+  Boolean(record.inTime || record.outTime || record.isClockedIn) ||
+  String(record.status || '').trim().toUpperCase() !== 'ABSENT'
+);
+
+const pickBestAttendanceRecord = (records = [], requestedDateKey = '') => {
+  if (!Array.isArray(records) || records.length === 0) return null;
+
+  const exactMatches = records.filter(record => {
+    const keys = getAttendanceComparableDateKeys(record);
+    return requestedDateKey ? keys.includes(requestedDateKey) : keys.length > 0;
+  });
+
+  const candidatePool = exactMatches.length > 0 ? exactMatches : records;
+
+  return [...candidatePool].sort((a, b) => {
+    const aScore = isMeaningfulAttendanceRecord(a) ? 1 : 0;
+    const bScore = isMeaningfulAttendanceRecord(b) ? 1 : 0;
+    if (aScore !== bScore) return bScore - aScore;
+
+    const aUpdated = new Date(a.updatedAt || a.inTime || a.date || 0).getTime();
+    const bUpdated = new Date(b.updatedAt || b.inTime || b.date || 0).getTime();
+    return bUpdated - aUpdated;
+  })[0] || null;
 };
 
 const toValidWorkDate = value => {
@@ -397,28 +432,53 @@ const calculateTaskWork = (task, workWindow) => {
 const getUserWorkWindow = async (userId, query) => {
   const taskRange = getTaskReportDateRange(query);
   const range = getAttendanceReportDateRange(query, taskRange);
-  let attendance = await Attendance.findOne({
+  const requestedDateKey = query?.fromDate
+    ? String(query.fromDate).slice(0, 10)
+    : getIndiaWorkDateKey(range.start || new Date());
+  const searchStart = new Date((range.start || new Date()).getTime() - DAY_MS);
+  const searchEnd = new Date((range.end || new Date()).getTime() + DAY_MS);
+
+  const attendanceCandidates = await Attendance.find({
     user: userId,
     $or: [
-      { date: { $gte: range.start, $lte: range.end } },
-      { inTime: { $gte: range.start, $lte: range.end } }
+      { date: { $gte: searchStart, $lte: searchEnd } },
+      { inTime: { $gte: searchStart, $lte: searchEnd } },
+      { outTime: { $gte: searchStart, $lte: searchEnd } },
+      { createdAt: { $gte: searchStart, $lte: searchEnd } },
+      { updatedAt: { $gte: searchStart, $lte: searchEnd } }
     ]
-  }).sort({ date: -1 }).lean();
+  }).sort({ updatedAt: -1, inTime: -1, date: -1 }).lean();
+
+  let attendance = pickBestAttendanceRecord(attendanceCandidates, requestedDateKey);
 
   // Older attendance records may have an inconsistent `date` value. Fall
   // back to the nearest clock-in and validate its calendar day in IST.
   if (!attendance && query?.fromDate) {
     const nearbyAttendance = await Attendance.find({
       user: userId,
-      inTime: {
-        $gte: new Date(range.start.getTime() - (24 * 60 * 60 * 1000)),
-        $lte: new Date(range.end.getTime() + (24 * 60 * 60 * 1000))
-      }
-    }).sort({ inTime: -1 }).lean();
-    const requestedDateKey = String(query.fromDate).slice(0, 10);
-    attendance = nearbyAttendance.find(record =>
-      getIndiaWorkDateKey(record.inTime || record.date) === requestedDateKey
-    ) || null;
+      $or: [
+        {
+          inTime: {
+            $gte: new Date(searchStart.getTime() - DAY_MS),
+            $lte: new Date(searchEnd.getTime() + DAY_MS)
+          }
+        },
+        {
+          outTime: {
+            $gte: new Date(searchStart.getTime() - DAY_MS),
+            $lte: new Date(searchEnd.getTime() + DAY_MS)
+          }
+        },
+        {
+          date: {
+            $gte: new Date(searchStart.getTime() - DAY_MS),
+            $lte: new Date(searchEnd.getTime() + DAY_MS)
+          }
+        }
+      ]
+    }).sort({ updatedAt: -1, inTime: -1, date: -1 }).lean();
+
+    attendance = pickBestAttendanceRecord(nearbyAttendance, requestedDateKey);
   }
 
   const clockIn = toValidWorkDate(attendance?.inTime);
