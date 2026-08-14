@@ -479,8 +479,22 @@ const findScopedRegisterRequest = async (req, id) => {
     ]
   });
   if (!user) return { error: { status: 404, message: 'Register request not found' } };
-  return { user };
+  const rawStatus = await User.collection.findOne(
+    { _id: user._id },
+    { projection: { registrationSource: 1, registrationStatus: 1, isActive: 1 } }
+  );
+  const isLegacyPending = Boolean(
+    rawStatus &&
+    !Object.prototype.hasOwnProperty.call(rawStatus, 'registrationSource') &&
+    !Object.prototype.hasOwnProperty.call(rawStatus, 'registrationStatus') &&
+    rawStatus.isActive === false
+  );
+  return { user, isLegacyPending };
 };
+
+const getScopedRegisterRequestStatus = (user, isLegacyPending = false) => (
+  isLegacyPending ? 'pending' : (user.registrationStatus || (user.isActive ? 'active' : 'pending'))
+);
 
 exports.getMe = async (req, res) => {
   try {
@@ -903,9 +917,9 @@ exports.updateRegisterRequest = async (req, res) => {
       return errorResponse(res, 403, "You do not have permission to update register requests");
     }
 
-    const { user, error } = await findScopedRegisterRequest(req, req.params.id);
+    const { user, error, isLegacyPending } = await findScopedRegisterRequest(req, req.params.id);
     if (error) return errorResponse(res, error.status, error.message);
-    if ((user.registrationStatus || (user.isActive ? 'active' : 'pending')) !== 'pending') {
+    if (getScopedRegisterRequestStatus(user, isLegacyPending) !== 'pending') {
       return errorResponse(res, 400, "Only pending register requests can be updated");
     }
 
@@ -1037,9 +1051,9 @@ exports.verifyRegisterRequestSection = async (req, res) => {
       return errorResponse(res, 400, "Invalid verification section");
     }
 
-    const { user, error } = await findScopedRegisterRequest(req, req.params.id);
+    const { user, error, isLegacyPending } = await findScopedRegisterRequest(req, req.params.id);
     if (error) return errorResponse(res, error.status, error.message);
-    if ((user.registrationStatus || (user.isActive ? 'active' : 'pending')) !== 'pending') {
+    if (getScopedRegisterRequestStatus(user, isLegacyPending) !== 'pending') {
       return errorResponse(res, 400, "Only pending register requests can be verified");
     }
 
@@ -1084,9 +1098,9 @@ exports.activateRegisterRequest = async (req, res) => {
       return errorResponse(res, 403, "You do not have permission to activate register requests");
     }
 
-    const { user, error } = await findScopedRegisterRequest(req, req.params.id);
+    const { user, error, isLegacyPending } = await findScopedRegisterRequest(req, req.params.id);
     if (error) return errorResponse(res, error.status, error.message);
-    if ((user.registrationStatus || (user.isActive ? 'active' : 'pending')) !== 'pending') {
+    if (getScopedRegisterRequestStatus(user, isLegacyPending) !== 'pending') {
       return errorResponse(res, 400, "Only pending register requests can be activated");
     }
 
