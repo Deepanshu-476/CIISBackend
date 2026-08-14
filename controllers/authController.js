@@ -771,28 +771,8 @@ exports.register = async (req, res) => {
       return abortAndError(400, "Company role must be Employee, Manager, HR, Admin, or Owner", "INVALID_COMPANY_ROLE");
     }
 
-    if (normalizedExperienceType === 'fresher' && !req.files?.bankStatement?.[0]) {
-      return abortAndError(400, "Bank statement PDF is required for fresher", "BANK_STATEMENT_REQUIRED");
-    }
-
-    if (normalizedExperienceType === 'fresher' && req.files?.bankStatement?.[0]?.mimetype !== 'application/pdf') {
+    if (req.files?.bankStatement?.[0] && req.files.bankStatement[0].mimetype !== 'application/pdf') {
       return abortAndError(400, "Bank statement must be a PDF file", "BANK_STATEMENT_PDF_REQUIRED");
-    }
-
-    if (normalizedExperienceType === 'experienced') {
-      const missingExperiencedDocument = [
-        ['experienceLetter', 'Experience letter'],
-        ['salarySlip', 'Salary slip'],
-        ['additionalDocument', 'Additional document']
-      ].find(([field]) => !req.files?.[field]?.[0]);
-
-      if (missingExperiencedDocument) {
-        return abortAndError(400, `${missingExperiencedDocument[1]} is required for experienced user`, "EXPERIENCE_DOCUMENT_REQUIRED");
-      }
-
-      if (!String(additionalDocumentDetails || '').trim()) {
-        return abortAndError(400, "Additional document details are required", "ADDITIONAL_DOCUMENT_DETAILS_REQUIRED");
-      }
     }
 
     
