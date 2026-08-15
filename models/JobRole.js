@@ -87,6 +87,9 @@ jobRoleSchema.index({ name: 1, department: 1, company: 1 }, {
   unique: true,
   partialFilterExpression: { isActive: true }
 });
+jobRoleSchema.index({ company: 1, isActive: 1, createdAt: -1 });
+jobRoleSchema.index({ company: 1, department: 1, isActive: 1 });
+jobRoleSchema.index({ companyCode: 1, isActive: 1 });
 
 
 jobRoleSchema.pre('save', async function(next) {

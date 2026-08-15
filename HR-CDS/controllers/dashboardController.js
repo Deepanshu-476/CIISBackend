@@ -272,6 +272,7 @@ const getEmployeeDashboardSummary = async (req, res) => {
       leaves,
       tasks,
       currentUser,
+      branch,
     ] = await Promise.all([
       companyId ? Company.findById(companyId).select("dashboardConfig officeLocation").lean() : null,
       JobRole.find({
@@ -311,8 +312,8 @@ const getEmployeeDashboardSummary = async (req, res) => {
         .limit(8)
         .lean(),
       User.findById(userId).select("_id name email employeeId jobRole department employeeType shiftId shiftName shiftType").lean(),
+      branchId ? Branch.findById(branchId).select("dashboardConfig officeLocation").lean() : null,
     ]);
-    const branch = branchId ? await Branch.findById(branchId).select("dashboardConfig officeLocation").lean() : null;
     const scopedDashboardConfig = branch?.dashboardConfig?.length ? branch.dashboardConfig : (company?.dashboardConfig || []);
 
     const userJobRole = String(currentUser?.jobRole || req.user.jobRole || "");
@@ -439,18 +440,20 @@ const getEmployeeDashboard = async (userId, companyCode) => {
     todayEnd.setHours(23, 59, 59, 999);
 
     
-    const leaveCount = await Leave.countDocuments({ 
-      user: userId, 
-      companyCode: companyCode 
-    });
-    const taskCount = await Task.countDocuments({ 
-      assigneeId: userId, 
-      companyCode: companyCode 
-    });
-    const assetCount = await AssetRequest.countDocuments({ 
-      user: userId, 
-      companyCode: companyCode 
-    });
+    const [leaveCount, taskCount, assetCount] = await Promise.all([
+      Leave.countDocuments({
+        user: userId,
+        companyCode: companyCode
+      }),
+      Task.countDocuments({
+        assigneeId: userId,
+        companyCode: companyCode
+      }),
+      AssetRequest.countDocuments({
+        user: userId,
+        companyCode: companyCode
+      }),
+    ]);
     
     void 0;
 
@@ -576,7 +579,7 @@ const getOwnerDashboard = async (companyCode, ownerId) => {
         companyCode: companyCode,
         companyRole: "employee",
         isActive: true,
-      }).select("_id name email employeeId companyRole"),
+      }).select("_id name email employeeId companyRole").lean(),
 
       Attendance.find({
         companyCode: companyCode,
