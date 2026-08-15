@@ -1,6 +1,10 @@
 
 const Department = require("../models/Department");
 const User = require("../models/User");
+const { getCacheKey, getOrSetCached, invalidateCache } = require("../utils/inMemoryCache");
+
+const DEPARTMENT_CACHE_PREFIX = "departments";
+const DEPARTMENT_SELECT = "name description company companyCode branch branchCode supportHead supportHeadName createdBy createdAt updatedAt isActive";
 
 const errorResponse = (res, status, message) => {
   return res.status(status).json({ success: false, message });
@@ -54,7 +58,7 @@ exports.createDepartment = async (req, res) => {
     void 0;
     
     
-    const user = await User.findById(createdBy);
+    const user = await User.findById(createdBy).select("role jobRole company companyCode").lean();
     if (!user) {
       void 0;
       return errorResponse(res, 400, "User not found");
@@ -138,6 +142,7 @@ exports.createDepartment = async (req, res) => {
 
     void 0;
     void 0;
+    invalidateCache(DEPARTMENT_CACHE_PREFIX);
 
     return res.status(201).json({
       success: true,
@@ -177,7 +182,7 @@ exports.getAllDepartments = async (req, res) => {
     void 0;
     
     
-    const user = await User.findById(req.user.id);
+    const user = await User.findById(req.user.id).select("role jobRole company companyCode").lean();
     if (!user) {
       void 0;
       return errorResponse(res, 400, "User not found");
@@ -219,10 +224,17 @@ exports.getAllDepartments = async (req, res) => {
     void 0;
     void 0;
     
-    const departments = await Department.find(query)
+    const cacheKey = getCacheKey(DEPARTMENT_CACHE_PREFIX, {
+      company: query.company,
+      branch: query.branch,
+      role: isSuper ? "super" : "company",
+    });
+    const departments = await getOrSetCached(cacheKey, () => Department.find(query)
+      .select(DEPARTMENT_SELECT)
       .populate('createdBy', 'name email')
       .populate('branch', 'name branchCode')
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean());
 
     void 0;
     void 0;
@@ -259,7 +271,7 @@ exports.updateDepartment = async (req, res) => {
     }
 
     void 0;
-    const user = await User.findById(req.user.id);
+    const user = await User.findById(req.user.id).select("role jobRole company companyCode").lean();
     if (!user) {
       void 0;
       return errorResponse(res, 400, "User not found");
@@ -338,10 +350,12 @@ exports.updateDepartment = async (req, res) => {
       updateData,
       { new: true, runValidators: true }
     ).populate('createdBy', 'name email')
-     .populate('branch', 'name branchCode');
+     .populate('branch', 'name branchCode')
+     .lean();
 
     void 0;
     void 0;
+    invalidateCache(DEPARTMENT_CACHE_PREFIX);
 
     return res.status(200).json({
       success: true,
@@ -379,7 +393,7 @@ exports.deleteDepartment = async (req, res) => {
     }
 
     void 0;
-    const user = await User.findById(req.user.id);
+    const user = await User.findById(req.user.id).select("role jobRole company companyCode").lean();
     if (!user) {
       void 0;
       return errorResponse(res, 400, "User not found");
@@ -434,6 +448,7 @@ exports.deleteDepartment = async (req, res) => {
 
     void 0;
     void 0;
+    invalidateCache(DEPARTMENT_CACHE_PREFIX);
 
     return res.status(200).json({
       success: true,
@@ -470,7 +485,7 @@ exports.getDepartmentsByCompany = async (req, res) => {
     }
 
     void 0;
-    const user = await User.findById(req.user.id);
+    const user = await User.findById(req.user.id).select("role jobRole company companyCode").lean();
     if (!user) {
       void 0;
       return errorResponse(res, 400, "User not found");
@@ -512,10 +527,16 @@ exports.getDepartmentsByCompany = async (req, res) => {
     }
     
     void 0;
-    const departments = await Department.find(query)
+    const cacheKey = getCacheKey(DEPARTMENT_CACHE_PREFIX, {
+      company: companyId,
+      branch: query.branch,
+      scope: "company",
+    });
+    const departments = await getOrSetCached(cacheKey, () => Department.find(query)
       .populate('branch', 'name branchCode')
       .select('name description branch')
-      .sort({ name: 1 });
+      .sort({ name: 1 })
+      .lean());
 
     void 0;
     void 0;

@@ -127,6 +127,7 @@ const assetRequestSchema = new mongoose.Schema({
 assetRequestSchema.index({ user: 1, status: 1 });
 assetRequestSchema.index({ asset: 1 });
 assetRequestSchema.index({ companyCode: 1 });
+assetRequestSchema.index({ companyCode: 1, status: 1, createdAt: -1 });
 assetRequestSchema.index({ status: 1, createdAt: -1 });
 
 const AssetRequest = mongoose.model('AssetRequest', assetRequestSchema);

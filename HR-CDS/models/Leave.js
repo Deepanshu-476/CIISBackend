@@ -187,6 +187,7 @@ const leaveSchema = new mongoose.Schema({
 
 leaveSchema.index({ user: 1, startDate: -1 });
 leaveSchema.index({ user: 1, status: 1 });
+leaveSchema.index({ companyCode: 1, status: 1, startDate: -1 });
 leaveSchema.index({ status: 1, startDate: -1 });
 leaveSchema.index({ user: 1, type: 1 });
 leaveSchema.index({ 'user.department': 1, status: 1 });

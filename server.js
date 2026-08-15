@@ -1,6 +1,7 @@
 const express = require("express");
 const dotenv = require("dotenv");
 const cors = require("cors");
+const compression = require("compression");
 const rateLimit = require("express-rate-limit");
 const connectDB = require("./config/db");
 const path = require("path");
@@ -680,6 +681,13 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
+app.use(compression({
+  threshold: 1024,
+  filter: (req, res) => {
+    if (req.headers["x-no-compression"]) return false;
+    return compression.filter(req, res);
+  },
+}));
 
 
 

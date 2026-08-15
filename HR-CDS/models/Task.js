@@ -232,9 +232,14 @@ const taskSchema = new mongoose.Schema(
  
 taskSchema.index({ assignedUsers: 1, dueDateTime: 1 });
 taskSchema.index({ overallStatus: 1, dueDateTime: 1 });
+taskSchema.index({ companyCode: 1, overallStatus: 1, dueDateTime: 1 });
+taskSchema.index({ companyCode: 1, isActive: 1, dueDateTime: 1 });
+taskSchema.index({ companyCode: 1, "statusByUser.status": 1, dueDateTime: 1 });
 taskSchema.index({ isActive: 1, dueDateTime: 1, overallStatus: 1 });
 taskSchema.index({ isActive: 1, dueDateTime: 1, 'statusByUser.status': 1 });
 taskSchema.index({ createdBy: 1, createdAt: -1 });
+taskSchema.index({ companyCode: 1, createdBy: 1, createdAt: -1 });
+taskSchema.index({ companyCode: 1, assignedUsers: 1, updatedAt: -1 });
 taskSchema.index({ 'statusByUser.user': 1, 'statusByUser.status': 1 });
 
  

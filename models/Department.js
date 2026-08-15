@@ -57,6 +57,9 @@ departmentSchema.index({ name: 1, company: 1 }, {
   unique: true,
   partialFilterExpression: { isActive: true }
 });
+departmentSchema.index({ company: 1, isActive: 1, createdAt: -1 });
+departmentSchema.index({ company: 1, branch: 1, isActive: 1 });
+departmentSchema.index({ companyCode: 1, isActive: 1 });
 
 // Older deployments used a global unique `{ name: 1 }` index. MongoDB keeps
 // that index even after the schema changes, which incorrectly blocks the same

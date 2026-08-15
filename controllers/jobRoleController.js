@@ -2,6 +2,10 @@ const JobRole = require("../models/JobRole");
 const User = require("../models/User");
 const Department = require("../models/Department");
 const mongoose = require("mongoose");
+const { getCacheKey, getOrSetCached, invalidateCache } = require("../utils/inMemoryCache");
+
+const JOB_ROLE_CACHE_PREFIX = "jobRoles";
+const JOB_ROLE_SELECT = "name description department company companyCode shiftSettings shifts createdBy createdAt updatedAt isActive";
 
 const errorResponse = (res, status, message) => {
   return res.status(status).json({ success: false, message });
@@ -98,7 +102,7 @@ exports.createJobRole = async (req, res) => {
     void 0;
     
     
-    const user = await User.findById(createdBy);
+    const user = await User.findById(createdBy).select("role jobRole company companyCode").lean();
     if (!user) {
       void 0;
       return errorResponse(res, 400, "User not found");
@@ -189,6 +193,7 @@ exports.createJobRole = async (req, res) => {
 
     void 0;
     void 0;
+    invalidateCache(JOB_ROLE_CACHE_PREFIX);
 
     return res.status(201).json({
       success: true,
@@ -228,7 +233,7 @@ exports.getAllJobRoles = async (req, res) => {
     void 0;
     
     
-    const user = await User.findById(req.user.id);
+    const user = await User.findById(req.user.id).select("role jobRole company companyCode").lean();
     if (!user) {
       void 0;
       return errorResponse(res, 400, "User not found");
@@ -272,11 +277,18 @@ exports.getAllJobRoles = async (req, res) => {
     void 0;
     void 0;
     
-    const jobRoles = await JobRole.find(query)
+    const cacheKey = getCacheKey(JOB_ROLE_CACHE_PREFIX, {
+      company: query.company,
+      department: query.department,
+      role: isSuper ? "super" : "company",
+    });
+    const jobRoles = await getOrSetCached(cacheKey, () => JobRole.find(query)
+      .select(JOB_ROLE_SELECT)
       .populate('createdBy', 'name email')
       .populate('department', 'name')
       .populate('company', 'name')
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean());
 
     void 0;
     void 0;
@@ -312,7 +324,7 @@ exports.updateJobRole = async (req, res) => {
     }
 
     void 0;
-    const user = await User.findById(req.user.id);
+    const user = await User.findById(req.user.id).select("role jobRole company companyCode").lean();
     if (!user) {
       void 0;
       return errorResponse(res, 400, "User not found");
@@ -411,10 +423,12 @@ exports.updateJobRole = async (req, res) => {
     )
     .populate('createdBy', 'name email')
     .populate('department', 'name')
-    .populate('company', 'name');
+    .populate('company', 'name')
+    .lean();
 
     void 0;
     void 0;
+    invalidateCache(JOB_ROLE_CACHE_PREFIX);
 
     return res.status(200).json({
       success: true,
@@ -452,7 +466,7 @@ exports.deleteJobRole = async (req, res) => {
     }
 
     void 0;
-    const user = await User.findById(req.user.id);
+    const user = await User.findById(req.user.id).select("role jobRole company companyCode").lean();
     if (!user) {
       void 0;
       return errorResponse(res, 400, "User not found");
@@ -507,6 +521,7 @@ exports.deleteJobRole = async (req, res) => {
 
     void 0;
     void 0;
+    invalidateCache(JOB_ROLE_CACHE_PREFIX);
 
     return res.status(200).json({
       success: true,
@@ -542,7 +557,7 @@ exports.getJobRolesByDepartment = async (req, res) => {
     }
 
     void 0;
-    const user = await User.findById(req.user.id);
+    const user = await User.findById(req.user.id).select("role jobRole company companyCode").lean();
     if (!user) {
       void 0;
       return errorResponse(res, 400, "User not found");
@@ -554,7 +569,7 @@ exports.getJobRolesByDepartment = async (req, res) => {
     void 0;
     
     
-    const department = await Department.findById(departmentId);
+    const department = await Department.findById(departmentId).select("company").lean();
     if (!department) {
       void 0;
       return errorResponse(res, 404, "Department not found");
@@ -587,9 +602,15 @@ exports.getJobRolesByDepartment = async (req, res) => {
     };
     
     void 0;
-    const jobRoles = await JobRole.find(query)
+    const cacheKey = getCacheKey(JOB_ROLE_CACHE_PREFIX, {
+      department: departmentId,
+      company: query.company || department.company,
+      scope: "department",
+    });
+    const jobRoles = await getOrSetCached(cacheKey, () => JobRole.find(query)
       .select('name description')
-      .sort({ name: 1 });
+      .sort({ name: 1 })
+      .lean());
 
     void 0;
     void 0;
@@ -622,7 +643,7 @@ exports.getJobRolesByDepartmentId = async (req, res) => {
     }
 
     void 0;
-    const user = await User.findById(req.user.id);
+    const user = await User.findById(req.user.id).select("role jobRole company companyCode").lean();
     if (!user) {
       void 0;
       return errorResponse(res, 400, "User not found");
@@ -635,7 +656,7 @@ exports.getJobRolesByDepartmentId = async (req, res) => {
     void 0;
 
     
-    const department = await Department.findById(departmentId);
+    const department = await Department.findById(departmentId).select("company").lean();
     if (!department) {
       void 0;
       return errorResponse(res, 404, "Department not found");
@@ -667,9 +688,15 @@ exports.getJobRolesByDepartmentId = async (req, res) => {
     }
 
     void 0;
-    const jobRoles = await JobRole.find(query)
+    const cacheKey = getCacheKey(JOB_ROLE_CACHE_PREFIX, {
+      department: departmentId,
+      company: query.company || department.company,
+      scope: "department-id",
+    });
+    const jobRoles = await getOrSetCached(cacheKey, () => JobRole.find(query)
       .select('name description')
-      .sort({ name: 1 });
+      .sort({ name: 1 })
+      .lean());
 
     void 0;
     void 0;
