@@ -127,6 +127,40 @@ const getIndiaDayEnd = (value = new Date()) => {
   return indiaDateTimeToUtc(year, monthIndex, day, 23, 59, 59, 999);
 };
 
+const normalizeWorkingDays = value => {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 7) return 5;
+  return parsed;
+};
+
+const getEffectiveWorkingDays = (department, date) => {
+  if (!department) return 5;
+  const targetTime = getIndiaDayStart(date).getTime();
+  const history = Array.isArray(department.workingDayHistory)
+    ? department.workingDayHistory
+        .filter(entry => entry?.effectiveFrom)
+        .sort((a, b) => new Date(a.effectiveFrom) - new Date(b.effectiveFrom))
+    : [];
+
+  let effectiveDays = normalizeWorkingDays(department.workingDays);
+  for (const entry of history) {
+    if (getIndiaDayStart(entry.effectiveFrom).getTime() <= targetTime) {
+      effectiveDays = normalizeWorkingDays(entry.workingDays);
+    } else {
+      break;
+    }
+  }
+
+  return effectiveDays;
+};
+
+const isDepartmentWeekend = (department, date) => {
+  const workingDays = getEffectiveWorkingDays(department, date);
+  const dayOfWeek = new Date(date.getTime() + INDIA_OFFSET_MS).getUTCDay();
+  const mondayBasedDay = dayOfWeek === 0 ? 7 : dayOfWeek;
+  return mondayBasedDay > workingDays;
+};
+
 const getIndiaDayRange = value => ({
   start: getIndiaDayStart(value),
   end: getIndiaDayEnd(value),
@@ -1136,7 +1170,8 @@ const getAttendanceList = async (req, res) => {
     
     
     const targetUser = await User.findById(targetUserId)
-      .select('name email employeeType companyCode company jobRole shiftId shiftName shiftType createdAt');
+      .select('name email employeeType companyCode company jobRole shiftId shiftName shiftType department createdAt')
+      .populate('department', 'workingDays workingDayHistory');
     if (!targetUser || targetUser.companyCode !== userCompanyCode) {
       return res.status(403).json({ 
         message: "Access denied. User belongs to different company." 
@@ -1246,8 +1281,7 @@ const getAttendanceList = async (req, res) => {
         };
       } else {
         
-        const dayOfWeek = new Date(date.getTime() + INDIA_OFFSET_MS).getUTCDay();
-        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+        const isWeekend = isDepartmentWeekend(targetUser.department, date);
         const fallbackSchedule = buildShiftSchedule(date, targetShiftSettings);
         const fallbackShift = buildShiftSnapshot(targetShiftSettings || {}, fallbackSchedule);
         const isLeaveCoveredDay = leaveCoverageDateKeys.has(dateKey);
@@ -1712,7 +1746,7 @@ const getAttendanceByUser = async (req, res) => {
       });
     }
     
-    const user = await User.findById(userId);
+    const user = await User.findById(userId).populate('department', 'workingDays workingDayHistory');
     if (!user) {
       return res.status(404).json({ 
         message: "User not found" 
@@ -1767,11 +1801,10 @@ const getAttendanceByUser = async (req, res) => {
         const savedRecord = recordsByDate.get(dateKey);
         if (savedRecord) return savedRecord;
 
-        const weekDay = new Date(queryYear, queryMonth, day).getDay();
         return {
           _id: `calendar-${dateKey}`,
           date,
-          status: dateKey > todayKey ? 'UPCOMING' : (weekDay === 0 ? 'WEEKEND' : 'NO RECORD'),
+          status: dateKey > todayKey ? 'UPCOMING' : (isDepartmentWeekend(user.department, date) ? 'WEEKEND' : 'NO RECORD'),
           isGenerated: true
         };
       });

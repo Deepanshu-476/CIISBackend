@@ -311,7 +311,10 @@ const getEmployeeDashboardSummary = async (req, res) => {
         .sort({updatedAt: -1, createdAt: -1})
         .limit(8)
         .lean(),
-      User.findById(userId).select("_id name email employeeId jobRole department employeeType shiftId shiftName shiftType").lean(),
+      User.findById(userId)
+        .select("_id name email employeeId jobRole department employeeType shiftId shiftName shiftType")
+        .populate("department", "name workingDays workingDayHistory")
+        .lean(),
       branchId ? Branch.findById(branchId).select("dashboardConfig officeLocation").lean() : null,
     ]);
     const scopedDashboardConfig = branch?.dashboardConfig?.length ? branch.dashboardConfig : (company?.dashboardConfig || []);

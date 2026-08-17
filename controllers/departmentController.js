@@ -4,10 +4,31 @@ const User = require("../models/User");
 const { getCacheKey, getOrSetCached, invalidateCache } = require("../utils/inMemoryCache");
 
 const DEPARTMENT_CACHE_PREFIX = "departments";
-const DEPARTMENT_SELECT = "name description company companyCode branch branchCode supportHead supportHeadName createdBy createdAt updatedAt isActive";
+const DEPARTMENT_SELECT = "name description company companyCode branch branchCode supportHead supportHeadName workingDays workingDayHistory createdBy createdAt updatedAt isActive";
 
 const errorResponse = (res, status, message) => {
   return res.status(status).json({ success: false, message });
+};
+
+const INDIA_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+const getIndiaDayStart = (value = new Date()) => {
+  const date = value instanceof Date ? value : new Date(value);
+  const shifted = new Date(date.getTime() + INDIA_OFFSET_MS);
+  return new Date(Date.UTC(
+    shifted.getUTCFullYear(),
+    shifted.getUTCMonth(),
+    shifted.getUTCDate()
+  ) - INDIA_OFFSET_MS);
+};
+
+const normalizeWorkingDays = (value) => {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 7) {
+    return { error: "Working days must be a whole number between 1 and 7" };
+  }
+  return { value: parsed };
 };
 
 
@@ -43,6 +64,11 @@ exports.createDepartment = async (req, res) => {
     void 0;
     
     const { name, description, branch } = req.body;
+    const workingDaysInput = normalizeWorkingDays(req.body.workingDays);
+    if (workingDaysInput?.error) {
+      return errorResponse(res, 400, workingDaysInput.error);
+    }
+    const workingDays = workingDaysInput?.value || 5;
     const createdBy = req.user ? req.user.id : null;
 
     if (!createdBy) {
@@ -137,6 +163,12 @@ exports.createDepartment = async (req, res) => {
       companyCode,
       branch: branchId,
       branchCode: branchCodeVal,
+      workingDays,
+      workingDayHistory: [{
+        workingDays,
+        effectiveFrom: getIndiaDayStart(new Date()),
+        updatedBy: createdBy
+      }],
       createdBy
     });
 
@@ -332,6 +364,42 @@ exports.updateDepartment = async (req, res) => {
       void 0;
       delete updateData.company;
       delete updateData.companyCode;
+    }
+
+    const workingDaysInput = normalizeWorkingDays(updateData.workingDays);
+    if (workingDaysInput?.error) {
+      return errorResponse(res, 400, workingDaysInput.error);
+    }
+
+    if (workingDaysInput?.value) {
+      const nextWorkingDays = workingDaysInput.value;
+      updateData.workingDays = nextWorkingDays;
+      const effectiveFrom = getIndiaDayStart(new Date());
+      const existingHistory = Array.isArray(department.workingDayHistory)
+        ? department.workingDayHistory.map(entry => ({
+            workingDays: entry.workingDays,
+            effectiveFrom: entry.effectiveFrom,
+            updatedBy: entry.updatedBy
+          }))
+        : [];
+      const sameDayIndex = existingHistory.findIndex(entry => (
+        entry.effectiveFrom &&
+        getIndiaDayStart(entry.effectiveFrom).getTime() === effectiveFrom.getTime()
+      ));
+      const nextEntry = {
+        workingDays: nextWorkingDays,
+        effectiveFrom,
+        updatedBy: req.user.id
+      };
+      if (sameDayIndex >= 0) {
+        existingHistory[sameDayIndex] = nextEntry;
+      } else {
+        existingHistory.push(nextEntry);
+      }
+      updateData.workingDayHistory = existingHistory.sort((a, b) => new Date(a.effectiveFrom) - new Date(b.effectiveFrom));
+    } else {
+      delete updateData.workingDays;
+      delete updateData.workingDayHistory;
     }
 
     
@@ -534,7 +602,7 @@ exports.getDepartmentsByCompany = async (req, res) => {
     });
     const departments = await getOrSetCached(cacheKey, () => Department.find(query)
       .populate('branch', 'name branchCode')
-      .select('name description branch')
+      .select('name description branch workingDays workingDayHistory')
       .sort({ name: 1 })
       .lean());
 

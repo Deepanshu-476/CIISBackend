@@ -47,7 +47,30 @@ const departmentSchema = new mongoose.Schema({
   supportHeadName: {
     type: String,
     trim: true
-  }
+  },
+  workingDays: {
+    type: Number,
+    min: [1, "Working days must be between 1 and 7"],
+    max: [7, "Working days must be between 1 and 7"],
+    default: 5
+  },
+  workingDayHistory: [{
+    workingDays: {
+      type: Number,
+      min: [1, "Working days must be between 1 and 7"],
+      max: [7, "Working days must be between 1 and 7"],
+      required: true
+    },
+    effectiveFrom: {
+      type: Date,
+      required: true,
+      default: Date.now
+    },
+    updatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User"
+    }
+  }]
 }, {
   timestamps: true
 });
