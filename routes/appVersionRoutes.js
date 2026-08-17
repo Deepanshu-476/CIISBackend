@@ -22,14 +22,14 @@ const normalizeBoolean = (value, fallback = false) => {
 
 const getFallbackSettings = () => {
   const iosAppStoreId = process.env.IOS_APP_STORE_ID || '6780872642';
-  const iosLatestVersionName = process.env.IOS_LATEST_VERSION_NAME || '1.1.16';
+  const iosLatestVersionName = process.env.IOS_LATEST_VERSION_NAME || '1.1.17';
   const androidPackageName = process.env.ANDROID_PACKAGE_NAME || 'ciisnetwork.in';
-  const androidLatestVersionName = process.env.ANDROID_LATEST_VERSION_NAME || '1.1.16';
+  const androidLatestVersionName = process.env.ANDROID_LATEST_VERSION_NAME || '1.1.17';
 
   return {
     ios: {
       latestVersionName: iosLatestVersionName,
-      latestVersionCode: parseNumber(process.env.IOS_LATEST_BUILD_NUMBER, 31),
+      latestVersionCode: parseNumber(process.env.IOS_LATEST_BUILD_NUMBER, 32),
       minimumVersionCode: parseNumber(process.env.IOS_MIN_BUILD_NUMBER, 1),
       forceUpdate: process.env.IOS_FORCE_UPDATE === 'true',
       title: process.env.IOS_UPDATE_TITLE || 'New Update Available',
@@ -40,7 +40,7 @@ const getFallbackSettings = () => {
     },
     android: {
       latestVersionName: androidLatestVersionName,
-      latestVersionCode: parseNumber(process.env.ANDROID_LATEST_VERSION_CODE, 27),
+      latestVersionCode: parseNumber(process.env.ANDROID_LATEST_VERSION_CODE, 28),
       minimumVersionCode: parseNumber(process.env.ANDROID_MIN_VERSION_CODE, 1),
       forceUpdate: process.env.ANDROID_FORCE_UPDATE === 'true',
       title: process.env.ANDROID_UPDATE_TITLE || 'New Update Available',
