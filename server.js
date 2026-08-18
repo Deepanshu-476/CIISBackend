@@ -1,7 +1,6 @@
 const express = require("express");
 const dotenv = require("dotenv");
 const cors = require("cors");
-const compression = require("compression");
 const rateLimit = require("express-rate-limit");
 const connectDB = require("./config/db");
 const path = require("path");
@@ -94,50 +93,6 @@ const {sendEmail} = require("./utils/sendEmail");
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const INITIAL_DB_JOB_DELAY_MS = Number(process.env.INITIAL_DB_JOB_DELAY_MS || 60000);
 const runningDbJobs = new Set();
-const INDIA_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-
-const getIndiaDayStart = (value = new Date()) => {
-  const date = value instanceof Date ? value : new Date(value);
-  const shifted = new Date(date.getTime() + INDIA_OFFSET_MS);
-  return new Date(Date.UTC(
-    shifted.getUTCFullYear(),
-    shifted.getUTCMonth(),
-    shifted.getUTCDate()
-  ) - INDIA_OFFSET_MS);
-};
-
-const normalizeWorkingDays = value => {
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 7 ? parsed : 5;
-};
-
-const getEffectiveWorkingDays = (department, date) => {
-  if (!department) return 5;
-  const targetTime = getIndiaDayStart(date).getTime();
-  const history = Array.isArray(department.workingDayHistory)
-    ? department.workingDayHistory
-        .filter(entry => entry?.effectiveFrom)
-        .sort((a, b) => new Date(a.effectiveFrom) - new Date(b.effectiveFrom))
-    : [];
-  let effectiveDays = normalizeWorkingDays(department.workingDays);
-
-  for (const entry of history) {
-    if (getIndiaDayStart(entry.effectiveFrom).getTime() <= targetTime) {
-      effectiveDays = normalizeWorkingDays(entry.workingDays);
-    } else {
-      break;
-    }
-  }
-
-  return effectiveDays;
-};
-
-const isDepartmentWeekend = (department, date) => {
-  const workingDays = getEffectiveWorkingDays(department, date);
-  const dayOfWeek = new Date(date.getTime() + INDIA_OFFSET_MS).getUTCDay();
-  const mondayBasedDay = dayOfWeek === 0 ? 7 : dayOfWeek;
-  return mondayBasedDay > workingDays;
-};
 
 process.on('unhandledRejection', error => {
   console.error('Unhandled promise rejection:', error);
@@ -540,7 +495,7 @@ const markPastAbsentRecords = async () => {
   try {
     void 0;
     
-    const users = await User.find({}).populate('department', 'workingDays workingDayHistory');
+    const users = await User.find({});
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
@@ -568,7 +523,9 @@ const markPastAbsentRecords = async () => {
       while (currentDate < today) {
         const dateStr = currentDate.toISOString();
         
-        const isWeekend = isDepartmentWeekend(user.department, currentDate);
+        
+        const dayOfWeek = currentDate.getDay();
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
         
         
         if (!existingDates.has(dateStr) && !isWeekend) {
@@ -621,7 +578,7 @@ const markDailyAbsent = async () => {
     tomorrow.setDate(tomorrow.getDate() + 1);
     
     
-    const users = await User.find({}).populate('department', 'workingDays workingDayHistory');
+    const users = await User.find({});
     
     for (const user of users) {
       
@@ -632,7 +589,8 @@ const markDailyAbsent = async () => {
       
       
       if (!existingAttendance) {
-        const isWeekend = isDepartmentWeekend(user.department, today);
+        const dayOfWeek = today.getDay();
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
         
         if (!isWeekend) {
           const absentRecord = new Attendance({
@@ -722,13 +680,6 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.use(compression({
-  threshold: 1024,
-  filter: (req, res) => {
-    if (req.headers["x-no-compression"]) return false;
-    return compression.filter(req, res);
-  },
-}));
 
 
 
@@ -736,8 +687,8 @@ const cookieParser = require("cookie-parser");
 app.use(cookieParser());
 
 
-app.use(express.json({ limit: "5mb" }));
-app.use(express.urlencoded({ extended: true, limit: "5mb" }));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 const uploadStaticDirs = [
   path.join(__dirname, "uploads"),
   path.join(__dirname, "HR-CDS", "uploads"),
