@@ -58,6 +58,8 @@ exports.resolveUsersWithPageAccess = async ({companyId, targetPath, excludeUserI
   const company = getId(companyId);
   if (!company || !targetPath) return [];
 
+  const excluded = excludeUserIds.map(getId).filter(Boolean);
+
   const target = getTarget(targetPath);
   const configs = await SidebarConfig.find({
     companyId: company,
@@ -77,7 +79,6 @@ exports.resolveUsersWithPageAccess = async ({companyId, targetPath, excludeUserI
       departmentName: config.departmentId?.name,
     }));
 
-  const excluded = excludeUserIds.map(getId).filter(Boolean);
   const users = await User.find({
     company,
     isActive: true,
