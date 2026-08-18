@@ -1154,8 +1154,9 @@ exports.getLeaveApprovalOptions = async (req, res) => {
     const currentUserId = normalizeId(req.user._id);
     const isOwner = String(req.user.companyRole || '').toLowerCase() === 'owner';
     const hasApprovalSteps = Array.isArray(leave.approvalSteps) && leave.approvalSteps.length > 0;
-    const isConfiguredApprover = hasApprovalSteps && leave.approvalSteps.some(step => normalizeId(step.user) === currentUserId);
-    if (!(isConfiguredApprover || (!hasApprovalSteps && isOwner))) {
+    const isLeaveApprover = hasApprovalSteps && leave.approvalSteps.some(step => normalizeId(step.user) === currentUserId);
+    const pageAccess = await getEmployeeLeavesPageAccess(getUserCompanyId(leave.user), currentUserId);
+    if (!(isLeaveApprover || pageAccess.isApprover || (!hasApprovalSteps && isOwner))) {
       return res.status(403).json({ success: false, error: 'You are not authorized to approve this leave.' });
     }
 
@@ -1236,11 +1237,25 @@ exports.updateLeaveStatus = async (req, res) => {
     const currentUserId = normalizeId(currentUser._id);
     const isOwner = String(currentUser.companyRole || '').toLowerCase() === 'owner';
     const hasApprovalSteps = Array.isArray(leave.approvalSteps) && leave.approvalSteps.length > 0;
-    const approvalStepIndex = hasApprovalSteps
+    let approvalStepIndex = hasApprovalSteps
       ? leave.approvalSteps.findIndex(step => normalizeId(step.user) === currentUserId)
       : -1;
+    const pageAccess = await getEmployeeLeavesPageAccess(getUserCompanyId(leave.user), currentUserId);
 
-    const canUpdateStatus = hasApprovalSteps ? approvalStepIndex !== -1 : isOwner;
+    // Permissions may change after a leave was submitted. Add a newly
+    // configured Page Management approver to the saved workflow on demand.
+    if (hasApprovalSteps && approvalStepIndex === -1 && pageAccess.isApprover) {
+      leave.approvalSteps.push({
+        user: currentUser._id,
+        status: 'Pending',
+        remarks: ''
+      });
+      approvalStepIndex = leave.approvalSteps.length - 1;
+    }
+
+    const canUpdateStatus = hasApprovalSteps
+      ? approvalStepIndex !== -1
+      : (pageAccess.isApprover || isOwner);
 
     if (!canUpdateStatus) {
       void 0;
