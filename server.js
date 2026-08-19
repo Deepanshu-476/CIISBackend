@@ -762,6 +762,8 @@ app.use('/api/page-permissions', require("./routes/pagePermissions.js"));
 app.use('/api/company', require("./routes/companyRoutes.js"));
 app.use('/api/plans', require("./routes/planRoutes.js"));
 app.use('/api/job-roles', require("./routes/jobRoleRoutes.js"));
+app.use('/api/salary-components', require("./routes/salaryComponentRoutes.js"));
+app.use('/api/salary-structures', require("./routes/salaryStructureRoutes.js"));
 app.use('/api/superAdmin', require("./routes/superAdmin.js"));
 app.use("/api/meetings", require("./HR-CDS/routes/meetingRoutes.js"));
 app.use('/api/cmeeting', require("./HR-CDS/routes/clientMeetingRoutes.js"));
