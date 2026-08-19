@@ -101,5 +101,7 @@ const pagePermissionSchema = new mongoose.Schema({
 });
 
 pagePermissionSchema.index({ company: 1, path: 1 }, { unique: true });
+pagePermissionSchema.index({ company: 1, pageKey: 1 });
+pagePermissionSchema.index({ company: 1, updatedAt: -1 });
 
 module.exports = mongoose.model('PagePermission', pagePermissionSchema);

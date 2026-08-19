@@ -23,5 +23,7 @@ const leavePolicySchema = new mongoose.Schema({
 
 leavePolicySchema.index({ company: 1, department: 1, status: 1 });
 leavePolicySchema.index({ company: 1, sortOrder: 1 });
+leavePolicySchema.index({ company: 1, department: 1, sortOrder: 1 });
+leavePolicySchema.index({ company: 1, status: 1, createdAt: -1 });
 
 module.exports = mongoose.model("LeavePolicy", leavePolicySchema);
