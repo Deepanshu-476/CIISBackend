@@ -9,6 +9,6 @@ router.get("/company/:companyId", branchController.getAllBranches);
 router.get("/:id", branchController.getBranchById);
 router.put("/:id", branchController.updateBranch);
 router.delete("/:id", branchController.deleteBranch);  
-
+ 
 module.exports = router;    
   

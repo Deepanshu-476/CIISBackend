@@ -6,6 +6,7 @@ const User = require('../models/User');
 const Branch = require('../models/Branch');
 const Department = require('../models/Department');
 const { protect, isCompanyOwner } = require('../middleware/authMiddleware');
+const { notifyDirectUsers } = require('../HR-CDS/utils/systemNotificationService');
 
 const router = express.Router();
 
@@ -470,6 +471,25 @@ router.put('/:pageKey', isCompanyOwner, async (req, res) => {
       .populate('viewUsers.user', 'name email jobRole companyRole department')
       .populate('editUsers.user', 'name email jobRole companyRole department')
       .populate('deleteUsers.user', 'name email jobRole companyRole department');
+
+    await notifyDirectUsers({
+      userIds: [req.user._id],
+      targetPath: page.path,
+      targetScreen: page.name,
+      type: 'page_updated',
+      title: `${page.name} updated`,
+      message: `Your update to ${page.name} has been saved successfully.`,
+      actor: req.user._id,
+      company: companyId,
+      data: {
+        pageKey: page.pageKey,
+        pageName: page.name,
+        path: page.path,
+        notificationReason: 'page_updated',
+      },
+      priority: 'medium',
+      push: true
+    });
 
     res.json({
       success: true,
