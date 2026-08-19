@@ -14,5 +14,7 @@ const leaveTypeSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 leaveTypeSchema.index({ company: 1, nameKey: 1 }, { unique: true });
+leaveTypeSchema.index({ company: 1, status: 1, sortOrder: 1 });
+leaveTypeSchema.index({ company: 1, createdAt: -1 });
 
 module.exports = mongoose.model("LeaveType", leaveTypeSchema);

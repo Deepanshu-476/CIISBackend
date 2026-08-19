@@ -87,8 +87,10 @@ const getManagedTicketFilter = async (req, baseFilter = {}) => {
 
 const getSupportDepartments = async req => {
   const departments = await Department.find(getDepartmentQuery(req))
+    .select("_id name description company companyCode supportHead supportHeadName branch branchCode isActive")
     .populate("supportHead", "name email jobRole department")
-    .sort({ name: 1 });
+    .sort({ name: 1 })
+    .lean();
 
   return departments.map(department => ({
     id: department._id,
@@ -113,7 +115,8 @@ const getDepartmentEmployees = async (req, department) => {
     department: { $in: departmentTerms },
   })
     .select("name email jobRole companyRole employeeId department")
-    .sort({ name: 1 });
+    .sort({ name: 1 })
+    .lean();
 
   return users.map(user => ({
     id: user._id,
@@ -319,6 +322,7 @@ exports.createTicket = async (req, res) => {
 exports.getMyTickets = async (req, res) => {
   try {
     const { status, category, q } = req.query;
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 100 });
     const filter = {
       ...getCompanyFilter(req),
       requester: req.user._id,
@@ -331,8 +335,16 @@ exports.getMyTickets = async (req, res) => {
       { category: new RegExp(q, "i") },
     ];
 
-    const tickets = await SupportTicket.find(filter).sort({ updatedAt: -1 }).limit(100).lean();
-    res.json({ success: true, tickets: tickets.map(serializeTicket) });
+    const [tickets, total] = await Promise.all([
+      SupportTicket.find(filter)
+        .select("ticketNumber company companyCode requester requesterName requesterEmail departmentId department subject description category source status priority assignedTo assignedToName slaDueAt resolvedAt lastResponseAt satisfactionScore tags messages createdAt updatedAt")
+        .sort({ updatedAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      SupportTicket.countDocuments(filter)
+    ]);
+    res.json({ success: true, tickets: tickets.map(serializeTicket), count: tickets.length, total, pagination: buildPaginationMeta({ page, limit, total }) });
   } catch (error) {
     console.error("Get my support tickets error:", error);
     res.status(500).json({ success: false, message: "Failed to fetch tickets" });
@@ -418,6 +430,7 @@ exports.getAllTickets = async (req, res) => {
 
     const [tickets, total] = await Promise.all([
       SupportTicket.find(filter)
+      .select("ticketNumber company companyCode requester requesterName requesterEmail departmentId department subject description category source status priority assignedTo assignedToName slaDueAt resolvedAt lastResponseAt satisfactionScore tags messages createdAt updatedAt")
       .populate("requester", "name email department")
       .populate("assignedTo", "name email")
       .sort({ updatedAt: -1 })
@@ -533,8 +546,18 @@ exports.getEnquiries = async (req, res) => {
     if (!isSupportAdmin(req.user)) {
       return res.status(403).json({ success: false, message: "Support admin access required" });
     }
-    const enquiries = await SupportEnquiry.find(getCompanyFilter(req)).sort({ createdAt: -1 }).limit(100).lean();
-    res.json({ success: true, enquiries });
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 100 });
+    const filter = getCompanyFilter(req);
+    const [enquiries, total] = await Promise.all([
+      SupportEnquiry.find(filter)
+        .select("company companyCode name email phone subject message source status convertedTicket assignedTo createdAt updatedAt")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      SupportEnquiry.countDocuments(filter)
+    ]);
+    res.json({ success: true, enquiries, count: enquiries.length, total, pagination: buildPaginationMeta({ page, limit, total }) });
   } catch (error) {
     console.error("Get support enquiries error:", error);
     res.status(500).json({ success: false, message: "Failed to fetch enquiries" });
@@ -684,9 +707,19 @@ exports.getChatbotLogs = async (req, res) => {
       return res.status(403).json({ success: false, message: "Support admin access required" });
     }
 
-    const logs = await ChatbotLog.find(getCompanyFilter(req)).sort({ createdAt: -1 }).limit(200).lean();
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 100 });
+    const filter = getCompanyFilter(req);
+    const [logs, total] = await Promise.all([
+      ChatbotLog.find(filter)
+        .select("company companyCode user userName departmentId departmentName question answer intent confidence outcome ticket createdAt updatedAt")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      ChatbotLog.countDocuments(filter)
+    ]);
     const intentStats = await ChatbotLog.aggregate([
-      { $match: getCompanyFilter(req) },
+      { $match: filter },
       {
         $group: {
           _id: "$intent",
@@ -702,6 +735,9 @@ exports.getChatbotLogs = async (req, res) => {
     res.json({
       success: true,
       logs,
+      count: logs.length,
+      total,
+      pagination: buildPaginationMeta({ page, limit, total }),
       intentStats: intentStats.map(item => ({
         intent: item._id,
         count: item.count,
@@ -732,7 +768,8 @@ exports.getAdminDepartments = async (req, res) => {
 
     let departments = await Department.find(getDepartmentQuery(req))
       .populate("supportHead", "name email jobRole")
-      .sort({ name: 1 });
+      .sort({ name: 1 })
+      .lean();
 
     if (!departments.length && access.admin) {
       departments = await getVirtualDepartmentsFromUsers(req);
@@ -788,9 +825,9 @@ exports.getDepartmentEmployees = async (req, res) => {
 
     const department = mongoose.Types.ObjectId.isValid(req.params.id)
       ? await Department.findOne({
-        _id: req.params.id,
-        ...getDepartmentQuery(req),
-      }).populate("supportHead", "name email jobRole")
+          _id: req.params.id,
+          ...getDepartmentQuery(req),
+        }).populate("supportHead", "name email jobRole")
       : { _id: req.params.id, name: req.params.id, virtual: true };
 
     if (!department) {
@@ -913,6 +950,7 @@ exports.getKnowledgeBase = async (req, res) => {
   try {
     await seedDefaultArticles(req);
     const { q, category } = req.query;
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 100 });
     const filter = { ...getCompanyFilter(req), isPublished: true };
     if (category && category !== "All") filter.category = category;
     if (q) filter.$or = [
@@ -921,8 +959,16 @@ exports.getKnowledgeBase = async (req, res) => {
       { tags: new RegExp(q, "i") },
     ];
 
-    const articles = await KnowledgeBaseArticle.find(filter).sort({ views: -1, updatedAt: -1 }).limit(50).lean();
-    res.json({ success: true, articles });
+    const [articles, total] = await Promise.all([
+      KnowledgeBaseArticle.find(filter)
+        .select("company companyCode title category summary content tags views isPublished createdBy createdAt updatedAt")
+        .sort({ views: -1, updatedAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      KnowledgeBaseArticle.countDocuments(filter)
+    ]);
+    res.json({ success: true, articles, count: articles.length, total, pagination: buildPaginationMeta({ page, limit, total }) });
   } catch (error) {
     console.error("Get knowledge base error:", error);
     res.status(500).json({ success: false, message: "Failed to fetch knowledge base" });
@@ -963,8 +1009,16 @@ exports.getEmployeeOverview = async (req, res) => {
     const filter = getCompanyFilter(req);
     const [activeTickets, myTickets, articles, lastLog] = await Promise.all([
       SupportTicket.countDocuments({ ...filter, requester: req.user._id, status: { $nin: ["Resolved", "Closed"] } }),
-      SupportTicket.find({ ...filter, requester: req.user._id }).sort({ updatedAt: -1 }).limit(6).lean(),
-      KnowledgeBaseArticle.find({ ...filter, isPublished: true }).sort({ views: -1 }).limit(4).lean(),
+      SupportTicket.find({ ...filter, requester: req.user._id })
+        .select("ticketNumber company companyCode requester requesterName requesterEmail departmentId department subject description category source status priority assignedTo assignedToName slaDueAt resolvedAt lastResponseAt satisfactionScore tags messages createdAt updatedAt")
+        .sort({ updatedAt: -1 })
+        .limit(6)
+        .lean(),
+      KnowledgeBaseArticle.find({ ...filter, isPublished: true })
+        .select("company companyCode title category summary views isPublished createdBy createdAt updatedAt")
+        .sort({ views: -1 })
+        .limit(4)
+        .lean(),
       ChatbotLog.findOne({ ...filter, user: req.user._id }).sort({ createdAt: -1 }).lean(),
     ]);
 
@@ -1019,7 +1073,12 @@ exports.getAdminDashboard = async (req, res) => {
       SupportTicket.countDocuments({ ...filter, status: "Escalated" }),
       ChatbotLog.countDocuments(companyFilter),
       ChatbotLog.countDocuments({ ...companyFilter, outcome: { $in: ["Resolved", "Article served"] } }),
-      SupportTicket.find(filter).populate("requester", "name email department").sort({ updatedAt: -1 }).limit(10).lean(),
+      SupportTicket.find(filter)
+        .select("ticketNumber company companyCode requester requesterName requesterEmail departmentId department subject description category source status priority assignedTo assignedToName slaDueAt resolvedAt lastResponseAt satisfactionScore tags messages createdAt updatedAt")
+        .populate("requester", "name email department")
+        .sort({ updatedAt: -1 })
+        .limit(10)
+        .lean(),
       SupportTicket.aggregate([
         { $match: filter },
         { $group: { _id: "$category", count: { $sum: 1 } } },

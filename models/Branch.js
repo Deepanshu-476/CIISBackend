@@ -116,5 +116,8 @@ branchSchema.index({ name: 1, company: 1 }, { unique: true });
 
 
 branchSchema.index({ branchCode: 1, company: 1 }, { unique: true });
+branchSchema.index({ company: 1, isActive: 1, createdAt: -1 });
+branchSchema.index({ companyCode: 1, isActive: 1, createdAt: -1 });
+branchSchema.index({ company: 1, isDefault: 1, isActive: 1 });
 
 module.exports = mongoose.model("Branch", branchSchema);

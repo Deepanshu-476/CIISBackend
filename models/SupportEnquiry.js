@@ -53,5 +53,6 @@ const supportEnquirySchema = new mongoose.Schema({
 }, { timestamps: true });
 
 supportEnquirySchema.index({ companyCode: 1, status: 1, createdAt: -1 });
+supportEnquirySchema.index({ companyCode: 1, createdAt: -1 });
 
 module.exports = mongoose.model("SupportEnquiry", supportEnquirySchema);

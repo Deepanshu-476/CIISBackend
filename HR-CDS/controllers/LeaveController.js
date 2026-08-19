@@ -18,6 +18,7 @@ const {
 
 const { emitLeaveEvents } = require('../socket/handlers/leaveHandlers');
 const {notifyPageUsers, notifyDirectUsers} = require('../utils/systemNotificationService');
+const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
 
 const APPROVAL_ROLES = ['manager', 'hr', 'owner'];
 
@@ -596,19 +597,28 @@ exports.getUserLeaves = async (req, res) => {
 
   try {
     const userId = req.user._id;
-    
-    const leaves = await Leave.find({ user: userId })
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 100 });
+    const filter = { user: userId };
+
+    const [leaves, total] = await Promise.all([
+      Leave.find(filter)
       .populate('user', 'name email jobRole department')
       .populate('approvedBy', 'name email jobRole companyRole')
       .populate('approvalSteps.user', 'name email jobRole companyRole')
       .populate('history.by', 'name email')
       .sort({ createdAt: -1 })
-      .lean();
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+      Leave.countDocuments(filter)
+    ]);
 
     res.status(200).json({
       success: true,
       leaves: leaves.map(formatLeaveWithApprovals),
-      total: leaves.length
+      total,
+      count: leaves.length,
+      pagination: buildPaginationMeta({ page, limit, total })
     });
 
   } catch (err) {
@@ -635,7 +645,7 @@ exports.getAllLeaves = async (req, res) => {
       month,
       year,
       page = 1, 
-      limit = 20 
+      limit = 50 
     } = req.query;
 
     
@@ -1727,6 +1737,7 @@ exports.getLeavesWithStatus = async (req, res) => {
   try {
     const userId = req.user._id;
     const { status, type, date, year, month } = req.query;
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 100 });
     
     const filter = { user: userId };
 
@@ -1749,17 +1760,24 @@ exports.getLeavesWithStatus = async (req, res) => {
       filter.startDate = { $gte: startOfDay, $lte: endOfDay };
     }
 
-    const leaves = await Leave.find(filter)
+    const [leaves, total] = await Promise.all([
+      Leave.find(filter)
       .populate('user', 'name email jobRole department')
       .populate('approvalSteps.user', 'name email jobRole companyRole')
       .populate('history.by', 'name email')
       .sort({ startDate: -1 })
-      .lean();
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+      Leave.countDocuments(filter)
+    ]);
 
     res.status(200).json({
       success: true,
       leaves: leaves.map(formatLeaveWithApprovals),
-      total: leaves.length
+      total,
+      count: leaves.length,
+      pagination: buildPaginationMeta({ page, limit, total })
     });
 
   } catch (err) {
@@ -1981,6 +1999,7 @@ exports.getLeavesByDepartment = async (req, res) => {
     const { department } = req.params;
     const { status, type, date } = req.query;
     const userCompanyId = req.user.company || req.user.companyId;
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 100 });
 
     
     const departmentUsers = await User.find({ 
@@ -2028,7 +2047,8 @@ exports.getLeavesByDepartment = async (req, res) => {
       filter.type = type;
     }
 
-    const leaves = await Leave.find(filter)
+    const [leaves, total] = await Promise.all([
+      Leave.find(filter)
       .populate({
         path: 'user',
         select: 'name email department phone',
@@ -2036,7 +2056,11 @@ exports.getLeavesByDepartment = async (req, res) => {
       })
       .populate('approvedBy', 'name email')
       .sort({ createdAt: -1 })
-      .lean();
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+      Leave.countDocuments(filter)
+    ]);
 
     res.status(200).json({
       success: true,
@@ -2044,7 +2068,9 @@ exports.getLeavesByDepartment = async (req, res) => {
         leaves,
         department,
         company: userCompanyId,
-        total: leaves.length
+        total,
+        count: leaves.length,
+        pagination: buildPaginationMeta({ page, limit, total })
       }
     });
 
