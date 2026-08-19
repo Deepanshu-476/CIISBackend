@@ -1242,7 +1242,7 @@ exports.setRegisterRequestStatus = async (req, res) => {
 
 exports.getAllUsers = async (req, res) => {
   try {
-    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 100 });
     
     const userCompany = req.user.company;
     const userDepartment = req.user.department;
@@ -1853,16 +1853,25 @@ exports.getDeletedUsers = async (req, res) => {
     };
     applyBranchAccessFilter(filter, req);
 
-    const users = await User.find(filter)
-      .select('-password -resetToken -resetTokenExpiry')
-      .populate('department', 'name description')
-      .populate('branch', 'name branchCode')
-      .populate('assignedBranches', 'name branchCode')
-      .populate('company', 'name companyCode')
-      .sort({ deletedAt: -1 });
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 100 });
+    const [users, total] = await Promise.all([
+      User.find(filter)
+        .select('-password -resetToken -resetTokenExpiry')
+        .populate('department', 'name description')
+        .populate('branch', 'name branchCode')
+        .populate('assignedBranches', 'name branchCode')
+        .populate('company', 'name companyCode')
+        .sort({ deletedAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      User.countDocuments(filter)
+    ]);
 
     return successResponse(res, 200, {
       count: users.length,
+      total,
+      pagination: buildPaginationMeta({ page, limit, total }),
       users
     });
   } catch (err) {
@@ -1916,14 +1925,21 @@ exports.getCompanydepartmentUsers = async (req, res) => {
       filter.department = currentUser.department;
     }
     
-    const users = await User.find(filter)
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 100 });
+    const [users, total] = await Promise.all([
+      User.find(filter)
       .select('-password -resetToken -resetTokenExpiry')
       .populate('department', 'name description')
       .populate('branch', 'name branchCode')
       .populate('assignedBranches', 'name branchCode')
       .populate('company', 'name companyName companyCode companyEmail companyPhone companyAddress logo')
       .populate('createdBy', 'name email')
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+      User.countDocuments(filter)
+    ]);
     const socketOnlineIds = getSocketOnlineUserIds(companyId);
     
     void 0;
@@ -1935,6 +1951,8 @@ exports.getCompanydepartmentUsers = async (req, res) => {
         name: currentUser.companyName || 'Company'
       },
       count: users.length,
+      total,
+      pagination: buildPaginationMeta({ page, limit, total }),
       users: users.map(user => ({
         id: user._id,
         name: user.name,
@@ -2115,14 +2133,21 @@ exports.getCompanyUsersPaginated = async (req, res) => {
     
     void 0;
     
-    const users = await User.find(filter)
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 100 });
+    const [users, total] = await Promise.all([
+      User.find(filter)
       .select('-password -resetToken -resetTokenExpiry')
       .populate('department', 'name description')
       .populate('branch', 'name branchCode')
       .populate('assignedBranches', 'name branchCode')
       .populate('company', 'name companyCode companyEmail companyPhone companyAddress logo')
       .populate('createdBy', 'name email')
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+      User.countDocuments(filter)
+    ]);
     
     void 0;
     
@@ -2138,6 +2163,8 @@ exports.getCompanyUsersPaginated = async (req, res) => {
         jobRole: currentUser.jobRole
       },
       count: users.length,
+      total,
+      pagination: buildPaginationMeta({ page, limit, total }),
       users: users.map(user => ({
         id: user._id,
         name: user.name,
@@ -2222,16 +2249,25 @@ exports.searchUsers = async (req, res) => {
     if (maritalStatus) filter.maritalStatus = maritalStatus;
     if (isActive !== undefined) filter.isActive = isActive === 'true';
 
-    const users = await User.find(filter)
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 100 });
+    const [users, total] = await Promise.all([
+      User.find(filter)
       .select('-password -resetToken -resetTokenExpiry')
       .populate('department', 'name description')
       .populate('branch', 'name branchCode')
       .populate('assignedBranches', 'name branchCode')
       .populate('company', 'name companyCode')
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+      User.countDocuments(filter)
+    ]);
 
     return successResponse(res, 200, {
       count: users.length,
+      total,
+      pagination: buildPaginationMeta({ page, limit, total }),
       users
     });
   } catch (err) {

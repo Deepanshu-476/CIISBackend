@@ -1,4 +1,4 @@
-const DEFAULT_LIMIT = 20;
+const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
 
 const parsePositiveInt = (value, fallback, max = Number.MAX_SAFE_INTEGER) => {

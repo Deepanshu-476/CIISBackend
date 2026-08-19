@@ -125,5 +125,9 @@ supportTicketSchema.pre("save", async function (next) {
 
 supportTicketSchema.index({ companyCode: 1, status: 1, createdAt: -1 });
 supportTicketSchema.index({ companyCode: 1, requester: 1, createdAt: -1 });
+supportTicketSchema.index({ companyCode: 1, status: 1, updatedAt: -1 });
+supportTicketSchema.index({ companyCode: 1, priority: 1, updatedAt: -1 });
+supportTicketSchema.index({ companyCode: 1, departmentId: 1, status: 1, updatedAt: -1 });
+supportTicketSchema.index({ companyCode: 1, assignedTo: 1, updatedAt: -1 });
 
 module.exports = mongoose.model("SupportTicket", supportTicketSchema);

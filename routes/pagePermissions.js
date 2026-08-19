@@ -7,6 +7,7 @@ const Branch = require('../models/Branch');
 const Department = require('../models/Department');
 const { protect, isCompanyOwner } = require('../middleware/authMiddleware');
 const { notifyDirectUsers } = require('../HR-CDS/utils/systemNotificationService');
+const { getCacheKey, getOrSetCached, invalidateCache } = require('../utils/inMemoryCache');
 
 const router = express.Router();
 
@@ -52,6 +53,9 @@ const APP_PAGES = [
   { pageKey: 'support-operations', name: 'Support Operations', path: '/ciisUser/support-operations', permissionPattern: 'viewEdit' }
 ];
 
+const PAGE_PERMISSION_CACHE_PREFIX = 'pagePermissions';
+const PAGE_PERMISSION_TTL_MS = Number(process.env.PAGE_PERMISSION_CACHE_TTL_MS || 5 * 60 * 1000);
+
 const normalizePath = (path = '') => {
   const clean = String(path || '').trim();
   if (!clean) return '';
@@ -72,7 +76,42 @@ const normalizePageUsers = (items = []) => {
   return uniqueIds.map(id => ({ user: id }));
 };
 
+const normalizeUserAccessScopes = (items = []) => {
+  if (!Array.isArray(items)) return [];
+
+  return items
+    .map(item => {
+      const userId = String(item?.user || item?.userId || '').trim();
+      const accessType = String(item?.accessType || '').trim().toLowerCase();
+      const branchIds = Array.isArray(item?.branchIds)
+        ? [...new Set(item.branchIds.map(id => String(id)).filter(id => mongoose.Types.ObjectId.isValid(id)))]
+        : [];
+      const departmentIds = Array.isArray(item?.departmentIds)
+        ? [...new Set(item.departmentIds.map(id => String(id)).filter(id => mongoose.Types.ObjectId.isValid(id)))]
+        : [];
+
+      if (!mongoose.Types.ObjectId.isValid(userId)) return null;
+      if (!['view', 'edit', 'delete', 'approve'].includes(accessType)) return null;
+
+      return {
+        user: userId,
+        accessType,
+        branchIds,
+        departmentIds
+      };
+    })
+    .filter(Boolean);
+};
+
 const getPageUsers = (config, key) => (config?.[key] || []).map(item => item.user).filter(Boolean);
+
+const getPageUserAccessScopes = (config) => (config?.userAccessScopes || []).map(item => ({
+  user: item.user,
+  accessType: item.accessType,
+  branchIds: item.branchIds || [],
+  departmentIds: item.departmentIds || [],
+  addedAt: item.addedAt || null
+}));
 
 const uniqueUsers = (users = []) => {
   const seen = new Set();
@@ -93,10 +132,12 @@ const getEffectiveViewUsers = (config) => uniqueUsers([
 
 const decoratePages = async (companyId) => {
   const configs = await PagePermission.find({ company: companyId })
+    .select('company companyCode pageKey name path approvers viewUsers editUsers deleteUsers userAccessScopes updatedAt')
     .populate('approvers.user', 'name email jobRole companyRole department')
     .populate('viewUsers.user', 'name email jobRole companyRole department')
     .populate('editUsers.user', 'name email jobRole companyRole department')
     .populate('deleteUsers.user', 'name email jobRole companyRole department')
+    .populate('userAccessScopes.user', 'name email jobRole companyRole department')
     .lean();
   const configMap = new Map(configs.map(config => [config.path, config]));
 
@@ -109,10 +150,63 @@ const decoratePages = async (companyId) => {
       viewUsers: getPageUsers(config, 'viewUsers'),
       editUsers: getPageUsers(config, 'editUsers'),
       deleteUsers: getPageUsers(config, 'deleteUsers'),
+      userAccessScopes: getPageUserAccessScopes(config),
       updatedAt: config?.updatedAt || null
     };
   });
 };
+
+const getDecoratedPagesCached = (companyId) => getOrSetCached(
+  getCacheKey(PAGE_PERMISSION_CACHE_PREFIX, { scope: 'pages', companyId }),
+  () => decoratePages(companyId),
+  PAGE_PERMISSION_TTL_MS
+);
+
+const getVisibilityContextCached = (companyId) => getOrSetCached(
+  getCacheKey(PAGE_PERMISSION_CACHE_PREFIX, { scope: 'visibility-context', companyId }),
+  () => loadVisibilityContext(companyId),
+  PAGE_PERMISSION_TTL_MS
+);
+
+const getEffectiveVisibilityCached = (companyId, userId) => getOrSetCached(
+  getCacheKey(PAGE_PERMISSION_CACHE_PREFIX, { scope: 'effective', companyId, userId }),
+  () => resolveVisibilityForUser(companyId, userId),
+  PAGE_PERMISSION_TTL_MS
+);
+
+const getPageByPathCached = (companyId, path) => getOrSetCached(
+  getCacheKey(PAGE_PERMISSION_CACHE_PREFIX, { scope: 'by-path', companyId, path }),
+  async () => {
+    const config = await PagePermission.findOne({ company: companyId, path })
+      .populate('approvers.user', 'name email jobRole companyRole department')
+      .populate('viewUsers.user', 'name email jobRole companyRole department')
+      .populate('editUsers.user', 'name email jobRole companyRole department')
+      .populate('deleteUsers.user', 'name email jobRole companyRole department')
+      .populate('userAccessScopes.user', 'name email jobRole companyRole department')
+      .lean();
+
+    return config ? {
+      pageKey: config.pageKey,
+      name: config.name,
+      path: config.path,
+      permissionPattern: APP_PAGES.find(item => item.path === config.path)?.permissionPattern || null,
+      approvers: getPageUsers(config, 'approvers'),
+      viewUsers: getEffectiveViewUsers(config),
+      editUsers: getPageUsers(config, 'editUsers'),
+      deleteUsers: getPageUsers(config, 'deleteUsers'),
+      userAccessScopes: getPageUserAccessScopes(config)
+    } : {
+      path,
+      permissionPattern: APP_PAGES.find(item => item.path === path)?.permissionPattern || null,
+      approvers: [],
+      viewUsers: [],
+      editUsers: [],
+      deleteUsers: [],
+      userAccessScopes: []
+    };
+  },
+  PAGE_PERMISSION_TTL_MS
+);
 
 const normalizeVisibilityRule = (rule = {}) => {
   const subjectType = String(rule.subjectType || '').trim().toLowerCase();
@@ -170,6 +264,7 @@ const loadVisibilityContext = async (companyId) => {
       .sort({ name: 1 })
       .lean(),
     PageDataVisibility.find({ company: companyId })
+      .select('_id company companyCode subjectType subjectKey subjectLabel scope branchIds departmentIds updatedBy updatedAt')
       .populate('updatedBy', 'name email')
       .lean()
   ]);
@@ -233,7 +328,7 @@ router.get('/pages', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Company not found for current user' });
     }
 
-    const pages = await decoratePages(companyId);
+    const pages = await getDecoratedPagesCached(companyId);
     res.json({ success: true, pages });
   } catch (error) {
     console.error('Page permissions list error:', error);
@@ -248,7 +343,7 @@ router.get('/data-visibility/context', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Company not found for current user' });
     }
 
-    const context = await loadVisibilityContext(companyId);
+    const context = await getVisibilityContextCached(companyId);
     res.json({ success: true, context });
   } catch (error) {
     console.error('Data visibility context error:', error);
@@ -263,7 +358,7 @@ router.get('/data-visibility', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Company not found for current user' });
     }
 
-    const context = await loadVisibilityContext(companyId);
+    const context = await getVisibilityContextCached(companyId);
     res.json({ success: true, ...context });
   } catch (error) {
     console.error('Data visibility list error:', error);
@@ -283,7 +378,7 @@ router.get('/data-visibility/effective', async (req, res) => {
       return res.status(400).json({ success: false, error: 'User ID is required' });
     }
 
-    const result = await resolveVisibilityForUser(companyId, userId);
+    const result = await getEffectiveVisibilityCached(companyId, userId);
     if (!result) {
       return res.status(404).json({ success: false, error: 'User not found for this company' });
     }
@@ -303,33 +398,8 @@ router.get('/by-path', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Company and path are required' });
     }
 
-    const config = await PagePermission.findOne({ company: companyId, path })
-      .populate('approvers.user', 'name email jobRole companyRole department')
-      .populate('viewUsers.user', 'name email jobRole companyRole department')
-      .populate('editUsers.user', 'name email jobRole companyRole department')
-      .populate('deleteUsers.user', 'name email jobRole companyRole department')
-      .lean();
-
-    res.json({
-      success: true,
-      page: config ? {
-        pageKey: config.pageKey,
-        name: config.name,
-        path: config.path,
-        permissionPattern: APP_PAGES.find(item => item.path === config.path)?.permissionPattern || null,
-        approvers: getPageUsers(config, 'approvers'),
-        viewUsers: getEffectiveViewUsers(config),
-        editUsers: getPageUsers(config, 'editUsers'),
-        deleteUsers: getPageUsers(config, 'deleteUsers')
-      } : {
-        path,
-        permissionPattern: APP_PAGES.find(item => item.path === path)?.permissionPattern || null,
-        approvers: [],
-        viewUsers: [],
-        editUsers: [],
-        deleteUsers: []
-      }
-    });
+    const page = await getPageByPathCached(companyId, path);
+    res.json({ success: true, page });
   } catch (error) {
     console.error('Page permission by path error:', error);
     res.status(500).json({ success: false, error: 'Failed to load page permission' });
@@ -414,6 +484,7 @@ router.put('/data-visibility', isCompanyOwner, async (req, res) => {
       savedRules: savedRules.length,
       ...context
     });
+    invalidateCache(PAGE_PERMISSION_CACHE_PREFIX);
   } catch (error) {
     console.error('Data visibility save error:', error);
     res.status(500).json({ success: false, error: 'Failed to save data visibility rules' });
@@ -432,6 +503,7 @@ router.put('/:pageKey', isCompanyOwner, async (req, res) => {
     const viewUserIds = Array.isArray(req.body.viewUserIds) ? req.body.viewUserIds : [];
     const editUserIds = Array.isArray(req.body.editUserIds) ? req.body.editUserIds : [];
     const deleteUserIds = Array.isArray(req.body.deleteUserIds) ? req.body.deleteUserIds : [];
+    const userAccessScopes = normalizeUserAccessScopes(req.body.userAccessScopes);
     const uniqueApproverIds = [...new Set(approverIds.map(id => String(id)).filter(id => mongoose.Types.ObjectId.isValid(id)))];
     const uniqueViewUserIds = [...new Set(viewUserIds.map(id => String(id)).filter(id => mongoose.Types.ObjectId.isValid(id)))];
     const uniqueEditUserIds = [...new Set(editUserIds.map(id => String(id)).filter(id => mongoose.Types.ObjectId.isValid(id)))];
@@ -451,6 +523,7 @@ router.put('/:pageKey', isCompanyOwner, async (req, res) => {
     const viewUsers = normalizePageUsers(uniqueViewUserIds.filter(id => validIdSet.has(id)));
     const editUsers = normalizePageUsers(uniqueEditUserIds.filter(id => validIdSet.has(id)));
     const deleteUsers = normalizePageUsers(uniqueDeleteUserIds.filter(id => validIdSet.has(id)));
+    const validUserAccessScopes = userAccessScopes.filter(item => validIdSet.has(String(item.user)));
 
     const config = await PagePermission.findOneAndUpdate(
       { company: companyId, path: page.path },
@@ -463,14 +536,16 @@ router.put('/:pageKey', isCompanyOwner, async (req, res) => {
         approvers,
         viewUsers,
         editUsers,
-        deleteUsers
+        deleteUsers,
+        userAccessScopes: validUserAccessScopes
       },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     )
       .populate('approvers.user', 'name email jobRole companyRole department')
       .populate('viewUsers.user', 'name email jobRole companyRole department')
       .populate('editUsers.user', 'name email jobRole companyRole department')
-      .populate('deleteUsers.user', 'name email jobRole companyRole department');
+      .populate('deleteUsers.user', 'name email jobRole companyRole department')
+      .populate('userAccessScopes.user', 'name email jobRole companyRole department');
 
     await notifyDirectUsers({
       userIds: [req.user._id],
@@ -502,9 +577,11 @@ router.put('/:pageKey', isCompanyOwner, async (req, res) => {
         approvers: getPageUsers(config, 'approvers'),
         viewUsers: getPageUsers(config, 'viewUsers'),
         editUsers: getPageUsers(config, 'editUsers'),
-        deleteUsers: getPageUsers(config, 'deleteUsers')
+        deleteUsers: getPageUsers(config, 'deleteUsers'),
+        userAccessScopes: getPageUserAccessScopes(config)
       }
     });
+    invalidateCache(PAGE_PERMISSION_CACHE_PREFIX);
   } catch (error) {
     console.error('Page permissions save error:', error);
     res.status(500).json({ success: false, error: 'Failed to save page approvers' });
