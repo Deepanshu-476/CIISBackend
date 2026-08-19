@@ -71,6 +71,30 @@ const pagePermissionSchema = new mongoose.Schema({
       type: Date,
       default: Date.now
     }
+  }],
+  userAccessScopes: [{
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true
+    },
+    accessType: {
+      type: String,
+      enum: ['view', 'edit', 'delete', 'approve'],
+      required: true
+    },
+    branchIds: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Branch'
+    }],
+    departmentIds: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Department'
+    }],
+    addedAt: {
+      type: Date,
+      default: Date.now
+    }
   }]
 }, {
   timestamps: true

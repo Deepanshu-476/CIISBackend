@@ -72,7 +72,42 @@ const normalizePageUsers = (items = []) => {
   return uniqueIds.map(id => ({ user: id }));
 };
 
+const normalizeUserAccessScopes = (items = []) => {
+  if (!Array.isArray(items)) return [];
+
+  return items
+    .map(item => {
+      const userId = String(item?.user || item?.userId || '').trim();
+      const accessType = String(item?.accessType || '').trim().toLowerCase();
+      const branchIds = Array.isArray(item?.branchIds)
+        ? [...new Set(item.branchIds.map(id => String(id)).filter(id => mongoose.Types.ObjectId.isValid(id)))]
+        : [];
+      const departmentIds = Array.isArray(item?.departmentIds)
+        ? [...new Set(item.departmentIds.map(id => String(id)).filter(id => mongoose.Types.ObjectId.isValid(id)))]
+        : [];
+
+      if (!mongoose.Types.ObjectId.isValid(userId)) return null;
+      if (!['view', 'edit', 'delete', 'approve'].includes(accessType)) return null;
+
+      return {
+        user: userId,
+        accessType,
+        branchIds,
+        departmentIds
+      };
+    })
+    .filter(Boolean);
+};
+
 const getPageUsers = (config, key) => (config?.[key] || []).map(item => item.user).filter(Boolean);
+
+const getPageUserAccessScopes = (config) => (config?.userAccessScopes || []).map(item => ({
+  user: item.user,
+  accessType: item.accessType,
+  branchIds: item.branchIds || [],
+  departmentIds: item.departmentIds || [],
+  addedAt: item.addedAt || null
+}));
 
 const uniqueUsers = (users = []) => {
   const seen = new Set();
@@ -97,6 +132,7 @@ const decoratePages = async (companyId) => {
     .populate('viewUsers.user', 'name email jobRole companyRole department')
     .populate('editUsers.user', 'name email jobRole companyRole department')
     .populate('deleteUsers.user', 'name email jobRole companyRole department')
+    .populate('userAccessScopes.user', 'name email jobRole companyRole department')
     .lean();
   const configMap = new Map(configs.map(config => [config.path, config]));
 
@@ -109,6 +145,7 @@ const decoratePages = async (companyId) => {
       viewUsers: getPageUsers(config, 'viewUsers'),
       editUsers: getPageUsers(config, 'editUsers'),
       deleteUsers: getPageUsers(config, 'deleteUsers'),
+      userAccessScopes: getPageUserAccessScopes(config),
       updatedAt: config?.updatedAt || null
     };
   });
@@ -304,11 +341,12 @@ router.get('/by-path', async (req, res) => {
     }
 
     const config = await PagePermission.findOne({ company: companyId, path })
-      .populate('approvers.user', 'name email jobRole companyRole department')
-      .populate('viewUsers.user', 'name email jobRole companyRole department')
-      .populate('editUsers.user', 'name email jobRole companyRole department')
-      .populate('deleteUsers.user', 'name email jobRole companyRole department')
-      .lean();
+    .populate('approvers.user', 'name email jobRole companyRole department')
+    .populate('viewUsers.user', 'name email jobRole companyRole department')
+    .populate('editUsers.user', 'name email jobRole companyRole department')
+    .populate('deleteUsers.user', 'name email jobRole companyRole department')
+    .populate('userAccessScopes.user', 'name email jobRole companyRole department')
+    .lean();
 
     res.json({
       success: true,
@@ -320,14 +358,16 @@ router.get('/by-path', async (req, res) => {
         approvers: getPageUsers(config, 'approvers'),
         viewUsers: getEffectiveViewUsers(config),
         editUsers: getPageUsers(config, 'editUsers'),
-        deleteUsers: getPageUsers(config, 'deleteUsers')
+        deleteUsers: getPageUsers(config, 'deleteUsers'),
+        userAccessScopes: getPageUserAccessScopes(config)
       } : {
         path,
         permissionPattern: APP_PAGES.find(item => item.path === path)?.permissionPattern || null,
         approvers: [],
         viewUsers: [],
         editUsers: [],
-        deleteUsers: []
+        deleteUsers: [],
+        userAccessScopes: []
       }
     });
   } catch (error) {
@@ -432,6 +472,7 @@ router.put('/:pageKey', isCompanyOwner, async (req, res) => {
     const viewUserIds = Array.isArray(req.body.viewUserIds) ? req.body.viewUserIds : [];
     const editUserIds = Array.isArray(req.body.editUserIds) ? req.body.editUserIds : [];
     const deleteUserIds = Array.isArray(req.body.deleteUserIds) ? req.body.deleteUserIds : [];
+    const userAccessScopes = normalizeUserAccessScopes(req.body.userAccessScopes);
     const uniqueApproverIds = [...new Set(approverIds.map(id => String(id)).filter(id => mongoose.Types.ObjectId.isValid(id)))];
     const uniqueViewUserIds = [...new Set(viewUserIds.map(id => String(id)).filter(id => mongoose.Types.ObjectId.isValid(id)))];
     const uniqueEditUserIds = [...new Set(editUserIds.map(id => String(id)).filter(id => mongoose.Types.ObjectId.isValid(id)))];
@@ -451,6 +492,7 @@ router.put('/:pageKey', isCompanyOwner, async (req, res) => {
     const viewUsers = normalizePageUsers(uniqueViewUserIds.filter(id => validIdSet.has(id)));
     const editUsers = normalizePageUsers(uniqueEditUserIds.filter(id => validIdSet.has(id)));
     const deleteUsers = normalizePageUsers(uniqueDeleteUserIds.filter(id => validIdSet.has(id)));
+    const validUserAccessScopes = userAccessScopes.filter(item => validIdSet.has(String(item.user)));
 
     const config = await PagePermission.findOneAndUpdate(
       { company: companyId, path: page.path },
@@ -463,14 +505,16 @@ router.put('/:pageKey', isCompanyOwner, async (req, res) => {
         approvers,
         viewUsers,
         editUsers,
-        deleteUsers
+        deleteUsers,
+        userAccessScopes: validUserAccessScopes
       },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     )
       .populate('approvers.user', 'name email jobRole companyRole department')
       .populate('viewUsers.user', 'name email jobRole companyRole department')
       .populate('editUsers.user', 'name email jobRole companyRole department')
-      .populate('deleteUsers.user', 'name email jobRole companyRole department');
+      .populate('deleteUsers.user', 'name email jobRole companyRole department')
+      .populate('userAccessScopes.user', 'name email jobRole companyRole department');
 
     await notifyDirectUsers({
       userIds: [req.user._id],
@@ -502,7 +546,8 @@ router.put('/:pageKey', isCompanyOwner, async (req, res) => {
         approvers: getPageUsers(config, 'approvers'),
         viewUsers: getPageUsers(config, 'viewUsers'),
         editUsers: getPageUsers(config, 'editUsers'),
-        deleteUsers: getPageUsers(config, 'deleteUsers')
+        deleteUsers: getPageUsers(config, 'deleteUsers'),
+        userAccessScopes: getPageUserAccessScopes(config)
       }
     });
   } catch (error) {
