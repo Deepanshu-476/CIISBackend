@@ -15,7 +15,9 @@ const validate = async (p, company) => {
   if (!p.components.length) return "Add at least one salary component.";
   const ids = p.components.map(row => String(row.component || ""));
   if (ids.some(id => !mongoose.isValidObjectId(id)) || new Set(ids).size !== ids.length) return "Salary components must be valid and unique.";
-  if (p.components.some(row => !["manual", "percentage", "formula"].includes(row.calculationType) || row.sortOrder < 1 || row.value < 0 || (row.calculationType === "formula" && !row.formula))) return "Invalid component calculation settings.";
+  if (p.components.some(row => !["manual", "percentage", "formula"].includes(row.calculationType) || row.sortOrder < 1 || row.value < 0)) return "Invalid component calculation settings.";
+  if (p.components.some(row => row.calculationType === "percentage" && (!row.calculationBase || row.value > 100))) return "Percentage components require a calculation base and a value between 0 and 100.";
+  if (p.components.some(row => row.calculationType === "formula" && !row.formula)) return "Formula is required for formula-based components.";
   return await SalaryComponent.countDocuments({ _id: { $in: ids }, company }) === ids.length ? null : "One or more salary components do not belong to this company.";
 };
 const populate = query => query.populate("components.component", "name code type status");
