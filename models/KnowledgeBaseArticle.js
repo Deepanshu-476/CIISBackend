@@ -40,5 +40,7 @@ const knowledgeBaseArticleSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 knowledgeBaseArticleSchema.index({ companyCode: 1, isPublished: 1, views: -1 });
+knowledgeBaseArticleSchema.index({ companyCode: 1, isPublished: 1, updatedAt: -1 });
+knowledgeBaseArticleSchema.index({ companyCode: 1, category: 1, isPublished: 1 });
 
 module.exports = mongoose.model("KnowledgeBaseArticle", knowledgeBaseArticleSchema);

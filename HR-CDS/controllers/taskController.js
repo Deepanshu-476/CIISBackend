@@ -16,6 +16,7 @@ const path = require('path');
 const sharp = require('sharp');
 const { notifyDirectUsers, notifyPageUsers } = require('../utils/systemNotificationService');
 const { enqueueCompletionJob } = require('../utils/backgroundJobQueue');
+const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
 
  
 
@@ -447,7 +448,7 @@ const getUserWorkWindow = async (userId, query) => {
       { createdAt: { $gte: searchStart, $lte: searchEnd } },
       { updatedAt: { $gte: searchStart, $lte: searchEnd } }
     ]
-  }).sort({ updatedAt: -1, inTime: -1, date: -1 }).lean();
+  }).select('date inTime outTime isClockedIn createdAt updatedAt').sort({ updatedAt: -1, inTime: -1, date: -1 }).lean();
 
   let attendance = pickBestAttendanceRecord(attendanceCandidates, requestedDateKey);
 
@@ -476,7 +477,7 @@ const getUserWorkWindow = async (userId, query) => {
           }
         }
       ]
-    }).sort({ updatedAt: -1, inTime: -1, date: -1 }).lean();
+    }).select('date inTime outTime isClockedIn createdAt updatedAt').sort({ updatedAt: -1, inTime: -1, date: -1 }).lean();
 
     attendance = pickBestAttendanceRecord(nearbyAttendance, requestedDateKey);
   }
@@ -1643,8 +1644,18 @@ exports.markAllNotificationsAsRead = async (req, res) => {
 
 exports.getTaskActivityLogs = async (req, res) => {
   try {
-    const logs = await ActivityLog.find({ task: req.params.taskId }).populate('user', 'name role email').sort({ createdAt: -1 }).lean();
-    res.json({ success: true, logs });
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 100 });
+    const filter = { task: req.params.taskId };
+    const [logs, total] = await Promise.all([
+      ActivityLog.find(filter)
+        .populate('user', 'name role email')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      ActivityLog.countDocuments(filter)
+    ]);
+    res.json({ success: true, logs, count: logs.length, total, pagination: buildPaginationMeta({ page, limit, total }) });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -1652,8 +1663,19 @@ exports.getTaskActivityLogs = async (req, res) => {
 
 exports.getUserActivityTimeline = async (req, res) => {
   try {
-    const logs = await ActivityLog.find({ user: req.params.userId }).populate('task', 'title').populate('user', 'name role email').sort({ createdAt: -1 }).lean();
-    res.json({ success: true, logs });
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 100 });
+    const filter = { user: req.params.userId };
+    const [logs, total] = await Promise.all([
+      ActivityLog.find(filter)
+        .populate('task', 'title')
+        .populate('user', 'name role email')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      ActivityLog.countDocuments(filter)
+    ]);
+    res.json({ success: true, logs, count: logs.length, total, pagination: buildPaginationMeta({ page, limit, total }) });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

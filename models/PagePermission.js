@@ -71,11 +71,37 @@ const pagePermissionSchema = new mongoose.Schema({
       type: Date,
       default: Date.now
     }
+  }],
+  userAccessScopes: [{
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true
+    },
+    accessType: {
+      type: String,
+      enum: ['view', 'edit', 'delete', 'approve'],
+      required: true
+    },
+    branchIds: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Branch'
+    }],
+    departmentIds: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Department'
+    }],
+    addedAt: {
+      type: Date,
+      default: Date.now
+    }
   }]
 }, {
   timestamps: true
 });
 
 pagePermissionSchema.index({ company: 1, path: 1 }, { unique: true });
+pagePermissionSchema.index({ company: 1, pageKey: 1 });
+pagePermissionSchema.index({ company: 1, updatedAt: -1 });
 
 module.exports = mongoose.model('PagePermission', pagePermissionSchema);

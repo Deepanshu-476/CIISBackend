@@ -54,5 +54,7 @@ const chatbotLogSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 chatbotLogSchema.index({ companyCode: 1, intent: 1, createdAt: -1 });
+chatbotLogSchema.index({ companyCode: 1, createdAt: -1 });
+chatbotLogSchema.index({ companyCode: 1, user: 1, createdAt: -1 });
 
 module.exports = mongoose.model("ChatbotLog", chatbotLogSchema);

@@ -55,5 +55,6 @@ pageDataVisibilitySchema.index(
   { company: 1, subjectType: 1, subjectKey: 1 },
   { unique: true }
 );
+pageDataVisibilitySchema.index({ company: 1, updatedAt: -1 });
 
 module.exports = mongoose.model('PageDataVisibility', pageDataVisibilitySchema);
