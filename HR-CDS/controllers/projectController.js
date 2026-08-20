@@ -555,6 +555,44 @@ exports.listProjects = async (req, res) => {
 
     const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
     const summaryMode = ["1", "true", "yes"].includes(String(req.query.summary || "").toLowerCase());
+
+    if (summaryMode) {
+      const summaryProjects = await Project.aggregate([
+        { $match: query },
+        { $sort: { createdAt: -1 } },
+        { $skip: skip },
+        { $limit: limit },
+        {
+          $project: {
+            projectName: 1,
+            description: 1,
+            company: 1,
+            companyCode: 1,
+            branch: 1,
+            status: 1,
+            startDate: 1,
+            endDate: 1,
+            priority: 1,
+            pdfFile: 1,
+            createdBy: 1,
+            createdAt: 1,
+            updatedAt: 1,
+            taskCount: { $size: { $ifNull: ["$tasks", []] } },
+            userCount: { $size: { $ifNull: ["$users", []] } }
+          }
+        }
+      ]);
+      const total = await Project.countDocuments(query);
+
+      return res.status(200).json({
+        success: true,
+        count: summaryProjects.length,
+        total,
+        pagination: buildPaginationMeta({ page, limit, total }),
+        items: summaryProjects
+      });
+    }
+
     const projectQuery = Project.find(query)
       .populate('users', 'name email role company companyCode branch assignedBranches')
       .populate('branch', 'name branchCode')
@@ -563,14 +601,10 @@ exports.listProjects = async (req, res) => {
       .skip(skip)
       .limit(limit);
 
-    if (summaryMode) {
-      projectQuery.select('projectName description company companyCode branch users status startDate endDate priority pdfFile createdBy createdAt updatedAt');
-    } else {
-      projectQuery
-        .populate('tasks.assignedTo', 'name email')
-        .populate('tasks.assignedUsers', 'name email')
-        .populate('tasks.createdBy', 'name email');
-    }
+    projectQuery
+      .populate('tasks.assignedTo', 'name email')
+      .populate('tasks.assignedUsers', 'name email')
+      .populate('tasks.createdBy', 'name email');
 
     const [projects, total] = await Promise.all([
       projectQuery.lean(),
