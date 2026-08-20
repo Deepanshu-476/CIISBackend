@@ -1,4 +1,8 @@
 const mongoose = require("mongoose");
+const {
+  normalizeRepeatPattern,
+  normalizeRepeatDays,
+} = require("../utils/taskRecurrence");
 
  
 const SYSTEM_USER_ID = new mongoose.Types.ObjectId("000000000000000000000001");
@@ -128,6 +132,7 @@ const taskSchema = new mongoose.Schema(
   {
     title: { type: String, required: true, trim: true },
     description: String,
+    startDateTime: Date,
     dueDateTime: Date,
     whatsappNumber: String,
     priorityDays: String,
@@ -214,8 +219,26 @@ const taskSchema = new mongoose.Schema(
     },
 
     isRecurring: { type: Boolean, default: false },
+    repeatPattern: {
+      type: String,
+      enum: ["none", "daily"],
+      default: "none",
+    },
+    repeatDays: {
+      type: [String],
+      default: [],
+    },
     recurringPattern: String,
     nextRecurringDate: Date,
+    recurrenceSourceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Task",
+      default: null,
+    },
+    recurrenceOccurrenceKey: {
+      type: String,
+      default: null,
+    },
 
     markedOverdueAt: Date,
     overdueReason: String,
@@ -242,6 +265,10 @@ taskSchema.index({ companyCode: 1, createdBy: 1, createdAt: -1 });
 taskSchema.index({ companyCode: 1, assignedUsers: 1, updatedAt: -1 });
 taskSchema.index({ companyCode: 1, taskFor: 1, isActive: 1, createdAt: -1 });
 taskSchema.index({ 'statusByUser.user': 1, 'statusByUser.status': 1 });
+taskSchema.index(
+  { recurrenceSourceId: 1, recurrenceOccurrenceKey: 1 },
+  { unique: true, sparse: true }
+);
 
  
 taskSchema.virtual('isPastDue').get(function() {
@@ -509,6 +536,12 @@ taskSchema.statics.getTaskWithUserStatus = async function (taskId, userId) {
 
  
 taskSchema.pre("save", function (next) {
+  const normalizedRepeatPattern = normalizeRepeatPattern(this.repeatPattern || this.recurringPattern);
+  const normalizedRepeatDays = normalizeRepeatDays(this.repeatDays);
+  this.repeatPattern = normalizedRepeatPattern;
+  this.recurringPattern = normalizedRepeatPattern;
+  this.repeatDays = normalizedRepeatDays;
+  this.isRecurring = Boolean(this.isRecurring || normalizedRepeatPattern !== 'none');
   
   if (this.dueDateTime) {
     const now = new Date();
