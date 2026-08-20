@@ -396,35 +396,60 @@ const getTaskStatusEvents = task => {
   return [];
 };
 
-const calculateTaskWork = (task, workWindow) => {
-  if (!workWindow?.start || !workWindow?.end) return { seconds: 0, intervals: [] };
+const parseDurationStringToSeconds = (str) => {
+  if (!str || typeof str !== 'string') return 0;
+  const parts = str.split(':').map(Number);
+  if (parts.length === 3 && parts.every(Number.isFinite)) {
+    return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  }
+  if (parts.length === 2 && parts.every(Number.isFinite)) {
+    return parts[0] * 3600 + parts[1] * 60;
+  }
+  return 0;
+};
+
+const calculateTaskWork = (task, workWindow, fallbackRange) => {
+  const windowStart = workWindow?.start || fallbackRange?.start;
+  const windowEnd = workWindow?.end || fallbackRange?.end || new Date();
+
+  if (!windowStart || !windowEnd) {
+    if (task.timeSpent > 0) return { seconds: task.timeSpent, intervals: [] };
+    return { seconds: 0, intervals: [] };
+  }
 
   const sessions = buildProgressSessions(
     getTaskStatusEvents(task),
     task.userStatus || task.status || task.overallStatus,
-    workWindow.end
+    windowEnd
   );
 
   let intervals = sessions
     .map(session => getClippedInterval(
       session.start,
       session.end,
-      workWindow.start,
-      workWindow.end
+      windowStart,
+      windowEnd
     ))
     .filter(Boolean);
   let total = getMergedIntervalSeconds(intervals);
 
-  if (total === 0 && task.taskSource === 'client') {
-    const activeInterval = normalizeTaskStatus(task.status) === 'in-progress' && task.inProgressSince
-      ? getClippedInterval(task.inProgressSince, workWindow.end, workWindow.start, workWindow.end)
-      : null;
-    const activeSeconds = activeInterval ? getOverlapSeconds(activeInterval.start, activeInterval.end, workWindow.start, workWindow.end) : 0;
-    // timeSpent is cumulative across the task's full lifetime and cannot be
-    // attributed to the selected report date. Only count today's clipped
-    // active interval here.
-    total = activeSeconds;
-    intervals = activeInterval ? [activeInterval] : [];
+  if (total === 0) {
+    if (task.taskSource === 'client') {
+      const activeInterval = normalizeTaskStatus(task.status) === 'in-progress' && task.inProgressSince
+        ? getClippedInterval(task.inProgressSince, windowEnd, windowStart, windowEnd)
+        : null;
+      const activeSeconds = activeInterval ? getOverlapSeconds(activeInterval.start, activeInterval.end, windowStart, windowEnd) : 0;
+      total = activeSeconds > 0 ? activeSeconds : (task.timeSpent || 0);
+      intervals = activeInterval ? [activeInterval] : [];
+    } else if (normalizeTaskStatus(task.status || task.userStatus) === 'in-progress' && (task.updatedAt || task.createdAt)) {
+      const startCandidate = task.inProgressSince || task.updatedAt || task.createdAt;
+      const activeInterval = getClippedInterval(startCandidate, windowEnd, windowStart, windowEnd);
+      const activeSeconds = activeInterval ? getOverlapSeconds(activeInterval.start, activeInterval.end, windowStart, windowEnd) : 0;
+      if (activeSeconds > 0) {
+        total = activeSeconds;
+        intervals = activeInterval ? [activeInterval] : [];
+      }
+    }
   }
 
   return { seconds: Math.max(0, total), intervals };
@@ -439,8 +464,12 @@ const getUserWorkWindow = async (userId, query) => {
   const searchStart = new Date((range.start || new Date()).getTime() - DAY_MS);
   const searchEnd = new Date((range.end || new Date()).getTime() + DAY_MS);
 
+  const userQuery = mongoose.Types.ObjectId.isValid(userId)
+    ? { $in: [userId, new mongoose.Types.ObjectId(userId)] }
+    : userId;
+
   const attendanceCandidates = await Attendance.find({
-    user: userId,
+    user: userQuery,
     $or: [
       { date: { $gte: searchStart, $lte: searchEnd } },
       { inTime: { $gte: searchStart, $lte: searchEnd } },
@@ -448,7 +477,7 @@ const getUserWorkWindow = async (userId, query) => {
       { createdAt: { $gte: searchStart, $lte: searchEnd } },
       { updatedAt: { $gte: searchStart, $lte: searchEnd } }
     ]
-  }).select('date inTime outTime isClockedIn createdAt updatedAt').sort({ updatedAt: -1, inTime: -1, date: -1 }).lean();
+  }).select('date inTime outTime isClockedIn status totalTime lateBy earlyLeave createdAt updatedAt companyCode').sort({ updatedAt: -1, inTime: -1, date: -1 }).lean();
 
   let attendance = pickBestAttendanceRecord(attendanceCandidates, requestedDateKey);
 
@@ -456,7 +485,7 @@ const getUserWorkWindow = async (userId, query) => {
   // back to the nearest clock-in and validate its calendar day in IST.
   if (!attendance && query?.fromDate) {
     const nearbyAttendance = await Attendance.find({
-      user: userId,
+      user: userQuery,
       $or: [
         {
           inTime: {
@@ -477,29 +506,38 @@ const getUserWorkWindow = async (userId, query) => {
           }
         }
       ]
-    }).select('date inTime outTime isClockedIn createdAt updatedAt').sort({ updatedAt: -1, inTime: -1, date: -1 }).lean();
+    }).select('date inTime outTime isClockedIn status totalTime lateBy earlyLeave createdAt updatedAt companyCode').sort({ updatedAt: -1, inTime: -1, date: -1 }).lean();
 
     attendance = pickBestAttendanceRecord(nearbyAttendance, requestedDateKey);
+  }
+
+  // If still not found and requested date is today, check if there is an active clocked-in record
+  if (!attendance && requestedDateKey === getIndiaWorkDateKey(new Date())) {
+    attendance = await Attendance.findOne({
+      user: userQuery,
+      isClockedIn: true
+    }).select('date inTime outTime isClockedIn status totalTime lateBy earlyLeave createdAt updatedAt companyCode').sort({ updatedAt: -1 }).lean();
   }
 
   const clockIn = toValidWorkDate(attendance?.inTime);
   const rawClockOut = toValidWorkDate(attendance?.outTime);
   const clockOut = rawClockOut || (attendance?.isClockedIn ? new Date() : null);
-  // Without a real clock-in there is no employee work window. Using the full
-  // calendar day here incorrectly turns task status elapsed time into tracked
-  // work time.
   const start = clockIn;
   const rawWorkEnd = clockOut || range.end;
   const end = clockIn
     ? new Date(Math.min(rawWorkEnd.getTime(), range.end.getTime()))
     : null;
-  const totalSeconds = clockIn && end ? Math.max(0, Math.floor((end - clockIn) / 1000)) : 0;
+  let totalSeconds = clockIn && end ? Math.max(0, Math.floor((end - clockIn) / 1000)) : 0;
+  if (totalSeconds === 0 && attendance?.totalTime) {
+    totalSeconds = parseDurationStringToSeconds(attendance.totalTime);
+  }
 
   return {
     start,
     end,
     attendance,
     summary: {
+      hasAttendance: Boolean(attendance),
       clockIn,
       clockOut: rawClockOut,
       isClockedIn: Boolean(attendance?.isClockedIn),
@@ -2196,11 +2234,17 @@ exports.getUserAllTasksPaginated = async (req, res) => {
     const page = parsePositiveInt(req.query.page, 1);
     const limit = parsePositiveInt(req.query.limit, 10, 50);
 
-    const allTasks = await queryAllUserTasks(userId, req.user.companyCode, req.query);
-    const filtered = filterUserTasks(allTasks, req.query);
+    const [targetUser, allTasks] = await Promise.all([
+      User.findById(userId).select('name email role jobRole companyRole department company').populate('department', 'name').lean(),
+      queryAllUserTasks(userId, req.user.companyCode, req.query)
+    ]);
+
+    const taskRange = getTaskReportDateRange(req.query);
+    const range = getAttendanceReportDateRange(req.query, taskRange);
     const workWindow = await getUserWorkWindow(userId, req.query);
-    const filteredWithWorkTime = filtered.map(task => {
-      const work = calculateTaskWork(task, workWindow);
+
+    const allTasksWithWorkTime = allTasks.map(task => {
+      const work = calculateTaskWork(task, workWindow, range);
       return {
         ...task,
         workTime: {
@@ -2211,20 +2255,16 @@ exports.getUserAllTasksPaginated = async (req, res) => {
       };
     });
 
-    
-    
-    const sortedFiltered = sortTasksNewestFirst(filteredWithWorkTime);
+    const allIntervals = allTasksWithWorkTime.flatMap(task => task.__workIntervals || []);
+    let dayTrackedTaskSeconds = getMergedIntervalSeconds(allIntervals);
+    if (dayTrackedTaskSeconds === 0) {
+      dayTrackedTaskSeconds = allTasksWithWorkTime.reduce((sum, task) => sum + (task.workTime?.seconds || 0), 0);
+    }
+    const totalClockedSeconds = workWindow.summary.totalClockedSeconds || 0;
+    const untrackedSeconds = Math.max(0, totalClockedSeconds - dayTrackedTaskSeconds);
 
-    
-    const total = sortedFiltered.length;
-    const pages = Math.max(1, Math.ceil(total / limit));
-    const safePage = Math.min(page, pages);
-    const start = (safePage - 1) * limit;
-    const tasks = sortedFiltered.slice(start, start + limit);
-
-    
     const counts = {
-      total: total,
+      total: allTasksWithWorkTime.length,
       pending: 0,
       'in-progress': 0,
       completed: 0,
@@ -2232,7 +2272,7 @@ exports.getUserAllTasksPaginated = async (req, res) => {
       onhold: 0
     };
 
-    filteredWithWorkTime.forEach(task => {
+    allTasksWithWorkTime.forEach(task => {
       const status = task.status;
       if (counts[status] !== undefined) {
         counts[status] += 1;
@@ -2243,31 +2283,43 @@ exports.getUserAllTasksPaginated = async (req, res) => {
 
     const toStat = (count) => ({
       count,
-      percentage: total > 0 ? Math.round((count / total) * 100) : 0
+      percentage: counts.total > 0 ? Math.round((count / counts.total) * 100) : 0
     });
 
     const calculatedStats = {
-      total: total,
+      total: counts.total,
       pending: toStat(counts.pending),
       inProgress: toStat(counts['in-progress']),
       completed: toStat(counts.completed),
       overdue: toStat(counts.overdue),
       onhold: toStat(counts.onhold)
     };
-    const trackedTaskSeconds = getMergedIntervalSeconds(
-      filteredWithWorkTime.flatMap(task => task.__workIntervals || [])
-    );
-    const untrackedSeconds = Math.max(0, (workWindow.summary.totalClockedSeconds || 0) - trackedTaskSeconds);
-    const cleanTasks = tasks.map(({ __workIntervals, ...task }) => task);
+
+    const filtered = filterUserTasks(allTasksWithWorkTime, req.query);
+    const sortedFiltered = sortTasksNewestFirst(filtered);
+
+    const total = sortedFiltered.length;
+    const pages = Math.max(1, Math.ceil(total / limit));
+    const safePage = Math.min(page, pages);
+    const start = (safePage - 1) * limit;
+    const paginatedTasks = sortedFiltered.slice(start, start + limit);
+    const cleanTasks = paginatedTasks.map(({ __workIntervals, ...task }) => task);
 
     res.json({
       success: true,
       userId,
+      user: targetUser ? {
+        _id: targetUser._id,
+        name: targetUser.name,
+        email: targetUser.email,
+        role: targetUser.jobRole || targetUser.companyRole || targetUser.role,
+        department: targetUser.department
+      } : null,
       tasks: cleanTasks,
       workSummary: {
         ...workWindow.summary,
-        trackedTaskSeconds,
-        trackedTaskLabel: secondsToDurationLabel(trackedTaskSeconds),
+        trackedTaskSeconds: dayTrackedTaskSeconds,
+        trackedTaskLabel: secondsToDurationLabel(dayTrackedTaskSeconds),
         untrackedSeconds,
         untrackedLabel: secondsToDurationLabel(untrackedSeconds)
       },
