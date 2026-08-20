@@ -24,6 +24,38 @@ const {
   sharp
 } = require('./taskHelper');
 const { enqueueCompletionJob } = require('../utils/backgroundJobQueue');
+const {
+  normalizeTaskRecurrenceFields,
+  getNextRecurringDate,
+} = require('../utils/taskRecurrence');
+const {
+  resolveShiftScheduleForUser,
+} = require('../utils/shiftSchedule');
+
+const parseRecurringSettingsFromBody = (body = {}) => {
+  const normalized = normalizeTaskRecurrenceFields(body);
+  return {
+    repeatPattern: normalized.repeatPattern,
+    repeatDays: normalized.repeatDays,
+    isRecurring: normalized.repeatPattern !== 'none' && normalized.isRecurring,
+  };
+};
+
+const applyRecurringFields = (task, body = {}, dueDateTime = null) => {
+  const recurring = parseRecurringSettingsFromBody(body);
+  task.repeatPattern = recurring.repeatPattern;
+  task.repeatDays = recurring.repeatDays;
+  task.recurringPattern = recurring.repeatPattern;
+  task.isRecurring = recurring.isRecurring;
+  task.nextRecurringDate = recurring.isRecurring && dueDateTime
+    ? getNextRecurringDate(dueDateTime, recurring.repeatPattern, recurring.repeatDays)
+    : null;
+  if (!task.isRecurring) {
+    task.recurrenceSourceId = null;
+    task.recurrenceOccurrenceKey = null;
+  }
+  return task;
+};
 
 
 const fetchPersonalTaskList = async (req) => {
@@ -105,11 +137,28 @@ exports.createTaskForSelf = async (req, res) => {
 
     const statusByUser = parsedUsers.map(uid => ({ user: uid, status: 'pending' }));
     const parsedCheckpoints = parseTaskCheckpoints(checkpoints);
+    const recurringSettings = parseRecurringSettingsFromBody(req.body);
+    let taskStartDateTime = null;
+    let taskDueDateTime = parsedDue;
+
+    if (recurringSettings.isRecurring) {
+      const shiftContext = await resolveShiftScheduleForUser(req.user, parsedDue || new Date());
+      if (!shiftContext?.schedule?.shiftStart || !shiftContext?.schedule?.shiftEnd) {
+        return res.status(400).json({
+          success: false,
+          error: 'Shift settings not found for this user. Recurring tasks need a valid shift.'
+        });
+      }
+
+      taskStartDateTime = shiftContext.schedule.shiftStart;
+      taskDueDateTime = shiftContext.schedule.shiftEnd;
+    }
 
     const task = await Task.create({
       title,
       description,
-      dueDateTime: parsedDue,
+      startDateTime: taskStartDateTime,
+      dueDateTime: taskDueDateTime,
       whatsappNumber,
       priorityDays,
       priority: priority || 'medium',
@@ -122,6 +171,13 @@ exports.createTaskForSelf = async (req, res) => {
       voiceNote,
       createdBy: req.user._id,
       taskFor: 'self',
+      isRecurring: recurringSettings.isRecurring,
+      repeatPattern: recurringSettings.repeatPattern,
+      repeatDays: recurringSettings.repeatDays,
+      recurringPattern: recurringSettings.repeatPattern,
+      nextRecurringDate: recurringSettings.isRecurring && taskDueDateTime
+        ? getNextRecurringDate(taskDueDateTime, recurringSettings.repeatPattern, recurringSettings.repeatDays)
+        : null,
       statusHistory: [{ status: 'pending', changedBy: req.user._id, remarks: 'Self task created' }]
     });
 
@@ -177,6 +233,21 @@ exports.updateTask = async (req, res) => {
     fields.forEach(f => {
       if (req.body[f] !== undefined && req.body[f] !== 'null') task[f] = req.body[f];
     });
+    const hasRecurringUpdate = ['repeatPattern', 'repeatDays', 'isRecurring', 'recurringPattern']
+      .some(field => Object.prototype.hasOwnProperty.call(req.body, field));
+    if (hasRecurringUpdate) {
+      applyRecurringFields(task, req.body, task.dueDateTime);
+    } else if (
+      task.isRecurring &&
+      Object.prototype.hasOwnProperty.call(req.body, 'dueDateTime') &&
+      req.body.dueDateTime !== 'null'
+    ) {
+      task.nextRecurringDate = getNextRecurringDate(
+        task.dueDateTime,
+        task.repeatPattern || task.recurringPattern,
+        task.repeatDays || []
+      );
+    }
     if (req.body.checkpoints !== undefined) {
       task.checkpoints = parseTaskCheckpoints(req.body.checkpoints);
     }

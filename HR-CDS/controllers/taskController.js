@@ -17,6 +17,10 @@ const sharp = require('sharp');
 const { notifyDirectUsers, notifyPageUsers } = require('../utils/systemNotificationService');
 const { enqueueCompletionJob } = require('../utils/backgroundJobQueue');
 const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
+const {
+  normalizeTaskRecurrenceFields,
+  getNextRecurringDate,
+} = require('../utils/taskRecurrence');
 
  
 
@@ -557,6 +561,31 @@ const isCompanyAllTaskEdit = (req) => (
   req.body?.allowCompanyAllTaskEdit === 'true' ||
   req.headers?.['x-company-all-task-edit'] === 'true'
 );
+
+const parseRecurringSettingsFromBody = (body = {}) => {
+  const normalized = normalizeTaskRecurrenceFields(body);
+  return {
+    repeatPattern: normalized.repeatPattern,
+    repeatDays: normalized.repeatDays,
+    isRecurring: normalized.repeatPattern !== 'none' && normalized.isRecurring,
+  };
+};
+
+const applyRecurringFields = (task, body = {}, dueDateTime = null) => {
+  const recurring = parseRecurringSettingsFromBody(body);
+  task.repeatPattern = recurring.repeatPattern;
+  task.repeatDays = recurring.repeatDays;
+  task.recurringPattern = recurring.repeatPattern;
+  task.isRecurring = recurring.isRecurring;
+  task.nextRecurringDate = recurring.isRecurring && dueDateTime
+    ? getNextRecurringDate(dueDateTime, recurring.repeatPattern, recurring.repeatDays)
+    : null;
+  if (!task.isRecurring) {
+    task.recurrenceSourceId = null;
+    task.recurrenceOccurrenceKey = null;
+  }
+  return task;
+};
 
 const isSameCompanyTaskRequest = (req, task) => {
   const requesterCompany = normalizeCodeBase(getRequestCompanyCode(req));
@@ -1281,6 +1310,11 @@ const handleTaskCreation = async (req, res, isSelf) => {
 
   const statusByUser = parsedUsers.map(uid => ({ user: uid, status: 'pending' }));
   const parsedCheckpoints = parseTaskCheckpoints(checkpoints);
+  const recurringSettings = isSelf ? parseRecurringSettingsFromBody(req.body) : {
+    repeatPattern: 'none',
+    repeatDays: [],
+    isRecurring: false,
+  };
 
   const task = await Task.create({
     title,
@@ -1299,6 +1333,13 @@ const handleTaskCreation = async (req, res, isSelf) => {
     voiceNote,
     createdBy: req.user._id,
     taskFor: isSelf ? 'self' : 'others',
+    isRecurring: recurringSettings.isRecurring,
+    repeatPattern: recurringSettings.repeatPattern,
+    repeatDays: recurringSettings.repeatDays,
+    recurringPattern: recurringSettings.repeatPattern,
+    nextRecurringDate: recurringSettings.isRecurring && parsedDue
+      ? getNextRecurringDate(parsedDue, recurringSettings.repeatPattern, recurringSettings.repeatDays)
+      : null,
     statusHistory: [{ status: 'pending', changedBy: req.user._id, remarks: isSelf ? 'Self task created' : 'Task assigned to others' }]
   });
 
@@ -1357,6 +1398,21 @@ exports.updateTask = async (req, res) => {
     fields.forEach(f => {
       if (req.body[f] !== undefined && req.body[f] !== 'null') task[f] = req.body[f];
     });
+    const hasRecurringUpdate = ['repeatPattern', 'repeatDays', 'isRecurring', 'recurringPattern']
+      .some(field => Object.prototype.hasOwnProperty.call(req.body, field));
+    if (hasRecurringUpdate) {
+      applyRecurringFields(task, req.body, task.dueDateTime);
+    } else if (
+      task.isRecurring &&
+      Object.prototype.hasOwnProperty.call(req.body, 'dueDateTime') &&
+      req.body.dueDateTime !== 'null'
+    ) {
+      task.nextRecurringDate = getNextRecurringDate(
+        task.dueDateTime,
+        task.repeatPattern || task.recurringPattern,
+        task.repeatDays || []
+      );
+    }
 
     if (req.body.assignedUsers) {
       task.assignedUsers = typeof req.body.assignedUsers === 'string' ? JSON.parse(req.body.assignedUsers) : req.body.assignedUsers;

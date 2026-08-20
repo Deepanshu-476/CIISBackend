@@ -21,6 +21,7 @@ if (missingEnvVars.length > 0) {
 require('./services/subscriptionReminderService');
 const { runWorkAnniversaryEmails } = require('./services/workAnniversaryService');
 const { runAutoClockOutSweep } = require('./HR-CDS/cron/forceClockOut');
+require('./HR-CDS/cron/recurringTasks');
 
 const app = express();
 

@@ -13,6 +13,9 @@ const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
 const { notifyDirectUsers, notifyPageUsers } = require('../utils/systemNotificationService');
+const {
+  normalizeTaskRecurrenceFields,
+} = require('../utils/taskRecurrence');
 
 const parsePositiveInt = (value, fallback, max = 100) => {
   const parsed = parseInt(value, 10);
@@ -387,7 +390,7 @@ const enrichStatusInfo = async (tasks) => {
         ...(s.status === 'rejected' && { rejectedByUser: `${u?.name} (${u?.role})` })
       };
     });
-    return { ...task, statusInfo: info };
+    return { ...task, ...normalizeTaskRecurrenceFields(task), statusInfo: info };
   });
 };
 
