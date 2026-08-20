@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const { JobRole } = require('../models/JobRole');
+const { JobRole } = require('../../models/JobRole');
 
 const INDIA_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
