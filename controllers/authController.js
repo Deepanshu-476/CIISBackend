@@ -485,14 +485,26 @@ exports.companyLogin = async (req, res) => {
     const cleanEmail = email.toLowerCase().trim();
 
     const rawCompanyCode = companyCode.toLowerCase().trim();
+    const loginDebugBase = {
+      email: cleanEmail,
+      requestedCompany: companyCode,
+      normalizedCompany: rawCompanyCode,
+      ip: req.ip,
+      userAgent: req.get("user-agent")
+    };
 
     
     let cleanCompanyCode = rawCompanyCode;
     let expectedBranchCode = null;
+    let expectedBranchCodes = [];
     if (rawCompanyCode.includes("-")) {
       const parts = rawCompanyCode.split("-");
       cleanCompanyCode = parts[0];
       expectedBranchCode = parts.slice(1).join("-").toUpperCase();
+      expectedBranchCodes = [...new Set([
+        expectedBranchCode,
+        rawCompanyCode.toUpperCase(),
+      ].filter(Boolean))];
     }
 
     
@@ -505,16 +517,27 @@ exports.companyLogin = async (req, res) => {
     }).select('+isActive +subscriptionExpiry');
 
     if (!company) {
-      void 0;
+      console.warn("[company-login] company lookup failed", loginDebugBase);
       return res.status(404).json({
         success: false,
-        message: "Company not found or invalid company code",
+        message: "Company code is incorrect.",
         errorCode: "COMPANY_NOT_FOUND",
+        field: "companyCode",
       });
     }
+    console.info("[company-login] company lookup ok", {
+      ...loginDebugBase,
+      companyId: company._id,
+      companyCode: company.companyCode,
+      expectedBranchCodes,
+    });
 
     
     if (!company.isActive) {
+      console.warn("[company-login] company deactivated", {
+        ...loginDebugBase,
+        companyCode: company.companyCode,
+      });
       return res.status(403).json({
         success: false,
         message: "Company account is deactivated",
@@ -524,6 +547,11 @@ exports.companyLogin = async (req, res) => {
 
     
     if (company.subscriptionExpiry && new Date() > new Date(company.subscriptionExpiry)) {
+      console.warn("[company-login] company subscription expired", {
+        ...loginDebugBase,
+        companyCode: company.companyCode,
+        subscriptionExpiry: company.subscriptionExpiry,
+      });
       return res.status(403).json({
         success: false,
         message: "Company subscription has expired",
@@ -542,7 +570,7 @@ exports.companyLogin = async (req, res) => {
     };
 
     if (expectedBranchCode) {
-      userQuery.branchCode = expectedBranchCode;
+      userQuery.branchCode = { $in: expectedBranchCodes.length ? expectedBranchCodes : [expectedBranchCode] };
     }
 
     const user = await User.findOne(userQuery)
@@ -553,16 +581,57 @@ exports.companyLogin = async (req, res) => {
       .populate("company", "companyName companyCode logo")
 
     if (!user) {
-      void 0;
+      const companyEmailUser = await User.findOne({
+        email: cleanEmail,
+        $or: [
+          { companyCode: company.companyCode },
+          { company: company._id }
+        ]
+      }).select("_id email branchCode isActive registrationStatus").lean();
+      const anyEmailUser = companyEmailUser
+        ? null
+        : await User.findOne({ email: cleanEmail }).select("_id email companyCode isActive").lean();
+      const message = companyEmailUser && expectedBranchCode
+        ? `Email is correct, but this user is not in selected branch. Expected branch: ${expectedBranchCodes.join(" / ")}. User branch: ${companyEmailUser.branchCode || "not set"}.`
+        : anyEmailUser
+          ? "Email exists, but not under this company code."
+          : "Email is not registered in this company.";
+      const errorCode = companyEmailUser && expectedBranchCode
+        ? "BRANCH_MISMATCH"
+        : anyEmailUser
+          ? "COMPANY_EMAIL_MISMATCH"
+          : "EMAIL_NOT_FOUND";
+      console.warn("[company-login] user lookup failed", {
+        ...loginDebugBase,
+        companyCode: company.companyCode,
+        expectedBranchCodes,
+        emailExistsInCompany: Boolean(companyEmailUser),
+        existingBranchCode: companyEmailUser?.branchCode || null,
+        emailExistsElsewhere: Boolean(anyEmailUser),
+        elsewhereCompanyCode: anyEmailUser?.companyCode || null,
+        errorCode,
+      });
       return res.status(401).json({
         success: false,
-        message: "Invalid email or password for this company",
-        errorCode: "INVALID_CREDENTIALS",
+        message,
+        errorCode,
+        field: companyEmailUser && expectedBranchCode ? "branch" : "email",
       });
     }
+    console.info("[company-login] user lookup ok", {
+      ...loginDebugBase,
+      companyCode: company.companyCode,
+      userId: user._id,
+      userBranchCode: user.branchCode || null,
+    });
 
     
     if (user.registrationStatus === 'pending') {
+      console.warn("[company-login] registration pending", {
+        ...loginDebugBase,
+        userId: user._id,
+        companyCode: company.companyCode,
+      });
       return res.status(403).json({
         success: false,
         message: "Your registration request is pending admin approval. Please wait for verification.",
@@ -571,6 +640,11 @@ exports.companyLogin = async (req, res) => {
     }
 
     if (user.registrationStatus === 'rejected') {
+      console.warn("[company-login] registration rejected", {
+        ...loginDebugBase,
+        userId: user._id,
+        companyCode: company.companyCode,
+      });
       return res.status(403).json({
         success: false,
         message: "Your registration request has been rejected by the administrator.",
@@ -579,6 +653,11 @@ exports.companyLogin = async (req, res) => {
     }
 
     if (!user.isActive) {
+      console.warn("[company-login] account deactivated", {
+        ...loginDebugBase,
+        userId: user._id,
+        companyCode: company.companyCode,
+      });
       return res.status(403).json({
         success: false,
         message: "Your account has been deactivated. Please contact your administrator.",
@@ -589,6 +668,12 @@ exports.companyLogin = async (req, res) => {
     
     if (user.lockUntil && user.lockUntil > Date.now()) {
       const lockMinutes = Math.ceil((user.lockUntil - Date.now()) / 60000);
+      console.warn("[company-login] account locked", {
+        ...loginDebugBase,
+        userId: user._id,
+        companyCode: company.companyCode,
+        lockUntil: user.lockUntil,
+      });
       return res.status(429).json({
         success: false,
         message: `Account temporarily locked. Try again in ${lockMinutes} minutes.`,
@@ -611,11 +696,19 @@ exports.companyLogin = async (req, res) => {
       }
 
       await User.findByIdAndUpdate(user._id, updateData);
+      console.warn("[company-login] password invalid", {
+        ...loginDebugBase,
+        userId: user._id,
+        companyCode: company.companyCode,
+        failedLoginAttempts: updatedAttempts,
+        remainingAttempts: Math.max(0, 5 - updatedAttempts),
+      });
 
       return res.status(401).json({
         success: false,
-        message: "Invalid email or password",
-        errorCode: "INVALID_CREDENTIALS",
+        message: "Password is incorrect.",
+        errorCode: "PASSWORD_INCORRECT",
+        field: "password",
         remainingAttempts: Math.max(0, 5 - updatedAttempts),
       });
     }
@@ -1140,10 +1233,15 @@ exports.login = async (req, res) => {
     const rawCompanyCode = companyCode || companyIdentifier;
     let providedCompanyCode = rawCompanyCode;
     let expectedBranchCode = null;
+    let expectedBranchCodes = [];
     if (rawCompanyCode && typeof rawCompanyCode === "string" && rawCompanyCode.includes("-")) {
       const parts = rawCompanyCode.split("-");
       providedCompanyCode = parts[0];
       expectedBranchCode = parts.slice(1).join("-").toUpperCase();
+      expectedBranchCodes = [...new Set([
+        expectedBranchCode,
+        rawCompanyCode.toUpperCase(),
+      ].filter(Boolean))];
     }
     
     
@@ -1220,11 +1318,11 @@ exports.login = async (req, res) => {
       }
 
       
-      if (expectedBranchCode && user.branchCode !== expectedBranchCode) {
+      if (expectedBranchCode && !expectedBranchCodes.includes(user.branchCode)) {
         void 0;
         return res.status(403).json({
           success: false,
-          message: `Access denied. You do not belong to branch '${expectedBranchCode}'`,
+          message: `Access denied. You do not belong to branch '${expectedBranchCodes.join(" / ")}'`,
           errorCode: "BRANCH_MISMATCH"
         });
       }
