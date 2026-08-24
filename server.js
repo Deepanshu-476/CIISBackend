@@ -737,6 +737,7 @@ app.use("/api/departments", require("./routes/Department.routes.js"));
 app.use("/api/users/profile", require("./HR-CDS/routes/profileRoute.js"));
 app.use("/api/alerts", require("./HR-CDS/routes/alertRoutes.js"));
 app.use("/api/notifications", require("./HR-CDS/routes/notificationRoutes.js"));
+app.use("/api/feedback", require("./HR-CDS/routes/feedbackRoutes.js"));
 app.use("/api/groups", require("./HR-CDS/routes/groupRoutes.js"));
 app.use("/api/projects", require("./HR-CDS/routes/projectRoutes.js"));
 app.use("/api/clientsservice", require("./HR-CDS/routes/clientRoutes.js"));
