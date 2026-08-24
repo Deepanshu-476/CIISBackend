@@ -22,6 +22,10 @@ const platformVersionSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    updateEnabled: {
+      type: Boolean,
+      default: true,
+    },
     title: {
       type: String,
       trim: true,
