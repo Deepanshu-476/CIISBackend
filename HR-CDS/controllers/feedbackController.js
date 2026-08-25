@@ -20,6 +20,13 @@ const isSuperAdmin = user => {
   return role === 'super_admin' || role === 'superadmin';
 };
 
+const getLoggedCompanyId = user => normalizeId(
+  user?.company ||
+  user?.companyId ||
+  user?.companyDetails ||
+  user?.companyData
+);
+
 const buildQuestionSummary = questionnaire => {
   const scopeLabel = {
     company: 'Company',
@@ -38,7 +45,14 @@ const getTargetUsers = async ({ targetScope, companyId, branchId, targetedUsers 
     .filter(Boolean))];
 
   if (targetScope === 'user') {
-    return targetedUserIds;
+    if (!companyObjectId) return targetedUserIds;
+    const users = await User.find({
+      _id: { $in: targetedUserIds },
+      isActive: true,
+      company: companyObjectId,
+      companyRole: { $not: /^client$/i },
+    }).select('_id').lean();
+    return users.map(user => String(user._id));
   }
 
   const query = {
@@ -95,7 +109,7 @@ exports.createQuestionnaire = async (req, res) => {
     const targetScope = String(req.body.targetScope || '').trim();
     const recipientMode = String(req.body.recipientMode || 'all').trim();
     const nameVisibility = String(req.body.nameVisibility || 'show_name').trim();
-    const company = normalizeId(req.body.company);
+    const company = getLoggedCompanyId(req.user) || normalizeId(req.body.company);
     const branch = normalizeId(req.body.branch);
     const targetedUsers = Array.isArray(req.body.targetedUsers) ? req.body.targetedUsers : [];
     const questions = sanitizeQuestions(req.body.questions);
