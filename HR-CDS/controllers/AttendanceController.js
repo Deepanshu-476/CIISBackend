@@ -653,21 +653,46 @@ const findAttendanceRecord = async (id, updateData = {}) => {
     }).populate("user", "name email employeeType companyCode");
     
     if (!record) {
-      record = new Attendance({
+      record = await Attendance.findOne({
         user: userId,
-        date: searchDate,
-        inTime: null,
-        outTime: null,
-        status: "ABSENT",
-        lateBy: "00:00:00",
-        earlyLeave: "00:00:00",
-        overTime: "00:00:00",
-        totalTime: "00:00:00",
-        isClockedIn: false
-      });
-      
-      await record.save();
-      record = await Attendance.findById(record._id).populate("user", "name email employeeType companyCode");
+        date: searchDate
+      }).populate("user", "name email employeeType companyCode");
+    }
+
+    if (!record) {
+      try {
+        record = new Attendance({
+          user: userId,
+          date: searchDate,
+          companyCode: user.companyCode,
+          inTime: null,
+          outTime: null,
+          status: "ABSENT",
+          lateBy: "00:00:00",
+          earlyLeave: "00:00:00",
+          overTime: "00:00:00",
+          totalTime: "00:00:00",
+          isClockedIn: false
+        });
+        
+        await record.save();
+        record = await Attendance.findById(record._id).populate("user", "name email employeeType companyCode");
+      } catch (err) {
+        if (err.code === 11000) {
+          record = await Attendance.findOne({
+            user: userId,
+            date: { $gte: searchDate, $lte: endOfDay }
+          }).populate("user", "name email employeeType companyCode");
+          if (!record) {
+            record = await Attendance.findOne({
+              user: userId,
+              date: searchDate
+            }).populate("user", "name email employeeType companyCode");
+          }
+        } else {
+          throw err;
+        }
+      }
     }
     
     return record;
@@ -1458,13 +1483,17 @@ const updateAttendanceRecord = async (req, res) => {
       record.inTime = updateData.inTime ? new Date(updateData.inTime) : null;
     }
     
-    if (updateData.outTime) {
-      record.outTime = new Date(updateData.outTime);
-      record.clockOutMode = normalizeClockOutMode(updateData.clockOutMode || 'MANUAL');
-      record.isClockedIn = false;
+    if (updateData.outTime !== undefined) {
+      record.outTime = updateData.outTime ? new Date(updateData.outTime) : null;
+      if (record.outTime) {
+        record.clockOutMode = normalizeClockOutMode(updateData.clockOutMode || 'MANUAL');
+        record.isClockedIn = false;
+      }
     }
     
-    if ((updateData.inTime || updateData.outTime) && !updateData.status) {
+    if (updateData.status && String(updateData.status).trim() !== '') {
+      record.status = String(updateData.status).toUpperCase();
+    } else if (updateData.inTime !== undefined || updateData.outTime !== undefined) {
       const attendanceUser = await User.findById(record.user).select('company jobRole shiftId shiftName shiftType');
       const shiftSettings = record.shiftStart && record.shiftEnd
         ? getRecordShiftSettings(record)
@@ -1478,16 +1507,6 @@ const updateAttendanceRecord = async (req, res) => {
         currentStatus: record.status
       });
       Object.assign(record, recalculated);
-    }
-
-    if (!record.outTime) {
-      record.clockOutMode = null;
-    } else if (!record.clockOutMode) {
-      record.clockOutMode = 'MANUAL';
-    }
-
-    if (updateData.status && updateData.status.trim() !== '') {
-      record.status = updateData.status.toUpperCase();
     }
     
     if (updateData.lateBy !== undefined) {
@@ -1514,7 +1533,36 @@ const updateAttendanceRecord = async (req, res) => {
       record.companyCode = userCompanyCode;
     }
     
-    await record.save();
+    try {
+      await record.save();
+    } catch (err) {
+      if (err.code === 11000) {
+        const searchDate = record.date;
+        const existingRecord = await Attendance.findOne({
+          _id: { $ne: record._id },
+          user: record.user,
+          date: searchDate
+        }) || await Attendance.findOne({
+          _id: { $ne: record._id },
+          user: record.user,
+          date: { $gte: searchDate, $lte: getIndiaDayEnd(searchDate) }
+        });
+
+        if (existingRecord) {
+          if (updateData.inTime !== undefined) existingRecord.inTime = updateData.inTime ? new Date(updateData.inTime) : null;
+          if (updateData.outTime !== undefined) existingRecord.outTime = updateData.outTime ? new Date(updateData.outTime) : null;
+          if (updateData.status) existingRecord.status = String(updateData.status).toUpperCase();
+          if (updateData.notes !== undefined) existingRecord.notes = updateData.notes;
+          existingRecord.companyCode = userCompanyCode;
+          await existingRecord.save();
+          record = existingRecord;
+        } else {
+          throw err;
+        }
+      } else {
+        throw err;
+      }
+    }
     
     const populatedRecord = await Attendance.findById(record._id)
       .populate({
@@ -1643,7 +1691,30 @@ const createManualAttendance = async (req, res) => {
     });
     applyShiftSnapshot(attendance, shiftSnapshot);
     
-    await attendance.save();
+    try {
+      await attendance.save();
+    } catch (err) {
+      if (err.code === 11000) {
+        const existingRecord = await Attendance.findOne({
+          user,
+          date: { $gte: existingDate, $lte: endOfDay }
+        });
+        if (existingRecord) {
+          existingRecord.status = status ? status.toUpperCase() : existingRecord.status;
+          if (inTime !== undefined) existingRecord.inTime = inTime ? new Date(inTime) : existingRecord.inTime;
+          if (outTime !== undefined) existingRecord.outTime = outTime ? new Date(outTime) : existingRecord.outTime;
+          existingRecord.notes = notes || existingRecord.notes;
+          existingRecord.companyCode = userCompanyCode;
+          await existingRecord.save();
+
+          return res.status(200).json({
+            message: "Attendance updated successfully",
+            data: existingRecord
+          });
+        }
+      }
+      throw err;
+    }
     
     const populatedAttendance = await Attendance.findById(attendance._id)
       .populate({

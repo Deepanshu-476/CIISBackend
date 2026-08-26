@@ -9,7 +9,7 @@ const alertSchema = new mongoose.Schema({
   companyCode: {
     type: String,
     trim: true,
-    index: true
+    index: true 
   },
   type: {
     type: String,
