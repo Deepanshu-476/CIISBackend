@@ -629,12 +629,17 @@ exports.updateMe = async (req, res) => {
       'aadharCard', 'panCard',
       'chatSettings', 'notificationPreferences', 'properties',
       'propertyOwned', 'additionalDetails',
-      'employeeType'
+      'employeeType',
+      'profileImage'
     ]);
 
     Object.keys(req.body).forEach(key => {
       if (selfEditableFields.has(key)) updateData[key] = req.body[key];
     });
+
+    if (req.body.profileImage !== undefined) {
+      updateData.profileImage = req.body.profileImage ? String(req.body.profileImage).trim() : "";
+    }
 
     ['bankHolderName', 'accountNumber', 'bankName'].forEach((field) => {
       if (updateData[field] !== undefined) updateData[field] = String(updateData[field]).trim();
