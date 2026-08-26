@@ -1,7 +1,7 @@
 const mongoose = require("mongoose");
 const rowSchema = new mongoose.Schema({
   component: { type: mongoose.Schema.Types.ObjectId, ref: "SalaryComponent", required: true },
-  calculationType: { type: String, enum: ["manual", "percentage", "formula"], default: "manual" },
+  calculationType: { type: String, enum: ["manual", "percentage", "formula", "balance"], default: "manual" },
   calculationBase: { type: String, trim: true, default: "" }, value: { type: Number, min: 0, default: 0 },
   formula: { type: String, trim: true, maxlength: 500, default: "" }, sortOrder: { type: Number, required: true, min: 1 },
 });

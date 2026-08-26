@@ -413,7 +413,7 @@ const sendPendingTaskReminders = async () => {
     }
   } catch (error) {
     if (isTransientMongoError(error)) throw error;
-    console.error('❌ Pending task reminder failed:', error.message);
+    console.error('❌ Pending task reminder failed:'  , error.message);
   }
 };
 
@@ -592,7 +592,7 @@ const markDailyAbsent = async () => {
         const dayOfWeek = today.getDay();
         const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
         
-        if (!isWeekend) {
+        if (!isWeekend) { 
           const absentRecord = new Attendance({
             user: user._id,
             date: today,
@@ -762,8 +762,6 @@ app.use('/api/page-permissions', require("./routes/pagePermissions.js"));
 app.use('/api/company', require("./routes/companyRoutes.js"));
 app.use('/api/plans', require("./routes/planRoutes.js"));
 app.use('/api/job-roles', require("./routes/jobRoleRoutes.js"));
-app.use('/api/salary-components', require("./routes/salaryComponentRoutes.js"));
-app.use('/api/salary-structures', require("./routes/salaryStructureRoutes.js"));
 app.use('/api/superAdmin', require("./routes/superAdmin.js"));
 app.use("/api/meetings", require("./HR-CDS/routes/meetingRoutes.js"));
 app.use('/api/cmeeting', require("./HR-CDS/routes/clientMeetingRoutes.js"));
@@ -777,6 +775,9 @@ app.use('/api/email-settings', require('./routes/emailSettingsRoutes.js'));
 app.use('/api/demo-requests', require('./routes/demoRequestRoutes.js'));
 app.use('/api/leave-types', require('./routes/leaveTypeRoutes.js'));
 app.use('/api/leave-policies', require('./routes/leavePolicyRoutes.js'));
+app.use('/api/salary-components', require('./routes/salaryComponentRoutes.js'));
+app.use('/api/salary-structures', require('./routes/salaryStructureRoutes.js'));
+app.use('/api/employee-salaries', require('./routes/employeeSalaryRoutes.js'));
 
 
 
