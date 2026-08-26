@@ -1,0 +1,10 @@
+const router = require("express").Router();
+const { protect } = require("../middleware/authMiddleware");
+const { requirePayrollPagePermission } = require("../middleware/payrollPagePermission");
+const controller = require("../controllers/salaryStructureController");
+router.use(protect);
+router.get("/", requirePayrollPagePermission("/ciisUser/salary-structure", "view"), controller.list);
+router.post("/", requirePayrollPagePermission("/ciisUser/salary-structure", "edit"), controller.create);
+router.put("/:id", requirePayrollPagePermission("/ciisUser/salary-structure", "edit"), controller.update);
+router.delete("/:id", requirePayrollPagePermission("/ciisUser/salary-structure", "delete"), controller.remove);
+module.exports = router;

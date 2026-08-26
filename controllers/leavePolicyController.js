@@ -99,27 +99,54 @@ exports.createLeaveType = async (req, res, next) => {
     if (!companyScope) return;
     const name = String(req.body?.name || "").trim();
     if (!name) return fail(res, 400, "Leave type name is required");
-
+    const nameKey = name.toLowerCase();
+    const existing = await LeaveType.findOne({ company: companyScope.company, nameKey });
+    if (existing) return fail(res, 409, "A leave type with this name already exists in your company");
     const leaveType = await LeaveType.create({
+      company: companyScope.company,
+      companyCode: companyScope.companyCode,
       name,
-      nameKey: name.toLowerCase(),
-      description: String(req.body?.description || "").trim(),
+      nameKey,
       sortOrder: Number(req.body?.sortOrder) || 1,
-      status: req.body?.status || "Active",
-      isCustom: true,
-      ...companyScope,
+      status: req.body?.status === "Inactive" ? "Inactive" : "Active",
       createdBy: req.user._id,
       updatedBy: req.user._id
     });
-    await leaveType.populate([
-      { path: "createdBy", select: "name email" },
-      { path: "updatedBy", select: "name email" }
-    ]);
     res.status(201).json({ success: true, leaveType });
-  } catch (error) {
-    if (error?.code === 11000) return fail(res, 409, "This leave type already exists");
-    next(error);
-  }
+  } catch (error) { next(error); }
+};
+
+exports.updateLeaveType = async (req, res, next) => {
+  try {
+    const companyScope = scope(req, res);
+    if (!companyScope) return;
+    if (!validId(req.params.id)) return fail(res, 400, "Invalid leave type id");
+    const updates = {};
+    if (req.body?.name !== undefined) {
+      const name = String(req.body.name || "").trim();
+      if (!name) return fail(res, 400, "Leave type name is required");
+      const nameKey = name.toLowerCase();
+      const existing = await LeaveType.findOne({
+        _id: { $ne: req.params.id },
+        company: companyScope.company,
+        nameKey
+      });
+      if (existing) return fail(res, 409, "A leave type with this name already exists in your company");
+      updates.name = name;
+      updates.nameKey = nameKey;
+    }
+    if (req.body?.sortOrder !== undefined) updates.sortOrder = Number(req.body.sortOrder) || 1;
+    if (req.body?.status !== undefined) updates.status = req.body.status === "Inactive" ? "Inactive" : "Active";
+    updates.updatedBy = req.user._id;
+
+    const leaveType = await LeaveType.findOneAndUpdate(
+      { _id: req.params.id, company: companyScope.company },
+      updates,
+      { new: true, runValidators: true }
+    );
+    if (!leaveType) return fail(res, 404, "Leave type not found");
+    res.json({ success: true, leaveType });
+  } catch (error) { next(error); }
 };
 
 exports.deleteLeaveType = async (req, res, next) => {
@@ -141,7 +168,7 @@ exports.deleteLeaveType = async (req, res, next) => {
 
 const policyValues = (body) => ({
   policyName: String(body.policyName || "").trim(),
-  department: body.department,
+  department: validId(body.department) ? body.department : null,
   jobRoles: Array.isArray(body.jobRoles) ? [...new Set(body.jobRoles.filter(validId).map(String))] : [],
   jobRoleNames: Array.isArray(body.jobRoleNames) ? body.jobRoleNames.map(String).map(v => v.trim()).filter(Boolean) : [],
   leaveType: String(body.leaveType || "").trim(),
@@ -157,9 +184,8 @@ const policyValues = (body) => ({
 });
 
 const validatePolicyRelations = async (values, company) => {
-  if (!values.policyName || !values.leaveType) return "Policy name and leave type are required";
+  if (!values.policyName || !values.department || !values.leaveType) return "Policy name, department and leave type are required";
   if (!["Paid", "Unpaid", "Admin Choice"].includes(values.payType)) return "Select a valid pay type";
-  if (!validId(values.department)) return "A valid department is required";
   if (!values.jobRoles.length) return "At least one job role is required";
   const leaveType = await LeaveType.exists({
     company,
@@ -168,9 +194,9 @@ const validatePolicyRelations = async (values, company) => {
   });
   if (!leaveType) return "Select an active leave type configured for your company";
   const department = await Department.exists({ _id: values.department, company });
-  if (!department) return "Department does not belong to your company";
-  const roleCount = await JobRole.countDocuments({ _id: { $in: values.jobRoles }, company, department: values.department });
-  if (roleCount !== values.jobRoles.length) return "One or more job roles do not belong to the selected department";
+  if (!department) return "Selected department does not belong to your company";
+  const roles = await JobRole.countDocuments({ _id: { $in: values.jobRoles }, company, department: values.department });
+  if (roles !== values.jobRoles.length) return "One or more job roles do not belong to the selected department";
   return null;
 };
 
@@ -216,7 +242,10 @@ exports.getApplicableLeavePolicies = async (req, res, next) => {
     const isOnProbation = normalize(user.employeeType).includes("probation");
 
     const applicable = allPolicies.filter(policy => {
-      const departments = [normalize(policy.department?._id || policy.department), normalize(policy.department?.name)].filter(Boolean);
+      const departments = [
+        normalize(policy.department?._id || policy.department),
+        normalize(policy.department?.name)
+      ].filter(Boolean);
       const roles = [
         ...(policy.jobRoles || []).flatMap(role => [normalize(role?._id || role), normalize(role?.name)]),
         ...(policy.jobRoleNames || []).map(normalize)

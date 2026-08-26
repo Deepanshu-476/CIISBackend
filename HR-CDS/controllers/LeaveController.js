@@ -308,14 +308,10 @@ const getBranchScopedCompanyUserIds = async (companyId, branchId) => {
   return companyUsers.map(user => user._id);
 };
 
-
 exports.applyLeave = async (req, res) => {
-  void 0;
-
   try {
     const { type, reason, startDate, endDate } = req.body;
 
-    
     if (!type?.trim() || !reason?.trim() || !startDate || !endDate) {
       return res.status(400).json({ error: 'All fields are required.' });
     }

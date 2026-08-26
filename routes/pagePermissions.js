@@ -50,7 +50,14 @@ const APP_PAGES = [
   { pageKey: 'create-alert', name: 'Create Alert', path: '/ciisUser/create-alert', permissionPattern: 'viewEdit' },
   { pageKey: 'chat', name: 'Chat', path: '/ciisUser/chat', permissionPattern: 'viewEdit' },
   { pageKey: 'support-desk', name: 'Support Desk', path: '/ciisUser/support-desk', permissionPattern: 'viewEdit' },
-  { pageKey: 'support-operations', name: 'Support Operations', path: '/ciisUser/support-operations', permissionPattern: 'viewEdit' }
+  { pageKey: 'support-operations', name: 'Support Operations', path: '/ciisUser/support-operations', permissionPattern: 'viewEdit' },
+  { pageKey: 'salary-component', name: 'Salary Component', path: '/ciisUser/salary-component', permissionPattern: 'viewEdit' },
+  { pageKey: 'salary-structure', name: 'Salary Structure', path: '/ciisUser/salary-structure', permissionPattern: 'viewEdit' },
+  { pageKey: 'salary-assignment', name: 'Salary Assignment', path: '/ciisUser/salary-assignment', permissionPattern: 'viewEdit' },
+  { pageKey: 'assign-salary', name: 'Assign Salary', path: '/ciisUser/assign-salary', permissionPattern: 'viewEdit' },
+  { pageKey: 'payroll-process', name: 'Payroll Process', path: '/ciisUser/payroll-process', permissionPattern: 'viewEdit' },
+  { pageKey: 'payslip', name: 'Payslip', path: '/ciisUser/payslip', permissionPattern: 'viewEdit' },
+  { pageKey: 'payroll-reports', name: 'Payroll Reports', path: '/ciisUser/payroll-reports', permissionPattern: 'viewEdit' },
 ];
 
 const PAGE_PERMISSION_CACHE_PREFIX = 'pagePermissions';
