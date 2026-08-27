@@ -21,6 +21,15 @@ const payrollRunSchema = new mongoose.Schema({
     default: "Draft",
     index: true
   },
+  salaryDaysBasis: {
+    type: String,
+    enum: ["calendar", "fixed30", "fixed26"],
+    default: "calendar"
+  },
+  sandwichRuleEnabled: {
+    type: Boolean,
+    default: false
+  },
   employees: { type: [mongoose.Schema.Types.Mixed], default: [] },
   totals: {
     employees: { type: Number, default: 0 },

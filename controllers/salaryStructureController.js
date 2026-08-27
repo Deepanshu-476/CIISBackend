@@ -169,6 +169,7 @@ exports.create = async (req, res) => {
     const optionError = validateStructureOptions(salaryType, salaryInputType, status);
     if (optionError) return res.status(400).json({ success: false, message: optionError });
 
+    const defaultGross = Math.max(0, Number(req.body.defaultGross || req.body.grossSalary || 0));
     const userId = req.user?._id || req.user?.id;
     const resolvedComponents = await resolveStructureComponents(rawComponents, company, userId);
     const code = await generateStructureCode(company);
@@ -179,6 +180,7 @@ exports.create = async (req, res) => {
       code,
       salaryType,
       salaryInputType,
+      defaultGross,
       effectiveFrom,
       description,
       status,
@@ -229,6 +231,7 @@ exports.update = async (req, res) => {
     structure.name = name;
     structure.salaryType = salaryType;
     structure.salaryInputType = salaryInputType;
+    structure.defaultGross = Math.max(0, Number(req.body.defaultGross || req.body.grossSalary || 0));
     if (requestedEffectiveFrom) structure.effectiveFrom = new Date(requestedEffectiveFrom);
     structure.description = description;
     structure.status = status;
