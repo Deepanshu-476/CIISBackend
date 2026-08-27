@@ -21,6 +21,7 @@ router.get("/payroll-run", processView, controller.getPayrollRun);
 router.post("/payroll-run/generate", processEdit, controller.generatePayrollRun);
 router.post("/payroll-run/recalculate-employee", processEdit, controller.recalculateSingleEmployee);
 router.patch("/payroll-run/status", processEdit, controller.updatePayrollRunStatus);
+router.patch("/payroll-run/settings", processEdit, controller.updatePayrollSettings);
 router.patch("/payroll-run/employee-status", processEdit, controller.updatePayrollEmployeeStatus);
 router.patch("/payroll-run/adjustment", processEdit, controller.addPayrollAdjustment);
 router.delete("/payroll-run/adjustment", processEdit, controller.removePayrollAdjustment);

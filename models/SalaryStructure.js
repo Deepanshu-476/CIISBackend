@@ -11,6 +11,7 @@ const schema = new mongoose.Schema({
   code: { type: String, required: true, trim: true, uppercase: true, maxlength: 30 },
   salaryType: { type: String, enum: ["monthly", "annual"], default: "monthly" },
   salaryInputType: { type: String, enum: ["gross", "ctc"], default: "gross" },
+  defaultGross: { type: Number, min: 0, default: 0 },
   effectiveFrom: { type: Date, required: true }, description: { type: String, trim: true, maxlength: 500, default: "" },
   status: { type: String, enum: ["active", "inactive"], default: "active" }, components: { type: [rowSchema], default: [] },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" }, updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
