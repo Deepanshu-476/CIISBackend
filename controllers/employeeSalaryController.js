@@ -344,8 +344,10 @@ exports.payrollPreview = async (req, res) => {
       let presentDays = 0;
       let paidLeaveDays = 0;
       let unpaidLeaveDays = 0;
+      let uninformedLeaveDays = 0;
       let halfDayDays = 0;
       let lopDays = 0;
+      let actualAbsentDays = 0;
       let sandwichLopDays = 0;
       let pendingDays = 0;
       let futureDays = 0;
@@ -355,14 +357,16 @@ exports.payrollPreview = async (req, res) => {
       calendarDates.forEach((date, idx) => {
         const key = indiaDateKey(date);
         const dayOfWeek = date.getUTCDay() || 7;
-        const isHoliday = holidayKeys.has(key);
+        const attendance = attendanceMap.get(`${userId}:${key}`);
+        const status = String(attendance?.status || "").trim().toUpperCase();
+        const isHoliday = holidayKeys.has(key) || status === "HOLIDAY";
         const isWeekOff = dayOfWeek > effectiveWorkingDays(departmentDoc, date);
         const isOffDay = isWeekOff || isHoliday;
 
         if (isOffDay) {
           if ((!joiningKey || key >= joiningKey) && key <= todayKey) {
-            if (isWeekOff) elapsedWeekOffDays += 1;
-            else if (isHoliday) elapsedHolidays += 1;
+            if (isHoliday) elapsedHolidays += 1;
+            else if (isWeekOff) elapsedWeekOffDays += 1;
           }
 
           // Check Sandwich LOP if policy enabled
@@ -429,18 +433,23 @@ exports.payrollPreview = async (req, res) => {
           return;
         }
 
-        const attendance = attendanceMap.get(`${userId}:${key}`);
-        const status = String(attendance?.status || "").trim().toUpperCase();
         if (["PRESENT", "LATE", "SHORT LEAVE"].includes(status)) presentDays += 1;
         else if (["HALF DAY", "HALFDAY"].includes(status)) {
           presentDays += 0.5;
           halfDayDays += 1;
-        } else if (status === "ABSENT") lopDays += 1;
+        } else if (["UNINFORMED LEAVE", "UNINFORMEDLEAVE"].includes(status)) {
+          lopDays += 1;
+          uninformedLeaveDays += 1;
+        } else if (status === "ABSENT") {
+          lopDays += 1;
+          actualAbsentDays += 1;
+        }
         else pendingDays += 1;
       });
 
+      const uninformedLeavePenaltyDays = uninformedLeaveDays;
       const totalLopDays = lopDays + sandwichLopDays;
-      const deductionDays = totalLopDays + (halfDayDays * 0.5);
+      const deductionDays = totalLopDays + uninformedLeavePenaltyDays + (halfDayDays * 0.5);
       const payableDays = Math.max(0, presentDays + paidLeaveDays);
       const projectedPayableDays = Math.max(0, eligibleWorkingDays - deductionDays);
 
@@ -466,7 +475,10 @@ exports.payrollPreview = async (req, res) => {
       const lopDeduction = deductionDays > 0
         ? Math.round((attendanceDeduction * totalLopDays / deductionDays) * 100) / 100
         : 0;
-      const halfDayDeduction = Math.round(Math.max(0, attendanceDeduction - lopDeduction) * 100) / 100;
+      const uninformedLeavePenaltyDeduction = deductionDays > 0
+        ? Math.round((attendanceDeduction * uninformedLeavePenaltyDays / deductionDays) * 100) / 100
+        : 0;
+      const halfDayDeduction = Math.round(Math.max(0, attendanceDeduction - lopDeduction - uninformedLeavePenaltyDeduction) * 100) / 100;
       const pendingAmount = Math.round(Math.max(0, projectedGross - gross) * 100) / 100;
       const earnedBeforeAttendance = assignedGross;
       const totalAppliedDeductions = Math.round((deductions + attendanceDeduction) * 100) / 100;
@@ -487,7 +499,11 @@ exports.payrollPreview = async (req, res) => {
           presentDays,
           paidLeaveDays,
           unpaidLeaveDays,
+          uninformedLeaveDays,
+          uninformedLeavePenaltyDays,
+          holidayDays: elapsedHolidays,
           halfDayDays,
+          actualAbsentDays,
           lopDays,
           sandwichLopDays,
           totalLopDays,
@@ -503,6 +519,7 @@ exports.payrollPreview = async (req, res) => {
         assignedGross,
         attendanceDeduction,
         lopDeduction,
+        uninformedLeavePenaltyDeduction,
         halfDayDeduction,
         pendingAmount,
         earnedTillDateGross,

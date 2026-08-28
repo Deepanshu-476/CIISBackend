@@ -5,6 +5,11 @@ const companyId = req => req.user?.company?._id || req.user?.company || req.user
 const normalizeRole = value => String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
 const administrativeRoles = new Set(["owner", "admin", "hr", "super_admin", "superadmin", "company_owner", "companyowner"]);
 const ids = (page, key) => (page?.[key] || []).map(item => String(item?.user?._id || item?.user || "")).filter(Boolean);
+const customPermissionField = {
+  generate: "generateUsers",
+  lock: "lockUsers",
+  unlock: "unlockUsers"
+};
 
 const hasAdministrativeAccess = user => [user?.companyRole, user?.role, user?.jobRole]
   .map(normalizeRole)
@@ -21,12 +26,14 @@ const requirePayrollPagePermission = (path, permission = "view") => async (req, 
     const page = await PagePermission.findOne({ company, path }).lean();
     if (!page) return res.status(403).json({ success: false, message: "Payroll page access has not been assigned in Page Management." });
 
-    const viewIds = new Set([...ids(page, "viewUsers"), ...ids(page, "editUsers"), ...ids(page, "deleteUsers"), ...ids(page, "approvers")]);
+    const viewIds = new Set([...ids(page, "viewUsers"), ...ids(page, "editUsers"), ...ids(page, "deleteUsers"), ...ids(page, "approvers"), ...ids(page, "generateUsers"), ...ids(page, "lockUsers"), ...ids(page, "unlockUsers")]);
     const allowed = permission === "view"
       ? viewIds.has(userId)
       : permission === "delete"
         ? ids(page, "deleteUsers").includes(userId)
-        : ids(page, "editUsers").includes(userId);
+        : customPermissionField[permission]
+          ? ids(page, customPermissionField[permission]).includes(userId)
+          : ids(page, "editUsers").includes(userId);
     if (!allowed) return res.status(403).json({ success: false, message: `You do not have ${permission} access for this payroll page.` });
     return next();
   } catch (error) {
@@ -44,8 +51,9 @@ const requireAnyPayrollPagePermission = (paths, permission = "view") => async (r
     }
     const pages = await PagePermission.find({ company, path: { $in: paths } }).lean();
     const allowed = pages.some(page => {
-      if (permission === "view") return [...ids(page, "viewUsers"), ...ids(page, "editUsers"), ...ids(page, "deleteUsers"), ...ids(page, "approvers")].includes(userId);
+      if (permission === "view") return [...ids(page, "viewUsers"), ...ids(page, "editUsers"), ...ids(page, "deleteUsers"), ...ids(page, "approvers"), ...ids(page, "generateUsers"), ...ids(page, "lockUsers"), ...ids(page, "unlockUsers")].includes(userId);
       if (permission === "delete") return ids(page, "deleteUsers").includes(userId);
+      if (customPermissionField[permission]) return ids(page, customPermissionField[permission]).includes(userId);
       return ids(page, "editUsers").includes(userId);
     });
     if (!allowed) return res.status(403).json({ success: false, message: `You do not have ${permission} access for this payroll page.` });

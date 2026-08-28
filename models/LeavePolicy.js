@@ -3,6 +3,7 @@ const mongoose = require("mongoose");
 const leavePolicySchema = new mongoose.Schema({
   policyName: { type: String, required: true, trim: true, maxlength: 120 },
   department: { type: mongoose.Schema.Types.ObjectId, ref: "Department", required: true },
+  departments: [{ type: mongoose.Schema.Types.ObjectId, ref: "Department" }],
   jobRoles: [{ type: mongoose.Schema.Types.ObjectId, ref: "JobRole" }],
   jobRoleNames: [{ type: String, trim: true }],
   leaveType: { type: String, required: true, trim: true, maxlength: 80 },
@@ -22,6 +23,7 @@ const leavePolicySchema = new mongoose.Schema({
 }, { timestamps: true });
 
 leavePolicySchema.index({ company: 1, department: 1, status: 1 });
+leavePolicySchema.index({ company: 1, departments: 1, status: 1 });
 leavePolicySchema.index({ company: 1, sortOrder: 1 });
 leavePolicySchema.index({ company: 1, department: 1, sortOrder: 1 });
 leavePolicySchema.index({ company: 1, status: 1, createdAt: -1 });

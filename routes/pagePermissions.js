@@ -11,6 +11,22 @@ const { getCacheKey, getOrSetCached, invalidateCache } = require('../utils/inMem
 
 const router = express.Router();
 
+const payrollPermissionActions = {
+  salaryComponent: { view: 'View', edit: 'Save / Edit', delete: 'Delete' },
+  salaryStructure: { view: 'View', edit: 'Save / Edit', delete: 'Delete' },
+  employeeSalary: { view: 'View', edit: 'Save / Edit', delete: 'Unassign / Delete' },
+  assignSalary: { view: 'View', edit: 'Assign / Edit', delete: 'Unassign' },
+  payrollProcess: { view: 'View', edit: 'Review / Settings / Fine', generate: 'Generate', lock: 'Lock', unlock: 'Unlock', delete: 'Delete Process' },
+  payslip: { view: 'View', edit: 'Email / Download', delete: 'Delete' },
+  payrollReports: { view: 'View Reports', edit: 'Export / Download', delete: 'Delete' },
+};
+
+const CUSTOM_ACCESS_FIELDS = {
+  generate: 'generateUsers',
+  lock: 'lockUsers',
+  unlock: 'unlockUsers'
+};
+
 const APP_PAGES = [
   { pageKey: 'emp-details', name: 'Emp - Details', path: '/ciisUser/emp-details', permissionPattern: 'viewEdit' },
   { pageKey: 'emp-leaves', name: 'Emp - Leaves', path: '/ciisUser/emp-leaves', permissionPattern: 'approveReject' },
@@ -22,13 +38,13 @@ const APP_PAGES = [
   { pageKey: 'manage-groups', name: 'Manage Group', path: '/ciisUser/manage-groups', permissionPattern: 'viewEdit' },
   { pageKey: 'company-all-task', name: 'Company All Task', path: '/ciisUser/company-all-task', permissionPattern: 'viewEdit' },
   { pageKey: 'emp-client', name: 'Client Management', path: '/ciisUser/emp-client', permissionPattern: 'viewEdit' },
-  { pageKey: 'salary-component', name: 'Salary Component', path: '/ciisUser/salary-component', permissionPattern: 'viewEdit' },
-  { pageKey: 'salary-structure', name: 'Salary Structure', path: '/ciisUser/salary-structure', permissionPattern: 'viewEdit' },
-  { pageKey: 'salary-assignment', name: 'Salary Assignment', path: '/ciisUser/salary-assignment', permissionPattern: 'viewEdit' },
-  { pageKey: 'assign-salary', name: 'Assign Salary', path: '/ciisUser/assign-salary', permissionPattern: 'viewEdit' },
-  { pageKey: 'payroll-process', name: 'Payroll Process', path: '/ciisUser/payroll-process', permissionPattern: 'viewEdit' },
-  { pageKey: 'payslip', name: 'Payslip', path: '/ciisUser/payslip', permissionPattern: 'viewEdit' },
-  { pageKey: 'payroll-reports', name: 'Payroll Reports', path: '/ciisUser/payroll-reports', permissionPattern: 'viewEdit' },
+  { pageKey: 'salary-component', name: 'Salary Component', path: '/ciisUser/salary-component', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.salaryComponent },
+  { pageKey: 'salary-structure', name: 'Salary Structure', path: '/ciisUser/salary-structure', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.salaryStructure },
+  { pageKey: 'salary-assignment', name: 'Employee Salary', path: '/ciisUser/salary-assignment', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.employeeSalary },
+  { pageKey: 'assign-salary', name: 'Assign Salary', path: '/ciisUser/assign-salary', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.assignSalary },
+  { pageKey: 'payroll-process', name: 'Payroll Process', path: '/ciisUser/payroll-process', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.payrollProcess },
+  { pageKey: 'payslip', name: 'Payslip', path: '/ciisUser/payslip', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.payslip },
+  { pageKey: 'payroll-reports', name: 'Payroll Reports', path: '/ciisUser/payroll-reports', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.payrollReports },
 ];
 
 const PAGE_PERMISSION_CACHE_PREFIX = 'pagePermissions';
@@ -69,7 +85,7 @@ const normalizeUserAccessScopes = (items = []) => {
         : [];
 
       if (!mongoose.Types.ObjectId.isValid(userId)) return null;
-      if (!['view', 'edit', 'delete', 'approve'].includes(accessType)) return null;
+      if (!['view', 'edit', 'delete', 'approve', 'generate', 'lock', 'unlock'].includes(accessType)) return null;
 
       return {
         user: userId,
@@ -108,13 +124,66 @@ const getEffectiveViewUsers = (config) => uniqueUsers([
   ...getPageUsers(config, 'deleteUsers')
 ]);
 
+const getPageUserCounts = (config) => {
+  const viewUsers = getPageUsers(config, 'viewUsers');
+  const editUsers = getPageUsers(config, 'editUsers');
+  const approvers = getPageUsers(config, 'approvers');
+  const deleteUsers = getPageUsers(config, 'deleteUsers');
+  const generateUsers = getPageUsers(config, 'generateUsers');
+  const lockUsers = getPageUsers(config, 'lockUsers');
+  const unlockUsers = getPageUsers(config, 'unlockUsers');
+  return {
+    viewCount: viewUsers.length,
+    editCount: editUsers.length,
+    approveCount: approvers.length,
+    deleteCount: deleteUsers.length,
+    generateCount: generateUsers.length,
+    lockCount: lockUsers.length,
+    unlockCount: unlockUsers.length
+  };
+};
+
+const getAccessScopeCategory = (scopes = []) => {
+  const items = Array.isArray(scopes) ? scopes : [];
+  if (!items.length) return 'all';
+
+  const hasBranchLimit = items.some(scope => Array.isArray(scope.branchIds) && scope.branchIds.length > 0);
+  const hasDepartmentLimit = items.some(scope => Array.isArray(scope.departmentIds) && scope.departmentIds.length > 0);
+  if (hasBranchLimit && hasDepartmentLimit) return 'branch-department';
+  if (hasBranchLimit) return 'branch';
+  if (hasDepartmentLimit) return 'department';
+  return 'all';
+};
+
+const decoratePageSummaries = async (companyId) => {
+  const configs = await PagePermission.find({ company: companyId })
+    .select('pageKey path approvers viewUsers editUsers deleteUsers generateUsers lockUsers unlockUsers userAccessScopes updatedAt')
+    .lean();
+  const configMap = new Map(configs.map(config => [config.path, config]));
+
+  return APP_PAGES.map(page => {
+    const config = configMap.get(page.path);
+    const counts = getPageUserCounts(config);
+    return {
+      ...page,
+      ...counts,
+      accessScopeCategory: getAccessScopeCategory(config?.userAccessScopes),
+      hasConfiguredPermission: Boolean(counts.viewCount || counts.editCount || counts.approveCount || counts.deleteCount || counts.generateCount || counts.lockCount || counts.unlockCount),
+      updatedAt: config?.updatedAt || null
+    };
+  });
+};
+
 const decoratePages = async (companyId) => {
   const configs = await PagePermission.find({ company: companyId })
-    .select('company companyCode pageKey name path approvers viewUsers editUsers deleteUsers userAccessScopes updatedAt')
+    .select('company companyCode pageKey name path approvers viewUsers editUsers deleteUsers generateUsers lockUsers unlockUsers userAccessScopes updatedAt')
     .populate('approvers.user', 'name email jobRole companyRole department')
     .populate('viewUsers.user', 'name email jobRole companyRole department')
     .populate('editUsers.user', 'name email jobRole companyRole department')
     .populate('deleteUsers.user', 'name email jobRole companyRole department')
+    .populate('generateUsers.user', 'name email jobRole companyRole department')
+    .populate('lockUsers.user', 'name email jobRole companyRole department')
+    .populate('unlockUsers.user', 'name email jobRole companyRole department')
     .populate('userAccessScopes.user', 'name email jobRole companyRole department')
     .lean();
   const configMap = new Map(configs.map(config => [config.path, config]));
@@ -128,14 +197,23 @@ const decoratePages = async (companyId) => {
       viewUsers: getPageUsers(config, 'viewUsers'),
       editUsers: getPageUsers(config, 'editUsers'),
       deleteUsers: getPageUsers(config, 'deleteUsers'),
+      generateUsers: getPageUsers(config, 'generateUsers'),
+      lockUsers: getPageUsers(config, 'lockUsers'),
+      unlockUsers: getPageUsers(config, 'unlockUsers'),
       userAccessScopes: getPageUserAccessScopes(config),
       updatedAt: config?.updatedAt || null
     };
   });
 };
 
-const getDecoratedPagesCached = (companyId) => getOrSetCached(
+const getPageSummariesCached = (companyId) => getOrSetCached(
   getCacheKey(PAGE_PERMISSION_CACHE_PREFIX, { scope: 'pages', companyId }),
+  () => decoratePageSummaries(companyId),
+  PAGE_PERMISSION_TTL_MS
+);
+
+const getDecoratedPagesCached = (companyId) => getOrSetCached(
+  getCacheKey(PAGE_PERMISSION_CACHE_PREFIX, { scope: 'pages-full', companyId }),
   () => decoratePages(companyId),
   PAGE_PERMISSION_TTL_MS
 );
@@ -160,26 +238,41 @@ const getPageByPathCached = (companyId, path) => getOrSetCached(
       .populate('viewUsers.user', 'name email jobRole companyRole department')
       .populate('editUsers.user', 'name email jobRole companyRole department')
       .populate('deleteUsers.user', 'name email jobRole companyRole department')
+      .populate('generateUsers.user', 'name email jobRole companyRole department')
+      .populate('lockUsers.user', 'name email jobRole companyRole department')
+      .populate('unlockUsers.user', 'name email jobRole companyRole department')
       .populate('userAccessScopes.user', 'name email jobRole companyRole department')
       .lean();
 
+    const pageMeta = APP_PAGES.find(item => item.path === (config?.path || path));
+
     return config ? {
-      pageKey: config.pageKey,
-      name: config.name,
-      path: config.path,
-      permissionPattern: APP_PAGES.find(item => item.path === config.path)?.permissionPattern || null,
+      pageKey: config.pageKey || pageMeta?.pageKey || '',
+      name: config.name || pageMeta?.name || 'Page',
+      path: config.path || pageMeta?.path || path,
+      permissionPattern: pageMeta?.permissionPattern || null,
+      permissionActions: pageMeta?.permissionActions || null,
       approvers: getPageUsers(config, 'approvers'),
       viewUsers: getEffectiveViewUsers(config),
       editUsers: getPageUsers(config, 'editUsers'),
       deleteUsers: getPageUsers(config, 'deleteUsers'),
+      generateUsers: getPageUsers(config, 'generateUsers'),
+      lockUsers: getPageUsers(config, 'lockUsers'),
+      unlockUsers: getPageUsers(config, 'unlockUsers'),
       userAccessScopes: getPageUserAccessScopes(config)
     } : {
-      path,
-      permissionPattern: APP_PAGES.find(item => item.path === path)?.permissionPattern || null,
+      pageKey: pageMeta?.pageKey || '',
+      name: pageMeta?.name || 'Page',
+      path: pageMeta?.path || path,
+      permissionPattern: pageMeta?.permissionPattern || null,
+      permissionActions: pageMeta?.permissionActions || null,
       approvers: [],
       viewUsers: [],
       editUsers: [],
       deleteUsers: [],
+      generateUsers: [],
+      lockUsers: [],
+      unlockUsers: [],
       userAccessScopes: []
     };
   },
@@ -306,7 +399,7 @@ router.get('/pages', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Company not found for current user' });
     }
 
-    const pages = await getDecoratedPagesCached(companyId);
+    const pages = await getPageSummariesCached(companyId);
     res.json({ success: true, pages });
   } catch (error) {
     console.error('Page permissions list error:', error);
@@ -481,12 +574,18 @@ router.put('/:pageKey', isCompanyOwner, async (req, res) => {
     const viewUserIds = Array.isArray(req.body.viewUserIds) ? req.body.viewUserIds : [];
     const editUserIds = Array.isArray(req.body.editUserIds) ? req.body.editUserIds : [];
     const deleteUserIds = Array.isArray(req.body.deleteUserIds) ? req.body.deleteUserIds : [];
+    const generateUserIds = Array.isArray(req.body.generateUserIds) ? req.body.generateUserIds : [];
+    const lockUserIds = Array.isArray(req.body.lockUserIds) ? req.body.lockUserIds : [];
+    const unlockUserIds = Array.isArray(req.body.unlockUserIds) ? req.body.unlockUserIds : [];
     const userAccessScopes = normalizeUserAccessScopes(req.body.userAccessScopes);
     const uniqueApproverIds = [...new Set(approverIds.map(id => String(id)).filter(id => mongoose.Types.ObjectId.isValid(id)))];
     const uniqueViewUserIds = [...new Set(viewUserIds.map(id => String(id)).filter(id => mongoose.Types.ObjectId.isValid(id)))];
     const uniqueEditUserIds = [...new Set(editUserIds.map(id => String(id)).filter(id => mongoose.Types.ObjectId.isValid(id)))];
     const uniqueDeleteUserIds = [...new Set(deleteUserIds.map(id => String(id)).filter(id => mongoose.Types.ObjectId.isValid(id)))];
-    const allUserIds = [...new Set([...uniqueApproverIds, ...uniqueViewUserIds, ...uniqueEditUserIds, ...uniqueDeleteUserIds])];
+    const uniqueGenerateUserIds = [...new Set(generateUserIds.map(id => String(id)).filter(id => mongoose.Types.ObjectId.isValid(id)))];
+    const uniqueLockUserIds = [...new Set(lockUserIds.map(id => String(id)).filter(id => mongoose.Types.ObjectId.isValid(id)))];
+    const uniqueUnlockUserIds = [...new Set(unlockUserIds.map(id => String(id)).filter(id => mongoose.Types.ObjectId.isValid(id)))];
+    const allUserIds = [...new Set([...uniqueApproverIds, ...uniqueViewUserIds, ...uniqueEditUserIds, ...uniqueDeleteUserIds, ...uniqueGenerateUserIds, ...uniqueLockUserIds, ...uniqueUnlockUserIds])];
 
     const validUsers = await User.find({
       _id: { $in: allUserIds },
@@ -501,6 +600,9 @@ router.put('/:pageKey', isCompanyOwner, async (req, res) => {
     const viewUsers = normalizePageUsers(uniqueViewUserIds.filter(id => validIdSet.has(id)));
     const editUsers = normalizePageUsers(uniqueEditUserIds.filter(id => validIdSet.has(id)));
     const deleteUsers = normalizePageUsers(uniqueDeleteUserIds.filter(id => validIdSet.has(id)));
+    const generateUsers = normalizePageUsers(uniqueGenerateUserIds.filter(id => validIdSet.has(id)));
+    const lockUsers = normalizePageUsers(uniqueLockUserIds.filter(id => validIdSet.has(id)));
+    const unlockUsers = normalizePageUsers(uniqueUnlockUserIds.filter(id => validIdSet.has(id)));
     const validUserAccessScopes = userAccessScopes.filter(item => validIdSet.has(String(item.user)));
 
     const config = await PagePermission.findOneAndUpdate(
@@ -515,6 +617,9 @@ router.put('/:pageKey', isCompanyOwner, async (req, res) => {
         viewUsers,
         editUsers,
         deleteUsers,
+        generateUsers,
+        lockUsers,
+        unlockUsers,
         userAccessScopes: validUserAccessScopes
       },
       { upsert: true, new: true, setDefaultsOnInsert: true }
@@ -523,6 +628,9 @@ router.put('/:pageKey', isCompanyOwner, async (req, res) => {
       .populate('viewUsers.user', 'name email jobRole companyRole department')
       .populate('editUsers.user', 'name email jobRole companyRole department')
       .populate('deleteUsers.user', 'name email jobRole companyRole department')
+      .populate('generateUsers.user', 'name email jobRole companyRole department')
+      .populate('lockUsers.user', 'name email jobRole companyRole department')
+      .populate('unlockUsers.user', 'name email jobRole companyRole department')
       .populate('userAccessScopes.user', 'name email jobRole companyRole department');
 
     await notifyDirectUsers({
@@ -556,6 +664,9 @@ router.put('/:pageKey', isCompanyOwner, async (req, res) => {
         viewUsers: getPageUsers(config, 'viewUsers'),
         editUsers: getPageUsers(config, 'editUsers'),
         deleteUsers: getPageUsers(config, 'deleteUsers'),
+        generateUsers: getPageUsers(config, 'generateUsers'),
+        lockUsers: getPageUsers(config, 'lockUsers'),
+        unlockUsers: getPageUsers(config, 'unlockUsers'),
         userAccessScopes: getPageUserAccessScopes(config)
       }
     });
