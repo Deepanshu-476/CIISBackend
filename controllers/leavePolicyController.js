@@ -166,25 +166,35 @@ exports.deleteLeaveType = async (req, res, next) => {
   } catch (error) { next(error); }
 };
 
-const policyValues = (body) => ({
-  policyName: String(body.policyName || "").trim(),
-  department: validId(body.department) ? body.department : null,
-  jobRoles: Array.isArray(body.jobRoles) ? [...new Set(body.jobRoles.filter(validId).map(String))] : [],
-  jobRoleNames: Array.isArray(body.jobRoleNames) ? body.jobRoleNames.map(String).map(v => v.trim()).filter(Boolean) : [],
-  leaveType: String(body.leaveType || "").trim(),
-  payType: body.payType || "Paid",
-  entitledDays: Number(body.entitledDays) || 0,
-  monthlyAllowed: Number(body.monthlyAllowed) || 0,
-  carryForward: body.carryForward || "No",
-  maxCarryForwardDays: Number(body.maxCarryForwardDays) || 0,
-  encashmentAllowed: body.encashmentAllowed || "No",
-  probationApplicable: body.probationApplicable || "No",
-  sortOrder: Number(body.sortOrder) || 1,
-  status: body.status || "Active"
-});
+const policyValues = (body) => {
+  const departments = [
+    ...(Array.isArray(body.departments) ? body.departments : []),
+    ...(Array.isArray(body.departmentIds) ? body.departmentIds : []),
+    body.department
+  ].filter(validId).map(String);
+  const uniqueDepartments = [...new Set(departments)];
+
+  return {
+    policyName: String(body.policyName || "").trim(),
+    department: uniqueDepartments[0] || null,
+    departments: uniqueDepartments,
+    jobRoles: Array.isArray(body.jobRoles) ? [...new Set(body.jobRoles.filter(validId).map(String))] : [],
+    jobRoleNames: Array.isArray(body.jobRoleNames) ? body.jobRoleNames.map(String).map(v => v.trim()).filter(Boolean) : [],
+    leaveType: String(body.leaveType || "").trim(),
+    payType: body.payType || "Paid",
+    entitledDays: Number(body.entitledDays) || 0,
+    monthlyAllowed: Number(body.monthlyAllowed) || 0,
+    carryForward: body.carryForward || "No",
+    maxCarryForwardDays: Number(body.maxCarryForwardDays) || 0,
+    encashmentAllowed: body.encashmentAllowed || "No",
+    probationApplicable: body.probationApplicable || "No",
+    sortOrder: Number(body.sortOrder) || 1,
+    status: body.status || "Active"
+  };
+};
 
 const validatePolicyRelations = async (values, company) => {
-  if (!values.policyName || !values.department || !values.leaveType) return "Policy name, department and leave type are required";
+  if (!values.policyName || !values.departments.length || !values.leaveType) return "Policy name, department and leave type are required";
   if (!["Paid", "Unpaid", "Admin Choice"].includes(values.payType)) return "Select a valid pay type";
   if (!values.jobRoles.length) return "At least one job role is required";
   const leaveType = await LeaveType.exists({
@@ -193,9 +203,9 @@ const validatePolicyRelations = async (values, company) => {
     status: "Active"
   });
   if (!leaveType) return "Select an active leave type configured for your company";
-  const department = await Department.exists({ _id: values.department, company });
-  if (!department) return "Selected department does not belong to your company";
-  const roles = await JobRole.countDocuments({ _id: { $in: values.jobRoles }, company, department: values.department });
+  const departmentCount = await Department.countDocuments({ _id: { $in: values.departments }, company });
+  if (departmentCount !== values.departments.length) return "One or more selected departments do not belong to your company";
+  const roles = await JobRole.countDocuments({ _id: { $in: values.jobRoles }, company, department: { $in: values.departments } });
   if (roles !== values.jobRoles.length) return "One or more job roles do not belong to the selected department";
   return null;
 };
@@ -206,6 +216,7 @@ exports.getLeavePolicies = async (req, res, next) => {
     if (!companyScope) return;
     const leavePolicies = await LeavePolicy.find({ company: companyScope.company })
       .populate("department", "name branch company")
+      .populate("departments", "name branch company")
       .populate("jobRoles", "name department")
       .populate("createdBy", "name email")
       .populate("updatedBy", "name email")
@@ -234,6 +245,7 @@ exports.getApplicableLeavePolicies = async (req, res, next) => {
 
     const allPolicies = await LeavePolicy.find({ company: companyScope.company, status: "Active" })
       .populate("department", "name")
+      .populate("departments", "name")
       .populate("jobRoles", "name")
       .sort({ sortOrder: 1, createdAt: 1 })
       .lean();
@@ -244,7 +256,8 @@ exports.getApplicableLeavePolicies = async (req, res, next) => {
     const applicable = allPolicies.filter(policy => {
       const departments = [
         normalize(policy.department?._id || policy.department),
-        normalize(policy.department?.name)
+        normalize(policy.department?.name),
+        ...(policy.departments || []).flatMap(dept => [normalize(dept?._id || dept), normalize(dept?.name)])
       ].filter(Boolean);
       const roles = [
         ...(policy.jobRoles || []).flatMap(role => [normalize(role?._id || role), normalize(role?.name)]),
@@ -335,6 +348,7 @@ exports.createLeavePolicy = async (req, res, next) => {
     const leavePolicy = await LeavePolicy.create({ ...values, ...companyScope, createdBy: req.user._id, updatedBy: req.user._id });
     await leavePolicy.populate([
       { path: "department", select: "name branch" },
+      { path: "departments", select: "name branch" },
       { path: "jobRoles", select: "name department" },
       { path: "createdBy", select: "name email" },
       { path: "updatedBy", select: "name email" }
@@ -357,6 +371,7 @@ exports.updateLeavePolicy = async (req, res, next) => {
       { new: true, runValidators: true }
     )
       .populate("department", "name branch")
+      .populate("departments", "name branch")
       .populate("jobRoles", "name department")
       .populate("createdBy", "name email")
       .populate("updatedBy", "name email");

@@ -314,6 +314,21 @@ const normalizeClockOutMode = (value) => {
   return mode === 'AUTO' ? 'AUTO' : 'MANUAL';
 };
 
+const normalizeAttendanceStatusForSave = (value, fallback = "") => {
+  const compact = String(value || fallback || "").trim().toUpperCase().replace(/[\s_-]+/g, "");
+  const statusMap = {
+    PRESENT: "PRESENT",
+    LATE: "LATE",
+    HALFDAY: "HALF DAY",
+    ABSENT: "ABSENT",
+    UNINFORMEDLEAVE: "UNINFORMED LEAVE",
+    HOLIDAY: "HOLIDAY",
+    WEEKEND: "WEEKEND",
+    SHORTLEAVE: "SHORT LEAVE"
+  };
+  return statusMap[compact] || fallback || "ABSENT";
+};
+
 const calculateAttendanceByShift = ({ inTime, outTime, shiftSettings, currentStatus }) => {
   if (!inTime) {
     return {
@@ -1492,7 +1507,7 @@ const updateAttendanceRecord = async (req, res) => {
     }
     
     if (updateData.status && String(updateData.status).trim() !== '') {
-      record.status = String(updateData.status).toUpperCase();
+      record.status = normalizeAttendanceStatusForSave(updateData.status, record.status);
     } else if (updateData.inTime !== undefined || updateData.outTime !== undefined) {
       const attendanceUser = await User.findById(record.user).select('company jobRole shiftId shiftName shiftType');
       const shiftSettings = record.shiftStart && record.shiftEnd
@@ -1551,7 +1566,7 @@ const updateAttendanceRecord = async (req, res) => {
         if (existingRecord) {
           if (updateData.inTime !== undefined) existingRecord.inTime = updateData.inTime ? new Date(updateData.inTime) : null;
           if (updateData.outTime !== undefined) existingRecord.outTime = updateData.outTime ? new Date(updateData.outTime) : null;
-          if (updateData.status) existingRecord.status = String(updateData.status).toUpperCase();
+          if (updateData.status) existingRecord.status = normalizeAttendanceStatusForSave(updateData.status, existingRecord.status);
           if (updateData.notes !== undefined) existingRecord.notes = updateData.notes;
           existingRecord.companyCode = userCompanyCode;
           await existingRecord.save();
@@ -1632,7 +1647,7 @@ const createManualAttendance = async (req, res) => {
       inTime: inTime ? new Date(inTime) : null,
       outTime: outTime ? new Date(outTime) : null,
       shiftSettings,
-      currentStatus: status ? status.toUpperCase() : "ABSENT"
+      currentStatus: normalizeAttendanceStatusForSave(status, "ABSENT")
     });
     
     const existingDate = parseIndiaDateOnly(date);
@@ -1644,10 +1659,10 @@ const createManualAttendance = async (req, res) => {
     });
     
     if (existingAttendance) {
-      existingAttendance.status = status ? status.toUpperCase() : existingAttendance.status;
+      existingAttendance.status = status ? normalizeAttendanceStatusForSave(status, existingAttendance.status) : existingAttendance.status;
       existingAttendance.inTime = inTime ? new Date(inTime) : existingAttendance.inTime;
       existingAttendance.outTime = outTime ? new Date(outTime) : existingAttendance.outTime;
-      existingAttendance.isClockedIn = outTime ? false : existingAttendance.isClockedIn;
+      existingAttendance.isClockedIn = outTime || status ? false : existingAttendance.isClockedIn;
       existingAttendance.clockOutMode = outTime
         ? normalizeClockOutMode(clockOutMode || existingAttendance.clockOutMode || 'MANUAL')
         : existingAttendance.clockOutMode;
@@ -1680,13 +1695,13 @@ const createManualAttendance = async (req, res) => {
       inTime: inTime ? new Date(inTime) : null,
       outTime: outTime ? new Date(outTime) : null,
       clockOutMode: outTime ? normalizeClockOutMode(clockOutMode || 'MANUAL') : null,
-      status: status ? status.toUpperCase() : calculated.status,
+      status: status ? normalizeAttendanceStatusForSave(status, calculated.status) : calculated.status,
       lateBy: lateBy || calculated.lateBy,
       earlyLeave: earlyLeave || calculated.earlyLeave,
       overTime: overTime || calculated.overTime,
       totalTime: calculated.totalTime,
       notes: notes || "",
-      isClockedIn: !outTime,
+      isClockedIn: Boolean(inTime && !outTime && !status),
       companyCode: userCompanyCode
     });
     applyShiftSnapshot(attendance, shiftSnapshot);
@@ -1700,7 +1715,7 @@ const createManualAttendance = async (req, res) => {
           date: { $gte: existingDate, $lte: endOfDay }
         });
         if (existingRecord) {
-          existingRecord.status = status ? status.toUpperCase() : existingRecord.status;
+          existingRecord.status = status ? normalizeAttendanceStatusForSave(status, existingRecord.status) : existingRecord.status;
           if (inTime !== undefined) existingRecord.inTime = inTime ? new Date(inTime) : existingRecord.inTime;
           if (outTime !== undefined) existingRecord.outTime = outTime ? new Date(outTime) : existingRecord.outTime;
           existingRecord.notes = notes || existingRecord.notes;
@@ -1975,7 +1990,7 @@ const getAttendanceStats = async (req, res) => {
       if (branchUserIds.length === 0) {
         return res.status(200).json({
           message: "Attendance statistics fetched successfully",
-          data: { total: 0, present: 0, late: 0, halfDay: 0, absent: 0 }
+          data: { total: 0, present: 0, late: 0, halfDay: 0, absent: 0, uninformedLeave: 0, holiday: 0 }
         });
       }
       matchStage.user = { $in: branchUserIds };
@@ -2013,6 +2028,16 @@ const getAttendanceStats = async (req, res) => {
             $sum: {
               $cond: [{ $eq: ["$status", "ABSENT"] }, 1, 0]
             }
+          },
+          uninformedLeave: {
+            $sum: {
+              $cond: [{ $in: ["$status", ["UNINFORMED LEAVE", "UNINFORMEDLEAVE"]] }, 1, 0]
+            }
+          },
+          holiday: {
+            $sum: {
+              $cond: [{ $eq: ["$status", "HOLIDAY"] }, 1, 0]
+            }
           }
         }
       }
@@ -2023,7 +2048,9 @@ const getAttendanceStats = async (req, res) => {
       present: 0,
       late: 0,
       halfDay: 0,
-      absent: 0
+      absent: 0,
+      uninformedLeave: 0,
+      holiday: 0
     };
     
     res.status(200).json({

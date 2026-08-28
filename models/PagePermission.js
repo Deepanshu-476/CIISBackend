@@ -72,6 +72,39 @@ const pagePermissionSchema = new mongoose.Schema({
       default: Date.now
     }
   }],
+  generateUsers: [{
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true
+    },
+    addedAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
+  lockUsers: [{
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true
+    },
+    addedAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
+  unlockUsers: [{
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true
+    },
+    addedAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
   userAccessScopes: [{
     user: {
       type: mongoose.Schema.Types.ObjectId,
@@ -80,7 +113,7 @@ const pagePermissionSchema = new mongoose.Schema({
     },
     accessType: {
       type: String,
-      enum: ['view', 'edit', 'delete', 'approve'],
+      enum: ['view', 'edit', 'delete', 'approve', 'generate', 'lock', 'unlock'],
       required: true
     },
     branchIds: [{
