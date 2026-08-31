@@ -372,7 +372,19 @@ const hasChangedValue = (nextValue, currentValue) => {
 
 const REGISTER_REQUEST_PATH = '/ciisUser/register-request';
 
-const REGISTER_REQUEST_SECTIONS = ['applicationReview'];
+const REGISTER_REQUEST_SECTIONS = [
+  'applicationReview',
+  'personalInformation',
+  'companyAssignment',
+  'additionalDetails',
+  'workDetails',
+  'addressInformation',
+  'identityDocuments',
+  'salaryBankDetails',
+  'familyDetails',
+  'emergencyContact',
+  'assetsExtraDetails'
+];
 
 const REGISTER_REQUEST_EDITABLE_FIELDS = new Set([
   'name', 'email', 'phone', 'dob', 'gender', 'maritalStatus',
@@ -1112,7 +1124,8 @@ exports.activateRegisterRequest = async (req, res) => {
     const allVerified = REGISTER_REQUEST_SECTIONS.every(key => (
       Boolean(user.registrationVerification?.sections?.[key]?.verified)
     ));
-    if (!allVerified) {
+    const legacyApplicationReviewVerified = Boolean(user.registrationVerification?.sections?.applicationReview?.verified);
+    if (!allVerified && !legacyApplicationReviewVerified) {
       return errorResponse(res, 400, "Please review the application before activating this user");
     }
 
@@ -1213,10 +1226,12 @@ exports.setRegisterRequestStatus = async (req, res) => {
     };
 
     if (isActive) {
-      setData['registrationVerification.sections.applicationReview.verified'] = true;
-      setData['registrationVerification.sections.applicationReview.verifiedBy'] = req.user.id || req.user._id;
-      setData['registrationVerification.sections.applicationReview.verifierName'] = getRequestUserName(req.user);
-      setData['registrationVerification.sections.applicationReview.verifiedAt'] = now;
+      REGISTER_REQUEST_SECTIONS.forEach(sectionKey => {
+        setData[`registrationVerification.sections.${sectionKey}.verified`] = true;
+        setData[`registrationVerification.sections.${sectionKey}.verifiedBy`] = req.user.id || req.user._id;
+        setData[`registrationVerification.sections.${sectionKey}.verifierName`] = getRequestUserName(req.user);
+        setData[`registrationVerification.sections.${sectionKey}.verifiedAt`] = now;
+      });
       setData['registrationVerification.activatedBy'] = req.user.id || req.user._id;
       setData['registrationVerification.activatedByName'] = getRequestUserName(req.user);
       setData['registrationVerification.activatedAt'] = now;
