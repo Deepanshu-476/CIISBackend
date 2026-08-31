@@ -11,7 +11,7 @@ test("bulk approval preserves an already locked employee", () => {
   assert.equal(result[0].payrollStatus, "Locked");
   assert.equal(result[1].payrollStatus, "Approved");
 });
-
+ 
 test("reopen removes payslip eligibility from every employee", () => {
   const result = applyBulkEmployeeTransition("reopen", [{ payrollStatus: "Approved" }, { payrollStatus: "Locked" }], "actor", new Date(0));
   assert.deepEqual(result.map(item => item.payrollStatus), ["Draft", "Draft"]);
