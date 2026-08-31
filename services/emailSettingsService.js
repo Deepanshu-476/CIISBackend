@@ -3,7 +3,7 @@ const nodemailer = require("nodemailer");
 const EmailSettings = require("../models/EmailSettings");
 
 const SETTINGS_KEY = "global";
-let cachedSettings = null;
+let cachedSettings = null; 
 let cachedAt = 0;
 let cachedIncludesSecret = false;
 const CACHE_TTL_MS = 5000;    
