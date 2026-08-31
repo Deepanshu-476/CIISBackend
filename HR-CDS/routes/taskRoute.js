@@ -31,6 +31,7 @@ router.post('/create-self', protect, uploadFields, taskController.createTaskForS
 router.post('/create-for-others', protect, uploadFields, taskController.createTaskForOthers);
 
 router.put('/:taskId', protect, uploadFields, taskController.updateTask);
+router.patch('/:taskId/stop-recurring', protect, taskController.stopRecurringTask);
 router.delete('/:taskId', protect, taskController.deleteTask);
 router.patch('/:taskId/status', protect, taskController.updateStatus);
 router.patch('/:taskId/quick-status', protect, taskController.quickStatusUpdate);

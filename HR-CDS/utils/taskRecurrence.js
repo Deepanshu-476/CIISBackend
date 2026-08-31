@@ -163,6 +163,9 @@ const normalizeTaskRecurrenceFields = (task = {}) => {
   const repeatDays = normalizeRepeatDays(task.repeatDays);
   const isRecurring = toBoolean(task.isRecurring) || repeatPattern !== 'none';
   const nextRecurringDate = task.nextRecurringDate ? toValidDate(task.nextRecurringDate) : null;
+  const recurrenceEndDate = task.recurrenceEndDate || task.repeatEndDate || task.endDate
+    ? toValidDate(task.recurrenceEndDate || task.repeatEndDate || task.endDate)
+    : null;
   const recurrenceSourceId = task.recurrenceSourceId || null;
   const recurrenceOccurrenceKey = task.recurrenceOccurrenceKey || null;
 
@@ -171,6 +174,7 @@ const normalizeTaskRecurrenceFields = (task = {}) => {
     repeatDays,
     isRecurring,
     nextRecurringDate,
+    recurrenceEndDate,
     recurrenceSourceId,
     recurrenceOccurrenceKey,
   };
@@ -234,6 +238,8 @@ const buildRecurringTaskClone = (templateTask, occurrenceDate) => {
     repeatDays: normalized.repeatDays,
     recurringPattern: normalized.repeatPattern,
     nextRecurringDate,
+    recurrenceEndDate: normalized.recurrenceEndDate,
+    recurrenceStoppedAt: null,
     recurrenceSourceId: sourceId,
     recurrenceOccurrenceKey: dueDateTime.toISOString(),
     creatorStatus: {

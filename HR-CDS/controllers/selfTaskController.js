@@ -37,6 +37,7 @@ const parseRecurringSettingsFromBody = (body = {}) => {
   return {
     repeatPattern: normalized.repeatPattern,
     repeatDays: normalized.repeatDays,
+    recurrenceEndDate: normalized.recurrenceEndDate,
     isRecurring: normalized.repeatPattern !== 'none' && normalized.isRecurring,
   };
 };
@@ -47,6 +48,8 @@ const applyRecurringFields = (task, body = {}, dueDateTime = null) => {
   task.repeatDays = recurring.repeatDays;
   task.recurringPattern = recurring.repeatPattern;
   task.isRecurring = recurring.isRecurring;
+  task.recurrenceEndDate = recurring.isRecurring ? recurring.recurrenceEndDate : null;
+  task.recurrenceStoppedAt = recurring.isRecurring ? null : (task.recurrenceStoppedAt || new Date());
   task.nextRecurringDate = recurring.isRecurring && dueDateTime
     ? getNextRecurringDate(dueDateTime, recurring.repeatPattern, recurring.repeatDays)
     : null;
@@ -175,6 +178,8 @@ exports.createTaskForSelf = async (req, res) => {
       repeatPattern: recurringSettings.repeatPattern,
       repeatDays: recurringSettings.repeatDays,
       recurringPattern: recurringSettings.repeatPattern,
+      recurrenceEndDate: recurringSettings.recurrenceEndDate,
+      recurrenceStoppedAt: null,
       nextRecurringDate: recurringSettings.isRecurring && taskDueDateTime
         ? getNextRecurringDate(taskDueDateTime, recurringSettings.repeatPattern, recurringSettings.repeatDays)
         : null,
@@ -233,7 +238,7 @@ exports.updateTask = async (req, res) => {
     fields.forEach(f => {
       if (req.body[f] !== undefined && req.body[f] !== 'null') task[f] = req.body[f];
     });
-    const hasRecurringUpdate = ['repeatPattern', 'repeatDays', 'isRecurring', 'recurringPattern']
+    const hasRecurringUpdate = ['repeatPattern', 'repeatDays', 'isRecurring', 'recurringPattern', 'recurrenceEndDate', 'repeatEndDate', 'endDate']
       .some(field => Object.prototype.hasOwnProperty.call(req.body, field));
     if (hasRecurringUpdate) {
       applyRecurringFields(task, req.body, task.dueDateTime);
@@ -256,6 +261,34 @@ exports.updateTask = async (req, res) => {
     await createActivityLog(req.user, 'task_updated', task._id, `Updated task details`, oldTask, task.toObject(), req);
 
     res.json({ success: true, message: 'Task updated successfully', task });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+exports.stopRecurringTask = async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    let task = await Task.findById(taskId);
+    if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
+    if (task.recurrenceSourceId) {
+      task = await Task.findById(task.recurrenceSourceId);
+      if (!task) return res.status(404).json({ success: false, error: 'Recurring source task not found' });
+    }
+    if (!(await canManagePersonalTask(req, task))) return res.status(403).json({ success: false, error: 'Not authorized' });
+    if (task.taskFor !== 'self') return res.status(400).json({ success: false, error: 'Only personal recurring tasks can be stopped' });
+
+    const oldTask = task.toObject();
+    task.isRecurring = false;
+    task.repeatPattern = 'none';
+    task.recurringPattern = 'none';
+    task.repeatDays = [];
+    task.nextRecurringDate = null;
+    task.recurrenceStoppedAt = new Date();
+    await task.save();
+
+    await createActivityLog(req.user, 'recurring_task_stopped', task._id, 'Stopped recurring task', oldTask, task.toObject(), req);
+    res.json({ success: true, message: 'Repeat task stopped successfully', task });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

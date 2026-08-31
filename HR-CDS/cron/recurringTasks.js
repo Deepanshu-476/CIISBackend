@@ -21,6 +21,12 @@ const getOccurrenceStartDate = (task) => (
   toValidDate(task?.dueDateTime)
 );
 
+const isAfterRecurringEndDate = (occurrenceDate, recurrenceEndDate) => {
+  const endDate = toValidDate(recurrenceEndDate);
+  if (!endDate) return false;
+  return occurrenceDate > endDate;
+};
+
 const createOccurrenceIfMissing = async (templateTask, occurrenceDate) => {
   const occurrenceKey = occurrenceDate.toISOString();
   const existing = await Task.findOne({
@@ -62,11 +68,36 @@ const processRecurringTemplate = async (templateTask, now = new Date()) => {
   let created = 0;
   let iterations = 0;
 
-  while (nextOccurrence && nextOccurrence <= now && iterations < MAX_CATCH_UP_OCCURRENCES) {
+  if (nextOccurrence && isAfterRecurringEndDate(nextOccurrence, normalized.recurrenceEndDate)) {
+    await Task.updateOne(
+      { _id: templateTask._id },
+      {
+        $set: {
+          isRecurring: false,
+          repeatPattern: 'none',
+          recurringPattern: 'none',
+          nextRecurringDate: null,
+          recurrenceStoppedAt: new Date(),
+        }
+      }
+    );
+    return { created: 0, stopped: true };
+  }
+
+  while (
+    nextOccurrence &&
+    nextOccurrence <= now &&
+    !isAfterRecurringEndDate(nextOccurrence, normalized.recurrenceEndDate) &&
+    iterations < MAX_CATCH_UP_OCCURRENCES
+  ) {
     await createOccurrenceIfMissing(templateTask, nextOccurrence);
     created += 1;
     nextOccurrence = getNextRecurringDate(nextOccurrence, normalized.repeatPattern, normalized.repeatDays);
     iterations += 1;
+  }
+
+  if (nextOccurrence && isAfterRecurringEndDate(nextOccurrence, normalized.recurrenceEndDate)) {
+    nextOccurrence = null;
   }
 
   if (nextOccurrence) {
@@ -79,6 +110,20 @@ const processRecurringTemplate = async (templateTask, now = new Date()) => {
           repeatDays: normalized.repeatDays,
           recurringPattern: normalized.repeatPattern,
           isRecurring: true,
+          recurrenceEndDate: normalized.recurrenceEndDate,
+        }
+      }
+    );
+  } else {
+    await Task.updateOne(
+      { _id: templateTask._id },
+      {
+        $set: {
+          isRecurring: false,
+          repeatPattern: 'none',
+          recurringPattern: 'none',
+          nextRecurringDate: null,
+          recurrenceStoppedAt: new Date(),
         }
       }
     );
@@ -98,7 +143,7 @@ const runRecurringTaskSweep = async () => {
       { recurrenceSourceId: { $exists: false } }
     ]
   }).select(
-    '_id title description startDateTime dueDateTime nextRecurringDate repeatPattern repeatDays recurringPattern isRecurring createdAt taskFor recurrenceSourceId isActive whatsappNumber priorityDays priority companyCode branch assignedUsers assignedGroups statusByUser checkpoints remarks files voiceNote createdBy'
+    '_id title description startDateTime dueDateTime nextRecurringDate recurrenceEndDate repeatPattern repeatDays recurringPattern isRecurring createdAt taskFor recurrenceSourceId isActive whatsappNumber priorityDays priority companyCode branch assignedUsers assignedGroups statusByUser checkpoints remarks files voiceNote createdBy'
   ).lean();
 
   let processed = 0;

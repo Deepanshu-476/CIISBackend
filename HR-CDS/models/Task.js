@@ -230,6 +230,14 @@ const taskSchema = new mongoose.Schema(
     },
     recurringPattern: String,
     nextRecurringDate: Date,
+    recurrenceEndDate: {
+      type: Date,
+      default: null,
+    },
+    recurrenceStoppedAt: {
+      type: Date,
+      default: null,
+    },
     recurrenceSourceId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Task",
