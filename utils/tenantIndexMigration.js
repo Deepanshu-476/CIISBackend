@@ -6,6 +6,7 @@ const Holiday = require("../HR-CDS/models/Holiday");
 const Service = require("../HR-CDS/models/Service");
 const Client = require("../HR-CDS/models/Client");
 const ClientPlan = require("../HR-CDS/models/ClientPlan");
+const Task = require("../HR-CDS/models/Task");
 
 const tenantModels = [
   { model: Department, legacyFields: ["name"] },
@@ -24,6 +25,14 @@ const isLegacyGlobalUniqueIndex = (index, fields) => {
 };
 
 const migrateTenantIndexes = async () => {
+  try {
+    await Task.repairRecurrenceUniqueIndex();
+  } catch (error) {
+    if (error?.code !== 26 && error?.codeName !== "NamespaceNotFound") {
+      console.error("Failed to migrate Task recurrence index:", error.message);
+    }
+  }
+
   for (const { model, legacyFields } of tenantModels) {
     try {
       const indexes = await model.collection.indexes();

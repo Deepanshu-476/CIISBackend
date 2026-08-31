@@ -267,8 +267,37 @@ taskSchema.index({ companyCode: 1, taskFor: 1, isActive: 1, createdAt: -1 });
 taskSchema.index({ 'statusByUser.user': 1, 'statusByUser.status': 1 });
 taskSchema.index(
   { recurrenceSourceId: 1, recurrenceOccurrenceKey: 1 },
-  { unique: true, sparse: true }
+  {
+    unique: true,
+    partialFilterExpression: {
+      recurrenceSourceId: { $type: "objectId" },
+      recurrenceOccurrenceKey: { $type: "string" },
+    },
+  }
 );
+
+taskSchema.statics.repairRecurrenceUniqueIndex = async function() {
+  const indexName = "recurrenceSourceId_1_recurrenceOccurrenceKey_1";
+  const partialFilterExpression = {
+    recurrenceSourceId: { $type: "objectId" },
+    recurrenceOccurrenceKey: { $type: "string" },
+  };
+
+  const indexes = await this.collection.indexes();
+  const existing = indexes.find(index => index.name === indexName);
+  const existingFilter = JSON.stringify(existing?.partialFilterExpression || null);
+  const expectedFilter = JSON.stringify(partialFilterExpression);
+
+  if (existing && existingFilter !== expectedFilter) {
+    await this.collection.dropIndex(existing.name);
+    console.log(`Removed legacy Task recurrence index: ${existing.name}`);
+  }
+
+  await this.collection.createIndex(
+    { recurrenceSourceId: 1, recurrenceOccurrenceKey: 1 },
+    { unique: true, name: indexName, partialFilterExpression }
+  );
+};
 
  
 taskSchema.virtual('isPastDue').get(function() {
