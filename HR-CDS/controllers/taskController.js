@@ -1943,14 +1943,14 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
 
   const [personalTasks, clientTasks, projectTasks] = await Promise.all([
     Task.find(personalQuery)
-      .select('title description dueDate dueDateTime priority priorityDays checkpoints overallStatus statusByUser statusHistory assignedUsers assignedGroups createdBy companyCode taskFor onHoldReleasedAt createdAt updatedAt')
+      .select('title description dueDate dueDateTime priority priorityDays checkpoints overallStatus statusByUser statusHistory completionDate assignedUsers assignedGroups createdBy companyCode taskFor onHoldReleasedAt createdAt updatedAt')
       .populate('assignedUsers', 'name email')
       .populate('createdBy', 'name email')
       .sort({ createdAt: -1 })
       .lean(),
     
     ClientTask.find(clientQuery)
-      .select('name description dueDate priority status completed checkpoints service timeSpent inProgressSince activityLogs clientId createdAt updatedAt assignee assigneeId')
+      .select('name description dueDate priority status completed completedAt checkpoints service timeSpent inProgressSince activityLogs clientId createdAt updatedAt assignee assigneeId')
       .populate('clientId', 'client name email company phone companyCode')
       .populate('assigneeId', 'name email role')
       .sort({ createdAt: -1 })
@@ -1982,6 +1982,7 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
       priority: String(t.priority || 'Medium').toLowerCase(),
       status: displayStatus,
       userStatus,
+      completedAt: t.completionDate || null,
       source: taskSource,
       taskSource,
       __taskSource: taskSource
@@ -1999,6 +2000,7 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
       dueDate: t.dueDate,
       dueDateTime: t.dueDate,
       completed: t.completed,
+      completedAt: t.completedAt || null,
       checkpoints: t.checkpoints || [],
       priority: String(t.priority || 'Medium').toLowerCase(),
       status: displayStatus,
@@ -2040,6 +2042,9 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
         priority: String(task.priority || 'medium').toLowerCase(),
         status: displayStatus,
         userStatus: projectStatus,
+        completedAt: task.activityLogs
+          ?.filter(log => normalizeTaskStatus(log?.newValue || log?.newValues?.status || log?.status) === 'completed')
+          ?.sort((a, b) => new Date(b?.performedAt || b?.createdAt || 0) - new Date(a?.performedAt || a?.createdAt || 0))?.[0]?.performedAt || null,
         projectName: project.projectName,
         projectTaskId: task._id,
         createdBy: assignedBy,
