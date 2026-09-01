@@ -289,7 +289,7 @@ exports.updateStatus = async (req, res) => {
     if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
     if (!(await canManagePersonalTask(req, task))) return res.status(403).json({ success: false, error: 'Not authorized' });
 
-    const oldStatus = task.overallStatus || 'pending';
+    const oldStatus = normalizeTaskStatus(task.overallStatus || 'pending');
     const normalizedStatus = normalizeTaskStatus(status);
     const ownerUserId = task.createdBy;
     const allowCompanyAllEdit = isCompanyAllTaskEdit(req);
@@ -324,35 +324,35 @@ exports.updateStatus = async (req, res) => {
 
     const idx = task.statusByUser.findIndex(s => s.user?.toString() === ownerUserId.toString());
     if (idx === -1) {
-      task.statusByUser.push({ user: ownerUserId, status: status, updatedAt: new Date(), remarks });
+      task.statusByUser.push({ user: ownerUserId, status: normalizedStatus, updatedAt: new Date(), remarks });
     } else {
-      task.statusByUser[idx].status = status;
+      task.statusByUser[idx].status = normalizedStatus;
       task.statusByUser[idx].updatedAt = new Date();
       if (remarks) task.statusByUser[idx].remarks = remarks;
     }
 
-    task.overallStatus = status;
+    task.overallStatus = normalizedStatus;
     if (isOnHoldStatus(oldStatus) && normalizedStatus === 'in-progress') {
       task.onHoldReleasedAt = new Date();
     } else if (normalizedStatus === 'onhold') {
       task.onHoldReleasedAt = null;
     }
-    if (status === 'completed') {
+    if (normalizedStatus === 'completed') {
       task.completionDate = new Date();
     } else {
       task.completionDate = null;
     }
 
-    task.statusHistory.push({ status, changedBy: req.user._id, remarks: remarks || `Status changed from ${oldStatus} to ${status}` });
+    task.statusHistory.push({ status: normalizedStatus, changedBy: req.user._id, remarks: remarks || `Status changed from ${oldStatus} to ${normalizedStatus}` });
 
     await task.save();
-    res.json({ success: true, message: 'Status updated successfully', data: { taskId, newStatus: status, overallStatus: task.overallStatus } });
+    res.json({ success: true, message: 'Status updated successfully', data: { taskId, newStatus: normalizedStatus, overallStatus: task.overallStatus } });
 
     const runStatusPostProcessing = async () => {
-      await createActivityLog(req.user, 'status_updated', task._id, `Updated task status to ${status}`, { status: oldStatus }, { status, remarks }, req);
+      await createActivityLog(req.user, 'status_updated', task._id, `Updated task status to ${normalizedStatus}`, { status: oldStatus }, { status: normalizedStatus, remarks }, req);
     };
 
-    if (status === 'completed') {
+    if (normalizedStatus === 'completed') {
       enqueueCompletionJob(async () => {
         try {
           await runStatusPostProcessing();

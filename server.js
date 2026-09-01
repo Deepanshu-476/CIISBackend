@@ -527,9 +527,16 @@ const markPastAbsentRecords = async () => {
         
         const dayOfWeek = currentDate.getDay();
         const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+        const nextDate = new Date(currentDate);
+        nextDate.setDate(nextDate.getDate() + 1);
+        const isHoliday = await Holiday.exists({
+          companyCode: user.companyCode,
+          isActive: true,
+          date: { $gte: currentDate, $lt: nextDate }
+        });
         
         
-        if (!existingDates.has(dateStr) && !isWeekend) {
+        if (!existingDates.has(dateStr) && !isWeekend && !isHoliday) {
           
           if (currentDate < today) {
             const absentRecord = new Attendance({
@@ -592,8 +599,14 @@ const markDailyAbsent = async () => {
       if (!existingAttendance) {
         const dayOfWeek = today.getDay();
         const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+        const isHoliday = await Holiday.exists({
+          companyCode: user.companyCode,
+          isActive: true,
+          date: { $gte: today, $lt: tomorrow }
+        });
         
-        if (!isWeekend) { 
+        // A company holiday must never be converted into an absent day.
+        if (!isWeekend && !isHoliday) { 
           const absentRecord = new Attendance({
             user: user._id,
             date: today,
