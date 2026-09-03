@@ -32,6 +32,26 @@ const server = http.createServer(app);
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
 
+// Keep request profiling development-only so production logs and latency stay
+// unchanged. The path intentionally excludes query strings and request data.
+if (process.env.NODE_ENV === "development" || process.env.ENABLE_API_TIMING === "true") {
+  app.use((req, res, next) => {
+    const startedAt = process.hrtime.bigint();
+
+    res.once("finish", () => {
+      const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+      const responseSize = res.getHeader("content-length");
+      const sizeSuffix = responseSize ? ` size=${responseSize}b` : "";
+      const endpoint = String(req.originalUrl || req.path).split("?", 1)[0];
+      console.log(
+        `[api-timing] ${req.method} ${endpoint} -> ${res.statusCode} ${durationMs.toFixed(1)}ms${sizeSuffix}`
+      );
+    });
+
+    next();
+  });
+}
+
 app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "SAMEORIGIN");
