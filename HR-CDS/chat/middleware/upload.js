@@ -2,7 +2,7 @@ const multer = require("multer");
 const fs = require("fs");
 const path = require("path");
 
-const chatUploadDir = path.join(__dirname, "../../../../uploads/chat");
+const chatUploadDir = path.join(__dirname, "../../../uploads/chat");
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => {
