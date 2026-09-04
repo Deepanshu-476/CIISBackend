@@ -13,6 +13,17 @@ const getRouteKey = item => {
   return rawPath.split('/').filter(Boolean).pop();
 };
 
+const removeLegacyDashboardItems = menuItems => (Array.isArray(menuItems) ? menuItems.filter(item => {
+  const values = [item?.id, item?.path, item?.name].map(value => String(value || '').trim().toLowerCase());
+  return !values.includes('dashboard-2') && !values.includes('dashboard 2');
+}) : []);
+
+const sanitizeConfig = config => {
+  if (!config) return config;
+  config.menuItems = removeLegacyDashboardItems(config.menuItems);
+  return config;
+};
+
 const getRouteAccessKeys = item => {
   const id = String(item?.id || '').trim();
   const rawPath = String(item?.path || '').trim();
@@ -171,7 +182,7 @@ router.get('/', async (req, res) => {
     res.json({
       success: true,
       count: configs.length,
-      data: configs
+      data: configs.map(sanitizeConfig)
     });
   } catch (error) {
     console.error('Error fetching sidebar configs:', error);
@@ -245,6 +256,8 @@ router.get('/config', async (req, res) => {
         data: null
       });
     }
+
+    sanitizeConfig(config);
     
     res.json({
       success: true,
@@ -263,13 +276,12 @@ router.get('/config', async (req, res) => {
 
 
 router.post('/', async (req, res) => {
+  const { companyId, branchId, departmentId, role, menuItems, ranges } = req.body;
   try {
-    const { companyId, branchId, departmentId, role, menuItems, ranges } = req.body;
-    
     void 0;
     
     
-    if (!companyId || !departmentId || !role || !menuItems) {
+    if (!companyId || !departmentId || !role || !Array.isArray(menuItems)) {
       return res.status(400).json({
         success: false,
         message: 'Company, department, role and menuItems are required'
@@ -291,39 +303,33 @@ router.post('/', async (req, res) => {
       });
     }
     
-    const query = { companyId, departmentId, role };
-    if (branchId) query.branchId = branchId;
-
-    const existingConfig = await SidebarConfig.findOne(query);
-    
-    if (existingConfig) {
-      return res.status(409).json({ 
-        success: false,
-        message: 'Configuration already exists for this combination',
-        data: existingConfig
-      });
-    }
-    
-    
-    const newConfig = new SidebarConfig({
+    const configKey = {
       companyId,
       branchId: branchId || null,
       departmentId,
-      role,
-      menuItems,
-      ranges: ranges || []
-    });
-    
-    const savedConfig = await newConfig.save();
-    
-    
+      role
+    };
+    const configValues = {
+      menuItems: removeLegacyDashboardItems(menuItems),
+      ranges: Array.isArray(ranges) ? ranges : [],
+      updatedAt: new Date()
+    };
+
+    // Save is intentionally idempotent: a stale UI lookup must not turn a
+    // normal update into a duplicate-key failure.
+    const savedConfig = await SidebarConfig.findOneAndUpdate(
+      configKey,
+      { $set: configValues, $setOnInsert: configKey },
+      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+    );
+
     const populatedConfig = await SidebarConfig.findById(savedConfig._id)
       .populate('companyId', 'companyName companyCode')
       .populate('departmentId', 'name');
     
-    res.status(201).json({
+    res.status(200).json({
       success: true,
-      message: 'Configuration created successfully',
+      message: 'Configuration saved successfully',
       data: populatedConfig
     });
   } catch (error) {
@@ -331,9 +337,12 @@ router.post('/', async (req, res) => {
     
     
     if (error.code === 11000) {
+      const duplicateQuery = { companyId, departmentId, role, branchId: branchId || null };
+      const duplicateConfig = await SidebarConfig.findOne(duplicateQuery).lean();
       return res.status(409).json({
         success: false,
-        message: 'Configuration already exists for this combination'
+        message: 'Configuration already exists for this combination',
+        data: duplicateConfig
       });
     }
     
@@ -380,7 +389,7 @@ router.put('/:id', async (req, res) => {
     const updatedConfig = await SidebarConfig.findByIdAndUpdate(
       id,
       {
-        menuItems,
+        menuItems: removeLegacyDashboardItems(menuItems),
         ranges: ranges || [],
         updatedAt: Date.now()
       },
@@ -465,6 +474,8 @@ router.get('/user-config', async (req, res) => {
         data: null
       });
     }
+
+    sanitizeConfig(config);
     
     res.json({
       success: true,

@@ -2050,8 +2050,13 @@ exports.getCompanyUsers = async (req, res) => {
     }
     applyBranchAccessFilter(filter, req);
 
+    const taskOverviewView = String(req.query.view || '').toLowerCase() === 'task-overview';
+    const userProjection = taskOverviewView
+      ? 'name email role companyRole jobRole employeeType employeeId company companyCode department branch assignedBranches isActive status createdAt'
+      : '-password -resetToken -resetTokenExpiry';
+
     const users = await User.find(filter)
-      .select("-password -resetToken -resetTokenExpiry")
+      .select(userProjection)
       .populate("department", "name description")
       .populate("branch", "name branchCode")
       .populate("assignedBranches", "name branchCode")

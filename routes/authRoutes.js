@@ -9,7 +9,7 @@ const authController = require("../controllers/authController");
 const registerDocumentDir = path.join(__dirname, "../uploads/employee-documents");
 fs.mkdirSync(registerDocumentDir, { recursive: true });
 
-const registerDocumentUpload = multer({
+const registerDocumentUpload = multer({  
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, registerDocumentDir),
     filename: (_req, file, cb) => {
