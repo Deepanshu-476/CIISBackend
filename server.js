@@ -32,6 +32,26 @@ const server = http.createServer(app);
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
 
+// Keep request profiling development-only so production logs and latency stay
+// unchanged. The path intentionally excludes query strings and request data.
+if (process.env.NODE_ENV === "development" || process.env.ENABLE_API_TIMING === "true") {
+  app.use((req, res, next) => {
+    const startedAt = process.hrtime.bigint();
+
+    res.once("finish", () => {
+      const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+      const responseSize = res.getHeader("content-length");
+      const sizeSuffix = responseSize ? ` size=${responseSize}b` : "";
+      const endpoint = String(req.originalUrl || req.path).split("?", 1)[0];
+      console.log(
+        `[api-timing] ${req.method} ${endpoint} -> ${res.statusCode} ${durationMs.toFixed(1)}ms${sizeSuffix}`
+      );
+    });
+
+    next();
+  });
+}
+
 app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "SAMEORIGIN");
@@ -527,9 +547,16 @@ const markPastAbsentRecords = async () => {
         
         const dayOfWeek = currentDate.getDay();
         const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+        const nextDate = new Date(currentDate);
+        nextDate.setDate(nextDate.getDate() + 1);
+        const isHoliday = await Holiday.exists({
+          companyCode: user.companyCode,
+          isActive: true,
+          date: { $gte: currentDate, $lt: nextDate }
+        });
         
         
-        if (!existingDates.has(dateStr) && !isWeekend) {
+        if (!existingDates.has(dateStr) && !isWeekend && !isHoliday) {
           
           if (currentDate < today) {
             const absentRecord = new Attendance({
@@ -592,8 +619,14 @@ const markDailyAbsent = async () => {
       if (!existingAttendance) {
         const dayOfWeek = today.getDay();
         const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+        const isHoliday = await Holiday.exists({
+          companyCode: user.companyCode,
+          isActive: true,
+          date: { $gte: today, $lt: tomorrow }
+        });
         
-        if (!isWeekend) { 
+        // A company holiday must never be converted into an absent day.
+        if (!isWeekend && !isHoliday) { 
           const absentRecord = new Attendance({
             user: user._id,
             date: today,

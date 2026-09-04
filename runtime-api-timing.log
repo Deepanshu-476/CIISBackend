@@ -1,0 +1,4 @@
+◇ injected env (13) from .env // tip: ⌘ suppress logs { quiet: true }
+MongoDB connected
+Startup work anniversary test completed: { checked: 23, matched: 0, sent: 0, skipped: 0, failed: 0 }
+[api-timing] GET /api/tasks/test -> 200 44.7ms size=895b
