@@ -108,6 +108,24 @@ const getSocketOnlineUserIds = (companyId) => {
   return onlineIds;
 };
 
+const getDeliveredMemberIds = (conversation, senderId) => {
+  const onlineIds = getSocketOnlineUserIds(conversation.companyId);
+  return (conversation.members || [])
+    .map(member => member.toString())
+    .filter(memberId => memberId !== senderId)
+    .filter(memberId => onlineIds.has(memberId));
+};
+
+const emitMessageDelivered = (message, conversation, deliveredTo) => {
+  if (!global.io || !deliveredTo.length) return;
+
+  global.io.to(`user:${message.sender}`).emit("chat:message-delivered", {
+    messageId: message._id,
+    conversationId: conversation._id,
+    deliveredTo,
+  });
+};
+
 const isRecentlyOnlineInDb = (user) => {
   if (!user?.isOnline) return false;
   if (!user.lastSeen) return true;
@@ -348,6 +366,7 @@ exports.sendMessage = async (req, res) => {
 
     const duration = DISAPPEARING_DURATIONS[conversation.disappearingMode];
     const expiresAt = duration ? new Date(Date.now() + duration) : null;
+    const deliveredTo = getDeliveredMemberIds(conversation, senderId);
 
     const message = await Message.create({
       companyId: req.user.company,
@@ -359,6 +378,7 @@ exports.sendMessage = async (req, res) => {
       replyTo: replyTo?._id || null,
       expiresAt,
       seenBy: [senderId],
+      deliveredTo,
     });
 
     const populatedMessage = await populateMessage(Message.findById(message._id));
@@ -366,6 +386,7 @@ exports.sendMessage = async (req, res) => {
     if (global.io) {
       const room = `conversation:${conversationId}`;
       global.io.to(room).emit("chat:receive-message", populatedMessage);
+      emitMessageDelivered(message, conversation, deliveredTo);
     }
 
     await emitUnreadCounts(conversation, senderId);
@@ -444,14 +465,28 @@ exports.getMessages = async (req, res) => {
       const plain = message.toObject();
       const senderId = plain.sender?._id?.toString() || plain.sender?.toString();
       const seenBy = (plain.seenBy || []).map(member => member.toString());
+      const deliveredTo = (plain.deliveredTo || []).map(member => member.toString());
 
       return {
         ...plain,
+        delivered: senderId === userId
+          ? deliveredTo.some(memberId => memberId !== userId)
+          : deliveredTo.includes(userId),
         seen: senderId === userId
           ? seenBy.some(memberId => memberId !== userId)
           : seenBy.includes(userId),
       };
     });
+
+    const newlySeenMessages = messages
+      .map(message => {
+        const senderId = message.sender?._id?.toString() || message.sender?.toString();
+        const seenBy = (message.seenBy || []).map(member => member.toString());
+        return senderId !== userId && !seenBy.includes(userId)
+          ? {messageId: message._id, senderId}
+          : null;
+      })
+      .filter(Boolean);
 
     await Message.updateMany(
       {
@@ -461,10 +496,20 @@ exports.getMessages = async (req, res) => {
         seenBy: {$ne: userId},
         ...activeMessageFilter(),
       },
-      {$addToSet: {seenBy: userId}}
+      {$addToSet: {seenBy: userId, deliveredTo: userId}}
     );
 
     await emitUnreadCounts(conversation, userId);
+
+    if (global.io) {
+      newlySeenMessages.forEach(message => {
+        global.io.to(`user:${message.senderId}`).emit("chat:message-seen", {
+          messageId: message.messageId,
+          conversationId: conversation._id,
+          seenBy: userId,
+        });
+      });
+    }
 
     res.status(200).json({success: true, messages: normalizedMessages});
   } catch (error) {
@@ -778,6 +823,8 @@ exports.forwardMessage = async (req, res) => {
         });
       }
 
+      const deliveredTo = getDeliveredMemberIds(conversation, userId);
+
       const message = await Message.create({
         companyId: req.user.company,
         conversationId: conversation._id,
@@ -786,6 +833,7 @@ exports.forwardMessage = async (req, res) => {
         file: original.file,
         fileType: original.fileType,
         seenBy: [userId],
+        deliveredTo,
         isForwarded: true,
         originalMessage: original._id,
       });
@@ -796,6 +844,7 @@ exports.forwardMessage = async (req, res) => {
       if (global.io) {
         global.io.to(`conversation:${conversation._id}`).emit("chat:message-forwarded", populatedMessage);
         global.io.to(`user:${targetId}`).emit("chat:message-forwarded", populatedMessage);
+        emitMessageDelivered(message, conversation, deliveredTo);
       }
 
       await emitUnreadCounts(conversation, userId);
@@ -829,6 +878,7 @@ exports.markMessageSeen = async (req, res) => {
       return res.status(403).json({success: false, message: "You are not a member of this conversation"});
     }
 
+    message.deliveredTo.addToSet(userId);
     message.seenBy.addToSet(userId);
     await message.save();
     await emitUnreadCounts(conversation, userId);

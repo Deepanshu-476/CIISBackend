@@ -178,6 +178,22 @@ socket.on(
                 companyId: socket.companyId,
                 members: socket.userId
             });
+            const deliveredTo = conversation
+                ? getCompanyOnlineUsers(io, socket.companyId)
+                    .filter(userId => userId !== socket.userId.toString())
+                    .filter(userId => (conversation.members || []).map(member => member.toString()).includes(userId))
+                : [];
+            if (data?._id && deliveredTo.length) {
+                await Message.updateOne(
+                    {_id: data._id, companyId: socket.companyId},
+                    {$addToSet: {deliveredTo: {$each: deliveredTo}}}
+                );
+                io.to(`user:${socket.userId}`).emit("chat:message-delivered", {
+                    messageId: data._id,
+                    conversationId: data.conversationId,
+                    deliveredTo,
+                });
+            }
             await emitUnreadCounts(io, conversation, socket.userId);
         } else if (data.receiverId) {
             socket.to(`user:${data.receiverId}`).emit(
@@ -252,6 +268,7 @@ socket.on(
 
         if (!conversation) return;
 
+        message.deliveredTo.addToSet(socket.userId);
         message.seenBy.addToSet(socket.userId);
         await message.save();
         await emitUnreadCounts(io, conversation, socket.userId);
