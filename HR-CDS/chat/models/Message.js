@@ -106,6 +106,11 @@ const messageSchema = new mongoose.Schema(
     seenBy: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: "User"
+    }],
+
+    deliveredTo: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User"
     }]
 },
 { timestamps: true }
