@@ -12,6 +12,16 @@ try {
 
 const IMAGE_MAX_DIMENSION = 1600;
 const IMAGE_QUALITY = 76;
+const AUTO_COMPRESS_IMAGE_BYTES = 10 * 1024 * 1024;
+const AUTO_COMPRESS_VIDEO_BYTES = 200 * 1024 * 1024;
+
+const shouldCompressFile = (req, file) => {
+  const preference = String(req.body?.compressionMode || "normal").toLowerCase();
+  if (preference !== "hd") return true;
+  if (file.mimetype?.startsWith("image/")) return Number(file.size || 0) > AUTO_COMPRESS_IMAGE_BYTES;
+  if (file.mimetype?.startsWith("video/")) return Number(file.size || 0) > AUTO_COMPRESS_VIDEO_BYTES;
+  return false;
+};
 
 const updateFile = (file, targetPath, mimetype) => {
   const stat = fs.statSync(targetPath);
@@ -111,6 +121,7 @@ const compressUploadedMedia = async (req, _res, next) => {
   const file = req.file;
 
   if (!file?.path) return next();
+  if (!shouldCompressFile(req, file)) return next();
 
   try {
     if (file.mimetype?.startsWith("image/")) {
