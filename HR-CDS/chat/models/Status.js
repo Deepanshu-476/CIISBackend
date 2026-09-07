@@ -21,6 +21,7 @@ const statusSchema = new mongoose.Schema({
   text: { type: String, trim: true, maxlength: 500, default: "" },
   mediaUrl: { type: String, default: "" },
   mimeType: { type: String, default: "" },
+  backgroundColor: { type: String, match: /^#[0-9a-f]{6}$/i, default: "#256c62" },
   viewedBy: [{
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     viewedAt: { type: Date, default: Date.now },
