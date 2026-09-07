@@ -7,14 +7,14 @@ const {notifyDirectUsers} = require("../../utils/systemNotificationService");
 const getUserId = req => req.user._id?.toString() || req.user.id?.toString();
 
 const populateMessage = query => query
-  .populate("sender", "name email profileImage")
+  .populate("sender", "name email profileImage avatar image photo")
   .populate({
     path: "replyTo",
     select: "sender text file fileType deletedForEveryone",
-    populate: {path: "sender", select: "name email profileImage"},
+    populate: {path: "sender", select: "name email profileImage avatar image photo"},
   })
-  .populate("reactions.user", "name profileImage")
-  .populate("systemEvent.actor", "name profileImage");
+  .populate("reactions.user", "name profileImage avatar image photo")
+  .populate("systemEvent.actor", "name profileImage avatar image photo");
 
 const DISAPPEARING_DURATIONS = {
   "24h": 24 * 60 * 60 * 1000,
@@ -56,7 +56,7 @@ const getLastVisibleMessage = (conversationId, userId, companyId) => Message.fin
   deletedFor: {$ne: userId},
   ...activeMessageFilter(),
 })
-  .populate("sender", "name email profileImage")
+  .populate("sender", "name email profileImage avatar image photo")
   .sort({createdAt: -1});
 
 const withConversationMeta = async (conversation, userId, companyId) => {
@@ -253,8 +253,8 @@ exports.getConversations = async (req, res) => {
       companyId: req.user.company,
       members: userId,
     })
-      .populate("members", "name email profileImage companyRole isActive")
-      .populate("admins", "name email profileImage")
+      .populate("members", "name email profileImage avatar image photo companyRole isActive")
+      .populate("admins", "name email profileImage avatar image photo")
       .sort({updatedAt: -1});
 
     
@@ -292,8 +292,8 @@ exports.getConversation = async (req, res) => {
       companyId: req.user.company,
       members: req.user.id,
     })
-      .populate("members", "name email profileImage companyRole")
-      .populate("admins", "name email profileImage");
+      .populate("members", "name email profileImage avatar image photo companyRole")
+      .populate("admins", "name email profileImage avatar image photo");
 
     if (!conversation) {
       return res.status(404).json({success: false, message: "Conversation not found"});
@@ -320,7 +320,8 @@ exports.getCompanyGroups = async (req, res) => {
       isActive: true,
     })
       .select("name description members createdBy")
-      .populate("createdBy", "name email profileImage");
+      .populate("createdBy", "name email profileImage avatar image photo")
+      .populate("members", "name email profileImage avatar image photo companyRole");
 
     res.status(200).json({success: true, groups});
   } catch (error) {
@@ -451,14 +452,14 @@ exports.getMessages = async (req, res) => {
       deletedFor: {$ne: userId},
       ...activeMessageFilter(),
     })
-      .populate("sender", "name email profileImage")
+      .populate("sender", "name email profileImage avatar image photo")
       .populate({
         path: "replyTo",
         select: "sender text file fileType deletedForEveryone",
-        populate: {path: "sender", select: "name email profileImage"},
+        populate: {path: "sender", select: "name email profileImage avatar image photo"},
       })
-      .populate("reactions.user", "name profileImage")
-      .populate("systemEvent.actor", "name profileImage")
+      .populate("reactions.user", "name profileImage avatar image photo")
+      .populate("systemEvent.actor", "name profileImage avatar image photo")
       .sort({createdAt: 1});
 
     const normalizedMessages = messages.map(message => {
@@ -669,12 +670,17 @@ exports.getCompanyUsers = async (req, res) => {
       _id: {$ne: req.user.id},
       isActive: true,
       companyRole: { $not: /^client$/i },
-    }).select("name email profileImage companyRole isOnline lastSeen").lean();
+    }).select("name email profileImage avatar image photo companyRole isOnline lastSeen").lean();
 
-    const usersWithPresence = users.map(user => ({
-      ...user,
-      isOnline: socketOnlineIds.has(user._id.toString()) || isRecentlyOnlineInDb(user),
-    }));
+    const usersWithPresence = users.map(user => {
+      const avatarValue = user.profileImage || user.avatar || user.image || user.photo || "";
+      return {
+        ...user,
+        profileImage: avatarValue,
+        avatar: avatarValue,
+        isOnline: socketOnlineIds.has(user._id.toString()) || isRecentlyOnlineInDb(user),
+      };
+    });
 
     res.status(200).json({success: true, users: usersWithPresence});
   } catch (error) {
