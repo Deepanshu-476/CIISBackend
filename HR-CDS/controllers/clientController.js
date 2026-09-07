@@ -11,6 +11,7 @@ const crypto = require('crypto');
 const mongoose = require('mongoose');
 const Company = require('../../models/Company');
 const emailService = require('../../services/emailService'); 
+const { isEmailModuleEnabled } = require('../../services/emailSettingsService');
 const multer = require('multer');
 const path = require('path');
 const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
@@ -932,16 +933,20 @@ const getCompanyLoginUrl = (companyCode) => {
 };
 
 const sendWelcomeEmail = async (email, name, company, password, companyCode) => {
-  void 0;
-  void 0;
-  void 0;
-  void 0;
-  void 0;
-  void 0;
-  
-  const fullLoginUrl = getCompanyLoginUrl(companyCode);
-  
   try {
+    const isEnabled = await isEmailModuleEnabled('client_welcome');
+    if (!isEnabled) {
+      console.log(`ℹ️ [Email Settings] Client welcome email skipped for ${email}: 'client_welcome' module is turned OFF in Email Settings`);
+      return {
+        success: true,
+        skipped: true,
+        disabled: true,
+        moduleKey: 'client_welcome',
+        message: 'Client welcome email is disabled in Email Settings'
+      };
+    }
+
+    const fullLoginUrl = getCompanyLoginUrl(companyCode);
     const emailHtml = getWelcomeEmailTemplate(name, company, email, password, fullLoginUrl);
     
     const result = await emailService.sendEmail(
@@ -955,6 +960,7 @@ const sendWelcomeEmail = async (email, name, company, password, companyCode) => 
         notificationTargetPath: '/ciisUser/ClientDashboard',
         notificationMessage: `Your CIIS account for ${company} has been created. Please check your email for login details.`,
         notificationPriority: 'high',
+        emailModuleKey: 'client_welcome',
         headers: {
           'X-Email-Type': 'client-welcome',
           'X-Company': company,
@@ -1779,11 +1785,15 @@ const addClient = async (req, res) => {
     );
 
     await session.commitTransaction();
-    if (!reusableClientUser) {
+    if (!reusableClientUser && req.body?.sendWelcomeEmail !== false) {
       sendWelcomeEmail(cleanEmail, cleanClientName, cleanCompanyName, autoPassword, cleanCompanyCode)
         .then(result => {
           if (result.success) {
-            void 0;
+            if (result.skipped) {
+              console.log(`ℹ️ Client welcome email skipped for ${cleanEmail} (disabled in Email Settings)`);
+            } else {
+              void 0;
+            }
           } else {
             console.warn('Welcome email sending failed:', result.error);
           }
