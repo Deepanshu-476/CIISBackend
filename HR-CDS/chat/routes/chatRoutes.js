@@ -33,7 +33,20 @@ const {
 const uploadChatFile = (req, res, next) => {
   upload.single("file")(req, res, error => {
     if (!error) return next();
-    return next(error);
+    return res.status(error.code === "LIMIT_FILE_SIZE" ? 413 : 400).json({
+      success: false,
+      message: error.code === "LIMIT_FILE_SIZE" ? "Attachments must be 100 MB or smaller" : error.message,
+    });
+  });
+};
+
+const uploadStatusFile = (req, res, next) => {
+  statusUpload.single("file")(req, res, error => {
+    if (!error) return next();
+    return res.status(error.code === "LIMIT_FILE_SIZE" ? 413 : 400).json({
+      success: false,
+      message: error.code === "LIMIT_FILE_SIZE" ? "Status file is too large" : error.message,
+    });
   });
 };
 
@@ -53,7 +66,7 @@ router.patch("/conversation/:id/mute", authMiddleware, updateConversationMute);
 router.patch("/conversation/:id/disappearing-messages", authMiddleware, updateDisappearingMessages);
 router.patch("/message/:messageId/reaction", authMiddleware, updateMessageReaction);
 router.get("/statuses", authMiddleware, getStatuses);
-router.post("/statuses", authMiddleware, statusUpload.single("file"), compressUploadedMedia, createStatus);
+router.post("/statuses", authMiddleware, uploadStatusFile, compressUploadedMedia, createStatus);
 router.patch("/statuses/:statusId/view", authMiddleware, markViewed);
 router.delete("/statuses/:statusId", authMiddleware, deleteStatus);
 
