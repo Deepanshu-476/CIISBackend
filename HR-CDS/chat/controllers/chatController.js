@@ -348,7 +348,12 @@ exports.sendMessage = async (req, res) => {
     }
 
     const file = req.file ? `/api/uploads/chat/${req.file.filename}` : "";
-    const fileType = req.file ? req.file.mimetype : "";
+    const detectedMime = req.file?.mimetype || "";
+    const fileType = (detectedMime && detectedMime !== "application/octet-stream")
+      ? detectedMime
+      : (req.body?.fileType || detectedMime);
+    const fileName = req.body?.fileName || (req.file ? (req.file.originalname || req.file.filename) : "");
+    const fileSize = req.file ? req.file.size : 0;
     let replyTo = null;
 
     if (replyToMessageId) {
@@ -376,6 +381,8 @@ exports.sendMessage = async (req, res) => {
       text,
       file,
       fileType,
+      fileName,
+      fileSize,
       replyTo: replyTo?._id || null,
       expiresAt,
       seenBy: [senderId],
@@ -838,6 +845,8 @@ exports.forwardMessage = async (req, res) => {
         text: original.text,
         file: original.file,
         fileType: original.fileType,
+        fileName: original.fileName || "",
+        fileSize: original.fileSize || 0,
         seenBy: [userId],
         deliveredTo,
         isForwarded: true,

@@ -471,8 +471,11 @@ exports.getAllMyTaskStats = async (req, res) => {
 exports.getUserAllTasksPaginated = async (req, res) => {
   try {
     const { userId } = req.params;
+    const isExport = req.query.export === 'true' || req.query.all === 'true';
     const page = parsePositiveInt(req.query.page, 1);
-    const limit = parsePositiveInt(req.query.limit, 10, 50);
+    const limit = isExport
+      ? parsePositiveInt(req.query.limit, 5000, 10000)
+      : parsePositiveInt(req.query.limit, 10, 50);
 
     const allTasks = await queryAllUserTasks(userId, req.user.companyCode, req.query);
     const filtered = filterUserTasks(allTasks, req.query);

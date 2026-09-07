@@ -2325,8 +2325,11 @@ exports.getUserTasks = async (req, res) => {
 exports.getUserAllTasksPaginated = async (req, res) => {
   try {
     const { userId } = req.params;
+    const isExport = req.query.export === 'true' || req.query.all === 'true';
     const page = parsePositiveInt(req.query.page, 1);
-    const limit = parsePositiveInt(req.query.limit, 10, 50);
+    const limit = isExport
+      ? parsePositiveInt(req.query.limit, 5000, 10000)
+      : parsePositiveInt(req.query.limit, 10, 50);
 
     const [targetUser, allTasks] = await Promise.all([
       User.findById(userId).select('name email role jobRole companyRole department company').populate('department', 'name').lean(),
