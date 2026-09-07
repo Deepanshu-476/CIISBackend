@@ -102,50 +102,89 @@ const resolveDepartmentId = async (companyId, departmentValue) => {
 const buildRoleQuery = async (companyId, departmentId, role) => {
   const roleValue = String(role || '').trim();
   const aliases = new Set([roleValue]);
-  let jobRole = null;
+  let resolvedDepartmentId = null;
 
   if (mongoose.Types.ObjectId.isValid(roleValue)) {
-    jobRole = await JobRole.findOne({
+    const jobRole = await JobRole.findOne({
       _id: roleValue,
-      company: companyId,
-      department: departmentId
-    }).select('_id name');
-  } else {
-    const targetRoleKey = normalizeNameKey(roleValue);
-    const roles = await JobRole.find({
-      company: companyId,
-      department: departmentId,
-      isActive: { $ne: false }
-    }).select('_id name').lean();
-    jobRole = roles.find(item => normalizeNameKey(item.name) === targetRoleKey) || null;
+      company: companyId
+    }).select('_id name department');
+
+    if (jobRole) {
+      aliases.add(String(jobRole._id));
+      aliases.add(jobRole.name);
+      if (jobRole.department) {
+        resolvedDepartmentId = String(jobRole.department);
+      }
+    }
   }
 
-  if (jobRole) {
-    aliases.add(String(jobRole._id));
-    aliases.add(jobRole.name);
-  }
+  const targetRoleKey = normalizeNameKey(roleValue);
+  const roles = await JobRole.find({
+    company: companyId,
+    isActive: { $ne: false }
+  }).select('_id name department').lean();
+
+  const matchingRoles = roles.filter(item => normalizeNameKey(item.name) === targetRoleKey);
+  matchingRoles.forEach(item => {
+    aliases.add(String(item._id));
+    aliases.add(item.name);
+    if (!resolvedDepartmentId && item.department) {
+      resolvedDepartmentId = String(item.department);
+    }
+  });
 
   return {
-    $in: [...aliases].map(value => new RegExp(`^${escapeRegex(value)}$`, 'i'))
+    query: {
+      $in: [...aliases].map(value => new RegExp(`^${escapeRegex(value)}$`, 'i'))
+    },
+    resolvedDepartmentId
   };
 };
 
 const findSidebarConfig = async ({ companyId, branchId, departmentId, role }) => {
-  const roleQuery = await buildRoleQuery(companyId, departmentId, role);
-  const baseQuery = { companyId, departmentId, role: roleQuery, isActive: { $ne: false } };
-
-  if (branchId) {
-    const branchConfig = await SidebarConfig.findOne({ ...baseQuery, branchId });
-    if (branchConfig) return branchConfig;
-
-    // Older/global assignments did not store a branch.
-    return SidebarConfig.findOne({
-      ...baseQuery,
-      $or: [{ branchId: null }, { branchId: { $exists: false } }]
-    });
+  const { query: roleQuery, resolvedDepartmentId } = await buildRoleQuery(companyId, departmentId, role);
+  const activeDeptId = departmentId || resolvedDepartmentId;
+  
+  const baseQuery = { companyId, role: roleQuery, isActive: { $ne: false } };
+  if (activeDeptId && mongoose.Types.ObjectId.isValid(activeDeptId)) {
+    baseQuery.departmentId = activeDeptId;
   }
 
-  return SidebarConfig.findOne(baseQuery).sort({ branchId: 1, updatedAt: -1 });
+  if (branchId && mongoose.Types.ObjectId.isValid(branchId)) {
+    const branchConfig = await SidebarConfig.findOne({ ...baseQuery, branchId }).sort({ updatedAt: -1 });
+    if (branchConfig) return branchConfig;
+
+    const globalConfig = await SidebarConfig.findOne({
+      ...baseQuery,
+      $or: [{ branchId: null }, { branchId: { $exists: false } }]
+    }).sort({ updatedAt: -1 });
+    if (globalConfig) return globalConfig;
+
+    const anyBranchConfig = await SidebarConfig.findOne(baseQuery).sort({ updatedAt: -1 });
+    if (anyBranchConfig) return anyBranchConfig;
+  } else {
+    const globalConfig = await SidebarConfig.findOne({
+      ...baseQuery,
+      $or: [{ branchId: null }, { branchId: { $exists: false } }]
+    }).sort({ updatedAt: -1 });
+    if (globalConfig) return globalConfig;
+
+    const anyConfig = await SidebarConfig.findOne(baseQuery).sort({ updatedAt: -1 });
+    if (anyConfig) return anyConfig;
+  }
+
+  if (baseQuery.departmentId) {
+    const roleOnlyQuery = { companyId, role: roleQuery, isActive: { $ne: false } };
+    if (branchId && mongoose.Types.ObjectId.isValid(branchId)) {
+      const branchRoleConfig = await SidebarConfig.findOne({ ...roleOnlyQuery, branchId }).sort({ updatedAt: -1 });
+      if (branchRoleConfig) return branchRoleConfig;
+    }
+    const anyRoleConfig = await SidebarConfig.findOne(roleOnlyQuery).sort({ updatedAt: -1 });
+    if (anyRoleConfig) return anyRoleConfig;
+  }
+
+  return null;
 };
 
 
@@ -199,14 +238,14 @@ router.get('/config', async (req, res) => {
   try {
     let { companyId, branchId, departmentId, role } = req.query;
     
-    if (!companyId || !departmentId || !role) {
+    if (!companyId || !role) {
       return res.status(400).json({
         success: false,
-        message: 'Company, department and role are required'
+        message: 'Company and role are required'
       });
     }
 
-    if (mongoose.Types.ObjectId.isValid(companyId)) {
+    if (companyId && mongoose.Types.ObjectId.isValid(companyId) && departmentId) {
       departmentId = await resolveDepartmentId(companyId, departmentId);
     }
 
@@ -231,9 +270,7 @@ router.get('/config', async (req, res) => {
       }
     }
 
-    if (!mongoose.Types.ObjectId.isValid(companyId) || 
-        !mongoose.Types.ObjectId.isValid(departmentId) || 
-        (branchId && !mongoose.Types.ObjectId.isValid(branchId))) {
+    if (!mongoose.Types.ObjectId.isValid(companyId)) {
       return res.json({
         success: true,
         message: 'No configuration found',
@@ -303,6 +340,9 @@ router.post('/', async (req, res) => {
       });
     }
     
+    const cleanedItems = removeLegacyDashboardItems(menuItems);
+    const cleanedRanges = Array.isArray(ranges) ? ranges : [];
+
     const configKey = {
       companyId,
       branchId: branchId || null,
@@ -310,8 +350,8 @@ router.post('/', async (req, res) => {
       role
     };
     const configValues = {
-      menuItems: removeLegacyDashboardItems(menuItems),
-      ranges: Array.isArray(ranges) ? ranges : [],
+      menuItems: cleanedItems,
+      ranges: cleanedRanges,
       updatedAt: new Date()
     };
 
@@ -322,6 +362,28 @@ router.post('/', async (req, res) => {
       { $set: configValues, $setOnInsert: configKey },
       { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
     );
+
+    // Synchronize all other configs for this role in this company
+    // so every user assigned this role receives the changes!
+    try {
+      const { query: roleQuery } = await buildRoleQuery(companyId, departmentId, role);
+      await SidebarConfig.updateMany(
+        {
+          companyId,
+          role: roleQuery,
+          _id: { $ne: savedConfig._id }
+        },
+        {
+          $set: {
+            menuItems: cleanedItems,
+            ranges: cleanedRanges,
+            updatedAt: new Date()
+          }
+        }
+      );
+    } catch (syncErr) {
+      console.warn('Warning: sync cross-branch error in POST:', syncErr.message);
+    }
 
     const populatedConfig = await SidebarConfig.findById(savedConfig._id)
       .populate('companyId', 'companyName companyCode')
@@ -368,7 +430,7 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { menuItems, ranges } = req.body;
+    const { menuItems, ranges, role, departmentId, branchId } = req.body;
     
     if (!menuItems || !Array.isArray(menuItems)) {
       return res.status(400).json({
@@ -377,7 +439,7 @@ router.put('/:id', async (req, res) => {
       });
     }
     
-    const existingConfig = await SidebarConfig.findById(id).select('companyId');
+    const existingConfig = await SidebarConfig.findById(id);
 
     if (!existingConfig) {
       return res.status(404).json({
@@ -386,12 +448,15 @@ router.put('/:id', async (req, res) => {
       });
     }
 
+    const cleanedItems = removeLegacyDashboardItems(menuItems);
+    const cleanedRanges = Array.isArray(ranges) ? ranges : [];
+
     const updatedConfig = await SidebarConfig.findByIdAndUpdate(
       id,
       {
-        menuItems: removeLegacyDashboardItems(menuItems),
-        ranges: ranges || [],
-        updatedAt: Date.now()
+        menuItems: cleanedItems,
+        ranges: cleanedRanges,
+        updatedAt: new Date()
       },
       { 
         new: true,
@@ -399,6 +464,34 @@ router.put('/:id', async (req, res) => {
       }
     ).populate('companyId', 'companyName')
      .populate('departmentId', 'name');
+
+    // Also synchronize this role's other configs across the company
+    try {
+      const targetCompanyId = existingConfig.companyId?._id || existingConfig.companyId;
+      const targetRole = role || existingConfig.role;
+      const targetDept = departmentId || existingConfig.departmentId?._id || existingConfig.departmentId;
+
+      if (targetCompanyId && targetRole) {
+        const { query: roleQuery } = await buildRoleQuery(targetCompanyId, targetDept, targetRole);
+
+        await SidebarConfig.updateMany(
+          {
+            companyId: targetCompanyId,
+            role: roleQuery,
+            _id: { $ne: id }
+          },
+          {
+            $set: {
+              menuItems: cleanedItems,
+              ranges: cleanedRanges,
+              updatedAt: new Date()
+            }
+          }
+        );
+      }
+    } catch (syncError) {
+      console.warn('Warning: Could not sync cross-branch configs:', syncError.message);
+    }
     
     res.json({
       success: true,
