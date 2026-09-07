@@ -43,6 +43,8 @@ const compressedPathFor = (filePath, extension) => {
 };
 
 const compressImage = async file => {
+  // Re-encoding an animated GIF as a single-frame image discards the animation.
+  if (file.mimetype === "image/gif") return;
   const outputPath = compressedPathFor(file.path, ".webp");
 
   await sharp(file.path)
@@ -57,7 +59,7 @@ const compressImage = async file => {
   const originalSize = file.size || fs.statSync(file.path).size;
   const compressedSize = fs.statSync(outputPath).size;
 
-  if (compressedSize < originalSize) {
+  if (compressedSize < originalSize || !["image/jpeg", "image/png", "image/webp", "image/avif"].includes(file.mimetype)) {
     removeQuietly(file.path);
     updateFile(file, outputPath, "image/webp");
   } else {
@@ -99,22 +101,40 @@ const compressVideo = async file => {
     "veryfast",
     "-crf",
     "28",
+    "-pix_fmt",
+    "yuv420p",
     "-c:a",
     "aac",
     "-b:a",
     "128k",
+    "-movflags",
+    "+faststart",
     outputPath,
   ]);
 
   const originalSize = file.size || fs.statSync(file.path).size;
   const compressedSize = fs.statSync(outputPath).size;
 
-  if (compressedSize < originalSize) {
+  if (compressedSize < originalSize || file.mimetype !== "video/mp4") {
     removeQuietly(file.path);
     updateFile(file, outputPath, "video/mp4");
   } else {
     removeQuietly(outputPath);
   }
+};
+
+const normalizeAudio = async file => {
+  // MediaRecorder's WebM/Opus blobs may lack duration/seek metadata and are not
+  // playable in every browser. AAC in an M4A container works across clients.
+  if (["audio/mpeg", "audio/mp4", "audio/x-m4a"].includes(file.mimetype)) return;
+  const outputPath = compressedPathFor(file.path, ".m4a");
+  await runFfmpeg([
+    "-y", "-i", file.path, "-vn", "-c:a", "aac", "-b:a", "96k",
+    "-movflags", "+faststart", outputPath,
+  ]);
+  const originalPath = file.path;
+  updateFile(file, outputPath, "audio/mp4");
+  removeQuietly(originalPath);
 };
 
 const compressUploadedMedia = async (req, _res, next) => {
@@ -128,10 +148,13 @@ const compressUploadedMedia = async (req, _res, next) => {
       await compressImage(file);
     } else if (file.mimetype?.startsWith("video/")) {
       await compressVideo(file);
+    } else if (file.mimetype?.startsWith("audio/")) {
+      await normalizeAudio(file);
     }
   } catch (error) {
     removeQuietly(compressedPathFor(file.path, ".webp"));
     removeQuietly(compressedPathFor(file.path, ".mp4"));
+    removeQuietly(compressedPathFor(file.path, ".m4a"));
     console.warn("Chat media compression skipped:", error.message);
   }
 

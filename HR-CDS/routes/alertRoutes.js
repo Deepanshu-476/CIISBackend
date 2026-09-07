@@ -20,7 +20,9 @@ const canManageAlerts = (req, res, next) => {
 
 router.get("/", protect, alertController.getAlerts);
 router.get("/unread/count", protect, alertController.getUnreadCount);
+router.patch("/mark-all/read", protect, alertController.markAllAsRead);
 router.patch("/:id/read", protect, alertController.markAsRead);
+router.patch("/:id/unread", protect, alertController.markAsUnread);
 
 
 router.post("/", protect, alertController.addAlert);

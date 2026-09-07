@@ -96,7 +96,7 @@ const getAlerts = async (req, res) => {
     const alerts = await Alert.find(mergeQueries(companyQuery, assignmentQuery))
       .populate('assignedUsers', 'name email')
       .populate('assignedGroups', 'name')
-      .populate('createdBy', 'name email')
+      .populate('createdBy', 'name email role department')
       .sort({ createdAt: -1 });
     
     res.json({
@@ -157,7 +157,7 @@ const getUnreadCount = async (req, res) => {
 
 const addAlert = async (req, res) => {
   try {
-    const { type, message, assignedUsers = [], assignedGroups = [] } = req.body;
+    const { title, type, message, assignedUsers = [], assignedGroups = [], attachments = [] } = req.body;
     const createdBy = req.user._id;
     const company = getCompanyId(req.user);
     const companyCode = getCompanyCode(req.user);
@@ -171,17 +171,23 @@ const addAlert = async (req, res) => {
     }
     
     
+    const createdByName = req.user?.name || req.user?.username || '';
+    
     const alert = new Alert({
+      title: title ? String(title).trim() : '',
       type: type || 'info',
       message: message.trim(),
       assignedUsers: Array.isArray(assignedUsers) ? assignedUsers : [],
       assignedGroups: Array.isArray(assignedGroups) ? assignedGroups : [],
+      attachments: Array.isArray(attachments) ? attachments : [],
       createdBy,
+      createdByName,
       company,
       companyCode
     });
     
     await alert.save();
+    await alert.populate('createdBy', 'name email role department');
     
     res.status(201).json({
       success: true,
@@ -204,7 +210,7 @@ const addAlert = async (req, res) => {
 const updateAlert = async (req, res) => {
   try {
     const { id } = req.params;
-    const { type, message, assignedUsers, assignedGroups } = req.body;
+    const { title, type, message, assignedUsers, assignedGroups, attachments } = req.body;
     
     
     const alert = await Alert.findById(id);
@@ -222,12 +228,15 @@ const updateAlert = async (req, res) => {
     }
     
     
+    if (title !== undefined) alert.title = String(title).trim();
     if (type) alert.type = type;
     if (message) alert.message = message.trim();
     if (assignedUsers !== undefined) alert.assignedUsers = Array.isArray(assignedUsers) ? assignedUsers : [];
     if (assignedGroups !== undefined) alert.assignedGroups = Array.isArray(assignedGroups) ? assignedGroups : [];
+    if (attachments !== undefined) alert.attachments = Array.isArray(attachments) ? attachments : [];
     
     await alert.save();
+    await alert.populate('createdBy', 'name email role department');
     
     res.json({
       success: true,
@@ -304,7 +313,7 @@ const markAsRead = async (req, res) => {
     }
     
     
-    if (!alert.readBy.includes(userId)) {
+    if (!alert.readBy.some(uId => String(uId) === String(userId))) {
       alert.readBy.push(userId);
       await alert.save();
     }
@@ -322,12 +331,74 @@ const markAsRead = async (req, res) => {
     });
   }
 };
-void 0;
+
+const markAsUnread = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user._id;
+    
+    const alert = await Alert.findById(id);
+    if (!alert) {
+      return res.status(404).json({
+        success: false,
+        message: 'Alert not found'
+      });
+    }
+    if (!(await assertAlertInCompany(alert, req.user))) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized for this company alert'
+      });
+    }
+    
+    alert.readBy = alert.readBy.filter(uId => String(uId) !== String(userId));
+    await alert.save();
+    
+    res.json({
+      success: true,
+      message: 'Alert marked as unread'
+    });
+  } catch (error) {
+    console.error('Error marking alert as unread:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+const markAllAsRead = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const companyQuery = await buildCompanyAlertQuery(req.user);
+    
+    await Alert.updateMany(
+      mergeQueries(companyQuery, { readBy: { $ne: userId } }),
+      { $addToSet: { readBy: userId } }
+    );
+    
+    res.json({
+      success: true,
+      message: 'All alerts marked as read'
+    });
+  } catch (error) {
+    console.error('Error marking all alerts as read:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   getAlerts,
   addAlert,
   updateAlert,
   deleteAlert,
   markAsRead,
+  markAsUnread,
+  markAllAsRead,
   getUnreadCount
 };  
