@@ -14,11 +14,14 @@ const IMAGE_MAX_DIMENSION = 1600;
 const IMAGE_QUALITY = 76;
 const AUTO_COMPRESS_IMAGE_BYTES = 10 * 1024 * 1024;
 const AUTO_COMPRESS_VIDEO_BYTES = 200 * 1024 * 1024;
+const WEB_SAFE_IMAGE_TYPES = new Set(["image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif", "image/avif"]);
 
 const shouldCompressFile = (req, file) => {
   const preference = String(req.body?.compressionMode || "normal").toLowerCase();
   if (preference !== "hd") return true;
-  if (file.mimetype?.startsWith("image/")) return Number(file.size || 0) > AUTO_COMPRESS_IMAGE_BYTES;
+  if (file.mimetype?.startsWith("image/")) {
+    return !WEB_SAFE_IMAGE_TYPES.has(file.mimetype) || Number(file.size || 0) > AUTO_COMPRESS_IMAGE_BYTES;
+  }
   if (file.mimetype?.startsWith("video/")) return Number(file.size || 0) > AUTO_COMPRESS_VIDEO_BYTES;
   return false;
 };
@@ -59,7 +62,7 @@ const compressImage = async file => {
   const originalSize = file.size || fs.statSync(file.path).size;
   const compressedSize = fs.statSync(outputPath).size;
 
-  if (compressedSize < originalSize || !["image/jpeg", "image/png", "image/webp", "image/avif"].includes(file.mimetype)) {
+  if (compressedSize < originalSize || !WEB_SAFE_IMAGE_TYPES.has(file.mimetype)) {
     removeQuietly(file.path);
     updateFile(file, outputPath, "image/webp");
   } else {

@@ -8,6 +8,7 @@ const { protect } = require('../../middleware/authMiddleware');
 
 const router = express.Router();
 const uploadDir = path.join(__dirname, '../uploads/client-documents');
+const CLIENT_DOCUMENT_FILE_LIMIT = 10 * 1024 * 1024;
 const CLIENT_DOCUMENT_STORAGE_LIMIT = 5 * 1024 * 1024 * 1024;
 
 if (!fs.existsSync(uploadDir)) {
@@ -24,7 +25,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 20 * 1024 * 1024 },
+  limits: { fileSize: CLIENT_DOCUMENT_FILE_LIMIT },
   fileFilter: (_req, file, cb) => {
     const allowed = [
       'application/pdf',
@@ -37,9 +38,30 @@ const upload = multer({
       'image/webp',
       'text/plain',
     ];
-    cb(null, allowed.includes(file.mimetype));
+    if (!allowed.includes(file.mimetype)) {
+      return cb(new Error('Unsupported file type. Please upload PDF, Word, Excel, image, or text files only.'));
+    }
+    return cb(null, true);
   },
 });
+
+const uploadClientDocument = (req, res, next) => {
+  upload.single('document')(req, res, error => {
+    if (!error) return next();
+
+    if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({
+        success: false,
+        message: 'File size must be 10 MB or less.',
+      });
+    }
+
+    return res.status(400).json({
+      success: false,
+      message: error.message || 'Document upload failed',
+    });
+  });
+};
 
 const getUserCompanyCode = req => (
   req.user?.companyCode ||
@@ -191,7 +213,7 @@ router.get('/', protect, async (req, res) => {
   }
 });
 
-router.post('/', protect, upload.single('document'), async (req, res) => {
+router.post('/', protect, uploadClientDocument, async (req, res) => {
   try {
     const { clientId, category = 'General' } = req.body;
     if (!clientId) {

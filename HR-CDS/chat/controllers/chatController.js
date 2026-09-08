@@ -22,6 +22,19 @@ const DISAPPEARING_DURATIONS = {
   "90d": 90 * 24 * 60 * 60 * 1000,
 };
 
+const getPublicOrigin = req => {
+  const configuredOrigin = process.env.CHAT_PUBLIC_ORIGIN || process.env.PUBLIC_URL || "";
+  if (configuredOrigin) return configuredOrigin.replace(/\/+$/, "");
+
+  const forwardedProto = String(req.get("x-forwarded-proto") || "").split(",")[0].trim();
+  const protocol = forwardedProto || req.protocol || "http";
+  return `${protocol}://${req.get("host")}`.replace(/\/+$/, "");
+};
+
+const getPublicChatFileUrl = req => (
+  req.file ? `${getPublicOrigin(req)}/api/uploads/chat/${req.file.filename}` : ""
+);
+
 const activeMessageFilter = () => ({
   $or: [
     {expiresAt: null},
@@ -347,7 +360,7 @@ exports.sendMessage = async (req, res) => {
       return res.status(403).json({success: false, message: "You are not a member of this conversation"});
     }
 
-    const file = req.file ? `/api/uploads/chat/${req.file.filename}` : "";
+    const file = getPublicChatFileUrl(req);
     const detectedMime = req.file?.mimetype || "";
     const fileType = (detectedMime && detectedMime !== "application/octet-stream")
       ? detectedMime
