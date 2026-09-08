@@ -1273,6 +1273,13 @@ exports.updateLeaveStatus = async (req, res) => {
       });
     }
 
+    if (hasApprovalSteps && approvalStepIndex !== -1 && (leave.approvalSteps[approvalStepIndex].status || 'Pending') !== 'Pending') {
+      return res.status(409).json({
+        success: false,
+        error: 'You have already taken action on this leave request.'
+      });
+    }
+
     if (status === 'Approved') {
       const companyId = getUserCompanyId(leave.user);
       const finalLeaveType = String(leaveType || leave.type || '').trim();
