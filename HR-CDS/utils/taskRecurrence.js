@@ -206,6 +206,10 @@ const buildRecurringTaskClone = (templateTask, occurrenceDate) => {
     remarks: 'Recurring task auto-created'
   }));
 
+  const occurrenceCreatedAt = baseTask.startDateTime
+    ? cloneDateTimeForOccurrence(dueDateTime, baseTask.startDateTime)
+    : dueDateTime;
+
   return {
     title: baseTask.title,
     description: baseTask.description,
@@ -213,6 +217,7 @@ const buildRecurringTaskClone = (templateTask, occurrenceDate) => {
       ? cloneDateTimeForOccurrence(dueDateTime, baseTask.startDateTime)
       : null,
     dueDateTime,
+    createdAt: occurrenceCreatedAt || dueDateTime,
     whatsappNumber: baseTask.whatsappNumber,
     priorityDays: baseTask.priorityDays,
     priority: baseTask.priority || 'medium',
@@ -225,7 +230,7 @@ const buildRecurringTaskClone = (templateTask, occurrenceDate) => {
       status: 'pending',
       changedBy: baseTask.createdBy,
       remarks: 'Recurring task auto-created',
-      changedAt: new Date()
+      changedAt: occurrenceCreatedAt || new Date()
     }],
     checkpoints,
     remarks: [],
