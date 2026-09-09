@@ -54,11 +54,27 @@ if (process.env.NODE_ENV === "development" || process.env.ENABLE_API_TIMING === 
 
 app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-Frame-Options", "SAMEORIGIN");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   res.setHeader("Permissions-Policy", "camera=(self), microphone=(self), geolocation=(self)");
   res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
-  res.setHeader("Cross-Origin-Resource-Policy", "same-site");
+
+  const requestUrl = String(req.originalUrl || req.path || "").toLowerCase();
+  const isEmbeddableResource =
+    requestUrl.startsWith("/api/uploads") ||
+    requestUrl.startsWith("/uploads") ||
+    requestUrl.includes("/documents/") ||
+    /\.(pdf|png|jpe?g|gif|webp|svg|docx?|xlsx?)$/i.test(requestUrl);
+
+  if (isEmbeddableResource) {
+    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    res.setHeader(
+      "Content-Security-Policy",
+      "frame-ancestors 'self' https://cds.ciisnetwork.in https://backendcds.ciisnetwork.in http://localhost:* http://127.0.0.1:* https://*.ciisnetwork.in"
+    );
+  } else {
+    res.setHeader("X-Frame-Options", "SAMEORIGIN");
+    res.setHeader("Cross-Origin-Resource-Policy", "same-site");
+  }
 
   if (process.env.NODE_ENV === "production") {
     res.setHeader("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
@@ -728,6 +744,19 @@ const uploadStaticDirs = [
   path.join(__dirname, "uploads"),
   path.join(__dirname, "HR-CDS", "uploads"),
 ];
+
+const embeddableStaticHeaders = (req, res, next) => {
+  res.removeHeader("X-Frame-Options");
+  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+  res.setHeader(
+    "Content-Security-Policy",
+    "frame-ancestors 'self' https://cds.ciisnetwork.in https://backendcds.ciisnetwork.in http://localhost:* http://127.0.0.1:* https://*.ciisnetwork.in"
+  );
+  next();
+};
+
+app.use("/api/uploads", embeddableStaticHeaders);
+app.use("/uploads", embeddableStaticHeaders);
 
 uploadStaticDirs.forEach(uploadDir => {
   app.use("/api/uploads", express.static(uploadDir));
