@@ -24,8 +24,10 @@ const INDIA_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const toValidDate = value => {
+  if (!value) return null;
   const date = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date;
+  if (Number.isNaN(date.getTime()) || date.getTime() === 0) return null;
+  return date;
 };
 
 const getIndiaDateParts = (value = new Date()) => {
@@ -262,6 +264,23 @@ const buildShiftSchedule = (referenceDate, shiftSettings = {}) => {
   };
 };
 
+const formatTime12h = (timeStr) => {
+  if (!timeStr) return "";
+  if (/\b(AM|PM|am|pm)\b/.test(timeStr)) return timeStr;
+  const [rawH, rawM] = String(timeStr).split(":");
+  const h = parseInt(rawH, 10);
+  const m = parseInt(rawM, 10);
+  if (isNaN(h) || isNaN(m)) return timeStr;
+  const period = h >= 12 ? "PM" : "AM";
+  const hour12 = h % 12 === 0 ? 12 : h % 12;
+  return `${String(hour12).padStart(2, "0")}:${String(m).padStart(2, "0")} ${period}`;
+};
+
+const formatShiftTimeWindow = (shiftStart, shiftEnd) => {
+  if (!shiftStart || !shiftEnd) return "";
+  return `${formatTime12h(shiftStart)} - ${formatTime12h(shiftEnd)}`;
+};
+
 const buildShiftSnapshot = (shiftSettings = {}, schedule) => {
   const source = shiftSettings || {};
   return {
@@ -270,6 +289,7 @@ const buildShiftSnapshot = (shiftSettings = {}, schedule) => {
     shiftType: source.shiftType || "general",
     shiftStart: schedule.shiftStartStr,
     shiftEnd: schedule.shiftEndStr,
+    shiftTime: formatShiftTimeWindow(schedule.shiftStartStr, schedule.shiftEndStr),
     earlyClockInStart: schedule.earlyClockInStartStr,
     lateGraceLimit: schedule.lateGraceLimitStr,
     halfDayLateLimit: schedule.halfDayLateLimitStr,
@@ -288,6 +308,7 @@ const applyShiftSnapshot = (record, snapshot = {}) => {
   record.shiftType = snapshot.shiftType;
   record.shiftStart = snapshot.shiftStart;
   record.shiftEnd = snapshot.shiftEnd;
+  record.shiftTime = snapshot.shiftTime || formatShiftTimeWindow(snapshot.shiftStart, snapshot.shiftEnd);
   record.earlyClockInStart = snapshot.earlyClockInStart;
   record.lateGraceLimit = snapshot.lateGraceLimit;
   record.halfDayLateLimit = snapshot.halfDayLateLimit;
@@ -1161,6 +1182,7 @@ const getTodayStatus = async (req, res) => {
           shiftName: shiftSettings?.shiftName,
           shiftStart: schedule.shiftStartStr,
           shiftEnd: schedule.shiftEndStr,
+          shiftTime: formatShiftTimeWindow(schedule.shiftStartStr, schedule.shiftEndStr),
           message: "No attendance recorded for your shift"
         });
       }
@@ -1171,14 +1193,47 @@ const getTodayStatus = async (req, res) => {
         shiftName: shiftSettings?.shiftName,
         shiftStart: schedule.shiftStartStr,
         shiftEnd: schedule.shiftEndStr,
+        shiftTime: formatShiftTimeWindow(schedule.shiftStartStr, schedule.shiftEndStr),
         message: "No attendance recorded yet"
       });
     }
 
+    const isClockedInNow = today.isClockedIn === true || (!today.outTime && Boolean(today.inTime));
+    const formattedLogin = today.inTime ? formatTime(today.inTime) : "";
+    const formattedLogout = (!isClockedInNow && today.outTime) ? formatTime(today.outTime) : "";
+
+    let shiftStart = today.shiftStart;
+    let shiftEnd = today.shiftEnd;
+    let shiftName = today.shiftName;
+    let shiftId = today.shiftId;
+    let shiftType = today.shiftType;
+
+    if (!shiftStart || !shiftEnd) {
+      const { userObj } = await getAttendanceSettingsContext({ companyCode: userCompanyCode, userId });
+      const shiftSettings = await resolveSelectedShiftSettings(userObj);
+      if (shiftSettings) {
+        shiftStart = shiftStart || shiftSettings.shiftStart;
+        shiftEnd = shiftEnd || shiftSettings.shiftEnd;
+        shiftName = shiftName || shiftSettings.shiftName;
+        shiftId = shiftId || shiftSettings.shiftId;
+        shiftType = shiftType || shiftSettings.shiftType;
+      }
+    }
+
+    const shiftTime = formatShiftTimeWindow(shiftStart, shiftEnd);
+
     res.status(200).json({
       ...today.toObject(),
-      login: formatTime(today.inTime),
-      logout: formatTime(today.outTime),
+      shiftId,
+      shiftName,
+      shiftType,
+      shiftStart,
+      shiftEnd,
+      shiftTime,
+      login: formattedLogin,
+      logout: formattedLogout,
+      outTime: isClockedInNow ? null : today.outTime,
+      isClockedIn: isClockedInNow,
       status: today.status
     });
   } catch (err) {
@@ -1302,21 +1357,34 @@ const getAttendanceList = async (req, res) => {
         const fallbackSchedule = buildShiftSchedule(record.date, targetShiftSettings);
         const fallbackShift = buildShiftSnapshot(targetShiftSettings || {}, fallbackSchedule);
         const isLeaveCoveredDay = leaveCoverageDateKeys.has(dateKey) && !recordObject.inTime && !recordObject.outTime;
+        const isClockedIn = recordObject.isClockedIn === true || (!recordObject.outTime && Boolean(recordObject.inTime));
+        const formattedLogin = recordObject.inTime ? formatTime(recordObject.inTime) : "";
+        const formattedLogout = (!isClockedIn && recordObject.outTime) ? formatTime(recordObject.outTime) : "";
+
+        const effectiveShiftStart = recordObject.shiftStart || fallbackShift.shiftStart;
+        const effectiveShiftEnd = recordObject.shiftEnd || fallbackShift.shiftEnd;
+        const effectiveShiftName = recordObject.shiftName || fallbackShift.shiftName;
+        const effectiveShiftTime = recordObject.shiftTime || formatShiftTimeWindow(effectiveShiftStart, effectiveShiftEnd);
+
         return {
           ...recordObject,
+          dateKey,
           shiftId: recordObject.shiftId || fallbackShift.shiftId,
-          shiftName: recordObject.shiftName || fallbackShift.shiftName,
+          shiftName: effectiveShiftName,
           shiftType: recordObject.shiftType || fallbackShift.shiftType,
-          shiftStart: recordObject.shiftStart || fallbackShift.shiftStart,
-          shiftEnd: recordObject.shiftEnd || fallbackShift.shiftEnd,
+          shiftStart: effectiveShiftStart,
+          shiftEnd: effectiveShiftEnd,
+          shiftTime: effectiveShiftTime,
           earlyClockInStart: recordObject.earlyClockInStart || fallbackShift.earlyClockInStart,
           lateGraceLimit: recordObject.lateGraceLimit || fallbackShift.lateGraceLimit,
           halfDayLateLimit: recordObject.halfDayLateLimit || fallbackShift.halfDayLateLimit,
           shortLeaveEarlyLimit: recordObject.shortLeaveEarlyLimit || fallbackShift.shortLeaveEarlyLimit,
           halfDayEarlyLimit: recordObject.halfDayEarlyLimit || fallbackShift.halfDayEarlyLimit,
           shiftWindow: recordObject.shiftWindow || fallbackShift.shiftWindow,
-          login: formatTime(record.inTime),
-          logout: formatTime(record.outTime),
+          login: formattedLogin,
+          logout: formattedLogout,
+          inTime: recordObject.inTime || null,
+          outTime: isClockedIn ? null : (recordObject.outTime || null),
           status: isLeaveCoveredDay ? 'LEAVE' : (record.status || 'ABSENT')
         };
       } else {
@@ -1324,10 +1392,12 @@ const getAttendanceList = async (req, res) => {
         const isWeekend = isDepartmentWeekend(targetUser.department, date);
         const fallbackSchedule = buildShiftSchedule(date, targetShiftSettings);
         const fallbackShift = buildShiftSnapshot(targetShiftSettings || {}, fallbackSchedule);
+        const fallbackShiftTime = fallbackShift.shiftTime || formatShiftTimeWindow(fallbackShift.shiftStart, fallbackShift.shiftEnd);
         const isLeaveCoveredDay = leaveCoverageDateKeys.has(dateKey);
 
         return {
           _id: `absent_${targetUserId}_${dateKey}`,
+          dateKey,
           user: {
             _id: targetUserId,
             name: targetUser?.name || 'User',
@@ -1350,6 +1420,7 @@ const getAttendanceList = async (req, res) => {
           shiftType: fallbackShift.shiftType,
           shiftStart: fallbackShift.shiftStart,
           shiftEnd: fallbackShift.shiftEnd,
+          shiftTime: fallbackShiftTime,
           earlyClockInStart: fallbackShift.earlyClockInStart,
           lateGraceLimit: fallbackShift.lateGraceLimit,
           halfDayLateLimit: fallbackShift.halfDayLateLimit,
