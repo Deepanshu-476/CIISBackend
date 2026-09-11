@@ -70,6 +70,10 @@ const attendanceSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  shiftTime: {
+    type: String,
+    trim: true
+  },
   earlyClockInStart: {
     type: String,
     trim: true

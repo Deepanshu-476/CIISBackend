@@ -31,6 +31,10 @@ const {
 const {
   resolveShiftScheduleForUser,
 } = require('../utils/shiftSchedule');
+const {
+  generateRecurringOccurrences,
+  runRecurringTaskSweep,
+} = require('../cron/recurringTasks');
 
 const parseRecurringSettingsFromBody = (body = {}) => {
   const normalized = normalizeTaskRecurrenceFields(body);
@@ -146,15 +150,13 @@ exports.createTaskForSelf = async (req, res) => {
 
     if (recurringSettings.isRecurring) {
       const shiftContext = await resolveShiftScheduleForUser(req.user, parsedDue || new Date());
-      if (!shiftContext?.schedule?.shiftStart || !shiftContext?.schedule?.shiftEnd) {
-        return res.status(400).json({
-          success: false,
-          error: 'Shift settings not found for this user. Recurring tasks need a valid shift.'
-        });
+      if (shiftContext?.schedule?.shiftStart && shiftContext?.schedule?.shiftEnd) {
+        taskStartDateTime = shiftContext.schedule.shiftStart;
+        taskDueDateTime = shiftContext.schedule.shiftEnd;
+      } else if (parsedDue) {
+        taskStartDateTime = new Date(parsedDue.getTime() - 8 * 60 * 60 * 1000);
+        taskDueDateTime = parsedDue;
       }
-
-      taskStartDateTime = shiftContext.schedule.shiftStart;
-      taskDueDateTime = shiftContext.schedule.shiftEnd;
     }
 
     const task = await Task.create({
@@ -186,6 +188,14 @@ exports.createTaskForSelf = async (req, res) => {
       statusHistory: [{ status: 'pending', changedBy: req.user._id, remarks: 'Self task created' }]
     });
 
+    if (task.isRecurring) {
+      try {
+        await generateRecurringOccurrences(task);
+      } catch (recErr) {
+        console.error(`Failed to auto-generate recurring occurrences for task ${task._id}:`, recErr);
+      }
+    }
+
     await task.populate('assignedUsers', 'name role email');
     await task.populate('createdBy', 'name email');
 
@@ -200,6 +210,13 @@ exports.createTaskForSelf = async (req, res) => {
 
 exports.getPersonalTasks = async (req, res) => {
   try {
+    if (req.user?._id) {
+      try {
+        await runRecurringTaskSweep({ createdBy: req.user._id });
+      } catch (sweepErr) {
+        console.error('Error during on-demand recurring tasks sync:', sweepErr);
+      }
+    }
     const list = await fetchPersonalTaskList(req);
     return sendCleanTaskList(res, applyCleanListFilters(list, req), 'personal', 'createdAt');
   } catch (err) {
@@ -258,6 +275,15 @@ exports.updateTask = async (req, res) => {
     }
 
     await task.save();
+
+    if (task.isRecurring && !task.recurrenceSourceId) {
+      try {
+        await generateRecurringOccurrences(task);
+      } catch (recErr) {
+        console.error(`Failed to sync recurring occurrences on update for task ${task._id}:`, recErr);
+      }
+    }
+
     await createActivityLog(req.user, 'task_updated', task._id, `Updated task details`, oldTask, task.toObject(), req);
 
     res.json({ success: true, message: 'Task updated successfully', task });
@@ -287,6 +313,13 @@ exports.stopRecurringTask = async (req, res) => {
     task.recurrenceStoppedAt = new Date();
     await task.save();
 
+    // Clean up future pending occurrences that were auto-created
+    await Task.deleteMany({
+      recurrenceSourceId: task._id,
+      overallStatus: 'pending',
+      dueDateTime: { $gt: new Date() }
+    });
+
     await createActivityLog(req.user, 'recurring_task_stopped', task._id, 'Stopped recurring task', oldTask, task.toObject(), req);
     res.json({ success: true, message: 'Repeat task stopped successfully', task });
   } catch (err) {
@@ -304,6 +337,13 @@ exports.deleteTask = async (req, res) => {
 
     task.isActive = false;
     await task.save();
+
+    if (!task.recurrenceSourceId && task.isRecurring) {
+      await Task.updateMany(
+        { recurrenceSourceId: task._id, overallStatus: 'pending', dueDateTime: { $gt: new Date() } },
+        { $set: { isActive: false } }
+      );
+    }
 
     await createActivityLog(req.user, 'task_deleted', taskId, `Deleted task: ${task.title}`, task.toObject(), null, req);
     res.json({ success: true, message: 'Task deleted successfully' });
