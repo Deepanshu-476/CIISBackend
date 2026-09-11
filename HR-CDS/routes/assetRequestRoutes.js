@@ -33,6 +33,7 @@ const uploadCommentImage = multer({
 
 router.post('/request', protect, assetController.requestAsset);
 router.get('/my-requests', protect, assetController.getMyRequests);
+router.get('/available', protect, assetController.getAvailableAssets);
 router.post('/:id/return-request', protect, assetController.requestAssetReturn);
 router.post('/:id/deposit', protect, assetController.depositAsset);
 router.post('/:id/confirm-deposit', protect, assetController.confirmAssetDeposit);

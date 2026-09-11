@@ -21,7 +21,7 @@ if (missingEnvVars.length > 0) {
 require('./services/subscriptionReminderService');
 const { runWorkAnniversaryEmails } = require('./services/workAnniversaryService');
 const { runAutoClockOutSweep } = require('./HR-CDS/cron/forceClockOut');
-require('./HR-CDS/cron/recurringTasks');
+const { cleanRecurringTasksForAbsentUser } = require('./HR-CDS/cron/recurringTasks');
 
 const app = express();
 
@@ -584,6 +584,7 @@ const markPastAbsentRecords = async () => {
             });
             
             await absentRecord.save();
+            await cleanRecurringTasksForAbsentUser(user._id, currentDate);
 
             
             if (global.io) {
@@ -652,6 +653,7 @@ const markDailyAbsent = async () => {
           });
           
           await absentRecord.save();
+          await cleanRecurringTasksForAbsentUser(user._id, today);
 
           
           if (global.io) {

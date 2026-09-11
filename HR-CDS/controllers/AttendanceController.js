@@ -9,6 +9,7 @@ const mongoose = require("mongoose");
 const {notifyPageUsers, getCompanyId} = require("../utils/systemNotificationService");
 const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagination");
 const { runAutoClockOutSweep } = require("../cron/forceClockOut");
+const { cleanRecurringTasksForAbsentUser } = require("../cron/recurringTasks");
 
 
 const formatDuration = (ms) => {
@@ -1650,6 +1651,10 @@ const updateAttendanceRecord = async (req, res) => {
       }
     }
     
+    if (['ABSENT', 'UNINFORMED LEAVE', 'UNINFORMEDLEAVE'].includes(String(record.status || '').toUpperCase())) {
+      cleanRecurringTasksForAbsentUser(record.user, record.date).catch(() => {});
+    }
+
     const populatedRecord = await Attendance.findById(record._id)
       .populate({
         path: "user",
@@ -1754,6 +1759,10 @@ const createManualAttendance = async (req, res) => {
 
       await existingAttendance.save();
 
+      if (['ABSENT', 'UNINFORMED LEAVE', 'UNINFORMEDLEAVE'].includes(String(existingAttendance.status || '').toUpperCase())) {
+        cleanRecurringTasksForAbsentUser(existingAttendance.user, existingAttendance.date).catch(() => {});
+      }
+
       return res.status(200).json({
         message: "Attendance updated successfully",
         data: existingAttendance
@@ -1793,6 +1802,10 @@ const createManualAttendance = async (req, res) => {
           existingRecord.companyCode = userCompanyCode;
           await existingRecord.save();
 
+          if (['ABSENT', 'UNINFORMED LEAVE', 'UNINFORMEDLEAVE'].includes(String(existingRecord.status || '').toUpperCase())) {
+            cleanRecurringTasksForAbsentUser(existingRecord.user, existingRecord.date).catch(() => {});
+          }
+
           return res.status(200).json({
             message: "Attendance updated successfully",
             data: existingRecord
@@ -1802,6 +1815,10 @@ const createManualAttendance = async (req, res) => {
       throw err;
     }
     
+    if (['ABSENT', 'UNINFORMED LEAVE', 'UNINFORMEDLEAVE'].includes(String(attendance.status || '').toUpperCase())) {
+      cleanRecurringTasksForAbsentUser(attendance.user, attendance.date).catch(() => {});
+    }
+
     const populatedAttendance = await Attendance.findById(attendance._id)
       .populate({
         path: "user",
