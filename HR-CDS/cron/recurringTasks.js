@@ -1,10 +1,14 @@
 const cron = require('node-cron');
+const mongoose = require('mongoose');
 const Task = require('../models/Task');
+const Attendance = require('../models/Attendance');
+const Leave = require('../models/Leave');
 const {
   buildRecurringTaskClone,
   getNextRecurringDate,
   normalizeTaskRecurrenceFields,
   toValidDate,
+  getIndiaDayRange,
 } = require('../utils/taskRecurrence');
 
 const MAX_CATCH_UP_OCCURRENCES = 20;
@@ -27,7 +31,135 @@ const isAfterRecurringEndDate = (occurrenceDate, recurrenceEndDate) => {
   return occurrenceDate > endDate;
 };
 
-const createOccurrenceIfMissing = async (templateTask, occurrenceDate) => {
+const isUserAbsentOnDate = async (userId, dateValue, options = {}) => {
+  if (!userId || !dateValue) return false;
+  if (options.isAbsent !== undefined) {
+    return typeof options.isAbsent === 'function'
+      ? options.isAbsent(userId, dateValue)
+      : Boolean(options.isAbsent);
+  }
+  if (mongoose.connection?.readyState === 0 && !options.mockAbsence) {
+    return false;
+  }
+
+  const targetDate = toValidDate(dateValue);
+  if (!targetDate) return false;
+
+  const bounds = getIndiaDayRange(targetDate);
+  if (!bounds) return false;
+
+  try {
+    const attendance = await Attendance.findOne({
+      user: userId,
+      date: { $gte: bounds.start, $lte: bounds.end }
+    }).select('status isClockedIn inTime').lean();
+
+    if (attendance) {
+      const status = String(attendance.status || '').trim().toUpperCase();
+      const isClockedIn = attendance.isClockedIn === true || Boolean(attendance.inTime);
+      if (!isClockedIn && ['ABSENT', 'UNINFORMED LEAVE', 'UNINFORMEDLEAVE'].includes(status)) {
+        return true;
+      }
+    }
+
+    const leave = await Leave.findOne({
+      user: userId,
+      status: 'Approved',
+      startDate: { $lte: bounds.end },
+      endDate: { $gte: bounds.start }
+    }).select('_id').lean();
+
+    if (leave) {
+      return true;
+    }
+
+    return false;
+  } catch (err) {
+    console.error(`Error checking user absence for ${userId} on ${targetDate}:`, err);
+    return false;
+  }
+};
+
+const cleanRecurringTasksForAbsentUser = async (userId, targetDate, options = {}) => {
+  if (!userId || !targetDate) return 0;
+  if (mongoose.connection?.readyState === 0 && !options.mockAbsence) return 0;
+
+  const target = toValidDate(targetDate);
+  if (!target) return 0;
+
+  const bounds = getIndiaDayRange(target);
+  if (!bounds) return 0;
+
+  try {
+    const result = await Task.deleteMany({
+      taskFor: 'self',
+      recurrenceSourceId: { $ne: null },
+      overallStatus: 'pending',
+      $or: [
+        { assignedUsers: userId },
+        { createdBy: userId }
+      ],
+      dueDateTime: { $gte: bounds.start, $lte: bounds.end }
+    });
+    return result.deletedCount || 0;
+  } catch (err) {
+    console.error(`Error cleaning recurring tasks for absent user ${userId}:`, err);
+    return 0;
+  }
+};
+
+const cleanRecurringTasksForAbsentUserRange = async (userId, startDate, endDate, options = {}) => {
+  if (!userId || !startDate || !endDate) return 0;
+  if (mongoose.connection?.readyState === 0 && !options.mockAbsence) return 0;
+
+  const start = toValidDate(startDate);
+  const end = toValidDate(endDate);
+  if (!start || !end) return 0;
+
+  const startBounds = getIndiaDayRange(start);
+  const endBounds = getIndiaDayRange(end);
+  if (!startBounds || !endBounds) return 0;
+
+  try {
+    const result = await Task.deleteMany({
+      taskFor: 'self',
+      recurrenceSourceId: { $ne: null },
+      overallStatus: 'pending',
+      $or: [
+        { assignedUsers: userId },
+        { createdBy: userId }
+      ],
+      dueDateTime: { $gte: startBounds.start, $lte: endBounds.end }
+    });
+    return result.deletedCount || 0;
+  } catch (err) {
+    console.error(`Error cleaning recurring tasks for absent user leave range ${userId}:`, err);
+    return 0;
+  }
+};
+
+const createOccurrenceIfMissing = async (templateTask, occurrenceDate, options = {}) => {
+  const targetUserId = templateTask.assignedUsers?.[0]?._id
+    || templateTask.assignedUsers?.[0]
+    || templateTask.createdBy;
+
+  if (targetUserId) {
+    const isAbsent = await isUserAbsentOnDate(targetUserId, occurrenceDate, options);
+    if (isAbsent) {
+      const occurrenceKey = occurrenceDate.toISOString();
+      try {
+        await Task.deleteOne({
+          recurrenceSourceId: templateTask._id,
+          recurrenceOccurrenceKey: occurrenceKey,
+          overallStatus: 'pending',
+        });
+      } catch (delErr) {
+        // Ignored if disconnected or buffering
+      }
+      return { created: false, skipped: true, reason: 'user_absent' };
+    }
+  }
+
   const occurrenceKey = occurrenceDate.toISOString();
   const existing = await Task.findOne({
     recurrenceSourceId: templateTask._id,
@@ -80,7 +212,7 @@ const generateRecurringOccurrences = async (templateTask, options = {}) => {
     (!targetEndDate || !isAfterRecurringEndDate(nextOccurrence, targetEndDate)) &&
     iterations < maxOccurrences
   ) {
-    const result = await createOccurrenceIfMissing(templateTask, nextOccurrence);
+    const result = await createOccurrenceIfMissing(templateTask, nextOccurrence, options);
     if (result.created) {
       created += 1;
     }
@@ -186,4 +318,7 @@ module.exports = {
   generateRecurringOccurrences,
   processRecurringTemplate,
   runRecurringTaskSweep,
+  isUserAbsentOnDate,
+  cleanRecurringTasksForAbsentUser,
+  cleanRecurringTasksForAbsentUserRange,
 };
