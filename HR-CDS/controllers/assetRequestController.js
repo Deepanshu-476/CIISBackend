@@ -498,18 +498,50 @@ exports.getMyRequests = async (req, res) => {
       user: req.user._id,
       companyCode: req.user.companyCode 
     })
-      .populate('asset', 'name description status')
+      .populate('asset', 'name description status quantity branch')
       .populate('approvedBy', 'name email')
       .populate('adminComments.addedBy', 'name email')
       .populate('approvalDetails.updatedBy', 'name email')
       .populate('approvalDetails.images.uploadedBy', 'name email')
       .populate('updateHistory.updatedBy', 'name email')
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
+
+    // Also check for company assets assigned directly to this user
+    const directAssigned = await CompanyAsset.find({
+      companyCode: req.user.companyCode,
+      assignedTo: req.user._id
+    }).lean();
+
+    const requestAssetIds = new Set(
+      requests
+        .filter(r => ['approved', 'return_requested', 'pending_verification'].includes(normalizeRequestStatus(r.status)))
+        .map(r => normalizeId(r.asset?._id || r.asset))
+        .filter(Boolean)
+    );
+
+    const directRequests = directAssigned
+      .filter(asset => !requestAssetIds.has(normalizeId(asset._id)))
+      .map(asset => ({
+        _id: asset._id,
+        asset: asset,
+        assetName: asset.name,
+        assetStatus: asset.status,
+        status: 'approved',
+        companyCode: asset.companyCode,
+        reason: 'Directly assigned company asset',
+        assignedDate: asset.assignedDate || asset.createdAt,
+        createdAt: asset.createdAt,
+        requestDate: asset.assignedDate || asset.createdAt,
+        adminComments: []
+      }));
+
+    const combinedRequests = [...requests, ...directRequests];
 
     return res.status(200).json({
       success: true,
-      count: requests.length,
-      requests
+      count: combinedRequests.length,
+      requests: combinedRequests
     });
 
   } catch (err) {
@@ -918,28 +950,56 @@ try {
 exports.requestAssetReturn = async (req, res) => {
   try {
     const { id } = req.params;
-    const pageAccess = await getEmployeeAssetsPageAccess(req.user);
-    const roleScope = getUserRoleScope(req.user);
-    const canManageRequest = pageAccess.hasConfig ? pageAccess.hasPageAccess : roleScope.canManage;
 
-    if (!canManageRequest) {
-      return res.status(403).json({
-        success: false,
-        error: pageAccess.hasConfig
-          ? 'You are not selected for employee assets page access.'
-          : 'You do not have permission to raise return requests.'
-      });
-    }
-
-    const request = await loadAssetRequest({
+    let request = await loadAssetRequest({
       _id: id,
       companyCode: req.user.companyCode
     });
 
     if (!request) {
+      // Check if it's a CompanyAsset directly assigned to this user
+      const companyAsset = await CompanyAsset.findOne({
+        _id: id,
+        companyCode: req.user.companyCode,
+        assignedTo: req.user._id
+      });
+
+      if (companyAsset) {
+        request = new AssetRequest({
+          user: req.user._id,
+          asset: companyAsset._id,
+          assetName: companyAsset.name,
+          assetStatus: 'Assigned',
+          status: 'approved',
+          companyCode: req.user.companyCode,
+          department: req.user.department || 'General',
+          reason: 'Return initiated for assigned asset',
+          requestDate: companyAsset.assignedDate || companyAsset.createdAt || new Date(),
+          decisionDate: companyAsset.assignedDate || companyAsset.createdAt || new Date()
+        });
+        await request.save();
+        request = await loadAssetRequest({ _id: request._id });
+      }
+    }
+
+    if (!request) {
       return res.status(404).json({
         success: false,
         error: 'Request not found'
+      });
+    }
+
+    const pageAccess = await getEmployeeAssetsPageAccess(req.user);
+    const roleScope = getUserRoleScope(req.user);
+    const canManageRequest = pageAccess.hasConfig ? pageAccess.hasPageAccess : roleScope.canManage;
+    const isAssetOwner = normalizeId(request.user?._id || request.user) === normalizeId(req.user._id);
+
+    if (!canManageRequest && !isAssetOwner) {
+      return res.status(403).json({
+        success: false,
+        error: pageAccess.hasConfig
+          ? 'You are not selected for employee assets page access.'
+          : 'You do not have permission to raise return requests.'
       });
     }
 
@@ -983,22 +1043,42 @@ exports.requestAssetReturn = async (req, res) => {
     request.returnRequestedAt = new Date();
     await request.save();
 
-    await notifyDirectUsers({
-      userIds: [request.user?._id || request.user],
-      targetPath: '/ciisUser/my-assets',
-      type: 'asset_return_requested',
-      title: 'Asset Return Requested',
-      message: `${req.user.name || 'Admin'} requested return of "${request.asset.name}"`,
-      actor: req.user._id,
-      data: {
-        requestId: request._id,
-        assetId: request.asset._id,
-        assetName: request.asset.name,
-        status: request.status,
-        returnRequestedBy: req.user._id
-      },
-      priority: 'high'
-    });
+    if (isAssetOwner) {
+      await notifyPageUsers({
+        companyId: req.user.company || req.user.companyId,
+        targetPath: '/ciisUser/emp-assets',
+        excludeUserIds: [req.user._id],
+        type: 'asset_return_requested',
+        title: 'Asset Return Requested by Employee',
+        message: `${req.user.name || 'Employee'} requested return of "${request.asset?.name || request.assetName}"`,
+        actor: req.user._id,
+        data: {
+          requestId: request._id,
+          assetId: request.asset?._id,
+          assetName: request.asset?.name || request.assetName,
+          status: request.status,
+          employeeId: req.user._id
+        },
+        priority: 'high'
+      });
+    } else {
+      await notifyDirectUsers({
+        userIds: [request.user?._id || request.user],
+        targetPath: '/ciisUser/my-assets',
+        type: 'asset_return_requested',
+        title: 'Asset Return Requested',
+        message: `${req.user.name || 'Admin'} requested return of "${request.asset?.name || request.assetName}"`,
+        actor: req.user._id,
+        data: {
+          requestId: request._id,
+          assetId: request.asset?._id,
+          assetName: request.asset?.name || request.assetName,
+          status: request.status,
+          returnRequestedBy: req.user._id
+        },
+        priority: 'high'
+      });
+    }
 
     return res.status(200).json({
       success: true,
