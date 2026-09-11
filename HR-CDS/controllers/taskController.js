@@ -21,6 +21,9 @@ const {
   normalizeTaskRecurrenceFields,
   getNextRecurringDate,
 } = require('../utils/taskRecurrence');
+const {
+  generateRecurringOccurrences,
+} = require('../cron/recurringTasks');
 
  
 
@@ -1351,6 +1354,14 @@ const handleTaskCreation = async (req, res, isSelf) => {
   await task.populate('assignedUsers', 'name role email');
   await task.populate('createdBy', 'name email');
 
+  if (isSelf && task.isRecurring) {
+    try {
+      await generateRecurringOccurrences(task);
+    } catch (recErr) {
+      console.error(`Failed to auto-generate recurring occurrences for task ${task._id}:`, recErr);
+    }
+  }
+
   if (task.assignedUsers?.length > 0) {
     await sendTaskCreationEmail(task, task.assignedUsers);
     const targetUsers = task.assignedUsers.map(u => u._id.toString()).filter(id => id !== req.user._id.toString());
@@ -1428,6 +1439,15 @@ exports.updateTask = async (req, res) => {
     }
 
     await task.save();
+
+    if (task.isRecurring && !task.recurrenceSourceId) {
+      try {
+        await generateRecurringOccurrences(task);
+      } catch (recErr) {
+        console.error(`Failed to sync recurring occurrences on update for task ${task._id}:`, recErr);
+      }
+    }
+
     await createActivityLog(req.user, 'task_updated', task._id, `Updated task details`, oldTask, task.toObject(), req);
 
     res.json({ success: true, message: 'Task updated successfully', task });
@@ -1445,6 +1465,13 @@ exports.deleteTask = async (req, res) => {
 
     task.isActive = false;
     await task.save();
+
+    if (!task.recurrenceSourceId && task.isRecurring) {
+      await Task.updateMany(
+        { recurrenceSourceId: task._id, overallStatus: 'pending', dueDateTime: { $gt: new Date() } },
+        { $set: { isActive: false } }
+      );
+    }
 
     await createActivityLog(req.user, 'task_deleted', taskId, `Deleted task: ${task.title}`, task.toObject(), null, req);
     res.json({ success: true, message: 'Task deleted successfully' });
@@ -1473,6 +1500,12 @@ exports.stopRecurringTask = async (req, res) => {
     task.nextRecurringDate = null;
     task.recurrenceStoppedAt = new Date();
     await task.save();
+
+    await Task.deleteMany({
+      recurrenceSourceId: task._id,
+      overallStatus: 'pending',
+      dueDateTime: { $gt: new Date() }
+    });
 
     await createActivityLog(req.user, 'recurring_task_stopped', task._id, 'Stopped recurring task', oldTask, task.toObject(), req);
     res.json({ success: true, message: 'Repeat task stopped successfully', task });
