@@ -721,8 +721,9 @@ const cookieParser = require("cookie-parser");
 app.use(cookieParser());
 
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+const requestBodyLimit = process.env.REQUEST_BODY_LIMIT || "15mb";
+app.use(express.json({ limit: requestBodyLimit }));
+app.use(express.urlencoded({ extended: true, limit: requestBodyLimit }));
 const uploadStaticDirs = [
   path.join(__dirname, "..", "uploads"),
   path.join(__dirname, "uploads"),

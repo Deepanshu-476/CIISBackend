@@ -209,8 +209,8 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
       .lean(),
     
     ClientTask.find(clientQuery)
-      .select('name description dueDate priority status completed clientId createdAt updatedAt assignee assigneeId')
-      .populate('clientId', 'name email company phone companyCode')
+      .select('name description dueDate priority status completed clientId service createdAt updatedAt assignee assigneeId')
+      .populate('clientId', 'client name email company phone companyCode')
       .sort({ createdAt: -1 })
       .lean(),
 
@@ -277,7 +277,9 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
       priority: String(t.priority || 'Medium').toLowerCase(),
       status: displayStatus,
       userStatus: clientStatus,
-      clientName: t.clientId?.name || 'Unknown Client',
+      clientName: t.clientId?.client || t.clientId?.name || t.clientId?.company || 'Unknown Client',
+      clientCompany: t.clientId?.company || '',
+      service: t.service || '',
       createdAt: t.createdAt,
       source: 'client',
       taskSource: 'client',
