@@ -1,6 +1,7 @@
 node_modules/
 logs/
 uploads/
+private-uploads/
 .env/node_modules/
 .env
 firebase.json
