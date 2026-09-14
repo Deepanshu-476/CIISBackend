@@ -6,7 +6,7 @@ const multer = require("multer");
 const router = express.Router();
 const authController = require("../controllers/authController");
 
-const registerDocumentDir = path.join(__dirname, "../uploads/employee-documents");
+const registerDocumentDir = path.join(__dirname, "../private-uploads/employee-documents");
 fs.mkdirSync(registerDocumentDir, { recursive: true });
 
 const registerDocumentUpload = multer({  
