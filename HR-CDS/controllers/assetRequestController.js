@@ -761,52 +761,43 @@ exports.updateRequestStatus = async (req, res) => {
       adminCommentsCount: Array.isArray(request.adminComments) ? request.adminComments.length : 0
     };
     
-    if (status === 'approved' && request.asset.quantity <= 0) {
+    if (status === 'approved' && request.asset && request.asset.quantity <= 0) {
       return res.status(400).json({ 
         success: false, 
-        error: `Asset is no longer available (Current: ${request.asset.status})` 
+        error: `Asset is no longer available (Current: ${request.asset.status || 'Unavailable'})` 
       });
     }
 
-    if (status === 'approved' && !approvalAbout && !(request.approvalDetails?.about || '').trim()) {
-      return res.status(400).json({
-        success: false,
-        error: 'About is required while approving an asset request'
-      });
+    if (status) {
+      request.status = status;
     }
 
-    
-   
-      if (status) {
-        request.status = status;
-      }
+    if (!request.adminComments) {
+      request.adminComments = [];
+    }
 
-      
-      
-        if (!request.adminComments) {
-          request.adminComments = [];
-        }
+    const approvalImages = uploadedFiles.map(file => ({
+      image: `/api/uploads/asset-comments/${file.filename}`,
+      originalName: file.originalname || '',
+      size: file.size || 0,
+      mimeType: file.mimetype || '',
+      uploadedBy: req.user._id,
+      uploadedAt: new Date()
+    }));
 
-        const approvalImages = uploadedFiles.map(file => ({
-          image: `/api/uploads/asset-comments/${file.filename}`,
-          originalName: file.originalname || '',
-          size: file.size || 0,
-          mimeType: file.mimetype || '',
-          uploadedBy: req.user._id,
-          uploadedAt: new Date()
-        }));
+    const resolvedApprovalAbout = approvalAbout || request.approvalDetails?.about || (status === 'approved' ? 'Approved by administrator' : '');
 
-        if (approvalAbout || approvalImages.length) {
-          request.approvalDetails = {
-            ...(request.approvalDetails?.toObject ? request.approvalDetails.toObject() : request.approvalDetails || {}),
-            about: approvalAbout || request.approvalDetails?.about || '',
-            images: approvalImages.length
-              ? approvalImages
-              : (Array.isArray(request.approvalDetails?.images) ? request.approvalDetails.images : []),
-            updatedBy: req.user._id,
-            updatedAt: new Date()
-          };
-        }
+    if (resolvedApprovalAbout || approvalImages.length) {
+      request.approvalDetails = {
+        ...(request.approvalDetails?.toObject ? request.approvalDetails.toObject() : request.approvalDetails || {}),
+        about: resolvedApprovalAbout,
+        images: approvalImages.length
+          ? approvalImages
+          : (Array.isArray(request.approvalDetails?.images) ? request.approvalDetails.images : []),
+        updatedBy: req.user._id,
+        updatedAt: new Date()
+      };
+    }
 
         if (adminComment || uploadedFiles.length) {
           if (!uploadedFiles.length) {
@@ -852,7 +843,7 @@ exports.updateRequestStatus = async (req, res) => {
     request.approvedBy = req.user._id;
 
     
-    if (status === 'approved') {
+    if (status === 'approved' && request.asset?._id) {
       await CompanyAsset.findByIdAndUpdate(request.asset._id, {
         status: 'Assigned',
         assignedTo: request.user?._id || request.user,
@@ -860,8 +851,7 @@ exports.updateRequestStatus = async (req, res) => {
       });
     }
 
-    
-    if (status === 'completed') {
+    if (status === 'completed' && request.asset?._id) {
       await CompanyAsset.findByIdAndUpdate(request.asset._id, {
         status: 'Available',
         assignedTo: null,

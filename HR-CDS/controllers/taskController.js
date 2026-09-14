@@ -1250,11 +1250,53 @@ exports.getAssignedTasks = async (req, res) => {
     const filtered = sortTasksNewestFirst(applyCleanListFilters(mapped, req));
     const paginated = paginateTasks(filtered, req);
 
+    const calculateTaskSummary = (taskList = []) => {
+      let pending = 0;
+      let inProgress = 0;
+      let completed = 0;
+      let rejected = 0;
+      let overdue = 0;
+
+      taskList.forEach(t => {
+        const rawStatus = t.overallStatus || t.status || 'pending';
+        const st = normalizeTaskStatus(rawStatus);
+
+        if (st === 'completed' || st === 'approved') {
+          completed++;
+        } else if (st === 'in-progress') {
+          inProgress++;
+        } else if (st === 'rejected') {
+          rejected++;
+        } else {
+          pending++;
+        }
+
+        const due = t.dueDateTime || t.dueDate;
+        if (due && new Date(due) < new Date() && st !== 'completed' && st !== 'approved') {
+          overdue++;
+        }
+      });
+
+      return {
+        total: taskList.length,
+        pending,
+        inProgress,
+        completed,
+        rejected,
+        overdue
+      };
+    };
+
+    const summaryStats = calculateTaskSummary(filtered);
+    const overallStats = calculateTaskSummary(mapped);
+
     return res.json({
       success: true,
       tasks: paginated.tasks,
       groupedTasks: groupTasksByDate(paginated.tasks, 'createdAt', 'assignedSerialNo'),
       stats: calculateUnifiedTaskStats(filtered),
+      summaryStats,
+      overallStats,
       total: paginated.total,
       pagination: paginated
     });
