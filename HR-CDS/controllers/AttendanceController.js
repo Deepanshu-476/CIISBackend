@@ -98,10 +98,23 @@ const refreshAutoClockOuts = async () => {
 
 const getBranchScopedUserIds = async (req, companyCode) => {
   const requestedBranch = req.query?.branch || req.query?.branchId;
-  if (!requestedBranch || !isValidObjectId(requestedBranch)) return null;
+  const accessibleBranchIds = getUserBranchIds(req.user || {});
+
+  if (!requestedBranch || !isValidObjectId(requestedBranch)) {
+    if (!canViewAllBranchData(req.user) && accessibleBranchIds.length > 0) {
+      const users = await User.find({
+        companyCode,
+        $or: [
+          { branch: { $in: accessibleBranchIds } },
+          { assignedBranches: { $in: accessibleBranchIds } }
+        ]
+      }).select('_id').lean();
+      return users.map(user => user._id);
+    }
+    return null;
+  }
 
   const requestedBranchId = String(requestedBranch);
-  const accessibleBranchIds = getUserBranchIds(req.user || {});
   if (!canViewAllBranchData(req.user) && !accessibleBranchIds.includes(requestedBranchId)) {
     return [];
   }
