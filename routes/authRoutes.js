@@ -5,6 +5,7 @@ const path = require("path");
 const multer = require("multer");
 const router = express.Router();
 const authController = require("../controllers/authController");
+const { loginOtpGuard } = require("../middleware/loginOtpGuard");
 
 const registerDocumentDir = path.join(__dirname, "../uploads/employee-documents");
 fs.mkdirSync(registerDocumentDir, { recursive: true });
@@ -94,12 +95,12 @@ router.post("/refresh-token", authController.refreshToken);
 router.post("/logout", authController.logout); 
  
  
-router.post("/verify-login-otp", otpLimiter, authController.verifyLoginOTP);         
+router.post("/verify-login-otp", otpLimiter, loginOtpGuard, authController.verifyLoginOTP);         
 router.post("/resend-login-otp", otpLimiter, authController.resendLoginOTP); 
 
 
 router.post("/superadmin/login", authAttemptLimiter, authController.superAdminLogin);
-router.post("/superadmin/verify-otp", otpLimiter, authController.verifySuperAdminOTP);
+router.post("/superadmin/verify-otp", otpLimiter, loginOtpGuard, authController.verifySuperAdminOTP);
 router.post("/superadmin/resend-otp", otpLimiter, authController.resendSuperAdminOTP);
 router.post("/superadmin/forgot-password", passwordResetLimiter, authController.requestSuperAdminPasswordReset);
 router.post("/superadmin/verify-reset-otp", passwordResetLimiter, authController.verifySuperAdminResetOTP);
@@ -108,7 +109,7 @@ router.post("/superadmin/reset-password", passwordResetLimiter, authController.r
 
 router.post("/company/:companyCode/login", authAttemptLimiter, authController.companyLoginRoute);
 router.post("/company-login/:companyCode", authAttemptLimiter, authController.companyLogin);
-router.post("/company/:companyCode/verify-otp", otpLimiter, authController.verifyLoginOTP);
+router.post("/company/:companyCode/verify-otp", otpLimiter, loginOtpGuard, authController.verifyLoginOTP);
 router.post("/company/:companyCode/resend-otp", otpLimiter, authController.resendLoginOTP);
 router.get("/company/:identifier", authController.getCompanyDetailsByIdentifier);
 
