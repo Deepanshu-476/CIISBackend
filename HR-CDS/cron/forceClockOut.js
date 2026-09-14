@@ -4,6 +4,7 @@ const Attendance = require('../models/Attendance');
 const User = require('../../models/User');
 const JobRole = require('../../models/JobRole');
 const { notifyDirectUsers } = require('../utils/systemNotificationService');
+const { isOvertimeApprovedForUserDate } = require('../controllers/overtimeController');
 
 const ATTENDANCE_TIME_ZONE = 'Asia/Kolkata';
 const INDIA_OFFSET_MS = 5.5 * 60 * 60 * 1000;
@@ -319,6 +320,17 @@ const runAutoClockOutSweep = async () => {
       const forcedOutTime = addMinutes(schedule.shiftEnd, 30);
       if (now < forcedOutTime) continue;
 
+      // Overtime Check: If user has approved overtime for this date, DO NOT auto clock-out!
+      const hasApprovedOvertime = record.hasOvertimeApproved || (await isOvertimeApprovedForUserDate(recordUser._id, record.inTime || record.date || now));
+      if (hasApprovedOvertime) {
+        if (!record.hasOvertimeApproved) {
+          record.hasOvertimeApproved = true;
+          await record.save();
+        }
+        // User continues their overtime shift without being automatically forced out
+        continue;
+      }
+
       const snapshot = buildShiftSnapshot(shiftSettings, schedule);
       const recalculated = calculateAttendanceByShift({
         inTime: record.inTime,
@@ -333,7 +345,9 @@ const runAutoClockOutSweep = async () => {
       record.isClockedIn = false;
       record.totalTime = recalculated.totalTime;
       record.earlyLeave = recalculated.earlyLeave;
-      record.overTime = recalculated.overTime;
+      record.overTime = '00:00:00';
+      record.overTimeMinutes = 0;
+      record.hasOvertimeApproved = false;
       record.status = recalculated.status;
       if (!record.companyCode && recordUser.companyCode) {
         record.companyCode = recordUser.companyCode;

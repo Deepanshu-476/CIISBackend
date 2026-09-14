@@ -353,11 +353,29 @@ exports.payrollPreview = async (req, res) => {
       let futureDays = 0;
       let elapsedWeekOffDays = 0;
       let elapsedHolidays = 0;
+      let totalOvertimeMinutes = 0;
+      let overtimeDays = 0;
 
       calendarDates.forEach((date, idx) => {
         const key = indiaDateKey(date);
         const dayOfWeek = date.getUTCDay() || 7;
         const attendance = attendanceMap.get(`${userId}:${key}`);
+
+        // Aggregate Overtime only if approved for this date
+        if (attendance && attendance.hasOvertimeApproved) {
+          let otMin = Number(attendance.overTimeMinutes || 0);
+          if (!otMin && attendance.overTime && attendance.overTime !== "00:00:00") {
+            const parts = String(attendance.overTime).split(":").map(Number);
+            if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+              otMin = (parts[0] * 60) + parts[1];
+            }
+          }
+          if (otMin > 0) {
+            totalOvertimeMinutes += otMin;
+            overtimeDays += 1;
+          }
+        }
+
         const status = String(attendance?.status || "").trim().toUpperCase();
         const isHoliday = holidayKeys.has(key) || status === "HOLIDAY";
         const isWeekOff = dayOfWeek > effectiveWorkingDays(departmentDoc, date);
@@ -491,6 +509,35 @@ exports.payrollPreview = async (req, res) => {
       const earnedTillDateNet = !isMonthCompleted ? Math.round(Math.max(0, earnedTillDateGross - deductions) * 100) / 100 : Math.round(Math.max(0, earnedBeforeAttendance - totalAppliedDeductions) * 100) / 100;
 
 
+      const otHours = Math.floor(totalOvertimeMinutes / 60);
+      const otRemainingMinutes = totalOvertimeMinutes % 60;
+      const totalOvertimeDuration = `${String(otHours).padStart(2, "0")}:${String(otRemainingMinutes).padStart(2, "0")}:00`;
+      const totalOvertimeHoursFormatted = `${otHours}h ${otRemainingMinutes}m`;
+
+      // Calculate Overtime Pay Amount (Daily wage / 8 hours * Overtime hours)
+      const dailyWage = divisorDays > 0 ? (assignedGross / divisorDays) : 0;
+      const hourlyWage = dailyWage > 0 ? (dailyWage / 8) : 0;
+      const overtimePay = Math.round(((totalOvertimeMinutes / 60) * hourlyWage) * 100) / 100;
+
+      const finalMonthlyGross = Math.round((assignedGross + overtimePay) * 100) / 100;
+      const finalPayableGross = Math.round(Math.max(0, (assignedGross - attendanceDeduction) + overtimePay) * 100) / 100;
+      const finalMonthlyNet = Math.round(Math.max(0, (assignedGross - totalAppliedDeductions) + overtimePay) * 100) / 100;
+      const finalEarnedTillDateGross = Math.round((earnedTillDateGross + overtimePay) * 100) / 100;
+      const finalEarnedTillDateNet = Math.round((earnedTillDateNet + overtimePay) * 100) / 100;
+
+      const finalComponents = [...adjustedComponents];
+      if (overtimePay > 0) {
+        finalComponents.push({
+          name: `Overtime Pay (${totalOvertimeHoursFormatted})`,
+          code: "OVERTIME_PAY",
+          type: "earning",
+          amount: overtimePay,
+          payrollAmount: overtimePay,
+          projectedPayrollAmount: overtimePay,
+          isOvertime: true
+        });
+      }
+
       return {
         ...assignment,
         attendance: {
@@ -514,7 +561,13 @@ exports.payrollPreview = async (req, res) => {
           daysInMonth,
           weekOffDays,
           daysBasisCount: divisorDays,
-          calculationCutoff: todayKey
+          calculationCutoff: todayKey,
+          totalOvertimeMinutes,
+          totalOvertimeDuration,
+          totalOvertimeHoursFormatted,
+          overtimeDays,
+          overtimePay,
+          overtimeHourlyRate: Math.round(hourlyWage * 100) / 100
         },
         assignedGross,
         attendanceDeduction,
@@ -522,14 +575,16 @@ exports.payrollPreview = async (req, res) => {
         uninformedLeavePenaltyDeduction,
         halfDayDeduction,
         pendingAmount,
-        earnedTillDateGross,
-        earnedTillDateNet,
-        monthlyGross: assignedGross,
-        payableGross: Math.round(Math.max(0, assignedGross - attendanceDeduction) * 100) / 100,
+        earnedTillDateGross: finalEarnedTillDateGross,
+        earnedTillDateNet: finalEarnedTillDateNet,
+        monthlyGross: finalMonthlyGross,
+        payableGross: finalPayableGross,
         salaryDeductions: Math.round(deductions * 100) / 100,
         totalDeductions: totalAppliedDeductions,
-        monthlyNet: Math.round(Math.max(0, assignedGross - totalAppliedDeductions) * 100) / 100,
-        components: adjustedComponents,
+        monthlyNet: finalMonthlyNet,
+        overtimePay,
+        overtimeHourlyRate: Math.round(hourlyWage * 100) / 100,
+        components: finalComponents,
         payrollStatus: "Calculated"
       };
     });
