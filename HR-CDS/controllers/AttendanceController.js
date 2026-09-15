@@ -1382,18 +1382,24 @@ const getAttendanceList = async (req, res) => {
     const approvedOtRequests = await OvertimeRequest.find({
       user: targetUserId,
       status: 'Approved'
-    }).select('requestType dateKeys month').lean();
+    }).select('requestType dateKeys month calculationType requestedHours').lean();
 
-    const approvedOtDateKeysSet = new Set();
+    const approvedOtDateMap = new Map();
     approvedOtRequests.forEach(req => {
+      const isFullDay = req.calculationType === 'FULL_DAY_PRESENT';
       if (req.requestType === 'FULL_MONTH' && req.month) {
         const [y, m] = req.month.split('-').map(Number);
         const daysInM = new Date(y, m, 0).getDate();
         for (let d = 1; d <= daysInM; d++) {
-          approvedOtDateKeysSet.add(`${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`);
+          approvedOtDateMap.set(
+            `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`,
+            { calculationType: req.calculationType, requestedHours: req.requestedHours, isFullDay }
+          );
         }
       } else if (Array.isArray(req.dateKeys)) {
-        req.dateKeys.forEach(k => approvedOtDateKeysSet.add(k));
+        req.dateKeys.forEach(k => {
+          approvedOtDateMap.set(k, { calculationType: req.calculationType, requestedHours: req.requestedHours, isFullDay });
+        });
       }
     });
 
@@ -1422,22 +1428,34 @@ const getAttendanceList = async (req, res) => {
         const effectiveShiftName = recordObject.shiftName || fallbackShift.shiftName;
         const effectiveShiftTime = recordObject.shiftTime || formatShiftTimeWindow(effectiveShiftStart, effectiveShiftEnd);
 
-        const isOtApprovedForDate = approvedOtDateKeysSet.has(dateKey);
-        const effectiveHasOvertimeApproved = Boolean(isOtApprovedForDate);
+        const approvedOtInfo = approvedOtDateMap.get(dateKey);
+        const effectiveHasOvertimeApproved = Boolean(approvedOtInfo);
+        const isFullDayOt = Boolean(approvedOtInfo?.isFullDay);
         let effectiveOverTime = "00:00:00";
         let effectiveOverTimeMinutes = 0;
 
-        if (effectiveHasOvertimeApproved && recordObject.clockOutMode !== 'AUTO') {
-          if (recordObject.overTime && recordObject.overTime !== '00:00:00') {
-            effectiveOverTime = recordObject.overTime;
-            effectiveOverTimeMinutes = recordObject.overTimeMinutes || 0;
-          } else if (recordObject.outTime && recordObject.shiftEnd) {
-            const outD = new Date(recordObject.outTime);
-            const shiftEndD = new Date(recordObject.shiftEnd);
-            if (outD > shiftEndD) {
-              const otMs = Math.max(0, outD - shiftEndD);
-              effectiveOverTime = formatDuration(otMs);
-              effectiveOverTimeMinutes = Math.floor(otMs / (60 * 1000));
+        if (effectiveHasOvertimeApproved) {
+          if (isFullDayOt) {
+            effectiveOverTime = "Full Day";
+            effectiveOverTimeMinutes = 540;
+          } else if (recordObject.clockOutMode !== 'AUTO') {
+            if (recordObject.overTime && recordObject.overTime !== '00:00:00' && recordObject.overTime !== 'Full Day') {
+              effectiveOverTime = recordObject.overTime;
+              effectiveOverTimeMinutes = recordObject.overTimeMinutes || 0;
+            } else if (recordObject.outTime && recordObject.shiftEnd) {
+              const outD = new Date(recordObject.outTime);
+              const shiftEndD = new Date(recordObject.shiftEnd);
+              if (outD > shiftEndD) {
+                const otMs = Math.max(0, outD - shiftEndD);
+                effectiveOverTime = formatDuration(otMs);
+                effectiveOverTimeMinutes = Math.floor(otMs / (60 * 1000));
+              } else if (Number(approvedOtInfo?.requestedHours || 0) > 0) {
+                effectiveOverTime = formatDuration(Number(approvedOtInfo.requestedHours) * 3600 * 1000);
+                effectiveOverTimeMinutes = Number(approvedOtInfo.requestedHours) * 60;
+              }
+            } else if (Number(approvedOtInfo?.requestedHours || 0) > 0) {
+              effectiveOverTime = formatDuration(Number(approvedOtInfo.requestedHours) * 3600 * 1000);
+              effectiveOverTimeMinutes = Number(approvedOtInfo.requestedHours) * 60;
             }
           }
         }
@@ -1446,8 +1464,11 @@ const getAttendanceList = async (req, res) => {
           ...recordObject,
           dateKey,
           hasOvertimeApproved: effectiveHasOvertimeApproved,
+          overtimeCalculationType: approvedOtInfo?.calculationType || 'BY_HOURS',
+          isFullDayOt,
           overTime: effectiveOverTime,
           overTimeMinutes: effectiveOverTimeMinutes,
+          status: isFullDayOt ? 'PRESENT' : (recordObject.status || 'ABSENT'),
           shiftId: recordObject.shiftId || fallbackShift.shiftId,
           shiftName: effectiveShiftName,
           shiftType: recordObject.shiftType || fallbackShift.shiftType,
@@ -1597,21 +1618,33 @@ const getAllUsersAttendance = async (req, res) => {
     const approvedOtRequests = await OvertimeRequest.find({
       user: { $in: userIdsInRecords },
       status: 'Approved'
-    }).select('user requestType dateKeys month').lean();
+    }).select('user requestType dateKeys month calculationType requestedHours').lean();
 
     const userApprovedOtMap = new Map();
     approvedOtRequests.forEach(req => {
       const uId = String(req.user);
-      if (!userApprovedOtMap.has(uId)) userApprovedOtMap.set(uId, new Set());
-      const set = userApprovedOtMap.get(uId);
+      if (!userApprovedOtMap.has(uId)) userApprovedOtMap.set(uId, new Map());
+      const userMap = userApprovedOtMap.get(uId);
+      const isFullDay = req.calculationType === 'FULL_DAY_PRESENT';
+
       if (req.requestType === 'FULL_MONTH' && req.month) {
         const [y, m] = req.month.split('-').map(Number);
         const daysInM = new Date(y, m, 0).getDate();
         for (let d = 1; d <= daysInM; d++) {
-          set.add(`${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`);
+          userMap.set(`${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`, {
+            calculationType: req.calculationType,
+            requestedHours: req.requestedHours,
+            isFullDay
+          });
         }
       } else if (Array.isArray(req.dateKeys)) {
-        req.dateKeys.forEach(k => set.add(k));
+        req.dateKeys.forEach(k => {
+          userMap.set(k, {
+            calculationType: req.calculationType,
+            requestedHours: req.requestedHours,
+            isFullDay
+          });
+        });
       }
     });
 
@@ -1620,22 +1653,34 @@ const getAllUsersAttendance = async (req, res) => {
       data: records.map(record => {
         const uId = String(record.user?._id || record.user);
         const dKey = formatIndiaDateKey(record.date);
-        const isApprovedForDate = Boolean(userApprovedOtMap.get(uId)?.has(dKey));
-        const effectiveHasOvertimeApproved = Boolean(isApprovedForDate);
+        const otInfo = userApprovedOtMap.get(uId)?.get(dKey);
+        const effectiveHasOvertimeApproved = Boolean(otInfo);
+        const isFullDayOt = Boolean(otInfo?.isFullDay);
         let effectiveOverTime = "00:00:00";
         let effectiveOverTimeMinutes = 0;
 
-        if (effectiveHasOvertimeApproved && record.clockOutMode !== 'AUTO') {
-          if (record.overTime && record.overTime !== '00:00:00') {
-            effectiveOverTime = record.overTime;
-            effectiveOverTimeMinutes = record.overTimeMinutes || 0;
-          } else if (record.outTime && record.shiftEnd) {
-            const outD = new Date(record.outTime);
-            const shiftEndD = new Date(record.shiftEnd);
-            if (outD > shiftEndD) {
-              const otMs = Math.max(0, outD - shiftEndD);
-              effectiveOverTime = formatDuration(otMs);
-              effectiveOverTimeMinutes = Math.floor(otMs / (60 * 1000));
+        if (effectiveHasOvertimeApproved) {
+          if (isFullDayOt) {
+            effectiveOverTime = "Full Day";
+            effectiveOverTimeMinutes = 540;
+          } else if (record.clockOutMode !== 'AUTO') {
+            if (record.overTime && record.overTime !== '00:00:00' && record.overTime !== 'Full Day') {
+              effectiveOverTime = record.overTime;
+              effectiveOverTimeMinutes = record.overTimeMinutes || 0;
+            } else if (record.outTime && record.shiftEnd) {
+              const outD = new Date(record.outTime);
+              const shiftEndD = new Date(record.shiftEnd);
+              if (outD > shiftEndD) {
+                const otMs = Math.max(0, outD - shiftEndD);
+                effectiveOverTime = formatDuration(otMs);
+                effectiveOverTimeMinutes = Math.floor(otMs / (60 * 1000));
+              } else if (Number(otInfo?.requestedHours || 0) > 0) {
+                effectiveOverTime = formatDuration(Number(otInfo.requestedHours) * 3600 * 1000);
+                effectiveOverTimeMinutes = Number(otInfo.requestedHours) * 60;
+              }
+            } else if (Number(otInfo?.requestedHours || 0) > 0) {
+              effectiveOverTime = formatDuration(Number(otInfo.requestedHours) * 3600 * 1000);
+              effectiveOverTimeMinutes = Number(otInfo.requestedHours) * 60;
             }
           }
         }
@@ -1643,9 +1688,11 @@ const getAllUsersAttendance = async (req, res) => {
         return {
           ...record,
           hasOvertimeApproved: effectiveHasOvertimeApproved,
+          overtimeCalculationType: otInfo?.calculationType || 'BY_HOURS',
+          isFullDayOt,
           overTime: effectiveOverTime,
           overTimeMinutes: effectiveOverTimeMinutes,
-          status: record.status || 'ABSENT'
+          status: isFullDayOt ? 'PRESENT' : (record.status || 'ABSENT')
         };
       }),
       count: records.length,
