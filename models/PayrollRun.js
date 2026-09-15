@@ -17,7 +17,7 @@ const payrollRunSchema = new mongoose.Schema({
   month: { type: String, required: true, match: /^\d{4}-\d{2}$/ },
   status: {
     type: String,
-    enum: ["Draft", "Calculated", "Reviewed", "Approved", "Locked"],
+    enum: ["Draft", "Calculated", "Reviewed", "Approved", "Locked", "Released"],
     default: "Draft",
     index: true
   },

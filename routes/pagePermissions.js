@@ -5,6 +5,7 @@ const PageDataVisibility = require('../models/PageDataVisibility');
 const User = require('../models/User');
 const Branch = require('../models/Branch');
 const Department = require('../models/Department');
+const Company = require('../models/Company');
 const { protect, isCompanyOwner } = require('../middleware/authMiddleware');
 const { notifyDirectUsers } = require('../HR-CDS/utils/systemNotificationService');
 const { getCacheKey, getOrSetCached, invalidateCache } = require('../utils/inMemoryCache');
@@ -17,6 +18,7 @@ const payrollPermissionActions = {
   employeeSalary: { view: 'View', edit: 'Save / Edit', delete: 'Unassign / Delete' },
   assignSalary: { view: 'View', edit: 'Assign / Edit', delete: 'Unassign' },
   payrollProcess: { view: 'View', edit: 'Review / Settings / Fine', generate: 'Generate', lock: 'Lock', unlock: 'Unlock', delete: 'Delete Process' },
+  releasePayroll: { view: 'View', edit: 'Release Payroll' },
   payslip: { view: 'View', edit: 'Email / Download', delete: 'Delete' },
   payrollReports: { view: 'View Reports', edit: 'Export / Download', delete: 'Delete' },
 };
@@ -43,8 +45,18 @@ const APP_PAGES = [
   { pageKey: 'salary-assignment', name: 'Employee Salary', path: '/ciisUser/salary-assignment', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.employeeSalary },
   { pageKey: 'assign-salary', name: 'Assign Salary', path: '/ciisUser/assign-salary', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.assignSalary },
   { pageKey: 'payroll-process', name: 'Payroll Process', path: '/ciisUser/payroll-process', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.payrollProcess },
+  { pageKey: 'release-payroll', name: 'Release Payroll', path: '/ciisUser/release-payroll', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.releasePayroll },
   { pageKey: 'payslip', name: 'Payslip', path: '/ciisUser/payslip', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.payslip },
   { pageKey: 'payroll-reports', name: 'Payroll Reports', path: '/ciisUser/payroll-reports', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.payrollReports },
+  ...require('../utils/crmPermissionPages'),
+  ...[
+    ['dashboard', 'Dashboard'], ['call-dashboard', 'Call Dashboard'],
+    ['assigned-calls', 'My Assigned Calls'], ['todays-calls', "Today's Calls"],
+    ['pending-calls', 'Pending Calls'], ['scheduled-calls', 'Scheduled Calls'],
+    ['completed-calls', 'Completed Calls'], ['call-history', 'Call History'],
+    ['follow-ups', 'My Follow-Ups'], ['converted-leads', 'Converted Leads'],
+    ['call-workspace', 'Call Workspace'], ['lead-detail', 'Lead Detail'],
+  ].map(([slug, name]) => ({ pageKey: `admin-telecaller-${slug}`, name: `Admin Telecaller - ${name}`, path: `/ciisUser/telecaller/${slug}`, permissionPattern: 'viewEdit' })),
 ];
 
 const PAGE_PERMISSION_CACHE_PREFIX = 'pagePermissions';
@@ -155,13 +167,29 @@ const getAccessScopeCategory = (scopes = []) => {
   return 'all';
 };
 
-const decoratePageSummaries = async (companyId) => {
-  const configs = await PagePermission.find({ company: companyId })
+const getCompanyEnabledPages = async companyId => {
+  const company = await Company.findById(companyId).select('allowedPages').lean();
+  const enabled = new Set((company?.allowedPages || []).map(value => String(value || '').trim().toLowerCase().replace(/^\/+/, '').replace(/^ciisuser\//, '')));
+  // Release Payroll is a child of Payroll Process, so existing payroll-enabled
+  // companies receive the new page automatically without a database migration.
+  if (enabled.has('payroll-process')) enabled.add('release-payroll');
+  return enabled;
+};
+
+const pageIsEnabled = (page, enabled) => {
+  if (!enabled.size) return true;
+  const keys = [page.pageKey, page.path]
+    .map(value => String(value || '').trim().toLowerCase().replace(/^\/+/, '').replace(/^ciisuser\//, ''));
+  return keys.some(key => enabled.has(key));
+};
+
+const decoratePageSummaries = async (companyId, includeAccess = false) => {
+  const [configs, enabledPages] = await Promise.all([PagePermission.find({ company: companyId })
     .select('pageKey path approvers viewUsers editUsers deleteUsers generateUsers lockUsers unlockUsers userAccessScopes updatedAt')
-    .lean();
+    .lean(), getCompanyEnabledPages(companyId)]);
   const configMap = new Map(configs.map(config => [config.path, config]));
 
-  return APP_PAGES.map(page => {
+  const pages = APP_PAGES.filter(page => pageIsEnabled(page, enabledPages)).map(page => {
     const config = configMap.get(page.path);
     const counts = getPageUserCounts(config);
     return {
@@ -172,9 +200,27 @@ const decoratePageSummaries = async (companyId) => {
       updatedAt: config?.updatedAt || null
     };
   });
+  if (!includeAccess) return pages;
+  // Match by-path access semantics without populating users once per page.
+  const accessPages = APP_PAGES.map(page => {
+    const config = configMap.get(page.path);
+    return {
+      ...page,
+      approvers: getPageUsers(config, 'approvers'),
+      viewUsers: getEffectiveViewUsers(config),
+      editUsers: getPageUsers(config, 'editUsers'),
+      deleteUsers: getPageUsers(config, 'deleteUsers'),
+      generateUsers: getPageUsers(config, 'generateUsers'),
+      lockUsers: getPageUsers(config, 'lockUsers'),
+      unlockUsers: getPageUsers(config, 'unlockUsers'),
+      userAccessScopes: getPageUserAccessScopes(config)
+    };
+  });
+  return { pages, accessPages };
 };
 
 const decoratePages = async (companyId) => {
+  const enabledPages = await getCompanyEnabledPages(companyId);
   const configs = await PagePermission.find({ company: companyId })
     .select('company companyCode pageKey name path approvers viewUsers editUsers deleteUsers generateUsers lockUsers unlockUsers userAccessScopes updatedAt')
     .populate('approvers.user', 'name email jobRole companyRole department')
@@ -188,7 +234,7 @@ const decoratePages = async (companyId) => {
     .lean();
   const configMap = new Map(configs.map(config => [config.path, config]));
 
-  return APP_PAGES.map(page => {
+  return APP_PAGES.filter(page => pageIsEnabled(page, enabledPages)).map(page => {
     const config = configMap.get(page.path);
     return {
       ...page,
@@ -399,6 +445,14 @@ router.get('/pages', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Company not found for current user' });
     }
 
+    if (req.query?.includeAccess === 'true') {
+      const result = await getOrSetCached(
+        getCacheKey(PAGE_PERMISSION_CACHE_PREFIX, { scope: 'pages-access', companyId }),
+        () => decoratePageSummaries(companyId, true),
+        PAGE_PERMISSION_TTL_MS
+      );
+      return res.json({ success: true, ...result });
+    }
     const pages = await getPageSummariesCached(companyId);
     res.json({ success: true, pages });
   } catch (error) {
