@@ -11,6 +11,7 @@ const Holiday = require("../HR-CDS/models/Holiday");
 const PayrollRun = require("../models/PayrollRun");
 const Company = require("../models/Company");
 const { validateBulkEmployeeStatuses, applyBulkEmployeeTransition, deriveRunStatus } = require("../utils/payrollFlow");
+const { salarySnapshotForMonth } = require("../utils/payrollSalarySnapshot");
 const { sendEmail } = require("../utils/sendEmail");
 
 const getCompany = (req) => req.user?.company?._id || req.user?.company || req.user?.companyId;
@@ -21,6 +22,7 @@ const populateQuery = (query) =>
     .populate("user", "name email department jobRole employeeId empId phone profileImage status dateOfJoining bankName accountNumber ifsc bankHolderName panCard panNo pan aadharCard aadharNo aadhar aadhaar aadhaarCard dob")
     .populate("salaryStructure", "name code salaryType salaryInputType effectiveFrom status description components")
     .populate("components.component", "name code type proRata taxable grossSalary pfWage esiWage ptWage")
+    .populate("history.components.component", "name code type proRata taxable grossSalary pfWage esiWage ptWage")
     .populate("createdBy", "name email")
     .populate("updatedBy", "name email");
 
@@ -288,9 +290,12 @@ exports.payrollPreview = async (req, res) => {
     const monthIndex = Number(match[2]) - 1;
     const start = new Date(Date.UTC(year, monthIndex, 1) - (330 * 60 * 1000));
     const end = new Date(Date.UTC(year, monthIndex + 1, 1) - (330 * 60 * 1000) - 1);
-    const assignments = await populateQuery(EmployeeSalary.find({ company, status: "active" }))
+    const activeAssignments = await populateQuery(EmployeeSalary.find({ company, status: "active" }))
       .populate("components.component", "name code type proRata")
       .lean();
+    const assignments = activeAssignments
+      .map(assignment => salarySnapshotForMonth(assignment, month))
+      .filter(Boolean);
     const userIds = assignments.map(item => item.user?._id || item.user).filter(Boolean);
     const departmentIds = [...new Set(assignments.map(item => item.user?.department).filter(id => mongoose.isValidObjectId(id)).map(String))];
 
@@ -692,6 +697,9 @@ exports.generatePayrollRun = async (req, res) => {
       return res.status(400).json({ success: false, message: "A valid payroll month is required." });
     }
     const existing = await PayrollRun.findOne({ company, month });
+    if (existing && (existing.status === "Released" || existing.employees?.some(employee => employee.payrollStatus === "Released"))) {
+      return res.status(409).json({ success: false, message: "Released payroll cannot be recalculated." });
+    }
     if (existing && ["Approved", "Locked"].includes(existing.status)) {
       return res.status(409).json({ success: false, message: `${existing.status} payroll must be reopened before recalculation.` });
     }
@@ -735,6 +743,9 @@ exports.updatePayrollSettings = async (req, res) => {
     }
 
     let run = await PayrollRun.findOne({ company, month });
+    if (run && (run.status === "Released" || run.employees?.some(employee => employee.payrollStatus === "Released"))) {
+      return res.status(409).json({ success: false, message: "Released payroll settings cannot be modified." });
+    }
     if (run && ["Approved", "Locked"].includes(run.status)) {
       return res.status(409).json({ success: false, message: `${run.status} payroll must be reopened before updating settings.` });
     }
@@ -790,8 +801,15 @@ exports.recalculateSingleEmployee = async (req, res) => {
       return res.status(400).json({ success: false, message: "Valid month and employeeId are required." });
     }
     const run = await PayrollRun.findOne({ company, month });
+    const existingEmployee = run?.employees?.find(employee => employeePayrollKey(employee) === employeeId || String(employee._id || "") === employeeId);
+    if (run && (run.status === "Released" || existingEmployee?.payrollStatus === "Released")) {
+      return res.status(409).json({ success: false, message: "Released payroll cannot be recalculated." });
+    }
     if (run && ["Approved", "Locked"].includes(run.status)) {
       return res.status(409).json({ success: false, message: `${run.status} payroll must be reopened before recalculation.` });
+    }
+    if (["Approved", "Locked"].includes(existingEmployee?.payrollStatus)) {
+      return res.status(409).json({ success: false, message: `${existingEmployee.payrollStatus} employee payroll must be reopened before recalculation.` });
     }
 
     const calculation = await calculatePayroll(req);
@@ -855,13 +873,14 @@ exports.addPayrollAdjustment = async (req, res) => {
     }
     const run = await PayrollRun.findOne({ company, month });
     if (!run) return res.status(404).json({ success: false, message: "Generate payroll before adding a fine." });
-    if (["Approved", "Locked"].includes(run.status)) {
+    if (["Approved", "Locked", "Released"].includes(run.status)) {
       return res.status(409).json({ success: false, message: `${run.status} payroll must be reopened before adding a fine.` });
     }
     const index = run.employees.findIndex(employee => employeePayrollKey(employee) === employeeId || String(employee._id || "") === employeeId);
     if (index < 0) return res.status(404).json({ success: false, message: "Employee was not found in this payroll run." });
 
     const currentEmployee = run.employees[index];
+    if (currentEmployee.payrollStatus === "Released") return res.status(409).json({ success: false, message: "Released payroll cannot be modified." });
     const availableNet = Math.round(Math.max(0,
       Number(currentEmployee.monthlyGross || 0) -
       Number(currentEmployee.totalDeductions || 0) -
@@ -901,12 +920,13 @@ exports.removePayrollAdjustment = async (req, res) => {
     }
     const run = await PayrollRun.findOne({ company, month });
     if (!run) return res.status(404).json({ success: false, message: "Payroll run not found." });
-    if (["Approved", "Locked"].includes(run.status)) {
+    if (["Approved", "Locked", "Released"].includes(run.status)) {
       return res.status(409).json({ success: false, message: `${run.status} payroll must be reopened before removing a fine.` });
     }
     const index = run.employees.findIndex(employee => employeePayrollKey(employee) === employeeId || String(employee._id || "") === employeeId);
     if (index < 0) return res.status(404).json({ success: false, message: "Employee was not found in this payroll run." });
     const current = run.employees[index];
+    if (current.payrollStatus === "Released") return res.status(409).json({ success: false, message: "Released payroll cannot be modified." });
     const adjustment = (current.adjustments || []).find(item => String(item._id) === adjustmentId);
     if (!adjustment) return res.status(404).json({ success: false, message: "Fine was not found." });
 
@@ -933,6 +953,9 @@ exports.updatePayrollRunStatus = async (req, res) => {
     const reason = String(req.body.reason || "").trim();
     const run = await PayrollRun.findOne({ company, month });
     if (!run) return res.status(404).json({ success: false, message: "Generate payroll before changing its status." });
+    if (run.status === "Released" || run.employees?.some(employee => employee.payrollStatus === "Released")) {
+      return res.status(409).json({ success: false, message: "A payroll containing released employees cannot be reopened or modified." });
+    }
 
     const transitions = {
       review: { from: ["Calculated"], to: "Reviewed", label: "Review Payroll" },
@@ -1052,6 +1075,61 @@ exports.updatePayrollEmployeeStatus = async (req, res) => {
   }
 };
 
+// GET /api/employee-salaries/payroll-release?month=YYYY-MM&employeeId=...
+exports.getPayrollRelease = async (req, res) => {
+  try {
+    const company = getCompany(req);
+    const month = String(req.query.month || "").trim();
+    const employeeId = String(req.query.employeeId || "").trim();
+    const query = { company };
+    if (month && /^\d{4}-\d{2}$/.test(month)) query.month = month;
+    const runs = await PayrollRun.find(query).select("month status employees lockedAt").sort({ month: -1 }).lean();
+    const pending = [];
+    const history = [];
+    for (const run of runs) {
+      for (const employee of run.employees || []) {
+        const id = employeePayrollKey(employee) || String(employee._id || "");
+        const row = { ...employee, employeeId: id, month: run.month };
+        if (employee.payrollStatus === "Locked" && (!employeeId || id === employeeId)) pending.push(row);
+        if (employee.payrollStatus === "Released" && (!employeeId || id === employeeId)) history.push(row);
+      }
+    }
+    return res.json({ success: true, pending, history });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: "Unable to load payroll release records." });
+  }
+};
+
+// POST /api/employee-salaries/payroll-release
+exports.releaseEmployeePayroll = async (req, res) => {
+  try {
+    const company = getCompany(req);
+    const month = String(req.body.month || "").trim();
+    const employeeId = String(req.body.employeeId || "").trim();
+    const remarks = String(req.body.remarks || "").trim().slice(0, 500);
+    const paymentReference = String(req.body.paymentReference || "").trim().slice(0, 120);
+    if (!company || !/^\d{4}-\d{2}$/.test(month) || !employeeId) return res.status(400).json({ success: false, message: "Month and employee are required." });
+    const run = await PayrollRun.findOne({ company, month });
+    if (!run) return res.status(404).json({ success: false, message: "Payroll run not found." });
+    const index = run.employees.findIndex(item => employeePayrollKey(item) === employeeId || String(item._id || "") === employeeId);
+    if (index < 0) return res.status(404).json({ success: false, message: "Employee was not found in this payroll run." });
+    const current = run.employees[index];
+    if (current.payrollStatus === "Released") return res.status(409).json({ success: false, message: "This payroll has already been released." });
+    if (current.payrollStatus !== "Locked") return res.status(409).json({ success: false, message: "Only locked payroll can be released." });
+    const releasedAt = new Date();
+    const actor = req.user?._id || req.user?.id;
+    const employeeName = current?.user?.name || current?.user?.email || "Employee";
+    run.employees = run.employees.map((item, itemIndex) => itemIndex === index ? { ...item, payrollStatus: "Released", releasedAt, releasedBy: actor, releaseRemarks: remarks, paymentReference } : item);
+    if (run.employees.every(item => item.payrollStatus === "Released")) run.status = "Released";
+    run.updatedBy = actor;
+    run.auditLog.push({ action: "Release Employee Payroll", fromStatus: "Locked", toStatus: "Released", reason: remarks || "Payslip released.", performedBy: actor, performedByName: getActorName(req), employeeId, employeeName });
+    await run.save();
+    return res.json({ success: true, message: `${employeeName} payroll released successfully.` });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: "Unable to release employee payroll." });
+  }
+};
+
 // GET /api/employee-salaries/payroll-payslips?month=YYYY-MM
 const fs = require("fs");
 const path = require("path");
@@ -1089,8 +1167,8 @@ exports.getPayrollPayslips = async (req, res) => {
     const run = await PayrollRun.findOne({ company, month }).lean();
     if (!run) return res.status(404).json({ success: false, message: "Payroll run was not found." });
     const displayRun = await fillMissingSalaryStructures(company, payrollRunJson(run));
-    const approvedEmployees = (displayRun.employees || []).filter(employee => ["Approved", "Locked"].includes(employee.payrollStatus));
-    if (!approvedEmployees.length) return res.status(404).json({ success: false, message: "No employee payslip has been approved for this month." });
+    const approvedEmployees = (displayRun.employees || []).filter(employee => employee.payrollStatus === "Released");
+    if (!approvedEmployees.length) return res.status(404).json({ success: false, message: "No employee payslip has been released for this month." });
 
     const userIds = approvedEmployees.map(e => e.user?._id || e.user).filter(Boolean);
     const userDocs = await User.find({ _id: { $in: userIds } })
@@ -1130,7 +1208,7 @@ exports.getPayrollPayslips = async (req, res) => {
     }
     return res.json({ success: true, company: companyDoc, run: { ...displayRun, employees: enrichedApproved } });
   } catch (error) {
-    return res.status(500).json({ success: false, message: "Unable to load approved payslips." });
+    return res.status(500).json({ success: false, message: "Unable to load released payslips." });
   }
 };
 
@@ -1147,7 +1225,7 @@ exports.getPayslipHistory = async (req, res) => {
       .lean();
     const payslips = runs.flatMap(run => {
       const employee = (run.employees || []).find(item => employeePayrollKey(item) === employeeId || String(item._id || "") === employeeId);
-      return employee && ["Approved", "Locked"].includes(employee.payrollStatus) ? [{ month: run.month, status: employee.payrollStatus, approvedAt: employee.approvedAt || run.approvedAt, lockedAt: employee.lockedAt || run.lockedAt, netSalary: employee.monthlyNet }] : [];
+      return employee && employee.payrollStatus === "Released" ? [{ month: run.month, status: employee.payrollStatus, approvedAt: employee.approvedAt || run.approvedAt, lockedAt: employee.lockedAt || run.lockedAt, releasedAt: employee.releasedAt, netSalary: employee.monthlyNet }] : [];
     });
     return res.json({ success: true, payslips });
   } catch (error) {
@@ -1167,7 +1245,7 @@ exports.emailPayslip = async (req, res) => {
     const run = await PayrollRun.findOne({ company, month }).lean();
     if (!run) return res.status(404).json({ success: false, message: "Payroll run was not found." });
     const employee = (run.employees || []).find(item => employeePayrollKey(item) === employeeId || String(item._id || "") === employeeId);
-    if (!employee || !["Approved", "Locked"].includes(employee.payrollStatus)) return res.status(404).json({ success: false, message: "Employee payslip is not approved yet." });
+    if (!employee || employee.payrollStatus !== "Released") return res.status(404).json({ success: false, message: "Employee payslip has not been released yet." });
     const email = employee.user?.email;
     if (!email) return res.status(400).json({ success: false, message: "Employee email is not available." });
     const employeeName = employee.user?.name || "Employee";
