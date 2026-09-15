@@ -2,9 +2,23 @@ const mongoose = require('mongoose');
 const OvertimeRequest = require('../models/OvertimeRequest');
 const Attendance = require('../models/Attendance');
 const User = require('../../models/User');
+const EmployeeSalary = require('../../models/EmployeeSalary');
 const { notifyPageUsers, notifyDirectUsers, getCompanyId } = require('../utils/systemNotificationService');
+const { resolveShiftScheduleForUser } = require('../utils/shiftSchedule');
 
 const INDIA_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+const format12Hour = (timeStr) => {
+  if (!timeStr) return '';
+  if (/\b(AM|PM|am|pm)\b/.test(timeStr)) return timeStr;
+  const [hStr, mStr] = String(timeStr).split(':');
+  const h = parseInt(hStr, 10);
+  const m = parseInt(mStr || '0', 10);
+  if (isNaN(h)) return timeStr;
+  const period = h >= 12 ? 'PM' : 'AM';
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${String(h12).padStart(2, '0')}:${String(m).padStart(2, '0')} ${period}`;
+};
 
 const getIndiaDateKey = (dateInput) => {
   const d = new Date(dateInput);
@@ -75,7 +89,14 @@ const createOvertimeRequest = async (req, res) => {
       return res.status(400).json({ success: false, message: 'User company code not found.' });
     }
 
-    const { requestType = 'SINGLE_DAY', dates = [], month = '', reason = '' } = req.body;
+    const { 
+      requestType = 'SINGLE_DAY', 
+      dates = [], 
+      month = '', 
+      reason = '',
+      calculationType = 'BY_HOURS',
+      requestedHours = 0
+    } = req.body;
 
     let computedDateKeys = [];
     let computedDates = [];
@@ -128,6 +149,24 @@ const createOvertimeRequest = async (req, res) => {
       });
     }
 
+    // Retrieve active salary assignment to compute calculated overtime amount
+    let calculatedAmount = 0;
+    try {
+      const salaryDoc = await EmployeeSalary.findOne({ user: userId, status: 'active' }).lean();
+      const monthlyGross = Number(salaryDoc?.monthlyGross || 0);
+      const dailyWage = monthlyGross > 0 ? (monthlyGross / 30) : 0;
+      const hourlyWage = dailyWage > 0 ? (dailyWage / 9) : 0;
+      const totalDaysCount = computedDates.length;
+
+      if (calculationType === 'FULL_DAY_PRESENT') {
+        calculatedAmount = Math.round(dailyWage * totalDaysCount * 100) / 100;
+      } else {
+        calculatedAmount = Math.round(hourlyWage * Number(requestedHours || 0) * totalDaysCount * 100) / 100;
+      }
+    } catch (salErr) {
+      console.error('Error fetching employee salary for overtime calculation:', salErr);
+    }
+
     const overtimeRequest = new OvertimeRequest({
       user: userId,
       company,
@@ -136,6 +175,9 @@ const createOvertimeRequest = async (req, res) => {
       dates: computedDates,
       dateKeys: computedDateKeys,
       month: computedMonth,
+      calculationType: calculationType === 'FULL_DAY_PRESENT' ? 'FULL_DAY_PRESENT' : 'BY_HOURS',
+      requestedHours: calculationType === 'FULL_DAY_PRESENT' ? 0 : Number(requestedHours || 0),
+      calculatedAmount,
       reason: String(reason || '').trim(),
       status: 'Pending'
     });
@@ -202,9 +244,42 @@ const getMyOvertimeRequests = async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
 
+    const salaryDoc = await EmployeeSalary.findOne({ user: userId, status: 'active' }).lean();
+    const monthlyGross = Number(salaryDoc?.monthlyGross || 0);
+    const dailyWage = monthlyGross > 0 ? (monthlyGross / 30) : 0;
+    const hourlyWage = dailyWage > 0 ? (dailyWage / 9) : 0;
+
+    const enriched = requests.map(r => {
+      const daysCount = (r.dateKeys || []).length || 1;
+      let calcAmt = Number(r.calculatedAmount || 0);
+      if (!calcAmt && monthlyGross > 0) {
+        if (r.calculationType === 'FULL_DAY_PRESENT') {
+          calcAmt = Math.round(dailyWage * daysCount * 100) / 100;
+        } else if (Number(r.requestedHours || 0) > 0) {
+          calcAmt = Math.round(hourlyWage * Number(r.requestedHours) * daysCount * 100) / 100;
+        }
+      }
+
+      return {
+        ...r,
+        calculationType: r.calculationType || 'BY_HOURS',
+        requestedHours: r.requestedHours || 0,
+        calculatedAmount: calcAmt,
+        isFullDayApproved: Boolean(r.isFullDayApproved),
+        monthlySalary: monthlyGross,
+        dailyWage: Math.round(dailyWage * 100) / 100,
+        hourlyWage: Math.round(hourlyWage * 100) / 100
+      };
+    });
+
     return res.status(200).json({
       success: true,
-      data: requests
+      data: enriched,
+      salaryInfo: {
+        monthlyGross,
+        dailyWage: Math.round(dailyWage * 100) / 100,
+        hourlyWage: Math.round(hourlyWage * 100) / 100
+      }
     });
   } catch (error) {
     console.error('Get My Overtime Requests Error:', error);
@@ -257,10 +332,43 @@ const getAdminOvertimeRequests = async (req, res) => {
       );
     }
 
+    const userIds = [...new Set(filtered.map(r => String(r.user?._id || r.user)).filter(Boolean))];
+    const salaries = await EmployeeSalary.find({ user: { $in: userIds }, status: 'active' }).lean();
+    const salaryMap = new Map(salaries.map(s => [String(s.user), s]));
+
+    const enriched = filtered.map(r => {
+      const uId = String(r.user?._id || r.user);
+      const sal = salaryMap.get(uId);
+      const monthlyGross = Number(sal?.monthlyGross || 0);
+      const dailyWage = monthlyGross > 0 ? (monthlyGross / 30) : 0;
+      const hourlyWage = dailyWage > 0 ? (dailyWage / 9) : 0;
+      const daysCount = (r.dateKeys || []).length || 1;
+
+      let calcAmt = Number(r.calculatedAmount || 0);
+      if (!calcAmt && monthlyGross > 0) {
+        if (r.calculationType === 'FULL_DAY_PRESENT') {
+          calcAmt = Math.round(dailyWage * daysCount * 100) / 100;
+        } else if (Number(r.requestedHours || 0) > 0) {
+          calcAmt = Math.round(hourlyWage * Number(r.requestedHours) * daysCount * 100) / 100;
+        }
+      }
+
+      return {
+        ...r,
+        calculationType: r.calculationType || 'BY_HOURS',
+        requestedHours: r.requestedHours || 0,
+        calculatedAmount: calcAmt,
+        isFullDayApproved: Boolean(r.isFullDayApproved),
+        monthlySalary: monthlyGross,
+        dailyWage: Math.round(dailyWage * 100) / 100,
+        hourlyWage: Math.round(hourlyWage * 100) / 100
+      };
+    });
+
     return res.status(200).json({
       success: true,
-      data: filtered,
-      count: filtered.length
+      data: enriched,
+      count: enriched.length
     });
   } catch (error) {
     console.error('Get Admin Overtime Requests Error:', error);
@@ -277,7 +385,7 @@ const reviewOvertimeRequest = async (req, res) => {
     const adminId = req.user._id || req.user.id;
     const companyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     const { id } = req.params;
-    const { action, rejectionReason = '' } = req.body;
+    const { action, rejectionReason = '', isFullDayApproved = false } = req.body;
 
     if (!['Approve', 'Reject'].includes(action)) {
       return res.status(400).json({ success: false, message: "Action must be either 'Approve' or 'Reject'." });
@@ -294,6 +402,10 @@ const reviewOvertimeRequest = async (req, res) => {
     request.approvedAt = new Date();
     if (action === 'Reject') {
       request.rejectionReason = String(rejectionReason || '').trim();
+    } else if (action === 'Approve') {
+      if (request.calculationType === 'FULL_DAY_PRESENT') {
+        request.isFullDayApproved = isFullDayApproved !== undefined ? Boolean(isFullDayApproved) : true;
+      }
     }
 
     await request.save();
@@ -322,23 +434,63 @@ const reviewOvertimeRequest = async (req, res) => {
             $or: orFilters
           });
 
+          const matchedDateKeys = new Set();
           for (const att of matchingRecords) {
+            const attKey = getIndiaDateKey(att.date);
+            matchedDateKeys.add(attKey);
             att.hasOvertimeApproved = true;
             att.overtimeRequestId = request._id;
-            // If already clocked out manually and worked past shift end, recalculate overtime
-            if (att.outTime && att.shiftEnd && att.clockOutMode !== 'AUTO') {
-              const outD = new Date(att.outTime);
-              const shiftEndD = new Date(att.shiftEnd);
-              if (outD > shiftEndD) {
-                const otMs = Math.max(0, outD - shiftEndD);
-                att.overTime = formatDuration(otMs);
-                att.overTimeMinutes = Math.floor(otMs / (60 * 1000));
+
+            if (request.calculationType === 'FULL_DAY_PRESENT') {
+              if (request.isFullDayApproved) {
+                att.overTime = 'Full Day';
+                att.overTimeMinutes = 540;
+                att.status = 'PRESENT';
               }
-            } else if (att.clockOutMode === 'AUTO') {
-              att.overTime = '00:00:00';
-              att.overTimeMinutes = 0;
+            } else {
+              // BY_HOURS
+              if (att.outTime && att.shiftEnd && att.clockOutMode !== 'AUTO') {
+                const outD = new Date(att.outTime);
+                const shiftEndD = new Date(att.shiftEnd);
+                if (outD > shiftEndD) {
+                  const otMs = Math.max(0, outD - shiftEndD);
+                  att.overTime = formatDuration(otMs);
+                  att.overTimeMinutes = Math.floor(otMs / (60 * 1000));
+                } else if (Number(request.requestedHours || 0) > 0) {
+                  att.overTime = formatDuration(Number(request.requestedHours) * 3600 * 1000);
+                  att.overTimeMinutes = Number(request.requestedHours) * 60;
+                }
+              } else if (Number(request.requestedHours || 0) > 0) {
+                att.overTime = formatDuration(Number(request.requestedHours) * 3600 * 1000);
+                att.overTimeMinutes = Number(request.requestedHours) * 60;
+              } else if (att.clockOutMode === 'AUTO') {
+                att.overTime = '00:00:00';
+                att.overTimeMinutes = 0;
+              }
             }
             await att.save();
+          }
+
+          // If FULL_DAY_PRESENT and no attendance record existed on that date, create one marked as Present
+          if (request.calculationType === 'FULL_DAY_PRESENT' && request.isFullDayApproved) {
+            for (const dKey of (request.dateKeys || [])) {
+              if (!matchedDateKeys.has(dKey)) {
+                const recDate = new Date(`${dKey}T00:00:00.000+05:30`);
+                const newAtt = new Attendance({
+                  user: request.user,
+                  company: request.company,
+                  companyCode: request.companyCode,
+                  date: recDate,
+                  status: 'PRESENT',
+                  hasOvertimeApproved: true,
+                  overtimeRequestId: request._id,
+                  overTime: 'Full Day',
+                  overTimeMinutes: 540,
+                  notes: 'Overtime approved as 1 Full Day Present'
+                });
+                await newAtt.save();
+              }
+            }
           }
         }
       } catch (attSyncErr) {
@@ -398,6 +550,341 @@ const reviewOvertimeRequest = async (req, res) => {
 };
 
 /**
+ * GET /api/overtime/today-session
+ * Checks today's overtime status, shift end time, timer state, and if Start OT is allowed
+ */
+const getTodayOvertimeSession = async (req, res) => {
+  try {
+    const userId = req.user._id || req.user.id;
+    const now = new Date();
+    const todayKey = getIndiaDateKey(now);
+    const monthKey = todayKey.slice(0, 7);
+
+    // 1. Check if user has an approved overtime request for today
+    const approvedRequest = await OvertimeRequest.findOne({
+      user: userId,
+      status: 'Approved',
+      $or: [
+        { dateKeys: todayKey },
+        { month: monthKey, requestType: 'FULL_MONTH' }
+      ]
+    }).lean();
+
+    if (!approvedRequest) {
+      return res.status(200).json({
+        success: true,
+        hasApprovedOt: false,
+        message: 'No approved overtime request for today.'
+      });
+    }
+
+    // 2. Fetch shift schedule to know shiftEnd
+    const userDoc = await User.findById(userId).populate('jobRole').lean();
+    const shiftInfo = await resolveShiftScheduleForUser(userDoc, now);
+
+    let shiftEnd = shiftInfo?.schedule?.shiftEnd;
+    let shiftEndStr = shiftInfo?.schedule?.shiftEndStr || '19:00';
+    let shiftStartStr = shiftInfo?.schedule?.shiftStartStr || '10:00';
+
+    // 3. Check today's Attendance document
+    const startOfDay = new Date(`${todayKey}T00:00:00.000+05:30`);
+    const endOfDay = new Date(`${todayKey}T23:59:59.999+05:30`);
+
+    const att = await Attendance.findOne({
+      user: userId,
+      date: { $gte: startOfDay, $lte: endOfDay }
+    }).lean();
+
+    if (att && att.shiftEnd && !shiftInfo?.schedule) {
+      shiftEndStr = att.shiftEnd;
+    }
+
+    // Determine if shift has ended
+    let isShiftEnded = false;
+    if (shiftEnd) {
+      isShiftEnded = now >= shiftEnd;
+    } else if (shiftEndStr) {
+      const [seh, sem] = shiftEndStr.split(':').map(Number);
+      const shiftedNow = new Date(now.getTime() + INDIA_OFFSET_MS);
+      const nowH = shiftedNow.getUTCHours();
+      const nowM = shiftedNow.getUTCMinutes();
+      isShiftEnded = (nowH * 60 + nowM) >= (seh * 60 + (sem || 0));
+    }
+
+    const isOtRunning = Boolean(att?.isOtRunning);
+    const otStartTime = att?.otStartTime || null;
+    const otEndTime = att?.otEndTime || null;
+    const overTime = att?.overTime || '00:00:00';
+    const overTimeMinutes = Number(att?.overTimeMinutes || 0);
+    const otCompleted = Boolean(!isOtRunning && otEndTime && overTimeMinutes > 0);
+
+    // Calculate live earnings preview based on 9h workday
+    const salaryDoc = await EmployeeSalary.findOne({ user: userId, status: 'active' }).lean();
+    const monthlyGross = Number(salaryDoc?.monthlyGross || 0);
+    const dailyWage = monthlyGross > 0 ? (monthlyGross / 30) : 0;
+    const hourlyWage = dailyWage > 0 ? (dailyWage / 9) : 0;
+    const earnedAmount = overTimeMinutes > 0 ? Math.round(((overTimeMinutes / 60) * hourlyWage) * 100) / 100 : 0;
+
+    return res.status(200).json({
+      success: true,
+      hasApprovedOt: true,
+      data: {
+        todayKey,
+        requestId: approvedRequest._id,
+        calculationType: approvedRequest.calculationType || 'BY_HOURS',
+        requestedHours: approvedRequest.requestedHours || 0,
+        shiftStartStr,
+        shiftEndStr,
+        shiftEndFormatted: format12Hour(shiftEndStr),
+        isShiftEnded,
+        canStartOt: isShiftEnded && !isOtRunning && !otCompleted,
+        isOtRunning,
+        otStartTime,
+        otEndTime,
+        overTime,
+        overTimeMinutes,
+        otCompleted,
+        monthlyGross,
+        dailyWage: Math.round(dailyWage * 100) / 100,
+        hourlyWage: Math.round(hourlyWage * 100) / 100,
+        earnedAmount
+      }
+    });
+  } catch (error) {
+    console.error('Get Today Overtime Session Error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to get today overtime session', error: error.message });
+  }
+};
+
+/**
+ * POST /api/overtime/start
+ * Employee starts overtime after their regular shift ends
+ */
+const startOvertimeSession = async (req, res) => {
+  try {
+    const userId = req.user._id || req.user.id;
+    const companyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
+    const now = new Date();
+    const todayKey = getIndiaDateKey(now);
+    const monthKey = todayKey.slice(0, 7);
+
+    // 1. Verify approved request for today
+    const approvedRequest = await OvertimeRequest.findOne({
+      user: userId,
+      status: 'Approved',
+      $or: [
+        { dateKeys: todayKey },
+        { month: monthKey, requestType: 'FULL_MONTH' }
+      ]
+    });
+
+    if (!approvedRequest) {
+      return res.status(400).json({
+        success: false,
+        message: 'No approved overtime request found for today.'
+      });
+    }
+
+    // 2. Verify shift has ended
+    const userDoc = await User.findById(userId).populate('jobRole').lean();
+    const shiftInfo = await resolveShiftScheduleForUser(userDoc, now);
+
+    let shiftEnd = shiftInfo?.schedule?.shiftEnd;
+    let shiftEndStr = shiftInfo?.schedule?.shiftEndStr || '19:00';
+    let isShiftEnded = false;
+
+    if (shiftEnd) {
+      isShiftEnded = now >= shiftEnd;
+    } else if (shiftEndStr) {
+      const [seh, sem] = shiftEndStr.split(':').map(Number);
+      const shiftedNow = new Date(now.getTime() + INDIA_OFFSET_MS);
+      const nowH = shiftedNow.getUTCHours();
+      const nowM = shiftedNow.getUTCMinutes();
+      isShiftEnded = (nowH * 60 + nowM) >= (seh * 60 + (sem || 0));
+    }
+
+    if (!isShiftEnded) {
+      const formattedEnd = format12Hour(shiftEndStr);
+      return res.status(400).json({
+        success: false,
+        message: `Your regular shift ends at ${formattedEnd}. Overtime can only be started after your regular shift ends.`
+      });
+    }
+
+    // 3. Find or create today's Attendance document
+    const startOfDay = new Date(`${todayKey}T00:00:00.000+05:30`);
+    const endOfDay = new Date(`${todayKey}T23:59:59.999+05:30`);
+
+    let att = await Attendance.findOne({
+      user: userId,
+      date: { $gte: startOfDay, $lte: endOfDay }
+    });
+
+    if (!att) {
+      att = new Attendance({
+        user: userId,
+        company: approvedRequest.company,
+        companyCode: companyCode || approvedRequest.companyCode,
+        date: now,
+        status: 'PRESENT',
+        shiftStart: shiftInfo?.schedule?.shiftStartStr || '10:00',
+        shiftEnd: shiftInfo?.schedule?.shiftEndStr || '19:00',
+        shiftName: shiftInfo?.shiftSettings?.shiftName || 'General Shift',
+        hasOvertimeApproved: true,
+        overtimeRequestId: approvedRequest._id,
+        notes: 'Overtime shift session'
+      });
+    }
+
+    if (att.isOtRunning) {
+      return res.status(200).json({
+        success: true,
+        message: 'Overtime is already running.',
+        data: {
+          otStartTime: att.otStartTime,
+          isOtRunning: true,
+          requestedHours: approvedRequest.requestedHours
+        }
+      });
+    }
+
+    if (att.otEndTime && !att.isOtRunning && att.overTimeMinutes > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Overtime session for today has already been completed and recorded.'
+      });
+    }
+
+    att.otStartTime = now;
+    att.otEndTime = null;
+    att.isOtRunning = true;
+    att.hasOvertimeApproved = true;
+    att.overtimeRequestId = approvedRequest._id;
+    if (att.status === 'ABSENT' || !att.status) {
+      att.status = 'PRESENT';
+    }
+
+    await att.save();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Overtime started successfully. Timer is now running.',
+      data: {
+        otStartTime: att.otStartTime,
+        isOtRunning: true,
+        requestedHours: approvedRequest.requestedHours
+      }
+    });
+  } catch (error) {
+    console.error('Start Overtime Session Error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to start overtime session', error: error.message });
+  }
+};
+
+/**
+ * POST /api/overtime/stop
+ * Employee stops overtime; calculates actual duration and caps at approved requested hours
+ */
+const stopOvertimeSession = async (req, res) => {
+  try {
+    const userId = req.user._id || req.user.id;
+    const now = new Date();
+    const todayKey = getIndiaDateKey(now);
+
+    const startOfDay = new Date(`${todayKey}T00:00:00.000+05:30`);
+    const endOfDay = new Date(`${todayKey}T23:59:59.999+05:30`);
+
+    let att = await Attendance.findOne({
+      user: userId,
+      date: { $gte: startOfDay, $lte: endOfDay }
+    });
+
+    if (!att || !att.otStartTime) {
+      return res.status(400).json({
+        success: false,
+        message: 'No active overtime session found to stop.'
+      });
+    }
+
+    const otStartTime = new Date(att.otStartTime);
+    const otEndTime = now;
+    const elapsedMs = Math.max(0, otEndTime - otStartTime);
+    const actualMinutes = Math.max(1, Math.floor(elapsedMs / 60000));
+
+    // Get approved request to cap duration
+    const monthKey = todayKey.slice(0, 7);
+    const approvedRequest = await OvertimeRequest.findOne({
+      user: userId,
+      status: 'Approved',
+      $or: [
+        { dateKeys: todayKey },
+        { month: monthKey, requestType: 'FULL_MONTH' }
+      ]
+    }).lean();
+
+    const approvedHours = Number(approvedRequest?.requestedHours || 0);
+    const maxMinutes = approvedHours > 0 ? (approvedHours * 60) : actualMinutes;
+
+    // Cap at approved hours: if worked 2h 15m (135m) and approved is 2h (120m), count 120m.
+    // If worked 1h 30m (90m), count 90m.
+    const countedMinutes = Math.min(actualMinutes, maxMinutes);
+
+    const finalHours = Math.floor(countedMinutes / 60);
+    const finalRemMin = countedMinutes % 60;
+    const formattedOt = `${String(finalHours).padStart(2, '0')}:${String(finalRemMin).padStart(2, '0')}:00`;
+
+    att.otEndTime = otEndTime;
+    att.isOtRunning = false;
+    att.overTime = formattedOt;
+    att.overTimeMinutes = countedMinutes;
+    att.otActualMinutes = actualMinutes;
+    att.hasOvertimeApproved = true;
+    if (att.status === 'ABSENT' || !att.status) {
+      att.status = 'PRESENT';
+    }
+
+    await att.save();
+
+    // Calculate earned overtime pay (9-hour daily working time basis)
+    const salaryDoc = await EmployeeSalary.findOne({ user: userId, status: 'active' }).lean();
+    const monthlyGross = Number(salaryDoc?.monthlyGross || 0);
+    const dailyWage = monthlyGross > 0 ? (monthlyGross / 30) : 0;
+    const hourlyWage = dailyWage > 0 ? (dailyWage / 9) : 0;
+    const earnedAmount = Math.round(((countedMinutes / 60) * hourlyWage) * 100) / 100;
+
+    const actualHours = Math.floor(actualMinutes / 60);
+    const actualRemMin = actualMinutes % 60;
+    const actualFormatted = `${actualHours > 0 ? `${actualHours}h ` : ''}${actualRemMin}m`;
+    const countedFormatted = `${finalHours > 0 ? `${finalHours}h ` : ''}${finalRemMin}m`;
+
+    const isCapped = actualMinutes > maxMinutes;
+    const summaryMsg = isCapped
+      ? `Overtime recorded: ${actualFormatted} worked (Capped at approved limit: ${countedFormatted}). Earned: +₹${earnedAmount}`
+      : `Overtime recorded: ${countedFormatted}. Earned: +₹${earnedAmount}`;
+
+    return res.status(200).json({
+      success: true,
+      message: summaryMsg,
+      data: {
+        actualMinutes,
+        actualFormatted,
+        countedMinutes,
+        countedFormatted,
+        overTime: formattedOt,
+        overTimeMinutes: countedMinutes,
+        isCapped,
+        earnedAmount,
+        otStartTime: att.otStartTime,
+        otEndTime: att.otEndTime
+      }
+    });
+  } catch (error) {
+    console.error('Stop Overtime Session Error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to stop overtime session', error: error.message });
+  }
+};
+
+/**
  * DELETE /api/overtime/request/:id
  * Employee cancels their own pending overtime request
  */
@@ -429,6 +916,9 @@ module.exports = {
   getAdminOvertimeRequests,
   reviewOvertimeRequest,
   deleteOvertimeRequest,
+  getTodayOvertimeSession,
+  startOvertimeSession,
+  stopOvertimeSession,
   isOvertimeApprovedForUserDate,
   getIndiaDateKey
 };

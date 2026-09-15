@@ -33,6 +33,23 @@ const overtimeRequestSchema = new mongoose.Schema({
     type: String, // 'YYYY-MM'
     trim: true
   },
+  calculationType: {
+    type: String,
+    enum: ['BY_HOURS', 'FULL_DAY_PRESENT'],
+    default: 'BY_HOURS'
+  },
+  requestedHours: {
+    type: Number,
+    default: 0
+  },
+  calculatedAmount: {
+    type: Number,
+    default: 0
+  },
+  isFullDayApproved: {
+    type: Boolean,
+    default: false
+  },
   reason: {
     type: String,
     trim: true,
