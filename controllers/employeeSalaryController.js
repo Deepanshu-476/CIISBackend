@@ -373,31 +373,20 @@ exports.payrollPreview = async (req, res) => {
       const joiningKey = assignment.dateOfJoining || assignment.user?.dateOfJoining
         ? indiaDateKey(assignment.dateOfJoining || assignment.user.dateOfJoining)
         : "";
-      let workingDays = 0;
-      let eligibleWorkingDays = 0;
-      let presentDays = 0;
-      let paidLeaveDays = 0;
-      let unpaidLeaveDays = 0;
-      let uninformedLeaveDays = 0;
-      let halfDayDays = 0;
-      let lopDays = 0;
-      let actualAbsentDays = 0;
-      let sandwichLopDays = 0;
-      let pendingDays = 0;
-      let futureDays = 0;
-      let elapsedWeekOffDays = 0;
-      let elapsedHolidays = 0;
       const userOt = userApprovedOtMap.get(userId) || { fullDayDates: new Set(), hourlyDates: new Map() };
       const approvedFullDayCount = userOt.fullDayDates.size;
       let totalOvertimeMinutes = 0;
       let overtimeDays = approvedFullDayCount;
 
-      calendarDates.forEach((date, idx) => {
+      // 1. Build day-by-day status map for all calendar dates in month
+      const dayRecords = calendarDates.map((date, idx) => {
         const key = indiaDateKey(date);
         const dayOfWeek = date.getUTCDay() || 7;
+        const isPreJoining = Boolean(joiningKey && key < joiningKey);
+        const isFuture = key > todayKey;
         const attendance = attendanceMap.get(`${userId}:${key}`);
 
-        // Aggregate Overtime only if approved for this date
+        // Overtime calculation for this date
         if (userOt.hourlyDates.has(key)) {
           let otMin = Number(attendance?.overTimeMinutes || 0);
           if (!otMin && attendance?.overTime && attendance.overTime !== "00:00:00" && attendance.overTime !== "Full Day") {
@@ -430,172 +419,249 @@ exports.payrollPreview = async (req, res) => {
           }
         }
 
-        let status = String(attendance?.status || "").trim().toUpperCase();
-        if (userOt.fullDayDates.has(key) && (!status || status === "ABSENT")) {
-          status = "PRESENT";
+        let rawStatus = String(attendance?.status || "").trim().toUpperCase();
+        if (userOt.fullDayDates.has(key) && (!rawStatus || rawStatus === "ABSENT")) {
+          rawStatus = "PRESENT";
         }
-        const isHoliday = holidayKeys.has(key) || status === "HOLIDAY";
+        const isHoliday = holidayKeys.has(key) || rawStatus === "HOLIDAY";
         const isWeekOff = dayOfWeek > effectiveWorkingDays(departmentDoc, date);
         const isOffDay = isWeekOff || isHoliday;
 
-        if (isOffDay) {
-          if ((!joiningKey || key >= joiningKey) && key <= todayKey) {
-            if (isHoliday) elapsedHolidays += 1;
-            else if (isWeekOff) elapsedWeekOffDays += 1;
+        let workingStatus = "";
+        let isLeave = false;
+        let leavePayType = "";
+
+        if (!isOffDay && !isPreJoining && !isFuture) {
+          const approvedLeave = (leaveByUser.get(userId) || []).find(item => (
+            key >= indiaDateKey(item.startDate) && key <= indiaDateKey(item.endDate)
+          ));
+          if (approvedLeave) {
+            isLeave = true;
+            leavePayType = String(approvedLeave.payType).toLowerCase();
+            workingStatus = leavePayType === "unpaid" ? "UNPAID_LEAVE" : "PAID_LEAVE";
+          } else if (userOt.fullDayDates.has(key)) {
+            workingStatus = "PRESENT";
+          } else if (["PRESENT", "LATE", "SHORT LEAVE"].includes(rawStatus)) {
+            workingStatus = "PRESENT";
+          } else if (["HALF DAY", "HALFDAY"].includes(rawStatus)) {
+            workingStatus = "HALF_DAY";
+          } else if (["UNINFORMED LEAVE", "UNINFORMEDLEAVE"].includes(rawStatus)) {
+            workingStatus = "UNINFORMED_LEAVE";
+          } else if (rawStatus === "ABSENT") {
+            workingStatus = "ABSENT";
+          } else {
+            workingStatus = "PENDING";
           }
+        }
 
-          // Check Sandwich LOP if policy enabled
-          if (sandwichRuleEnabled && (!joiningKey || key >= joiningKey) && key <= todayKey) {
-            let prevStatus = "";
-            for (let i = idx - 1; i >= 0; i--) {
-              const pDate = calendarDates[i];
-              const pKey = indiaDateKey(pDate);
-              const pDayOfWeek = pDate.getUTCDay() || 7;
-              if (pDayOfWeek <= effectiveWorkingDays(departmentDoc, pDate) && !holidayKeys.has(pKey)) {
-                const pLeave = (leaveByUser.get(userId) || []).find(item => (pKey >= indiaDateKey(item.startDate) && pKey <= indiaDateKey(item.endDate)));
-                if (pLeave) {
-                  prevStatus = String(pLeave.payType).toLowerCase() === "unpaid" ? "ABSENT" : "PRESENT";
-                } else {
-                  const pAtt = attendanceMap.get(`${userId}:${pKey}`);
-                  prevStatus = String(pAtt?.status || "").trim().toUpperCase();
-                }
-                break;
-              }
-            }
+        return {
+          date,
+          key,
+          dayOfWeek,
+          idx,
+          isPreJoining,
+          isFuture,
+          isHoliday,
+          isWeekOff,
+          isOffDay,
+          workingStatus,
+          isLeave,
+          leavePayType,
+          rawStatus
+        };
+      });
 
-            let nextStatus = "";
-            for (let i = idx + 1; i < calendarDates.length; i++) {
-              const nDate = calendarDates[i];
-              const nKey = indiaDateKey(nDate);
-              const nDayOfWeek = nDate.getUTCDay() || 7;
-              if (nDayOfWeek <= effectiveWorkingDays(departmentDoc, nDate) && !holidayKeys.has(nKey)) {
-                const nLeave = (leaveByUser.get(userId) || []).find(item => (nKey >= indiaDateKey(item.startDate) && nKey <= indiaDateKey(item.endDate)));
-                if (nLeave) {
-                  nextStatus = String(nLeave.payType).toLowerCase() === "unpaid" ? "ABSENT" : "PRESENT";
-                } else {
-                  const nAtt = attendanceMap.get(`${userId}:${nKey}`);
-                  nextStatus = String(nAtt?.status || "").trim().toUpperCase();
-                }
-                break;
-              }
-            }
+      // 2. Count working days and attendance states
+      let workingDays = 0;
+      let eligibleWorkingDays = 0;
+      let presentDays = 0;
+      let paidLeaveDays = 0;
+      let unpaidLeaveDays = 0;
+      let uninformedLeaveDays = 0;
+      let halfDayDays = 0;
+      let lopDays = 0;
+      let actualAbsentDays = 0;
+      let pendingDays = 0;
+      let futureDays = 0;
+      let totalWeekOffDays = 0;
+      let totalHolidayDays = 0;
+      let elapsedWeekOffDays = 0;
+      let elapsedHolidayDays = 0;
 
-            if (["ABSENT", "UNPAID"].includes(prevStatus) && ["ABSENT", "UNPAID"].includes(nextStatus)) {
-              sandwichLopDays += 1;
-            }
+      dayRecords.forEach(day => {
+        if (day.isOffDay) {
+          if (day.isHoliday) {
+            totalHolidayDays += 1;
+            if (!day.isPreJoining && !day.isFuture) elapsedHolidayDays += 1;
+          } else if (day.isWeekOff) {
+            totalWeekOffDays += 1;
+            if (!day.isPreJoining && !day.isFuture) elapsedWeekOffDays += 1;
           }
           return;
         }
 
         workingDays += 1;
-        if (joiningKey && key < joiningKey) return;
-        if (key > todayKey) {
+        if (day.isPreJoining) return;
+        if (day.isFuture) {
           futureDays += 1;
           return;
         }
         eligibleWorkingDays += 1;
 
-        const approvedLeave = (leaveByUser.get(userId) || []).find(item => (
-          key >= indiaDateKey(item.startDate) && key <= indiaDateKey(item.endDate)
-        ));
-        if (approvedLeave) {
-          if (String(approvedLeave.payType).toLowerCase() === "unpaid") {
-            unpaidLeaveDays += 1;
-            lopDays += 1;
-          } else {
-            paidLeaveDays += 1;
-          }
-          return;
-        }
-
-        if (["PRESENT", "LATE", "SHORT LEAVE"].includes(status)) presentDays += 1;
-        else if (["HALF DAY", "HALFDAY"].includes(status)) {
+        if (day.workingStatus === "PAID_LEAVE") {
+          paidLeaveDays += 1;
+        } else if (day.workingStatus === "UNPAID_LEAVE") {
+          unpaidLeaveDays += 1;
+          lopDays += 1;
+        } else if (day.workingStatus === "PRESENT") {
+          presentDays += 1;
+        } else if (day.workingStatus === "HALF_DAY") {
           presentDays += 0.5;
           halfDayDays += 1;
-        } else if (["UNINFORMED LEAVE", "UNINFORMEDLEAVE"].includes(status)) {
-          lopDays += 1;
+        } else if (day.workingStatus === "UNINFORMED_LEAVE") {
           uninformedLeaveDays += 1;
-        } else if (status === "ABSENT") {
           lopDays += 1;
+        } else if (day.workingStatus === "ABSENT") {
           actualAbsentDays += 1;
+          lopDays += 1;
+        } else {
+          pendingDays += 1;
         }
-        else pendingDays += 1;
       });
 
-      const uninformedLeavePenaltyDays = uninformedLeaveDays;
+      // 3. Evaluate Verified Presence & Policy for Off-Days (Weekly Offs & Holidays)
+      // Only an employee with verified working presence can be credited with paid off-days.
+      const hasVerifiedWork = (presentDays > 0 || paidLeaveDays > 0 || approvedFullDayCount > 0);
+
+      let sandwichLopDays = 0;
+      let paidWeekOffDays = 0;
+      let paidHolidayDays = 0;
+
+      if (hasVerifiedWork) {
+        dayRecords.forEach((day, idx) => {
+          if (!day.isOffDay || day.isPreJoining || day.isFuture) return;
+
+          // Find preceding scheduled working day
+          let prevDay = null;
+          for (let i = idx - 1; i >= 0; i--) {
+            if (!dayRecords[i].isOffDay && !dayRecords[i].isPreJoining) {
+              prevDay = dayRecords[i];
+              break;
+            }
+          }
+
+          // Find succeeding scheduled working day
+          let nextDay = null;
+          for (let i = idx + 1; i < dayRecords.length; i++) {
+            if (!dayRecords[i].isOffDay) {
+              nextDay = dayRecords[i];
+              break;
+            }
+          }
+
+          const isPrevAbsentOrPending = !prevDay || ["ABSENT", "UNPAID_LEAVE", "UNINFORMED_LEAVE", "PENDING"].includes(prevDay.workingStatus);
+          const isNextAbsentOrPending = !nextDay || nextDay.isFuture || ["ABSENT", "UNPAID_LEAVE", "UNINFORMED_LEAVE", "PENDING"].includes(nextDay.workingStatus);
+          const isPrevVerified = prevDay && ["PRESENT", "HALF_DAY", "PAID_LEAVE"].includes(prevDay.workingStatus);
+          const isNextVerified = nextDay && !nextDay.isFuture && ["PRESENT", "HALF_DAY", "PAID_LEAVE"].includes(nextDay.workingStatus);
+
+          // Sandwich rule: absent/unpaid/pending on both sides
+          if (sandwichRuleEnabled) {
+            if (isPrevAbsentOrPending && isNextAbsentOrPending) {
+              sandwichLopDays += 1;
+              return;
+            }
+          }
+
+          // Policy check: paid off-day requires active verified work adjacent or in same week
+          if (isPrevVerified || isNextVerified) {
+            if (day.isHoliday) paidHolidayDays += 1;
+            else if (day.isWeekOff) paidWeekOffDays += 1;
+          } else {
+            const dayWeekStart = Math.max(0, idx - (day.dayOfWeek - 1));
+            const dayWeekEnd = Math.min(dayRecords.length - 1, dayWeekStart + 6);
+            let hasWorkInWeek = false;
+            for (let w = dayWeekStart; w <= dayWeekEnd; w++) {
+              if (["PRESENT", "HALF_DAY", "PAID_LEAVE"].includes(dayRecords[w]?.workingStatus)) {
+                hasWorkInWeek = true;
+                break;
+              }
+            }
+            if (hasWorkInWeek) {
+              if (day.isHoliday) paidHolidayDays += 1;
+              else if (day.isWeekOff) paidWeekOffDays += 1;
+            } else {
+              if (sandwichRuleEnabled) sandwichLopDays += 1;
+            }
+          }
+        });
+      }
+
       const totalLopDays = lopDays + sandwichLopDays;
-      const deductionDays = totalLopDays + uninformedLeavePenaltyDays + (halfDayDays * 0.5);
-      const payableDays = Math.max(0, presentDays + paidLeaveDays);
-      const projectedPayableDays = Math.max(0, eligibleWorkingDays - deductionDays);
+      const uninformedLeavePenaltyDays = uninformedLeaveDays;
+
+      // 4. Compute verified payable days and ratios
+      // When there is 0 verified attendance, verifiedPayableDays is strictly 0.
+      const effectivePresentDays = presentDays + approvedFullDayCount;
+      const verifiedPayableDays = hasVerifiedWork
+        ? Math.max(0, effectivePresentDays + paidLeaveDays + paidWeekOffDays + paidHolidayDays)
+        : 0;
 
       const divisorDays = salaryDaysBasis === "fixed30" ? 30 : salaryDaysBasis === "fixed31" ? 31 : salaryDaysBasis === "fixed26" ? 26 : daysInMonth;
-      const effectivePayableDays = Math.max(0, divisorDays - deductionDays);
+      const effectivePayableDays = Math.min(divisorDays, verifiedPayableDays);
       const ratio = divisorDays > 0 ? Math.min(1, effectivePayableDays / divisorDays) : 0;
-      const projectedRatio = ratio;
 
+      const assignedGross = Number(assignment.monthlyGross || 0);
+
+      // Overtime Pay
+      const dailyWage = divisorDays > 0 ? (assignedGross / divisorDays) : 0;
+      const hourlyWage = dailyWage > 0 ? (dailyWage / 9) : 0;
+      const minuteWage = hourlyWage > 0 ? (hourlyWage / 60) : 0;
+      const hourlyOvertimePay = Math.round(((totalOvertimeMinutes / 60) * hourlyWage) * 100) / 100;
+      const fullDayOvertimePay = Math.round((approvedFullDayCount * dailyWage) * 100) / 100;
+      const overtimePay = Math.round((hourlyOvertimePay + fullDayOvertimePay) * 100) / 100;
+
+      // Attendance deduction (for unverified or unpaid days out of divisor)
+      const unpaidDays = Math.max(0, divisorDays - effectivePayableDays);
+      const attendanceDeduction = divisorDays > 0
+        ? Math.round((assignedGross * unpaidDays / divisorDays) * 100) / 100
+        : 0;
+
+      // Prorate components
       const adjustedComponents = (assignment.components || []).map(item => {
         const shouldProrate = item.type === "earning" && item.component?.proRata !== false;
-        const amount = shouldProrate ? Number(item.amount || 0) * ratio : Number(item.amount || 0);
-        const projectedAmount = shouldProrate ? Number(item.amount || 0) * projectedRatio : Number(item.amount || 0);
-        return { ...item, payrollAmount: Math.round(amount * 100) / 100, projectedPayrollAmount: Math.round(projectedAmount * 100) / 100 };
+        const amount = shouldProrate ? Number(item.amount || 0) * ratio : (effectivePayableDays > 0 ? Number(item.amount || 0) : 0);
+        return {
+          ...item,
+          payrollAmount: Math.round(amount * 100) / 100,
+          projectedPayrollAmount: Math.round(amount * 100) / 100
+        };
       });
 
-      const gross = adjustedComponents.reduce((sum, item) => sum + (item.type === "earning" ? item.payrollAmount : 0), 0);
-      const projectedGross = adjustedComponents.reduce((sum, item) => sum + (item.type === "earning" ? item.projectedPayrollAmount : 0), 0);
-      const deductions = adjustedComponents.reduce((sum, item) => sum + (item.type === "deduction" ? item.payrollAmount : 0), 0);
-      const assignedGross = Number(assignment.monthlyGross || 0);
-      const attendanceDeduction = divisorDays > 0
-        ? Math.round((assignedGross * deductionDays / divisorDays) * 100) / 100
-        : 0;
-      const lopDeduction = deductionDays > 0
-        ? Math.round((attendanceDeduction * totalLopDays / deductionDays) * 100) / 100
-        : 0;
-      const uninformedLeavePenaltyDeduction = deductionDays > 0
-        ? Math.round((attendanceDeduction * uninformedLeavePenaltyDays / deductionDays) * 100) / 100
-        : 0;
-      const halfDayDeduction = Math.round(Math.max(0, attendanceDeduction - lopDeduction - uninformedLeavePenaltyDeduction) * 100) / 100;
-      const pendingAmount = Math.round(Math.max(0, projectedGross - gross) * 100) / 100;
-      const earnedBeforeAttendance = assignedGross;
-      const totalAppliedDeductions = Math.round((deductions + attendanceDeduction) * 100) / 100;
+      const rawComponentDeductions = adjustedComponents.reduce((sum, item) => sum + (item.type === "deduction" ? item.payrollAmount : 0), 0);
 
-      const weekOffDays = Math.max(0, daysInMonth - workingDays);
-      const isMonthCompleted = futureDays === 0 && pendingDays === 0;
-      const tillDatePayableDays = Math.max(0, elapsedCalendarDays - deductionDays);
-      const tillDateRatio = divisorDays > 0 ? Math.min(1, tillDatePayableDays / divisorDays) : 0;
-      const earnedTillDateGross = !isMonthCompleted ? Math.round(assignedGross * tillDateRatio * 100) / 100 : earnedBeforeAttendance;
-      const earnedTillDateNet = !isMonthCompleted ? Math.round(Math.max(0, earnedTillDateGross - deductions) * 100) / 100 : Math.round(Math.max(0, earnedBeforeAttendance - totalAppliedDeductions) * 100) / 100;
+      // Payable Gross & Net
+      const finalPayableGross = Math.round(Math.max(0, (assignedGross - attendanceDeduction) + overtimePay) * 100) / 100;
+      const finalMonthlyGross = finalPayableGross;
+      const salaryDeductions = Math.min(finalPayableGross, Math.round(rawComponentDeductions * 100) / 100);
+      const finalMonthlyNet = Math.round(Math.max(0, finalPayableGross - salaryDeductions) * 100) / 100;
+
+      const finalEarnedTillDateGross = finalPayableGross;
+      const finalEarnedTillDateNet = finalMonthlyNet;
+
+      const lopDeduction = totalLopDays > 0 && divisorDays > 0
+        ? Math.round((assignedGross * totalLopDays / divisorDays) * 100) / 100
+        : 0;
+      const uninformedLeavePenaltyDeduction = uninformedLeavePenaltyDays > 0 && divisorDays > 0
+        ? Math.round((assignedGross * uninformedLeavePenaltyDays / divisorDays) * 100) / 100
+        : 0;
+      const halfDayDeduction = halfDayDays > 0 && divisorDays > 0
+        ? Math.round((assignedGross * (halfDayDays * 0.5) / divisorDays) * 100) / 100
+        : 0;
 
       const otHours = Math.floor(totalOvertimeMinutes / 60);
       const otRemainingMinutes = totalOvertimeMinutes % 60;
       const totalOvertimeDuration = `${String(otHours).padStart(2, "0")}:${String(otRemainingMinutes).padStart(2, "0")}:00`;
       const totalOvertimeHoursFormatted = `${otHours}h ${otRemainingMinutes}m`;
-
-      // Calculate Overtime Pay Amount based on 9 working hours per day:
-      // 1 Day Wage = Assigned Gross / Divisor Days (30 or 31)
-      // 1 Hour Wage = 1 Day Wage / 9
-      // 1 Minute Wage = 1 Hour Wage / 60
-      const dailyWage = divisorDays > 0 ? (assignedGross / divisorDays) : 0;
-      const hourlyWage = dailyWage > 0 ? (dailyWage / 9) : 0;
-      const minuteWage = hourlyWage > 0 ? (hourlyWage / 60) : 0;
-
-      // 1. By Hours Overtime Pay
-      const hourlyOvertimePay = Math.round(((totalOvertimeMinutes / 60) * hourlyWage) * 100) / 100;
-
-      // 2. Full Day Present Overtime Pay
-      const fullDayOvertimePay = Math.round((approvedFullDayCount * dailyWage) * 100) / 100;
-
-      // Total Overtime Pay
-      const overtimePay = Math.round((hourlyOvertimePay + fullDayOvertimePay) * 100) / 100;
-
-      // Add approved full day overtime to presentDays (as 1 additional present day)
-      const effectivePresentDays = presentDays + approvedFullDayCount;
-      const payableDaysWithOt = Math.max(0, effectivePresentDays + paidLeaveDays);
-
-      const finalMonthlyGross = Math.round((assignedGross + overtimePay) * 100) / 100;
-      const finalPayableGross = Math.round(Math.max(0, (assignedGross - attendanceDeduction) + overtimePay) * 100) / 100;
-      const finalMonthlyNet = Math.round(Math.max(0, (assignedGross - totalAppliedDeductions) + overtimePay) * 100) / 100;
-      const finalEarnedTillDateGross = Math.round((earnedTillDateGross + overtimePay) * 100) / 100;
-      const finalEarnedTillDateNet = Math.round((earnedTillDateNet + overtimePay) * 100) / 100;
 
       const finalComponents = [...adjustedComponents];
       if (overtimePay > 0) {
@@ -623,18 +689,22 @@ exports.payrollPreview = async (req, res) => {
           unpaidLeaveDays,
           uninformedLeaveDays,
           uninformedLeavePenaltyDays,
-          holidayDays: elapsedHolidays,
+          holidayDays: totalHolidayDays,
+          paidHolidayDays,
+          weekOffDays: totalWeekOffDays,
+          paidWeekOffDays,
+          elapsedWeekOffDays,
+          elapsedHolidays: elapsedHolidayDays,
           halfDayDays,
           actualAbsentDays,
           lopDays,
           sandwichLopDays,
           totalLopDays,
-          deductionDays,
+          deductionDays: unpaidDays,
           pendingDays,
           futureDays,
-          payableDays: payableDaysWithOt,
+          payableDays: verifiedPayableDays,
           daysInMonth,
-          weekOffDays,
           daysBasisCount: divisorDays,
           calculationCutoff: todayKey,
           totalOvertimeMinutes,
@@ -654,13 +724,13 @@ exports.payrollPreview = async (req, res) => {
         lopDeduction,
         uninformedLeavePenaltyDeduction,
         halfDayDeduction,
-        pendingAmount,
+        pendingAmount: 0,
         earnedTillDateGross: finalEarnedTillDateGross,
         earnedTillDateNet: finalEarnedTillDateNet,
         monthlyGross: finalMonthlyGross,
         payableGross: finalPayableGross,
-        salaryDeductions: Math.round(deductions * 100) / 100,
-        totalDeductions: totalAppliedDeductions,
+        salaryDeductions,
+        totalDeductions: salaryDeductions,
         monthlyNet: finalMonthlyNet,
         overtimePay,
         overtimeHourlyRate: Math.round(hourlyWage * 100) / 100,
@@ -700,32 +770,38 @@ const employeePayrollKey = (employee = {}) => String(employee.user?._id || emplo
 const withPayrollAdjustments = (employee = {}, adjustments = employee.adjustments || []) => {
   const safeAdjustments = (Array.isArray(adjustments) ? adjustments : []).map(item => ({ ...item, amount: Math.max(0, Number(item.amount || 0)) }));
   const adjustmentDeductions = Math.round(safeAdjustments.reduce((sum, item) => sum + Number(item.amount || 0), 0) * 100) / 100;
-  const componentDeductions = Number(employee.totalDeductions || 0);
-  const earnedTillDateGross = Number(employee.earnedTillDateGross ?? employee.monthlyGross ?? 0);
+  const componentDeductions = Number(employee.salaryDeductions ?? employee.totalDeductions ?? 0);
+  const monthlyGross = Number(employee.monthlyGross ?? employee.payableGross ?? 0);
+  const earnedTillDateGross = Number(employee.earnedTillDateGross ?? monthlyGross);
+  const monthlyNet = Math.round(Math.max(0, monthlyGross - componentDeductions - adjustmentDeductions) * 100) / 100;
+  const earnedTillDateNet = Math.round(Math.max(0, earnedTillDateGross - componentDeductions - adjustmentDeductions) * 100) / 100;
   return {
     ...employee,
     adjustments: safeAdjustments,
     adjustmentDeductions,
-    monthlyNet: Math.round(Math.max(0, Number(employee.monthlyGross || 0) - componentDeductions - adjustmentDeductions) * 100) / 100,
+    totalDeductions: componentDeductions,
+    monthlyNet,
     earnedTillDateGross,
-    earnedTillDateNet: Math.round(Math.max(0, earnedTillDateGross - componentDeductions - adjustmentDeductions) * 100) / 100
+    earnedTillDateNet
   };
 };
 
 const payrollTotals = (employees = []) => employees.reduce((totals, employee) => {
-  const gross = Number(employee.monthlyGross || 0);
-  const rawDeductions = Number(employee.totalDeductions || 0) + Number(employee.adjustmentDeductions || 0);
+  const gross = Number(employee.monthlyGross ?? employee.payableGross ?? 0);
+  const assigned = Number(employee.assignedGross || 0);
+  const rawDeductions = Number(employee.totalDeductions || employee.salaryDeductions || 0) + Number(employee.adjustmentDeductions || 0);
   const net = Number(employee.monthlyNet || 0);
   const effectiveDeduction = Math.min(gross, rawDeductions);
 
   return {
     employees: totals.employees + 1,
     earnings: Math.round((totals.earnings + gross) * 100) / 100,
+    assignedEarnings: Math.round(((totals.assignedEarnings || 0) + assigned) * 100) / 100,
     deductions: Math.round((totals.deductions + effectiveDeduction) * 100) / 100,
     net: Math.round((totals.net + net) * 100) / 100,
     pendingAttendance: totals.pendingAttendance + Number(employee.attendance?.pendingDays || 0)
   };
-}, { employees: 0, earnings: 0, deductions: 0, net: 0, pendingAttendance: 0 });
+}, { employees: 0, earnings: 0, assignedEarnings: 0, deductions: 0, net: 0, pendingAttendance: 0 });
 
 const payrollRunJson = (run) => ({
   _id: run._id,
