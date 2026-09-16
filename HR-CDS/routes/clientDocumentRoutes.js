@@ -178,16 +178,19 @@ const canAccessClient = (req, client) => {
   if (role === 'client') {
     const requestClientIds = getRequestClientIds(req);
     const clientId = String(client._id || client.id || '').trim();
-    return (
+    const isOwnerOfClient = (
       (clientId && requestClientIds.includes(clientId)) ||
-      client.userId?.toString() === req.user._id?.toString() ||
-      client.userId?.toString() === req.user.id?.toString() ||
-      String(client.email || '').toLowerCase() === String(req.user.email || '').toLowerCase() ||
-      (userCompanyCode && String(client.companyCode || '').toUpperCase() === userCompanyCode)
+      (client.userId && (client.userId.toString() === req.user._id?.toString() || client.userId.toString() === req.user.id?.toString())) ||
+      (client.email && String(client.email).toLowerCase() === String(req.user.email || '').toLowerCase())
     );
+    if (!isOwnerOfClient) return false;
+    if (userCompanyCode && client.companyCode && String(client.companyCode).toUpperCase() !== userCompanyCode) {
+      return false;
+    }
+    return true;
   }
 
-  return userCompanyCode && client.companyCode === userCompanyCode;
+  return Boolean(userCompanyCode && client.companyCode && String(client.companyCode).toUpperCase() === userCompanyCode);
 };
 
 const getDocumentUploaderId = doc => String(doc.uploadedBy?._id || doc.uploadedBy || '');
@@ -196,9 +199,14 @@ const canDeleteDocument = (req, doc) => (
   Boolean(getRequestUserId(req)) && getDocumentUploaderId(doc) === getRequestUserId(req)
 );
 
-const canManageDocument = (req, doc, client) => (
-  canDeleteDocument(req, doc) || Boolean(client && canAccessClient(req, client))
-);
+const canManageDocument = (req, doc, client) => {
+  if (!client || !canAccessClient(req, client)) return false;
+  const role = getUserRole(req);
+  if (role === 'client') {
+    return canDeleteDocument(req, doc);
+  }
+  return true;
+};
 
 const removeDocumentFile = filePath => {
   if (!filePath || !fs.existsSync(filePath)) return;

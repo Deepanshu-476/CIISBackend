@@ -355,6 +355,17 @@ exports.authorize = (...roles) => {
 };
 
 
+const isSuperAdminUserCandidate = (user) => {
+  if (!user) return false;
+  if (user.isSuperAdmin === true || user.superAdmin === true) return true;
+  const candidateRoles = [user.jobRole, user.companyRole, user.role, user.userType]
+    .filter(Boolean)
+    .map(r => String(r).trim().toLowerCase().replace(/[\s_-]+/g, "_"));
+  return candidateRoles.some(r => r === "super_admin" || r === "superadmin");
+};
+
+exports.isSuperAdminUser = isSuperAdminUserCandidate;
+
 exports.restrictTo = (...roles) => {
   return (req, res, next) => {
     if (!req.user) {
@@ -364,11 +375,21 @@ exports.restrictTo = (...roles) => {
       });
     }
     
-    
     const userRole = (req.user.jobRole || '').toLowerCase();
+    const userCompanyRole = (req.user.companyRole || '').toLowerCase();
+    const userGeneralRole = (req.user.role || '').toLowerCase();
     const allowedRoles = roles.map(role => role.toLowerCase());
+
+    const isTargetingSuperAdmin = allowedRoles.some(r => ['super_admin', 'superadmin', 'super-admin'].includes(r));
+    if (isTargetingSuperAdmin && isSuperAdminUserCandidate(req.user)) {
+      return next();
+    }
     
-    if (!allowedRoles.includes(userRole)) {
+    if (
+      !allowedRoles.includes(userRole) &&
+      !allowedRoles.includes(userCompanyRole) &&
+      !allowedRoles.includes(userGeneralRole)
+    ) {
       return res.status(403).json({
         success: false,
         error: 'You do not have permission to perform this action'

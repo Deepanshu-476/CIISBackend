@@ -86,18 +86,25 @@ app.use((req, res, next) => {
 
 const dbConnectionPromise = connectDB();
 
+const envOrigins = (process.env.ALLOWED_ORIGINS || "")
+  .split(",")
+  .map(o => o.trim())
+  .filter(Boolean);
+
 const allowedOrigins = [
   "https://cds.ciisnetwork.in",
   "https://backendcds.ciisnetwork.in",
+  "https://ciisnetwork.in",
   "app://ciis",
   "capacitor://localhost",
   "ionic://localhost",
-  "null"
+  ...envOrigins
 ];
 
 const isAllowedOrigin = (origin) => {
   if (!origin) return true;
   if (allowedOrigins.includes(origin)) return true;
+  if (process.env.NODE_ENV !== "production" && origin === "null") return true;
 
   try {
     const { hostname } = new URL(origin);
@@ -123,6 +130,7 @@ const Task = require("./HR-CDS/models/Task");
 const Attendance = require("./HR-CDS/models/Attendance");
 const Holiday = require("./HR-CDS/models/Holiday");
 const User = require("./models/User");
+const Leave = require("./HR-CDS/models/Leave");
 require("./models/Company");
 const {notifyDirectUsers, sendSystemNotification} = require("./HR-CDS/utils/systemNotificationService");
 const {sendEmail} = require("./utils/sendEmail");
@@ -530,81 +538,124 @@ const dailyOverdueSummary = async () => {
 
 const markPastAbsentRecords = async () => {
   try {
-    void 0;
-    
-    const users = await User.find({});
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    
-    
+
     const startDate = new Date(today);
     startDate.setDate(startDate.getDate() - 30);
-    
+
+    const users = await User.find({
+      isActive: true,
+      role: { $ne: 'client' },
+      companyRole: { $not: /^client$/i },
+    }).select('_id companyCode company department createdAt').lean();
+
+    if (!users.length) return;
+
+    // Pre-fetch all active holidays for the 30-day window across all companies in one query
+    const companyCodes = [...new Set(users.map(u => String(u.companyCode || '').toUpperCase()).filter(Boolean))];
+    const holidays = await Holiday.find({
+      companyCode: { $in: companyCodes },
+      isActive: true,
+      date: { $gte: startDate, $lt: today },
+    }).lean();
+
+    const holidaySet = new Set();
+    holidays.forEach(h => {
+      const d = new Date(h.date);
+      d.setHours(0, 0, 0, 0);
+      holidaySet.add(`${String(h.companyCode).toUpperCase()}_${d.toISOString()}`);
+    });
+
+    // Pre-fetch all approved leaves in the 30-day window in one query
+    const userIds = users.map(u => u._id);
+    const leaves = await Leave.find({
+      user: { $in: userIds },
+      status: 'Approved',
+      startDate: { $lte: today },
+      endDate: { $gte: startDate },
+    }).lean();
+
+    const isLeaveActive = (userId, dateObj) => {
+      const time = dateObj.getTime();
+      return leaves.some(l => {
+        if (String(l.user) !== String(userId)) return false;
+        const s = new Date(l.startDate);
+        s.setHours(0, 0, 0, 0);
+        const e = new Date(l.endDate);
+        e.setHours(23, 59, 59, 999);
+        return time >= s.getTime() && time <= e.getTime();
+      });
+    };
+
+    // Pre-fetch existing attendance records for all active users in one query
+    const existingAttendances = await Attendance.find({
+      user: { $in: userIds },
+      date: { $gte: startDate, $lt: today },
+    }).select('user date').lean();
+
+    const existingAttendanceMap = new Map();
+    existingAttendances.forEach(rec => {
+      const uKey = String(rec.user);
+      const d = new Date(rec.date);
+      d.setHours(0, 0, 0, 0);
+      if (!existingAttendanceMap.has(uKey)) {
+        existingAttendanceMap.set(uKey, new Set());
+      }
+      existingAttendanceMap.get(uKey).add(d.toISOString());
+    });
+
+    const newAbsentRecords = [];
+    const absentUsersToNotify = [];
+
     for (const user of users) {
-      
-      const existingAttendances = await Attendance.find({ 
-        user: user._id,
-        date: { $gte: startDate, $lt: today }
-      });
-      
-      
-      const existingDates = new Set();
-      existingAttendances.forEach(record => {
-        const date = new Date(record.date);
-        date.setHours(0, 0, 0, 0);
-        existingDates.add(date.toISOString());
-      });
-      
-      
-      const currentDate = new Date(startDate);
+      const uKey = String(user._id);
+      const userExistingDates = existingAttendanceMap.get(uKey) || new Set();
+      const userCompanyCode = String(user.companyCode || '').toUpperCase();
+      const userCreatedDate = user.createdAt ? new Date(user.createdAt) : startDate;
+      userCreatedDate.setHours(0, 0, 0, 0);
+
+      const effectiveStartDate = userCreatedDate > startDate ? userCreatedDate : startDate;
+      const currentDate = new Date(effectiveStartDate);
+
       while (currentDate < today) {
         const dateStr = currentDate.toISOString();
-        
-        
         const dayOfWeek = currentDate.getDay();
         const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-        const nextDate = new Date(currentDate);
-        nextDate.setDate(nextDate.getDate() + 1);
-        const isHoliday = await Holiday.exists({
-          companyCode: user.companyCode,
-          isActive: true,
-          date: { $gte: currentDate, $lt: nextDate }
-        });
-        
-        
-        if (!existingDates.has(dateStr) && !isWeekend && !isHoliday) {
-          
-          if (currentDate < today) {
-            const absentRecord = new Attendance({
-              user: user._id,
-              date: new Date(currentDate),
-              status: 'ABSENT',
-              isClockedIn: false,
-              notes: 'Auto-marked absent (no attendance recorded)'
-            });
-            
-            await absentRecord.save();
-            await cleanRecurringTasksForAbsentUser(user._id, currentDate);
+        const isHoliday = holidaySet.has(`${userCompanyCode}_${dateStr}`);
+        const hasLeave = isLeaveActive(user._id, currentDate);
 
-            
-            if (global.io) {
-              global.io.to(`user:${user._id}`).emit('attendance:marked', {
-                type: 'attendance_absent',
-                message: 'You were marked absent for ' + currentDate.toLocaleDateString(),
-                data: {
-                  date: currentDate,
-                  status: 'ABSENT'
-                }
-              });
-            }
-          }
+        if (!userExistingDates.has(dateStr) && !isWeekend && !isHoliday && !hasLeave) {
+          newAbsentRecords.push({
+            user: user._id,
+            date: new Date(currentDate),
+            status: 'ABSENT',
+            isClockedIn: false,
+            notes: 'Auto-marked absent (no attendance recorded)',
+          });
+          absentUsersToNotify.push({ userId: user._id, date: new Date(currentDate) });
         }
-        
+
         currentDate.setDate(currentDate.getDate() + 1);
       }
     }
-    
-    void 0;
+
+    if (newAbsentRecords.length > 0) {
+      await Attendance.insertMany(newAbsentRecords, { ordered: false });
+      for (const item of absentUsersToNotify) {
+        await cleanRecurringTasksForAbsentUser(item.userId, item.date);
+        if (global.io) {
+          global.io.to(`user:${item.userId}`).emit('attendance:marked', {
+            type: 'attendance_absent',
+            message: 'You were marked absent for ' + item.date.toLocaleDateString(),
+            data: {
+              date: item.date,
+              status: 'ABSENT',
+            },
+          });
+        }
+      }
+    }
   } catch (error) {
     if (isTransientMongoError(error)) throw error;
     console.error('❌ Error in past absent marking:', error);
@@ -612,70 +663,7 @@ const markPastAbsentRecords = async () => {
 };
 
 
-const markDailyAbsent = async () => {
-  try {
-    void 0;
-    
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
-    const tomorrow = new Date(today); 
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    
-    
-    const users = await User.find({});
-    
-    for (const user of users) {
-      
-      const existingAttendance = await Attendance.findOne({
-        user: user._id,
-        date: { $gte: today, $lt: tomorrow }
-      });
-      
-      
-      if (!existingAttendance) {
-        const dayOfWeek = today.getDay();
-        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-        const isHoliday = await Holiday.exists({
-          companyCode: user.companyCode,
-          isActive: true,
-          date: { $gte: today, $lt: tomorrow }
-        });
-        
-        // A company holiday must never be converted into an absent day.
-        if (!isWeekend && !isHoliday) { 
-          const absentRecord = new Attendance({
-            user: user._id,
-            date: today,
-            status: 'ABSENT',
-            isClockedIn: false,
-            notes: 'Auto-marked absent (no attendance recorded today)'
-          });
-          
-          await absentRecord.save();
-          await cleanRecurringTasksForAbsentUser(user._id, today);
-
-          
-          if (global.io) {
-            global.io.to(`user:${user._id}`).emit('attendance:marked', {
-              type: 'attendance_absent',
-              message: 'You have been marked absent for today',
-              data: {
-                date: today,
-                status: 'ABSENT'
-              }
-            });
-          }
-        }
-      }
-    }
-    
-    void 0;
-  } catch (error) {
-    if (isTransientMongoError(error)) throw error;
-    console.error('❌ Error in absent marking job:', error);
-  }
-};
+const { markDailyAbsent } = require('./HR-CDS/controllers/AttendanceController');
 
 
 
@@ -761,6 +749,36 @@ const embeddableStaticHeaders = (req, res, next) => {
 app.use("/api/uploads", embeddableStaticHeaders);
 app.use("/uploads", embeddableStaticHeaders);
 
+const SENSITIVE_UPLOAD_FOLDERS = [
+  "employee-documents",
+  "client-documents",
+  "receipts"
+];
+
+const blockSensitiveStaticAccess = (req, res, next) => {
+  try {
+    const normalizedPath = decodeURIComponent(req.path || "").toLowerCase().replace(/\\/g, "/");
+    const isSensitive = SENSITIVE_UPLOAD_FOLDERS.some(folder =>
+      normalizedPath.startsWith(`/${folder}`) ||
+      normalizedPath.includes(`/${folder}/`) ||
+      normalizedPath === `/${folder}`
+    );
+
+    if (isSensitive) {
+      return res.status(403).json({
+        success: false,
+        message: "Direct static access to sensitive documents is forbidden. Please use authorized API endpoints."
+      });
+    }
+  } catch (_err) {
+    return res.status(400).json({ success: false, message: "Invalid request path" });
+  }
+  next();
+};
+
+app.use("/api/uploads", blockSensitiveStaticAccess);
+app.use("/uploads", blockSensitiveStaticAccess);
+
 uploadStaticDirs.forEach(uploadDir => {
   app.use("/api/uploads", express.static(uploadDir));
 });
@@ -802,6 +820,7 @@ app.use("/api/overtime", require("./HR-CDS/routes/overtimeRoutes.js"));
 app.use("/api/leaves", require("./HR-CDS/routes/LeaveRoutes.js"));
 app.use("/api/asset-requests", require("./HR-CDS/routes/assetRequestRoutes.js"));
 app.use("/api/task", require("./HR-CDS/routes/taskRoute.js"));
+app.use("/task", require("./HR-CDS/routes/taskRoute.js"));
 app.use("/api/users", require("./HR-CDS/routes/userRoutes.js"));
 app.use("/api/departments", require("./routes/Department.routes.js"));
 app.use("/api/users/profile", require("./HR-CDS/routes/profileRoute.js"));
@@ -820,9 +839,13 @@ app.use("/api/tasks/client-tasks", require("./HR-CDS/routes/clientTaskRoute.js")
 app.use("/api/tasks/project", require("./HR-CDS/routes/projectTaskRoute.js"));
 app.use("/api/tasks/all", require("./HR-CDS/routes/allTaskRoute.js"));
 
-// IMPORTANT: Client task routes are mounted here.
-// This ensures that /api/tasks/... endpoints are available.
+// Client task routes mounted at /api/tasks
 app.use("/api/tasks", require("./HR-CDS/routes/clientTask.js"));
+// General task routes fallback at /api/tasks for consistent API surface
+// Canonical task routes mounted at /api/tasks (and /api/task)
+app.use("/api/tasks", require("./HR-CDS/routes/taskRoute.js"));
+// Client task routes dedicated namespace
+app.use("/api/client-tasks", require("./HR-CDS/routes/clientTask.js"));
 
 
 
@@ -937,6 +960,9 @@ app.get("/api/manual-attendance-check", protect, restrictTo("super_admin"), sens
 
 
 app.get("/api/tasks/test", (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ success: false, message: 'Not found' });
+  }
   res.json({
     success: true,
     message: "Tasks API is working",
@@ -988,7 +1014,7 @@ server.listen(PORT, async () => {
   // Temporarily enabled for work-anniversary email template testing.
   try {
     const anniversarySummary = await runWorkAnniversaryEmails();
-    console.log("Startup work anniversary test completed:", anniversarySummary);
+    // console.log("Startup work anniversary test completed:", anniversarySummary);
   } catch (err) {
     console.error("Startup work anniversary test failed:", err);
   }

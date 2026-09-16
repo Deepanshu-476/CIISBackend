@@ -114,5 +114,11 @@ router.get("/company/:identifier", authController.getCompanyDetailsByIdentifier)
 
 
 router.get("/test", authController.testAPI);
+router.get("/test", (req, res, next) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ success: false, message: 'Not found' });
+  }
+  next();
+}, authController.testAPI);
 
 module.exports = router;
