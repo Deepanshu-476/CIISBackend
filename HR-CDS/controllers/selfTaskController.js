@@ -34,6 +34,8 @@ const {
 const {
   generateRecurringOccurrences,
   runRecurringTaskSweep,
+  isUserAbsentOnDate,
+  cleanRecurringTasksForAbsentUser,
 } = require('../cron/recurringTasks');
 
 const parseRecurringSettingsFromBody = (body = {}) => {
@@ -77,7 +79,19 @@ const fetchPersonalTaskList = async (req) => {
     isActive: true
   }).populate('assignedUsers', 'name email').populate('createdBy', 'name email').sort({ createdAt: -1 }).lean();
 
-  const enriched = await enrichStatusInfo(tasks);
+  const filteredTasks = [];
+  for (const t of tasks) {
+    if (t.recurrenceSourceId && String(t.recurrenceSourceId) !== 'null' && t.overallStatus === 'pending') {
+      const isAbsent = await isUserAbsentOnDate(req.user._id, t.dueDateTime);
+      if (isAbsent) {
+        cleanRecurringTasksForAbsentUser(req.user._id, t.dueDateTime).catch(() => {});
+        continue;
+      }
+    }
+    filteredTasks.push(t);
+  }
+
+  const enriched = await enrichStatusInfo(filteredTasks);
   return enriched.map(t => ({ ...t, status: normalizeTaskStatus(t.overallStatus), taskSource: 'self', __taskSource: 'self' }));
 };
 

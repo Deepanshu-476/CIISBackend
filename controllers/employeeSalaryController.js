@@ -6,6 +6,7 @@ const User = require("../models/User");
 const Department = require("../models/Department");
 const JobRole = require("../models/JobRole");
 const Attendance = require("../HR-CDS/models/Attendance");
+const OvertimeRequest = require("../HR-CDS/models/OvertimeRequest");
 const Leave = require("../HR-CDS/models/Leave");
 const Holiday = require("../HR-CDS/models/Holiday");
 const PayrollRun = require("../models/PayrollRun");
@@ -294,12 +295,44 @@ exports.payrollPreview = async (req, res) => {
     const userIds = assignments.map(item => item.user?._id || item.user).filter(Boolean);
     const departmentIds = [...new Set(assignments.map(item => item.user?.department).filter(id => mongoose.isValidObjectId(id)).map(String))];
 
-    const [attendances, leaves, holidays, departments] = await Promise.all([
+    const [attendances, leaves, holidays, departments, approvedOtRequests] = await Promise.all([
       Attendance.find({ user: { $in: userIds }, date: { $gte: start, $lte: end } }).lean(),
       Leave.find({ user: { $in: userIds }, status: "Approved", startDate: { $lte: end }, endDate: { $gte: start } }).lean(),
       Holiday.find({ company, isActive: { $ne: false }, date: { $gte: start, $lte: end } }).lean(),
-      Department.find({ _id: { $in: departmentIds } }).select("name workingDays workingDayHistory").lean()
+      Department.find({ _id: { $in: departmentIds } }).select("name workingDays workingDayHistory").lean(),
+      OvertimeRequest.find({ user: { $in: userIds }, status: "Approved" }).lean()
     ]);
+
+    const userApprovedOtMap = new Map();
+    approvedOtRequests.forEach(req => {
+      const uId = String(req.user);
+      if (!userApprovedOtMap.has(uId)) {
+        userApprovedOtMap.set(uId, { fullDayDates: new Set(), hourlyDates: new Map() });
+      }
+      const userOt = userApprovedOtMap.get(uId);
+      const isFullDay = req.calculationType === 'FULL_DAY_PRESENT';
+
+      if (req.requestType === 'FULL_MONTH' && req.month === month) {
+        for (let d = 1; d <= 31; d++) {
+          const k = `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+          if (isFullDay) {
+            userOt.fullDayDates.add(k);
+          } else {
+            userOt.hourlyDates.set(k, Number(req.requestedHours || 0));
+          }
+        }
+      } else if (Array.isArray(req.dateKeys)) {
+        req.dateKeys.forEach(k => {
+          if (k.startsWith(month)) {
+            if (isFullDay) {
+              userOt.fullDayDates.add(k);
+            } else {
+              userOt.hourlyDates.set(k, Number(req.requestedHours || 0));
+            }
+          }
+        });
+      }
+    });
 
     const departmentMap = new Map(departments.map(item => [String(item._id), item]));
     const holidayKeys = new Set(holidays.map(item => indiaDateKey(item.date)));
@@ -329,6 +362,7 @@ exports.payrollPreview = async (req, res) => {
 
     let daysBasisCount = daysInMonth;
     if (salaryDaysBasis === "fixed30") daysBasisCount = 30;
+    else if (salaryDaysBasis === "fixed31") daysBasisCount = 31;
     else if (salaryDaysBasis === "fixed26") daysBasisCount = 26;
 
     const elapsedCalendarDays = calendarDates.filter(date => indiaDateKey(date) <= todayKey).length;
@@ -353,12 +387,53 @@ exports.payrollPreview = async (req, res) => {
       let futureDays = 0;
       let elapsedWeekOffDays = 0;
       let elapsedHolidays = 0;
+      const userOt = userApprovedOtMap.get(userId) || { fullDayDates: new Set(), hourlyDates: new Map() };
+      const approvedFullDayCount = userOt.fullDayDates.size;
+      let totalOvertimeMinutes = 0;
+      let overtimeDays = approvedFullDayCount;
 
       calendarDates.forEach((date, idx) => {
         const key = indiaDateKey(date);
         const dayOfWeek = date.getUTCDay() || 7;
         const attendance = attendanceMap.get(`${userId}:${key}`);
-        const status = String(attendance?.status || "").trim().toUpperCase();
+
+        // Aggregate Overtime only if approved for this date
+        if (userOt.hourlyDates.has(key)) {
+          let otMin = Number(attendance?.overTimeMinutes || 0);
+          if (!otMin && attendance?.overTime && attendance.overTime !== "00:00:00" && attendance.overTime !== "Full Day") {
+            const parts = String(attendance.overTime).split(":").map(Number);
+            if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+              otMin = (parts[0] * 60) + parts[1];
+            }
+          }
+          const approvedMaxMin = Number(userOt.hourlyDates.get(key) || 0) * 60;
+          if (!otMin && approvedMaxMin > 0) {
+            otMin = approvedMaxMin;
+          } else if (approvedMaxMin > 0 && otMin > approvedMaxMin) {
+            otMin = approvedMaxMin;
+          }
+          if (otMin > 0) {
+            totalOvertimeMinutes += otMin;
+            overtimeDays += 1;
+          }
+        } else if (attendance && attendance.hasOvertimeApproved && !userOt.fullDayDates.has(key)) {
+          let otMin = Number(attendance.overTimeMinutes || 0);
+          if (!otMin && attendance.overTime && attendance.overTime !== "00:00:00" && attendance.overTime !== "Full Day") {
+            const parts = String(attendance.overTime).split(":").map(Number);
+            if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+              otMin = (parts[0] * 60) + parts[1];
+            }
+          }
+          if (otMin > 0) {
+            totalOvertimeMinutes += otMin;
+            overtimeDays += 1;
+          }
+        }
+
+        let status = String(attendance?.status || "").trim().toUpperCase();
+        if (userOt.fullDayDates.has(key) && (!status || status === "ABSENT")) {
+          status = "PRESENT";
+        }
         const isHoliday = holidayKeys.has(key) || status === "HOLIDAY";
         const isWeekOff = dayOfWeek > effectiveWorkingDays(departmentDoc, date);
         const isOffDay = isWeekOff || isHoliday;
@@ -453,7 +528,7 @@ exports.payrollPreview = async (req, res) => {
       const payableDays = Math.max(0, presentDays + paidLeaveDays);
       const projectedPayableDays = Math.max(0, eligibleWorkingDays - deductionDays);
 
-      const divisorDays = salaryDaysBasis === "fixed30" ? 30 : salaryDaysBasis === "fixed26" ? 26 : daysInMonth;
+      const divisorDays = salaryDaysBasis === "fixed30" ? 30 : salaryDaysBasis === "fixed31" ? 31 : salaryDaysBasis === "fixed26" ? 26 : daysInMonth;
       const effectivePayableDays = Math.max(0, divisorDays - deductionDays);
       const ratio = divisorDays > 0 ? Math.min(1, effectivePayableDays / divisorDays) : 0;
       const projectedRatio = ratio;
@@ -490,13 +565,60 @@ exports.payrollPreview = async (req, res) => {
       const earnedTillDateGross = !isMonthCompleted ? Math.round(assignedGross * tillDateRatio * 100) / 100 : earnedBeforeAttendance;
       const earnedTillDateNet = !isMonthCompleted ? Math.round(Math.max(0, earnedTillDateGross - deductions) * 100) / 100 : Math.round(Math.max(0, earnedBeforeAttendance - totalAppliedDeductions) * 100) / 100;
 
+      const otHours = Math.floor(totalOvertimeMinutes / 60);
+      const otRemainingMinutes = totalOvertimeMinutes % 60;
+      const totalOvertimeDuration = `${String(otHours).padStart(2, "0")}:${String(otRemainingMinutes).padStart(2, "0")}:00`;
+      const totalOvertimeHoursFormatted = `${otHours}h ${otRemainingMinutes}m`;
+
+      // Calculate Overtime Pay Amount based on 9 working hours per day:
+      // 1 Day Wage = Assigned Gross / Divisor Days (30 or 31)
+      // 1 Hour Wage = 1 Day Wage / 9
+      // 1 Minute Wage = 1 Hour Wage / 60
+      const dailyWage = divisorDays > 0 ? (assignedGross / divisorDays) : 0;
+      const hourlyWage = dailyWage > 0 ? (dailyWage / 9) : 0;
+      const minuteWage = hourlyWage > 0 ? (hourlyWage / 60) : 0;
+
+      // 1. By Hours Overtime Pay
+      const hourlyOvertimePay = Math.round(((totalOvertimeMinutes / 60) * hourlyWage) * 100) / 100;
+
+      // 2. Full Day Present Overtime Pay
+      const fullDayOvertimePay = Math.round((approvedFullDayCount * dailyWage) * 100) / 100;
+
+      // Total Overtime Pay
+      const overtimePay = Math.round((hourlyOvertimePay + fullDayOvertimePay) * 100) / 100;
+
+      // Add approved full day overtime to presentDays (as 1 additional present day)
+      const effectivePresentDays = presentDays + approvedFullDayCount;
+      const payableDaysWithOt = Math.max(0, effectivePresentDays + paidLeaveDays);
+
+      const finalMonthlyGross = Math.round((assignedGross + overtimePay) * 100) / 100;
+      const finalPayableGross = Math.round(Math.max(0, (assignedGross - attendanceDeduction) + overtimePay) * 100) / 100;
+      const finalMonthlyNet = Math.round(Math.max(0, (assignedGross - totalAppliedDeductions) + overtimePay) * 100) / 100;
+      const finalEarnedTillDateGross = Math.round((earnedTillDateGross + overtimePay) * 100) / 100;
+      const finalEarnedTillDateNet = Math.round((earnedTillDateNet + overtimePay) * 100) / 100;
+
+      const finalComponents = [...adjustedComponents];
+      if (overtimePay > 0) {
+        const parts = [];
+        if (totalOvertimeMinutes > 0) parts.push(`Hours: ${totalOvertimeHoursFormatted}`);
+        if (approvedFullDayCount > 0) parts.push(`Full Day: ${approvedFullDayCount} Present Day(s)`);
+        finalComponents.push({
+          name: `Overtime Pay (${parts.join(' + ')})`,
+          code: "OVERTIME_PAY",
+          type: "earning",
+          amount: overtimePay,
+          payrollAmount: overtimePay,
+          projectedPayrollAmount: overtimePay,
+          isOvertime: true
+        });
+      }
 
       return {
         ...assignment,
         attendance: {
           workingDays,
           eligibleWorkingDays,
-          presentDays,
+          presentDays: effectivePresentDays,
           paidLeaveDays,
           unpaidLeaveDays,
           uninformedLeaveDays,
@@ -510,11 +632,22 @@ exports.payrollPreview = async (req, res) => {
           deductionDays,
           pendingDays,
           futureDays,
-          payableDays,
+          payableDays: payableDaysWithOt,
           daysInMonth,
           weekOffDays,
           daysBasisCount: divisorDays,
-          calculationCutoff: todayKey
+          calculationCutoff: todayKey,
+          totalOvertimeMinutes,
+          totalOvertimeDuration,
+          totalOvertimeHoursFormatted,
+          overtimeDays,
+          overtimeFullDayCount: approvedFullDayCount,
+          hourlyOvertimePay,
+          fullDayOvertimePay,
+          overtimePay,
+          overtimeHourlyRate: Math.round(hourlyWage * 100) / 100,
+          overtimeDailyRate: Math.round(dailyWage * 100) / 100,
+          overtimeMinuteRate: Math.round(minuteWage * 10000) / 10000
         },
         assignedGross,
         attendanceDeduction,
@@ -522,14 +655,19 @@ exports.payrollPreview = async (req, res) => {
         uninformedLeavePenaltyDeduction,
         halfDayDeduction,
         pendingAmount,
-        earnedTillDateGross,
-        earnedTillDateNet,
-        monthlyGross: assignedGross,
-        payableGross: Math.round(Math.max(0, assignedGross - attendanceDeduction) * 100) / 100,
+        earnedTillDateGross: finalEarnedTillDateGross,
+        earnedTillDateNet: finalEarnedTillDateNet,
+        monthlyGross: finalMonthlyGross,
+        payableGross: finalPayableGross,
         salaryDeductions: Math.round(deductions * 100) / 100,
         totalDeductions: totalAppliedDeductions,
-        monthlyNet: Math.round(Math.max(0, assignedGross - totalAppliedDeductions) * 100) / 100,
-        components: adjustedComponents,
+        monthlyNet: finalMonthlyNet,
+        overtimePay,
+        overtimeHourlyRate: Math.round(hourlyWage * 100) / 100,
+        overtimeDailyRate: Math.round(dailyWage * 100) / 100,
+        overtimeMinuteRate: Math.round(minuteWage * 10000) / 10000,
+        overtimeFullDayCount: approvedFullDayCount,
+        components: finalComponents,
         payrollStatus: "Calculated"
       };
     });

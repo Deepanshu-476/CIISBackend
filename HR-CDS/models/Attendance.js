@@ -39,6 +39,35 @@ const attendanceSchema = new mongoose.Schema({
     type: String,
     default: "00:00:00"
   },
+  overTimeMinutes: {
+    type: Number,
+    default: 0
+  },
+  hasOvertimeApproved: {
+    type: Boolean,
+    default: false
+  },
+  overtimeRequestId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'OvertimeRequest',
+    default: null
+  },
+  otStartTime: {
+    type: Date,
+    default: null
+  },
+  otEndTime: {
+    type: Date,
+    default: null
+  },
+  isOtRunning: {
+    type: Boolean,
+    default: false
+  },
+  otActualMinutes: {
+    type: Number,
+    default: 0
+  },
   totalTime: {
     type: String,
     default: "00:00:00"

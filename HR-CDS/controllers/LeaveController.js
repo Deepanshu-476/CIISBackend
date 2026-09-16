@@ -19,6 +19,7 @@ const {
 const { emitLeaveEvents } = require('../socket/handlers/leaveHandlers');
 const {notifyPageUsers, notifyDirectUsers} = require('../utils/systemNotificationService');
 const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
+const { cleanRecurringTasksForAbsentUserRange } = require('../cron/recurringTasks');
 
 const APPROVAL_ROLES = ['manager', 'hr', 'owner'];
 
@@ -1040,6 +1041,10 @@ exports.updateLeaveApproval = async (req, res) => {
 
     await leave.save();
 
+    if (leave.status === 'Approved') {
+      cleanRecurringTasksForAbsentUserRange(leave.user?._id || leave.user, leave.startDate, leave.endDate).catch(() => {});
+    }
+
     await leave.populate('approvedBy', 'name email');
     await leave.populate('history.by', 'name email');
 
@@ -1375,6 +1380,10 @@ exports.updateLeaveStatus = async (req, res) => {
     
     await leave.save();
     
+    if (leave.status === 'Approved') {
+      cleanRecurringTasksForAbsentUserRange(leave.user?._id || leave.user, leave.startDate, leave.endDate).catch(() => {});
+    }
+
     void 0;
 
     

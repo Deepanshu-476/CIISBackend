@@ -23,7 +23,7 @@ const payrollRunSchema = new mongoose.Schema({
   },
   salaryDaysBasis: {
     type: String,
-    enum: ["calendar", "fixed30", "fixed26"],
+    enum: ["calendar", "fixed30", "fixed31", "fixed26"],
     default: "calendar"
   },
   sandwichRuleEnabled: {
