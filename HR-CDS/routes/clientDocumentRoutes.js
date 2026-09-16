@@ -520,11 +520,21 @@ router.get('/:id/download', protect, async (req, res) => {
       return res.status(403).json({ success: false, message: 'Access denied for this document' });
     }
 
-    if (!fs.existsSync(document.path)) {
-      return res.status(404).json({ success: false, message: 'File not found' });
+    let filePath = document.path;
+    if (!filePath || !fs.existsSync(filePath)) {
+      const fallbackPath = document.storedName
+        ? path.join(uploadDir, document.storedName)
+        : (document.path ? path.join(uploadDir, path.basename(document.path)) : '');
+      if (fallbackPath && fs.existsSync(fallbackPath)) {
+        filePath = fallbackPath;
+      }
     }
 
-    return res.download(document.path, document.originalName);
+    if (!filePath || !fs.existsSync(filePath)) {
+      return res.status(404).json({ success: false, message: 'File not found on server' });
+    }
+
+    return res.download(filePath, document.originalName || 'document');
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
