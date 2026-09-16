@@ -264,6 +264,16 @@ const buildRecurringTaskClone = (templateTask, occurrenceDate) => {
   };
 };
 
+const getIndiaDayRange = (value = new Date()) => {
+  const date = toValidDate(value);
+  if (!date) return null;
+  const parts = getIndiaDateParts(date);
+  if (!parts) return null;
+  const start = buildIndiaDateTime(parts, { hour: 0, minute: 0, second: 0, millisecond: 0 });
+  const end = buildIndiaDateTime(parts, { hour: 23, minute: 59, second: 59, millisecond: 999 });
+  return { start, end };
+};
+
 module.exports = {
   INDIA_OFFSET_MS,
   normalizeRepeatPattern,
@@ -273,4 +283,5 @@ module.exports = {
   getNextRecurringDate,
   buildRecurringTaskClone,
   toValidDate,
+  getIndiaDayRange,
 };

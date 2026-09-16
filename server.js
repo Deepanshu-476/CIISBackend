@@ -21,7 +21,7 @@ if (missingEnvVars.length > 0) {
 require('./services/subscriptionReminderService');
 const { runWorkAnniversaryEmails } = require('./services/workAnniversaryService');
 const { runAutoClockOutSweep } = require('./HR-CDS/cron/forceClockOut');
-require('./HR-CDS/cron/recurringTasks');
+const { cleanRecurringTasksForAbsentUser } = require('./HR-CDS/cron/recurringTasks');
 
 const app = express();
 
@@ -584,6 +584,7 @@ const markPastAbsentRecords = async () => {
             });
             
             await absentRecord.save();
+            await cleanRecurringTasksForAbsentUser(user._id, currentDate);
 
             
             if (global.io) {
@@ -652,6 +653,7 @@ const markDailyAbsent = async () => {
           });
           
           await absentRecord.save();
+          await cleanRecurringTasksForAbsentUser(user._id, today);
 
           
           if (global.io) {
@@ -796,6 +798,7 @@ const dashboardRoutes = require('./HR-CDS/routes/dashboardRoutes.js');
 app.use("/api/auth", require("./routes/authRoutes.js"));
 app.use("/api/app-version", require("./routes/appVersionRoutes.js"));
 app.use("/api/attendance", require("./HR-CDS/routes/attendanceRoutes.js"));
+app.use("/api/overtime", require("./HR-CDS/routes/overtimeRoutes.js"));
 app.use("/api/leaves", require("./HR-CDS/routes/LeaveRoutes.js"));
 app.use("/api/asset-requests", require("./HR-CDS/routes/assetRequestRoutes.js"));
 app.use("/api/task", require("./HR-CDS/routes/taskRoute.js"));

@@ -1,4 +1,5 @@
 const Attendance = require("../models/Attendance");
+const OvertimeRequest = require("../models/OvertimeRequest");
 const Leave = require("../models/Leave");
 const User = require("../../models/User");
 const Company = require("../../models/Company");
@@ -9,6 +10,8 @@ const mongoose = require("mongoose");
 const {notifyPageUsers, getCompanyId} = require("../utils/systemNotificationService");
 const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagination");
 const { runAutoClockOutSweep } = require("../cron/forceClockOut");
+const { cleanRecurringTasksForAbsentUser } = require("../cron/recurringTasks");
+const { isOvertimeApprovedForUserDate } = require("./overtimeController");
 
 
 const formatDuration = (ms) => {
@@ -97,10 +100,23 @@ const refreshAutoClockOuts = async () => {
 
 const getBranchScopedUserIds = async (req, companyCode) => {
   const requestedBranch = req.query?.branch || req.query?.branchId;
-  if (!requestedBranch || !isValidObjectId(requestedBranch)) return null;
+  const accessibleBranchIds = getUserBranchIds(req.user || {});
+
+  if (!requestedBranch || !isValidObjectId(requestedBranch)) {
+    if (!canViewAllBranchData(req.user) && accessibleBranchIds.length > 0) {
+      const users = await User.find({
+        companyCode,
+        $or: [
+          { branch: { $in: accessibleBranchIds } },
+          { assignedBranches: { $in: accessibleBranchIds } }
+        ]
+      }).select('_id').lean();
+      return users.map(user => user._id);
+    }
+    return null;
+  }
 
   const requestedBranchId = String(requestedBranch);
-  const accessibleBranchIds = getUserBranchIds(req.user || {});
   if (!canViewAllBranchData(req.user) && !accessibleBranchIds.includes(requestedBranchId)) {
     return [];
   }
@@ -350,7 +366,7 @@ const normalizeAttendanceStatusForSave = (value, fallback = "") => {
   return statusMap[compact] || fallback || "ABSENT";
 };
 
-const calculateAttendanceByShift = ({ inTime, outTime, shiftSettings, currentStatus }) => {
+const calculateAttendanceByShift = ({ inTime, outTime, shiftSettings, currentStatus, hasOvertimeApproved = false }) => {
   if (!inTime) {
     return {
       status: currentStatus || "ABSENT",
@@ -400,7 +416,7 @@ const calculateAttendanceByShift = ({ inTime, outTime, shiftSettings, currentSta
     status: finalStatus,
     lateBy,
     earlyLeave: outTime < schedule.shiftEnd ? formatDuration(schedule.shiftEnd - outTime) : "00:00:00",
-    overTime: outTime > schedule.shiftEnd ? formatDuration(outTime - schedule.shiftEnd) : "00:00:00",
+    overTime: (hasOvertimeApproved && outTime > schedule.shiftEnd) ? formatDuration(outTime - schedule.shiftEnd) : "00:00:00",
     totalTime: formatDuration(Math.max(totalMs, 0))
   };
 };
@@ -1074,15 +1090,37 @@ const clockOut = async (req, res) => {
     record.clockOutMode = 'MANUAL';
     record.isClockedIn = false;
     record.totalTime = formatDuration(totalMs);
-    record.overTime = now > schedule.shiftEnd ? formatDuration(now - schedule.shiftEnd) : "00:00:00";
+
+    // Check overtime approval status
+    const hasApprovedOvertime = record.hasOvertimeApproved || (await isOvertimeApprovedForUserDate(userId, record.inTime || record.date || now));
+    record.hasOvertimeApproved = Boolean(hasApprovedOvertime);
+
+    let calculatedOverTime = "00:00:00";
+    let calculatedOverTimeMinutes = 0;
+    if (hasApprovedOvertime && now > schedule.shiftEnd) {
+      const otMs = Math.max(0, now - schedule.shiftEnd);
+      calculatedOverTime = formatDuration(otMs);
+      calculatedOverTimeMinutes = Math.floor(otMs / (60 * 1000));
+    }
+
+    record.overTime = calculatedOverTime;
+    record.overTimeMinutes = calculatedOverTimeMinutes;
     record.earlyLeave = now < schedule.shiftEnd ? formatDuration(schedule.shiftEnd - now) : "00:00:00";
     applyShiftSnapshot(record, shiftSnapshot);
-    Object.assign(record, calculateAttendanceByShift({
+
+    const shiftCalc = calculateAttendanceByShift({
       inTime: new Date(record.inTime),
       outTime: now,
       shiftSettings,
-      currentStatus: record.status
-    }));
+      currentStatus: record.status,
+      hasOvertimeApproved: Boolean(hasApprovedOvertime)
+    });
+
+    record.status = shiftCalc.status;
+    record.lateBy = shiftCalc.lateBy;
+    record.earlyLeave = shiftCalc.earlyLeave;
+    record.overTime = calculatedOverTime;
+    record.overTimeMinutes = calculatedOverTimeMinutes;
 
     // Save Location & Selfie
     if (latitude !== undefined && longitude !== undefined) {
@@ -1341,6 +1379,30 @@ const getAttendanceList = async (req, res) => {
       .sort({ date: 1 });
 
     
+    const approvedOtRequests = await OvertimeRequest.find({
+      user: targetUserId,
+      status: 'Approved'
+    }).select('requestType dateKeys month calculationType requestedHours').lean();
+
+    const approvedOtDateMap = new Map();
+    approvedOtRequests.forEach(req => {
+      const isFullDay = req.calculationType === 'FULL_DAY_PRESENT';
+      if (req.requestType === 'FULL_MONTH' && req.month) {
+        const [y, m] = req.month.split('-').map(Number);
+        const daysInM = new Date(y, m, 0).getDate();
+        for (let d = 1; d <= daysInM; d++) {
+          approvedOtDateMap.set(
+            `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`,
+            { calculationType: req.calculationType, requestedHours: req.requestedHours, isFullDay }
+          );
+        }
+      } else if (Array.isArray(req.dateKeys)) {
+        req.dateKeys.forEach(k => {
+          approvedOtDateMap.set(k, { calculationType: req.calculationType, requestedHours: req.requestedHours, isFullDay });
+        });
+      }
+    });
+
     const existingRecordsMap = {};
     dedupeAttendanceRecordsByIndiaDate(list).forEach(({ dateKey, record }) => {
       existingRecordsMap[dateKey] = record;
@@ -1366,9 +1428,47 @@ const getAttendanceList = async (req, res) => {
         const effectiveShiftName = recordObject.shiftName || fallbackShift.shiftName;
         const effectiveShiftTime = recordObject.shiftTime || formatShiftTimeWindow(effectiveShiftStart, effectiveShiftEnd);
 
+        const approvedOtInfo = approvedOtDateMap.get(dateKey);
+        const effectiveHasOvertimeApproved = Boolean(approvedOtInfo);
+        const isFullDayOt = Boolean(approvedOtInfo?.isFullDay);
+        let effectiveOverTime = "00:00:00";
+        let effectiveOverTimeMinutes = 0;
+
+        if (effectiveHasOvertimeApproved) {
+          if (isFullDayOt) {
+            effectiveOverTime = "Full Day";
+            effectiveOverTimeMinutes = 540;
+          } else if (recordObject.clockOutMode !== 'AUTO') {
+            if (recordObject.overTime && recordObject.overTime !== '00:00:00' && recordObject.overTime !== 'Full Day') {
+              effectiveOverTime = recordObject.overTime;
+              effectiveOverTimeMinutes = recordObject.overTimeMinutes || 0;
+            } else if (recordObject.outTime && recordObject.shiftEnd) {
+              const outD = new Date(recordObject.outTime);
+              const shiftEndD = new Date(recordObject.shiftEnd);
+              if (outD > shiftEndD) {
+                const otMs = Math.max(0, outD - shiftEndD);
+                effectiveOverTime = formatDuration(otMs);
+                effectiveOverTimeMinutes = Math.floor(otMs / (60 * 1000));
+              } else if (Number(approvedOtInfo?.requestedHours || 0) > 0) {
+                effectiveOverTime = formatDuration(Number(approvedOtInfo.requestedHours) * 3600 * 1000);
+                effectiveOverTimeMinutes = Number(approvedOtInfo.requestedHours) * 60;
+              }
+            } else if (Number(approvedOtInfo?.requestedHours || 0) > 0) {
+              effectiveOverTime = formatDuration(Number(approvedOtInfo.requestedHours) * 3600 * 1000);
+              effectiveOverTimeMinutes = Number(approvedOtInfo.requestedHours) * 60;
+            }
+          }
+        }
+
         return {
           ...recordObject,
           dateKey,
+          hasOvertimeApproved: effectiveHasOvertimeApproved,
+          overtimeCalculationType: approvedOtInfo?.calculationType || 'BY_HOURS',
+          isFullDayOt,
+          overTime: effectiveOverTime,
+          overTimeMinutes: effectiveOverTimeMinutes,
+          status: isFullDayOt ? 'PRESENT' : (recordObject.status || 'ABSENT'),
           shiftId: recordObject.shiftId || fallbackShift.shiftId,
           shiftName: effectiveShiftName,
           shiftType: recordObject.shiftType || fallbackShift.shiftType,
@@ -1514,12 +1614,87 @@ const getAllUsersAttendance = async (req, res) => {
       Attendance.countDocuments(filter)
     ]);
 
+    const userIdsInRecords = [...new Set(records.map(r => String(r.user?._id || r.user)).filter(Boolean))];
+    const approvedOtRequests = await OvertimeRequest.find({
+      user: { $in: userIdsInRecords },
+      status: 'Approved'
+    }).select('user requestType dateKeys month calculationType requestedHours').lean();
+
+    const userApprovedOtMap = new Map();
+    approvedOtRequests.forEach(req => {
+      const uId = String(req.user);
+      if (!userApprovedOtMap.has(uId)) userApprovedOtMap.set(uId, new Map());
+      const userMap = userApprovedOtMap.get(uId);
+      const isFullDay = req.calculationType === 'FULL_DAY_PRESENT';
+
+      if (req.requestType === 'FULL_MONTH' && req.month) {
+        const [y, m] = req.month.split('-').map(Number);
+        const daysInM = new Date(y, m, 0).getDate();
+        for (let d = 1; d <= daysInM; d++) {
+          userMap.set(`${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`, {
+            calculationType: req.calculationType,
+            requestedHours: req.requestedHours,
+            isFullDay
+          });
+        }
+      } else if (Array.isArray(req.dateKeys)) {
+        req.dateKeys.forEach(k => {
+          userMap.set(k, {
+            calculationType: req.calculationType,
+            requestedHours: req.requestedHours,
+            isFullDay
+          });
+        });
+      }
+    });
+
     res.status(200).json({ 
       message: "All attendance records fetched successfully",
-      data: records.map(record => ({
-        ...record,
-        status: record.status || 'ABSENT'
-      })),
+      data: records.map(record => {
+        const uId = String(record.user?._id || record.user);
+        const dKey = formatIndiaDateKey(record.date);
+        const otInfo = userApprovedOtMap.get(uId)?.get(dKey);
+        const effectiveHasOvertimeApproved = Boolean(otInfo);
+        const isFullDayOt = Boolean(otInfo?.isFullDay);
+        let effectiveOverTime = "00:00:00";
+        let effectiveOverTimeMinutes = 0;
+
+        if (effectiveHasOvertimeApproved) {
+          if (isFullDayOt) {
+            effectiveOverTime = "Full Day";
+            effectiveOverTimeMinutes = 540;
+          } else if (record.clockOutMode !== 'AUTO') {
+            if (record.overTime && record.overTime !== '00:00:00' && record.overTime !== 'Full Day') {
+              effectiveOverTime = record.overTime;
+              effectiveOverTimeMinutes = record.overTimeMinutes || 0;
+            } else if (record.outTime && record.shiftEnd) {
+              const outD = new Date(record.outTime);
+              const shiftEndD = new Date(record.shiftEnd);
+              if (outD > shiftEndD) {
+                const otMs = Math.max(0, outD - shiftEndD);
+                effectiveOverTime = formatDuration(otMs);
+                effectiveOverTimeMinutes = Math.floor(otMs / (60 * 1000));
+              } else if (Number(otInfo?.requestedHours || 0) > 0) {
+                effectiveOverTime = formatDuration(Number(otInfo.requestedHours) * 3600 * 1000);
+                effectiveOverTimeMinutes = Number(otInfo.requestedHours) * 60;
+              }
+            } else if (Number(otInfo?.requestedHours || 0) > 0) {
+              effectiveOverTime = formatDuration(Number(otInfo.requestedHours) * 3600 * 1000);
+              effectiveOverTimeMinutes = Number(otInfo.requestedHours) * 60;
+            }
+          }
+        }
+
+        return {
+          ...record,
+          hasOvertimeApproved: effectiveHasOvertimeApproved,
+          overtimeCalculationType: otInfo?.calculationType || 'BY_HOURS',
+          isFullDayOt,
+          overTime: effectiveOverTime,
+          overTimeMinutes: effectiveOverTimeMinutes,
+          status: isFullDayOt ? 'PRESENT' : (record.status || 'ABSENT')
+        };
+      }),
       count: records.length,
       total,
       pagination: buildPaginationMeta({ page, limit, total })
@@ -1590,7 +1765,8 @@ const updateAttendanceRecord = async (req, res) => {
         inTime: record.inTime,
         outTime: record.outTime,
         shiftSettings,
-        currentStatus: record.status
+        currentStatus: record.status,
+        hasOvertimeApproved: Boolean(record.hasOvertimeApproved)
       });
       Object.assign(record, recalculated);
     }
@@ -1650,6 +1826,10 @@ const updateAttendanceRecord = async (req, res) => {
       }
     }
     
+    if (['ABSENT', 'UNINFORMED LEAVE', 'UNINFORMEDLEAVE'].includes(String(record.status || '').toUpperCase())) {
+      cleanRecurringTasksForAbsentUser(record.user, record.date).catch(() => {});
+    }
+
     const populatedRecord = await Attendance.findById(record._id)
       .populate({
         path: "user",
@@ -1754,6 +1934,10 @@ const createManualAttendance = async (req, res) => {
 
       await existingAttendance.save();
 
+      if (['ABSENT', 'UNINFORMED LEAVE', 'UNINFORMEDLEAVE'].includes(String(existingAttendance.status || '').toUpperCase())) {
+        cleanRecurringTasksForAbsentUser(existingAttendance.user, existingAttendance.date).catch(() => {});
+      }
+
       return res.status(200).json({
         message: "Attendance updated successfully",
         data: existingAttendance
@@ -1793,6 +1977,10 @@ const createManualAttendance = async (req, res) => {
           existingRecord.companyCode = userCompanyCode;
           await existingRecord.save();
 
+          if (['ABSENT', 'UNINFORMED LEAVE', 'UNINFORMEDLEAVE'].includes(String(existingRecord.status || '').toUpperCase())) {
+            cleanRecurringTasksForAbsentUser(existingRecord.user, existingRecord.date).catch(() => {});
+          }
+
           return res.status(200).json({
             message: "Attendance updated successfully",
             data: existingRecord
@@ -1802,6 +1990,10 @@ const createManualAttendance = async (req, res) => {
       throw err;
     }
     
+    if (['ABSENT', 'UNINFORMED LEAVE', 'UNINFORMEDLEAVE'].includes(String(attendance.status || '').toUpperCase())) {
+      cleanRecurringTasksForAbsentUser(attendance.user, attendance.date).catch(() => {});
+    }
+
     const populatedAttendance = await Attendance.findById(attendance._id)
       .populate({
         path: "user",
