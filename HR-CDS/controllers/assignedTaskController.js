@@ -157,10 +157,10 @@ exports.addCheckpoint = async (req, res) => {
       .toLowerCase()
       .replace(/[\s_]+/g, '-');
 
-    if (effectiveStatus !== 'in-progress') {
+    if (!['pending', 'in-progress', 'reopen'].includes(effectiveStatus)) {
       return res.status(400).json({
         success: false,
-        error: 'Checkpoints can only be added to in-progress tasks'
+        error: 'Checkpoints can only be added to pending or in-progress tasks'
       });
     }
 
