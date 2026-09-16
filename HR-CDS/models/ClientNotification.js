@@ -55,14 +55,14 @@ const clientNotificationSchema = new mongoose.Schema({
 });
 
 
-clientnotificationSchema.index({ isRead: 1 });
-clientnotificationSchema.index({ recipient: 1 });
-clientnotificationSchema.index({ createdAt: -1 });
-clientnotificationSchema.index({ type: 1 });
-clientnotificationSchema.index({ expiryDate: 1 }, { expireAfterSeconds: 0 });
+clientNotificationSchema.index({ isRead: 1 });
+clientNotificationSchema.index({ recipient: 1 });
+clientNotificationSchema.index({ createdAt: -1 });
+clientNotificationSchema.index({ type: 1 });
+clientNotificationSchema.index({ expiryDate: 1 }, { expireAfterSeconds: 0 });
 
 
-clientnotificationSchema.statics.getUnreadCount = async function(recipientId = null) {
+clientNotificationSchema.statics.getUnreadCount = async function(recipientId = null) {
   const query = { isRead: false };
   if (recipientId) {
     query.recipient = recipientId;
@@ -72,13 +72,13 @@ clientnotificationSchema.statics.getUnreadCount = async function(recipientId = n
 };
 
 
-clientnotificationSchema.statics.createNotification = async function(notificationData) {
+clientNotificationSchema.statics.createNotification = async function(notificationData) {
   const notification = new this(notificationData);
   return await notification.save();
 };
 
 
-clientnotificationSchema.statics.markAllAsRead = async function(recipientId = null) {
+clientNotificationSchema.statics.markAllAsRead = async function(recipientId = null) {
   const query = { isRead: false };
   if (recipientId) {
     query.recipient = recipientId;
@@ -88,17 +88,17 @@ clientnotificationSchema.statics.markAllAsRead = async function(recipientId = nu
 };
 
 
-clientnotificationSchema.methods.markAsRead = function() {
+clientNotificationSchema.methods.markAsRead = function() {
   this.isRead = true;
   return this.save();
 };
 
 
-clientnotificationSchema.pre('save', function(next) {
+clientNotificationSchema.pre('save', function(next) {
   if (!this.expiryDate) {
     this.expiryDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); 
   }
   next();
 });
 
-module.exports = mongoose.model('ClientNotification', clientclientnotificationSchema);
+module.exports = mongoose.model('ClientNotification', clientNotificationSchema);

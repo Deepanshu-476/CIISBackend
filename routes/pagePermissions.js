@@ -37,6 +37,8 @@ const APP_PAGES = [
   { pageKey: 'JobRoleManagement', name: 'Job Role Management', path: '/ciisUser/JobRoleManagement', permissionPattern: 'viewEdit' },
   { pageKey: 'manage-groups', name: 'Manage Group', path: '/ciisUser/manage-groups', permissionPattern: 'viewEdit' },
   { pageKey: 'company-all-task', name: 'Company All Task', path: '/ciisUser/company-all-task', permissionPattern: 'viewEdit' },
+  { pageKey: 'company-assets', name: 'Asset Management', path: '/ciisUser/company-assets', permissionPattern: 'viewEdit' },
+  { pageKey: 'SidebarManagement', name: 'Sidebar Management', path: '/ciisUser/SidebarManagement', permissionPattern: 'viewEdit' },
   { pageKey: 'emp-client', name: 'Client Management', path: '/ciisUser/emp-client', permissionPattern: 'viewEdit' },
   { pageKey: 'salary-component', name: 'Salary Component', path: '/ciisUser/salary-component', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.salaryComponent },
   { pageKey: 'salary-structure', name: 'Salary Structure', path: '/ciisUser/salary-structure', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.salaryStructure },
@@ -45,6 +47,8 @@ const APP_PAGES = [
   { pageKey: 'payroll-process', name: 'Payroll Process', path: '/ciisUser/payroll-process', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.payrollProcess },
   { pageKey: 'payslip', name: 'Payslip', path: '/ciisUser/payslip', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.payslip },
   { pageKey: 'payroll-reports', name: 'Payroll Reports', path: '/ciisUser/payroll-reports', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.payrollReports },
+  { pageKey: 'task-management', name: 'Create Task', path: '/ciisUser/task-management', permissionPattern: 'viewEdit' },
+  { pageKey: 'admin-task-create', name: 'Admin Create Task', path: '/ciisUser/admin-task-create', permissionPattern: 'viewEdit' },
 ];
 
 const PAGE_PERMISSION_CACHE_PREFIX = 'pagePermissions';

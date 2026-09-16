@@ -3,7 +3,7 @@ const PagePermission = require("../models/PagePermission");
 
 const companyId = req => req.user?.company?._id || req.user?.company || req.user?.companyId;
 const normalizeRole = value => String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
-const administrativeRoles = new Set(["owner", "admin", "hr", "super_admin", "superadmin", "company_owner", "companyowner"]);
+const administrativeRoles = new Set(["owner", "admin", "super_admin", "superadmin", "company_owner", "companyowner"]);
 const ids = (page, key) => (page?.[key] || []).map(item => String(item?.user?._id || item?.user || "")).filter(Boolean);
 const customPermissionField = {
   generate: "generateUsers",
@@ -11,9 +11,13 @@ const customPermissionField = {
   unlock: "unlockUsers"
 };
 
-const hasAdministrativeAccess = user => [user?.companyRole, user?.role, user?.jobRole]
-  .map(normalizeRole)
-  .some(role => administrativeRoles.has(role));
+const hasAdministrativeAccess = user => {
+  if (!user) return false;
+  if (user.isSuperAdmin === true || user.superAdmin === true) return true;
+  const companyRole = normalizeRole(user.companyRole);
+  const generalRole = normalizeRole(user.role);
+  return administrativeRoles.has(companyRole) || administrativeRoles.has(generalRole);
+};
 
 const requirePayrollPagePermission = (path, permission = "view") => async (req, res, next) => {
   try {

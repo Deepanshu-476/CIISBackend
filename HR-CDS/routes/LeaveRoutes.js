@@ -126,8 +126,12 @@ router.get('/balance', leaveController.getLeaveBalance);
 router.get('/export', leaveController.exportLeaves);
 
 
-router.get('/test', 
-  async (req, res) => {
+router.get('/test', (req, res, next) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ success: false, message: 'Not found' });
+  }
+  next();
+}, async (req, res) => {
     try {
       const User = require('../../models/User');
       const Company = require('../../models/Company');

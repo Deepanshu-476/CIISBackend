@@ -2166,6 +2166,15 @@ const updateTask = async (req, res) => {
       });
     }
 
+    const isAlreadyAssigned = task.assigneeId || (task.assignee && task.assignee !== 'Unassigned');
+    const isEditingCoreFields = ['name', 'description', 'dueDate', 'dueDateTime', 'priority'].some(field => Object.prototype.hasOwnProperty.call(updates, field));
+    if (isAlreadyAssigned && isEditingCoreFields) {
+      return res.status(403).json({
+        success: false,
+        message: 'This task has already been assigned and cannot be edited.'
+      });
+    }
+
     if (updates.name !== undefined && (!updates.name || updates.name.trim().length === 0)) {
       return res.status(400).json({
         success: false,
@@ -2832,8 +2841,28 @@ const getTaskStats = async (req, res) => {
 };
 
 const debugActivityLogs = async (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ success: false, message: 'Not found' });
+  }
+
   try {
     const { taskId } = req.params;
+    const { isSuperAdminUser } = require('../../middleware/authMiddleware');
+    const isCompanyAdminOrOwner = (user) => {
+      if (!user) return false;
+      const role = String(user.role || '').toLowerCase();
+      const jobRole = String(user.jobRole || '').toLowerCase();
+      const companyRole = String(user.companyRole || '').toLowerCase();
+      return role === 'admin' || role === 'owner' || jobRole === 'admin' || jobRole === 'owner' || companyRole === 'owner' || companyRole === 'admin';
+    };
+
+    const isSuper = isSuperAdminUser && isSuperAdminUser(req.user);
+    if (!isSuper && !isCompanyAdminOrOwner(req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied: Admin or Owner privileges required'
+      });
+    }
     
     if (!mongoose.Types.ObjectId.isValid(taskId)) {
       return res.status(400).json({
@@ -2843,7 +2872,7 @@ const debugActivityLogs = async (req, res) => {
     }
     
     const task = await Task.findById(taskId)
-      .select('activityLogs name remarks')
+      .select('activityLogs name remarks companyCode')
       .populate('activityLogs.user', 'name email')
       .lean();
     
@@ -2852,6 +2881,16 @@ const debugActivityLogs = async (req, res) => {
         success: false,
         message: 'Task not found'
       });
+    }
+
+    if (!isSuper) {
+      const userCompanyCode = req.user?.companyCode || (req.user?.company && req.user.company.companyCode) || '';
+      if (task.companyCode && userCompanyCode && task.companyCode.toUpperCase() !== userCompanyCode.toUpperCase()) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied: Task belongs to another company'
+        });
+      }
     }
     
     res.json({
