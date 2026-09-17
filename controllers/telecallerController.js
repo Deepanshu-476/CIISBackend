@@ -13,15 +13,24 @@ exports.list = async (req, res, next) => {
   } catch (error) { next(error); }
 };
 
+exports.getOne = async (req, res, next) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid lead ID.' });
+    const item = await populated(Lead.findOne({ company: req.telecallerCompany, _id: req.params.id }));
+    if (!item) return res.status(404).json({ message: 'Lead not found in this company.' });
+    res.json({ item });
+  } catch (error) { next(error); }
+};
+
 exports.save = async (req, res, next) => {
   try {
     const { id, outcome, callType = 'Outbound', notes = '', followUp } = req.body;
     if (!mongoose.isValidObjectId(req.params.id) || typeof id !== 'string' || !/^[a-zA-Z0-9-]{8,80}$/.test(id)) return res.status(400).json({ message: 'Invalid lead or call ID.' });
     if (!outcomes.includes(outcome) || !['Inbound', 'Outbound'].includes(callType)) return res.status(400).json({ message: 'Choose a valid call outcome and direction.' });
     if (typeof notes !== 'string' || notes.length > 5000 || (outcome === 'Note Added' && !notes.trim())) return res.status(400).json({ message: 'Enter notes of at most 5,000 characters.' });
-    const filter = { ...scope(req), _id: req.params.id };
+    const filter = { company: req.telecallerCompany, _id: req.params.id };
     const existing = await Lead.findOne(filter).lean();
-    if (!existing) return res.status(404).json({ message: 'This lead is not assigned to you.' });
+    if (!existing) return res.status(404).json({ message: 'Lead not found in this company.' });
     // A retry after a lost response must not record the same call twice.
     if (existing.callHistory?.some(call => call.id === id)) return res.json({ item: await populated(Lead.findOne(filter)) });
     const noteOnly = outcome === 'Note Added';
