@@ -21,5 +21,6 @@ router.use(async (req, res, next) => {
 // Match the existing CRM policy: action-level Page Management enforcement is postponed.
 // Every read and write remains scoped to the authenticated user's assigned leads.
 router.get('/', controller.list);
+router.get('/:id', controller.getOne);
 router.post('/:id/calls', controller.save);
 module.exports = router;
