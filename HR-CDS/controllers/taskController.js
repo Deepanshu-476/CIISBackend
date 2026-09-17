@@ -173,16 +173,16 @@ const normalizeTaskStatus = status => {
 };
 
 const getTaskOverdueEligibilityDate = (dueDateTime, task) => {
-  if (!dueDateTime) return null;
-  const dueDate = new Date(dueDateTime);
-  if (isNaN(dueDate.getTime())) return null;
-
-  if (task?.taskFor === 'self' && task?.onHoldReleasedAt) {
+  if (task?.onHoldReleasedAt) {
     const releasedAt = new Date(task.onHoldReleasedAt);
-    if (!isNaN(releasedAt.getTime()) && dueDate <= releasedAt) {
+    if (!isNaN(releasedAt.getTime())) {
       return new Date(releasedAt.getTime() + 24 * 60 * 60 * 1000);
     }
   }
+
+  if (!dueDateTime) return null;
+  const dueDate = new Date(dueDateTime);
+  if (isNaN(dueDate.getTime())) return null;
 
   return dueDate;
 };
@@ -1603,8 +1603,11 @@ exports.updateStatus = async (req, res) => {
       return res.status(400).json({ success: false, error: 'Cannot change status of an overdue task' });
     }
 
+    const isResumedFromHold = isOnHoldStatus(oldStatus) && normalizedStatus === 'in-progress';
+
     if (
       !['overdue', 'onhold'].includes(normalizedStatus) &&
+      !isResumedFromHold &&
       isTaskOverdueForStatus(task.dueDateTime || task.dueDate, oldStatus, task) &&
       !allowCompanyAllEdit
     ) {
@@ -1699,6 +1702,21 @@ exports.updateStatus = async (req, res) => {
           if (remarks) s.remarks = remarks;
         });
       }
+    }
+
+    if (isResumedFromHold) {
+      const now = new Date();
+      task.onHoldReleasedAt = now;
+      task.dueDateTime = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+      task.dueDate = task.dueDateTime;
+    } else if (normalizedStatus === 'onhold') {
+      task.onHoldReleasedAt = null;
+    }
+
+    if (normalizedStatus === 'completed') {
+      task.completionDate = new Date();
+    } else if (normalizedStatus !== 'completed' && task.completionDate) {
+      task.completionDate = null;
     }
 
     task.statusHistory.push({ status, changedBy: req.user._id, remarks: remarks || `Status changed from ${oldStatus} to ${status}` });
