@@ -861,6 +861,7 @@ app.use('/api/crm/lead-types', require('./routes/leadTypeRoutes.js'));
 app.use('/api/crm/lead-sources', require('./routes/leadSourceRoutes.js'));
 app.use('/api/crm/leads', require('./routes/crmLeadRoutes.js'));
 app.use('/api/crm/telecaller', require('./routes/telecallerRoutes.js'));
+app.use('/api/crm/admin/calls', require('./routes/adminCallRoutes.js'));
 app.use('/api/superAdmin', require("./routes/superAdmin.js"));
 app.use("/api/meetings", require("./HR-CDS/routes/meetingRoutes.js"));
 app.use('/api/cmeeting', require("./HR-CDS/routes/clientMeetingRoutes.js"));
