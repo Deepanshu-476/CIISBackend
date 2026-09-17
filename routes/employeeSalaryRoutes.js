@@ -39,7 +39,13 @@ router.get("/payroll-payslips", payslipOrReportsView, controller.getPayrollPaysl
 router.get("/payroll-payslips/history", payslipView, controller.getPayslipHistory);
 router.post("/payroll-payslips/email", payslipEdit, controller.emailPayslip);
 router.delete("/:id/history/:historyId", assignmentDelete, controller.removeHistoryRevision);
-router.get("/user/:userId", assignmentView, controller.getByUserId);
+const userSalaryViewPermission = (req, res, next) => {
+  const isSelf = String(req.user?._id || req.user?.id) === String(req.params.userId);
+  if (isSelf) return next();
+  return assignmentView(req, res, next);
+};
+
+router.get("/user/:userId", userSalaryViewPermission, controller.getByUserId);
 router.get("/:id", assignmentView, controller.getById);
 router.put("/:id", assignmentEdit, controller.update);
 router.delete("/:id", assignmentDelete, controller.remove);

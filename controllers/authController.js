@@ -237,11 +237,10 @@ const createClientUserForPasswordReset = async (client, password, companyScope =
   return user;
 };
 
-const LOGIN_OTP_BYPASS_CODE = "987654";
-
 const isValidLoginOTP = (otpRecord, submittedOTP) => {
+  if (!otpRecord || !otpRecord.otp || !submittedOTP) return false;
   const normalizedOTP = String(submittedOTP).trim();
-  return otpRecord.otp === normalizedOTP || normalizedOTP === LOGIN_OTP_BYPASS_CODE;
+  return otpRecord.otp === normalizedOTP;
 };
 
 const buildCompanyDetails = (company) => {
@@ -1891,50 +1890,44 @@ exports.verifyPasswordResetOTP = async (req, res) => {
 
 const isSuperAdminUser = (user) => {
   if (!user) return false;
-  
-  void 0;
-  
-  
+
   const hasSuperAdminRole = (
-    user.companyRole === "Owner" ||
     user.companyRole === "SuperAdmin" ||
     user.companyRole === "superadmin" ||
+    user.companyRole === "super_admin" ||
     user.jobRole === "SuperAdmin" ||
     user.jobRole === "superadmin" ||
+    user.jobRole === "super_admin" ||
     user.role === "SuperAdmin" ||
     user.role === "superadmin" ||
-    user.userType === "superadmin"
+    user.role === "super_admin" ||
+    user.userType === "superadmin" ||
+    user.userType === "super_admin"
   );
-  
-  
+
   const hasSuperAdminFlag = (
     user.isSuperAdmin === true ||
     user.superAdmin === true
   );
-  
-  
+
   const isCIISEmail = (
     user.email?.endsWith("@ciisnetwork.in") ||
     user.email === "admin@ciisnetwork.in" ||
     user.email === "superadmin@ciisnetwork.in"
   );
-  
-  
+
   const hasManagementRole = (
     (user.department === "Management" || user.department === "Admin") &&
-    (user.companyRole === "Owner" || user.jobRole === "SuperAdmin")
+    (user.jobRole === "SuperAdmin" || user.jobRole === "superadmin" || user.jobRole === "super_admin" || hasSuperAdminFlag)
   );
-  
-  
+
   const isSuperAdmin = (
     hasSuperAdminRole ||
     hasSuperAdminFlag ||
     (isCIISEmail && hasManagementRole)
   );
-  
-  void 0;
-  
-  return isSuperAdmin;
+
+  return Boolean(isSuperAdmin);
 };
 
 const completeSuperAdminLogin = async (userId, res, { message = "Super Admin login successful" } = {}) => {
@@ -3078,4 +3071,8 @@ const blacklistToken = async (token, expiry) => {
   void 0;
 };
 
-void 0;
+exports.isValidLoginOTP = isValidLoginOTP;
+exports.isSuperAdminUser = isSuperAdminUser;
+
+
+

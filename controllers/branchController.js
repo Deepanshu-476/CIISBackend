@@ -7,6 +7,29 @@ const mongoose = require("mongoose");
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 const escapeRegExp = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+const isSuperAdmin = (user) => {
+  if (!user) return false;
+  if (user.isSuperAdmin === true || user.superAdmin === true) return true;
+  const roles = [user.jobRole, user.companyRole, user.role, user.userType]
+    .filter(Boolean)
+    .map(r => String(r).trim().toLowerCase().replace(/[\s_-]+/g, "_"));
+  return roles.some(r => r === "super_admin" || r === "superadmin");
+};
+
+const getUserCompanyId = (user) => {
+  if (!user) return "";
+  return String(user.company?._id || user.company || user.companyId || "");
+};
+
+const isCompanyAdminOrOwner = (user) => {
+  if (!user) return false;
+  if (isSuperAdmin(user)) return true;
+  const roles = [user.companyRole, user.jobRole, user.role]
+    .filter(Boolean)
+    .map(r => String(r).trim().toLowerCase());
+  return roles.some(r => ["owner", "admin", "company_owner", "companyowner", "company_admin"].includes(r));
+};
+
 
 exports.createBranch = async (req, res) => {
   try {
@@ -24,6 +47,25 @@ exports.createBranch = async (req, res) => {
         success: false,
         message: "Invalid company ID",
       });
+    }
+
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: "Not authorized" });
+    }
+    const userCompanyId = getUserCompanyId(req.user);
+    if (!isSuperAdmin(req.user)) {
+      if (userCompanyId !== String(companyId)) {
+        return res.status(403).json({
+          success: false,
+          message: "Access denied. You can only create branches for your own company.",
+        });
+      }
+      if (!isCompanyAdminOrOwner(req.user)) {
+        return res.status(403).json({
+          success: false,
+          message: "Access denied. Only Company Owner or Admin can create branches.",
+        });
+      }
     }
 
     const cleanName = String(name).trim();
@@ -115,6 +157,17 @@ exports.getAllBranches = async (req, res) => {
       });
     }
 
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: "Not authorized" });
+    }
+    const userCompanyId = getUserCompanyId(req.user);
+    if (!isSuperAdmin(req.user) && userCompanyId !== String(companyId)) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. You can only view branches for your own company.",
+      });
+    }
+
     const branches = await Branch.find({ company: companyId }).sort({ isDefault: -1, createdAt: 1 });
 
     
@@ -169,6 +222,17 @@ exports.getBranchById = async (req, res) => {
       });
     }
 
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: "Not authorized" });
+    }
+    const userCompanyId = getUserCompanyId(req.user);
+    if (!isSuperAdmin(req.user) && userCompanyId !== String(branch.company)) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. You can only view branches for your own company.",
+      });
+    }
+
     const userCount = await User.countDocuments({
       isActive: true,
       $or: [
@@ -213,6 +277,25 @@ exports.updateBranch = async (req, res) => {
         success: false,
         message: "Branch not found",
       });
+    }
+
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: "Not authorized" });
+    }
+    const userCompanyId = getUserCompanyId(req.user);
+    if (!isSuperAdmin(req.user)) {
+      if (userCompanyId !== String(branch.company)) {
+        return res.status(403).json({
+          success: false,
+          message: "Access denied. You can only update branches for your own company.",
+        });
+      }
+      if (!isCompanyAdminOrOwner(req.user)) {
+        return res.status(403).json({
+          success: false,
+          message: "Access denied. Only Company Owner or Admin can update branches.",
+        });
+      }
     }
 
     
@@ -324,6 +407,25 @@ exports.deleteBranch = async (req, res) => {
         success: false,
         message: "Branch not found",
       });
+    }
+
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: "Not authorized" });
+    }
+    const userCompanyId = getUserCompanyId(req.user);
+    if (!isSuperAdmin(req.user)) {
+      if (userCompanyId !== String(branch.company)) {
+        return res.status(403).json({
+          success: false,
+          message: "Access denied. You can only delete branches for your own company.",
+        });
+      }
+      if (!isCompanyAdminOrOwner(req.user)) {
+        return res.status(403).json({
+          success: false,
+          message: "Access denied. Only Company Owner or Admin can delete branches.",
+        });
+      }
     }
 
     

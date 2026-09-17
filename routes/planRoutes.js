@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const Plan = require("../models/Plan");
 const mongoose = require("mongoose");
+const { protect, restrictTo, isSuperAdminUser } = require("../middleware/authMiddleware");
 
 const cleanStringArray = value => (
   Array.isArray(value)
@@ -46,9 +47,29 @@ const validatePlanPayload = payload => {
   return errors;
 };
 
+// GET /api/plans: Active plans are publicly readable (needed by prospective clients during registration).
+// Inactive plans are only returned if includeInactive=true AND caller is authenticated SuperAdmin.
 router.get("/", async (req, res) => {
   try {
-    const query = req.query.includeInactive === "true" ? {} : { isActive: true };
+    let canViewInactive = false;
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      try {
+        await new Promise((resolve) => {
+          protect(req, res, () => {
+            if (req.user && isSuperAdminUser(req.user)) {
+              canViewInactive = true;
+            }
+            resolve();
+          });
+        });
+      } catch {
+        canViewInactive = false;
+      }
+    }
+
+    const wantsInactive = req.query.includeInactive === "true";
+    const query = (wantsInactive && canViewInactive) ? {} : { isActive: true };
     const plans = await populatePlanAudit(Plan.find(query).sort({ createdAt: -1 }));
     res.json({ success: true, count: plans.length, plans });
   } catch (error) {
@@ -57,7 +78,8 @@ router.get("/", async (req, res) => {
   }
 });
 
-router.post("/", async (req, res) => {
+// Mutating endpoints strictly restricted to Platform SuperAdmin
+router.post("/", protect, restrictTo("super_admin"), async (req, res) => {
   try {
     const payload = buildPlanPayload(req.body);
     const errors = validatePlanPayload(payload);
@@ -65,10 +87,8 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ success: false, message: "Validation failed", errors });
     }
 
-    if (req.body.createdBy && isValidObjectId(req.body.createdBy)) {
-      payload.createdBy = req.body.createdBy;
-      payload.updatedBy = req.body.createdBy;
-    }
+    payload.createdBy = req.user?._id || null;
+    payload.updatedBy = req.user?._id || null;
 
     const createdPlan = await Plan.create(payload);
     const plan = await populatePlanAudit(Plan.findById(createdPlan._id));
@@ -82,7 +102,7 @@ router.post("/", async (req, res) => {
   }
 });
 
-router.put("/:id", async (req, res) => {
+router.put("/:id", protect, restrictTo("super_admin"), async (req, res) => {
   try {
     if (!isValidObjectId(req.params.id)) {
       return res.status(400).json({ success: false, message: "Invalid plan id" });
@@ -94,9 +114,7 @@ router.put("/:id", async (req, res) => {
       return res.status(400).json({ success: false, message: "Validation failed", errors });
     }
 
-    if (req.body.updatedBy && isValidObjectId(req.body.updatedBy)) {
-      payload.updatedBy = req.body.updatedBy;
-    }
+    payload.updatedBy = req.user?._id || null;
 
     const plan = await populatePlanAudit(Plan.findByIdAndUpdate(req.params.id, payload, {
       new: true,
@@ -117,7 +135,7 @@ router.put("/:id", async (req, res) => {
   }
 });
 
-router.patch("/:id/status", async (req, res) => {
+router.patch("/:id/status", protect, restrictTo("super_admin"), async (req, res) => {
   try {
     if (!isValidObjectId(req.params.id)) {
       return res.status(400).json({ success: false, message: "Invalid plan id" });
@@ -125,7 +143,10 @@ router.patch("/:id/status", async (req, res) => {
 
     const plan = await populatePlanAudit(Plan.findByIdAndUpdate(
       req.params.id,
-      { isActive: Boolean(req.body.isActive) },
+      { 
+        isActive: Boolean(req.body.isActive),
+        updatedBy: req.user?._id || null,
+      },
       { new: true, runValidators: true }
     ));
 

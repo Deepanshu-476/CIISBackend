@@ -9,7 +9,32 @@ const sharp = require('sharp');
 
 
 
-router.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+const SENSITIVE_UPLOAD_FOLDERS = [
+  'employee-documents',
+  'client-documents',
+  'receipts'
+];
+
+router.use('/uploads', (req, res, next) => {
+  try {
+    const normalizedPath = decodeURIComponent(req.path || '').toLowerCase().replace(/\\/g, '/');
+    const isSensitive = SENSITIVE_UPLOAD_FOLDERS.some(folder =>
+      normalizedPath.startsWith(`/${folder}`) ||
+      normalizedPath.includes(`/${folder}/`) ||
+      normalizedPath === `/${folder}`
+    );
+
+    if (isSensitive) {
+      return res.status(403).json({
+        success: false,
+        message: 'Direct static access to sensitive documents is forbidden. Please use authorized API endpoints.'
+      });
+    }
+  } catch (_err) {
+    return res.status(400).json({ success: false, message: 'Invalid request path' });
+  }
+  next();
+}, express.static(path.join(__dirname, '../uploads')));
 
 
 const uploadDir = path.join(__dirname, '../uploads/client-remarks');
@@ -81,6 +106,9 @@ const compressImage = async (req, res, next) => {
 
 
 router.get('/test', (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ success: false, message: 'Not found' });
+  }
   res.json({
     status: 'success',
     message: 'Client Task API is working',
@@ -138,13 +166,19 @@ router.get('/:taskId/client-activity-logs', authMiddleware, taskController.getCl
 
 
 router.get('/:taskId/debug', authMiddleware, taskController.debugActivityLogs);
+router.get('/:taskId/debug', (req, res, next) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ success: false, message: 'Not found' });
+  }
+  next();
+}, authMiddleware, taskController.debugActivityLogs);
 
 
-router.get('/client/:clientId/service/:service', taskController.getTasksByClientService);
+router.get('/client/:clientId/service/:service', authMiddleware, taskController.getTasksByClientService);
 router.post('/client/:clientId/service/:service', authMiddleware, taskController.addTask);
 router.get('/summary/bulk', authMiddleware, taskController.getClientTaskSummaries);
-router.get('/client/:clientId', taskController.getClientTasks);
-router.get('/client/:clientId/stats', taskController.getTaskStats);
+router.get('/client/:clientId', authMiddleware, taskController.getClientTasks);
+router.get('/client/:clientId/stats', authMiddleware, taskController.getTaskStats);
 router.put('/:taskId', authMiddleware, taskController.updateTask);
 router.patch('/:taskId/checkpoints/:checkpointId', authMiddleware, taskController.updateTaskCheckpoint);
 router.patch('/:taskId/toggle', authMiddleware, taskController.toggleTaskCompletion);

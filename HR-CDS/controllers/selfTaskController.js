@@ -396,8 +396,11 @@ exports.updateStatus = async (req, res) => {
       return res.status(400).json({ success: false, error: 'Cannot change status of an overdue task' });
     }
 
+    const isResumedFromHold = isOnHoldStatus(oldStatus) && normalizedStatus === 'in-progress';
+
     if (
       !['overdue', 'onhold'].includes(normalizedStatus) &&
+      !isResumedFromHold &&
       isTaskOverdueForStatus(task.dueDateTime || task.dueDate, oldStatus, task) &&
       !allowCompanyAllEdit
     ) {
@@ -419,14 +422,17 @@ exports.updateStatus = async (req, res) => {
     }
 
     task.overallStatus = normalizedStatus;
-    if (isOnHoldStatus(oldStatus) && normalizedStatus === 'in-progress') {
-      task.onHoldReleasedAt = new Date();
+    if (isResumedFromHold) {
+      const now = new Date();
+      task.onHoldReleasedAt = now;
+      task.dueDateTime = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+      task.dueDate = task.dueDateTime;
     } else if (normalizedStatus === 'onhold') {
       task.onHoldReleasedAt = null;
     }
     if (normalizedStatus === 'completed') {
       task.completionDate = new Date();
-    } else {
+    } else if (normalizedStatus !== 'completed' && task.completionDate) {
       task.completionDate = null;
     }
 
