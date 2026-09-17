@@ -37,6 +37,8 @@ const APP_PAGES = [
   { pageKey: 'JobRoleManagement', name: 'Job Role Management', path: '/ciisUser/JobRoleManagement', permissionPattern: 'viewEdit' },
   { pageKey: 'manage-groups', name: 'Manage Group', path: '/ciisUser/manage-groups', permissionPattern: 'viewEdit' },
   { pageKey: 'company-all-task', name: 'Company All Task', path: '/ciisUser/company-all-task', permissionPattern: 'viewEdit' },
+  { pageKey: 'company-assets', name: 'Asset Management', path: '/ciisUser/company-assets', permissionPattern: 'viewEdit' },
+  { pageKey: 'SidebarManagement', name: 'Sidebar Management', path: '/ciisUser/SidebarManagement', permissionPattern: 'viewEdit' },
   { pageKey: 'emp-client', name: 'Client Management', path: '/ciisUser/emp-client', permissionPattern: 'viewEdit' },
   { pageKey: 'salary-component', name: 'Salary Component', path: '/ciisUser/salary-component', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.salaryComponent },
   { pageKey: 'salary-structure', name: 'Salary Structure', path: '/ciisUser/salary-structure', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.salaryStructure },
@@ -45,6 +47,8 @@ const APP_PAGES = [
   { pageKey: 'payroll-process', name: 'Payroll Process', path: '/ciisUser/payroll-process', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.payrollProcess },
   { pageKey: 'payslip', name: 'Payslip', path: '/ciisUser/payslip', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.payslip },
   { pageKey: 'payroll-reports', name: 'Payroll Reports', path: '/ciisUser/payroll-reports', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.payrollReports },
+  { pageKey: 'task-management', name: 'Create Task', path: '/ciisUser/task-management', permissionPattern: 'viewEdit' },
+  { pageKey: 'admin-task-create', name: 'Admin Create Task', path: '/ciisUser/admin-task-create', permissionPattern: 'viewEdit', permissionActions: { view: 'View', edit: 'Create Task', delete: 'Delete' } },
 ];
 
 const PAGE_PERMISSION_CACHE_PREFIX = 'pagePermissions';
@@ -596,14 +600,35 @@ router.put('/:pageKey', isCompanyOwner, async (req, res) => {
     }).select('_id');
 
     const validIdSet = new Set(validUsers.map(user => user._id.toString()));
+    const validEditIds = uniqueEditUserIds.filter(id => validIdSet.has(id));
+    const mergedViewUserIds = [...new Set([...uniqueViewUserIds.filter(id => validIdSet.has(id)), ...validEditIds])];
+
     const approvers = normalizePageUsers(uniqueApproverIds.filter(id => validIdSet.has(id)));
-    const viewUsers = normalizePageUsers(uniqueViewUserIds.filter(id => validIdSet.has(id)));
-    const editUsers = normalizePageUsers(uniqueEditUserIds.filter(id => validIdSet.has(id)));
+    const viewUsers = normalizePageUsers(mergedViewUserIds);
+    const editUsers = normalizePageUsers(validEditIds);
     const deleteUsers = normalizePageUsers(uniqueDeleteUserIds.filter(id => validIdSet.has(id)));
     const generateUsers = normalizePageUsers(uniqueGenerateUserIds.filter(id => validIdSet.has(id)));
     const lockUsers = normalizePageUsers(uniqueLockUserIds.filter(id => validIdSet.has(id)));
     const unlockUsers = normalizePageUsers(uniqueUnlockUserIds.filter(id => validIdSet.has(id)));
     const validUserAccessScopes = userAccessScopes.filter(item => validIdSet.has(String(item.user)));
+
+    const editScopeMap = new Map();
+    validUserAccessScopes.forEach(s => {
+      if (s.accessType === 'edit') editScopeMap.set(String(s.user), s);
+    });
+    const hasViewScopeSet = new Set(
+      validUserAccessScopes.filter(s => s.accessType === 'view').map(s => String(s.user))
+    );
+    editScopeMap.forEach((scope, userId) => {
+      if (!hasViewScopeSet.has(userId)) {
+        validUserAccessScopes.push({
+          user: userId,
+          accessType: 'view',
+          branchIds: scope.branchIds || [],
+          departmentIds: scope.departmentIds || []
+        });
+      }
+    });
 
     const config = await PagePermission.findOneAndUpdate(
       { company: companyId, path: page.path },

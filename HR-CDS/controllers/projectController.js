@@ -1622,7 +1622,9 @@ exports.updateTaskStatus = async (req, res) => {
       });
     }
 
-    if (!["overdue", "onhold"].includes(nextStatus) && isPendingTaskPastDue(task) && !allowCompanyAllEdit) {
+    const isResumedFromHold = (normalizedOldStatus === "onhold" || normalizedOldStatus === "on hold") && nextStatus === "in-progress";
+
+    if (!["overdue", "onhold"].includes(nextStatus) && !isResumedFromHold && isPendingTaskPastDue(task) && !allowCompanyAllEdit) {
       if (isPendingTaskPastDue(task)) {
         task.status = "overdue";
         task.updatedAt = new Date();
@@ -1644,6 +1646,21 @@ exports.updateTaskStatus = async (req, res) => {
 
     task.status = nextProjectStatus;
     task.updatedAt = new Date();
+
+    if (isResumedFromHold) {
+      const now = new Date();
+      task.onHoldReleasedAt = now;
+      task.dueDate = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+      task.dueDateTime = task.dueDate;
+    } else if (nextStatus === "onhold" || nextStatus === "on hold") {
+      task.onHoldReleasedAt = null;
+    }
+
+    if (nextStatus === "completed") {
+      task.completionDate = new Date();
+    } else if (nextStatus !== "completed" && task.completionDate) {
+      task.completionDate = null;
+    }
 
     
     task.activityLogs.push({

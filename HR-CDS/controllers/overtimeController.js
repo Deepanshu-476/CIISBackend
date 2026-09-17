@@ -20,6 +20,15 @@ const format12Hour = (timeStr) => {
   return `${String(h12).padStart(2, '0')}:${String(m).padStart(2, '0')} ${period}`;
 };
 
+const isPrivilegedOtManager = (user) => {
+  if (!user) return false;
+  if (user.isSuperAdmin === true || user.superAdmin === true) return true;
+  const roles = [user.companyRole, user.jobRole, user.role, user.userType]
+    .filter(Boolean)
+    .map(r => String(r).trim().toLowerCase().replace(/[\s_-]+/g, "_"));
+  return roles.some(r => ['super_admin', 'superadmin', 'owner', 'admin', 'hr', 'manager'].includes(r));
+};
+
 const getIndiaDateKey = (dateInput) => {
   const d = new Date(dateInput);
   if (isNaN(d.getTime())) return '';
@@ -293,6 +302,13 @@ const getMyOvertimeRequests = async (req, res) => {
  */
 const getAdminOvertimeRequests = async (req, res) => {
   try {
+    if (!isPrivilegedOtManager(req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Only authorized Admin or HR can view company overtime requests.'
+      });
+    }
+
     const companyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     if (!companyCode) {
       return res.status(400).json({ success: false, message: 'Company code not found.' });
@@ -382,6 +398,13 @@ const getAdminOvertimeRequests = async (req, res) => {
  */
 const reviewOvertimeRequest = async (req, res) => {
   try {
+    if (!isPrivilegedOtManager(req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Only authorized Admin or HR can review overtime requests.'
+      });
+    }
+
     const adminId = req.user._id || req.user.id;
     const companyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     const { id } = req.params;
@@ -394,6 +417,13 @@ const reviewOvertimeRequest = async (req, res) => {
     const request = await OvertimeRequest.findOne({ _id: id, companyCode });
     if (!request) {
       return res.status(404).json({ success: false, message: 'Overtime request not found.' });
+    }
+
+    if (String(request.user) === String(adminId)) {
+      return res.status(403).json({
+        success: false,
+        message: 'You cannot approve or reject your own overtime request.'
+      });
     }
 
     const newStatus = action === 'Approve' ? 'Approved' : 'Rejected';
@@ -685,6 +715,13 @@ const startOvertimeSession = async (req, res) => {
       });
     }
 
+    if (approvedRequest.companyCode && companyCode && approvedRequest.companyCode !== companyCode) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Cross-company overtime operation is forbidden.'
+      });
+    }
+
     // 2. Verify shift has ended
     const userDoc = await User.findById(userId).populate('jobRole').lean();
     const shiftInfo = await resolveShiftScheduleForUser(userDoc, now);
@@ -820,10 +857,23 @@ const stopOvertimeSession = async (req, res) => {
         { dateKeys: todayKey },
         { month: monthKey, requestType: 'FULL_MONTH' }
       ]
-    }).lean();
+    });
+    if (att.companyCode && req.user.companyCode && att.companyCode !== req.user.companyCode) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Cross-company overtime operation is forbidden.'
+      });
+    };
 
     const approvedHours = Number(approvedRequest?.requestedHours || 0);
-    const maxMinutes = approvedHours > 0 ? (approvedHours * 60) : actualMinutes;
+    let maxMinutes;
+    if (approvedRequest?.calculationType === 'FULL_DAY_PRESENT') {
+      maxMinutes = 540; // 9 hours max for full day
+    } else if (approvedHours > 0) {
+      maxMinutes = approvedHours * 60;
+    } else {
+      maxMinutes = 480; // Safe default max limit of 8 hours
+    }
 
     // Cap at approved hours: if worked 2h 15m (135m) and approved is 2h (120m), count 120m.
     // If worked 1h 30m (90m), count 90m.

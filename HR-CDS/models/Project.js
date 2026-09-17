@@ -67,6 +67,9 @@ const TaskSchema = new Schema(
     assignedTo: { type: Schema.Types.ObjectId, ref: "User" },
     assignedUsers: [{ type: Schema.Types.ObjectId, ref: "User" }],
     dueDate: { type: Date },
+    dueDateTime: { type: Date },
+    onHoldReleasedAt: { type: Date, default: null },
+    completionDate: { type: Date, default: null },
     priority: { type: String, enum: PRIORITY_LEVELS, default: "medium" },
     status: { type: String, enum: TASK_STATUS, default: "pending" },
     pdfFile: {
