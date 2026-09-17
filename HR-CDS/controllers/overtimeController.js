@@ -20,13 +20,41 @@ const format12Hour = (timeStr) => {
   return `${String(h12).padStart(2, '0')}:${String(m).padStart(2, '0')} ${period}`;
 };
 
-const isPrivilegedOtManager = (user) => {
+const isPrivilegedOtManager = async (user) => {
   if (!user) return false;
-  if (user.isSuperAdmin === true || user.superAdmin === true) return true;
-  const roles = [user.companyRole, user.jobRole, user.role, user.userType]
+  if (user.isSuperAdmin === true || user.superAdmin === true || user.isCompanyOwner === true) return true;
+  const roles = [user.companyRole, user.jobRole, user.jobRoleName, user.role, user.userType]
     .filter(Boolean)
     .map(r => String(r).trim().toLowerCase().replace(/[\s_-]+/g, "_"));
-  return roles.some(r => ['super_admin', 'superadmin', 'owner', 'admin', 'hr', 'manager'].includes(r));
+  const matched = roles.some(r => [
+    'super_admin', 'superadmin',
+    'owner', 'company_owner', 'companyowner',
+    'admin', 'company_admin', 'companyadmin',
+    'hr', 'hr_manager', 'manager'
+  ].includes(r));
+  if (matched) return true;
+
+  try {
+    const PagePermission = require('../../models/PagePermission');
+    const company = user?.company?._id || user?.company || user?.companyCode;
+    const userId = String(user?._id || user?.id || '');
+    if (company && userId) {
+      const page = await PagePermission.findOne({
+        $or: [{ company }, { companyCode: company }],
+        path: '/ciisUser/emp-attendance'
+      }).lean();
+      if (page) {
+        const allowedIds = new Set([
+          ...(page.viewUsers || []).map(u => String(u?.user?._id || u?.user || '')),
+          ...(page.editUsers || []).map(u => String(u?.user?._id || u?.user || '')),
+          ...(page.approvers || []).map(u => String(u?.user?._id || u?.user || ''))
+        ]);
+        if (allowedIds.has(userId)) return true;
+      }
+    }
+  } catch (_) {}
+
+  return false;
 };
 
 const getIndiaDateKey = (dateInput) => {
@@ -302,7 +330,8 @@ const getMyOvertimeRequests = async (req, res) => {
  */
 const getAdminOvertimeRequests = async (req, res) => {
   try {
-    if (!isPrivilegedOtManager(req.user)) {
+    const isAuthorized = await isPrivilegedOtManager(req.user);
+    if (!isAuthorized) {
       return res.status(403).json({
         success: false,
         message: 'Access denied. Only authorized Admin or HR can view company overtime requests.'
@@ -398,7 +427,8 @@ const getAdminOvertimeRequests = async (req, res) => {
  */
 const reviewOvertimeRequest = async (req, res) => {
   try {
-    if (!isPrivilegedOtManager(req.user)) {
+    const isAuthorized = await isPrivilegedOtManager(req.user);
+    if (!isAuthorized) {
       return res.status(403).json({
         success: false,
         message: 'Access denied. Only authorized Admin or HR can review overtime requests.'
