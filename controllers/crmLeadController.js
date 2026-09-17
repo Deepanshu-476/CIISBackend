@@ -76,11 +76,34 @@ exports.list = async (req, res, next) => {
 exports.team = async (req, res, next) => {
   try {
     const User = require('../models/User');
-    const users = await User.find({ company: req.crmCompany, isActive: { $ne: false } })
-      .select('name email role jobRole')
+    let clientUserIds = [];
+    try {
+      const Client = mongoose.models.Client || require('../HR-CDS/models/Client');
+      const clients = await Client.find({ userId: { $exists: true, $ne: null } }).select('userId').lean();
+      clientUserIds = clients.map(c => String(c.userId));
+    } catch (e) {
+      // Ignore if Client model not available
+    }
+
+    const users = await User.find({
+      company: req.crmCompany,
+      isActive: { $ne: false },
+      companyRole: { $not: /^client$/i },
+      role: { $not: /^client$/i }
+    })
+      .select('name email role jobRole companyRole')
       .sort({ name: 1 })
       .lean();
-    res.json({ users });
+
+    const employees = users.filter(u => {
+      const cRole = String(u.companyRole || '').trim().toLowerCase();
+      const r = String(u.role || '').trim().toLowerCase();
+      const isClientRole = cRole === 'client' || r === 'client';
+      const isClientUser = clientUserIds.includes(String(u._id));
+      return !isClientRole && !isClientUser;
+    });
+
+    res.json({ users: employees });
   } catch (error) { next(error); }
 };
 
@@ -118,6 +141,13 @@ exports.assign = async (req, res, next) => {
       return res.status(404).json({ message: 'Selected user was not found in your company.' });
     }
 
+    const Client = require('../HR-CDS/models/Client');
+    const isClient = ['role', 'companyRole'].some(key => String(user[key] || '').trim().toLowerCase() === 'client');
+    const clientRecord = await Client.findOne({ userId: user._id }).select('_id').lean();
+    if (user.isActive === false || isClient || clientRecord) {
+      return res.status(400).json({ message: 'Choose an active employee from your company.' });
+    }
+
     lead.assignedTo = user._id;
     lead.assignedAt = new Date();
     await lead.save();
@@ -131,4 +161,3 @@ exports.assign = async (req, res, next) => {
     res.json({ message: `Lead assigned to ${user.name} successfully.`, item: populatedLead });
   } catch (error) { next(error); }
 };
-

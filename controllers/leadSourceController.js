@@ -32,7 +32,7 @@ exports.update = async (req, res) => {
   try { data = validate(req.body); } catch (error) { return res.status(400).json({ message: error.message }); }
   try {
     const item = await LeadSource.findOneAndUpdate({ _id: req.params.id, company: req.leadSourceCompany }, { $set: data }, { new: true, runValidators: true });
-    if (!item) return res.status(404).json({ message: 'Lead type not found.' });
+    if (!item) return res.status(404).json({ message: 'Lead source not found.' });
     res.json({ item });
   } catch (error) { fail(res, error); }
 };
@@ -43,7 +43,7 @@ exports.remove = async (req, res) => {
     const used = await mongoose.connection.collection('leads').findOne({ company: req.leadSourceCompany, leadSource: { $in: [new mongoose.Types.ObjectId(req.params.id), req.params.id] } }, { projection: { _id: 1 } });
     if (used) return res.status(409).json({ message: 'This source is used by leads. Set it to Inactive instead.' });
     const item = await LeadSource.findOneAndDelete({ _id: req.params.id, company: req.leadSourceCompany, isSystem: false });
-    if (!item) return res.status(409).json({ message: 'Lead type was not found or is a protected system source.' });
+    if (!item) return res.status(409).json({ message: 'Lead source was not found or is a protected system source.' });
     res.json({ success: true });
   } catch (error) { fail(res, error); }
 };

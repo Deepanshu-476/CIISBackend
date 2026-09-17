@@ -14,9 +14,11 @@ const context = page => async (req, res, next) => {
     if (!record || (allowed.length && !allowed.some(v => ['crm', 'admin-crm', `admin-crm-${page}`, `crm/admin/${page}`].includes(v)))) return res.status(403).json({ message: 'This lead page is not enabled for your company.' });
     req.crmCompany = company;
     next();
-  } catch (error) { next(error); }
+  } catch (error) { next(error); }  
 };
+router.use('/transfer', context('import-export-leads'), require('./leadTransferRoutes'));
 router.get('/options', context('add-lead'), controller.options);
+router.get('/overview', context('lead-overview'), require('../controllers/leadOverviewController').overview);
 router.post('/', context('add-lead'), controller.create);
 router.get('/team', context('all-leads'), controller.team);
 router.put('/:id/assign', context('all-leads'), controller.assign);
