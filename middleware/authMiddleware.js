@@ -1,6 +1,8 @@
 
+const mongoose = require("mongoose");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
+const JobRole = require("../models/JobRole");
 
 
 exports.verify = async (req, res) => {
@@ -174,13 +176,25 @@ exports.protect = async (req, res, next) => {
       }
       
       
+      let jobRoleName = user.jobRole;
+      if (user.jobRole && mongoose.Types.ObjectId.isValid(user.jobRole)) {
+        try {
+          const jrDoc = await JobRole.findById(user.jobRole).select('name').lean();
+          if (jrDoc && jrDoc.name) {
+            jobRoleName = jrDoc.name;
+          }
+        } catch (_) {}
+      }
+
       req.user = {
         _id: user._id,
         id: user._id,
         name: user.name,
         email: user.email,
-        role: user.companyRole || user.jobRole,
-        jobRole: user.jobRole,
+        role: user.companyRole || jobRoleName || user.jobRole,
+        jobRole: jobRoleName || user.jobRole,
+        jobRoleId: user.jobRole,
+        jobRoleName: jobRoleName,
         companyRole: user.companyRole,
         employeeId: user.employeeId,
         phone: user.phone,
@@ -267,8 +281,8 @@ exports.isCompanyOwner = async (req, res, next) => {
     }
 
     
-    const userCompanyRole = (user.companyRole || '').toLowerCase();
-    if (userCompanyRole !== 'owner') {
+    const userCompanyRole = String(user.companyRole || '').trim().toLowerCase().replace(/[\s_-]+/g, '_');
+    if (!['owner', 'company_owner', 'companyowner'].includes(userCompanyRole)) {
       void 0;
       return res.status(403).json({
         success: false,
@@ -366,6 +380,17 @@ const isSuperAdminUserCandidate = (user) => {
 
 exports.isSuperAdminUser = isSuperAdminUserCandidate;
 
+const normalizeRole = (role) => {
+  return String(role || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '_');
+};
+
+const OWNER_ROLES = new Set(['owner', 'company_owner', 'companyowner']);
+const ADMIN_ROLES = new Set(['admin', 'company_admin', 'companyadmin']);
+const SUPER_ADMIN_ROLES = new Set(['super_admin', 'superadmin']);
+
 exports.restrictTo = (...roles) => {
   return (req, res, next) => {
     if (!req.user) {
@@ -374,28 +399,57 @@ exports.restrictTo = (...roles) => {
         message: "Not authorized"
       });
     }
-    
-    const userRole = (req.user.jobRole || '').toLowerCase();
-    const userCompanyRole = (req.user.companyRole || '').toLowerCase();
-    const userGeneralRole = (req.user.role || '').toLowerCase();
-    const allowedRoles = roles.map(role => role.toLowerCase());
 
-    const isTargetingSuperAdmin = allowedRoles.some(r => ['super_admin', 'superadmin', 'super-admin'].includes(r));
-    if (isTargetingSuperAdmin && isSuperAdminUserCandidate(req.user)) {
+    const userRoles = [
+      req.user.jobRole,
+      req.user.jobRoleName,
+      req.user.companyRole,
+      req.user.role,
+      req.user.userType
+    ]
+      .filter(Boolean)
+      .map(normalizeRole);
+
+    const allowedRoles = roles.map(normalizeRole);
+
+    // Super Admin check:
+    const userIsSuperAdmin = req.user.isSuperAdmin === true ||
+      req.user.superAdmin === true ||
+      userRoles.some(r => SUPER_ADMIN_ROLES.has(r)) ||
+      isSuperAdminUserCandidate(req.user);
+
+    if (userIsSuperAdmin) {
       return next();
     }
-    
-    if (
-      !allowedRoles.includes(userRole) &&
-      !allowedRoles.includes(userCompanyRole) &&
-      !allowedRoles.includes(userGeneralRole)
-    ) {
-      return res.status(403).json({
-        success: false,
-        error: 'You do not have permission to perform this action'
-      });
+
+    // Company Owner check:
+    const userIsOwner = req.user.isCompanyOwner === true ||
+      userRoles.some(r => OWNER_ROLES.has(r));
+
+    const allowsOwner = allowedRoles.some(r => OWNER_ROLES.has(r));
+    const allowsAdmin = allowedRoles.some(r => ADMIN_ROLES.has(r));
+    const allowsManagerOrHr = allowedRoles.some(r => ['hr', 'manager', 'hr_manager'].includes(r));
+
+    if (userIsOwner && (allowsOwner || allowsAdmin || allowsManagerOrHr)) {
+      return next();
     }
-    next();
+
+    // Admin check:
+    const userIsAdmin = userRoles.some(r => ADMIN_ROLES.has(r));
+    if (userIsAdmin && (allowsAdmin || allowsManagerOrHr)) {
+      return next();
+    }
+
+    // Direct role match:
+    const hasRole = userRoles.some(r => allowedRoles.includes(r));
+    if (hasRole) {
+      return next();
+    }
+
+    return res.status(403).json({
+      success: false,
+      error: 'You do not have permission to perform this action'
+    });
   };
 };
 
