@@ -42,18 +42,12 @@ router.get('/search', userController.searchUsers);
 
 router.use('/:id/documents', require('./employeeDocumentRoutes'));
 
-router.get('/:id', userController.getUser);
-router.put('/profile-update/:id', userController.updateSelfUser);
-router.put('/:id', userController.updateUser);
-
-
-
-
-
-
-
-
-router.get('/test', protect, async (req, res) => {
+router.get('/test', (req, res, next) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ success: false, message: 'Not found' });
+  }
+  next();
+}, protect, async (req, res) => {
   try {
     const User = require('../../models/User');
     const Department = require('../../models/Department');
@@ -196,5 +190,9 @@ router.get('/test', protect, async (req, res) => {
     });
   }
 });
+
+router.get('/:id', userController.getUser);
+router.put('/profile-update/:id', userController.updateSelfUser);
+router.put('/:id', userController.updateUser);
 
 module.exports = router;

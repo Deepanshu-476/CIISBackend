@@ -1,6 +1,7 @@
 const Attendance = require("../models/Attendance");
 const OvertimeRequest = require("../models/OvertimeRequest");
 const Leave = require("../models/Leave");
+const Holiday = require("../models/Holiday");
 const User = require("../../models/User");
 const Company = require("../../models/Company");
 const Branch = require("../../models/Branch");
@@ -60,6 +61,17 @@ const normalizeIdList = (value) => {
 const canViewAllBranchData = (user = {}) => {
   const roleText = String(user.companyRole || user.jobRole || user.role || '').trim().toLowerCase();
   return ['owner', 'company_owner', 'companyowner', 'super_admin', 'superadmin'].includes(roleText);
+};
+
+const isPrivilegedAttendanceUser = (user = {}, allowManager = true) => {
+  if (user.isSuperAdmin === true || user.superAdmin === true) return true;
+  const roles = [user.jobRole, user.companyRole, user.role, user.userType]
+    .filter(Boolean)
+    .map(r => String(r).trim().toLowerCase().replace(/[\s_-]+/g, '_'));
+  const allowed = allowManager
+    ? ['super_admin', 'superadmin', 'owner', 'company_owner', 'admin', 'hr', 'manager']
+    : ['super_admin', 'superadmin', 'owner', 'company_owner', 'admin', 'hr'];
+  return roles.some(r => allowed.includes(r));
 };
 
 const getUserBranchIds = (user = {}) => normalizeIdList([
@@ -836,18 +848,25 @@ const clockIn = async (req, res) => {
 
     // 1. Fetch branch-scoped settings to read attendance mode
     const { attendanceSettings, userObj } = await getAttendanceSettingsContext({ companyCode: userCompanyCode, userId });
+    
+    if (!userObj) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (userObj.companyCode && userCompanyCode && userObj.companyCode !== userCompanyCode) {
+      return res.status(403).json({ message: "Access denied. Cross-company attendance is forbidden." });
+    }
+
     const clockInConfig = attendanceSettings?.dashboardConfig?.find(c => c.componentId === 'clock-in');
     const attendanceMode = clockInConfig?.settings?.attendanceMode || 'normal';
 
     const { latitude, longitude, accuracy, selfieUrl } = req.body;
 
-    // 2. Validate Geolocation/Selfie based on company requirements
+    // 2. Validate Geolocation/Selfie based on company requirements (WFH determined strictly by user's DB record)
     let locationRange = null;
+    const isWfh = isWorkFromHomeEmployee(userObj) || isWorkFromHomeEmployee(req.user);
     const shouldEnforceLocation =
-      (attendanceMode === 'location' || attendanceMode === 'both') &&
-      !isWorkFromHomeEmployee(userObj) &&
-      !isWorkFromHomeEmployee(req.user) &&
-      !isWorkFromHomeEmployee(req.body);
+      (attendanceMode === 'location' || attendanceMode === 'both') && !isWfh;
     if (shouldEnforceLocation) {
       if (latitude === undefined || longitude === undefined) {
         return res.status(400).json({
@@ -1005,18 +1024,25 @@ const clockOut = async (req, res) => {
     
     // 1. Fetch branch-scoped settings to read attendance mode requirements
     const { attendanceSettings, userObj } = await getAttendanceSettingsContext({ companyCode: userCompanyCode, userId });
+
+    if (!userObj) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (userObj.companyCode && userCompanyCode && userObj.companyCode !== userCompanyCode) {
+      return res.status(403).json({ message: "Access denied. Cross-company attendance is forbidden." });
+    }
+
     const clockInConfig = attendanceSettings?.dashboardConfig?.find(c => c.componentId === 'clock-in');
     const attendanceMode = clockInConfig?.settings?.attendanceMode || 'normal';
 
     const { latitude, longitude, accuracy, selfieUrl } = req.body;
 
-    // 2. Validate Geolocation/Selfie based on company requirements
+    // 2. Validate Geolocation/Selfie based on company requirements (WFH determined strictly by user's DB record)
     let locationRange = null;
+    const isWfh = isWorkFromHomeEmployee(userObj) || isWorkFromHomeEmployee(req.user);
     const shouldEnforceLocation =
-      (attendanceMode === 'location' || attendanceMode === 'both') &&
-      !isWorkFromHomeEmployee(userObj) &&
-      !isWorkFromHomeEmployee(req.user) &&
-      !isWorkFromHomeEmployee(req.body);
+      (attendanceMode === 'location' || attendanceMode === 'both') && !isWfh;
     if (shouldEnforceLocation) {
       if (latitude === undefined || longitude === undefined) {
         return res.status(400).json({
@@ -1722,6 +1748,12 @@ const updateAttendanceRecord = async (req, res) => {
         message: "Company code not found" 
       });
     }
+
+    if (!isPrivilegedAttendanceUser(req.user, true)) {
+      return res.status(403).json({
+        message: "Access denied. Only Admin, HR, or Manager can update attendance records."
+      });
+    }
     
     let record = await findAttendanceRecord(id, updateData);
     
@@ -1867,6 +1899,12 @@ const createManualAttendance = async (req, res) => {
     if (!userCompanyCode) {
       return res.status(400).json({ 
         message: "Company code not found" 
+      });
+    }
+
+    if (!isPrivilegedAttendanceUser(req.user, true)) {
+      return res.status(403).json({
+        message: "Access denied. Only Admin, HR, or Manager can manually create attendance."
       });
     }
     
@@ -2033,6 +2071,12 @@ const deleteAttendanceRecord = async (req, res) => {
         message: "Company code not found" 
       });
     }
+
+    if (!isPrivilegedAttendanceUser(req.user, false)) {
+      return res.status(403).json({
+        message: "Access denied. Only Admin or HR can delete attendance records."
+      });
+    }
     
     if (isValidObjectId(id)) {
       const record = await Attendance.findById(id);
@@ -2101,7 +2145,13 @@ const getAttendanceByUser = async (req, res) => {
         message: "User not found" 
       });
     }
-    
+
+    const isSelf = String(req.user._id) === String(userId);
+    if (!isSelf && !isPrivilegedAttendanceUser(req.user, true)) {
+      return res.status(403).json({
+        message: "Access denied. You can only view your own attendance."
+      });
+    }
     
     if (user.companyCode !== userCompanyCode) {
       return res.status(403).json({ 
@@ -2190,46 +2240,98 @@ const getAttendanceByUser = async (req, res) => {
 
 const markDailyAbsent = async () => {
   try {
-    const nowForDay = new Date();
-    const {start: todayStart, end: todayEnd} = getIndiaDayRange(nowForDay);
-    
-    const companies = await Company.find({ isActive: true });
+    const now = new Date();
+    const companies = await Company.find({ isActive: true }).select('companyCode companyName').lean();
     
     for (const company of companies) {
       const companyUsers = await User.find({ 
         companyCode: company.companyCode,
         isActive: true 
-      });
+      }).populate('department');
       
       for (const user of companyUsers) {
+        // 1. Check if user is currently clocked in (e.g. night shift in progress)
+        const activeClockIn = await Attendance.findOne({
+          user: user._id,
+          isClockedIn: true,
+          outTime: null
+        });
+        if (activeClockIn) {
+          continue;
+        }
+
+        const shiftSettings = await resolveSelectedShiftSettings(user);
+        const schedule = buildShiftSchedule(now, shiftSettings);
+        const absentThreshold = schedule.shiftEnd;
+
+        // If current time is before the employee's shift end, DO NOT mark absent!
+        // This protects night shift employees and evening shift employees from premature morning sweeps!
+        if (now < absentThreshold) {
+          continue;
+        }
+
+        const targetDate = schedule.dateStart;
+        const targetDateStart = getIndiaDayStart(targetDate);
+        const targetDateEnd = getIndiaDayEnd(targetDate);
+
         const existingAttendance = await Attendance.findOne({
           user: user._id,
-          date: { $gte: todayStart, $lte: todayEnd }
+          date: { $gte: targetDateStart, $lte: targetDateEnd }
         });
         
         if (!existingAttendance) {
-          const now = new Date();
-          const shiftSettings = await resolveSelectedShiftSettings(user);
-          const schedule = buildShiftSchedule(now, shiftSettings);
-          const absentThreshold = schedule.shiftEnd;
+          // 2. Check if target date is a weekend for this user's department
+          if (isDepartmentWeekend(user.department, targetDate)) {
+            continue;
+          }
+
+          // 3. Check if target date is an active company holiday
+          const isHoliday = await Holiday.exists({
+            companyCode: company.companyCode,
+            isActive: true,
+            date: { $gte: targetDateStart, $lte: targetDateEnd }
+          });
+          if (isHoliday) {
+            continue;
+          }
+
+          // 4. Check if user has an approved leave for this date
+          const isApprovedLeave = await Leave.exists({
+            user: user._id,
+            status: 'Approved',
+            startDate: { $lte: targetDateEnd },
+            endDate: { $gte: targetDateStart }
+          });
+          if (isApprovedLeave) {
+            continue;
+          }
+
+          const absentRecord = new Attendance({
+            user: user._id,
+            date: targetDate,
+            status: "ABSENT",
+            isClockedIn: false,
+            companyCode: company.companyCode,
+            notes: "Auto-marked absent (shift ended without clock-in)"
+          });
+          applyShiftSnapshot(absentRecord, buildShiftSnapshot(shiftSettings || {}, schedule));
           
-          if (now >= absentThreshold) {
-            const absentRecord = new Attendance({
-              user: user._id,
-              date: schedule.dateStart,
-              status: "ABSENT",
-              isClockedIn: false,
-              companyCode: company.companyCode
+          await absentRecord.save();
+          await cleanRecurringTasksForAbsentUser(user._id, targetDate).catch(() => {});
+
+          if (global.io) {
+            global.io.to(`user:${user._id}`).emit('attendance:marked', {
+              type: 'attendance_absent',
+              message: 'You have been marked absent for today',
+              data: {
+                date: targetDate,
+                status: 'ABSENT'
+              }
             });
-            applyShiftSnapshot(absentRecord, buildShiftSnapshot(shiftSettings || {}, schedule));
-            
-            await absentRecord.save();
           }
         }
       }
     }
-    
-    void 0;
   } catch (err) {
     console.error("Mark Daily Absent Error:", err.message);
   }

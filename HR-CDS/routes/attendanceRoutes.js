@@ -2,10 +2,12 @@
 const express = require('express');
 const router = express.Router();
 const attendanceController = require('../controllers/AttendanceController');
-const { protect, authorize } = require('../../middleware/authMiddleware');
-
+const { protect, restrictTo } = require('../../middleware/authMiddleware');
 
 const upload = require('../../utils/multer');
+
+const privilegedAttendanceRoles = ['super_admin', 'superadmin', 'owner', 'company_owner', 'admin', 'hr', 'manager'];
+const adminOrHrRoles = ['super_admin', 'superadmin', 'owner', 'company_owner', 'admin', 'hr'];
 
 router.post('/in', protect, attendanceController.clockIn);
 router.post('/out', protect, attendanceController.clockOut);
@@ -26,16 +28,24 @@ router.post('/upload-selfie', protect, upload.single('selfie'), (req, res) => {
 router.get('/status', protect, attendanceController.getTodayStatus);
 router.get('/list', protect, attendanceController.getAttendanceList);
 
-
-router.get('/all', protect, attendanceController.getAllUsersAttendance);
-router.post('/manual', protect, attendanceController.createManualAttendance);
-router.put('/:id', protect, attendanceController.updateAttendanceRecord);
-router.delete('/:id', protect, attendanceController.deleteAttendanceRecord);
+router.get('/all', protect, restrictTo(...privilegedAttendanceRoles), attendanceController.getAllUsersAttendance);
+router.post('/manual', protect, restrictTo(...privilegedAttendanceRoles), attendanceController.createManualAttendance);
+router.put('/:id', protect, restrictTo(...privilegedAttendanceRoles), attendanceController.updateAttendanceRecord);
+router.delete('/:id', protect, restrictTo(...adminOrHrRoles), attendanceController.deleteAttendanceRecord);
 router.get('/user/:userId', protect, attendanceController.getAttendanceByUser);
-router.get('/stats', protect, attendanceController.getAttendanceStats);
+router.get('/stats', protect, restrictTo(...privilegedAttendanceRoles), attendanceController.getAttendanceStats);
+// Gate all /test routes from production
+router.use('/test', (req, res, next) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({
+      success: false,
+      message: 'Not found'
+    });
+  }
+  next();
+});
 
-
-router.get('/test', protect, async (req, res) => {
+router.get('/test', protect, restrictTo(...adminOrHrRoles), async (req, res) => {
   try {
     const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     
@@ -60,7 +70,7 @@ router.get('/test', protect, async (req, res) => {
   }
 });
 
-router.post('/test/attendance-creation', protect, async (req, res) => {
+router.post('/test/attendance-creation', protect, restrictTo(...adminOrHrRoles), async (req, res) => {
   try {
     const { userId, date } = req.body;
     const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
@@ -69,6 +79,16 @@ router.post('/test/attendance-creation', protect, async (req, res) => {
       return res.status(400).json({ 
         message: "Company code not found in user" 
       });
+    }
+    
+    if (userId && String(userId) !== String(req.user._id)) {
+      const targetUser = await User.findById(userId).select('companyCode company');
+      const targetCompanyCode = targetUser?.companyCode || (targetUser?.company ? targetUser.company.companyCode : null);
+      if (!targetUser || targetCompanyCode !== userCompanyCode) {
+        return res.status(403).json({ 
+          message: "Access denied: cannot create attendance for user in another company" 
+        });
+      }
     }
     
     
@@ -107,7 +127,7 @@ router.post('/test/attendance-creation', protect, async (req, res) => {
   }
 });
 
-router.get('/test/company-attendance', protect, async (req, res) => {
+router.get('/test/company-attendance', protect, restrictTo(...adminOrHrRoles), async (req, res) => {
   try {
     const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     
@@ -161,7 +181,7 @@ router.get('/test/company-attendance', protect, async (req, res) => {
   }
 });
 
-router.delete('/test/cleanup', protect, async (req, res) => {
+router.delete('/test/cleanup', protect, restrictTo(...adminOrHrRoles), async (req, res) => {
   try {
     const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     
@@ -192,7 +212,7 @@ router.delete('/test/cleanup', protect, async (req, res) => {
   }
 });
 
-router.get('/test/company-users', protect, async (req, res) => {
+router.get('/test/company-users', protect, restrictTo(...adminOrHrRoles), async (req, res) => {
   try {
     const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     

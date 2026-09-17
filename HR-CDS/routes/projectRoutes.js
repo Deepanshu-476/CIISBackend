@@ -58,7 +58,40 @@ router.post("/:projectId/users", protect, projectController.addUserToProject);
 
 
 
-router.get("/test/system-health", protect, async (req, res) => {
+const isCompanyAdminOrOwner = (user) => {
+  if (!user) return false;
+  const role = String(user.role || '').toLowerCase();
+  const jobRole = String(user.jobRole || '').toLowerCase();
+  const companyRole = String(user.companyRole || '').toLowerCase();
+  return role === 'admin' || role === 'owner' || jobRole === 'admin' || jobRole === 'owner' || companyRole === 'owner' || companyRole === 'admin';
+};
+
+const requireTestAdmin = (req, res, next) => {
+  const { isSuperAdminUser } = require('../../middleware/authMiddleware');
+  if (isSuperAdminUser && isSuperAdminUser(req.user)) {
+    return next();
+  }
+  if (isCompanyAdminOrOwner(req.user)) {
+    return next();
+  }
+  return res.status(403).json({
+    success: false,
+    message: 'Access denied: Admin or Owner privileges required'
+  });
+};
+
+// Gate all /test routes from production
+router.use('/test', (req, res, next) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({
+      success: false,
+      message: 'Not found'
+    });
+  }
+  next();
+});
+
+router.get("/test/system-health", protect, requireTestAdmin, async (req, res) => {
   try {
     const Project = require("../models/Project");
     
@@ -123,7 +156,7 @@ router.get("/test/system-health", protect, async (req, res) => {
 });
 
 
-router.post("/test/create-test-project", protect, async (req, res) => {
+router.post("/test/create-test-project", protect, requireTestAdmin, async (req, res) => {
   try {
     const Project = require("../models/Project");
     const User = require("../../models/User");
@@ -186,7 +219,7 @@ router.post("/test/create-test-project", protect, async (req, res) => {
 });
 
 
-router.post("/test/bulk-test-projects", protect, async (req, res) => {
+router.post("/test/bulk-test-projects", protect, requireTestAdmin, async (req, res) => {
   try {
     const Project = require("../models/Project");
     const User = require("../../models/User");
@@ -301,7 +334,7 @@ router.post("/test/bulk-test-projects", protect, async (req, res) => {
 });
 
 
-router.delete("/test/cleanup-test-projects", protect, async (req, res) => {
+router.delete("/test/cleanup-test-projects", protect, requireTestAdmin, async (req, res) => {
   try {
     const Project = require("../models/Project");
     
@@ -333,7 +366,7 @@ router.delete("/test/cleanup-test-projects", protect, async (req, res) => {
 });
 
 
-router.get("/test/permissions-test", protect, async (req, res) => {
+router.get("/test/permissions-test", protect, requireTestAdmin, async (req, res) => {
   try {
     const Project = require("../models/Project");
     
@@ -409,7 +442,7 @@ router.get("/test/permissions-test", protect, async (req, res) => {
 });
 
 
-router.post("/test/create-project-with-tasks", protect, async (req, res) => {
+router.post("/test/create-project-with-tasks", protect, requireTestAdmin, async (req, res) => {
   try {
     const Project = require("../models/Project");
     const User = require("../../models/User");
@@ -512,7 +545,7 @@ router.post("/test/create-project-with-tasks", protect, async (req, res) => {
 });
 
 
-router.get("/test/model-schema", protect, async (req, res) => {
+router.get("/test/model-schema", protect, requireTestAdmin, async (req, res) => {
   try {
     const Project = require("../models/Project");
     
