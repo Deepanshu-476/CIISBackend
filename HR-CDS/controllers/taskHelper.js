@@ -124,16 +124,16 @@ const normalizeTaskStatus = status => {
 };
 
 const getTaskOverdueEligibilityDate = (dueDateTime, task) => {
-  if (!dueDateTime) return null;
-  const dueDate = new Date(dueDateTime);
-  if (isNaN(dueDate.getTime())) return null;
-
-  if (task?.taskFor === 'self' && task?.onHoldReleasedAt) {
+  if (task?.onHoldReleasedAt) {
     const releasedAt = new Date(task.onHoldReleasedAt);
-    if (!isNaN(releasedAt.getTime()) && dueDate <= releasedAt) {
+    if (!isNaN(releasedAt.getTime())) {
       return new Date(releasedAt.getTime() + 24 * 60 * 60 * 1000);
     }
   }
+
+  if (!dueDateTime) return null;
+  const dueDate = new Date(dueDateTime);
+  if (isNaN(dueDate.getTime())) return null;
 
   return dueDate;
 };
