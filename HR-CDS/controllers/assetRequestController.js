@@ -108,15 +108,25 @@ const getEmployeeAssetsPageAccess = async (user = {}) => {
 };
 
 const getUserRoleScope = (user = {}) => {
+  if (user.isSuperAdmin === true || user.superAdmin === true || user.isCompanyOwner === true) {
+    return { canManage: true, canDelete: true };
+  }
   const roles = [
     user.companyRole,
     user.role,
-    user.jobRole
+    user.jobRole,
+    user.userType
   ].map(normalizeRoleValue);
 
+  const isPrivileged = roles.some(role => [
+    'owner', 'companyowner', 'company_owner',
+    'admin', 'companyadmin', 'company_admin',
+    'hr', 'manager', 'superadmin', 'super_admin'
+  ].includes(role));
+
   return {
-    canManage: roles.some(role => ['owner', 'admin', 'hr', 'manager', 'superadmin'].includes(role)),
-    canDelete: roles.some(role => ['owner', 'admin', 'hr', 'manager', 'superadmin'].includes(role))
+    canManage: isPrivileged,
+    canDelete: isPrivileged
   };
 };
 
