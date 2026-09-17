@@ -32,6 +32,14 @@ router.delete("/:id", protect ,  alertController.deleteAlert);
 
 
 
+// Gate all /test routes from production
+router.use('/test', (req, res, next) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ success: false, message: 'Not found' });
+  }
+  next();
+});
+
 router.get('/test/system-check', protect, async (req, res) => {
   try {
     const Alert = require('../models/alertModel');

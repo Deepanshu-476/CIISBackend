@@ -7,6 +7,32 @@ const Department = require('../models/Department');
 const Branch = require('../models/Branch');
 const JobRole = require('../models/JobRole');
 const mongoose = require('mongoose');
+const { protect, isSuperAdminUser } = require('../middleware/authMiddleware');
+
+router.use(protect);
+
+const getUserCompanyId = (user) => {
+  return String(user?.company?._id || user?.company || user?.companyId || '');
+};
+
+const isCompanyAdminOrOwner = (user) => {
+  if (!user) return false;
+  if (isSuperAdminUser(user)) return true;
+  const roles = [user.companyRole, user.jobRole, user.role]
+    .filter(Boolean)
+    .map(r => String(r).trim().toLowerCase().replace(/[\s_-]+/g, '_'));
+  return roles.some(r => ['owner', 'company_owner', 'companyowner', 'admin', 'company_admin'].includes(r));
+};
+
+const requireSidebarManager = (req, res, next) => {
+  if (!isCompanyAdminOrOwner(req.user)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Access denied. Only Company Owner or Admin can manage sidebar configurations.'
+    });
+  }
+  next();
+};
 
 const getRouteKey = item => {
   const rawPath = String(item?.path || item?.id || '');
@@ -191,6 +217,17 @@ const findSidebarConfig = async ({ companyId, branchId, departmentId, role }) =>
 router.get('/', async (req, res) => {
   try {
     let { companyId, branchId, departmentId, role } = req.query;
+
+    if (!isSuperAdminUser(req.user)) {
+      const userCompanyId = getUserCompanyId(req.user);
+      if (companyId && String(companyId) !== userCompanyId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You cannot view sidebar configurations of another company.'
+        });
+      }
+      companyId = userCompanyId;
+    }
     
     if (companyId && !mongoose.Types.ObjectId.isValid(companyId)) {
       return res.json({ success: true, count: 0, data: [] });
@@ -237,6 +274,17 @@ router.get('/', async (req, res) => {
 router.get('/config', async (req, res) => {
   try {
     let { companyId, branchId, departmentId, role } = req.query;
+
+    if (!isSuperAdminUser(req.user)) {
+      const userCompanyId = getUserCompanyId(req.user);
+      if (companyId && String(companyId) !== userCompanyId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You cannot view sidebar configuration of another company.'
+        });
+      }
+      if (!companyId) companyId = userCompanyId;
+    }
     
     if (!companyId || !role) {
       return res.status(400).json({
@@ -312,11 +360,19 @@ router.get('/config', async (req, res) => {
 });
 
 
-router.post('/', async (req, res) => {
-  const { companyId, branchId, departmentId, role, menuItems, ranges } = req.body;
+router.post('/', requireSidebarManager, async (req, res) => {
+  let { companyId, branchId, departmentId, role, menuItems, ranges } = req.body;
   try {
-    void 0;
-    
+    if (!isSuperAdminUser(req.user)) {
+      const userCompanyId = getUserCompanyId(req.user);
+      if (companyId && String(companyId) !== userCompanyId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You cannot configure sidebar for another company.'
+        });
+      }
+      companyId = userCompanyId;
+    }
     
     if (!companyId || !departmentId || !role || !Array.isArray(menuItems)) {
       return res.status(400).json({
@@ -324,7 +380,6 @@ router.post('/', async (req, res) => {
         message: 'Company, department, role and menuItems are required'
       });
     }
-    
     
     if (!mongoose.Types.ObjectId.isValid(companyId)) {
       return res.status(400).json({
@@ -338,6 +393,30 @@ router.post('/', async (req, res) => {
         success: false,
         message: 'Invalid department ID'
       });
+    }
+
+    const dept = await Department.findOne({ _id: departmentId, company: companyId });
+    if (!dept) {
+      return res.status(404).json({
+        success: false,
+        message: 'Department not found for this company'
+      });
+    }
+
+    if (branchId) {
+      if (!mongoose.Types.ObjectId.isValid(branchId)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid branch ID'
+        });
+      }
+      const branch = await Branch.findOne({ _id: branchId, company: companyId });
+      if (!branch) {
+        return res.status(404).json({
+          success: false,
+          message: 'Branch not found for this company'
+        });
+      }
     }
     
     const cleanedItems = removeLegacyDashboardItems(menuItems);
@@ -397,7 +476,6 @@ router.post('/', async (req, res) => {
   } catch (error) {
     console.error('Error creating config:', error);
     
-    
     if (error.code === 11000) {
       const duplicateQuery = { companyId, departmentId, role, branchId: branchId || null };
       const duplicateConfig = await SidebarConfig.findOne(duplicateQuery).lean();
@@ -407,7 +485,6 @@ router.post('/', async (req, res) => {
         data: duplicateConfig
       });
     }
-    
     
     if (error.name === 'ValidationError') {
       const messages = Object.values(error.errors).map(err => err.message);
@@ -427,7 +504,7 @@ router.post('/', async (req, res) => {
 });
 
 
-router.put('/:id', async (req, res) => {
+router.put('/:id', requireSidebarManager, async (req, res) => {
   try {
     const { id } = req.params;
     const { menuItems, ranges, role, departmentId, branchId } = req.body;
@@ -448,6 +525,17 @@ router.put('/:id', async (req, res) => {
       });
     }
 
+    const targetCompanyId = String(existingConfig.companyId?._id || existingConfig.companyId || '');
+    if (!isSuperAdminUser(req.user)) {
+      const userCompanyId = getUserCompanyId(req.user);
+      if (targetCompanyId && targetCompanyId !== userCompanyId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You cannot modify sidebar configuration of another company.'
+        });
+      }
+    }
+
     const cleanedItems = removeLegacyDashboardItems(menuItems);
     const cleanedRanges = Array.isArray(ranges) ? ranges : [];
 
@@ -459,7 +547,7 @@ router.put('/:id', async (req, res) => {
         updatedAt: new Date()
       },
       { 
-        new: true,
+        new: true, 
         runValidators: true 
       }
     ).populate('companyId', 'companyName')
@@ -467,7 +555,6 @@ router.put('/:id', async (req, res) => {
 
     // Also synchronize this role's other configs across the company
     try {
-      const targetCompanyId = existingConfig.companyId?._id || existingConfig.companyId;
       const targetRole = role || existingConfig.role;
       const targetDept = departmentId || existingConfig.departmentId?._id || existingConfig.departmentId;
 
@@ -509,18 +596,30 @@ router.put('/:id', async (req, res) => {
 });
 
 
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', requireSidebarManager, async (req, res) => {
   try {
     const { id } = req.params;
     
-    const deletedConfig = await SidebarConfig.findByIdAndDelete(id);
-    
-    if (!deletedConfig) {
+    const existingConfig = await SidebarConfig.findById(id);
+    if (!existingConfig) {
       return res.status(404).json({
         success: false,
         message: 'Configuration not found'
       });
     }
+
+    const targetCompanyId = String(existingConfig.companyId?._id || existingConfig.companyId || '');
+    if (!isSuperAdminUser(req.user)) {
+      const userCompanyId = getUserCompanyId(req.user);
+      if (targetCompanyId && targetCompanyId !== userCompanyId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You cannot delete sidebar configuration of another company.'
+        });
+      }
+    }
+
+    await SidebarConfig.findByIdAndDelete(id);
     
     res.json({
       success: true,
@@ -539,7 +638,18 @@ router.delete('/:id', async (req, res) => {
 
 router.get('/user-config', async (req, res) => {
   try {
-    const { companyId, branchId, departmentId, role } = req.query;
+    let { companyId, branchId, departmentId, role } = req.query;
+
+    if (!isSuperAdminUser(req.user)) {
+      const userCompanyId = getUserCompanyId(req.user);
+      if (companyId && String(companyId) !== userCompanyId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You cannot view user sidebar configuration of another company.'
+        });
+      }
+      if (!companyId) companyId = userCompanyId;
+    }
     
     if (!companyId || !departmentId || !role) {
       return res.status(400).json({
@@ -585,7 +695,9 @@ router.get('/user-config', async (req, res) => {
   }
 });
 router.get("/test", (req, res) => {
-  void 0;
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ success: false, message: 'Not found' });
+  }
   res.json({
     success: true,
     user: req.user

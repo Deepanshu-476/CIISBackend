@@ -84,10 +84,18 @@ router.patch('/:taskId/snooze', protect, taskController.snoozeTask);
 
 
 router.get('/test', (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ success: false, message: 'Not found' });
+  }
   return res.json({ success: true, message: 'Task management API is running', timestamp: new Date(), version: '1.0.0' });
 });
 
-router.get('/test1', protect, (req, res) => {
+router.get('/test1', (req, res, next) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ success: false, message: 'Not found' });
+  }
+  next();
+}, protect, (req, res) => {
   return res.json({
     success: true,
     user: { id: req.user._id, name: req.user.name, email: req.user.email, role: req.user.role },

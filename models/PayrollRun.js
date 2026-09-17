@@ -34,6 +34,7 @@ const payrollRunSchema = new mongoose.Schema({
   totals: {
     employees: { type: Number, default: 0 },
     earnings: { type: Number, default: 0 },
+    assignedEarnings: { type: Number, default: 0 },
     deductions: { type: Number, default: 0 },
     net: { type: Number, default: 0 },
     pendingAttendance: { type: Number, default: 0 }

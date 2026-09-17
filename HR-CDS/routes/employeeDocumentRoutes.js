@@ -66,6 +66,9 @@ const loadUser = async (req, res, next) => {
 router.use(protect, loadUser);
 
 router.get('/', (req, res) => {
+  if (!canManageDocuments(req.user, req.targetUser)) {
+    return res.status(403).json({ message: 'You do not have permission to view documents for this employee' });
+  }
   res.json({ documents: req.targetUser.documents.map(doc => documentJson(doc, req.targetUser._id)) });
 });
 
@@ -106,6 +109,9 @@ router.post('/', upload.single('document'), async (req, res) => {
 });
 
 const sendDocument = disposition => (req, res) => {
+  if (!canManageDocuments(req.user, req.targetUser)) {
+    return res.status(403).json({ message: 'You do not have permission to access documents for this employee' });
+  }
   const document = req.targetUser.documents.id(req.params.documentId);
   if (!document) return res.status(404).json({ message: 'Document not found' });
   const filePath = path.join(uploadDir, path.basename(document.url || ''));

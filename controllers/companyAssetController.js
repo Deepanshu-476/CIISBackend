@@ -1,5 +1,8 @@
 const CompanyAsset = require('../models/CompanyAsset');
 const { getPaginationOptions, buildPaginationMeta } = require('../utils/pagination');
+const { isSuperAdminUser } = require('../middleware/authMiddleware');
+const Branch = require('../models/Branch');
+const mongoose = require('mongoose');
 
 
 
@@ -9,15 +12,25 @@ const getCompanyAssets = async (req, res) => {
     void 0;
     void 0;
 
-    if (!req.user || !req.user.companyCode) {
+    if (!req.user || (!req.user.companyCode && !isSuperAdminUser(req.user))) {
       return res.status(401).json({
         success: false,
         message: 'User not authenticated or company code missing'
       });
     }
 
+    let targetCompanyCode = req.user.companyCode;
+    if (isSuperAdminUser(req.user) && req.query.companyCode) {
+      targetCompanyCode = req.query.companyCode;
+    } else if (req.query.companyCode && req.query.companyCode !== req.user.companyCode) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied - You cannot view assets of another company'
+      });
+    }
+
     const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
-    const query = { companyCode: req.user.companyCode };
+    const query = { companyCode: targetCompanyCode };
     const search = String(req.query.search || req.query.q || '').trim();
     if (search) {
       const searchRegex = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
@@ -93,6 +106,23 @@ const createCompanyAsset = async (req, res) => {
         success: false,
         message: 'Company code not found for user'
       });
+    }
+
+    if (branch) {
+      if (!mongoose.Types.ObjectId.isValid(branch)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid branch ID'
+        });
+      }
+      const userCompanyId = req.user.company?._id || req.user.company || req.user.companyId;
+      const branchDoc = await Branch.findOne({ _id: branch, company: userCompanyId });
+      if (!branchDoc) {
+        return res.status(404).json({
+          success: false,
+          message: 'Branch not found for this company'
+        });
+      }
     }
 
     
@@ -173,7 +203,7 @@ const updateCompanyAssetStatus = async (req, res) => {
       });
     }
 
-    if (asset.companyCode !== req.user.companyCode) {
+    if (asset.companyCode !== req.user.companyCode && !isSuperAdminUser(req.user)) {
       return res.status(403).json({
         success: false,
         message: 'Access denied - Asset belongs to different company'
@@ -225,7 +255,7 @@ const deleteCompanyAsset = async (req, res) => {
     void 0;
 
     
-    if (asset.companyCode !== req.user.companyCode) {
+    if (asset.companyCode !== req.user.companyCode && !isSuperAdminUser(req.user)) {
       void 0;
       return res.status(403).json({
         success: false,

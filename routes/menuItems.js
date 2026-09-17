@@ -1,7 +1,17 @@
 const express = require('express');
 const router = express.Router();
 const MenuItem = require('../models/MenuItem');
+const { protect, isSuperAdminUser } = require('../middleware/authMiddleware');
 
+const requirePlatformSuperAdmin = (req, res, next) => {
+  if (!isSuperAdminUser(req.user)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Access denied. Platform SuperAdmin privileges required.'
+    });
+  }
+  next();
+};
 
 router.get('/', async (req, res) => {
   try {
@@ -23,7 +33,7 @@ router.get('/all', async (req, res) => {
 });
 
 
-router.post('/', async (req, res) => {
+router.post('/', protect, requirePlatformSuperAdmin, async (req, res) => {
   try {
     const { name, icon, path, category, isActive = true, order = 0 } = req.body;
     
@@ -58,7 +68,7 @@ router.post('/', async (req, res) => {
 });
 
 
-router.put('/:id', async (req, res) => {
+router.put('/:id', protect, requirePlatformSuperAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     
@@ -79,7 +89,7 @@ router.put('/:id', async (req, res) => {
 });
 
 
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', protect, requirePlatformSuperAdmin, async (req, res) => {
   try {
     const menuItem = await MenuItem.findByIdAndUpdate(
       req.params.id, 
@@ -98,7 +108,7 @@ router.delete('/:id', async (req, res) => {
 });
 
 
-router.put('/:id/restore', async (req, res) => {
+router.put('/:id/restore', protect, requirePlatformSuperAdmin, async (req, res) => {
   try {
     const menuItem = await MenuItem.findByIdAndUpdate(
       req.params.id,
@@ -116,6 +126,9 @@ router.put('/:id/restore', async (req, res) => {
   }
 });
 router.get('/test', (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ success: false, message: 'Not found' });
+  }
   res.json({
     status: 'healthy',
     service: 'Menu Access API',
