@@ -8,6 +8,9 @@ const User = require('../../models/User');
 const Group = require('../models/Group');
 const Notification = require('../models/Notification');
 const ActivityLog = require('../models/ActivityLog');
+const PagePermission = require('../../models/PagePermission');
+const Department = require('../../models/Department');
+const Branch = require('../../models/Branch');
 const moment = require('moment');
 const mongoose = require('mongoose');
 const { sendEmail } = require('../../utils/sendEmail');
@@ -892,6 +895,80 @@ const fetchAssignedToMeTaskList = async (req) => {
   });
 };
 
+const getAdminTaskPageScope = async (req) => {
+  const user = req.user;
+  if (!user) return { hasAccess: false, isOwner: false, branchIds: [], departmentIds: [] };
+
+  const role = String(user.role || user.userRole || '').toLowerCase();
+  const companyRole = String(user.companyRole || '').toLowerCase();
+  const isOwner = user.isSuperAdmin === true ||
+    user.superAdmin === true ||
+    role.includes('owner') ||
+    companyRole.includes('owner') ||
+    (role.includes('admin') && role.includes('super'));
+
+  if (isOwner) {
+    return { isOwner: true, hasAccess: true, branchIds: ['all'], departmentIds: ['all'] };
+  }
+
+  const company = user.company?._id || user.company || user.companyId;
+  const userId = String(user._id || user.id || '');
+
+  const page = await PagePermission.findOne({
+    company,
+    path: { $in: ['/ciisUser/admin-task-create', 'admin-task-create'] }
+  }).lean();
+
+  if (!page) {
+    return { isOwner: false, hasAccess: true, branchIds: ['all'], departmentIds: ['all'] };
+  }
+
+  const allowedUserIds = new Set([
+    ...(page.viewUsers || []),
+    ...(page.editUsers || []),
+    ...(page.deleteUsers || []),
+    ...(page.approvers || [])
+  ].map(item => String(item?.user?._id || item?.user || '')).filter(Boolean));
+
+  if (allowedUserIds.size > 0 && !allowedUserIds.has(userId)) {
+    return { isOwner: false, hasAccess: false, branchIds: [], departmentIds: [] };
+  }
+
+  const scopes = Array.isArray(page.userAccessScopes) ? page.userAccessScopes : [];
+  const matchingScopes = scopes.filter(s => String(s?.user?._id || s?.user || '') === userId);
+
+  if (!matchingScopes.length) {
+    return { isOwner: false, hasAccess: true, branchIds: ['all'], departmentIds: ['all'] };
+  }
+
+  let branchIds = [];
+  let departmentIds = [];
+  let hasAllBranches = false;
+  let hasAllDepartments = false;
+
+  matchingScopes.forEach(s => {
+    const bIds = (Array.isArray(s.branchIds) ? s.branchIds : [])
+      .map(b => String(b?._id || b).trim())
+      .filter(Boolean);
+    const dIds = (Array.isArray(s.departmentIds) ? s.departmentIds : [])
+      .map(d => String(d?._id || d).trim())
+      .filter(Boolean);
+
+    if (bIds.includes('all') || bIds.length === 0) hasAllBranches = true;
+    else branchIds.push(...bIds);
+
+    if (dIds.includes('all') || dIds.length === 0) hasAllDepartments = true;
+    else departmentIds.push(...dIds);
+  });
+
+  return {
+    isOwner: false,
+    hasAccess: true,
+    branchIds: hasAllBranches ? ['all'] : [...new Set(branchIds)],
+    departmentIds: hasAllDepartments ? ['all'] : [...new Set(departmentIds)]
+  };
+};
+
 const getBranchScopedUserIds = async (req) => {
   const requestedBranchId = req.query?.branch || req.query?.branchId;
   if (!requestedBranchId) return null;
@@ -1220,9 +1297,86 @@ exports.getAssignedTasks = async (req, res) => {
   try {
     const currentUserId = req.user._id || req.user.id;
     const branchUserIds = await getBranchScopedUserIds(req);
+    const pageScope = await getAdminTaskPageScope(req);
+
+    if (!pageScope.hasAccess) {
+      return res.json({
+        success: true,
+        tasks: [],
+        groupedTasks: {},
+        stats: calculateUnifiedTaskStats([]),
+        summaryStats: { total: 0, pending: 0, inProgress: 0, completed: 0, rejected: 0, overdue: 0 },
+        overallStats: { total: 0, pending: 0, inProgress: 0, completed: 0, rejected: 0, overdue: 0 },
+        total: 0,
+        pagination: { page: 1, limit: 10, total: 0, pages: 1, hasNext: false, hasPrev: false, tasks: [] }
+      });
+    }
+
     const companyCode = getRequestCompanyCode(req);
     const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
     const groupCompanyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : req.user.companyCode;
+
+    // Resolve requested filters from query
+    const requestedBranch = req.query?.branch || req.query?.branchId;
+    const requestedDepartment = req.query?.department || req.query?.departmentId;
+
+    let effectiveBranchIds = null;
+    if (!pageScope.branchIds.includes('all')) {
+      if (requestedBranch && requestedBranch !== 'all') {
+        const rBranchList = String(requestedBranch).split(',').map(s => s.trim()).filter(Boolean);
+        const validRequested = rBranchList.filter(rb => pageScope.branchIds.map(String).includes(rb));
+        if (validRequested.length === 0) {
+          return res.json({
+            success: true,
+            tasks: [],
+            groupedTasks: {},
+            stats: calculateUnifiedTaskStats([]),
+            summaryStats: { total: 0, pending: 0, inProgress: 0, completed: 0, rejected: 0, overdue: 0 },
+            overallStats: { total: 0, pending: 0, inProgress: 0, completed: 0, rejected: 0, overdue: 0 },
+            total: 0,
+            pagination: { page: 1, limit: 10, total: 0, pages: 1, hasNext: false, hasPrev: false, tasks: [] }
+          });
+        }
+        effectiveBranchIds = validRequested;
+      } else {
+        effectiveBranchIds = pageScope.branchIds.map(String);
+      }
+    } else if (requestedBranch && requestedBranch !== 'all') {
+      effectiveBranchIds = String(requestedBranch).split(',').map(s => s.trim()).filter(Boolean);
+    }
+
+    let effectiveDepartmentIds = null;
+    if (!pageScope.departmentIds.includes('all')) {
+      if (requestedDepartment && requestedDepartment !== 'all') {
+        const rDeptList = String(requestedDepartment).split(',').map(s => s.trim()).filter(Boolean);
+        const validObjectIds = pageScope.departmentIds.filter(id => mongoose.Types.ObjectId.isValid(id));
+        const allowedDeptDocs = await Department.find({
+          _id: { $in: validObjectIds }
+        }).select('_id name departmentName').lean();
+        const allowedNames = new Set(allowedDeptDocs.map(d => (d.name || d.departmentName || '').trim().toLowerCase()));
+        const allowedIdSet = new Set(pageScope.departmentIds.map(String));
+
+        const validRequested = rDeptList.filter(rd => allowedIdSet.has(rd) || allowedNames.has(rd.toLowerCase()));
+        if (validRequested.length === 0) {
+          return res.json({
+            success: true,
+            tasks: [],
+            groupedTasks: {},
+            stats: calculateUnifiedTaskStats([]),
+            summaryStats: { total: 0, pending: 0, inProgress: 0, completed: 0, rejected: 0, overdue: 0 },
+            overallStats: { total: 0, pending: 0, inProgress: 0, completed: 0, rejected: 0, overdue: 0 },
+            total: 0,
+            pagination: { page: 1, limit: 10, total: 0, pages: 1, hasNext: false, hasPrev: false, tasks: [] }
+          });
+        }
+        effectiveDepartmentIds = validRequested;
+      } else {
+        effectiveDepartmentIds = pageScope.departmentIds.map(String);
+      }
+    } else if (requestedDepartment && requestedDepartment !== 'all') {
+      effectiveDepartmentIds = String(requestedDepartment).split(',').map(s => s.trim()).filter(Boolean);
+    }
+
     const taskFilter = {
       companyCode: req.user.companyCode,
       createdBy: currentUserId,
@@ -1230,20 +1384,87 @@ exports.getAssignedTasks = async (req, res) => {
       isActive: true
     };
 
-    if (branchUserIds) {
-      const branchGroupIds = await Group.find({
+    if (effectiveBranchIds || effectiveDepartmentIds) {
+      const userConditions = [{ companyCode: groupCompanyFilter, isActive: true }];
+
+      if (effectiveBranchIds) {
+        const branchObjectIds = effectiveBranchIds
+          .filter(id => mongoose.Types.ObjectId.isValid(id))
+          .map(id => new mongoose.Types.ObjectId(id));
+
+        userConditions.push({
+          $or: [
+            { branch: { $in: [...branchObjectIds, ...effectiveBranchIds] } },
+            { branchId: { $in: [...branchObjectIds, ...effectiveBranchIds] } },
+            { assignedBranches: { $in: [...branchObjectIds, ...effectiveBranchIds] } }
+          ]
+        });
+      }
+
+      if (effectiveDepartmentIds) {
+        const deptObjectIds = effectiveDepartmentIds
+          .filter(id => mongoose.Types.ObjectId.isValid(id))
+          .map(id => new mongoose.Types.ObjectId(id));
+
+        const deptDocs = await Department.find({
+          $or: [
+            ...(deptObjectIds.length ? [{ _id: { $in: deptObjectIds } }] : []),
+            { name: { $in: effectiveDepartmentIds } },
+            { departmentName: { $in: effectiveDepartmentIds } }
+          ]
+        }).select('_id name departmentName').lean();
+
+        const allDeptNames = [
+          ...effectiveDepartmentIds,
+          ...deptDocs.map(d => d.name),
+          ...deptDocs.map(d => d.departmentName)
+        ].filter(Boolean);
+
+        const allDeptIds = [
+          ...deptObjectIds,
+          ...deptDocs.map(d => d._id)
+        ];
+
+        userConditions.push({
+          $or: [
+            { department: { $in: allDeptNames } },
+            { department: { $in: allDeptIds } },
+            { departmentId: { $in: allDeptNames } },
+            { departmentId: { $in: allDeptIds } }
+          ]
+        });
+      }
+
+      const matchingUsers = await User.find({ $and: userConditions }).select('_id').lean();
+      const scopedUserIds = matchingUsers.map(u => u._id);
+
+      const matchingGroups = await Group.find({
         companyCode: groupCompanyFilter,
         isActive: true,
-        members: { $in: branchUserIds }
+        members: { $in: scopedUserIds }
       }).distinct('_id');
 
-      taskFilter.$or = [
-        { assignedUsers: { $in: branchUserIds } },
-        ...(branchGroupIds.length ? [{ assignedGroups: { $in: branchGroupIds } }] : [])
+      const orConditions = [
+        { assignedUsers: { $in: scopedUserIds } },
+        ...(matchingGroups.length ? [{ assignedGroups: { $in: matchingGroups } }] : [])
       ];
+
+      if (effectiveBranchIds && !effectiveDepartmentIds) {
+        const branchObjectIds = effectiveBranchIds
+          .filter(id => mongoose.Types.ObjectId.isValid(id))
+          .map(id => new mongoose.Types.ObjectId(id));
+        orConditions.push({ branch: { $in: [...branchObjectIds, ...effectiveBranchIds] } });
+      }
+
+      taskFilter.$or = orConditions;
     }
 
-    const tasks = await Task.find(taskFilter).populate('assignedUsers', 'name role email').populate('createdBy', 'name email').sort({ createdAt: -1 }).lean();
+    const tasks = await Task.find(taskFilter)
+      .populate('branch', 'name branchCode')
+      .populate('assignedUsers', 'name role email department branch assignedBranches')
+      .populate('createdBy', 'name email')
+      .sort({ createdAt: -1 })
+      .lean();
 
     const enriched = await enrichStatusInfo(tasks);
     const mapped = enriched.map(t => ({ ...t, status: normalizeTaskStatus(t.overallStatus) }));
@@ -1308,7 +1529,7 @@ exports.getAssignedTasks = async (req, res) => {
 const handleTaskCreation = async (req, res, isSelf) => {
   const { title, description, dueDateTime, whatsappNumber, priorityDays, priority, assignedUsers, assignedGroups, checkpoints } = req.body;
   const companyCode = getRequestCompanyCode(req);
-  const branchId = getRequestedTaskBranchId(req);
+  let branchId = getRequestedTaskBranchId(req);
   
   if (!companyCode) {
     return res.status(400).json({ success: false, error: 'Company code is missing. Please login again.' });
@@ -1323,6 +1544,61 @@ const handleTaskCreation = async (req, res, isSelf) => {
     parsedUsers = typeof assignedUsers === 'string' ? JSON.parse(assignedUsers) : assignedUsers;
   }
   parsedUsers = parsedUsers.map(userId => normalizeId(userId)).filter(Boolean);
+
+  // Validate creator's Page Management scope for admin-task-create
+  const pageScope = await getAdminTaskPageScope(req);
+  if (!pageScope.hasAccess) {
+    return res.status(403).json({ success: false, error: 'You do not have permission to create tasks' });
+  }
+
+  if (!isSelf && !pageScope.isOwner) {
+    if (!pageScope.branchIds.includes('all')) {
+      if (branchId && !pageScope.branchIds.map(String).includes(String(branchId))) {
+        return res.status(403).json({ success: false, error: 'Cannot create task for a branch outside your assigned scope' });
+      }
+      if (!branchId && pageScope.branchIds.length === 1) {
+        branchId = pageScope.branchIds[0];
+      }
+    }
+
+    if (parsedUsers.length > 0) {
+      const branchConditions = !pageScope.branchIds.includes('all') ? [
+        { branch: { $in: pageScope.branchIds } },
+        { branchId: { $in: pageScope.branchIds } },
+        { assignedBranches: { $in: pageScope.branchIds } }
+      ] : null;
+
+      let deptConditions = null;
+      if (!pageScope.departmentIds.includes('all')) {
+        const validObjectIds = pageScope.departmentIds.filter(id => mongoose.Types.ObjectId.isValid(id));
+        const deptDocs = await Department.find({
+          _id: { $in: validObjectIds }
+        }).select('_id name departmentName').lean();
+        const names = deptDocs.map(d => d.name || d.departmentName).filter(Boolean);
+        deptConditions = [
+          { department: { $in: [...pageScope.departmentIds, ...names] } },
+          { departmentId: { $in: pageScope.departmentIds } }
+        ];
+      }
+
+      const userConditions = [
+        { _id: { $in: parsedUsers } },
+        ...(branchConditions ? [{ $or: branchConditions }] : []),
+        ...(deptConditions ? [{ $or: deptConditions }] : [])
+      ];
+
+      const validUsers = await User.find({ $and: userConditions }).select('_id').lean();
+      const validUserSet = new Set(validUsers.map(u => String(u._id)));
+      const hasInvalidUser = parsedUsers.some(uId => !validUserSet.has(String(uId)));
+
+      if (hasInvalidUser) {
+        return res.status(403).json({
+          success: false,
+          error: 'Cannot assign task to users outside your assigned branch/department scope'
+        });
+      }
+    }
+  }
 
   if (!isSelf && branchId && parsedUsers.length > 0) {
     const branchUsers = await User.find({
@@ -1474,6 +1750,50 @@ exports.updateTask = async (req, res) => {
 
     if (req.body.assignedUsers) {
       task.assignedUsers = typeof req.body.assignedUsers === 'string' ? JSON.parse(req.body.assignedUsers) : req.body.assignedUsers;
+      const parsedUpdateUsers = (typeof req.body.assignedUsers === 'string' ? JSON.parse(req.body.assignedUsers) : req.body.assignedUsers)
+        .map(u => normalizeId(u))
+        .filter(Boolean);
+
+      const pageScope = await getAdminTaskPageScope(req);
+      if (!pageScope.isOwner && (!pageScope.branchIds.includes('all') || !pageScope.departmentIds.includes('all'))) {
+        const branchConditions = !pageScope.branchIds.includes('all') ? [
+          { branch: { $in: pageScope.branchIds } },
+          { branchId: { $in: pageScope.branchIds } },
+          { assignedBranches: { $in: pageScope.branchIds } }
+        ] : null;
+
+        let deptConditions = null;
+        if (!pageScope.departmentIds.includes('all')) {
+          const validObjectIds = pageScope.departmentIds.filter(id => mongoose.Types.ObjectId.isValid(id));
+          const deptDocs = await Department.find({
+            _id: { $in: validObjectIds }
+          }).select('_id name departmentName').lean();
+          const names = deptDocs.map(d => d.name || d.departmentName).filter(Boolean);
+          deptConditions = [
+            { department: { $in: [...pageScope.departmentIds, ...names] } },
+            { departmentId: { $in: pageScope.departmentIds } }
+          ];
+        }
+
+        const userConditions = [
+          { _id: { $in: parsedUpdateUsers } },
+          ...(branchConditions ? [{ $or: branchConditions }] : []),
+          ...(deptConditions ? [{ $or: deptConditions }] : [])
+        ];
+
+        const validUsers = await User.find({ $and: userConditions }).select('_id').lean();
+        const validUserSet = new Set(validUsers.map(u => String(u._id)));
+        const hasInvalidUser = parsedUpdateUsers.some(uId => !validUserSet.has(String(uId)));
+
+        if (hasInvalidUser) {
+          return res.status(403).json({
+            success: false,
+            error: 'Cannot assign task to users outside your assigned branch/department scope'
+          });
+        }
+      }
+
+      task.assignedUsers = parsedUpdateUsers;
       task.statusByUser = task.assignedUsers.map(uid => ({ user: uid, status: 'pending' }));
     }
     if (req.body.checkpoints !== undefined) {
