@@ -126,4 +126,53 @@ module.exports = [
     "path": "/ciisUser/crm/admin/workload",
     "permissionPattern": "viewEdit"
   },
+  {
+    "pageKey": "admin-crm-reports-overview",
+    "name": "Admin CRM - Reports Overview",
+    "path": "/ciisUser/crm/reports/overview",
+    "permissionPattern": "viewEdit"
+  },
+  {
+    "pageKey": "admin-crm-reports-leads",
+    "name": "Admin CRM - Lead Reports",
+    "path": "/ciisUser/crm/reports/leads",
+    "permissionPattern": "viewEdit"
+  },
+  {
+    "pageKey": "admin-crm-reports-calls",
+    "name": "Admin CRM - Call Reports",
+    "path": "/ciisUser/crm/reports/calls",
+    "permissionPattern": "viewEdit"
+  },
+  {
+    "pageKey": "admin-crm-reports-visits",
+    "name": "Admin CRM - Visit Reports",
+    "path": "/ciisUser/crm/reports/visits",
+    "permissionPattern": "viewEdit"
+  },
+  {
+    "pageKey": "admin-crm-reports-follow-ups",
+    "name": "Admin CRM - Follow-Up Reports",
+    "path": "/ciisUser/crm/reports/follow-ups",
+    "permissionPattern": "viewEdit"
+  },
+  {
+    "pageKey": "admin-crm-reports-team-performance",
+    "name": "Admin CRM - Team Performance",
+    "path": "/ciisUser/crm/reports/team-performance",
+    "permissionPattern": "viewEdit"
+  },
+  {
+    "pageKey": "admin-crm-reports-conversion-funnel",
+    "name": "Admin CRM - Conversion Funnel",
+    "path": "/ciisUser/crm/reports/conversion-funnel",
+    "permissionPattern": "viewEdit"
+  },
+  {
+    "pageKey": "admin-crm-reports-user-activity",
+    "name": "Admin CRM - User Activity",
+    "path": "/ciisUser/crm/reports/user-activity",
+    "permissionPattern": "viewEdit"
+  }
 ];
+
