@@ -514,7 +514,7 @@ exports.getMe = async (req, res) => {
       .select('-password -resetToken -resetTokenExpiry')
       .populate('department', 'name description')
       .populate('createdBy', 'name email')
-      .populate('company', 'name companyCode');
+      .populate('company', 'companyName name companyCode');
 
     if (!user) {
       return errorResponse(res, 404, "User not found");
