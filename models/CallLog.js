@@ -21,4 +21,4 @@
     { unique: true, partialFilterExpression: { clientCallId: { $type: 'string' } } }
   );
 
-  module.exports = mongoose.model("CallLog", callLogSchema);
+  module.exports = mongoose.model("CallLog", callLogSchema);              
