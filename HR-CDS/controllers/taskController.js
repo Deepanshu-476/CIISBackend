@@ -895,7 +895,7 @@ const fetchAssignedToMeTaskList = async (req) => {
   });
 };
 
-const getAdminTaskPageScope = async (req) => {
+const getAdminTaskPageScope = async (req, preferredAccessTypes = ['edit', 'view']) => {
   const user = req.user;
   if (!user) return { hasAccess: false, isOwner: false, branchIds: [], departmentIds: [] };
 
@@ -923,19 +923,32 @@ const getAdminTaskPageScope = async (req) => {
     return { isOwner: false, hasAccess: true, branchIds: ['all'], departmentIds: ['all'] };
   }
 
-  const allowedUserIds = new Set([
-    ...(page.viewUsers || []),
-    ...(page.editUsers || []),
-    ...(page.deleteUsers || []),
-    ...(page.approvers || [])
-  ].map(item => String(item?.user?._id || item?.user || '')).filter(Boolean));
+  const accessFieldByType = {
+    view: 'viewUsers',
+    edit: 'editUsers',
+    delete: 'deleteUsers',
+    approve: 'approvers'
+  };
+  const preferredTypes = (Array.isArray(preferredAccessTypes) ? preferredAccessTypes : ['edit', 'view'])
+    .map(type => String(type || '').trim().toLowerCase())
+    .filter(type => accessFieldByType[type]);
+  const fallbackTypes = ['view', 'edit', 'delete', 'approve'];
+  const allowedTypes = preferredTypes.length ? preferredTypes : fallbackTypes;
+  const allowedUserIds = new Set(
+    allowedTypes.flatMap(type => page[accessFieldByType[type]] || [])
+      .map(item => String(item?.user?._id || item?.user || ''))
+      .filter(Boolean)
+  );
 
   if (allowedUserIds.size > 0 && !allowedUserIds.has(userId)) {
     return { isOwner: false, hasAccess: false, branchIds: [], departmentIds: [] };
   }
 
   const scopes = Array.isArray(page.userAccessScopes) ? page.userAccessScopes : [];
-  const matchingScopes = scopes.filter(s => String(s?.user?._id || s?.user || '') === userId);
+  const userScopes = scopes.filter(s => String(s?.user?._id || s?.user || '') === userId);
+  const matchingScopes = allowedTypes
+    .map(type => userScopes.filter(s => String(s?.accessType || '').trim().toLowerCase() === type))
+    .find(items => items.length) || [];
 
   if (!matchingScopes.length) {
     return { isOwner: false, hasAccess: true, branchIds: ['all'], departmentIds: ['all'] };
@@ -1379,7 +1392,6 @@ exports.getAssignedTasks = async (req, res) => {
 
     const taskFilter = {
       companyCode: req.user.companyCode,
-      createdBy: currentUserId,
       taskFor: 'others',
       isActive: true
     };
