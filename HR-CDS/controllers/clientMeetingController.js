@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const schedule = require('node-schedule');
 const ClientMeeting = require('../models/ClientMeeting');
 const ClientMeetingView = require('../models/ClientMeetingView');
@@ -156,13 +157,71 @@ const meetingPopulate = [
   { path: 'createdBy', select: 'name email' },
 ];
 
+const applyMeetingFilters = (filter, queryParams = {}) => {
+  const { q, search, type, priority, date, dateRange, status } = queryParams;
+  const searchTerm = (q || search || '').trim();
+  if (searchTerm) {
+    filter.$or = [
+      { title: { $regex: searchTerm, $options: 'i' } },
+      { clientName: { $regex: searchTerm, $options: 'i' } },
+      { company: { $regex: searchTerm, $options: 'i' } },
+      { email: { $regex: searchTerm, $options: 'i' } },
+      { phone: { $regex: searchTerm, $options: 'i' } },
+      { location: { $regex: searchTerm, $options: 'i' } },
+    ];
+  }
+  if (type && type !== 'all') {
+    filter.meetingType = type;
+  }
+  if (priority && priority !== 'all') {
+    filter.priority = priority;
+  }
+  if (status && status !== 'all') {
+    filter.status = status;
+  }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+
+  if (dateRange === 'today') {
+    filter.meetingDate = { $gte: today, $lt: tomorrow };
+  } else if (dateRange === 'tomorrow') {
+    const dayAfter = new Date(tomorrow);
+    dayAfter.setDate(dayAfter.getDate() + 1);
+    filter.meetingDate = { $gte: tomorrow, $lt: dayAfter };
+  } else if (dateRange === 'next7' || dateRange === 'upcoming7') {
+    const next7 = new Date(today);
+    next7.setDate(next7.getDate() + 7);
+    next7.setHours(23, 59, 59, 999);
+    filter.meetingDate = { $gte: today, $lte: next7 };
+  } else if (dateRange === 'thisMonth') {
+    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+    const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59, 999);
+    filter.meetingDate = { $gte: startOfMonth, $lte: endOfMonth };
+  } else if (dateRange === 'past') {
+    filter.meetingDate = { $lt: today };
+  } else if (dateRange === 'upcoming') {
+    filter.meetingDate = { $gte: today };
+  } else if (date) {
+    const selectedDate = new Date(date);
+    selectedDate.setHours(0, 0, 0, 0);
+    const nextDate = new Date(selectedDate);
+    nextDate.setDate(nextDate.getDate() + 1);
+    filter.meetingDate = { $gte: selectedDate, $lt: nextDate };
+  }
+  return filter;
+};
+
 const getMeetings = async (req, res, next) => {
   try {
-    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
-    const filter = buildCompanyFilter(req);
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 100, maxLimit: 500 });
+    const baseFilter = buildCompanyFilter(req);
+    const filter = applyMeetingFilters({ ...baseFilter }, req.query);
     const [meetings, total] = await Promise.all([
       ClientMeeting.find(filter)
-      .populate(meetingPopulate)
+        .populate(meetingPopulate)
         .sort({ meetingDate: -1, meetingTime: 1 })
         .skip(skip)
         .limit(limit)
@@ -175,7 +234,8 @@ const getMeetings = async (req, res, next) => {
       count: meetings.length,
       total,
       pagination: buildPaginationMeta({ page, limit, total }),
-      data: meetings
+      data: meetings,
+      meetings
     });
   } catch (error) {
     next(error);
@@ -197,60 +257,89 @@ const createMeeting = async (req, res, next) => {
     const {
       title,
       clientId,
+      clientName,
+      company,
+      email,
+      phone,
       attendees = [],
       companyCode,
-      meetingType,
-      priority,
-      location,
-      link,
+      meetingType = 'Online',
+      priority = 'Normal',
+      location = '',
+      link = '',
       meetingDate,
       meetingTime,
       dates,
-      duration,
-      description,
-      followUpRequired,
-      recurring,
+      duration = '30',
+      description = '',
+      followUpRequired = 'No',
+      recurring = 'No',
       createdBy
     } = req.body;
 
-    const normalizedCompanyCode = normalizeCompanyCode(companyCode);
+    const normalizedCompanyCode = normalizeCompanyCode(companyCode || req.user?.companyCode || req.query?.companyCode || 'CIIS');
     const dateList = Array.isArray(dates) && dates.length ? dates : meetingDate ? [meetingDate] : [];
 
-    if (!title || !clientId || !normalizedCompanyCode || !dateList.length || !meetingTime) {
+    if (!dateList.length || !meetingTime) {
       return res.status(400).json({
         success: false,
-        error: 'Please select client and fill title, date, time, and company code'
+        error: 'Please fill meeting date and time'
       });
     }
 
-    const selectedClients = await resolveClients({
-      attendeeIds: attendees.length ? attendees : [clientId],
-      clientId,
-      companyCode: normalizedCompanyCode
-    });
+    let selectedClients = [];
+    let primaryClient = null;
 
-    const primaryClient = selectedClients.find(client => client._id.toString() === clientId.toString());
-    if (!primaryClient) {
-      return res.status(404).json({ success: false, error: 'Selected client not found for this company' });
+    if (clientId && mongoose.Types.ObjectId.isValid(clientId)) {
+      selectedClients = await resolveClients({
+        attendeeIds: attendees.length ? attendees : [clientId],
+        clientId,
+        companyCode: normalizedCompanyCode
+      });
+      primaryClient = selectedClients.find(client => client._id.toString() === clientId.toString());
     }
 
+    if (!primaryClient) {
+      const cName = (clientName || req.body.client || 'Client').trim();
+      const clientQuery = {
+        companyCode: normalizedCompanyCode,
+        $or: [
+          ...(email ? [{ email: email.trim().toLowerCase() }] : []),
+          { client: { $regex: new RegExp(`^${cName}$`, 'i') } }
+        ]
+      };
+      primaryClient = await Client.findOne(clientQuery);
+
+      if (!primaryClient) {
+        primaryClient = await Client.create({
+          client: cName,
+          company: company || cName,
+          email: email ? email.trim().toLowerCase() : '',
+          phone: phone || '',
+          companyCode: normalizedCompanyCode,
+        });
+      }
+      selectedClients = [primaryClient];
+    }
+
+    const finalTitle = title || `Meeting with ${primaryClient.client || 'Client'}`;
     const attendeeClientIds = selectedClients.map(client => client._id);
     const attendeeUserIds = selectedClients.map(client => client.userId).filter(Boolean);
     const createdMeetings = [];
 
     for (const dateValue of dateList) {
       const meeting = await ClientMeeting.create({
-        title,
+        title: finalTitle,
         clientId: primaryClient._id,
         clientName: primaryClient.client,
-        phone: primaryClient.phone || '',
-        email: primaryClient.email || '',
-        company: primaryClient.company,
+        phone: primaryClient.phone || phone || '',
+        email: primaryClient.email || email || '',
+        company: primaryClient.company || company || '',
         companyCode: normalizedCompanyCode,
         meetingType,
         priority,
-        location,
-        link,
+        location: location || link || 'Online',
+        link: link || location || '',
         meetingDate: new Date(dateValue),
         meetingTime,
         duration,
@@ -268,7 +357,7 @@ const createMeeting = async (req, res, next) => {
         clients: selectedClients,
         type: 'client_meeting_created',
         title: 'New Client Meeting Scheduled',
-        message: `Meeting "${title}" is scheduled on ${new Date(dateValue).toDateString()} at ${meetingTime}`,
+        message: `Meeting "${finalTitle}" is scheduled on ${new Date(dateValue).toDateString()} at ${meetingTime}`,
         actor: createdBy || req.user?._id,
         emailPrefix: 'Client Meeting Scheduled',
       });
@@ -295,45 +384,63 @@ const updateMeeting = async (req, res, next) => {
     const updateData = { ...req.body };
     if (updateData.companyCode) updateData.companyCode = normalizeCompanyCode(updateData.companyCode);
 
-    const nextCompanyCode = updateData.companyCode || meeting.companyCode;
+    const nextCompanyCode = updateData.companyCode || meeting.companyCode || 'CIIS';
     const nextClientId = updateData.clientId || meeting.clientId;
     const nextAttendees = updateData.attendees || meeting.attendees || [nextClientId];
-    const clients = await resolveClients({
-      attendeeIds: nextAttendees,
-      clientId: nextClientId,
-      companyCode: nextCompanyCode
-    });
 
-    const primaryClient = clients.find(client => client._id.toString() === nextClientId.toString());
-    if (!primaryClient) return res.status(404).json({ success: false, error: 'Selected client not found' });
+    let clients = [];
+    if (nextClientId && mongoose.Types.ObjectId.isValid(nextClientId)) {
+      clients = await resolveClients({
+        attendeeIds: nextAttendees,
+        clientId: nextClientId,
+        companyCode: nextCompanyCode
+      });
+    }
+
+    let primaryClient = clients.find(client => client._id.toString() === String(nextClientId));
+    if (!primaryClient && (updateData.clientName || meeting.clientName)) {
+      const cName = (updateData.clientName || meeting.clientName).trim();
+      primaryClient = await Client.findOne({
+        companyCode: nextCompanyCode,
+        client: { $regex: new RegExp(`^${cName}$`, 'i') }
+      });
+    }
 
     cancelClientMeetingReminder(meeting._id);
 
-    updateData.clientId = primaryClient._id;
-    updateData.clientName = primaryClient.client;
-    updateData.phone = primaryClient.phone || '';
-    updateData.email = primaryClient.email || '';
-    updateData.company = primaryClient.company;
+    if (primaryClient) {
+      updateData.clientId = primaryClient._id;
+      updateData.clientName = primaryClient.client;
+      updateData.phone = primaryClient.phone || updateData.phone || meeting.phone || '';
+      updateData.email = primaryClient.email || updateData.email || meeting.email || '';
+      updateData.company = primaryClient.company || updateData.company || meeting.company || '';
+      updateData.attendees = clients.length ? clients.map(client => client._id) : [primaryClient._id];
+      updateData.attendeeUsers = clients.map(client => client.userId).filter(Boolean);
+    }
     updateData.companyCode = nextCompanyCode;
-    updateData.attendees = clients.map(client => client._id);
-    updateData.attendeeUsers = clients.map(client => client.userId).filter(Boolean);
     if (updateData.meetingDate) updateData.meetingDate = new Date(updateData.meetingDate);
+    if (updateData.link && !updateData.location) updateData.location = updateData.link;
+    if (updateData.location && !updateData.link && (updateData.location.startsWith('http') || updateData.location.includes('meet') || updateData.location.includes('zoom'))) {
+      updateData.link = updateData.location;
+    }
 
     meeting = await ClientMeeting.findByIdAndUpdate(req.params.id, updateData, {
       new: true,
       runValidators: true
     });
 
-    await createViews(meeting, clients);
-    await runClientMeetingSideEffects({
-      meeting,
-      clients,
-      type: 'client_meeting_updated',
-      title: 'Client Meeting Updated',
-      message: `Meeting "${meeting.title}" has been updated`,
-      actor: req.user?._id || meeting.createdBy,
-      emailPrefix: 'Client Meeting Updated',
-    });
+    if (clients.length) {
+      await createViews(meeting, clients);
+      await runClientMeetingSideEffects({
+        meeting,
+        clients,
+        type: 'client_meeting_updated',
+        title: 'Client Meeting Updated',
+        message: `Meeting "${meeting.title}" has been updated`,
+        actor: req.user?._id || meeting.createdBy,
+        emailPrefix: 'Client Meeting Updated',
+      });
+    }
 
     res.status(200).json({ success: true, message: 'Meeting updated successfully', data: meeting, meeting });
   } catch (error) {
@@ -482,16 +589,30 @@ const getMeetingStats = async (req, res, next) => {
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
+    const next7Days = new Date(today);
+    next7Days.setDate(next7Days.getDate() + 7);
+    next7Days.setHours(23, 59, 59, 999);
 
-    const [total, todayCount, highPriority, scheduled, completed] = await Promise.all([
+    const [total, todayCount, upcomingCount, highPriority, scheduled, completed] = await Promise.all([
       ClientMeeting.countDocuments(filter),
       ClientMeeting.countDocuments({ ...filter, meetingDate: { $gte: today, $lt: tomorrow } }),
+      ClientMeeting.countDocuments({ ...filter, meetingDate: { $gte: today, $lte: next7Days } }),
       ClientMeeting.countDocuments({ ...filter, priority: 'High' }),
       ClientMeeting.countDocuments({ ...filter, status: 'Scheduled' }),
       ClientMeeting.countDocuments({ ...filter, status: 'Completed' }),
     ]);
 
-    res.status(200).json({ success: true, data: { total, today: todayCount, highPriority, scheduled, completed } });
+    res.status(200).json({
+      success: true,
+      data: {
+        total,
+        today: todayCount,
+        upcoming: upcomingCount,
+        highPriority,
+        scheduled,
+        completed
+      }
+    });
   } catch (error) {
     next(error);
   }
@@ -499,28 +620,11 @@ const getMeetingStats = async (req, res, next) => {
 
 const searchMeetings = async (req, res, next) => {
   try {
-    const { q, type, priority, date } = req.query;
-    const query = buildCompanyFilter(req);
+    const baseFilter = buildCompanyFilter(req);
+    const query = applyMeetingFilters({ ...baseFilter }, req.query);
 
-    if (q) {
-      query.$or = [
-        { title: { $regex: q, $options: 'i' } },
-        { clientName: { $regex: q, $options: 'i' } },
-        { company: { $regex: q, $options: 'i' } },
-        { email: { $regex: q, $options: 'i' } }
-      ];
-    }
-    if (type && type !== 'all') query.meetingType = type;
-    if (priority && priority !== 'all') query.priority = priority;
-    if (date) {
-      const selectedDate = new Date(date);
-      const nextDate = new Date(selectedDate);
-      nextDate.setDate(nextDate.getDate() + 1);
-      query.meetingDate = { $gte: selectedDate, $lt: nextDate };
-    }
-
-    const meetings = await ClientMeeting.find(query).populate(meetingPopulate).sort({ meetingDate: -1 });
-    res.status(200).json({ success: true, count: meetings.length, data: meetings });
+    const meetings = await ClientMeeting.find(query).populate(meetingPopulate).sort({ meetingDate: -1, meetingTime: 1 });
+    res.status(200).json({ success: true, count: meetings.length, data: meetings, meetings });
   } catch (error) {
     next(error);
   }

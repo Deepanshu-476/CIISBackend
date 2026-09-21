@@ -6,6 +6,7 @@ const {
   Project,
   Group,
   User,
+  ActivityLog,
   parsePositiveInt,
   getCleanTaskDateRange,
   normalizeTaskStatus,
@@ -202,15 +203,20 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
 
   const [personalTasks, clientTasks, projectTasks] = await Promise.all([
     Task.find(personalQuery)
-      .select('title description dueDate dueDateTime priority overallStatus statusByUser assignedUsers assignedGroups createdBy companyCode taskFor onHoldReleasedAt createdAt updatedAt')
+      .select('title description dueDate dueDateTime priority overallStatus statusByUser statusHistory completionDate assignedUsers assignedGroups createdBy companyCode taskFor onHoldReleasedAt createdAt updatedAt remarks')
       .populate('assignedUsers', 'name email')
       .populate('createdBy', 'name email')
+      .populate('statusHistory.changedBy', 'name email')
+      .populate('remarks.user', 'name email')
       .sort({ createdAt: -1 })
       .lean(),
     
     ClientTask.find(clientQuery)
-      .select('name description dueDate priority status completed clientId createdAt updatedAt assignee assigneeId')
-      .populate('clientId', 'name email company phone companyCode')
+      .select('name description dueDate priority status completed clientId service createdAt updatedAt assignee assigneeId activityLogs remarks')
+      .populate('clientId', 'client name email company phone companyCode')
+      .populate('assigneeId', 'name email role')
+      .populate('activityLogs.user', 'name email')
+      .populate('remarks.user', 'name email')
       .sort({ createdAt: -1 })
       .lean(),
 
@@ -230,11 +236,14 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
         'tasks.status',
         'tasks.createdBy',
         'tasks.createdAt',
-        'tasks.updatedAt'
+        'tasks.updatedAt',
+        'tasks.activityLogs',
+        'tasks.remarks'
       ].join(' '))
       .populate('createdBy', 'name email')
       .populate('tasks.assignedTo', 'name email')
       .populate('tasks.createdBy', 'name email')
+      .populate('tasks.activityLogs.performedBy', 'name email')
       .lean()
   ]);
 
@@ -258,7 +267,8 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
       userStatus,
       source: taskSource,
       taskSource,
-      __taskSource: taskSource
+      __taskSource: taskSource,
+      remarks: Array.isArray(t.remarks) ? t.remarks : []
     };
   });
 
@@ -277,8 +287,12 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
       priority: String(t.priority || 'Medium').toLowerCase(),
       status: displayStatus,
       userStatus: clientStatus,
-      clientName: t.clientId?.name || 'Unknown Client',
+      clientName: t.clientId?.client || t.clientId?.name || t.clientId?.company || 'Unknown Client',
+      clientCompany: t.clientId?.company || '',
+      service: t.service || '',
       createdAt: t.createdAt,
+      activityLogs: Array.isArray(t.activityLogs) ? t.activityLogs : [],
+      remarks: Array.isArray(t.remarks) ? t.remarks : [],
       source: 'client',
       taskSource: 'client',
       __taskSource: 'client'
@@ -309,6 +323,8 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
         userStatus: projectStatus,
         projectName: project.projectName,
         projectTaskId: task._id,
+        activityLogs: Array.isArray(task.activityLogs) ? task.activityLogs : [],
+        remarks: Array.isArray(task.remarks) ? task.remarks : [],
         createdAt: task.createdAt || project.createdAt,
         updatedAt: task.updatedAt || project.updatedAt,
         lastActivityAt: task.updatedAt || task.createdAt || project.updatedAt || project.createdAt,
@@ -438,7 +454,7 @@ exports.getAllMyTaskViews = async (req, res) => {
       fetchAssignedProjectTaskList(req)
     ]);
     const list = applyCleanListFilters([...personal, ...assigned, ...client, ...project], req);
-    return sendCleanTaskList(res, list, 'all', 'createdAt', req);
+    return sendCleanTaskList(res, list, 'all', 'source-aware', req);
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
@@ -468,11 +484,133 @@ exports.getAllMyTaskStats = async (req, res) => {
 };
 
 
+const enrichTasksWithActivityAndRemarks = async (tasks) => {
+  if (!Array.isArray(tasks) || tasks.length === 0) return tasks;
+
+  const personalTaskIds = tasks
+    .filter(t => !t.source || t.source === 'personal' || t.source === 'assigned' || t.source === 'self')
+    .map(t => t._id)
+    .filter(Boolean);
+
+  let activityLogsByTaskId = {};
+  if (personalTaskIds.length > 0) {
+    try {
+      const dbLogs = await ActivityLog.find({ task: { $in: personalTaskIds } })
+        .populate('user', 'name role email')
+        .sort({ createdAt: -1 })
+        .lean();
+
+      dbLogs.forEach(log => {
+        const tId = log.task?.toString();
+        if (!activityLogsByTaskId[tId]) activityLogsByTaskId[tId] = [];
+        activityLogsByTaskId[tId].push({
+          _id: log._id,
+          action: log.action || 'update',
+          user: log.user,
+          userName: log.user?.name || log.userName || 'User',
+          description: log.description || 'Task activity',
+          oldValues: log.oldValues,
+          newValues: log.newValues,
+          createdAt: log.createdAt
+        });
+      });
+    } catch (logErr) {
+      console.error('Error fetching ActivityLogs in allTaskController:', logErr);
+    }
+  }
+
+  return tasks.map(task => {
+    let activityLogs = [];
+
+    if (task.source === 'client') {
+      activityLogs = (Array.isArray(task.activityLogs) ? task.activityLogs : []).map(log => ({
+        _id: log._id,
+        action: log.action || 'update',
+        user: log.user,
+        userName: log.userName || log.user?.name || 'User',
+        description: log.description || 'Task activity',
+        oldValues: log.oldValues,
+        newValues: log.newValues,
+        createdAt: log.createdAt || task.updatedAt
+      }));
+      if (activityLogs.length === 0 && task.createdAt) {
+        activityLogs.push({
+          _id: `create_${task._id}`,
+          action: 'task_created',
+          userName: task.assigneeName || 'System',
+          description: `Task created for client ${task.clientName || 'Client'}`,
+          createdAt: task.createdAt
+        });
+      }
+    } else if (task.source === 'project') {
+      activityLogs = (Array.isArray(task.activityLogs) ? task.activityLogs : []).map(log => ({
+        _id: log._id,
+        action: log.type || log.action || 'update',
+        user: log.performedBy || log.user,
+        userName: log.performedBy?.name || log.userName || 'User',
+        description: log.remarks || log.description || 'Project task activity',
+        createdAt: log.performedAt || log.createdAt || task.updatedAt
+      }));
+      if (activityLogs.length === 0 && task.createdAt) {
+        activityLogs.push({
+          _id: `create_${task._id}`,
+          action: 'task_created',
+          userName: task.assignedByName || 'System',
+          description: `Project task created for ${task.projectName || 'Project'}`,
+          createdAt: task.createdAt
+        });
+      }
+    } else {
+      const tId = task._id?.toString();
+      const logs = activityLogsByTaskId[tId] || [];
+      if (logs.length > 0) {
+        activityLogs = logs;
+      } else {
+        const fallback = [];
+        if (Array.isArray(task.statusHistory) && task.statusHistory.length > 0) {
+          task.statusHistory.forEach(sh => {
+            fallback.push({
+              _id: `sh_${sh._id || Math.random()}`,
+              action: 'status_updated',
+              user: sh.changedBy,
+              userName: sh.changedBy?.name || 'User',
+              description: sh.remarks || `Status changed to ${sh.status}`,
+              createdAt: sh.changedAt || task.updatedAt
+            });
+          });
+        }
+        if (task.createdAt) {
+          fallback.push({
+            _id: `create_${task._id}`,
+            action: task.taskFor === 'self' ? 'self_task_created' : 'task_created',
+            user: task.createdBy,
+            userName: task.createdBy?.name || 'User',
+            description: `Task created: ${task.title || 'Task'}`,
+            createdAt: task.createdAt
+          });
+        }
+        activityLogs = fallback;
+      }
+    }
+
+    activityLogs.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+
+    return {
+      ...task,
+      activityLogs,
+      remarks: Array.isArray(task.remarks) ? task.remarks : []
+    };
+  });
+};
+
 exports.getUserAllTasksPaginated = async (req, res) => {
   try {
     const { userId } = req.params;
+    const isExport = req.query.export === 'true' || req.query.all === 'true';
     const page = parsePositiveInt(req.query.page, 1);
-    const limit = parsePositiveInt(req.query.limit, 10, 50);
+    const limit = isExport
+      ? parsePositiveInt(req.query.limit, 5000, 10000)
+      : parsePositiveInt(req.query.limit, 10, 50);
 
     const allTasks = await queryAllUserTasks(userId, req.user.companyCode, req.query);
     const filtered = filterUserTasks(allTasks, req.query);
@@ -485,6 +623,7 @@ exports.getUserAllTasksPaginated = async (req, res) => {
     const safePage = Math.min(page, pages);
     const start = (safePage - 1) * limit;
     const tasks = sortedFiltered.slice(start, start + limit);
+    const enrichedTasks = await enrichTasksWithActivityAndRemarks(tasks);
 
     const counts = {
       total: total,
@@ -521,7 +660,7 @@ exports.getUserAllTasksPaginated = async (req, res) => {
     res.json({
       success: true,
       userId,
-      tasks,
+      tasks: enrichedTasks,
       pagination: {
         page: safePage,
         limit,

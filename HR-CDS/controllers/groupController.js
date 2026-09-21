@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Group = require('../models/Group');
 const Task = require('../models/Task');
 const User = require('../../models/User');
@@ -24,10 +25,15 @@ const buildCompanyUserFilter = user => {
 };
 
 const getCompanyUserIds = async user => {
-  const filter = buildCompanyUserFilter(user);
-  if (!Object.keys(filter).length) return [];
-  const users = await User.find(filter).select('_id').lean();
-  return users.map(item => item._id);
+  try {
+    const filter = buildCompanyUserFilter(user);
+    if (!Object.keys(filter).length) return [];
+    if (mongoose.connection?.readyState !== 1) return [];
+    const users = await User.find(filter).select('_id').lean();
+    return (users || []).map(item => item._id);
+  } catch (err) {
+    return [];
+  }
 };
 
 const buildGroupCompanyFilter = async user => {
@@ -57,28 +63,48 @@ const mergeQueries = (...queries) => {
   return {$and: parts};
 };
 
+const escapeRegex = string => String(string || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const buildDuplicateGroupQuery = async (user, name, excludeGroupId = null) => {
+  const trimmedName = String(name || '').trim();
+  const nameRegex = new RegExp(`^${escapeRegex(trimmedName)}$`, 'i');
+  const companyFilter = await buildGroupCompanyFilter(user);
+  const scopeFilter = Object.keys(companyFilter).length ? companyFilter : { createdBy: user?._id };
+  const queryConditions = {
+    name: nameRegex,
+    isActive: true,
+  };
+  if (excludeGroupId) {
+    queryConditions._id = { $ne: excludeGroupId };
+  }
+  return mergeQueries(scopeFilter, queryConditions);
+};
 
 exports.createGroup = async (req, res) => {
   try {
     const { name, description, members } = req.body;
 
-    
-    if (!name) {
-      return res.status(400).json({ error: 'Group name is required' });
+    const trimmedName = typeof name === 'string' ? name.trim() : '';
+
+    if (!trimmedName) {
+      return res.status(400).json({
+        success: false,
+        message: 'Group name is required',
+        error: 'Group name is required'
+      });
     }
 
-    
-    const existingGroup = await Group.findOne({
-      name,
-      createdBy: req.user._id,
-      isActive: true
-    });
+    const duplicateQuery = await buildDuplicateGroupQuery(req.user, trimmedName);
+    const existingGroup = await Group.findOne(duplicateQuery);
 
     if (existingGroup) {
-      return res.status(400).json({ error: 'Group name already exists' });
+      return res.status(400).json({
+        success: false,
+        message: 'A group with this name already exists.',
+        error: 'A group with this name already exists.'
+      });
     }
 
-    
     const validMembers = Array.isArray(members) ? members : [];
     if (validMembers.length > 0) {
       const usersExist = await User.find({ 
@@ -87,7 +113,11 @@ exports.createGroup = async (req, res) => {
       }).select('_id');
       
       if (usersExist.length !== validMembers.length) {
-        return res.status(400).json({ error: 'Some users do not exist' });
+        return res.status(400).json({
+          success: false,
+          message: 'Some users do not exist',
+          error: 'Some users do not exist'
+        });
       }
     }
 
@@ -99,7 +129,7 @@ exports.createGroup = async (req, res) => {
     ).map((id) => id);
 
     const group = await Group.create({
-      name,
+      name: trimmedName,
       description,
       members: uniqueMembers,
       createdBy: req.user._id,
@@ -107,7 +137,6 @@ exports.createGroup = async (req, res) => {
       companyCode: getCompanyCode(req.user),
     });
 
-    
     await group.populate('members', 'name role email');
 
     notifyDirectUsers({
@@ -115,12 +144,12 @@ exports.createGroup = async (req, res) => {
       targetPath: '/ciisUser/manage-groups',
       type: 'group_member_added',
       title: 'Added to Group',
-      message: `${req.user.name || 'Admin'} added you to group "${name}"`,
+      message: `${req.user.name || 'Admin'} added you to group "${trimmedName}"`,
       actor: req.user._id,
       company: req.user.company,
       data: {
         groupId: group._id,
-        groupName: name,
+        groupName: trimmedName,
       },
       priority: 'medium',
     }).catch(error => console.error('Group create notification failed:', error.message));
@@ -133,7 +162,11 @@ exports.createGroup = async (req, res) => {
 
   } catch (error) {
     console.error('❌ Error creating group:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: 'Internal server error'
+    });
   }
 };
 
@@ -252,38 +285,53 @@ exports.updateGroup = async (req, res) => {
     });
 
     if (!group) {
-      return res.status(404).json({ error: 'Group not found' });
+      return res.status(404).json({
+        success: false,
+        message: 'Group not found',
+        error: 'Group not found'
+      });
     }
 
-    
-    if (name && name !== group.name) {
-      const existingGroup = await Group.findOne({
-        name,
-        createdBy: req.user._id,
-        isActive: true,
-        _id: { $ne: groupId }
-      });
+    let trimmedName;
+    if (name !== undefined) {
+      trimmedName = typeof name === 'string' ? name.trim() : '';
+      if (!trimmedName) {
+        return res.status(400).json({
+          success: false,
+          message: 'Group name cannot be empty',
+          error: 'Group name cannot be empty'
+        });
+      }
+
+      const duplicateQuery = await buildDuplicateGroupQuery(req.user, trimmedName, groupId);
+      const existingGroup = await Group.findOne(duplicateQuery);
 
       if (existingGroup) {
-        return res.status(400).json({ error: 'Group name already exists' });
+        return res.status(400).json({
+          success: false,
+          message: 'A group with this name already exists.',
+          error: 'A group with this name already exists.'
+        });
       }
     }
 
-    
     if (members && Array.isArray(members)) {
       const usersExist = await User.find({ 
         _id: { $in: members } 
       }).select('_id');
       
       if (usersExist.length !== members.length) {
-        return res.status(400).json({ error: 'Some users do not exist' });
+        return res.status(400).json({
+          success: false,
+          message: 'Some users do not exist',
+          error: 'Some users do not exist'
+        });
       }
     }
 
     const previousMembers = (group.members || []).map(member => member.toString());
 
-    
-    if (name) group.name = name;
+    if (trimmedName !== undefined) group.name = trimmedName;
     if (description !== undefined) group.description = description;
     if (members !== undefined) group.members = members;
 
@@ -316,7 +364,11 @@ exports.updateGroup = async (req, res) => {
 
   } catch (error) {
     console.error('❌ Error updating group:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: 'Internal server error'
+    });
   }
 };
 
@@ -492,4 +544,6 @@ exports.getAssignableGroups = async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 };
-void 0;
+
+exports.escapeRegex = escapeRegex;
+exports.buildDuplicateGroupQuery = buildDuplicateGroupQuery;

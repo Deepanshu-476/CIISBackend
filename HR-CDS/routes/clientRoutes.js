@@ -53,20 +53,24 @@ const uploadReceipt = multer({
 });
 
 
+// Public enquiry creation for landing page leads
+router.post('/service-enquiries', serviceEnquiryController.createServiceEnquiry);
+
+// All client management, service management, and client portal routes require authentication
+router.use(auth.protect);
+
 router.get('/services', serviceController.getAllServices);
 router.post('/services', serviceController.addService);
 router.put('/services/:id', serviceController.updateService);
 router.delete('/services/:id', serviceController.deleteService);
 
 router.get('/service-enquiries', serviceEnquiryController.getServiceEnquiries);
-router.post('/service-enquiries', serviceEnquiryController.createServiceEnquiry);
 router.patch('/service-enquiries/:id/status', serviceEnquiryController.updateServiceEnquiryStatus);
-
 
 router.get('/stats', getClientStats);
 router.get('/manager-stats', getManagerStats);
-router.get('/dashboard-overview', auth.protect, getClientDashboardOverview);
-router.get('/dashboard-stats/:clientId', auth.protect, getClientDashboardStats);
+router.get('/dashboard-overview', getClientDashboardOverview);
+router.get('/dashboard-stats/:clientId', getClientDashboardStats);
 
 
 router.get('/company/:companyCode', getClientsByCompany);
@@ -178,31 +182,62 @@ router.get('/client/:clientId/receipt/:receiptId', async (req, res) => {
 
 
 
-router.get('/test/system-check', async (req, res) => {
+const isCompanyAdminOrOwner = (user) => {
+  if (!user) return false;
+  const role = String(user.role || '').toLowerCase();
+  const jobRole = String(user.jobRole || '').toLowerCase();
+  const companyRole = String(user.companyRole || '').toLowerCase();
+  return role === 'admin' || role === 'owner' || jobRole === 'admin' || jobRole === 'owner' || companyRole === 'owner' || companyRole === 'admin';
+};
+
+const requireTestAdmin = (req, res, next) => {
+  if (auth.isSuperAdminUser && auth.isSuperAdminUser(req.user)) {
+    return next();
+  }
+  if (isCompanyAdminOrOwner(req.user)) {
+    return next();
+  }
+  return res.status(403).json({
+    success: false,
+    message: 'Access denied: Admin or Owner privileges required'
+  });
+};
+
+// Gate all /test routes from production
+router.use('/test', (req, res, next) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({
+      success: false,
+      message: 'Not found'
+    });
+  }
+  next();
+});
+
+router.get('/test/system-check', requireTestAdmin, async (req, res) => {
   try {
     const Client = require('../models/Client');
     const Service = require('../models/Service');
     
+    const isSuper = auth.isSuperAdminUser && auth.isSuperAdminUser(req.user);
+    const userCompanyCode = req.user?.companyCode || '';
     
-    const totalClients = await Client.countDocuments();
-    const totalServices = await Service.countDocuments();
+    const totalClients = isSuper ? await Client.countDocuments() : await Client.countDocuments({ companyCode: userCompanyCode });
+    const totalServices = isSuper ? await Service.countDocuments() : await Service.countDocuments({ companyCode: userCompanyCode });
     
+    const clientsWithCompanyCode = isSuper
+      ? await Client.countDocuments({ companyCode: { $exists: true, $ne: '' } })
+      : await Client.countDocuments({ companyCode: userCompanyCode });
     
-    const clientsWithCompanyCode = await Client.countDocuments({ 
-      companyCode: { $exists: true, $ne: '' } 
-    });
-    
-    
-    const sampleClient = await Client.findOne()
+    const sampleClient = await Client.findOne(isSuper ? {} : { companyCode: userCompanyCode })
       .select('client company companyCode projectManager services status')
       .lean();
     
-    const sampleService = await Service.findOne()
+    const sampleService = await Service.findOne(isSuper ? {} : { companyCode: userCompanyCode })
       .select('servicename description companyCode price')
       .lean();
     
-    
-    const uniqueCompanyCodes = await Client.distinct('companyCode');
+    const uniqueCompanyCodes = isSuper ? await Client.distinct('companyCode') : (userCompanyCode ? [userCompanyCode] : []);
     
     res.status(200).json({
       success: true,
@@ -246,12 +281,24 @@ router.get('/test/system-check', async (req, res) => {
 });
 
 
-router.post('/test/create-test-client', async (req, res) => {
+router.post('/test/create-test-client', requireTestAdmin, async (req, res) => {
   try {
     const Client = require('../models/Client');
     const Service = require('../models/Service');
     
-    const { companyCode = 'TEST001', createServices = true } = req.body;
+    let { companyCode = 'TEST001', createServices = true } = req.body;
+    
+    const isSuper = auth.isSuperAdminUser && auth.isSuperAdminUser(req.user);
+    if (!isSuper) {
+      const userCompanyCode = req.user?.companyCode || '';
+      if (companyCode && companyCode.toUpperCase() !== userCompanyCode.toUpperCase()) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied: cannot create test client for another company'
+        });
+      }
+      companyCode = userCompanyCode;
+    }
     
     
     if (!companyCode || companyCode.trim() === '') {
@@ -350,10 +397,22 @@ router.post('/test/create-test-client', async (req, res) => {
 });
 
 
-router.post('/test/bulk-test-clients', async (req, res) => {
+router.post('/test/bulk-test-clients', requireTestAdmin, async (req, res) => {
   try {
     const Client = require('../models/Client');
-    const { count = 3, companyCode = 'TEST001' } = req.body;
+    let { count = 3, companyCode = 'TEST001' } = req.body;
+    
+    const isSuper = auth.isSuperAdminUser && auth.isSuperAdminUser(req.user);
+    if (!isSuper) {
+      const userCompanyCode = req.user?.companyCode || '';
+      if (companyCode && companyCode.toUpperCase() !== userCompanyCode.toUpperCase()) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied: cannot bulk-create test clients for another company'
+        });
+      }
+      companyCode = userCompanyCode;
+    }
     
     
     if (!companyCode || companyCode.trim() === '') {
@@ -496,12 +555,24 @@ router.post('/test/bulk-test-clients', async (req, res) => {
 });
 
 
-router.delete('/test/cleanup-test-clients', async (req, res) => {
+router.delete('/test/cleanup-test-clients', requireTestAdmin, async (req, res) => {
   try {
     const Client = require('../models/Client');
     const Service = require('../models/Service');
     
-    const { companyCode, deleteServices = 'false' } = req.query;
+    let { companyCode, deleteServices = 'false' } = req.query;
+    
+    const isSuper = auth.isSuperAdminUser && auth.isSuperAdminUser(req.user);
+    if (!isSuper) {
+      const userCompanyCode = req.user?.companyCode || '';
+      if (companyCode && companyCode.toUpperCase() !== userCompanyCode.toUpperCase()) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied: cannot delete test clients for another company'
+        });
+      }
+      companyCode = userCompanyCode;
+    }
     
     if (!companyCode) {
       return res.status(400).json({
@@ -546,12 +617,13 @@ router.delete('/test/cleanup-test-clients', async (req, res) => {
 });
 
 
-router.get('/test/company-filter-test', async (req, res) => {
+router.get('/test/company-filter-test', requireTestAdmin, async (req, res) => {
   try {
     const Client = require('../models/Client');
     
-    
-    const companyCodes = await Client.distinct('companyCode');
+    const isSuper = auth.isSuperAdminUser && auth.isSuperAdminUser(req.user);
+    const userCompanyCode = req.user?.companyCode || '';
+    const companyCodes = isSuper ? await Client.distinct('companyCode') : (userCompanyCode ? [userCompanyCode] : []);
     
     if (companyCodes.length === 0) {
       return res.status(200).json({
@@ -629,10 +701,12 @@ router.get('/test/company-filter-test', async (req, res) => {
 });
 
 
-router.get('/test/model-schema', async (req, res) => {
+router.get('/test/model-schema', requireTestAdmin, async (req, res) => {
   try {
     const Client = require('../models/Client');
     
+    const isSuper = auth.isSuperAdminUser && auth.isSuperAdminUser(req.user);
+    const userCompanyCode = req.user?.companyCode || '';
     
     const clientSchema = Client.schema;
     const schemaPaths = clientSchema.paths;
@@ -655,11 +729,16 @@ router.get('/test/model-schema', async (req, res) => {
     const missingFields = importantFields.filter(field => !(field in fields));
     const existingImportantFields = importantFields.filter(field => field in fields);
     
-    
-    const totalClients = await Client.countDocuments();
-    const clientsWithCompanyCode = await Client.countDocuments({ companyCode: { $exists: true, $ne: '' } });
-    const clientsWithServices = await Client.countDocuments({ 'services.0': { $exists: true } });
-    const activeClients = await Client.countDocuments({ status: 'Active' });
+    const totalClients = isSuper ? await Client.countDocuments() : await Client.countDocuments({ companyCode: userCompanyCode });
+    const clientsWithCompanyCode = isSuper
+      ? await Client.countDocuments({ companyCode: { $exists: true, $ne: '' } })
+      : await Client.countDocuments({ companyCode: userCompanyCode });
+    const clientsWithServices = isSuper
+      ? await Client.countDocuments({ 'services.0': { $exists: true } })
+      : await Client.countDocuments({ companyCode: userCompanyCode, 'services.0': { $exists: true } });
+    const activeClients = isSuper
+      ? await Client.countDocuments({ status: 'Active' })
+      : await Client.countDocuments({ companyCode: userCompanyCode, status: 'Active' });
     
     res.status(200).json({
       success: true,
@@ -705,7 +784,7 @@ router.get('/test/model-schema', async (req, res) => {
 });
 
 
-router.post('/test/validation-test', async (req, res) => {
+router.post('/test/validation-test', requireTestAdmin, async (req, res) => {
   try {
     const Client = require('../models/Client');
     

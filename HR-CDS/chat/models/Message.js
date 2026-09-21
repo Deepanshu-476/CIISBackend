@@ -82,6 +82,9 @@ const messageSchema = new mongoose.Schema(
             default: ""
         },
 
+    fileName: { type: String, default: "" },
+    fileSize: { type: Number, default: 0 },
+
     deletedFor: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: "User"
@@ -104,6 +107,11 @@ const messageSchema = new mongoose.Schema(
     },
 
     seenBy: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User"
+    }],
+
+    deliveredTo: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: "User"
     }]

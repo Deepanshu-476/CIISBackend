@@ -8,6 +8,9 @@ const User = require('../../models/User');
 const Group = require('../models/Group');
 const Notification = require('../models/Notification');
 const ActivityLog = require('../models/ActivityLog');
+const PagePermission = require('../../models/PagePermission');
+const Department = require('../../models/Department');
+const Branch = require('../../models/Branch');
 const moment = require('moment');
 const mongoose = require('mongoose');
 const { sendEmail } = require('../../utils/sendEmail');
@@ -21,6 +24,9 @@ const {
   normalizeTaskRecurrenceFields,
   getNextRecurringDate,
 } = require('../utils/taskRecurrence');
+const {
+  generateRecurringOccurrences,
+} = require('../cron/recurringTasks');
 
  
 
@@ -170,16 +176,16 @@ const normalizeTaskStatus = status => {
 };
 
 const getTaskOverdueEligibilityDate = (dueDateTime, task) => {
-  if (!dueDateTime) return null;
-  const dueDate = new Date(dueDateTime);
-  if (isNaN(dueDate.getTime())) return null;
-
-  if (task?.taskFor === 'self' && task?.onHoldReleasedAt) {
+  if (task?.onHoldReleasedAt) {
     const releasedAt = new Date(task.onHoldReleasedAt);
-    if (!isNaN(releasedAt.getTime()) && dueDate <= releasedAt) {
+    if (!isNaN(releasedAt.getTime())) {
       return new Date(releasedAt.getTime() + 24 * 60 * 60 * 1000);
     }
   }
+
+  if (!dueDateTime) return null;
+  const dueDate = new Date(dueDateTime);
+  if (isNaN(dueDate.getTime())) return null;
 
   return dueDate;
 };
@@ -567,6 +573,7 @@ const parseRecurringSettingsFromBody = (body = {}) => {
   return {
     repeatPattern: normalized.repeatPattern,
     repeatDays: normalized.repeatDays,
+    recurrenceEndDate: normalized.recurrenceEndDate,
     isRecurring: normalized.repeatPattern !== 'none' && normalized.isRecurring,
   };
 };
@@ -577,6 +584,8 @@ const applyRecurringFields = (task, body = {}, dueDateTime = null) => {
   task.repeatDays = recurring.repeatDays;
   task.recurringPattern = recurring.repeatPattern;
   task.isRecurring = recurring.isRecurring;
+  task.recurrenceEndDate = recurring.isRecurring ? recurring.recurrenceEndDate : null;
+  task.recurrenceStoppedAt = recurring.isRecurring ? null : (task.recurrenceStoppedAt || new Date());
   task.nextRecurringDate = recurring.isRecurring && dueDateTime
     ? getNextRecurringDate(dueDateTime, recurring.repeatPattern, recurring.repeatDays)
     : null;
@@ -884,6 +893,93 @@ const fetchAssignedToMeTaskList = async (req) => {
     const status = userEntry?.status || t.overallStatus || 'pending';
     return { ...t, status: normalizeTaskStatus(status), taskSource: 'assigned', __taskSource: 'assigned' };
   });
+};
+
+const getAdminTaskPageScope = async (req, preferredAccessTypes = ['edit', 'view']) => {
+  const user = req.user;
+  if (!user) return { hasAccess: false, isOwner: false, branchIds: [], departmentIds: [] };
+
+  const role = String(user.role || user.userRole || '').toLowerCase();
+  const companyRole = String(user.companyRole || '').toLowerCase();
+  const isOwner = user.isSuperAdmin === true ||
+    user.superAdmin === true ||
+    role.includes('owner') ||
+    companyRole.includes('owner') ||
+    (role.includes('admin') && role.includes('super'));
+
+  if (isOwner) {
+    return { isOwner: true, hasAccess: true, branchIds: ['all'], departmentIds: ['all'] };
+  }
+
+  const company = user.company?._id || user.company || user.companyId;
+  const userId = String(user._id || user.id || '');
+
+  const page = await PagePermission.findOne({
+    company,
+    path: { $in: ['/ciisUser/admin-task-create', 'admin-task-create'] }
+  }).lean();
+
+  if (!page) {
+    return { isOwner: false, hasAccess: true, branchIds: ['all'], departmentIds: ['all'] };
+  }
+
+  const accessFieldByType = {
+    view: 'viewUsers',
+    edit: 'editUsers',
+    delete: 'deleteUsers',
+    approve: 'approvers'
+  };
+  const preferredTypes = (Array.isArray(preferredAccessTypes) ? preferredAccessTypes : ['edit', 'view'])
+    .map(type => String(type || '').trim().toLowerCase())
+    .filter(type => accessFieldByType[type]);
+  const fallbackTypes = ['view', 'edit', 'delete', 'approve'];
+  const allowedTypes = preferredTypes.length ? preferredTypes : fallbackTypes;
+  const allowedUserIds = new Set(
+    allowedTypes.flatMap(type => page[accessFieldByType[type]] || [])
+      .map(item => String(item?.user?._id || item?.user || ''))
+      .filter(Boolean)
+  );
+
+  if (allowedUserIds.size > 0 && !allowedUserIds.has(userId)) {
+    return { isOwner: false, hasAccess: false, branchIds: [], departmentIds: [] };
+  }
+
+  const scopes = Array.isArray(page.userAccessScopes) ? page.userAccessScopes : [];
+  const userScopes = scopes.filter(s => String(s?.user?._id || s?.user || '') === userId);
+  const matchingScopes = allowedTypes
+    .map(type => userScopes.filter(s => String(s?.accessType || '').trim().toLowerCase() === type))
+    .find(items => items.length) || [];
+
+  if (!matchingScopes.length) {
+    return { isOwner: false, hasAccess: true, branchIds: ['all'], departmentIds: ['all'] };
+  }
+
+  let branchIds = [];
+  let departmentIds = [];
+  let hasAllBranches = false;
+  let hasAllDepartments = false;
+
+  matchingScopes.forEach(s => {
+    const bIds = (Array.isArray(s.branchIds) ? s.branchIds : [])
+      .map(b => String(b?._id || b).trim())
+      .filter(Boolean);
+    const dIds = (Array.isArray(s.departmentIds) ? s.departmentIds : [])
+      .map(d => String(d?._id || d).trim())
+      .filter(Boolean);
+
+    if (bIds.includes('all') || bIds.length === 0) hasAllBranches = true;
+    else branchIds.push(...bIds);
+
+    if (dIds.includes('all') || dIds.length === 0) hasAllDepartments = true;
+    else departmentIds.push(...dIds);
+  });
+
+  return {
+    isOwner: false,
+    hasAccess: true,
+    branchIds: hasAllBranches ? ['all'] : [...new Set(branchIds)],
+    departmentIds: hasAllDepartments ? ['all'] : [...new Set(departmentIds)]
+  };
 };
 
 const getBranchScopedUserIds = async (req) => {
@@ -1214,41 +1310,226 @@ exports.getAssignedTasks = async (req, res) => {
   try {
     const currentUserId = req.user._id || req.user.id;
     const branchUserIds = await getBranchScopedUserIds(req);
+    const pageScope = await getAdminTaskPageScope(req);
+
+    if (!pageScope.hasAccess) {
+      return res.json({
+        success: true,
+        tasks: [],
+        groupedTasks: {},
+        stats: calculateUnifiedTaskStats([]),
+        summaryStats: { total: 0, pending: 0, inProgress: 0, completed: 0, rejected: 0, overdue: 0 },
+        overallStats: { total: 0, pending: 0, inProgress: 0, completed: 0, rejected: 0, overdue: 0 },
+        total: 0,
+        pagination: { page: 1, limit: 10, total: 0, pages: 1, hasNext: false, hasPrev: false, tasks: [] }
+      });
+    }
+
     const companyCode = getRequestCompanyCode(req);
     const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
     const groupCompanyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : req.user.companyCode;
+
+    // Resolve requested filters from query
+    const requestedBranch = req.query?.branch || req.query?.branchId;
+    const requestedDepartment = req.query?.department || req.query?.departmentId;
+
+    let effectiveBranchIds = null;
+    if (!pageScope.branchIds.includes('all')) {
+      if (requestedBranch && requestedBranch !== 'all') {
+        const rBranchList = String(requestedBranch).split(',').map(s => s.trim()).filter(Boolean);
+        const validRequested = rBranchList.filter(rb => pageScope.branchIds.map(String).includes(rb));
+        if (validRequested.length === 0) {
+          return res.json({
+            success: true,
+            tasks: [],
+            groupedTasks: {},
+            stats: calculateUnifiedTaskStats([]),
+            summaryStats: { total: 0, pending: 0, inProgress: 0, completed: 0, rejected: 0, overdue: 0 },
+            overallStats: { total: 0, pending: 0, inProgress: 0, completed: 0, rejected: 0, overdue: 0 },
+            total: 0,
+            pagination: { page: 1, limit: 10, total: 0, pages: 1, hasNext: false, hasPrev: false, tasks: [] }
+          });
+        }
+        effectiveBranchIds = validRequested;
+      } else {
+        effectiveBranchIds = pageScope.branchIds.map(String);
+      }
+    } else if (requestedBranch && requestedBranch !== 'all') {
+      effectiveBranchIds = String(requestedBranch).split(',').map(s => s.trim()).filter(Boolean);
+    }
+
+    let effectiveDepartmentIds = null;
+    if (!pageScope.departmentIds.includes('all')) {
+      if (requestedDepartment && requestedDepartment !== 'all') {
+        const rDeptList = String(requestedDepartment).split(',').map(s => s.trim()).filter(Boolean);
+        const validObjectIds = pageScope.departmentIds.filter(id => mongoose.Types.ObjectId.isValid(id));
+        const allowedDeptDocs = await Department.find({
+          _id: { $in: validObjectIds }
+        }).select('_id name departmentName').lean();
+        const allowedNames = new Set(allowedDeptDocs.map(d => (d.name || d.departmentName || '').trim().toLowerCase()));
+        const allowedIdSet = new Set(pageScope.departmentIds.map(String));
+
+        const validRequested = rDeptList.filter(rd => allowedIdSet.has(rd) || allowedNames.has(rd.toLowerCase()));
+        if (validRequested.length === 0) {
+          return res.json({
+            success: true,
+            tasks: [],
+            groupedTasks: {},
+            stats: calculateUnifiedTaskStats([]),
+            summaryStats: { total: 0, pending: 0, inProgress: 0, completed: 0, rejected: 0, overdue: 0 },
+            overallStats: { total: 0, pending: 0, inProgress: 0, completed: 0, rejected: 0, overdue: 0 },
+            total: 0,
+            pagination: { page: 1, limit: 10, total: 0, pages: 1, hasNext: false, hasPrev: false, tasks: [] }
+          });
+        }
+        effectiveDepartmentIds = validRequested;
+      } else {
+        effectiveDepartmentIds = pageScope.departmentIds.map(String);
+      }
+    } else if (requestedDepartment && requestedDepartment !== 'all') {
+      effectiveDepartmentIds = String(requestedDepartment).split(',').map(s => s.trim()).filter(Boolean);
+    }
+
     const taskFilter = {
       companyCode: req.user.companyCode,
-      createdBy: currentUserId,
       taskFor: 'others',
       isActive: true
     };
 
-    if (branchUserIds) {
-      const branchGroupIds = await Group.find({
+    if (effectiveBranchIds || effectiveDepartmentIds) {
+      const userConditions = [{ companyCode: groupCompanyFilter, isActive: true }];
+
+      if (effectiveBranchIds) {
+        const branchObjectIds = effectiveBranchIds
+          .filter(id => mongoose.Types.ObjectId.isValid(id))
+          .map(id => new mongoose.Types.ObjectId(id));
+
+        userConditions.push({
+          $or: [
+            { branch: { $in: [...branchObjectIds, ...effectiveBranchIds] } },
+            { branchId: { $in: [...branchObjectIds, ...effectiveBranchIds] } },
+            { assignedBranches: { $in: [...branchObjectIds, ...effectiveBranchIds] } }
+          ]
+        });
+      }
+
+      if (effectiveDepartmentIds) {
+        const deptObjectIds = effectiveDepartmentIds
+          .filter(id => mongoose.Types.ObjectId.isValid(id))
+          .map(id => new mongoose.Types.ObjectId(id));
+
+        const deptDocs = await Department.find({
+          $or: [
+            ...(deptObjectIds.length ? [{ _id: { $in: deptObjectIds } }] : []),
+            { name: { $in: effectiveDepartmentIds } },
+            { departmentName: { $in: effectiveDepartmentIds } }
+          ]
+        }).select('_id name departmentName').lean();
+
+        const allDeptNames = [
+          ...effectiveDepartmentIds,
+          ...deptDocs.map(d => d.name),
+          ...deptDocs.map(d => d.departmentName)
+        ].filter(Boolean);
+
+        const allDeptIds = [
+          ...deptObjectIds,
+          ...deptDocs.map(d => d._id)
+        ];
+
+        userConditions.push({
+          $or: [
+            { department: { $in: allDeptNames } },
+            { department: { $in: allDeptIds } },
+            { departmentId: { $in: allDeptNames } },
+            { departmentId: { $in: allDeptIds } }
+          ]
+        });
+      }
+
+      const matchingUsers = await User.find({ $and: userConditions }).select('_id').lean();
+      const scopedUserIds = matchingUsers.map(u => u._id);
+
+      const matchingGroups = await Group.find({
         companyCode: groupCompanyFilter,
         isActive: true,
-        members: { $in: branchUserIds }
+        members: { $in: scopedUserIds }
       }).distinct('_id');
 
-      taskFilter.$or = [
-        { assignedUsers: { $in: branchUserIds } },
-        ...(branchGroupIds.length ? [{ assignedGroups: { $in: branchGroupIds } }] : [])
+      const orConditions = [
+        { assignedUsers: { $in: scopedUserIds } },
+        ...(matchingGroups.length ? [{ assignedGroups: { $in: matchingGroups } }] : [])
       ];
+
+      if (effectiveBranchIds && !effectiveDepartmentIds) {
+        const branchObjectIds = effectiveBranchIds
+          .filter(id => mongoose.Types.ObjectId.isValid(id))
+          .map(id => new mongoose.Types.ObjectId(id));
+        orConditions.push({ branch: { $in: [...branchObjectIds, ...effectiveBranchIds] } });
+      }
+
+      taskFilter.$or = orConditions;
     }
 
-    const tasks = await Task.find(taskFilter).populate('assignedUsers', 'name role email').populate('createdBy', 'name email').sort({ createdAt: -1 }).lean();
+    const tasks = await Task.find(taskFilter)
+      .populate('branch', 'name branchCode')
+      .populate('assignedUsers', 'name role email department branch assignedBranches')
+      .populate('createdBy', 'name email')
+      .sort({ createdAt: -1 })
+      .lean();
 
     const enriched = await enrichStatusInfo(tasks);
     const mapped = enriched.map(t => ({ ...t, status: normalizeTaskStatus(t.overallStatus) }));
     const filtered = sortTasksNewestFirst(applyCleanListFilters(mapped, req));
     const paginated = paginateTasks(filtered, req);
 
+    const calculateTaskSummary = (taskList = []) => {
+      let pending = 0;
+      let inProgress = 0;
+      let completed = 0;
+      let rejected = 0;
+      let overdue = 0;
+
+      taskList.forEach(t => {
+        const rawStatus = t.overallStatus || t.status || 'pending';
+        const st = normalizeTaskStatus(rawStatus);
+
+        if (st === 'completed' || st === 'approved') {
+          completed++;
+        } else if (st === 'in-progress') {
+          inProgress++;
+        } else if (st === 'rejected') {
+          rejected++;
+        } else {
+          pending++;
+        }
+
+        const due = t.dueDateTime || t.dueDate;
+        if (due && new Date(due) < new Date() && st !== 'completed' && st !== 'approved') {
+          overdue++;
+        }
+      });
+
+      return {
+        total: taskList.length,
+        pending,
+        inProgress,
+        completed,
+        rejected,
+        overdue
+      };
+    };
+
+    const summaryStats = calculateTaskSummary(filtered);
+    const overallStats = calculateTaskSummary(mapped);
+
     return res.json({
       success: true,
       tasks: paginated.tasks,
       groupedTasks: groupTasksByDate(paginated.tasks, 'createdAt', 'assignedSerialNo'),
       stats: calculateUnifiedTaskStats(filtered),
+      summaryStats,
+      overallStats,
       total: paginated.total,
       pagination: paginated
     });
@@ -1260,7 +1541,7 @@ exports.getAssignedTasks = async (req, res) => {
 const handleTaskCreation = async (req, res, isSelf) => {
   const { title, description, dueDateTime, whatsappNumber, priorityDays, priority, assignedUsers, assignedGroups, checkpoints } = req.body;
   const companyCode = getRequestCompanyCode(req);
-  const branchId = getRequestedTaskBranchId(req);
+  let branchId = getRequestedTaskBranchId(req);
   
   if (!companyCode) {
     return res.status(400).json({ success: false, error: 'Company code is missing. Please login again.' });
@@ -1275,6 +1556,61 @@ const handleTaskCreation = async (req, res, isSelf) => {
     parsedUsers = typeof assignedUsers === 'string' ? JSON.parse(assignedUsers) : assignedUsers;
   }
   parsedUsers = parsedUsers.map(userId => normalizeId(userId)).filter(Boolean);
+
+  // Validate creator's Page Management scope for admin-task-create
+  const pageScope = await getAdminTaskPageScope(req);
+  if (!pageScope.hasAccess) {
+    return res.status(403).json({ success: false, error: 'You do not have permission to create tasks' });
+  }
+
+  if (!isSelf && !pageScope.isOwner) {
+    if (!pageScope.branchIds.includes('all')) {
+      if (branchId && !pageScope.branchIds.map(String).includes(String(branchId))) {
+        return res.status(403).json({ success: false, error: 'Cannot create task for a branch outside your assigned scope' });
+      }
+      if (!branchId && pageScope.branchIds.length === 1) {
+        branchId = pageScope.branchIds[0];
+      }
+    }
+
+    if (parsedUsers.length > 0) {
+      const branchConditions = !pageScope.branchIds.includes('all') ? [
+        { branch: { $in: pageScope.branchIds } },
+        { branchId: { $in: pageScope.branchIds } },
+        { assignedBranches: { $in: pageScope.branchIds } }
+      ] : null;
+
+      let deptConditions = null;
+      if (!pageScope.departmentIds.includes('all')) {
+        const validObjectIds = pageScope.departmentIds.filter(id => mongoose.Types.ObjectId.isValid(id));
+        const deptDocs = await Department.find({
+          _id: { $in: validObjectIds }
+        }).select('_id name departmentName').lean();
+        const names = deptDocs.map(d => d.name || d.departmentName).filter(Boolean);
+        deptConditions = [
+          { department: { $in: [...pageScope.departmentIds, ...names] } },
+          { departmentId: { $in: pageScope.departmentIds } }
+        ];
+      }
+
+      const userConditions = [
+        { _id: { $in: parsedUsers } },
+        ...(branchConditions ? [{ $or: branchConditions }] : []),
+        ...(deptConditions ? [{ $or: deptConditions }] : [])
+      ];
+
+      const validUsers = await User.find({ $and: userConditions }).select('_id').lean();
+      const validUserSet = new Set(validUsers.map(u => String(u._id)));
+      const hasInvalidUser = parsedUsers.some(uId => !validUserSet.has(String(uId)));
+
+      if (hasInvalidUser) {
+        return res.status(403).json({
+          success: false,
+          error: 'Cannot assign task to users outside your assigned branch/department scope'
+        });
+      }
+    }
+  }
 
   if (!isSelf && branchId && parsedUsers.length > 0) {
     const branchUsers = await User.find({
@@ -1337,6 +1673,8 @@ const handleTaskCreation = async (req, res, isSelf) => {
     repeatPattern: recurringSettings.repeatPattern,
     repeatDays: recurringSettings.repeatDays,
     recurringPattern: recurringSettings.repeatPattern,
+    recurrenceEndDate: recurringSettings.recurrenceEndDate,
+    recurrenceStoppedAt: null,
     nextRecurringDate: recurringSettings.isRecurring && parsedDue
       ? getNextRecurringDate(parsedDue, recurringSettings.repeatPattern, recurringSettings.repeatDays)
       : null,
@@ -1345,6 +1683,14 @@ const handleTaskCreation = async (req, res, isSelf) => {
 
   await task.populate('assignedUsers', 'name role email');
   await task.populate('createdBy', 'name email');
+
+  if (isSelf && task.isRecurring) {
+    try {
+      await generateRecurringOccurrences(task);
+    } catch (recErr) {
+      console.error(`Failed to auto-generate recurring occurrences for task ${task._id}:`, recErr);
+    }
+  }
 
   if (task.assignedUsers?.length > 0) {
     await sendTaskCreationEmail(task, task.assignedUsers);
@@ -1398,7 +1744,7 @@ exports.updateTask = async (req, res) => {
     fields.forEach(f => {
       if (req.body[f] !== undefined && req.body[f] !== 'null') task[f] = req.body[f];
     });
-    const hasRecurringUpdate = ['repeatPattern', 'repeatDays', 'isRecurring', 'recurringPattern']
+    const hasRecurringUpdate = ['repeatPattern', 'repeatDays', 'isRecurring', 'recurringPattern', 'recurrenceEndDate', 'repeatEndDate', 'endDate']
       .some(field => Object.prototype.hasOwnProperty.call(req.body, field));
     if (hasRecurringUpdate) {
       applyRecurringFields(task, req.body, task.dueDateTime);
@@ -1416,6 +1762,50 @@ exports.updateTask = async (req, res) => {
 
     if (req.body.assignedUsers) {
       task.assignedUsers = typeof req.body.assignedUsers === 'string' ? JSON.parse(req.body.assignedUsers) : req.body.assignedUsers;
+      const parsedUpdateUsers = (typeof req.body.assignedUsers === 'string' ? JSON.parse(req.body.assignedUsers) : req.body.assignedUsers)
+        .map(u => normalizeId(u))
+        .filter(Boolean);
+
+      const pageScope = await getAdminTaskPageScope(req);
+      if (!pageScope.isOwner && (!pageScope.branchIds.includes('all') || !pageScope.departmentIds.includes('all'))) {
+        const branchConditions = !pageScope.branchIds.includes('all') ? [
+          { branch: { $in: pageScope.branchIds } },
+          { branchId: { $in: pageScope.branchIds } },
+          { assignedBranches: { $in: pageScope.branchIds } }
+        ] : null;
+
+        let deptConditions = null;
+        if (!pageScope.departmentIds.includes('all')) {
+          const validObjectIds = pageScope.departmentIds.filter(id => mongoose.Types.ObjectId.isValid(id));
+          const deptDocs = await Department.find({
+            _id: { $in: validObjectIds }
+          }).select('_id name departmentName').lean();
+          const names = deptDocs.map(d => d.name || d.departmentName).filter(Boolean);
+          deptConditions = [
+            { department: { $in: [...pageScope.departmentIds, ...names] } },
+            { departmentId: { $in: pageScope.departmentIds } }
+          ];
+        }
+
+        const userConditions = [
+          { _id: { $in: parsedUpdateUsers } },
+          ...(branchConditions ? [{ $or: branchConditions }] : []),
+          ...(deptConditions ? [{ $or: deptConditions }] : [])
+        ];
+
+        const validUsers = await User.find({ $and: userConditions }).select('_id').lean();
+        const validUserSet = new Set(validUsers.map(u => String(u._id)));
+        const hasInvalidUser = parsedUpdateUsers.some(uId => !validUserSet.has(String(uId)));
+
+        if (hasInvalidUser) {
+          return res.status(403).json({
+            success: false,
+            error: 'Cannot assign task to users outside your assigned branch/department scope'
+          });
+        }
+      }
+
+      task.assignedUsers = parsedUpdateUsers;
       task.statusByUser = task.assignedUsers.map(uid => ({ user: uid, status: 'pending' }));
     }
     if (req.body.checkpoints !== undefined) {
@@ -1423,6 +1813,15 @@ exports.updateTask = async (req, res) => {
     }
 
     await task.save();
+
+    if (task.isRecurring && !task.recurrenceSourceId) {
+      try {
+        await generateRecurringOccurrences(task);
+      } catch (recErr) {
+        console.error(`Failed to sync recurring occurrences on update for task ${task._id}:`, recErr);
+      }
+    }
+
     await createActivityLog(req.user, 'task_updated', task._id, `Updated task details`, oldTask, task.toObject(), req);
 
     res.json({ success: true, message: 'Task updated successfully', task });
@@ -1441,8 +1840,49 @@ exports.deleteTask = async (req, res) => {
     task.isActive = false;
     await task.save();
 
+    if (!task.recurrenceSourceId && task.isRecurring) {
+      await Task.updateMany(
+        { recurrenceSourceId: task._id, overallStatus: 'pending', dueDateTime: { $gt: new Date() } },
+        { $set: { isActive: false } }
+      );
+    }
+
     await createActivityLog(req.user, 'task_deleted', taskId, `Deleted task: ${task.title}`, task.toObject(), null, req);
     res.json({ success: true, message: 'Task deleted successfully' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+exports.stopRecurringTask = async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    let task = await Task.findById(taskId);
+    if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
+    if (task.recurrenceSourceId) {
+      task = await Task.findById(task.recurrenceSourceId);
+      if (!task) return res.status(404).json({ success: false, error: 'Recurring source task not found' });
+    }
+    if (task.createdBy.toString() !== req.user._id.toString()) return res.status(403).json({ success: false, error: 'Not authorized' });
+    if (task.taskFor !== 'self') return res.status(400).json({ success: false, error: 'Only personal recurring tasks can be stopped' });
+
+    const oldTask = task.toObject();
+    task.isRecurring = false;
+    task.repeatPattern = 'none';
+    task.recurringPattern = 'none';
+    task.repeatDays = [];
+    task.nextRecurringDate = null;
+    task.recurrenceStoppedAt = new Date();
+    await task.save();
+
+    await Task.deleteMany({
+      recurrenceSourceId: task._id,
+      overallStatus: 'pending',
+      dueDateTime: { $gt: new Date() }
+    });
+
+    await createActivityLog(req.user, 'recurring_task_stopped', task._id, 'Stopped recurring task', oldTask, task.toObject(), req);
+    res.json({ success: true, message: 'Repeat task stopped successfully', task });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -1495,8 +1935,11 @@ exports.updateStatus = async (req, res) => {
       return res.status(400).json({ success: false, error: 'Cannot change status of an overdue task' });
     }
 
+    const isResumedFromHold = isOnHoldStatus(oldStatus) && normalizedStatus === 'in-progress';
+
     if (
       !['overdue', 'onhold'].includes(normalizedStatus) &&
+      !isResumedFromHold &&
       isTaskOverdueForStatus(task.dueDateTime || task.dueDate, oldStatus, task) &&
       !allowCompanyAllEdit
     ) {
@@ -1591,6 +2034,21 @@ exports.updateStatus = async (req, res) => {
           if (remarks) s.remarks = remarks;
         });
       }
+    }
+
+    if (isResumedFromHold) {
+      const now = new Date();
+      task.onHoldReleasedAt = now;
+      task.dueDateTime = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+      task.dueDate = task.dueDateTime;
+    } else if (normalizedStatus === 'onhold') {
+      task.onHoldReleasedAt = null;
+    }
+
+    if (normalizedStatus === 'completed') {
+      task.completionDate = new Date();
+    } else if (normalizedStatus !== 'completed' && task.completionDate) {
+      task.completionDate = null;
     }
 
     task.statusHistory.push({ status, changedBy: req.user._id, remarks: remarks || `Status changed from ${oldStatus} to ${status}` });
@@ -1740,7 +2198,7 @@ exports.getTaskActivityLogs = async (req, res) => {
   try {
     const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 100 });
     const filter = { task: req.params.taskId };
-    const [logs, total] = await Promise.all([
+    let [logs, total] = await Promise.all([
       ActivityLog.find(filter)
         .populate('user', 'name role email')
         .sort({ createdAt: -1 })
@@ -1749,6 +2207,44 @@ exports.getTaskActivityLogs = async (req, res) => {
         .lean(),
       ActivityLog.countDocuments(filter)
     ]);
+
+    // Fallback if no explicit ActivityLog records found
+    if ((!logs || logs.length === 0) && skip === 0) {
+      const task = await Task.findById(req.params.taskId)
+        .populate('createdBy', 'name email role')
+        .populate('statusHistory.changedBy', 'name email role')
+        .lean();
+
+      if (task) {
+        const fallback = [];
+        if (Array.isArray(task.statusHistory) && task.statusHistory.length > 0) {
+          task.statusHistory.forEach(sh => {
+            fallback.push({
+              _id: `sh_${sh._id || Math.random()}`,
+              action: 'status_updated',
+              user: sh.changedBy,
+              userName: sh.changedBy?.name || 'User',
+              description: sh.remarks || `Status changed to ${sh.status}`,
+              createdAt: sh.changedAt || task.updatedAt
+            });
+          });
+        }
+        if (task.createdAt) {
+          fallback.push({
+            _id: `create_${task._id}`,
+            action: task.taskFor === 'self' ? 'self_task_created' : 'task_created',
+            user: task.createdBy,
+            userName: task.createdBy?.name || 'User',
+            description: `Task created: ${task.title || 'Task'}`,
+            createdAt: task.createdAt
+          });
+        }
+        fallback.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+        logs = fallback;
+        total = fallback.length;
+      }
+    }
+
     res.json({ success: true, logs, count: logs.length, total, pagination: buildPaginationMeta({ page, limit, total }) });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -1943,16 +2439,20 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
 
   const [personalTasks, clientTasks, projectTasks] = await Promise.all([
     Task.find(personalQuery)
-      .select('title description dueDate dueDateTime priority priorityDays checkpoints overallStatus statusByUser statusHistory completionDate assignedUsers assignedGroups createdBy companyCode taskFor onHoldReleasedAt createdAt updatedAt')
+      .select('title description dueDate dueDateTime priority priorityDays checkpoints overallStatus statusByUser statusHistory completionDate assignedUsers assignedGroups createdBy companyCode taskFor onHoldReleasedAt createdAt updatedAt remarks')
       .populate('assignedUsers', 'name email')
       .populate('createdBy', 'name email')
+      .populate('statusHistory.changedBy', 'name email')
+      .populate('remarks.user', 'name email')
       .sort({ createdAt: -1 })
       .lean(),
     
     ClientTask.find(clientQuery)
-      .select('name description dueDate priority status completed completedAt checkpoints service timeSpent inProgressSince activityLogs clientId createdAt updatedAt assignee assigneeId')
+      .select('name description dueDate priority status completed completedAt checkpoints service timeSpent inProgressSince activityLogs clientId createdAt updatedAt assignee assigneeId remarks')
       .populate('clientId', 'client name email company phone companyCode')
       .populate('assigneeId', 'name email role')
+      .populate('activityLogs.user', 'name email')
+      .populate('remarks.user', 'name email')
       .sort({ createdAt: -1 })
       .lean(),
 
@@ -1985,7 +2485,8 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
       completedAt: t.completionDate || null,
       source: taskSource,
       taskSource,
-      __taskSource: taskSource
+      __taskSource: taskSource,
+      remarks: Array.isArray(t.remarks) ? t.remarks : []
     };
   });
 
@@ -2013,7 +2514,8 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
       assigneeName: t.assigneeId?.name || t.assignee || 'Unassigned',
       timeSpent: t.timeSpent || 0,
       inProgressSince: t.inProgressSince || null,
-      activityLogs: t.activityLogs || [],
+      activityLogs: Array.isArray(t.activityLogs) ? t.activityLogs : [],
+      remarks: Array.isArray(t.remarks) ? t.remarks : [],
       source: 'client',
       taskSource: 'client',
       __taskSource: 'client'
@@ -2289,11 +2791,133 @@ exports.getUserTasks = async (req, res) => {
   }
 };
 
+const enrichTasksWithActivityAndRemarks = async (tasks) => {
+  if (!Array.isArray(tasks) || tasks.length === 0) return tasks;
+
+  const personalTaskIds = tasks
+    .filter(t => !t.source || t.source === 'personal' || t.source === 'assigned' || t.source === 'self')
+    .map(t => t._id)
+    .filter(Boolean);
+
+  let activityLogsByTaskId = {};
+  if (personalTaskIds.length > 0) {
+    try {
+      const dbLogs = await ActivityLog.find({ task: { $in: personalTaskIds } })
+        .populate('user', 'name role email')
+        .sort({ createdAt: -1 })
+        .lean();
+
+      dbLogs.forEach(log => {
+        const tId = log.task?.toString();
+        if (!activityLogsByTaskId[tId]) activityLogsByTaskId[tId] = [];
+        activityLogsByTaskId[tId].push({
+          _id: log._id,
+          action: log.action || 'update',
+          user: log.user,
+          userName: log.user?.name || log.userName || 'User',
+          description: log.description || 'Task activity',
+          oldValues: log.oldValues,
+          newValues: log.newValues,
+          createdAt: log.createdAt
+        });
+      });
+    } catch (logErr) {
+      console.error('Error fetching ActivityLogs for tasks:', logErr);
+    }
+  }
+
+  return tasks.map(task => {
+    let activityLogs = [];
+
+    if (task.source === 'client') {
+      activityLogs = (Array.isArray(task.activityLogs) ? task.activityLogs : []).map(log => ({
+        _id: log._id,
+        action: log.action || 'update',
+        user: log.user,
+        userName: log.userName || log.user?.name || 'User',
+        description: log.description || 'Task activity',
+        oldValues: log.oldValues,
+        newValues: log.newValues,
+        createdAt: log.createdAt || task.updatedAt
+      }));
+      if (activityLogs.length === 0 && task.createdAt) {
+        activityLogs.push({
+          _id: `create_${task._id}`,
+          action: 'task_created',
+          userName: task.assigneeName || 'System',
+          description: `Task created for client ${task.clientName || 'Client'}`,
+          createdAt: task.createdAt
+        });
+      }
+    } else if (task.source === 'project') {
+      activityLogs = (Array.isArray(task.activityLogs) ? task.activityLogs : []).map(log => ({
+        _id: log._id,
+        action: log.type || log.action || 'update',
+        user: log.performedBy || log.user,
+        userName: log.performedBy?.name || log.userName || 'User',
+        description: log.remarks || log.description || 'Project task activity',
+        createdAt: log.performedAt || log.createdAt || task.updatedAt
+      }));
+      if (activityLogs.length === 0 && task.createdAt) {
+        activityLogs.push({
+          _id: `create_${task._id}`,
+          action: 'task_created',
+          userName: task.assignedByName || 'System',
+          description: `Project task created for ${task.projectName || 'Project'}`,
+          createdAt: task.createdAt
+        });
+      }
+    } else {
+      const tId = task._id?.toString();
+      const logs = activityLogsByTaskId[tId] || [];
+      if (logs.length > 0) {
+        activityLogs = logs;
+      } else {
+        const fallback = [];
+        if (Array.isArray(task.statusHistory) && task.statusHistory.length > 0) {
+          task.statusHistory.forEach(sh => {
+            fallback.push({
+              _id: `sh_${sh._id || Math.random()}`,
+              action: 'status_updated',
+              user: sh.changedBy,
+              userName: sh.changedBy?.name || 'User',
+              description: sh.remarks || `Status changed to ${sh.status}`,
+              createdAt: sh.changedAt || task.updatedAt
+            });
+          });
+        }
+        if (task.createdAt) {
+          fallback.push({
+            _id: `create_${task._id}`,
+            action: task.taskFor === 'self' ? 'self_task_created' : 'task_created',
+            user: task.createdBy,
+            userName: task.createdBy?.name || 'User',
+            description: `Task created: ${task.title || 'Task'}`,
+            createdAt: task.createdAt
+          });
+        }
+        activityLogs = fallback;
+      }
+    }
+
+    activityLogs.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+
+    return {
+      ...task,
+      activityLogs,
+      remarks: Array.isArray(task.remarks) ? task.remarks : []
+    };
+  });
+};
+
 exports.getUserAllTasksPaginated = async (req, res) => {
   try {
     const { userId } = req.params;
+    const isExport = req.query.export === 'true' || req.query.all === 'true';
     const page = parsePositiveInt(req.query.page, 1);
-    const limit = parsePositiveInt(req.query.limit, 10, 50);
+    const limit = isExport
+      ? parsePositiveInt(req.query.limit, 5000, 10000)
+      : parsePositiveInt(req.query.limit, 10, 50);
 
     const [targetUser, allTasks] = await Promise.all([
       User.findById(userId).select('name email role jobRole companyRole department company').populate('department', 'name').lean(),
@@ -2365,6 +2989,7 @@ exports.getUserAllTasksPaginated = async (req, res) => {
     const start = (safePage - 1) * limit;
     const paginatedTasks = sortedFiltered.slice(start, start + limit);
     const cleanTasks = paginatedTasks.map(({ __workIntervals, ...task }) => task);
+    const enrichedTasks = await enrichTasksWithActivityAndRemarks(cleanTasks);
 
     res.json({
       success: true,
@@ -2376,7 +3001,7 @@ exports.getUserAllTasksPaginated = async (req, res) => {
         role: targetUser.jobRole || targetUser.companyRole || targetUser.role,
         department: targetUser.department
       } : null,
-      tasks: cleanTasks,
+      tasks: enrichedTasks,
       workSummary: {
         ...workWindow.summary,
         trackedTaskSeconds: dayTrackedTaskSeconds,

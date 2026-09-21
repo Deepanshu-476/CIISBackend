@@ -6,12 +6,12 @@ const User = require("../models/User");
 const Department = require("../models/Department");
 const JobRole = require("../models/JobRole");
 const Attendance = require("../HR-CDS/models/Attendance");
+const OvertimeRequest = require("../HR-CDS/models/OvertimeRequest");
 const Leave = require("../HR-CDS/models/Leave");
 const Holiday = require("../HR-CDS/models/Holiday");
 const PayrollRun = require("../models/PayrollRun");
 const Company = require("../models/Company");
 const { validateBulkEmployeeStatuses, applyBulkEmployeeTransition, deriveRunStatus } = require("../utils/payrollFlow");
-const { salarySnapshotForMonth } = require("../utils/payrollSalarySnapshot");
 const { sendEmail } = require("../utils/sendEmail");
 
 const getCompany = (req) => req.user?.company?._id || req.user?.company || req.user?.companyId;
@@ -22,7 +22,6 @@ const populateQuery = (query) =>
     .populate("user", "name email department jobRole employeeId empId phone profileImage status dateOfJoining bankName accountNumber ifsc bankHolderName panCard panNo pan aadharCard aadharNo aadhar aadhaar aadhaarCard dob")
     .populate("salaryStructure", "name code salaryType salaryInputType effectiveFrom status description components")
     .populate("components.component", "name code type proRata taxable grossSalary pfWage esiWage ptWage")
-    .populate("history.components.component", "name code type proRata taxable grossSalary pfWage esiWage ptWage")
     .populate("createdBy", "name email")
     .populate("updatedBy", "name email");
 
@@ -290,21 +289,50 @@ exports.payrollPreview = async (req, res) => {
     const monthIndex = Number(match[2]) - 1;
     const start = new Date(Date.UTC(year, monthIndex, 1) - (330 * 60 * 1000));
     const end = new Date(Date.UTC(year, monthIndex + 1, 1) - (330 * 60 * 1000) - 1);
-    const activeAssignments = await populateQuery(EmployeeSalary.find({ company, status: "active" }))
+    const assignments = await populateQuery(EmployeeSalary.find({ company, status: "active" }))
       .populate("components.component", "name code type proRata")
       .lean();
-    const assignments = activeAssignments
-      .map(assignment => salarySnapshotForMonth(assignment, month))
-      .filter(Boolean);
     const userIds = assignments.map(item => item.user?._id || item.user).filter(Boolean);
     const departmentIds = [...new Set(assignments.map(item => item.user?.department).filter(id => mongoose.isValidObjectId(id)).map(String))];
 
-    const [attendances, leaves, holidays, departments] = await Promise.all([
+    const [attendances, leaves, holidays, departments, approvedOtRequests] = await Promise.all([
       Attendance.find({ user: { $in: userIds }, date: { $gte: start, $lte: end } }).lean(),
       Leave.find({ user: { $in: userIds }, status: "Approved", startDate: { $lte: end }, endDate: { $gte: start } }).lean(),
       Holiday.find({ company, isActive: { $ne: false }, date: { $gte: start, $lte: end } }).lean(),
-      Department.find({ _id: { $in: departmentIds } }).select("name workingDays workingDayHistory").lean()
+      Department.find({ _id: { $in: departmentIds } }).select("name workingDays workingDayHistory").lean(),
+      OvertimeRequest.find({ user: { $in: userIds }, status: "Approved" }).lean()
     ]);
+
+    const userApprovedOtMap = new Map();
+    approvedOtRequests.forEach(req => {
+      const uId = String(req.user);
+      if (!userApprovedOtMap.has(uId)) {
+        userApprovedOtMap.set(uId, { fullDayDates: new Set(), hourlyDates: new Map() });
+      }
+      const userOt = userApprovedOtMap.get(uId);
+      const isFullDay = req.calculationType === 'FULL_DAY_PRESENT';
+
+      if (req.requestType === 'FULL_MONTH' && req.month === month) {
+        for (let d = 1; d <= 31; d++) {
+          const k = `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+          if (isFullDay) {
+            userOt.fullDayDates.add(k);
+          } else {
+            userOt.hourlyDates.set(k, Number(req.requestedHours || 0));
+          }
+        }
+      } else if (Array.isArray(req.dateKeys)) {
+        req.dateKeys.forEach(k => {
+          if (k.startsWith(month)) {
+            if (isFullDay) {
+              userOt.fullDayDates.add(k);
+            } else {
+              userOt.hourlyDates.set(k, Number(req.requestedHours || 0));
+            }
+          }
+        });
+      }
+    });
 
     const departmentMap = new Map(departments.map(item => [String(item._id), item]));
     const holidayKeys = new Set(holidays.map(item => indiaDateKey(item.date)));
@@ -334,6 +362,7 @@ exports.payrollPreview = async (req, res) => {
 
     let daysBasisCount = daysInMonth;
     if (salaryDaysBasis === "fixed30") daysBasisCount = 30;
+    else if (salaryDaysBasis === "fixed31") daysBasisCount = 31;
     else if (salaryDaysBasis === "fixed26") daysBasisCount = 26;
 
     const elapsedCalendarDays = calendarDates.filter(date => indiaDateKey(date) <= todayKey).length;
@@ -344,6 +373,105 @@ exports.payrollPreview = async (req, res) => {
       const joiningKey = assignment.dateOfJoining || assignment.user?.dateOfJoining
         ? indiaDateKey(assignment.dateOfJoining || assignment.user.dateOfJoining)
         : "";
+      const userOt = userApprovedOtMap.get(userId) || { fullDayDates: new Set(), hourlyDates: new Map() };
+      const approvedFullDayCount = userOt.fullDayDates.size;
+      let totalOvertimeMinutes = 0;
+      let overtimeDays = approvedFullDayCount;
+
+      // 1. Build day-by-day status map for all calendar dates in month
+      const dayRecords = calendarDates.map((date, idx) => {
+        const key = indiaDateKey(date);
+        const dayOfWeek = date.getUTCDay() || 7;
+        const isPreJoining = Boolean(joiningKey && key < joiningKey);
+        const isFuture = key > todayKey;
+        const attendance = attendanceMap.get(`${userId}:${key}`);
+
+        // Overtime calculation for this date
+        if (userOt.hourlyDates.has(key)) {
+          let otMin = Number(attendance?.overTimeMinutes || 0);
+          if (!otMin && attendance?.overTime && attendance.overTime !== "00:00:00" && attendance.overTime !== "Full Day") {
+            const parts = String(attendance.overTime).split(":").map(Number);
+            if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+              otMin = (parts[0] * 60) + parts[1];
+            }
+          }
+          const approvedMaxMin = Number(userOt.hourlyDates.get(key) || 0) * 60;
+          if (!otMin && approvedMaxMin > 0) {
+            otMin = approvedMaxMin;
+          } else if (approvedMaxMin > 0 && otMin > approvedMaxMin) {
+            otMin = approvedMaxMin;
+          }
+          if (otMin > 0) {
+            totalOvertimeMinutes += otMin;
+            overtimeDays += 1;
+          }
+        } else if (attendance && attendance.hasOvertimeApproved && !userOt.fullDayDates.has(key)) {
+          let otMin = Number(attendance.overTimeMinutes || 0);
+          if (!otMin && attendance.overTime && attendance.overTime !== "00:00:00" && attendance.overTime !== "Full Day") {
+            const parts = String(attendance.overTime).split(":").map(Number);
+            if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+              otMin = (parts[0] * 60) + parts[1];
+            }
+          }
+          if (otMin > 0) {
+            totalOvertimeMinutes += otMin;
+            overtimeDays += 1;
+          }
+        }
+
+        let rawStatus = String(attendance?.status || "").trim().toUpperCase();
+        if (userOt.fullDayDates.has(key) && (!rawStatus || rawStatus === "ABSENT")) {
+          rawStatus = "PRESENT";
+        }
+        const isHoliday = holidayKeys.has(key) || rawStatus === "HOLIDAY";
+        const isWeekOff = dayOfWeek > effectiveWorkingDays(departmentDoc, date);
+        const isOffDay = isWeekOff || isHoliday;
+
+        let workingStatus = "";
+        let isLeave = false;
+        let leavePayType = "";
+
+        if (!isOffDay && !isPreJoining && !isFuture) {
+          const approvedLeave = (leaveByUser.get(userId) || []).find(item => (
+            key >= indiaDateKey(item.startDate) && key <= indiaDateKey(item.endDate)
+          ));
+          if (approvedLeave) {
+            isLeave = true;
+            leavePayType = String(approvedLeave.payType).toLowerCase();
+            workingStatus = leavePayType === "unpaid" ? "UNPAID_LEAVE" : "PAID_LEAVE";
+          } else if (userOt.fullDayDates.has(key)) {
+            workingStatus = "PRESENT";
+          } else if (["PRESENT", "LATE", "SHORT LEAVE"].includes(rawStatus)) {
+            workingStatus = "PRESENT";
+          } else if (["HALF DAY", "HALFDAY"].includes(rawStatus)) {
+            workingStatus = "HALF_DAY";
+          } else if (["UNINFORMED LEAVE", "UNINFORMEDLEAVE"].includes(rawStatus)) {
+            workingStatus = "UNINFORMED_LEAVE";
+          } else if (rawStatus === "ABSENT") {
+            workingStatus = "ABSENT";
+          } else {
+            workingStatus = "PENDING";
+          }
+        }
+
+        return {
+          date,
+          key,
+          dayOfWeek,
+          idx,
+          isPreJoining,
+          isFuture,
+          isHoliday,
+          isWeekOff,
+          isOffDay,
+          workingStatus,
+          isLeave,
+          leavePayType,
+          rawStatus
+        };
+      });
+
+      // 2. Count working days and attendance states
       let workingDays = 0;
       let eligibleWorkingDays = 0;
       let presentDays = 0;
@@ -353,188 +481,263 @@ exports.payrollPreview = async (req, res) => {
       let halfDayDays = 0;
       let lopDays = 0;
       let actualAbsentDays = 0;
-      let sandwichLopDays = 0;
       let pendingDays = 0;
       let futureDays = 0;
+      let totalWeekOffDays = 0;
+      let totalHolidayDays = 0;
       let elapsedWeekOffDays = 0;
-      let elapsedHolidays = 0;
+      let elapsedHolidayDays = 0;
 
-      calendarDates.forEach((date, idx) => {
-        const key = indiaDateKey(date);
-        const dayOfWeek = date.getUTCDay() || 7;
-        const attendance = attendanceMap.get(`${userId}:${key}`);
-        const status = String(attendance?.status || "").trim().toUpperCase();
-        const isHoliday = holidayKeys.has(key) || status === "HOLIDAY";
-        const isWeekOff = dayOfWeek > effectiveWorkingDays(departmentDoc, date);
-        const isOffDay = isWeekOff || isHoliday;
-
-        if (isOffDay) {
-          if ((!joiningKey || key >= joiningKey) && key <= todayKey) {
-            if (isHoliday) elapsedHolidays += 1;
-            else if (isWeekOff) elapsedWeekOffDays += 1;
-          }
-
-          // Check Sandwich LOP if policy enabled
-          if (sandwichRuleEnabled && (!joiningKey || key >= joiningKey) && key <= todayKey) {
-            let prevStatus = "";
-            for (let i = idx - 1; i >= 0; i--) {
-              const pDate = calendarDates[i];
-              const pKey = indiaDateKey(pDate);
-              const pDayOfWeek = pDate.getUTCDay() || 7;
-              if (pDayOfWeek <= effectiveWorkingDays(departmentDoc, pDate) && !holidayKeys.has(pKey)) {
-                const pLeave = (leaveByUser.get(userId) || []).find(item => (pKey >= indiaDateKey(item.startDate) && pKey <= indiaDateKey(item.endDate)));
-                if (pLeave) {
-                  prevStatus = String(pLeave.payType).toLowerCase() === "unpaid" ? "ABSENT" : "PRESENT";
-                } else {
-                  const pAtt = attendanceMap.get(`${userId}:${pKey}`);
-                  prevStatus = String(pAtt?.status || "").trim().toUpperCase();
-                }
-                break;
-              }
-            }
-
-            let nextStatus = "";
-            for (let i = idx + 1; i < calendarDates.length; i++) {
-              const nDate = calendarDates[i];
-              const nKey = indiaDateKey(nDate);
-              const nDayOfWeek = nDate.getUTCDay() || 7;
-              if (nDayOfWeek <= effectiveWorkingDays(departmentDoc, nDate) && !holidayKeys.has(nKey)) {
-                const nLeave = (leaveByUser.get(userId) || []).find(item => (nKey >= indiaDateKey(item.startDate) && nKey <= indiaDateKey(item.endDate)));
-                if (nLeave) {
-                  nextStatus = String(nLeave.payType).toLowerCase() === "unpaid" ? "ABSENT" : "PRESENT";
-                } else {
-                  const nAtt = attendanceMap.get(`${userId}:${nKey}`);
-                  nextStatus = String(nAtt?.status || "").trim().toUpperCase();
-                }
-                break;
-              }
-            }
-
-            if (["ABSENT", "UNPAID"].includes(prevStatus) && ["ABSENT", "UNPAID"].includes(nextStatus)) {
-              sandwichLopDays += 1;
-            }
+      dayRecords.forEach(day => {
+        if (day.isOffDay) {
+          if (day.isHoliday) {
+            totalHolidayDays += 1;
+            if (!day.isPreJoining && !day.isFuture) elapsedHolidayDays += 1;
+          } else if (day.isWeekOff) {
+            totalWeekOffDays += 1;
+            if (!day.isPreJoining && !day.isFuture) elapsedWeekOffDays += 1;
           }
           return;
         }
 
         workingDays += 1;
-        if (joiningKey && key < joiningKey) return;
-        if (key > todayKey) {
+        if (day.isPreJoining) return;
+        if (day.isFuture) {
           futureDays += 1;
           return;
         }
         eligibleWorkingDays += 1;
 
-        const approvedLeave = (leaveByUser.get(userId) || []).find(item => (
-          key >= indiaDateKey(item.startDate) && key <= indiaDateKey(item.endDate)
-        ));
-        if (approvedLeave) {
-          if (String(approvedLeave.payType).toLowerCase() === "unpaid") {
-            unpaidLeaveDays += 1;
-            lopDays += 1;
-          } else {
-            paidLeaveDays += 1;
-          }
-          return;
-        }
-
-        if (["PRESENT", "LATE", "SHORT LEAVE"].includes(status)) presentDays += 1;
-        else if (["HALF DAY", "HALFDAY"].includes(status)) {
+        if (day.workingStatus === "PAID_LEAVE") {
+          paidLeaveDays += 1;
+        } else if (day.workingStatus === "UNPAID_LEAVE") {
+          unpaidLeaveDays += 1;
+          lopDays += 1;
+        } else if (day.workingStatus === "PRESENT") {
+          presentDays += 1;
+        } else if (day.workingStatus === "HALF_DAY") {
           presentDays += 0.5;
           halfDayDays += 1;
-        } else if (["UNINFORMED LEAVE", "UNINFORMEDLEAVE"].includes(status)) {
-          lopDays += 1;
+        } else if (day.workingStatus === "UNINFORMED_LEAVE") {
           uninformedLeaveDays += 1;
-        } else if (status === "ABSENT") {
           lopDays += 1;
+        } else if (day.workingStatus === "ABSENT") {
           actualAbsentDays += 1;
+          lopDays += 1;
+        } else {
+          pendingDays += 1;
         }
-        else pendingDays += 1;
       });
 
-      const uninformedLeavePenaltyDays = uninformedLeaveDays;
+      // 3. Evaluate Verified Presence & Policy for Off-Days (Weekly Offs & Holidays)
+      // Only an employee with verified working presence can be credited with paid off-days.
+      const hasVerifiedWork = (presentDays > 0 || paidLeaveDays > 0 || approvedFullDayCount > 0);
+
+      let sandwichLopDays = 0;
+      let paidWeekOffDays = 0;
+      let paidHolidayDays = 0;
+
+      if (hasVerifiedWork) {
+        dayRecords.forEach((day, idx) => {
+          if (!day.isOffDay || day.isPreJoining || day.isFuture) return;
+
+          // Find preceding scheduled working day
+          let prevDay = null;
+          for (let i = idx - 1; i >= 0; i--) {
+            if (!dayRecords[i].isOffDay && !dayRecords[i].isPreJoining) {
+              prevDay = dayRecords[i];
+              break;
+            }
+          }
+
+          // Find succeeding scheduled working day
+          let nextDay = null;
+          for (let i = idx + 1; i < dayRecords.length; i++) {
+            if (!dayRecords[i].isOffDay) {
+              nextDay = dayRecords[i];
+              break;
+            }
+          }
+
+          const isPrevAbsentOrPending = !prevDay || ["ABSENT", "UNPAID_LEAVE", "UNINFORMED_LEAVE", "PENDING"].includes(prevDay.workingStatus);
+          const isNextAbsentOrPending = !nextDay || nextDay.isFuture || ["ABSENT", "UNPAID_LEAVE", "UNINFORMED_LEAVE", "PENDING"].includes(nextDay.workingStatus);
+          const isPrevVerified = prevDay && ["PRESENT", "HALF_DAY", "PAID_LEAVE"].includes(prevDay.workingStatus);
+          const isNextVerified = nextDay && !nextDay.isFuture && ["PRESENT", "HALF_DAY", "PAID_LEAVE"].includes(nextDay.workingStatus);
+
+          // Sandwich rule: absent/unpaid/pending on both sides
+          if (sandwichRuleEnabled) {
+            if (isPrevAbsentOrPending && isNextAbsentOrPending) {
+              sandwichLopDays += 1;
+              return;
+            }
+          }
+
+          // Policy check: paid off-day requires active verified work adjacent or in same week
+          if (isPrevVerified || isNextVerified) {
+            if (day.isHoliday) paidHolidayDays += 1;
+            else if (day.isWeekOff) paidWeekOffDays += 1;
+          } else {
+            const dayWeekStart = Math.max(0, idx - (day.dayOfWeek - 1));
+            const dayWeekEnd = Math.min(dayRecords.length - 1, dayWeekStart + 6);
+            let hasWorkInWeek = false;
+            for (let w = dayWeekStart; w <= dayWeekEnd; w++) {
+              if (["PRESENT", "HALF_DAY", "PAID_LEAVE"].includes(dayRecords[w]?.workingStatus)) {
+                hasWorkInWeek = true;
+                break;
+              }
+            }
+            if (hasWorkInWeek) {
+              if (day.isHoliday) paidHolidayDays += 1;
+              else if (day.isWeekOff) paidWeekOffDays += 1;
+            } else {
+              if (sandwichRuleEnabled) sandwichLopDays += 1;
+            }
+          }
+        });
+      }
+
       const totalLopDays = lopDays + sandwichLopDays;
-      const deductionDays = totalLopDays + uninformedLeavePenaltyDays + (halfDayDays * 0.5);
-      const payableDays = Math.max(0, presentDays + paidLeaveDays);
-      const projectedPayableDays = Math.max(0, eligibleWorkingDays - deductionDays);
+      const uninformedLeavePenaltyDays = uninformedLeaveDays;
 
-      const divisorDays = salaryDaysBasis === "fixed30" ? 30 : salaryDaysBasis === "fixed26" ? 26 : daysInMonth;
-      const effectivePayableDays = Math.max(0, divisorDays - deductionDays);
+      // 4. Compute verified payable days and ratios
+      // When there is 0 verified attendance, verifiedPayableDays is strictly 0.
+      const effectivePresentDays = presentDays + approvedFullDayCount;
+      const verifiedPayableDays = hasVerifiedWork
+        ? Math.max(0, effectivePresentDays + paidLeaveDays + paidWeekOffDays + paidHolidayDays)
+        : 0;
+
+      const divisorDays = salaryDaysBasis === "fixed30" ? 30 : salaryDaysBasis === "fixed31" ? 31 : salaryDaysBasis === "fixed26" ? 26 : daysInMonth;
+      const effectivePayableDays = Math.min(divisorDays, verifiedPayableDays);
       const ratio = divisorDays > 0 ? Math.min(1, effectivePayableDays / divisorDays) : 0;
-      const projectedRatio = ratio;
 
+      const assignedGross = Number(assignment.monthlyGross || 0);
+
+      // Overtime Pay
+      const dailyWage = divisorDays > 0 ? (assignedGross / divisorDays) : 0;
+      const hourlyWage = dailyWage > 0 ? (dailyWage / 9) : 0;
+      const minuteWage = hourlyWage > 0 ? (hourlyWage / 60) : 0;
+      const hourlyOvertimePay = Math.round(((totalOvertimeMinutes / 60) * hourlyWage) * 100) / 100;
+      const fullDayOvertimePay = Math.round((approvedFullDayCount * dailyWage) * 100) / 100;
+      const overtimePay = Math.round((hourlyOvertimePay + fullDayOvertimePay) * 100) / 100;
+
+      // Attendance deduction (for unverified or unpaid days out of divisor)
+      const unpaidDays = Math.max(0, divisorDays - effectivePayableDays);
+      const attendanceDeduction = divisorDays > 0
+        ? Math.round((assignedGross * unpaidDays / divisorDays) * 100) / 100
+        : 0;
+
+      // Prorate components
       const adjustedComponents = (assignment.components || []).map(item => {
         const shouldProrate = item.type === "earning" && item.component?.proRata !== false;
-        const amount = shouldProrate ? Number(item.amount || 0) * ratio : Number(item.amount || 0);
-        const projectedAmount = shouldProrate ? Number(item.amount || 0) * projectedRatio : Number(item.amount || 0);
-        return { ...item, payrollAmount: Math.round(amount * 100) / 100, projectedPayrollAmount: Math.round(projectedAmount * 100) / 100 };
+        const amount = shouldProrate ? Number(item.amount || 0) * ratio : (effectivePayableDays > 0 ? Number(item.amount || 0) : 0);
+        return {
+          ...item,
+          payrollAmount: Math.round(amount * 100) / 100,
+          projectedPayrollAmount: Math.round(amount * 100) / 100
+        };
       });
 
-      const gross = adjustedComponents.reduce((sum, item) => sum + (item.type === "earning" ? item.payrollAmount : 0), 0);
-      const projectedGross = adjustedComponents.reduce((sum, item) => sum + (item.type === "earning" ? item.projectedPayrollAmount : 0), 0);
-      const deductions = adjustedComponents.reduce((sum, item) => sum + (item.type === "deduction" ? item.payrollAmount : 0), 0);
-      const assignedGross = Number(assignment.monthlyGross || 0);
-      const attendanceDeduction = divisorDays > 0
-        ? Math.round((assignedGross * deductionDays / divisorDays) * 100) / 100
-        : 0;
-      const lopDeduction = deductionDays > 0
-        ? Math.round((attendanceDeduction * totalLopDays / deductionDays) * 100) / 100
-        : 0;
-      const uninformedLeavePenaltyDeduction = deductionDays > 0
-        ? Math.round((attendanceDeduction * uninformedLeavePenaltyDays / deductionDays) * 100) / 100
-        : 0;
-      const halfDayDeduction = Math.round(Math.max(0, attendanceDeduction - lopDeduction - uninformedLeavePenaltyDeduction) * 100) / 100;
-      const pendingAmount = Math.round(Math.max(0, projectedGross - gross) * 100) / 100;
-      const earnedBeforeAttendance = assignedGross;
-      const totalAppliedDeductions = Math.round((deductions + attendanceDeduction) * 100) / 100;
+      const rawComponentDeductions = adjustedComponents.reduce((sum, item) => sum + (item.type === "deduction" ? item.payrollAmount : 0), 0);
 
-      const weekOffDays = Math.max(0, daysInMonth - workingDays);
-      const isMonthCompleted = futureDays === 0 && pendingDays === 0;
-      const tillDatePayableDays = Math.max(0, elapsedCalendarDays - deductionDays);
-      const tillDateRatio = divisorDays > 0 ? Math.min(1, tillDatePayableDays / divisorDays) : 0;
-      const earnedTillDateGross = !isMonthCompleted ? Math.round(assignedGross * tillDateRatio * 100) / 100 : earnedBeforeAttendance;
-      const earnedTillDateNet = !isMonthCompleted ? Math.round(Math.max(0, earnedTillDateGross - deductions) * 100) / 100 : Math.round(Math.max(0, earnedBeforeAttendance - totalAppliedDeductions) * 100) / 100;
+      // Payable Gross & Net
+      const finalPayableGross = Math.round(Math.max(0, (assignedGross - attendanceDeduction) + overtimePay) * 100) / 100;
+      const finalMonthlyGross = finalPayableGross;
+      const salaryDeductions = Math.min(finalPayableGross, Math.round(rawComponentDeductions * 100) / 100);
+      const finalMonthlyNet = Math.round(Math.max(0, finalPayableGross - salaryDeductions) * 100) / 100;
 
+      const finalEarnedTillDateGross = finalPayableGross;
+      const finalEarnedTillDateNet = finalMonthlyNet;
+
+      const lopDeduction = totalLopDays > 0 && divisorDays > 0
+        ? Math.round((assignedGross * totalLopDays / divisorDays) * 100) / 100
+        : 0;
+      const uninformedLeavePenaltyDeduction = uninformedLeavePenaltyDays > 0 && divisorDays > 0
+        ? Math.round((assignedGross * uninformedLeavePenaltyDays / divisorDays) * 100) / 100
+        : 0;
+      const halfDayDeduction = halfDayDays > 0 && divisorDays > 0
+        ? Math.round((assignedGross * (halfDayDays * 0.5) / divisorDays) * 100) / 100
+        : 0;
+
+      const otHours = Math.floor(totalOvertimeMinutes / 60);
+      const otRemainingMinutes = totalOvertimeMinutes % 60;
+      const totalOvertimeDuration = `${String(otHours).padStart(2, "0")}:${String(otRemainingMinutes).padStart(2, "0")}:00`;
+      const totalOvertimeHoursFormatted = `${otHours}h ${otRemainingMinutes}m`;
+
+      const finalComponents = [...adjustedComponents];
+      if (overtimePay > 0) {
+        const parts = [];
+        if (totalOvertimeMinutes > 0) parts.push(`Hours: ${totalOvertimeHoursFormatted}`);
+        if (approvedFullDayCount > 0) parts.push(`Full Day: ${approvedFullDayCount} Present Day(s)`);
+        finalComponents.push({
+          name: `Overtime Pay (${parts.join(' + ')})`,
+          code: "OVERTIME_PAY",
+          type: "earning",
+          amount: overtimePay,
+          payrollAmount: overtimePay,
+          projectedPayrollAmount: overtimePay,
+          isOvertime: true
+        });
+      }
 
       return {
         ...assignment,
         attendance: {
           workingDays,
           eligibleWorkingDays,
-          presentDays,
+          presentDays: effectivePresentDays,
           paidLeaveDays,
           unpaidLeaveDays,
           uninformedLeaveDays,
           uninformedLeavePenaltyDays,
-          holidayDays: elapsedHolidays,
+          holidayDays: totalHolidayDays,
+          paidHolidayDays,
+          weekOffDays: totalWeekOffDays,
+          paidWeekOffDays,
+          elapsedWeekOffDays,
+          elapsedHolidays: elapsedHolidayDays,
           halfDayDays,
           actualAbsentDays,
           lopDays,
           sandwichLopDays,
           totalLopDays,
-          deductionDays,
+          deductionDays: unpaidDays,
           pendingDays,
           futureDays,
-          payableDays,
+          payableDays: verifiedPayableDays,
           daysInMonth,
-          weekOffDays,
           daysBasisCount: divisorDays,
-          calculationCutoff: todayKey
+          calculationCutoff: todayKey,
+          totalOvertimeMinutes,
+          totalOvertimeDuration,
+          totalOvertimeHoursFormatted,
+          overtimeDays,
+          overtimeFullDayCount: approvedFullDayCount,
+          hourlyOvertimePay,
+          fullDayOvertimePay,
+          overtimePay,
+          overtimeHourlyRate: Math.round(hourlyWage * 100) / 100,
+          overtimeDailyRate: Math.round(dailyWage * 100) / 100,
+          overtimeMinuteRate: Math.round(minuteWage * 10000) / 10000
         },
         assignedGross,
         attendanceDeduction,
         lopDeduction,
         uninformedLeavePenaltyDeduction,
         halfDayDeduction,
-        pendingAmount,
-        earnedTillDateGross,
-        earnedTillDateNet,
-        monthlyGross: assignedGross,
-        payableGross: Math.round(Math.max(0, assignedGross - attendanceDeduction) * 100) / 100,
-        salaryDeductions: Math.round(deductions * 100) / 100,
-        totalDeductions: totalAppliedDeductions,
-        monthlyNet: Math.round(Math.max(0, assignedGross - totalAppliedDeductions) * 100) / 100,
-        components: adjustedComponents,
+        pendingAmount: 0,
+        earnedTillDateGross: finalEarnedTillDateGross,
+        earnedTillDateNet: finalEarnedTillDateNet,
+        monthlyGross: finalMonthlyGross,
+        payableGross: finalPayableGross,
+        salaryDeductions,
+        totalDeductions: salaryDeductions,
+        monthlyNet: finalMonthlyNet,
+        overtimePay,
+        overtimeHourlyRate: Math.round(hourlyWage * 100) / 100,
+        overtimeDailyRate: Math.round(dailyWage * 100) / 100,
+        overtimeMinuteRate: Math.round(minuteWage * 10000) / 10000,
+        overtimeFullDayCount: approvedFullDayCount,
+        components: finalComponents,
         payrollStatus: "Calculated"
       };
     });
@@ -567,32 +770,38 @@ const employeePayrollKey = (employee = {}) => String(employee.user?._id || emplo
 const withPayrollAdjustments = (employee = {}, adjustments = employee.adjustments || []) => {
   const safeAdjustments = (Array.isArray(adjustments) ? adjustments : []).map(item => ({ ...item, amount: Math.max(0, Number(item.amount || 0)) }));
   const adjustmentDeductions = Math.round(safeAdjustments.reduce((sum, item) => sum + Number(item.amount || 0), 0) * 100) / 100;
-  const componentDeductions = Number(employee.totalDeductions || 0);
-  const earnedTillDateGross = Number(employee.earnedTillDateGross ?? employee.monthlyGross ?? 0);
+  const componentDeductions = Number(employee.salaryDeductions ?? employee.totalDeductions ?? 0);
+  const monthlyGross = Number(employee.monthlyGross ?? employee.payableGross ?? 0);
+  const earnedTillDateGross = Number(employee.earnedTillDateGross ?? monthlyGross);
+  const monthlyNet = Math.round(Math.max(0, monthlyGross - componentDeductions - adjustmentDeductions) * 100) / 100;
+  const earnedTillDateNet = Math.round(Math.max(0, earnedTillDateGross - componentDeductions - adjustmentDeductions) * 100) / 100;
   return {
     ...employee,
     adjustments: safeAdjustments,
     adjustmentDeductions,
-    monthlyNet: Math.round(Math.max(0, Number(employee.monthlyGross || 0) - componentDeductions - adjustmentDeductions) * 100) / 100,
+    totalDeductions: componentDeductions,
+    monthlyNet,
     earnedTillDateGross,
-    earnedTillDateNet: Math.round(Math.max(0, earnedTillDateGross - componentDeductions - adjustmentDeductions) * 100) / 100
+    earnedTillDateNet
   };
 };
 
 const payrollTotals = (employees = []) => employees.reduce((totals, employee) => {
-  const gross = Number(employee.monthlyGross || 0);
-  const rawDeductions = Number(employee.totalDeductions || 0) + Number(employee.adjustmentDeductions || 0);
+  const gross = Number(employee.monthlyGross ?? employee.payableGross ?? 0);
+  const assigned = Number(employee.assignedGross || 0);
+  const rawDeductions = Number(employee.totalDeductions || employee.salaryDeductions || 0) + Number(employee.adjustmentDeductions || 0);
   const net = Number(employee.monthlyNet || 0);
   const effectiveDeduction = Math.min(gross, rawDeductions);
 
   return {
     employees: totals.employees + 1,
     earnings: Math.round((totals.earnings + gross) * 100) / 100,
+    assignedEarnings: Math.round(((totals.assignedEarnings || 0) + assigned) * 100) / 100,
     deductions: Math.round((totals.deductions + effectiveDeduction) * 100) / 100,
     net: Math.round((totals.net + net) * 100) / 100,
     pendingAttendance: totals.pendingAttendance + Number(employee.attendance?.pendingDays || 0)
   };
-}, { employees: 0, earnings: 0, deductions: 0, net: 0, pendingAttendance: 0 });
+}, { employees: 0, earnings: 0, assignedEarnings: 0, deductions: 0, net: 0, pendingAttendance: 0 });
 
 const payrollRunJson = (run) => ({
   _id: run._id,
@@ -697,9 +906,6 @@ exports.generatePayrollRun = async (req, res) => {
       return res.status(400).json({ success: false, message: "A valid payroll month is required." });
     }
     const existing = await PayrollRun.findOne({ company, month });
-    if (existing && (existing.status === "Released" || existing.employees?.some(employee => employee.payrollStatus === "Released"))) {
-      return res.status(409).json({ success: false, message: "Released payroll cannot be recalculated." });
-    }
     if (existing && ["Approved", "Locked"].includes(existing.status)) {
       return res.status(409).json({ success: false, message: `${existing.status} payroll must be reopened before recalculation.` });
     }
@@ -743,9 +949,6 @@ exports.updatePayrollSettings = async (req, res) => {
     }
 
     let run = await PayrollRun.findOne({ company, month });
-    if (run && (run.status === "Released" || run.employees?.some(employee => employee.payrollStatus === "Released"))) {
-      return res.status(409).json({ success: false, message: "Released payroll settings cannot be modified." });
-    }
     if (run && ["Approved", "Locked"].includes(run.status)) {
       return res.status(409).json({ success: false, message: `${run.status} payroll must be reopened before updating settings.` });
     }
@@ -801,15 +1004,8 @@ exports.recalculateSingleEmployee = async (req, res) => {
       return res.status(400).json({ success: false, message: "Valid month and employeeId are required." });
     }
     const run = await PayrollRun.findOne({ company, month });
-    const existingEmployee = run?.employees?.find(employee => employeePayrollKey(employee) === employeeId || String(employee._id || "") === employeeId);
-    if (run && (run.status === "Released" || existingEmployee?.payrollStatus === "Released")) {
-      return res.status(409).json({ success: false, message: "Released payroll cannot be recalculated." });
-    }
     if (run && ["Approved", "Locked"].includes(run.status)) {
       return res.status(409).json({ success: false, message: `${run.status} payroll must be reopened before recalculation.` });
-    }
-    if (["Approved", "Locked"].includes(existingEmployee?.payrollStatus)) {
-      return res.status(409).json({ success: false, message: `${existingEmployee.payrollStatus} employee payroll must be reopened before recalculation.` });
     }
 
     const calculation = await calculatePayroll(req);
@@ -873,14 +1069,13 @@ exports.addPayrollAdjustment = async (req, res) => {
     }
     const run = await PayrollRun.findOne({ company, month });
     if (!run) return res.status(404).json({ success: false, message: "Generate payroll before adding a fine." });
-    if (["Approved", "Locked", "Released"].includes(run.status)) {
+    if (["Approved", "Locked"].includes(run.status)) {
       return res.status(409).json({ success: false, message: `${run.status} payroll must be reopened before adding a fine.` });
     }
     const index = run.employees.findIndex(employee => employeePayrollKey(employee) === employeeId || String(employee._id || "") === employeeId);
     if (index < 0) return res.status(404).json({ success: false, message: "Employee was not found in this payroll run." });
 
     const currentEmployee = run.employees[index];
-    if (currentEmployee.payrollStatus === "Released") return res.status(409).json({ success: false, message: "Released payroll cannot be modified." });
     const availableNet = Math.round(Math.max(0,
       Number(currentEmployee.monthlyGross || 0) -
       Number(currentEmployee.totalDeductions || 0) -
@@ -920,13 +1115,12 @@ exports.removePayrollAdjustment = async (req, res) => {
     }
     const run = await PayrollRun.findOne({ company, month });
     if (!run) return res.status(404).json({ success: false, message: "Payroll run not found." });
-    if (["Approved", "Locked", "Released"].includes(run.status)) {
+    if (["Approved", "Locked"].includes(run.status)) {
       return res.status(409).json({ success: false, message: `${run.status} payroll must be reopened before removing a fine.` });
     }
     const index = run.employees.findIndex(employee => employeePayrollKey(employee) === employeeId || String(employee._id || "") === employeeId);
     if (index < 0) return res.status(404).json({ success: false, message: "Employee was not found in this payroll run." });
     const current = run.employees[index];
-    if (current.payrollStatus === "Released") return res.status(409).json({ success: false, message: "Released payroll cannot be modified." });
     const adjustment = (current.adjustments || []).find(item => String(item._id) === adjustmentId);
     if (!adjustment) return res.status(404).json({ success: false, message: "Fine was not found." });
 
@@ -953,9 +1147,6 @@ exports.updatePayrollRunStatus = async (req, res) => {
     const reason = String(req.body.reason || "").trim();
     const run = await PayrollRun.findOne({ company, month });
     if (!run) return res.status(404).json({ success: false, message: "Generate payroll before changing its status." });
-    if (run.status === "Released" || run.employees?.some(employee => employee.payrollStatus === "Released")) {
-      return res.status(409).json({ success: false, message: "A payroll containing released employees cannot be reopened or modified." });
-    }
 
     const transitions = {
       review: { from: ["Calculated"], to: "Reviewed", label: "Review Payroll" },
@@ -1075,61 +1266,6 @@ exports.updatePayrollEmployeeStatus = async (req, res) => {
   }
 };
 
-// GET /api/employee-salaries/payroll-release?month=YYYY-MM&employeeId=...
-exports.getPayrollRelease = async (req, res) => {
-  try {
-    const company = getCompany(req);
-    const month = String(req.query.month || "").trim();
-    const employeeId = String(req.query.employeeId || "").trim();
-    const query = { company };
-    if (month && /^\d{4}-\d{2}$/.test(month)) query.month = month;
-    const runs = await PayrollRun.find(query).select("month status employees lockedAt").sort({ month: -1 }).lean();
-    const pending = [];
-    const history = [];
-    for (const run of runs) {
-      for (const employee of run.employees || []) {
-        const id = employeePayrollKey(employee) || String(employee._id || "");
-        const row = { ...employee, employeeId: id, month: run.month };
-        if (employee.payrollStatus === "Locked" && (!employeeId || id === employeeId)) pending.push(row);
-        if (employee.payrollStatus === "Released" && (!employeeId || id === employeeId)) history.push(row);
-      }
-    }
-    return res.json({ success: true, pending, history });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: "Unable to load payroll release records." });
-  }
-};
-
-// POST /api/employee-salaries/payroll-release
-exports.releaseEmployeePayroll = async (req, res) => {
-  try {
-    const company = getCompany(req);
-    const month = String(req.body.month || "").trim();
-    const employeeId = String(req.body.employeeId || "").trim();
-    const remarks = String(req.body.remarks || "").trim().slice(0, 500);
-    const paymentReference = String(req.body.paymentReference || "").trim().slice(0, 120);
-    if (!company || !/^\d{4}-\d{2}$/.test(month) || !employeeId) return res.status(400).json({ success: false, message: "Month and employee are required." });
-    const run = await PayrollRun.findOne({ company, month });
-    if (!run) return res.status(404).json({ success: false, message: "Payroll run not found." });
-    const index = run.employees.findIndex(item => employeePayrollKey(item) === employeeId || String(item._id || "") === employeeId);
-    if (index < 0) return res.status(404).json({ success: false, message: "Employee was not found in this payroll run." });
-    const current = run.employees[index];
-    if (current.payrollStatus === "Released") return res.status(409).json({ success: false, message: "This payroll has already been released." });
-    if (current.payrollStatus !== "Locked") return res.status(409).json({ success: false, message: "Only locked payroll can be released." });
-    const releasedAt = new Date();
-    const actor = req.user?._id || req.user?.id;
-    const employeeName = current?.user?.name || current?.user?.email || "Employee";
-    run.employees = run.employees.map((item, itemIndex) => itemIndex === index ? { ...item, payrollStatus: "Released", releasedAt, releasedBy: actor, releaseRemarks: remarks, paymentReference } : item);
-    if (run.employees.every(item => item.payrollStatus === "Released")) run.status = "Released";
-    run.updatedBy = actor;
-    run.auditLog.push({ action: "Release Employee Payroll", fromStatus: "Locked", toStatus: "Released", reason: remarks || "Payslip released.", performedBy: actor, performedByName: getActorName(req), employeeId, employeeName });
-    await run.save();
-    return res.json({ success: true, message: `${employeeName} payroll released successfully.` });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: "Unable to release employee payroll." });
-  }
-};
-
 // GET /api/employee-salaries/payroll-payslips?month=YYYY-MM
 const fs = require("fs");
 const path = require("path");
@@ -1167,8 +1303,8 @@ exports.getPayrollPayslips = async (req, res) => {
     const run = await PayrollRun.findOne({ company, month }).lean();
     if (!run) return res.status(404).json({ success: false, message: "Payroll run was not found." });
     const displayRun = await fillMissingSalaryStructures(company, payrollRunJson(run));
-    const approvedEmployees = (displayRun.employees || []).filter(employee => employee.payrollStatus === "Released");
-    if (!approvedEmployees.length) return res.status(404).json({ success: false, message: "No employee payslip has been released for this month." });
+    const approvedEmployees = (displayRun.employees || []).filter(employee => ["Approved", "Locked"].includes(employee.payrollStatus));
+    if (!approvedEmployees.length) return res.status(404).json({ success: false, message: "No employee payslip has been approved for this month." });
 
     const userIds = approvedEmployees.map(e => e.user?._id || e.user).filter(Boolean);
     const userDocs = await User.find({ _id: { $in: userIds } })
@@ -1208,7 +1344,7 @@ exports.getPayrollPayslips = async (req, res) => {
     }
     return res.json({ success: true, company: companyDoc, run: { ...displayRun, employees: enrichedApproved } });
   } catch (error) {
-    return res.status(500).json({ success: false, message: "Unable to load released payslips." });
+    return res.status(500).json({ success: false, message: "Unable to load approved payslips." });
   }
 };
 
@@ -1225,7 +1361,7 @@ exports.getPayslipHistory = async (req, res) => {
       .lean();
     const payslips = runs.flatMap(run => {
       const employee = (run.employees || []).find(item => employeePayrollKey(item) === employeeId || String(item._id || "") === employeeId);
-      return employee && employee.payrollStatus === "Released" ? [{ month: run.month, status: employee.payrollStatus, approvedAt: employee.approvedAt || run.approvedAt, lockedAt: employee.lockedAt || run.lockedAt, releasedAt: employee.releasedAt, netSalary: employee.monthlyNet }] : [];
+      return employee && ["Approved", "Locked"].includes(employee.payrollStatus) ? [{ month: run.month, status: employee.payrollStatus, approvedAt: employee.approvedAt || run.approvedAt, lockedAt: employee.lockedAt || run.lockedAt, netSalary: employee.monthlyNet }] : [];
     });
     return res.json({ success: true, payslips });
   } catch (error) {
@@ -1245,7 +1381,7 @@ exports.emailPayslip = async (req, res) => {
     const run = await PayrollRun.findOne({ company, month }).lean();
     if (!run) return res.status(404).json({ success: false, message: "Payroll run was not found." });
     const employee = (run.employees || []).find(item => employeePayrollKey(item) === employeeId || String(item._id || "") === employeeId);
-    if (!employee || employee.payrollStatus !== "Released") return res.status(404).json({ success: false, message: "Employee payslip has not been released yet." });
+    if (!employee || !["Approved", "Locked"].includes(employee.payrollStatus)) return res.status(404).json({ success: false, message: "Employee payslip is not approved yet." });
     const email = employee.user?.email;
     if (!email) return res.status(400).json({ success: false, message: "Employee email is not available." });
     const employeeName = employee.user?.name || "Employee";

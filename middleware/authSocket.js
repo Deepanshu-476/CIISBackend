@@ -16,20 +16,25 @@ const authSocket = async (socket, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     
     
-    const user = await User.findById(decoded.id).select('-password');
+    const user = await User.findById(decoded.id || decoded._id)
+      .select('-password')
+      .populate('company', 'isActive companyCode');
     
     if (!user) {
-      void 0;
       return next(new Error('User not found'));
     }
 
-    
+    if (!user.isActive) {
+      return next(new Error('User account is deactivated'));
+    }
+
+    if (user.company && !user.company.isActive) {
+      return next(new Error('Company account is deactivated'));
+    }
+
     socket.user = user;
     socket.userId = user._id.toString();
-    socket.companyId = user.company?.toString() || user.companyId?.toString();
-
-    void 0;
-    
+    socket.companyId = user.company?._id?.toString() || user.company?.toString() || user.companyId?.toString();
     next();
   } catch (error) {
     console.error('❌ Socket auth error:', error.message);

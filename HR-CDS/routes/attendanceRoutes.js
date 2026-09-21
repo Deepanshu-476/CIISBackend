@@ -2,10 +2,90 @@
 const express = require('express');
 const router = express.Router();
 const attendanceController = require('../controllers/AttendanceController');
-const { protect, authorize } = require('../../middleware/authMiddleware');
-
+const { protect, restrictTo } = require('../../middleware/authMiddleware');
+const PagePermission = require('../../models/PagePermission');
 
 const upload = require('../../utils/multer');
+
+const normalizeRole = value => String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, '_');
+
+const privilegedAttendanceRoles = [
+  'super_admin', 'superadmin',
+  'owner', 'company_owner', 'companyowner',
+  'admin', 'company_admin', 'companyadmin',
+  'hr', 'hr_manager', 'manager'
+];
+const adminOrHrRoles = [
+  'super_admin', 'superadmin',
+  'owner', 'company_owner', 'companyowner',
+  'admin', 'company_admin', 'companyadmin',
+  'hr', 'hr_manager'
+];
+
+const checkAttendanceAccess = (requiredPermission = 'view') => async (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: 'Not authorized' });
+  }
+
+  // 1. Super Admin or Company Owner check
+  if (req.user.isSuperAdmin || req.user.isCompanyOwner) {
+    return next();
+  }
+
+  // 2. Direct role match
+  const userRoles = [
+    req.user.jobRole,
+    req.user.jobRoleName,
+    req.user.companyRole,
+    req.user.role,
+    req.user.userType
+  ].filter(Boolean).map(normalizeRole);
+
+  const allowedRoleList = requiredPermission === 'delete' ? adminOrHrRoles : privilegedAttendanceRoles;
+  if (userRoles.some(r => allowedRoleList.includes(r))) {
+    return next();
+  }
+
+  // 3. Dynamic PagePermission check for /ciisUser/emp-attendance
+  try {
+    const company = req.user?.company?._id || req.user?.company || req.user?.companyId;
+    const userId = String(req.user?._id || req.user?.id || '');
+    if (company && userId) {
+      const page = await PagePermission.findOne({
+        company,
+        path: '/ciisUser/emp-attendance'
+      }).lean();
+
+      if (page) {
+        const viewIds = new Set([
+          ...(page.viewUsers || []).map(u => String(u?.user?._id || u?.user || '')),
+          ...(page.editUsers || []).map(u => String(u?.user?._id || u?.user || '')),
+          ...(page.deleteUsers || []).map(u => String(u?.user?._id || u?.user || '')),
+          ...(page.approvers || []).map(u => String(u?.user?._id || u?.user || ''))
+        ]);
+        const editIds = new Set([
+          ...(page.editUsers || []).map(u => String(u?.user?._id || u?.user || '')),
+          ...(page.approvers || []).map(u => String(u?.user?._id || u?.user || ''))
+        ]);
+        const deleteIds = new Set([
+          ...(page.deleteUsers || []).map(u => String(u?.user?._id || u?.user || '')),
+          ...(page.approvers || []).map(u => String(u?.user?._id || u?.user || ''))
+        ]);
+
+        if (requiredPermission === 'view' && viewIds.has(userId)) return next();
+        if (requiredPermission === 'edit' && editIds.has(userId)) return next();
+        if (requiredPermission === 'delete' && deleteIds.has(userId)) return next();
+      }
+    }
+  } catch (err) {
+    console.error('Error checking attendance page permission:', err);
+  }
+
+  return res.status(403).json({
+    success: false,
+    message: 'You do not have permission to access this attendance resource'
+  });
+};
 
 router.post('/in', protect, attendanceController.clockIn);
 router.post('/out', protect, attendanceController.clockOut);
@@ -26,16 +106,24 @@ router.post('/upload-selfie', protect, upload.single('selfie'), (req, res) => {
 router.get('/status', protect, attendanceController.getTodayStatus);
 router.get('/list', protect, attendanceController.getAttendanceList);
 
-
-router.get('/all', protect, attendanceController.getAllUsersAttendance);
-router.post('/manual', protect, attendanceController.createManualAttendance);
-router.put('/:id', protect, attendanceController.updateAttendanceRecord);
-router.delete('/:id', protect, attendanceController.deleteAttendanceRecord);
+router.get('/all', protect, checkAttendanceAccess('view'), attendanceController.getAllUsersAttendance);
+router.post('/manual', protect, checkAttendanceAccess('edit'), attendanceController.createManualAttendance);
+router.put('/:id', protect, checkAttendanceAccess('edit'), attendanceController.updateAttendanceRecord);
+router.delete('/:id', protect, checkAttendanceAccess('delete'), attendanceController.deleteAttendanceRecord);
 router.get('/user/:userId', protect, attendanceController.getAttendanceByUser);
-router.get('/stats', protect, attendanceController.getAttendanceStats);
+router.get('/stats', protect, checkAttendanceAccess('view'), attendanceController.getAttendanceStats);
+// Gate all /test routes from production
+router.use('/test', (req, res, next) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({
+      success: false,
+      message: 'Not found'
+    });
+  }
+  next();
+});
 
-
-router.get('/test', protect, async (req, res) => {
+router.get('/test', protect, restrictTo(...adminOrHrRoles), async (req, res) => {
   try {
     const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     
@@ -60,7 +148,7 @@ router.get('/test', protect, async (req, res) => {
   }
 });
 
-router.post('/test/attendance-creation', protect, async (req, res) => {
+router.post('/test/attendance-creation', protect, restrictTo(...adminOrHrRoles), async (req, res) => {
   try {
     const { userId, date } = req.body;
     const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
@@ -69,6 +157,16 @@ router.post('/test/attendance-creation', protect, async (req, res) => {
       return res.status(400).json({ 
         message: "Company code not found in user" 
       });
+    }
+    
+    if (userId && String(userId) !== String(req.user._id)) {
+      const targetUser = await User.findById(userId).select('companyCode company');
+      const targetCompanyCode = targetUser?.companyCode || (targetUser?.company ? targetUser.company.companyCode : null);
+      if (!targetUser || targetCompanyCode !== userCompanyCode) {
+        return res.status(403).json({ 
+          message: "Access denied: cannot create attendance for user in another company" 
+        });
+      }
     }
     
     
@@ -107,7 +205,7 @@ router.post('/test/attendance-creation', protect, async (req, res) => {
   }
 });
 
-router.get('/test/company-attendance', protect, async (req, res) => {
+router.get('/test/company-attendance', protect, restrictTo(...adminOrHrRoles), async (req, res) => {
   try {
     const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     
@@ -161,7 +259,7 @@ router.get('/test/company-attendance', protect, async (req, res) => {
   }
 });
 
-router.delete('/test/cleanup', protect, async (req, res) => {
+router.delete('/test/cleanup', protect, restrictTo(...adminOrHrRoles), async (req, res) => {
   try {
     const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     
@@ -192,7 +290,7 @@ router.delete('/test/cleanup', protect, async (req, res) => {
   }
 });
 
-router.get('/test/company-users', protect, async (req, res) => {
+router.get('/test/company-users', protect, restrictTo(...adminOrHrRoles), async (req, res) => {
   try {
     const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     

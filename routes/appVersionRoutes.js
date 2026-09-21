@@ -22,14 +22,14 @@ const normalizeBoolean = (value, fallback = false) => {
 
 const getFallbackSettings = () => {
   const iosAppStoreId = process.env.IOS_APP_STORE_ID || '6780872642';
-  const iosLatestVersionName = process.env.IOS_LATEST_VERSION_NAME || '1.1.20';
+  const iosLatestVersionName = process.env.IOS_LATEST_VERSION_NAME || '1.1.29';
   const androidPackageName = process.env.ANDROID_PACKAGE_NAME || 'ciisnetwork.in';
-  const androidLatestVersionName = process.env.ANDROID_LATEST_VERSION_NAME || '1.1.20';
+  const androidLatestVersionName = process.env.ANDROID_LATEST_VERSION_NAME || '1.1.29';
 
   return {
     ios: {
       latestVersionName: iosLatestVersionName,
-      latestVersionCode: parseNumber(process.env.IOS_LATEST_BUILD_NUMBER, 35),
+      latestVersionCode: parseNumber(process.env.IOS_LATEST_BUILD_NUMBER, 44),
       minimumVersionCode: parseNumber(process.env.IOS_MIN_BUILD_NUMBER, 1),
       forceUpdate: process.env.IOS_FORCE_UPDATE === 'true',
       updateEnabled: process.env.IOS_UPDATE_ENABLED !== 'false',
@@ -41,7 +41,7 @@ const getFallbackSettings = () => {
     },
     android: {
       latestVersionName: androidLatestVersionName,
-      latestVersionCode: parseNumber(process.env.ANDROID_LATEST_VERSION_CODE, 31),
+      latestVersionCode: parseNumber(process.env.ANDROID_LATEST_VERSION_CODE, 39),
       minimumVersionCode: parseNumber(process.env.ANDROID_MIN_VERSION_CODE, 1),
       forceUpdate: process.env.ANDROID_FORCE_UPDATE === 'true',
       updateEnabled: process.env.ANDROID_UPDATE_ENABLED !== 'false',
@@ -58,10 +58,27 @@ const mergeWithFallback = (settings) => {
   const fallback = getFallbackSettings();
   const raw = settings?.toObject ? settings.toObject() : settings;
   const updatedBy = raw?.updatedBy || null;
+  const mergePlatform = (platform) => {
+    const merged = { ...fallback[platform], ...(raw?.[platform] || {}) };
+    const fallbackCode = Number(fallback[platform].latestVersionCode || 0);
+    const mergedCode = Number(merged.latestVersionCode || 0);
+
+    if (fallbackCode > mergedCode) {
+      return {
+        ...merged,
+        latestVersionName: fallback[platform].latestVersionName,
+        latestVersionCode: fallback[platform].latestVersionCode,
+        message: fallback[platform].message,
+        updateEnabled: fallback[platform].updateEnabled,
+      };
+    }
+
+    return merged;
+  };
 
   return {
-    ios: { ...fallback.ios, ...(raw?.ios || {}) },
-    android: { ...fallback.android, ...(raw?.android || {}) },
+    ios: mergePlatform('ios'),
+    android: mergePlatform('android'),
     updatedAt: raw?.updatedAt || null,
     updatedBy,
     updatedByName: updatedBy && typeof updatedBy === 'object'

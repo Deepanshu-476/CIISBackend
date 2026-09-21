@@ -157,10 +157,10 @@ exports.addCheckpoint = async (req, res) => {
       .toLowerCase()
       .replace(/[\s_]+/g, '-');
 
-    if (effectiveStatus !== 'in-progress') {
+    if (!['pending', 'in-progress', 'reopen'].includes(effectiveStatus)) {
       return res.status(400).json({
         success: false,
-        error: 'Checkpoints can only be added to in-progress tasks'
+        error: 'Checkpoints can only be added to pending or in-progress tasks'
       });
     }
 
@@ -388,8 +388,11 @@ exports.updateStatus = async (req, res) => {
       return res.status(400).json({ success: false, error: 'Cannot change status of an overdue task' });
     }
 
+    const isResumedFromHold = isOnHoldStatus(oldStatus) && normalizedStatus === 'in-progress';
+
     if (
       !['overdue', 'onhold'].includes(normalizedStatus) &&
+      !isResumedFromHold &&
       isTaskOverdueForStatus(task.dueDateTime || task.dueDate, oldStatus, task)
     ) {
       if (!['onhold', 'completed', 'approved', 'rejected', 'cancelled', 'overdue'].includes(normalizeTaskStatus(oldStatus))) {
@@ -460,6 +463,20 @@ exports.updateStatus = async (req, res) => {
         s.updatedAt = new Date();
         if (remarks) s.remarks = remarks;
       });
+    }
+
+    if (isResumedFromHold) {
+      const now = new Date();
+      task.onHoldReleasedAt = now;
+      task.dueDateTime = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+      task.dueDate = task.dueDateTime;
+    } else if (normalizedStatus === 'onhold') {
+      task.onHoldReleasedAt = null;
+    }
+    if (normalizedStatus === 'completed') {
+      task.completionDate = new Date();
+    } else if (normalizedStatus !== 'completed' && task.completionDate) {
+      task.completionDate = null;
     }
 
     task.statusHistory.push({ status, changedBy: req.user._id, remarks: remarks || `Status changed from ${oldStatus} to ${status}` });

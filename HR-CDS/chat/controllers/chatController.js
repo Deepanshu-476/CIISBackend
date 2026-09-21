@@ -7,20 +7,33 @@ const {notifyDirectUsers} = require("../../utils/systemNotificationService");
 const getUserId = req => req.user._id?.toString() || req.user.id?.toString();
 
 const populateMessage = query => query
-  .populate("sender", "name email profileImage")
+  .populate("sender", "name email profileImage avatar image photo")
   .populate({
     path: "replyTo",
     select: "sender text file fileType deletedForEveryone",
-    populate: {path: "sender", select: "name email profileImage"},
+    populate: {path: "sender", select: "name email profileImage avatar image photo"},
   })
-  .populate("reactions.user", "name profileImage")
-  .populate("systemEvent.actor", "name profileImage");
+  .populate("reactions.user", "name profileImage avatar image photo")
+  .populate("systemEvent.actor", "name profileImage avatar image photo");
 
 const DISAPPEARING_DURATIONS = {
   "24h": 24 * 60 * 60 * 1000,
   "7d": 7 * 24 * 60 * 60 * 1000,
   "90d": 90 * 24 * 60 * 60 * 1000,
 };
+
+const getPublicOrigin = req => {
+  const configuredOrigin = process.env.CHAT_PUBLIC_ORIGIN || process.env.PUBLIC_URL || "";
+  if (configuredOrigin) return configuredOrigin.replace(/\/+$/, "");
+
+  const forwardedProto = String(req.get("x-forwarded-proto") || "").split(",")[0].trim();
+  const protocol = forwardedProto || req.protocol || "http";
+  return `${protocol}://${req.get("host")}`.replace(/\/+$/, "");
+};
+
+const getPublicChatFileUrl = req => (
+  req.file ? `${getPublicOrigin(req)}/api/uploads/chat/${req.file.filename}` : ""
+);
 
 const activeMessageFilter = () => ({
   $or: [
@@ -56,7 +69,7 @@ const getLastVisibleMessage = (conversationId, userId, companyId) => Message.fin
   deletedFor: {$ne: userId},
   ...activeMessageFilter(),
 })
-  .populate("sender", "name email profileImage")
+  .populate("sender", "name email profileImage avatar image photo")
   .sort({createdAt: -1});
 
 const withConversationMeta = async (conversation, userId, companyId) => {
@@ -106,6 +119,24 @@ const getSocketOnlineUserIds = (companyId) => {
   });
 
   return onlineIds;
+};
+
+const getDeliveredMemberIds = (conversation, senderId) => {
+  const onlineIds = getSocketOnlineUserIds(conversation.companyId);
+  return (conversation.members || [])
+    .map(member => member.toString())
+    .filter(memberId => memberId !== senderId)
+    .filter(memberId => onlineIds.has(memberId));
+};
+
+const emitMessageDelivered = (message, conversation, deliveredTo) => {
+  if (!global.io || !deliveredTo.length) return;
+
+  global.io.to(`user:${message.sender}`).emit("chat:message-delivered", {
+    messageId: message._id,
+    conversationId: conversation._id,
+    deliveredTo,
+  });
 };
 
 const isRecentlyOnlineInDb = (user) => {
@@ -235,8 +266,8 @@ exports.getConversations = async (req, res) => {
       companyId: req.user.company,
       members: userId,
     })
-      .populate("members", "name email profileImage companyRole isActive")
-      .populate("admins", "name email profileImage")
+      .populate("members", "name email profileImage avatar image photo companyRole isActive")
+      .populate("admins", "name email profileImage avatar image photo")
       .sort({updatedAt: -1});
 
     
@@ -274,8 +305,8 @@ exports.getConversation = async (req, res) => {
       companyId: req.user.company,
       members: req.user.id,
     })
-      .populate("members", "name email profileImage companyRole")
-      .populate("admins", "name email profileImage");
+      .populate("members", "name email profileImage avatar image photo companyRole")
+      .populate("admins", "name email profileImage avatar image photo");
 
     if (!conversation) {
       return res.status(404).json({success: false, message: "Conversation not found"});
@@ -302,7 +333,8 @@ exports.getCompanyGroups = async (req, res) => {
       isActive: true,
     })
       .select("name description members createdBy")
-      .populate("createdBy", "name email profileImage");
+      .populate("createdBy", "name email profileImage avatar image photo")
+      .populate("members", "name email profileImage avatar image photo companyRole");
 
     res.status(200).json({success: true, groups});
   } catch (error) {
@@ -328,8 +360,13 @@ exports.sendMessage = async (req, res) => {
       return res.status(403).json({success: false, message: "You are not a member of this conversation"});
     }
 
-    const file = req.file ? `/api/uploads/chat/${req.file.filename}` : "";
-    const fileType = req.file ? req.file.mimetype : "";
+    const file = getPublicChatFileUrl(req);
+    const detectedMime = req.file?.mimetype || "";
+    const fileType = (detectedMime && detectedMime !== "application/octet-stream")
+      ? detectedMime
+      : (req.body?.fileType || detectedMime);
+    const fileName = req.body?.fileName || (req.file ? (req.file.originalname || req.file.filename) : "");
+    const fileSize = req.file ? req.file.size : 0;
     let replyTo = null;
 
     if (replyToMessageId) {
@@ -348,6 +385,7 @@ exports.sendMessage = async (req, res) => {
 
     const duration = DISAPPEARING_DURATIONS[conversation.disappearingMode];
     const expiresAt = duration ? new Date(Date.now() + duration) : null;
+    const deliveredTo = getDeliveredMemberIds(conversation, senderId);
 
     const message = await Message.create({
       companyId: req.user.company,
@@ -356,9 +394,12 @@ exports.sendMessage = async (req, res) => {
       text,
       file,
       fileType,
+      fileName,
+      fileSize,
       replyTo: replyTo?._id || null,
       expiresAt,
       seenBy: [senderId],
+      deliveredTo,
     });
 
     const populatedMessage = await populateMessage(Message.findById(message._id));
@@ -366,6 +407,7 @@ exports.sendMessage = async (req, res) => {
     if (global.io) {
       const room = `conversation:${conversationId}`;
       global.io.to(room).emit("chat:receive-message", populatedMessage);
+      emitMessageDelivered(message, conversation, deliveredTo);
     }
 
     await emitUnreadCounts(conversation, senderId);
@@ -430,28 +472,42 @@ exports.getMessages = async (req, res) => {
       deletedFor: {$ne: userId},
       ...activeMessageFilter(),
     })
-      .populate("sender", "name email profileImage")
+      .populate("sender", "name email profileImage avatar image photo")
       .populate({
         path: "replyTo",
         select: "sender text file fileType deletedForEveryone",
-        populate: {path: "sender", select: "name email profileImage"},
+        populate: {path: "sender", select: "name email profileImage avatar image photo"},
       })
-      .populate("reactions.user", "name profileImage")
-      .populate("systemEvent.actor", "name profileImage")
+      .populate("reactions.user", "name profileImage avatar image photo")
+      .populate("systemEvent.actor", "name profileImage avatar image photo")
       .sort({createdAt: 1});
 
     const normalizedMessages = messages.map(message => {
       const plain = message.toObject();
       const senderId = plain.sender?._id?.toString() || plain.sender?.toString();
       const seenBy = (plain.seenBy || []).map(member => member.toString());
+      const deliveredTo = (plain.deliveredTo || []).map(member => member.toString());
 
       return {
         ...plain,
+        delivered: senderId === userId
+          ? deliveredTo.some(memberId => memberId !== userId)
+          : deliveredTo.includes(userId),
         seen: senderId === userId
           ? seenBy.some(memberId => memberId !== userId)
           : seenBy.includes(userId),
       };
     });
+
+    const newlySeenMessages = messages
+      .map(message => {
+        const senderId = message.sender?._id?.toString() || message.sender?.toString();
+        const seenBy = (message.seenBy || []).map(member => member.toString());
+        return senderId !== userId && !seenBy.includes(userId)
+          ? {messageId: message._id, senderId}
+          : null;
+      })
+      .filter(Boolean);
 
     await Message.updateMany(
       {
@@ -461,10 +517,20 @@ exports.getMessages = async (req, res) => {
         seenBy: {$ne: userId},
         ...activeMessageFilter(),
       },
-      {$addToSet: {seenBy: userId}}
+      {$addToSet: {seenBy: userId, deliveredTo: userId}}
     );
 
     await emitUnreadCounts(conversation, userId);
+
+    if (global.io) {
+      newlySeenMessages.forEach(message => {
+        global.io.to(`user:${message.senderId}`).emit("chat:message-seen", {
+          messageId: message.messageId,
+          conversationId: conversation._id,
+          seenBy: userId,
+        });
+      });
+    }
 
     res.status(200).json({success: true, messages: normalizedMessages});
   } catch (error) {
@@ -624,12 +690,17 @@ exports.getCompanyUsers = async (req, res) => {
       _id: {$ne: req.user.id},
       isActive: true,
       companyRole: { $not: /^client$/i },
-    }).select("name email profileImage companyRole isOnline lastSeen").lean();
+    }).select("name email profileImage avatar image photo companyRole isOnline lastSeen").lean();
 
-    const usersWithPresence = users.map(user => ({
-      ...user,
-      isOnline: socketOnlineIds.has(user._id.toString()) || isRecentlyOnlineInDb(user),
-    }));
+    const usersWithPresence = users.map(user => {
+      const avatarValue = user.profileImage || user.avatar || user.image || user.photo || "";
+      return {
+        ...user,
+        profileImage: avatarValue,
+        avatar: avatarValue,
+        isOnline: socketOnlineIds.has(user._id.toString()) || isRecentlyOnlineInDb(user),
+      };
+    });
 
     res.status(200).json({success: true, users: usersWithPresence});
   } catch (error) {
@@ -778,6 +849,8 @@ exports.forwardMessage = async (req, res) => {
         });
       }
 
+      const deliveredTo = getDeliveredMemberIds(conversation, userId);
+
       const message = await Message.create({
         companyId: req.user.company,
         conversationId: conversation._id,
@@ -785,7 +858,10 @@ exports.forwardMessage = async (req, res) => {
         text: original.text,
         file: original.file,
         fileType: original.fileType,
+        fileName: original.fileName || "",
+        fileSize: original.fileSize || 0,
         seenBy: [userId],
+        deliveredTo,
         isForwarded: true,
         originalMessage: original._id,
       });
@@ -796,6 +872,7 @@ exports.forwardMessage = async (req, res) => {
       if (global.io) {
         global.io.to(`conversation:${conversation._id}`).emit("chat:message-forwarded", populatedMessage);
         global.io.to(`user:${targetId}`).emit("chat:message-forwarded", populatedMessage);
+        emitMessageDelivered(message, conversation, deliveredTo);
       }
 
       await emitUnreadCounts(conversation, userId);
@@ -829,6 +906,7 @@ exports.markMessageSeen = async (req, res) => {
       return res.status(403).json({success: false, message: "You are not a member of this conversation"});
     }
 
+    message.deliveredTo.addToSet(userId);
     message.seenBy.addToSet(userId);
     await message.save();
     await emitUnreadCounts(conversation, userId);

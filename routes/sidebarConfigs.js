@@ -7,10 +7,47 @@ const Department = require('../models/Department');
 const Branch = require('../models/Branch');
 const JobRole = require('../models/JobRole');
 const mongoose = require('mongoose');
+const { protect, isSuperAdminUser } = require('../middleware/authMiddleware');
+
+router.use(protect);
+
+const getUserCompanyId = (user) => {
+  return String(user?.company?._id || user?.company || user?.companyId || '');
+};
+
+const isCompanyAdminOrOwner = (user) => {
+  if (!user) return false;
+  if (isSuperAdminUser(user)) return true;
+  const roles = [user.companyRole, user.jobRole, user.role]
+    .filter(Boolean)
+    .map(r => String(r).trim().toLowerCase().replace(/[\s_-]+/g, '_'));
+  return roles.some(r => ['owner', 'company_owner', 'companyowner', 'admin', 'company_admin'].includes(r));
+};
+
+const requireSidebarManager = (req, res, next) => {
+  if (!isCompanyAdminOrOwner(req.user)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Access denied. Only Company Owner or Admin can manage sidebar configurations.'
+    });
+  }
+  next();
+};
 
 const getRouteKey = item => {
   const rawPath = String(item?.path || item?.id || '');
   return rawPath.split('/').filter(Boolean).pop();
+};
+
+const removeLegacyDashboardItems = menuItems => (Array.isArray(menuItems) ? menuItems.filter(item => {
+  const values = [item?.id, item?.path, item?.name].map(value => String(value || '').trim().toLowerCase());
+  return !values.includes('dashboard-2') && !values.includes('dashboard 2');
+}) : []);
+
+const sanitizeConfig = config => {
+  if (!config) return config;
+  config.menuItems = removeLegacyDashboardItems(config.menuItems);
+  return config;
 };
 
 const getRouteAccessKeys = item => {
@@ -91,56 +128,106 @@ const resolveDepartmentId = async (companyId, departmentValue) => {
 const buildRoleQuery = async (companyId, departmentId, role) => {
   const roleValue = String(role || '').trim();
   const aliases = new Set([roleValue]);
-  let jobRole = null;
+  let resolvedDepartmentId = null;
 
   if (mongoose.Types.ObjectId.isValid(roleValue)) {
-    jobRole = await JobRole.findOne({
+    const jobRole = await JobRole.findOne({
       _id: roleValue,
-      company: companyId,
-      department: departmentId
-    }).select('_id name');
-  } else {
-    const targetRoleKey = normalizeNameKey(roleValue);
-    const roles = await JobRole.find({
-      company: companyId,
-      department: departmentId,
-      isActive: { $ne: false }
-    }).select('_id name').lean();
-    jobRole = roles.find(item => normalizeNameKey(item.name) === targetRoleKey) || null;
+      company: companyId
+    }).select('_id name department');
+
+    if (jobRole) {
+      aliases.add(String(jobRole._id));
+      aliases.add(jobRole.name);
+      if (jobRole.department) {
+        resolvedDepartmentId = String(jobRole.department);
+      }
+    }
   }
 
-  if (jobRole) {
-    aliases.add(String(jobRole._id));
-    aliases.add(jobRole.name);
-  }
+  const targetRoleKey = normalizeNameKey(roleValue);
+  const roles = await JobRole.find({
+    company: companyId,
+    isActive: { $ne: false }
+  }).select('_id name department').lean();
+
+  const matchingRoles = roles.filter(item => normalizeNameKey(item.name) === targetRoleKey);
+  matchingRoles.forEach(item => {
+    aliases.add(String(item._id));
+    aliases.add(item.name);
+    if (!resolvedDepartmentId && item.department) {
+      resolvedDepartmentId = String(item.department);
+    }
+  });
 
   return {
-    $in: [...aliases].map(value => new RegExp(`^${escapeRegex(value)}$`, 'i'))
+    query: {
+      $in: [...aliases].map(value => new RegExp(`^${escapeRegex(value)}$`, 'i'))
+    },
+    resolvedDepartmentId
   };
 };
 
 const findSidebarConfig = async ({ companyId, branchId, departmentId, role }) => {
-  const roleQuery = await buildRoleQuery(companyId, departmentId, role);
-  const baseQuery = { companyId, departmentId, role: roleQuery, isActive: { $ne: false } };
-
-  if (branchId) {
-    const branchConfig = await SidebarConfig.findOne({ ...baseQuery, branchId });
-    if (branchConfig) return branchConfig;
-
-    // Older/global assignments did not store a branch.
-    return SidebarConfig.findOne({
-      ...baseQuery,
-      $or: [{ branchId: null }, { branchId: { $exists: false } }]
-    });
+  const { query: roleQuery, resolvedDepartmentId } = await buildRoleQuery(companyId, departmentId, role);
+  const activeDeptId = departmentId || resolvedDepartmentId;
+  
+  const baseQuery = { companyId, role: roleQuery, isActive: { $ne: false } };
+  if (activeDeptId && mongoose.Types.ObjectId.isValid(activeDeptId)) {
+    baseQuery.departmentId = activeDeptId;
   }
 
-  return SidebarConfig.findOne(baseQuery).sort({ branchId: 1, updatedAt: -1 });
+  if (branchId && mongoose.Types.ObjectId.isValid(branchId)) {
+    const branchConfig = await SidebarConfig.findOne({ ...baseQuery, branchId }).sort({ updatedAt: -1 });
+    if (branchConfig) return branchConfig;
+
+    const globalConfig = await SidebarConfig.findOne({
+      ...baseQuery,
+      $or: [{ branchId: null }, { branchId: { $exists: false } }]
+    }).sort({ updatedAt: -1 });
+    if (globalConfig) return globalConfig;
+
+    const anyBranchConfig = await SidebarConfig.findOne(baseQuery).sort({ updatedAt: -1 });
+    if (anyBranchConfig) return anyBranchConfig;
+  } else {
+    const globalConfig = await SidebarConfig.findOne({
+      ...baseQuery,
+      $or: [{ branchId: null }, { branchId: { $exists: false } }]
+    }).sort({ updatedAt: -1 });
+    if (globalConfig) return globalConfig;
+
+    const anyConfig = await SidebarConfig.findOne(baseQuery).sort({ updatedAt: -1 });
+    if (anyConfig) return anyConfig;
+  }
+
+  if (baseQuery.departmentId) {
+    const roleOnlyQuery = { companyId, role: roleQuery, isActive: { $ne: false } };
+    if (branchId && mongoose.Types.ObjectId.isValid(branchId)) {
+      const branchRoleConfig = await SidebarConfig.findOne({ ...roleOnlyQuery, branchId }).sort({ updatedAt: -1 });
+      if (branchRoleConfig) return branchRoleConfig;
+    }
+    const anyRoleConfig = await SidebarConfig.findOne(roleOnlyQuery).sort({ updatedAt: -1 });
+    if (anyRoleConfig) return anyRoleConfig;
+  }
+
+  return null;
 };
 
 
 router.get('/', async (req, res) => {
   try {
     let { companyId, branchId, departmentId, role } = req.query;
+
+    if (!isSuperAdminUser(req.user)) {
+      const userCompanyId = getUserCompanyId(req.user);
+      if (companyId && String(companyId) !== userCompanyId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You cannot view sidebar configurations of another company.'
+        });
+      }
+      companyId = userCompanyId;
+    }
     
     if (companyId && !mongoose.Types.ObjectId.isValid(companyId)) {
       return res.json({ success: true, count: 0, data: [] });
@@ -171,7 +258,7 @@ router.get('/', async (req, res) => {
     res.json({
       success: true,
       count: configs.length,
-      data: configs
+      data: configs.map(sanitizeConfig)
     });
   } catch (error) {
     console.error('Error fetching sidebar configs:', error);
@@ -187,15 +274,26 @@ router.get('/', async (req, res) => {
 router.get('/config', async (req, res) => {
   try {
     let { companyId, branchId, departmentId, role } = req.query;
+
+    if (!isSuperAdminUser(req.user)) {
+      const userCompanyId = getUserCompanyId(req.user);
+      if (companyId && String(companyId) !== userCompanyId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You cannot view sidebar configuration of another company.'
+        });
+      }
+      if (!companyId) companyId = userCompanyId;
+    }
     
-    if (!companyId || !departmentId || !role) {
+    if (!companyId || !role) {
       return res.status(400).json({
         success: false,
-        message: 'Company, department and role are required'
+        message: 'Company and role are required'
       });
     }
 
-    if (mongoose.Types.ObjectId.isValid(companyId)) {
+    if (companyId && mongoose.Types.ObjectId.isValid(companyId) && departmentId) {
       departmentId = await resolveDepartmentId(companyId, departmentId);
     }
 
@@ -220,9 +318,7 @@ router.get('/config', async (req, res) => {
       }
     }
 
-    if (!mongoose.Types.ObjectId.isValid(companyId) || 
-        !mongoose.Types.ObjectId.isValid(departmentId) || 
-        (branchId && !mongoose.Types.ObjectId.isValid(branchId))) {
+    if (!mongoose.Types.ObjectId.isValid(companyId)) {
       return res.json({
         success: true,
         message: 'No configuration found',
@@ -245,6 +341,8 @@ router.get('/config', async (req, res) => {
         data: null
       });
     }
+
+    sanitizeConfig(config);
     
     res.json({
       success: true,
@@ -262,20 +360,26 @@ router.get('/config', async (req, res) => {
 });
 
 
-router.post('/', async (req, res) => {
+router.post('/', requireSidebarManager, async (req, res) => {
+  let { companyId, branchId, departmentId, role, menuItems, ranges } = req.body;
   try {
-    const { companyId, branchId, departmentId, role, menuItems, ranges } = req.body;
+    if (!isSuperAdminUser(req.user)) {
+      const userCompanyId = getUserCompanyId(req.user);
+      if (companyId && String(companyId) !== userCompanyId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You cannot configure sidebar for another company.'
+        });
+      }
+      companyId = userCompanyId;
+    }
     
-    void 0;
-    
-    
-    if (!companyId || !departmentId || !role || !menuItems) {
+    if (!companyId || !departmentId || !role || !Array.isArray(menuItems)) {
       return res.status(400).json({
         success: false,
         message: 'Company, department, role and menuItems are required'
       });
     }
-    
     
     if (!mongoose.Types.ObjectId.isValid(companyId)) {
       return res.status(400).json({
@@ -290,53 +394,97 @@ router.post('/', async (req, res) => {
         message: 'Invalid department ID'
       });
     }
-    
-    const query = { companyId, departmentId, role };
-    if (branchId) query.branchId = branchId;
 
-    const existingConfig = await SidebarConfig.findOne(query);
-    
-    if (existingConfig) {
-      return res.status(409).json({ 
+    const dept = await Department.findOne({ _id: departmentId, company: companyId });
+    if (!dept) {
+      return res.status(404).json({
         success: false,
-        message: 'Configuration already exists for this combination',
-        data: existingConfig
+        message: 'Department not found for this company'
       });
     }
+
+    if (branchId) {
+      if (!mongoose.Types.ObjectId.isValid(branchId)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid branch ID'
+        });
+      }
+      const branch = await Branch.findOne({ _id: branchId, company: companyId });
+      if (!branch) {
+        return res.status(404).json({
+          success: false,
+          message: 'Branch not found for this company'
+        });
+      }
+    }
     
-    
-    const newConfig = new SidebarConfig({
+    const cleanedItems = removeLegacyDashboardItems(menuItems);
+    const cleanedRanges = Array.isArray(ranges) ? ranges : [];
+
+    const configKey = {
       companyId,
       branchId: branchId || null,
       departmentId,
-      role,
-      menuItems,
-      ranges: ranges || []
-    });
-    
-    const savedConfig = await newConfig.save();
-    
-    
+      role
+    };
+    const configValues = {
+      menuItems: cleanedItems,
+      ranges: cleanedRanges,
+      updatedAt: new Date()
+    };
+
+    // Save is intentionally idempotent: a stale UI lookup must not turn a
+    // normal update into a duplicate-key failure.
+    const savedConfig = await SidebarConfig.findOneAndUpdate(
+      configKey,
+      { $set: configValues, $setOnInsert: configKey },
+      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+    );
+
+    // Synchronize all other configs for this role in this company
+    // so every user assigned this role receives the changes!
+    try {
+      const { query: roleQuery } = await buildRoleQuery(companyId, departmentId, role);
+      await SidebarConfig.updateMany(
+        {
+          companyId,
+          role: roleQuery,
+          _id: { $ne: savedConfig._id }
+        },
+        {
+          $set: {
+            menuItems: cleanedItems,
+            ranges: cleanedRanges,
+            updatedAt: new Date()
+          }
+        }
+      );
+    } catch (syncErr) {
+      console.warn('Warning: sync cross-branch error in POST:', syncErr.message);
+    }
+
     const populatedConfig = await SidebarConfig.findById(savedConfig._id)
       .populate('companyId', 'companyName companyCode')
       .populate('departmentId', 'name');
     
-    res.status(201).json({
+    res.status(200).json({
       success: true,
-      message: 'Configuration created successfully',
+      message: 'Configuration saved successfully',
       data: populatedConfig
     });
   } catch (error) {
     console.error('Error creating config:', error);
     
-    
     if (error.code === 11000) {
+      const duplicateQuery = { companyId, departmentId, role, branchId: branchId || null };
+      const duplicateConfig = await SidebarConfig.findOne(duplicateQuery).lean();
       return res.status(409).json({
         success: false,
-        message: 'Configuration already exists for this combination'
+        message: 'Configuration already exists for this combination',
+        data: duplicateConfig
       });
     }
-    
     
     if (error.name === 'ValidationError') {
       const messages = Object.values(error.errors).map(err => err.message);
@@ -356,10 +504,10 @@ router.post('/', async (req, res) => {
 });
 
 
-router.put('/:id', async (req, res) => {
+router.put('/:id', requireSidebarManager, async (req, res) => {
   try {
     const { id } = req.params;
-    const { menuItems, ranges } = req.body;
+    const { menuItems, ranges, role, departmentId, branchId } = req.body;
     
     if (!menuItems || !Array.isArray(menuItems)) {
       return res.status(400).json({
@@ -368,7 +516,7 @@ router.put('/:id', async (req, res) => {
       });
     }
     
-    const existingConfig = await SidebarConfig.findById(id).select('companyId');
+    const existingConfig = await SidebarConfig.findById(id);
 
     if (!existingConfig) {
       return res.status(404).json({
@@ -377,19 +525,60 @@ router.put('/:id', async (req, res) => {
       });
     }
 
+    const targetCompanyId = String(existingConfig.companyId?._id || existingConfig.companyId || '');
+    if (!isSuperAdminUser(req.user)) {
+      const userCompanyId = getUserCompanyId(req.user);
+      if (targetCompanyId && targetCompanyId !== userCompanyId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You cannot modify sidebar configuration of another company.'
+        });
+      }
+    }
+
+    const cleanedItems = removeLegacyDashboardItems(menuItems);
+    const cleanedRanges = Array.isArray(ranges) ? ranges : [];
+
     const updatedConfig = await SidebarConfig.findByIdAndUpdate(
       id,
       {
-        menuItems,
-        ranges: ranges || [],
-        updatedAt: Date.now()
+        menuItems: cleanedItems,
+        ranges: cleanedRanges,
+        updatedAt: new Date()
       },
       { 
-        new: true,
+        new: true, 
         runValidators: true 
       }
     ).populate('companyId', 'companyName')
      .populate('departmentId', 'name');
+
+    // Also synchronize this role's other configs across the company
+    try {
+      const targetRole = role || existingConfig.role;
+      const targetDept = departmentId || existingConfig.departmentId?._id || existingConfig.departmentId;
+
+      if (targetCompanyId && targetRole) {
+        const { query: roleQuery } = await buildRoleQuery(targetCompanyId, targetDept, targetRole);
+
+        await SidebarConfig.updateMany(
+          {
+            companyId: targetCompanyId,
+            role: roleQuery,
+            _id: { $ne: id }
+          },
+          {
+            $set: {
+              menuItems: cleanedItems,
+              ranges: cleanedRanges,
+              updatedAt: new Date()
+            }
+          }
+        );
+      }
+    } catch (syncError) {
+      console.warn('Warning: Could not sync cross-branch configs:', syncError.message);
+    }
     
     res.json({
       success: true,
@@ -407,18 +596,30 @@ router.put('/:id', async (req, res) => {
 });
 
 
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', requireSidebarManager, async (req, res) => {
   try {
     const { id } = req.params;
     
-    const deletedConfig = await SidebarConfig.findByIdAndDelete(id);
-    
-    if (!deletedConfig) {
+    const existingConfig = await SidebarConfig.findById(id);
+    if (!existingConfig) {
       return res.status(404).json({
         success: false,
         message: 'Configuration not found'
       });
     }
+
+    const targetCompanyId = String(existingConfig.companyId?._id || existingConfig.companyId || '');
+    if (!isSuperAdminUser(req.user)) {
+      const userCompanyId = getUserCompanyId(req.user);
+      if (targetCompanyId && targetCompanyId !== userCompanyId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You cannot delete sidebar configuration of another company.'
+        });
+      }
+    }
+
+    await SidebarConfig.findByIdAndDelete(id);
     
     res.json({
       success: true,
@@ -437,7 +638,18 @@ router.delete('/:id', async (req, res) => {
 
 router.get('/user-config', async (req, res) => {
   try {
-    const { companyId, branchId, departmentId, role } = req.query;
+    let { companyId, branchId, departmentId, role } = req.query;
+
+    if (!isSuperAdminUser(req.user)) {
+      const userCompanyId = getUserCompanyId(req.user);
+      if (companyId && String(companyId) !== userCompanyId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You cannot view user sidebar configuration of another company.'
+        });
+      }
+      if (!companyId) companyId = userCompanyId;
+    }
     
     if (!companyId || !departmentId || !role) {
       return res.status(400).json({
@@ -465,6 +677,8 @@ router.get('/user-config', async (req, res) => {
         data: null
       });
     }
+
+    sanitizeConfig(config);
     
     res.json({
       success: true,
@@ -481,7 +695,9 @@ router.get('/user-config', async (req, res) => {
   }
 });
 router.get("/test", (req, res) => {
-  void 0;
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ success: false, message: 'Not found' });
+  }
   res.json({
     success: true,
     user: req.user

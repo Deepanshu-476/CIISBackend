@@ -15,6 +15,7 @@ router.post('/create', protect, uploadFields, selfTaskController.createTaskForSe
 router.get('/', protect, selfTaskController.getPersonalTasks);
 router.get('/stats', protect, selfTaskController.getPersonalTaskStats);
 router.put('/:taskId', protect, uploadFields, selfTaskController.updateTask);
+router.patch('/:taskId/stop-recurring', protect, selfTaskController.stopRecurringTask);
 router.delete('/:taskId', protect, selfTaskController.deleteTask);
 router.patch('/:taskId/status', protect, selfTaskController.updateStatus);
 router.patch('/:taskId/checkpoints/:checkpointId', protect, selfTaskController.updateCheckpoint);

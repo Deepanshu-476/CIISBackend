@@ -3,6 +3,7 @@ const User = require("../models/User");
 const Department = require("../models/Department");
 const mongoose = require("mongoose");
 const { getCacheKey, getOrSetCached, invalidateCache } = require("../utils/inMemoryCache");
+const { isSuperAdminUser } = require("../middleware/authMiddleware");
 
 const JOB_ROLE_CACHE_PREFIX = "jobRoles";
 const JOB_ROLE_SELECT = "name description department company companyCode shiftSettings shifts createdBy createdAt updatedAt isActive";
@@ -49,22 +50,8 @@ const normalizeShifts = (shifts, shiftSettings) => {
 };
 
 
-const isSuperAdmin = (user) => {
-  if (!user) return false;
-
-  const normalizedRole = String(user.role || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[_\s]+/g, '-');
-  const normalizedJobRole = String(user.jobRole?.roleName || user.jobRole || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[-\s]+/g, '_');
-  const isSuper = normalizedRole === 'super-admin' || normalizedJobRole === 'super_admin';
-  
-  void 0;
-  
-  return isSuper;
+const isSuperAdmin = (user, reqUser) => {
+  return isSuperAdminUser(reqUser) || isSuperAdminUser(user);
 };
 
 
@@ -102,33 +89,19 @@ exports.createJobRole = async (req, res) => {
     void 0;
     
     
-    const user = await User.findById(createdBy).select("role jobRole company companyCode").lean();
+    const user = await User.findById(createdBy).select("role jobRole company companyCode isSuperAdmin").lean();
     if (!user) {
       void 0;
       return errorResponse(res, 400, "User not found");
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-
-    
     if (!user.company) {
       void 0;
       return errorResponse(res, 400, "User company not found");
     }
 
-    
-    const isSuper = isSuperAdmin(user);
+    const isSuper = isSuperAdmin(user, req.user);
     void 0;
-    
     
     let companyId, companyCode;
     
@@ -233,21 +206,17 @@ exports.getAllJobRoles = async (req, res) => {
     void 0;
     
     
-    const user = await User.findById(req.user.id).select("role jobRole company companyCode").lean();
+    const user = await User.findById(req.user.id).select("role jobRole company companyCode isSuperAdmin").lean();
     if (!user) {
       void 0;
       return errorResponse(res, 400, "User not found");
     }
 
-    void 0;
-
-    
-    const isSuper = isSuperAdmin(user);
+    const isSuper = isSuperAdmin(user, req.user);
     void 0;
     
     let query = { isActive: true };
     void 0;
-    
     
     if (!isSuper) {
       void 0;
@@ -255,10 +224,12 @@ exports.getAllJobRoles = async (req, res) => {
         void 0;
         return errorResponse(res, 400, "User company not found");
       }
+      if (company && company.toString() !== user.company.toString()) {
+        return errorResponse(res, 403, "Access denied. You cannot view job roles of another company.");
+      }
       query.company = user.company;
       void 0;
     } else if (company) {
-      
       void 0;
       query.company = company;
     } else {
@@ -324,7 +295,7 @@ exports.updateJobRole = async (req, res) => {
     }
 
     void 0;
-    const user = await User.findById(req.user.id).select("role jobRole company companyCode").lean();
+    const user = await User.findById(req.user.id).select("role jobRole company companyCode isSuperAdmin").lean();
     if (!user) {
       void 0;
       return errorResponse(res, 400, "User not found");
@@ -332,7 +303,7 @@ exports.updateJobRole = async (req, res) => {
 
     void 0;
 
-    const isSuper = isSuperAdmin(user);
+    const isSuper = isSuperAdmin(user, req.user);
     void 0;
 
     void 0;
@@ -466,14 +437,14 @@ exports.deleteJobRole = async (req, res) => {
     }
 
     void 0;
-    const user = await User.findById(req.user.id).select("role jobRole company companyCode").lean();
+    const user = await User.findById(req.user.id).select("role jobRole company companyCode isSuperAdmin").lean();
     if (!user) {
       void 0;
       return errorResponse(res, 400, "User not found");
     }
 
     void 0;
-    const isSuper = isSuperAdmin(user);
+    const isSuper = isSuperAdmin(user, req.user);
     void 0;
 
     void 0;
@@ -557,7 +528,7 @@ exports.getJobRolesByDepartment = async (req, res) => {
     }
 
     void 0;
-    const user = await User.findById(req.user.id).select("role jobRole company companyCode").lean();
+    const user = await User.findById(req.user.id).select("role jobRole company companyCode isSuperAdmin").lean();
     if (!user) {
       void 0;
       return errorResponse(res, 400, "User not found");
@@ -565,7 +536,7 @@ exports.getJobRolesByDepartment = async (req, res) => {
 
     void 0;
 
-    const isSuper = isSuperAdmin(user);
+    const isSuper = isSuperAdmin(user, req.user);
     void 0;
     
     
@@ -643,7 +614,7 @@ exports.getJobRolesByDepartmentId = async (req, res) => {
     }
 
     void 0;
-    const user = await User.findById(req.user.id).select("role jobRole company companyCode").lean();
+    const user = await User.findById(req.user.id).select("role jobRole company companyCode isSuperAdmin").lean();
     if (!user) {
       void 0;
       return errorResponse(res, 400, "User not found");
@@ -652,7 +623,7 @@ exports.getJobRolesByDepartmentId = async (req, res) => {
     void 0;
 
     
-    const isSuper = isSuperAdmin(user);
+    const isSuper = isSuperAdmin(user, req.user);
     void 0;
 
     

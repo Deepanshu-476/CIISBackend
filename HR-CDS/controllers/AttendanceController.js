@@ -1,5 +1,7 @@
 const Attendance = require("../models/Attendance");
+const OvertimeRequest = require("../models/OvertimeRequest");
 const Leave = require("../models/Leave");
+const Holiday = require("../models/Holiday");
 const User = require("../../models/User");
 const Company = require("../../models/Company");
 const Branch = require("../../models/Branch");
@@ -9,6 +11,8 @@ const mongoose = require("mongoose");
 const {notifyPageUsers, getCompanyId} = require("../utils/systemNotificationService");
 const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagination");
 const { runAutoClockOutSweep } = require("../cron/forceClockOut");
+const { cleanRecurringTasksForAbsentUser } = require("../cron/recurringTasks");
+const { isOvertimeApprovedForUserDate } = require("./overtimeController");
 
 
 const formatDuration = (ms) => {
@@ -24,8 +28,10 @@ const INDIA_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const toValidDate = value => {
+  if (!value) return null;
   const date = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date;
+  if (Number.isNaN(date.getTime()) || date.getTime() === 0) return null;
+  return date;
 };
 
 const getIndiaDateParts = (value = new Date()) => {
@@ -55,6 +61,17 @@ const normalizeIdList = (value) => {
 const canViewAllBranchData = (user = {}) => {
   const roleText = String(user.companyRole || user.jobRole || user.role || '').trim().toLowerCase();
   return ['owner', 'company_owner', 'companyowner', 'super_admin', 'superadmin'].includes(roleText);
+};
+
+const isPrivilegedAttendanceUser = (user = {}, allowManager = true) => {
+  if (user.isSuperAdmin === true || user.superAdmin === true) return true;
+  const roles = [user.jobRole, user.companyRole, user.role, user.userType]
+    .filter(Boolean)
+    .map(r => String(r).trim().toLowerCase().replace(/[\s_-]+/g, '_'));
+  const allowed = allowManager
+    ? ['super_admin', 'superadmin', 'owner', 'company_owner', 'admin', 'hr', 'manager']
+    : ['super_admin', 'superadmin', 'owner', 'company_owner', 'admin', 'hr'];
+  return roles.some(r => allowed.includes(r));
 };
 
 const getUserBranchIds = (user = {}) => normalizeIdList([
@@ -95,10 +112,23 @@ const refreshAutoClockOuts = async () => {
 
 const getBranchScopedUserIds = async (req, companyCode) => {
   const requestedBranch = req.query?.branch || req.query?.branchId;
-  if (!requestedBranch || !isValidObjectId(requestedBranch)) return null;
+  const accessibleBranchIds = getUserBranchIds(req.user || {});
+
+  if (!requestedBranch || !isValidObjectId(requestedBranch)) {
+    if (!canViewAllBranchData(req.user) && accessibleBranchIds.length > 0) {
+      const users = await User.find({
+        companyCode,
+        $or: [
+          { branch: { $in: accessibleBranchIds } },
+          { assignedBranches: { $in: accessibleBranchIds } }
+        ]
+      }).select('_id').lean();
+      return users.map(user => user._id);
+    }
+    return null;
+  }
 
   const requestedBranchId = String(requestedBranch);
-  const accessibleBranchIds = getUserBranchIds(req.user || {});
   if (!canViewAllBranchData(req.user) && !accessibleBranchIds.includes(requestedBranchId)) {
     return [];
   }
@@ -262,6 +292,23 @@ const buildShiftSchedule = (referenceDate, shiftSettings = {}) => {
   };
 };
 
+const formatTime12h = (timeStr) => {
+  if (!timeStr) return "";
+  if (/\b(AM|PM|am|pm)\b/.test(timeStr)) return timeStr;
+  const [rawH, rawM] = String(timeStr).split(":");
+  const h = parseInt(rawH, 10);
+  const m = parseInt(rawM, 10);
+  if (isNaN(h) || isNaN(m)) return timeStr;
+  const period = h >= 12 ? "PM" : "AM";
+  const hour12 = h % 12 === 0 ? 12 : h % 12;
+  return `${String(hour12).padStart(2, "0")}:${String(m).padStart(2, "0")} ${period}`;
+};
+
+const formatShiftTimeWindow = (shiftStart, shiftEnd) => {
+  if (!shiftStart || !shiftEnd) return "";
+  return `${formatTime12h(shiftStart)} - ${formatTime12h(shiftEnd)}`;
+};
+
 const buildShiftSnapshot = (shiftSettings = {}, schedule) => {
   const source = shiftSettings || {};
   return {
@@ -270,6 +317,7 @@ const buildShiftSnapshot = (shiftSettings = {}, schedule) => {
     shiftType: source.shiftType || "general",
     shiftStart: schedule.shiftStartStr,
     shiftEnd: schedule.shiftEndStr,
+    shiftTime: formatShiftTimeWindow(schedule.shiftStartStr, schedule.shiftEndStr),
     earlyClockInStart: schedule.earlyClockInStartStr,
     lateGraceLimit: schedule.lateGraceLimitStr,
     halfDayLateLimit: schedule.halfDayLateLimitStr,
@@ -288,6 +336,7 @@ const applyShiftSnapshot = (record, snapshot = {}) => {
   record.shiftType = snapshot.shiftType;
   record.shiftStart = snapshot.shiftStart;
   record.shiftEnd = snapshot.shiftEnd;
+  record.shiftTime = snapshot.shiftTime || formatShiftTimeWindow(snapshot.shiftStart, snapshot.shiftEnd);
   record.earlyClockInStart = snapshot.earlyClockInStart;
   record.lateGraceLimit = snapshot.lateGraceLimit;
   record.halfDayLateLimit = snapshot.halfDayLateLimit;
@@ -329,7 +378,7 @@ const normalizeAttendanceStatusForSave = (value, fallback = "") => {
   return statusMap[compact] || fallback || "ABSENT";
 };
 
-const calculateAttendanceByShift = ({ inTime, outTime, shiftSettings, currentStatus }) => {
+const calculateAttendanceByShift = ({ inTime, outTime, shiftSettings, currentStatus, hasOvertimeApproved = false }) => {
   if (!inTime) {
     return {
       status: currentStatus || "ABSENT",
@@ -379,7 +428,7 @@ const calculateAttendanceByShift = ({ inTime, outTime, shiftSettings, currentSta
     status: finalStatus,
     lateBy,
     earlyLeave: outTime < schedule.shiftEnd ? formatDuration(schedule.shiftEnd - outTime) : "00:00:00",
-    overTime: outTime > schedule.shiftEnd ? formatDuration(outTime - schedule.shiftEnd) : "00:00:00",
+    overTime: (hasOvertimeApproved && outTime > schedule.shiftEnd) ? formatDuration(outTime - schedule.shiftEnd) : "00:00:00",
     totalTime: formatDuration(Math.max(totalMs, 0))
   };
 };
@@ -799,18 +848,25 @@ const clockIn = async (req, res) => {
 
     // 1. Fetch branch-scoped settings to read attendance mode
     const { attendanceSettings, userObj } = await getAttendanceSettingsContext({ companyCode: userCompanyCode, userId });
+    
+    if (!userObj) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (userObj.companyCode && userCompanyCode && userObj.companyCode !== userCompanyCode) {
+      return res.status(403).json({ message: "Access denied. Cross-company attendance is forbidden." });
+    }
+
     const clockInConfig = attendanceSettings?.dashboardConfig?.find(c => c.componentId === 'clock-in');
     const attendanceMode = clockInConfig?.settings?.attendanceMode || 'normal';
 
     const { latitude, longitude, accuracy, selfieUrl } = req.body;
 
-    // 2. Validate Geolocation/Selfie based on company requirements
+    // 2. Validate Geolocation/Selfie based on company requirements (WFH determined strictly by user's DB record)
     let locationRange = null;
+    const isWfh = isWorkFromHomeEmployee(userObj) || isWorkFromHomeEmployee(req.user);
     const shouldEnforceLocation =
-      (attendanceMode === 'location' || attendanceMode === 'both') &&
-      !isWorkFromHomeEmployee(userObj) &&
-      !isWorkFromHomeEmployee(req.user) &&
-      !isWorkFromHomeEmployee(req.body);
+      (attendanceMode === 'location' || attendanceMode === 'both') && !isWfh;
     if (shouldEnforceLocation) {
       if (latitude === undefined || longitude === undefined) {
         return res.status(400).json({
@@ -968,18 +1024,25 @@ const clockOut = async (req, res) => {
     
     // 1. Fetch branch-scoped settings to read attendance mode requirements
     const { attendanceSettings, userObj } = await getAttendanceSettingsContext({ companyCode: userCompanyCode, userId });
+
+    if (!userObj) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (userObj.companyCode && userCompanyCode && userObj.companyCode !== userCompanyCode) {
+      return res.status(403).json({ message: "Access denied. Cross-company attendance is forbidden." });
+    }
+
     const clockInConfig = attendanceSettings?.dashboardConfig?.find(c => c.componentId === 'clock-in');
     const attendanceMode = clockInConfig?.settings?.attendanceMode || 'normal';
 
     const { latitude, longitude, accuracy, selfieUrl } = req.body;
 
-    // 2. Validate Geolocation/Selfie based on company requirements
+    // 2. Validate Geolocation/Selfie based on company requirements (WFH determined strictly by user's DB record)
     let locationRange = null;
+    const isWfh = isWorkFromHomeEmployee(userObj) || isWorkFromHomeEmployee(req.user);
     const shouldEnforceLocation =
-      (attendanceMode === 'location' || attendanceMode === 'both') &&
-      !isWorkFromHomeEmployee(userObj) &&
-      !isWorkFromHomeEmployee(req.user) &&
-      !isWorkFromHomeEmployee(req.body);
+      (attendanceMode === 'location' || attendanceMode === 'both') && !isWfh;
     if (shouldEnforceLocation) {
       if (latitude === undefined || longitude === undefined) {
         return res.status(400).json({
@@ -1053,15 +1116,37 @@ const clockOut = async (req, res) => {
     record.clockOutMode = 'MANUAL';
     record.isClockedIn = false;
     record.totalTime = formatDuration(totalMs);
-    record.overTime = now > schedule.shiftEnd ? formatDuration(now - schedule.shiftEnd) : "00:00:00";
+
+    // Check overtime approval status
+    const hasApprovedOvertime = record.hasOvertimeApproved || (await isOvertimeApprovedForUserDate(userId, record.inTime || record.date || now));
+    record.hasOvertimeApproved = Boolean(hasApprovedOvertime);
+
+    let calculatedOverTime = "00:00:00";
+    let calculatedOverTimeMinutes = 0;
+    if (hasApprovedOvertime && now > schedule.shiftEnd) {
+      const otMs = Math.max(0, now - schedule.shiftEnd);
+      calculatedOverTime = formatDuration(otMs);
+      calculatedOverTimeMinutes = Math.floor(otMs / (60 * 1000));
+    }
+
+    record.overTime = calculatedOverTime;
+    record.overTimeMinutes = calculatedOverTimeMinutes;
     record.earlyLeave = now < schedule.shiftEnd ? formatDuration(schedule.shiftEnd - now) : "00:00:00";
     applyShiftSnapshot(record, shiftSnapshot);
-    Object.assign(record, calculateAttendanceByShift({
+
+    const shiftCalc = calculateAttendanceByShift({
       inTime: new Date(record.inTime),
       outTime: now,
       shiftSettings,
-      currentStatus: record.status
-    }));
+      currentStatus: record.status,
+      hasOvertimeApproved: Boolean(hasApprovedOvertime)
+    });
+
+    record.status = shiftCalc.status;
+    record.lateBy = shiftCalc.lateBy;
+    record.earlyLeave = shiftCalc.earlyLeave;
+    record.overTime = calculatedOverTime;
+    record.overTimeMinutes = calculatedOverTimeMinutes;
 
     // Save Location & Selfie
     if (latitude !== undefined && longitude !== undefined) {
@@ -1161,6 +1246,7 @@ const getTodayStatus = async (req, res) => {
           shiftName: shiftSettings?.shiftName,
           shiftStart: schedule.shiftStartStr,
           shiftEnd: schedule.shiftEndStr,
+          shiftTime: formatShiftTimeWindow(schedule.shiftStartStr, schedule.shiftEndStr),
           message: "No attendance recorded for your shift"
         });
       }
@@ -1171,14 +1257,47 @@ const getTodayStatus = async (req, res) => {
         shiftName: shiftSettings?.shiftName,
         shiftStart: schedule.shiftStartStr,
         shiftEnd: schedule.shiftEndStr,
+        shiftTime: formatShiftTimeWindow(schedule.shiftStartStr, schedule.shiftEndStr),
         message: "No attendance recorded yet"
       });
     }
 
+    const isClockedInNow = today.isClockedIn === true || (!today.outTime && Boolean(today.inTime));
+    const formattedLogin = today.inTime ? formatTime(today.inTime) : "";
+    const formattedLogout = (!isClockedInNow && today.outTime) ? formatTime(today.outTime) : "";
+
+    let shiftStart = today.shiftStart;
+    let shiftEnd = today.shiftEnd;
+    let shiftName = today.shiftName;
+    let shiftId = today.shiftId;
+    let shiftType = today.shiftType;
+
+    if (!shiftStart || !shiftEnd) {
+      const { userObj } = await getAttendanceSettingsContext({ companyCode: userCompanyCode, userId });
+      const shiftSettings = await resolveSelectedShiftSettings(userObj);
+      if (shiftSettings) {
+        shiftStart = shiftStart || shiftSettings.shiftStart;
+        shiftEnd = shiftEnd || shiftSettings.shiftEnd;
+        shiftName = shiftName || shiftSettings.shiftName;
+        shiftId = shiftId || shiftSettings.shiftId;
+        shiftType = shiftType || shiftSettings.shiftType;
+      }
+    }
+
+    const shiftTime = formatShiftTimeWindow(shiftStart, shiftEnd);
+
     res.status(200).json({
       ...today.toObject(),
-      login: formatTime(today.inTime),
-      logout: formatTime(today.outTime),
+      shiftId,
+      shiftName,
+      shiftType,
+      shiftStart,
+      shiftEnd,
+      shiftTime,
+      login: formattedLogin,
+      logout: formattedLogout,
+      outTime: isClockedInNow ? null : today.outTime,
+      isClockedIn: isClockedInNow,
       status: today.status
     });
   } catch (err) {
@@ -1286,6 +1405,30 @@ const getAttendanceList = async (req, res) => {
       .sort({ date: 1 });
 
     
+    const approvedOtRequests = await OvertimeRequest.find({
+      user: targetUserId,
+      status: 'Approved'
+    }).select('requestType dateKeys month calculationType requestedHours').lean();
+
+    const approvedOtDateMap = new Map();
+    approvedOtRequests.forEach(req => {
+      const isFullDay = req.calculationType === 'FULL_DAY_PRESENT';
+      if (req.requestType === 'FULL_MONTH' && req.month) {
+        const [y, m] = req.month.split('-').map(Number);
+        const daysInM = new Date(y, m, 0).getDate();
+        for (let d = 1; d <= daysInM; d++) {
+          approvedOtDateMap.set(
+            `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`,
+            { calculationType: req.calculationType, requestedHours: req.requestedHours, isFullDay }
+          );
+        }
+      } else if (Array.isArray(req.dateKeys)) {
+        req.dateKeys.forEach(k => {
+          approvedOtDateMap.set(k, { calculationType: req.calculationType, requestedHours: req.requestedHours, isFullDay });
+        });
+      }
+    });
+
     const existingRecordsMap = {};
     dedupeAttendanceRecordsByIndiaDate(list).forEach(({ dateKey, record }) => {
       existingRecordsMap[dateKey] = record;
@@ -1302,21 +1445,72 @@ const getAttendanceList = async (req, res) => {
         const fallbackSchedule = buildShiftSchedule(record.date, targetShiftSettings);
         const fallbackShift = buildShiftSnapshot(targetShiftSettings || {}, fallbackSchedule);
         const isLeaveCoveredDay = leaveCoverageDateKeys.has(dateKey) && !recordObject.inTime && !recordObject.outTime;
+        const isClockedIn = recordObject.isClockedIn === true || (!recordObject.outTime && Boolean(recordObject.inTime));
+        const formattedLogin = recordObject.inTime ? formatTime(recordObject.inTime) : "";
+        const formattedLogout = (!isClockedIn && recordObject.outTime) ? formatTime(recordObject.outTime) : "";
+
+        const effectiveShiftStart = recordObject.shiftStart || fallbackShift.shiftStart;
+        const effectiveShiftEnd = recordObject.shiftEnd || fallbackShift.shiftEnd;
+        const effectiveShiftName = recordObject.shiftName || fallbackShift.shiftName;
+        const effectiveShiftTime = recordObject.shiftTime || formatShiftTimeWindow(effectiveShiftStart, effectiveShiftEnd);
+
+        const approvedOtInfo = approvedOtDateMap.get(dateKey);
+        const effectiveHasOvertimeApproved = Boolean(approvedOtInfo);
+        const isFullDayOt = Boolean(approvedOtInfo?.isFullDay);
+        let effectiveOverTime = "00:00:00";
+        let effectiveOverTimeMinutes = 0;
+
+        if (effectiveHasOvertimeApproved) {
+          if (isFullDayOt) {
+            effectiveOverTime = "Full Day";
+            effectiveOverTimeMinutes = 540;
+          } else if (recordObject.clockOutMode !== 'AUTO') {
+            if (recordObject.overTime && recordObject.overTime !== '00:00:00' && recordObject.overTime !== 'Full Day') {
+              effectiveOverTime = recordObject.overTime;
+              effectiveOverTimeMinutes = recordObject.overTimeMinutes || 0;
+            } else if (recordObject.outTime && recordObject.shiftEnd) {
+              const outD = new Date(recordObject.outTime);
+              const shiftEndD = new Date(recordObject.shiftEnd);
+              if (outD > shiftEndD) {
+                const otMs = Math.max(0, outD - shiftEndD);
+                effectiveOverTime = formatDuration(otMs);
+                effectiveOverTimeMinutes = Math.floor(otMs / (60 * 1000));
+              } else if (Number(approvedOtInfo?.requestedHours || 0) > 0) {
+                effectiveOverTime = formatDuration(Number(approvedOtInfo.requestedHours) * 3600 * 1000);
+                effectiveOverTimeMinutes = Number(approvedOtInfo.requestedHours) * 60;
+              }
+            } else if (Number(approvedOtInfo?.requestedHours || 0) > 0) {
+              effectiveOverTime = formatDuration(Number(approvedOtInfo.requestedHours) * 3600 * 1000);
+              effectiveOverTimeMinutes = Number(approvedOtInfo.requestedHours) * 60;
+            }
+          }
+        }
+
         return {
           ...recordObject,
+          dateKey,
+          hasOvertimeApproved: effectiveHasOvertimeApproved,
+          overtimeCalculationType: approvedOtInfo?.calculationType || 'BY_HOURS',
+          isFullDayOt,
+          overTime: effectiveOverTime,
+          overTimeMinutes: effectiveOverTimeMinutes,
+          status: isFullDayOt ? 'PRESENT' : (recordObject.status || 'ABSENT'),
           shiftId: recordObject.shiftId || fallbackShift.shiftId,
-          shiftName: recordObject.shiftName || fallbackShift.shiftName,
+          shiftName: effectiveShiftName,
           shiftType: recordObject.shiftType || fallbackShift.shiftType,
-          shiftStart: recordObject.shiftStart || fallbackShift.shiftStart,
-          shiftEnd: recordObject.shiftEnd || fallbackShift.shiftEnd,
+          shiftStart: effectiveShiftStart,
+          shiftEnd: effectiveShiftEnd,
+          shiftTime: effectiveShiftTime,
           earlyClockInStart: recordObject.earlyClockInStart || fallbackShift.earlyClockInStart,
           lateGraceLimit: recordObject.lateGraceLimit || fallbackShift.lateGraceLimit,
           halfDayLateLimit: recordObject.halfDayLateLimit || fallbackShift.halfDayLateLimit,
           shortLeaveEarlyLimit: recordObject.shortLeaveEarlyLimit || fallbackShift.shortLeaveEarlyLimit,
           halfDayEarlyLimit: recordObject.halfDayEarlyLimit || fallbackShift.halfDayEarlyLimit,
           shiftWindow: recordObject.shiftWindow || fallbackShift.shiftWindow,
-          login: formatTime(record.inTime),
-          logout: formatTime(record.outTime),
+          login: formattedLogin,
+          logout: formattedLogout,
+          inTime: recordObject.inTime || null,
+          outTime: isClockedIn ? null : (recordObject.outTime || null),
           status: isLeaveCoveredDay ? 'LEAVE' : (record.status || 'ABSENT')
         };
       } else {
@@ -1324,10 +1518,12 @@ const getAttendanceList = async (req, res) => {
         const isWeekend = isDepartmentWeekend(targetUser.department, date);
         const fallbackSchedule = buildShiftSchedule(date, targetShiftSettings);
         const fallbackShift = buildShiftSnapshot(targetShiftSettings || {}, fallbackSchedule);
+        const fallbackShiftTime = fallbackShift.shiftTime || formatShiftTimeWindow(fallbackShift.shiftStart, fallbackShift.shiftEnd);
         const isLeaveCoveredDay = leaveCoverageDateKeys.has(dateKey);
 
         return {
           _id: `absent_${targetUserId}_${dateKey}`,
+          dateKey,
           user: {
             _id: targetUserId,
             name: targetUser?.name || 'User',
@@ -1350,6 +1546,7 @@ const getAttendanceList = async (req, res) => {
           shiftType: fallbackShift.shiftType,
           shiftStart: fallbackShift.shiftStart,
           shiftEnd: fallbackShift.shiftEnd,
+          shiftTime: fallbackShiftTime,
           earlyClockInStart: fallbackShift.earlyClockInStart,
           lateGraceLimit: fallbackShift.lateGraceLimit,
           halfDayLateLimit: fallbackShift.halfDayLateLimit,
@@ -1443,12 +1640,87 @@ const getAllUsersAttendance = async (req, res) => {
       Attendance.countDocuments(filter)
     ]);
 
+    const userIdsInRecords = [...new Set(records.map(r => String(r.user?._id || r.user)).filter(Boolean))];
+    const approvedOtRequests = await OvertimeRequest.find({
+      user: { $in: userIdsInRecords },
+      status: 'Approved'
+    }).select('user requestType dateKeys month calculationType requestedHours').lean();
+
+    const userApprovedOtMap = new Map();
+    approvedOtRequests.forEach(req => {
+      const uId = String(req.user);
+      if (!userApprovedOtMap.has(uId)) userApprovedOtMap.set(uId, new Map());
+      const userMap = userApprovedOtMap.get(uId);
+      const isFullDay = req.calculationType === 'FULL_DAY_PRESENT';
+
+      if (req.requestType === 'FULL_MONTH' && req.month) {
+        const [y, m] = req.month.split('-').map(Number);
+        const daysInM = new Date(y, m, 0).getDate();
+        for (let d = 1; d <= daysInM; d++) {
+          userMap.set(`${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`, {
+            calculationType: req.calculationType,
+            requestedHours: req.requestedHours,
+            isFullDay
+          });
+        }
+      } else if (Array.isArray(req.dateKeys)) {
+        req.dateKeys.forEach(k => {
+          userMap.set(k, {
+            calculationType: req.calculationType,
+            requestedHours: req.requestedHours,
+            isFullDay
+          });
+        });
+      }
+    });
+
     res.status(200).json({ 
       message: "All attendance records fetched successfully",
-      data: records.map(record => ({
-        ...record,
-        status: record.status || 'ABSENT'
-      })),
+      data: records.map(record => {
+        const uId = String(record.user?._id || record.user);
+        const dKey = formatIndiaDateKey(record.date);
+        const otInfo = userApprovedOtMap.get(uId)?.get(dKey);
+        const effectiveHasOvertimeApproved = Boolean(otInfo);
+        const isFullDayOt = Boolean(otInfo?.isFullDay);
+        let effectiveOverTime = "00:00:00";
+        let effectiveOverTimeMinutes = 0;
+
+        if (effectiveHasOvertimeApproved) {
+          if (isFullDayOt) {
+            effectiveOverTime = "Full Day";
+            effectiveOverTimeMinutes = 540;
+          } else if (record.clockOutMode !== 'AUTO') {
+            if (record.overTime && record.overTime !== '00:00:00' && record.overTime !== 'Full Day') {
+              effectiveOverTime = record.overTime;
+              effectiveOverTimeMinutes = record.overTimeMinutes || 0;
+            } else if (record.outTime && record.shiftEnd) {
+              const outD = new Date(record.outTime);
+              const shiftEndD = new Date(record.shiftEnd);
+              if (outD > shiftEndD) {
+                const otMs = Math.max(0, outD - shiftEndD);
+                effectiveOverTime = formatDuration(otMs);
+                effectiveOverTimeMinutes = Math.floor(otMs / (60 * 1000));
+              } else if (Number(otInfo?.requestedHours || 0) > 0) {
+                effectiveOverTime = formatDuration(Number(otInfo.requestedHours) * 3600 * 1000);
+                effectiveOverTimeMinutes = Number(otInfo.requestedHours) * 60;
+              }
+            } else if (Number(otInfo?.requestedHours || 0) > 0) {
+              effectiveOverTime = formatDuration(Number(otInfo.requestedHours) * 3600 * 1000);
+              effectiveOverTimeMinutes = Number(otInfo.requestedHours) * 60;
+            }
+          }
+        }
+
+        return {
+          ...record,
+          hasOvertimeApproved: effectiveHasOvertimeApproved,
+          overtimeCalculationType: otInfo?.calculationType || 'BY_HOURS',
+          isFullDayOt,
+          overTime: effectiveOverTime,
+          overTimeMinutes: effectiveOverTimeMinutes,
+          status: isFullDayOt ? 'PRESENT' : (record.status || 'ABSENT')
+        };
+      }),
       count: records.length,
       total,
       pagination: buildPaginationMeta({ page, limit, total })
@@ -1474,6 +1746,12 @@ const updateAttendanceRecord = async (req, res) => {
     if (!userCompanyCode) {
       return res.status(400).json({ 
         message: "Company code not found" 
+      });
+    }
+
+    if (!isPrivilegedAttendanceUser(req.user, true)) {
+      return res.status(403).json({
+        message: "Access denied. Only Admin, HR, or Manager can update attendance records."
       });
     }
     
@@ -1519,7 +1797,8 @@ const updateAttendanceRecord = async (req, res) => {
         inTime: record.inTime,
         outTime: record.outTime,
         shiftSettings,
-        currentStatus: record.status
+        currentStatus: record.status,
+        hasOvertimeApproved: Boolean(record.hasOvertimeApproved)
       });
       Object.assign(record, recalculated);
     }
@@ -1579,6 +1858,10 @@ const updateAttendanceRecord = async (req, res) => {
       }
     }
     
+    if (['ABSENT', 'UNINFORMED LEAVE', 'UNINFORMEDLEAVE'].includes(String(record.status || '').toUpperCase())) {
+      cleanRecurringTasksForAbsentUser(record.user, record.date).catch(() => {});
+    }
+
     const populatedRecord = await Attendance.findById(record._id)
       .populate({
         path: "user",
@@ -1616,6 +1899,12 @@ const createManualAttendance = async (req, res) => {
     if (!userCompanyCode) {
       return res.status(400).json({ 
         message: "Company code not found" 
+      });
+    }
+
+    if (!isPrivilegedAttendanceUser(req.user, true)) {
+      return res.status(403).json({
+        message: "Access denied. Only Admin, HR, or Manager can manually create attendance."
       });
     }
     
@@ -1683,6 +1972,10 @@ const createManualAttendance = async (req, res) => {
 
       await existingAttendance.save();
 
+      if (['ABSENT', 'UNINFORMED LEAVE', 'UNINFORMEDLEAVE'].includes(String(existingAttendance.status || '').toUpperCase())) {
+        cleanRecurringTasksForAbsentUser(existingAttendance.user, existingAttendance.date).catch(() => {});
+      }
+
       return res.status(200).json({
         message: "Attendance updated successfully",
         data: existingAttendance
@@ -1722,6 +2015,10 @@ const createManualAttendance = async (req, res) => {
           existingRecord.companyCode = userCompanyCode;
           await existingRecord.save();
 
+          if (['ABSENT', 'UNINFORMED LEAVE', 'UNINFORMEDLEAVE'].includes(String(existingRecord.status || '').toUpperCase())) {
+            cleanRecurringTasksForAbsentUser(existingRecord.user, existingRecord.date).catch(() => {});
+          }
+
           return res.status(200).json({
             message: "Attendance updated successfully",
             data: existingRecord
@@ -1731,6 +2028,10 @@ const createManualAttendance = async (req, res) => {
       throw err;
     }
     
+    if (['ABSENT', 'UNINFORMED LEAVE', 'UNINFORMEDLEAVE'].includes(String(attendance.status || '').toUpperCase())) {
+      cleanRecurringTasksForAbsentUser(attendance.user, attendance.date).catch(() => {});
+    }
+
     const populatedAttendance = await Attendance.findById(attendance._id)
       .populate({
         path: "user",
@@ -1768,6 +2069,12 @@ const deleteAttendanceRecord = async (req, res) => {
     if (!userCompanyCode) {
       return res.status(400).json({ 
         message: "Company code not found" 
+      });
+    }
+
+    if (!isPrivilegedAttendanceUser(req.user, false)) {
+      return res.status(403).json({
+        message: "Access denied. Only Admin or HR can delete attendance records."
       });
     }
     
@@ -1838,7 +2145,13 @@ const getAttendanceByUser = async (req, res) => {
         message: "User not found" 
       });
     }
-    
+
+    const isSelf = String(req.user._id) === String(userId);
+    if (!isSelf && !isPrivilegedAttendanceUser(req.user, true)) {
+      return res.status(403).json({
+        message: "Access denied. You can only view your own attendance."
+      });
+    }
     
     if (user.companyCode !== userCompanyCode) {
       return res.status(403).json({ 
@@ -1927,46 +2240,98 @@ const getAttendanceByUser = async (req, res) => {
 
 const markDailyAbsent = async () => {
   try {
-    const nowForDay = new Date();
-    const {start: todayStart, end: todayEnd} = getIndiaDayRange(nowForDay);
-    
-    const companies = await Company.find({ isActive: true });
+    const now = new Date();
+    const companies = await Company.find({ isActive: true }).select('companyCode companyName').lean();
     
     for (const company of companies) {
       const companyUsers = await User.find({ 
         companyCode: company.companyCode,
         isActive: true 
-      });
+      }).populate('department');
       
       for (const user of companyUsers) {
+        // 1. Check if user is currently clocked in (e.g. night shift in progress)
+        const activeClockIn = await Attendance.findOne({
+          user: user._id,
+          isClockedIn: true,
+          outTime: null
+        });
+        if (activeClockIn) {
+          continue;
+        }
+
+        const shiftSettings = await resolveSelectedShiftSettings(user);
+        const schedule = buildShiftSchedule(now, shiftSettings);
+        const absentThreshold = schedule.shiftEnd;
+
+        // If current time is before the employee's shift end, DO NOT mark absent!
+        // This protects night shift employees and evening shift employees from premature morning sweeps!
+        if (now < absentThreshold) {
+          continue;
+        }
+
+        const targetDate = schedule.dateStart;
+        const targetDateStart = getIndiaDayStart(targetDate);
+        const targetDateEnd = getIndiaDayEnd(targetDate);
+
         const existingAttendance = await Attendance.findOne({
           user: user._id,
-          date: { $gte: todayStart, $lte: todayEnd }
+          date: { $gte: targetDateStart, $lte: targetDateEnd }
         });
         
         if (!existingAttendance) {
-          const now = new Date();
-          const shiftSettings = await resolveSelectedShiftSettings(user);
-          const schedule = buildShiftSchedule(now, shiftSettings);
-          const absentThreshold = schedule.shiftEnd;
+          // 2. Check if target date is a weekend for this user's department
+          if (isDepartmentWeekend(user.department, targetDate)) {
+            continue;
+          }
+
+          // 3. Check if target date is an active company holiday
+          const isHoliday = await Holiday.exists({
+            companyCode: company.companyCode,
+            isActive: true,
+            date: { $gte: targetDateStart, $lte: targetDateEnd }
+          });
+          if (isHoliday) {
+            continue;
+          }
+
+          // 4. Check if user has an approved leave for this date
+          const isApprovedLeave = await Leave.exists({
+            user: user._id,
+            status: 'Approved',
+            startDate: { $lte: targetDateEnd },
+            endDate: { $gte: targetDateStart }
+          });
+          if (isApprovedLeave) {
+            continue;
+          }
+
+          const absentRecord = new Attendance({
+            user: user._id,
+            date: targetDate,
+            status: "ABSENT",
+            isClockedIn: false,
+            companyCode: company.companyCode,
+            notes: "Auto-marked absent (shift ended without clock-in)"
+          });
+          applyShiftSnapshot(absentRecord, buildShiftSnapshot(shiftSettings || {}, schedule));
           
-          if (now >= absentThreshold) {
-            const absentRecord = new Attendance({
-              user: user._id,
-              date: schedule.dateStart,
-              status: "ABSENT",
-              isClockedIn: false,
-              companyCode: company.companyCode
+          await absentRecord.save();
+          await cleanRecurringTasksForAbsentUser(user._id, targetDate).catch(() => {});
+
+          if (global.io) {
+            global.io.to(`user:${user._id}`).emit('attendance:marked', {
+              type: 'attendance_absent',
+              message: 'You have been marked absent for today',
+              data: {
+                date: targetDate,
+                status: 'ABSENT'
+              }
             });
-            applyShiftSnapshot(absentRecord, buildShiftSnapshot(shiftSettings || {}, schedule));
-            
-            await absentRecord.save();
           }
         }
       }
     }
-    
-    void 0;
   } catch (err) {
     console.error("Mark Daily Absent Error:", err.message);
   }

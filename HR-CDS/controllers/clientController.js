@@ -11,9 +11,11 @@ const crypto = require('crypto');
 const mongoose = require('mongoose');
 const Company = require('../../models/Company');
 const emailService = require('../../services/emailService'); 
+const { isEmailModuleEnabled } = require('../../services/emailSettingsService');
 const multer = require('multer');
 const path = require('path');
 const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
+const { isSuperAdminUser } = require('../../middleware/authMiddleware');
 
 
 const DEFAULT_CLIENT_DEPARTMENT_ID = '69ae555c9a1e47e80a40204c';
@@ -932,16 +934,20 @@ const getCompanyLoginUrl = (companyCode) => {
 };
 
 const sendWelcomeEmail = async (email, name, company, password, companyCode) => {
-  void 0;
-  void 0;
-  void 0;
-  void 0;
-  void 0;
-  void 0;
-  
-  const fullLoginUrl = getCompanyLoginUrl(companyCode);
-  
   try {
+    const isEnabled = await isEmailModuleEnabled('client_welcome');
+    if (!isEnabled) {
+      console.log(`ℹ️ [Email Settings] Client welcome email skipped for ${email}: 'client_welcome' module is turned OFF in Email Settings`);
+      return {
+        success: true,
+        skipped: true,
+        disabled: true,
+        moduleKey: 'client_welcome',
+        message: 'Client welcome email is disabled in Email Settings'
+      };
+    }
+
+    const fullLoginUrl = getCompanyLoginUrl(companyCode);
     const emailHtml = getWelcomeEmailTemplate(name, company, email, password, fullLoginUrl);
     
     const result = await emailService.sendEmail(
@@ -955,6 +961,7 @@ const sendWelcomeEmail = async (email, name, company, password, companyCode) => 
         notificationTargetPath: '/ciisUser/ClientDashboard',
         notificationMessage: `Your CIIS account for ${company} has been created. Please check your email for login details.`,
         notificationPriority: 'high',
+        emailModuleKey: 'client_welcome',
         headers: {
           'X-Email-Type': 'client-welcome',
           'X-Company': company,
@@ -989,24 +996,41 @@ const getAllClients = async (req, res) => {
       status,
       projectManager,
       service,
-      companyCode,
+      companyCode: queryCompanyCode,
       companyName,
       branch,
       branchId,
       groupByClient = 'false'
     } = req.query;
 
-    const filter = buildCompanyScopeFilter({ companyCode, companyName });
+    const userIsSuper = req.user && isSuperAdminUser(req.user);
+    const userCompanyCode = req.user?.companyCode || req.user?.company?.companyCode;
+
+    if (!userIsSuper && queryCompanyCode && userCompanyCode && queryCompanyCode.toUpperCase() !== userCompanyCode.toUpperCase()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. You can only view clients of your own company.'
+      });
+    }
+
+    const effectiveCompanyCode = userIsSuper 
+      ? (queryCompanyCode || userCompanyCode)
+      : userCompanyCode;
+
+    const filter = buildCompanyScopeFilter({ 
+      companyCode: effectiveCompanyCode, 
+      companyName: userIsSuper ? companyName : undefined 
+    });
 
     if (!filter) {
-      console.warn('⚠️ No companyCode provided in request');
+      console.warn('⚠️ No companyCode provided in request or user session');
       return res.status(400).json({
         success: false,
         message: 'Company code or company name is required'
       });
     }
 
-    const branchFilter = await getBranchClientFilter(normalizeCompanyCode(companyCode), branch || branchId);
+    const branchFilter = await getBranchClientFilter(normalizeCompanyCode(effectiveCompanyCode), branch || branchId);
     if (branchFilter) {
       filter.$and = [...(filter.$and || []), branchFilter];
     }
@@ -1779,11 +1803,15 @@ const addClient = async (req, res) => {
     );
 
     await session.commitTransaction();
-    if (!reusableClientUser) {
+    if (!reusableClientUser && req.body?.sendWelcomeEmail !== false) {
       sendWelcomeEmail(cleanEmail, cleanClientName, cleanCompanyName, autoPassword, cleanCompanyCode)
         .then(result => {
           if (result.success) {
-            void 0;
+            if (result.skipped) {
+              console.log(`ℹ️ Client welcome email skipped for ${cleanEmail} (disabled in Email Settings)`);
+            } else {
+              void 0;
+            }
           } else {
             console.warn('Welcome email sending failed:', result.error);
           }
@@ -2181,9 +2209,25 @@ const deleteClient = async (req, res) => {
 const getClientStats = async (req, res) => {
   void 0;
   try {
-    const { companyCode, companyName, branch, branchId } = req.query;
-    const normalizedCompanyCode = normalizeCompanyCode(companyCode);
-    const filter = buildCompanyScopeFilter({ companyCode, companyName }) || {};
+    const { companyCode: queryCompanyCode, companyName, branch, branchId } = req.query;
+    const userIsSuper = req.user && isSuperAdminUser(req.user);
+    const userCompanyCode = req.user?.companyCode || req.user?.company?.companyCode;
+
+    if (!userIsSuper && queryCompanyCode && userCompanyCode && queryCompanyCode.toUpperCase() !== userCompanyCode.toUpperCase()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. You can only view statistics for your own company.'
+      });
+    }
+
+    const effectiveCompanyCode = userIsSuper 
+      ? (queryCompanyCode || userCompanyCode)
+      : userCompanyCode;
+    const normalizedCompanyCode = normalizeCompanyCode(effectiveCompanyCode);
+    const filter = buildCompanyScopeFilter({ 
+      companyCode: effectiveCompanyCode, 
+      companyName: userIsSuper ? companyName : undefined 
+    }) || {};
     const branchManagerFilter = await getBranchClientFilter(normalizedCompanyCode, branch || branchId);
 
     if (branchManagerFilter) {
@@ -2216,9 +2260,21 @@ const getClientStats = async (req, res) => {
 const getManagerStats = async (req, res) => {
   void 0;
   try {
-    const { companyCode } = req.query;
+    const { companyCode: queryCompanyCode } = req.query;
+    const userIsSuper = req.user && isSuperAdminUser(req.user);
+    const userCompanyCode = req.user?.companyCode || req.user?.company?.companyCode;
+
+    if (!userIsSuper && queryCompanyCode && userCompanyCode && queryCompanyCode.toUpperCase() !== userCompanyCode.toUpperCase()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. You can only view manager statistics for your own company.'
+      });
+    }
+    const effectiveCompanyCode = userIsSuper 
+      ? (queryCompanyCode || userCompanyCode)
+      : userCompanyCode;
     
-    const stats = await Client.getManagerStats(companyCode);
+    const stats = await Client.getManagerStats(effectiveCompanyCode);
     
     res.json({
       success: true,
@@ -2308,8 +2364,19 @@ const getClientsByCompany = async (req, res) => {
       });
     }
 
+    const userIsSuper = req.user && isSuperAdminUser(req.user);
+    const userCompanyCode = req.user?.companyCode || req.user?.company?.companyCode;
+
+    if (!userIsSuper && userCompanyCode && companyCode.toUpperCase() !== userCompanyCode.toUpperCase()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. You can only view clients of your own company.'
+      });
+    }
+
+    const effectiveCode = userIsSuper ? companyCode : (userCompanyCode || companyCode);
     const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
-    const filter = { companyCode: companyCode.toUpperCase() };
+    const filter = { companyCode: effectiveCode.toUpperCase() };
     const [clients, total] = await Promise.all([
       Client.find(filter)
         .sort({ client: 1 })
