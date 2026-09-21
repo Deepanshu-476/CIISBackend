@@ -7,11 +7,10 @@ const leadAssignmentHistorySchema = new mongoose.Schema({
   toUser: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   performedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   action: { type: String, enum: ['assigned', 'reassigned', 'unassigned'], required: true },
-  method: { type: String, enum: ['single', 'specific', 'round-robin', 'load-balanced'], default: 'single' }
+  method: { type: String, enum: ['single', 'specific', 'round-robin', 'load-balanced', 'equal-distribution'], default: 'single' }
 }, { timestamps: true });
 
 leadAssignmentHistorySchema.index({ company: 1, createdAt: -1 });
 leadAssignmentHistorySchema.index({ company: 1, lead: 1, createdAt: -1 });
 
 module.exports = mongoose.model('LeadAssignmentHistory', leadAssignmentHistorySchema);
-                
