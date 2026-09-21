@@ -1028,7 +1028,7 @@ const startServer = async () => {
   // Temporarily enabled for work-anniversary email template testing.
   try {
     const anniversarySummary = await runWorkAnniversaryEmails();
-    // console.log("Startup work anniversary test completed:", anniversarySummary);
+    console.log("Startup work anniversary test completed:", anniversarySummary);
   } catch (err) {
     console.error("Startup work anniversary test failed:", err);
   }
