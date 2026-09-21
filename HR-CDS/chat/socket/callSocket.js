@@ -1,26 +1,43 @@
 const activeCalls = new Map();
 const CALL_RING_TIMEOUT_MS = 45 * 1000;
 
-const getPublicUser = (user) => ({
-    _id: user?._id?.toString(),
-    id: user?._id?.toString(),
-    name: user?.name || user?.email || "User",
-    email: user?.email,
-    avatar: user?.avatar || user?.profileImage || user?.image,
-});
+const getPublicUser = (user) => {
+    if (!user) return null;
+    const rawId = user._id || user.id;
+    const name = user.name || user.fullName ||
+        (user.firstName ? `${user.firstName} ${user.lastName || ''}`.trim() : "") ||
+        user.email || "User";
+    const avatar = user.avatar || user.profileImage || user.image || "";
+    return {
+        _id: rawId?.toString(),
+        id: rawId?.toString(),
+        name,
+        email: user.email,
+        avatar,
+        profileImage: avatar,
+    };
+};
 
 const normalizeCallerUser = (socket, data = {}) => {
-    const socketUser = getPublicUser(socket.user);
+    const socketUser = getPublicUser(socket.user) || {};
     const clientUser = data.callerUser && typeof data.callerUser === "object"
-        ? getPublicUser(data.callerUser)
+        ? getPublicUser(data.callerUser) || {}
         : {};
+
+    const finalId = socket.userId || clientUser._id || clientUser.id || "";
+    const finalName = (clientUser.name && clientUser.name !== "User")
+        ? clientUser.name
+        : (socketUser.name && socketUser.name !== "User" ? socketUser.name : (clientUser.name || socketUser.name || "User"));
+    const finalAvatar = clientUser.avatar || clientUser.profileImage || socketUser.avatar || socketUser.profileImage || "";
 
     return {
         ...socketUser,
         ...clientUser,
-        _id: socket.userId,
-        id: socket.userId,
-        name: clientUser.name || socketUser.name || "User",
+        _id: finalId,
+        id: finalId,
+        name: finalName,
+        avatar: finalAvatar,
+        profileImage: finalAvatar,
     };
 };
 
@@ -136,11 +153,17 @@ const callSocket = (io, socket) => {
 
         const callId = data.callId?.toString();
         const callerUser = normalizeCallerUser(socket, data);
+        const isGroupCall = Boolean(data.isGroupCall || participantIds.length > 1);
+        const callTitle = isGroupCall
+            ? (data.groupTitle || data.title || "Channel call")
+            : (callerUser.name || "User");
+
         const room = {
             callId,
             callType,
             hostUserId: socket.userId,
-            title: data.title || "",
+            title: callTitle,
+            isGroupCall,
             participants: new Map(),
             ringTimeout: null,
         };
@@ -179,8 +202,10 @@ const callSocket = (io, socket) => {
                 callId,
                 fromUserId: socket.userId,
                 fromUser: callerUser,
+                callerUser,
                 participantIds: [socket.userId, ...onlineParticipantIds],
-                title: data.title,
+                title: callTitle,
+                isGroupCall,
                 callType,
             });
         });
@@ -225,6 +250,7 @@ const callSocket = (io, socket) => {
             callType: room.callType,
             participants: existingJoinedParticipants,
             title: room.title,
+            isGroupCall: Boolean(room.isGroupCall),
         });
 
         emitToJoinedParticipants(io, room, "call:participant-joined", {

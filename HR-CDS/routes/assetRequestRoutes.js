@@ -33,6 +33,7 @@ const uploadCommentImage = multer({
 
 router.post('/request', protect, assetController.requestAsset);
 router.get('/my-requests', protect, assetController.getMyRequests);
+router.get('/available', protect, assetController.getAvailableAssets);
 router.post('/:id/return-request', protect, assetController.requestAssetReturn);
 router.post('/:id/deposit', protect, assetController.depositAsset);
 router.post('/:id/confirm-deposit', protect, assetController.confirmAssetDeposit);
@@ -52,7 +53,40 @@ router.delete('/update/:id/comments/:commentId/attachment', protect, assetContro
 router.delete('/delete/:id', protect, assetController.deleteRequest);      
 
 
-router.get('/test', protect, (req, res) => {
+const isCompanyAdminOrOwner = (user) => {
+  if (!user) return false;
+  const role = String(user.role || '').toLowerCase();
+  const jobRole = String(user.jobRole || '').toLowerCase();
+  const companyRole = String(user.companyRole || '').toLowerCase();
+  return role === 'admin' || role === 'owner' || jobRole === 'admin' || jobRole === 'owner' || companyRole === 'owner' || companyRole === 'admin' || role === 'hr';
+};
+
+const requireAssetTestAdmin = (req, res, next) => {
+  const { isSuperAdminUser } = require('../../middleware/authMiddleware');
+  if (isSuperAdminUser && isSuperAdminUser(req.user)) {
+    return next();
+  }
+  if (isCompanyAdminOrOwner(req.user)) {
+    return next();
+  }
+  return res.status(403).json({
+    success: false,
+    message: 'Access denied: Admin, Owner, or HR privileges required'
+  });
+};
+
+// Gate all /test routes from production
+router.use('/test', (req, res, next) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({
+      success: false,
+      message: 'Not found'
+    });
+  }
+  next();
+});
+
+router.get('/test', protect, requireAssetTestAdmin, (req, res) => {
   try {
     const userCompanyCode = req.user.companyCode;
     const userId = req.user._id;
@@ -87,7 +121,7 @@ router.get('/test', protect, (req, res) => {
   }
 });
 
-router.get('/test/asset-requests', protect, async (req, res) => {
+router.get('/test/asset-requests', protect, requireAssetTestAdmin, async (req, res) => {
   try {
     const AssetRequest = require('../models/AssetRequest');
     const User = require('../../models/User');

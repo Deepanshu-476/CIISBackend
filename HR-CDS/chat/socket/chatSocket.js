@@ -141,13 +141,19 @@ const chatSocket = (io, socket) => {
 
     socket.on(
         "chat:join-conversations",
-        (data) => {
-            if (!data || !Array.isArray(data.conversationIds)) {
+        async (data) => {
+            if (!data || !Array.isArray(data.conversationIds) || !data.conversationIds.length) {
                 return;
             }
 
-            data.conversationIds.forEach((conversationId) => {
-                socket.join(`conversation:${conversationId}`);
+            const validConversations = await Conversation.find({
+                _id: { $in: data.conversationIds },
+                companyId: socket.companyId,
+                members: socket.userId
+            }).select('_id');
+
+            validConversations.forEach((conv) => {
+                socket.join(`conversation:${conv._id}`);
             });
         }
     );
@@ -178,6 +184,22 @@ socket.on(
                 companyId: socket.companyId,
                 members: socket.userId
             });
+            const deliveredTo = conversation
+                ? getCompanyOnlineUsers(io, socket.companyId)
+                    .filter(userId => userId !== socket.userId.toString())
+                    .filter(userId => (conversation.members || []).map(member => member.toString()).includes(userId))
+                : [];
+            if (data?._id && deliveredTo.length) {
+                await Message.updateOne(
+                    {_id: data._id, companyId: socket.companyId},
+                    {$addToSet: {deliveredTo: {$each: deliveredTo}}}
+                );
+                io.to(`user:${socket.userId}`).emit("chat:message-delivered", {
+                    messageId: data._id,
+                    conversationId: data.conversationId,
+                    deliveredTo,
+                });
+            }
             await emitUnreadCounts(io, conversation, socket.userId);
         } else if (data.receiverId) {
             socket.to(`user:${data.receiverId}`).emit(
@@ -197,9 +219,14 @@ socket.on(
     socket.on(
         "chat:typing",
         (data) => {
-            const room = data.conversationId
+            if (data?.conversationId && !socket.rooms.has(`conversation:${data.conversationId}`)) {
+                return;
+            }
+            const room = data?.conversationId
                 ? `conversation:${data.conversationId}`
-                : `user:${data.receiverId}`;
+                : (data?.receiverId ? `user:${data.receiverId}` : null);
+
+            if (!room) return;
 
             socket.to(room).emit(
                 "chat:typing",
@@ -217,9 +244,14 @@ socket.on(
     socket.on(
         "chat:stop-typing",
         (data) => {
-            const room = data.conversationId
+            if (data?.conversationId && !socket.rooms.has(`conversation:${data.conversationId}`)) {
+                return;
+            }
+            const room = data?.conversationId
                 ? `conversation:${data.conversationId}`
-                : `user:${data.receiverId}`;
+                : (data?.receiverId ? `user:${data.receiverId}` : null);
+
+            if (!room) return;
 
             socket.to(room).emit(
                 "chat:stop-typing",
@@ -252,6 +284,7 @@ socket.on(
 
         if (!conversation) return;
 
+        message.deliveredTo.addToSet(socket.userId);
         message.seenBy.addToSet(socket.userId);
         await message.save();
         await emitUnreadCounts(io, conversation, socket.userId);
@@ -287,6 +320,7 @@ socket.on(
         "chat:delete-for-everyone",
         (data) => {
             if (!data?.messageId || !data?.conversationId) return;
+            if (!socket.rooms.has(`conversation:${data.conversationId}`)) return;
             io.to(`conversation:${data.conversationId}`).emit(
                 "chat:message-deleted-for-everyone",
                 {

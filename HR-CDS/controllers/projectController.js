@@ -557,39 +557,29 @@ exports.listProjects = async (req, res) => {
     const summaryMode = ["1", "true", "yes"].includes(String(req.query.summary || "").toLowerCase());
 
     if (summaryMode) {
-      const summaryProjects = await Project.aggregate([
-        { $match: query },
-        { $sort: { createdAt: -1 } },
-        { $skip: skip },
-        { $limit: limit },
-        {
-          $project: {
-            projectName: 1,
-            description: 1,
-            company: 1,
-            companyCode: 1,
-            branch: 1,
-            status: 1,
-            startDate: 1,
-            endDate: 1,
-            priority: 1,
-            pdfFile: 1,
-            createdBy: 1,
-            createdAt: 1,
-            updatedAt: 1,
-            taskCount: { $size: { $ifNull: ["$tasks", []] } },
-            userCount: { $size: { $ifNull: ["$users", []] } }
-          }
-        }
+      const [summaryProjects, total] = await Promise.all([
+        Project.find(query)
+          .select('projectName description company companyCode branch status startDate endDate priority pdfFile createdBy createdAt updatedAt tasks._id users')
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .lean(),
+        Project.countDocuments(query)
       ]);
-      const total = await Project.countDocuments(query);
+
+      const items = summaryProjects.map(project => ({
+        ...project,
+        taskCount: Array.isArray(project.tasks) ? project.tasks.length : 0,
+        userCount: Array.isArray(project.users) ? project.users.length : 0,
+        tasks: undefined,
+      }));
 
       return res.status(200).json({
         success: true,
-        count: summaryProjects.length,
+        count: items.length,
         total,
         pagination: buildPaginationMeta({ page, limit, total }),
-        items: summaryProjects
+        items
       });
     }
 
@@ -649,7 +639,7 @@ exports.getProjectById = async (req, res) => {
       .populate('tasks.assignedUsers', 'name email')
       .populate('tasks.createdBy', 'name email')
       .populate('tasks.remarks.createdBy', 'name email')
-      .populate('tasks.activityLogs.performedBy', 'name email');
+      .lean();
 
     if (!project) {
       void 0;
@@ -677,7 +667,7 @@ exports.getProjectById = async (req, res) => {
           userId: req.user.id,
           userRole: req.user.role,
           projectId: project._id,
-          projectUsers: project.users.map(u => u._id)
+          projectUsers: (project.users || []).map(u => u._id || u)
         }
       });
     }
@@ -1632,7 +1622,9 @@ exports.updateTaskStatus = async (req, res) => {
       });
     }
 
-    if (!["overdue", "onhold"].includes(nextStatus) && isPendingTaskPastDue(task) && !allowCompanyAllEdit) {
+    const isResumedFromHold = (normalizedOldStatus === "onhold" || normalizedOldStatus === "on hold") && nextStatus === "in-progress";
+
+    if (!["overdue", "onhold"].includes(nextStatus) && !isResumedFromHold && isPendingTaskPastDue(task) && !allowCompanyAllEdit) {
       if (isPendingTaskPastDue(task)) {
         task.status = "overdue";
         task.updatedAt = new Date();
@@ -1654,6 +1646,21 @@ exports.updateTaskStatus = async (req, res) => {
 
     task.status = nextProjectStatus;
     task.updatedAt = new Date();
+
+    if (isResumedFromHold) {
+      const now = new Date();
+      task.onHoldReleasedAt = now;
+      task.dueDate = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+      task.dueDateTime = task.dueDate;
+    } else if (nextStatus === "onhold" || nextStatus === "on hold") {
+      task.onHoldReleasedAt = null;
+    }
+
+    if (nextStatus === "completed") {
+      task.completionDate = new Date();
+    } else if (nextStatus !== "completed" && task.completionDate) {
+      task.completionDate = null;
+    }
 
     
     task.activityLogs.push({

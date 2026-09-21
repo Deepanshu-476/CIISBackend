@@ -8,13 +8,14 @@ let cachedAt = 0;
 let cachedIncludesSecret = false;
 const CACHE_TTL_MS = 5000;    
 const DEFAULT_PROFILE_ID = "default";  
-
+   
 const EMAIL_MODULES = [
   { key: "company_login_otp", label: "Company Login OTP", area: "Authentication", description: "OTP email used when company users sign in." },
   { key: "superadmin_login_otp", label: "Super Admin Login OTP", area: "Authentication", description: "OTP email used when Super Admin signs in." },
   { key: "password_reset", label: "Password Reset OTP", area: "Authentication", description: "Forgot password OTP and reset confirmation emails." },
   { key: "company_registration", label: "Company Registration", area: "Companies", description: "Company registration and owner access emails." },
   { key: "user_welcome", label: "User Welcome", area: "Users", description: "New user welcome and account-created emails." },
+  { key: "client_welcome", label: "Client Welcome", area: "Clients", description: "Welcome email with login credentials sent when a new client is created in Client Management (/ciisUser/emp-client)." },
   { key: "leave_notifications", label: "Leave Notifications", area: "HR", description: "Leave applied, updated, deleted, and status emails." },
   { key: "work_anniversary", label: "Work Anniversary", area: "HR", description: "Annual employee work anniversary celebration emails." },
   { key: "asset_requests", label: "Asset Requests", area: "HR", description: "Asset request submitted, assigned, and status emails." },
@@ -497,6 +498,7 @@ const resolveEmailModuleKey = (subject = "", options = {}) => {
   if (text.includes("login verification") || text.includes("login otp") || text.includes("company login")) return "company_login_otp";
   if (text.includes("password reset") || text.includes("forgot password")) return "password_reset";
   if (text.includes("company registration") || text.includes("company-reg") || headerType.includes("company-registration")) return "company_registration";
+  if (headerType.includes("client-welcome") || text.includes("client-welcome") || text.includes("client welcome") || (text.includes("welcome") && text.includes("client"))) return "client_welcome";
   if (text.includes("welcome") || headerType.includes("user-welcome") || headerType.includes("owner-registration")) return "user_welcome";
   if (text.includes("leave")) return "leave_notifications";
   if (text.includes("work anniversary") || headerType.includes("work-anniversary")) return "work_anniversary";

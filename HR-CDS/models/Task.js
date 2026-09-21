@@ -12,16 +12,16 @@ const normalizeTaskStatus = status => String(status || 'pending').trim().toLower
 const canMoveToOverdue = status => !OVERDUE_LOCKED_STATUSES.has(normalizeTaskStatus(status));
 
 const getOverdueEligibilityDate = (task) => {
-  if (!task?.dueDateTime) return null;
-  const dueDate = new Date(task.dueDateTime);
-  if (Number.isNaN(dueDate.getTime())) return null;
-
-  if (task.taskFor === 'self' && task.onHoldReleasedAt) {
+  if (task?.onHoldReleasedAt) {
     const releasedAt = new Date(task.onHoldReleasedAt);
-    if (!Number.isNaN(releasedAt.getTime()) && dueDate <= releasedAt) {
+    if (!Number.isNaN(releasedAt.getTime())) {
       return new Date(releasedAt.getTime() + ON_HOLD_OVERDUE_GRACE_MS);
     }
   }
+
+  if (!task?.dueDateTime) return null;
+  const dueDate = new Date(task.dueDateTime);
+  if (Number.isNaN(dueDate.getTime())) return null;
 
   return dueDate;
 };
@@ -230,6 +230,14 @@ const taskSchema = new mongoose.Schema(
     },
     recurringPattern: String,
     nextRecurringDate: Date,
+    recurrenceEndDate: {
+      type: Date,
+      default: null,
+    },
+    recurrenceStoppedAt: {
+      type: Date,
+      default: null,
+    },
     recurrenceSourceId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Task",

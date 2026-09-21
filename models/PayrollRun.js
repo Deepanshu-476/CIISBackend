@@ -17,13 +17,13 @@ const payrollRunSchema = new mongoose.Schema({
   month: { type: String, required: true, match: /^\d{4}-\d{2}$/ },
   status: {
     type: String,
-    enum: ["Draft", "Calculated", "Reviewed", "Approved", "Locked", "Released"],
+    enum: ["Draft", "Calculated", "Reviewed", "Approved", "Locked"],
     default: "Draft",
     index: true
   },
   salaryDaysBasis: {
     type: String,
-    enum: ["calendar", "fixed30", "fixed26"],
+    enum: ["calendar", "fixed30", "fixed31", "fixed26"],
     default: "calendar"
   },
   sandwichRuleEnabled: {
@@ -34,6 +34,7 @@ const payrollRunSchema = new mongoose.Schema({
   totals: {
     employees: { type: Number, default: 0 },
     earnings: { type: Number, default: 0 },
+    assignedEarnings: { type: Number, default: 0 },
     deductions: { type: Number, default: 0 },
     net: { type: Number, default: 0 },
     pendingAttendance: { type: Number, default: 0 }

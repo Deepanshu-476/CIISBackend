@@ -163,6 +163,9 @@ const normalizeTaskRecurrenceFields = (task = {}) => {
   const repeatDays = normalizeRepeatDays(task.repeatDays);
   const isRecurring = toBoolean(task.isRecurring) || repeatPattern !== 'none';
   const nextRecurringDate = task.nextRecurringDate ? toValidDate(task.nextRecurringDate) : null;
+  const recurrenceEndDate = task.recurrenceEndDate || task.repeatEndDate || task.endDate
+    ? toValidDate(task.recurrenceEndDate || task.repeatEndDate || task.endDate)
+    : null;
   const recurrenceSourceId = task.recurrenceSourceId || null;
   const recurrenceOccurrenceKey = task.recurrenceOccurrenceKey || null;
 
@@ -171,6 +174,7 @@ const normalizeTaskRecurrenceFields = (task = {}) => {
     repeatDays,
     isRecurring,
     nextRecurringDate,
+    recurrenceEndDate,
     recurrenceSourceId,
     recurrenceOccurrenceKey,
   };
@@ -202,6 +206,10 @@ const buildRecurringTaskClone = (templateTask, occurrenceDate) => {
     remarks: 'Recurring task auto-created'
   }));
 
+  const occurrenceCreatedAt = baseTask.startDateTime
+    ? cloneDateTimeForOccurrence(dueDateTime, baseTask.startDateTime)
+    : dueDateTime;
+
   return {
     title: baseTask.title,
     description: baseTask.description,
@@ -209,6 +217,7 @@ const buildRecurringTaskClone = (templateTask, occurrenceDate) => {
       ? cloneDateTimeForOccurrence(dueDateTime, baseTask.startDateTime)
       : null,
     dueDateTime,
+    createdAt: occurrenceCreatedAt || dueDateTime,
     whatsappNumber: baseTask.whatsappNumber,
     priorityDays: baseTask.priorityDays,
     priority: baseTask.priority || 'medium',
@@ -221,7 +230,7 @@ const buildRecurringTaskClone = (templateTask, occurrenceDate) => {
       status: 'pending',
       changedBy: baseTask.createdBy,
       remarks: 'Recurring task auto-created',
-      changedAt: new Date()
+      changedAt: occurrenceCreatedAt || new Date()
     }],
     checkpoints,
     remarks: [],
@@ -234,6 +243,8 @@ const buildRecurringTaskClone = (templateTask, occurrenceDate) => {
     repeatDays: normalized.repeatDays,
     recurringPattern: normalized.repeatPattern,
     nextRecurringDate,
+    recurrenceEndDate: normalized.recurrenceEndDate,
+    recurrenceStoppedAt: null,
     recurrenceSourceId: sourceId,
     recurrenceOccurrenceKey: dueDateTime.toISOString(),
     creatorStatus: {
@@ -253,6 +264,16 @@ const buildRecurringTaskClone = (templateTask, occurrenceDate) => {
   };
 };
 
+const getIndiaDayRange = (value = new Date()) => {
+  const date = toValidDate(value);
+  if (!date) return null;
+  const parts = getIndiaDateParts(date);
+  if (!parts) return null;
+  const start = buildIndiaDateTime(parts, { hour: 0, minute: 0, second: 0, millisecond: 0 });
+  const end = buildIndiaDateTime(parts, { hour: 23, minute: 59, second: 59, millisecond: 999 });
+  return { start, end };
+};
+
 module.exports = {
   INDIA_OFFSET_MS,
   normalizeRepeatPattern,
@@ -262,4 +283,5 @@ module.exports = {
   getNextRecurringDate,
   buildRecurringTaskClone,
   toValidDate,
+  getIndiaDayRange,
 };

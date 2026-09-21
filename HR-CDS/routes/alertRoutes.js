@@ -20,7 +20,9 @@ const canManageAlerts = (req, res, next) => {
 
 router.get("/", protect, alertController.getAlerts);
 router.get("/unread/count", protect, alertController.getUnreadCount);
+router.patch("/mark-all/read", protect, alertController.markAllAsRead);
 router.patch("/:id/read", protect, alertController.markAsRead);
+router.patch("/:id/unread", protect, alertController.markAsUnread);
 
 
 router.post("/", protect, alertController.addAlert);
@@ -29,6 +31,14 @@ router.delete("/:id", protect ,  alertController.deleteAlert);
 
 
 
+
+// Gate all /test routes from production
+router.use('/test', (req, res, next) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ success: false, message: 'Not found' });
+  }
+  next();
+});
 
 router.get('/test/system-check', protect, async (req, res) => {
   try {

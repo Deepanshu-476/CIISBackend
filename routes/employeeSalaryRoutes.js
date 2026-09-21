@@ -15,8 +15,6 @@ const processLock = requirePayrollPagePermission("/ciisUser/payroll-process", "l
 const processUnlock = requirePayrollPagePermission("/ciisUser/payroll-process", "unlock");
 const payslipView = requirePayrollPagePermission("/ciisUser/payslip", "view");
 const payslipEdit = requirePayrollPagePermission("/ciisUser/payslip", "edit");
-const releaseView = requirePayrollPagePermission("/ciisUser/release-payroll", "view");
-const releaseEdit = requirePayrollPagePermission("/ciisUser/release-payroll", "edit");
 const payslipOrReportsView = requireAnyPayrollPagePermission(["/ciisUser/payslip", "/ciisUser/payroll-reports", "/ciisUser/payroll-process"], "view");
 
 const processStatusPermission = (req, res, next) => {
@@ -38,12 +36,16 @@ router.patch("/payroll-run/employee-status", processStatusPermission, controller
 router.patch("/payroll-run/adjustment", processEdit, controller.addPayrollAdjustment);
 router.delete("/payroll-run/adjustment", processEdit, controller.removePayrollAdjustment);
 router.get("/payroll-payslips", payslipOrReportsView, controller.getPayrollPayslips);
-router.get("/payroll-release", releaseView, controller.getPayrollRelease);
-router.post("/payroll-release", releaseEdit, controller.releaseEmployeePayroll);
 router.get("/payroll-payslips/history", payslipView, controller.getPayslipHistory);
 router.post("/payroll-payslips/email", payslipEdit, controller.emailPayslip);
 router.delete("/:id/history/:historyId", assignmentDelete, controller.removeHistoryRevision);
-router.get("/user/:userId", assignmentView, controller.getByUserId);
+const userSalaryViewPermission = (req, res, next) => {
+  const isSelf = String(req.user?._id || req.user?.id) === String(req.params.userId);
+  if (isSelf) return next();
+  return assignmentView(req, res, next);
+};
+
+router.get("/user/:userId", userSalaryViewPermission, controller.getByUserId);
 router.get("/:id", assignmentView, controller.getById);
 router.put("/:id", assignmentEdit, controller.update);
 router.delete("/:id", assignmentDelete, controller.remove);

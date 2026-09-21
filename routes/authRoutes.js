@@ -9,7 +9,7 @@ const authController = require("../controllers/authController");
 const registerDocumentDir = path.join(__dirname, "../uploads/employee-documents");
 fs.mkdirSync(registerDocumentDir, { recursive: true });
 
-const registerDocumentUpload = multer({
+const registerDocumentUpload = multer({  
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, registerDocumentDir),
     filename: (_req, file, cb) => {
@@ -114,5 +114,11 @@ router.get("/company/:identifier", authController.getCompanyDetailsByIdentifier)
 
 
 router.get("/test", authController.testAPI);
+router.get("/test", (req, res, next) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ success: false, message: 'Not found' });
+  }
+  next();
+}, authController.testAPI);
 
 module.exports = router;

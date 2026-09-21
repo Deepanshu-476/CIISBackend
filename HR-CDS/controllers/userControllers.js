@@ -514,7 +514,7 @@ exports.getMe = async (req, res) => {
       .select('-password -resetToken -resetTokenExpiry')
       .populate('department', 'name description')
       .populate('createdBy', 'name email')
-      .populate('company', 'name companyCode');
+      .populate('company', 'companyName name companyCode');
 
     if (!user) {
       return errorResponse(res, 404, "User not found");
@@ -641,7 +641,6 @@ exports.updateMe = async (req, res) => {
       'aadharCard', 'panCard',
       'chatSettings', 'notificationPreferences', 'properties',
       'propertyOwned', 'additionalDetails',
-      'employeeType',
       'profileImage'
     ]);
 
@@ -1493,10 +1492,55 @@ exports.updateUser = async (req, res) => {
     
     
     const isSelfUpdate = requestingUser.id.toString() === id;
-    
-    
-    
+    const requesterRole = String(requestingUser.companyRole || requestingUser.jobRole || requestingUser.role || '').toLowerCase();
+    const isPrivilegedUser = ['super_admin', 'superadmin', 'owner', 'admin', 'hr'].includes(requesterRole) || requestingUser.isSuperAdmin === true;
 
+    if (!isSelfUpdate && !isPrivilegedUser) {
+      return errorResponse(res, 403, "You do not have permission to update other employees");
+    }
+
+    const targetRole = String(user.companyRole || user.jobRole || user.role || '').toLowerCase();
+
+    // Privilege Escalation Prevention:
+    // 1. Manager / HR cannot update an Owner, Admin, or SuperAdmin
+    if (['manager', 'hr'].includes(requesterRole) && ['owner', 'admin', 'super_admin', 'superadmin'].includes(targetRole)) {
+      return errorResponse(res, 403, "Managers and HR cannot modify Admin or Owner accounts.");
+    }
+
+    // 2. Manager / HR cannot assign Admin, Owner, or SuperAdmin roles
+    if (['manager', 'hr'].includes(requesterRole) && req.body.companyRole) {
+      const assignedRole = String(req.body.companyRole).toLowerCase();
+      if (['owner', 'admin', 'super_admin', 'superadmin'].includes(assignedRole)) {
+        return errorResponse(res, 403, "You do not have permission to assign Admin or Owner roles.");
+      }
+    }
+
+    // 3. Salary modifications require Admin, Owner, or SuperAdmin
+    if (req.body.salary !== undefined) {
+      const canEditSalary = ['owner', 'admin', 'super_admin', 'superadmin'].includes(requesterRole) || requestingUser.isSuperAdmin === true;
+      if (!canEditSalary) {
+        delete req.body.salary;
+      }
+    }
+
+    // 4. Nobody except platform super_admin can set superAdmin flags or role
+    if (req.body.isSuperAdmin !== undefined || req.body.superAdmin !== undefined || req.body.role === 'super_admin') {
+      if (!requestingUser.isSuperAdmin && requesterRole !== 'super_admin') {
+        delete req.body.isSuperAdmin;
+        delete req.body.superAdmin;
+        delete req.body.role;
+      }
+    }
+
+    if (!isPrivilegedUser) {
+      // Normal employees cannot modify sensitive employment, role, or WFH fields
+      const employeeForbiddenFields = [
+        'companyRole', 'role', 'jobRole', 'employeeType', 'salary', 'isActive',
+        'branch', 'assignedBranches', 'company', 'companyCode', 'workFromHome',
+        'isWorkFromHome', 'isRemote', 'workMode', 'attendanceType'
+      ];
+      employeeForbiddenFields.forEach(f => delete req.body[f]);
+    }
     
     const updateData = {};
     const adminEditableFields = new Set([
@@ -1614,7 +1658,11 @@ exports.updateUser = async (req, res) => {
 
     
     if (req.body.password) {
-      updateData.password = req.body.password;
+      const trimmedPassword = typeof req.body.password === 'string' ? req.body.password.trim() : '';
+      if (trimmedPassword.length < 6) {
+        return errorResponse(res, 400, "Password must be at least 6 characters long");
+      }
+      updateData.password = await bcrypt.hash(trimmedPassword, 12);
     }
 
     const employmentLocationError = normalizeEmploymentLocationFields(updateData, user);
@@ -1680,8 +1728,14 @@ exports.updateSelfUser = async (req, res) => {
 
     const updateData = {};
     
-    
-    const blockedUpdateFields = new Set(['password', 'resetToken', 'resetTokenExpiry', '__v', 'spouseName', 'children', 'zipCode', 'workLocation', 'noticePeriod', 'aadhaar', 'aadhar', 'pan']);
+    const blockedUpdateFields = new Set([
+      'password', 'resetToken', 'resetTokenExpiry', '__v', 'spouseName', 'children',
+      'zipCode', 'workLocation', 'noticePeriod', 'aadhaar', 'aadhar', 'pan',
+      'companyRole', 'role', 'jobRole', 'employeeType', 'salary', 'isActive',
+      'branch', 'assignedBranches', 'company', 'companyCode', 'workFromHome',
+      'isWorkFromHome', 'isRemote', 'workMode', 'attendanceType', 'isVerified',
+      'registrationSource', 'reportingManager', 'dateOfJoining'
+    ]);
 
     Object.keys(req.body).forEach(key => {
       if (!blockedUpdateFields.has(key)) {
@@ -1786,12 +1840,22 @@ exports.deleteUser = async (req, res) => {
     
     
     
-    const authorizedRoles = ['super_admin', 'admin', 'hr', 'manager'];
-    const canDelete = authorizedRoles.includes(requestingUser.jobRole) || 
-                      authorizedRoles.includes(requestingUser.companyRole);
+    const requesterRole = String(requestingUser.companyRole || requestingUser.jobRole || requestingUser.role || '').toLowerCase();
+    const targetRole = String(user.companyRole || user.jobRole || user.role || '').toLowerCase();
+
+    const authorizedRoles = ['super_admin', 'superadmin', 'owner', 'admin', 'hr', 'manager'];
+    const canDelete = authorizedRoles.includes(requesterRole) || requestingUser.isSuperAdmin === true;
     
     if (!canDelete) {
-      return errorResponse(res, 403, "You don't have permission to delete users. Only HR, Manager, Admin, or Super Admin can delete users.");
+      return errorResponse(res, 403, "You don't have permission to delete users.");
+    }
+
+    if (['manager', 'hr'].includes(requesterRole) && ['owner', 'admin', 'super_admin', 'superadmin'].includes(targetRole)) {
+      return errorResponse(res, 403, "Managers and HR cannot delete Admin or Owner accounts.");
+    }
+
+    if ((targetRole === 'super_admin' || user.isSuperAdmin) && !requestingUser.isSuperAdmin && requesterRole !== 'super_admin') {
+      return errorResponse(res, 403, "Cannot delete Platform SuperAdmin account.");
     }
     
     
@@ -2050,8 +2114,13 @@ exports.getCompanyUsers = async (req, res) => {
     }
     applyBranchAccessFilter(filter, req);
 
+    const taskOverviewView = String(req.query.view || '').toLowerCase() === 'task-overview';
+    const userProjection = taskOverviewView
+      ? 'name email role companyRole jobRole employeeType employeeId company companyCode department branch assignedBranches isActive status createdAt'
+      : '-password -resetToken -resetTokenExpiry';
+
     const users = await User.find(filter)
-      .select("-password -resetToken -resetTokenExpiry")
+      .select(userProjection)
       .populate("department", "name description")
       .populate("branch", "name branchCode")
       .populate("assignedBranches", "name branchCode")

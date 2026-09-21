@@ -11,15 +11,26 @@ const alertSchema = new mongoose.Schema({
     trim: true,
     index: true 
   },
+  title: {
+    type: String,
+    trim: true
+  },
   type: {
     type: String,
-    enum: ['info', 'warning', 'error'],
     default: 'info'
   },
   message: {
     type: String,
     required: true
   },
+  attachments: [
+    {
+      name: { type: String, trim: true },
+      url: { type: String, trim: true },
+      size: { type: String, trim: true },
+      fileType: { type: String, trim: true }
+    }
+  ],
   assignedUsers: [
     { 
       type: mongoose.Schema.Types.ObjectId, 
@@ -45,6 +56,10 @@ const alertSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
+  },
+  createdByName: {
+    type: String,
+    trim: true
   }
 }, { 
   timestamps: true 

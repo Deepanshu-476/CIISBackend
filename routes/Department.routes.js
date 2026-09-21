@@ -27,6 +27,9 @@ router.delete("/:id", departmentController.deleteDepartment);
 
 router.get("/test", (req, res) => {
   void 0;
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ success: false, message: 'Not found' });
+  }
   res.json({
     success: true,
     user: req.user
