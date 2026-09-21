@@ -814,6 +814,15 @@ const dashboardRoutes = require('./HR-CDS/routes/dashboardRoutes.js');
 
 
 app.use("/api/auth", require("./routes/authRoutes.js"));
+app.use('/api/crm/lead-types', require('./routes/leadTypeRoutes.js'));
+app.use('/api/crm/lead-sources', require('./routes/leadSourceRoutes.js'));
+app.use('/api/crm/leads', require('./routes/crmLeadRoutes.js'));
+app.use('/api/crm/assignments', require('./routes/crmAssignmentRoutes.js'));
+app.use('/api/crm/reports', require('./routes/crmReportRoutes.js'));
+app.use('/api/crm/telecaller', require('./routes/telecallerRoutes.js'));
+app.use('/api/crm/admin', require('./routes/adminCallRoutes.js'));
+app.use('/api/calls', require('./routes/callRoutes.js'));
+app.use('/api/followups', require('./routes/followUpRoutes.js'));
 app.use("/api/app-version", require("./routes/appVersionRoutes.js"));
 app.use("/api/attendance", require("./HR-CDS/routes/attendanceRoutes.js"));
 app.use("/api/overtime", require("./HR-CDS/routes/overtimeRoutes.js"));
