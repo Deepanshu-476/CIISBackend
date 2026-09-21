@@ -121,15 +121,13 @@ test('assign updates assignedTo and assignedAt or unassigns when userId is empty
       if (name === '../models/Lead') {
         return {
           findOne: filter => (filter._id === id && filter.company === company ? leadDoc : null),
-          findById: () => ({
-            populate: () => ({
-              populate: () => ({
-                populate: () => ({
-                  lean: async () => ({ ...leadDoc, assignedTo: { _id: id, name: 'Telecaller 1' } })
-                })
-              })
-            })
-          })
+          findById: () => {
+            const chain = {
+              populate: () => chain,
+              lean: async () => ({ ...leadDoc, assignedTo: { _id: id, name: 'Telecaller 1' } })
+            };
+            return chain;
+          }
         };
       }
       if (name === '../models/User') {

@@ -6,12 +6,16 @@ const mongoose = require('mongoose');
 const company = '507f1f77bcf86cd799439010', user = '507f1f77bcf86cd799439011', leadId = '507f1f77bcf86cd799439012';
 function fixture() {
   let lead = { _id: leadId, company, assignedTo: user, status: 'new', __v: 0, callHistory: [] };
+  let beforeUpdate;
   const query = value => ({ populate() { return this; }, sort() { return this; }, lean: async () => structuredClone(value) });
-  const matches = filter => filter._id === lead._id && filter.company === lead.company && filter.assignedTo === lead.assignedTo;
+  // Match only supplied predicates, like MongoDB; omitting assignee must not
+  // accidentally make the test double more restrictive than the database.
+  const matches = filter => ['_id', 'company', 'assignedTo'].every(key => !(key in filter) || filter[key] === lead[key]);
   const Lead = {
     find: filter => query(filter.company === lead.company && filter.assignedTo === lead.assignedTo ? [lead] : []),
     findOne: filter => query(matches(filter) ? lead : null),
     findOneAndUpdate(filter, mutation) {
+      beforeUpdate?.(lead);
       if (!matches(filter) || filter.__v !== lead.__v || filter.status !== lead.status || lead.callHistory.some(call => call.id === filter['callHistory.id'].$ne)) return query(null);
       lead.callHistory.push(mutation.$push.callHistory);
       Object.assign(lead, mutation.$set || {});
@@ -27,16 +31,31 @@ function fixture() {
     await module.exports[action](request, res, error => { throw error; });
     return res;
   }
-  return { req, invoke, getLead: () => lead };
+  return { req, invoke, getLead: () => lead, beforeUpdate: callback => { beforeUpdate = callback; } };
 }
 test('assigned leads and saves are isolated by company and authenticated assignee', async () => {
   const f = fixture();
   assert.equal((await f.invoke('list')).data.items.length, 1);
   for (const request of [{ ...f.req, telecallerCompany: user }, { ...f.req, user: { _id: company } }]) {
     assert.equal((await f.invoke('list', request)).data.items.length, 0);
+    assert.equal((await f.invoke('getOne', request)).statusCode, 404);
     assert.equal((await f.invoke('save', request)).statusCode, 404);
   }
   assert.equal(f.getLead().callHistory.length, 0);
+});
+
+test('unassigned and reassigned leads cannot be read, noted, or retried by the previous assignee', async () => {
+  for (const assignee of [null, company]) {
+    const f = fixture();
+    assert.equal((await f.invoke('getOne')).statusCode, 200);
+    assert.equal((await f.invoke()).statusCode, 200);
+    f.getLead().assignedTo = assignee;
+    assert.equal((await f.invoke('getOne')).statusCode, 404);
+    assert.equal((await f.invoke()).statusCode, 404, 'retry must check current assignment');
+    f.req.body = { id: 'note-unassigned-01', outcome: 'Note Added', notes: 'Not permitted' };
+    assert.equal((await f.invoke()).statusCode, 404);
+    assert.equal(f.getLead().callHistory.length, 1);
+  }
 });
 test('outcomes persist lead status, server identity/time, and retries cannot duplicate history', async () => {
   const f = fixture();
@@ -58,9 +77,11 @@ test('callbacks require future time, notes preserve follow-up, and closing clear
   f.req.body = { id: 'note-test-0001', outcome: 'Note Added', notes: 'Brochure sent' };
   await f.invoke(); assert.equal(f.getLead().nextFollowUp.getTime(), scheduled);
   assert.equal(f.getLead().status, 'follow-up');
+  f.req.body = { id: 'call-test-noans-01', outcome: 'No Answer', notes: 'Ringing' };
+  await f.invoke(); assert.equal(f.getLead().nextFollowUp.getTime(), scheduled);
   f.req.body = { id: 'call-test-0002', outcome: 'Call Closed' };
   await f.invoke(); assert.equal(f.getLead().status, 'closed'); assert.equal(f.getLead().nextFollowUp, null);
-  await f.invoke(); assert.equal(f.getLead().callHistory.length, 3);
+  await f.invoke(); assert.equal(f.getLead().callHistory.length, 4);
   f.req.body = { id: 'call-test-0003', outcome: 'Connected' };
   assert.equal((await f.invoke()).statusCode, 409);
 });
@@ -83,4 +104,12 @@ test('simultaneous saves cannot silently overwrite each other', async () => {
   ]);
   assert.deepEqual(responses.map(r => r.statusCode).sort(), [200, 409]);
   assert.equal(f.getLead().callHistory.length, 1);
+});
+
+test('reassignment between read and atomic save prevents the former assignee from writing', async () => {
+  const f = fixture();
+  f.beforeUpdate(lead => { lead.assignedTo = company; });
+  assert.equal((await f.invoke()).statusCode, 409);
+  assert.equal(f.getLead().callHistory.length, 0);
+  assert.equal(f.getLead().status, 'new');
 });
