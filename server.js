@@ -780,6 +780,7 @@ app.use('/api/job-roles', require("./routes/jobRoleRoutes.js"));
 app.use('/api/crm/lead-types', require('./routes/leadTypeRoutes.js'));
 app.use('/api/crm/lead-sources', require('./routes/leadSourceRoutes.js'));
 app.use('/api/crm/leads', require('./routes/crmLeadRoutes.js'));
+app.use('/api/crm/assignments', require('./routes/crmAssignmentRoutes.js'));
 app.use('/api/crm/telecaller', require('./routes/telecallerRoutes.js'));
 app.use('/api/crm/admin', require('./routes/adminCallRoutes.js'));
 app.use('/api/calls', require('./routes/callRoutes.js'));

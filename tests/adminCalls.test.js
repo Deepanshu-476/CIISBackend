@@ -6,6 +6,7 @@ const Lead = require('../models/Lead');
 const CallLog = require('../models/CallLog');
 const FollowUp = require('../models/Followup');
 const User = require('../models/User');
+const PagePermission = require('../models/PagePermission');
 
 test('Admin CRM: dashboard endpoint aggregates company metrics, pipeline, trends, and team performance', async () => {
   const companyId = new mongoose.Types.ObjectId();
@@ -18,6 +19,7 @@ test('Admin CRM: dashboard endpoint aggregates company metrics, pipeline, trends
   const originalLeadAggregate = Lead.aggregate;
   const originalCallAggregate = CallLog.aggregate;
   const originalCallFind = CallLog.find;
+  const originalPermissionFind = PagePermission.find;
 
   Lead.countDocuments = async (filter) => {
     if (filter.status === 'converted') return 5;
@@ -29,6 +31,7 @@ test('Admin CRM: dashboard endpoint aggregates company metrics, pipeline, trends
     return 40; // total calls
   };
   FollowUp.countDocuments = async () => 3;
+  PagePermission.find = () => ({ select: () => ({ lean: async () => [{ path: '/ciisUser/telecaller/dashboard', viewUsers: [{ user: userId }] }] }) });
 
   User.find = () => ({
     select: () => ({
@@ -93,6 +96,7 @@ test('Admin CRM: dashboard endpoint aggregates company metrics, pipeline, trends
     Lead.aggregate = originalLeadAggregate;
     CallLog.aggregate = originalCallAggregate;
     CallLog.find = originalCallFind;
+    PagePermission.find = originalPermissionFind;
   }
 });
 
@@ -164,4 +168,3 @@ test('Admin CRM: call overview endpoint returns statCards, quickAccessCounts, an
     CallLog.aggregate = originalCallAggregate;
   }
 });
-

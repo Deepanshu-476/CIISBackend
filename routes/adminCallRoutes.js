@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const Company = require('../models/Company');
 const { protect } = require('../middleware/authMiddleware');
 const controller = require('../controllers/adminCallController');
+const { requireCrmPagePermission } = require('../middleware/crmPagePermission');
 
 router.use(protect);
 
@@ -23,17 +24,17 @@ const context = page => async (req, res, next) => {
   } catch (error) { next(error); }
 };
 
-router.get('/dashboard', context('dashboard'), controller.dashboard);
-router.get('/calls/overview', context('call-overview'), controller.overview);
-router.get('/calls/assigned', context('assigned-calls'), controller.assignedCalls);
-router.get('/calls/today', context('todays-calls'), controller.todaysCalls);
-router.get('/calls/history', context('call-history'), controller.callHistory);
-router.get('/calls/pending', context('pending-calls'), controller.pendingCalls);
-router.get('/calls/scheduled', context('scheduled-calls'), controller.scheduledCalls);
-router.get('/calls/completed', context('completed-calls'), controller.completedCalls);
-router.get('/calls/converted', context('converted-calls'), controller.convertedCalls);
-router.get('/calls/transferred', context('transferred-calls'), controller.transferredCalls);
-router.get('/calls/follow-ups', context('follow-ups'), controller.followUps);
+const page = slug => requireCrmPagePermission(`/ciisUser/crm/admin/${slug}`);
+router.get('/dashboard', context('dashboard'), page('dashboard'), controller.dashboard);
+router.get('/calls/overview', context('call-overview'), page('call-overview'), controller.overview);
+router.get('/calls/assigned', context('assigned-calls'), page('assigned-calls'), controller.assignedCalls);
+router.get('/calls/today', context('todays-calls'), page('todays-calls'), controller.todaysCalls);
+router.get('/calls/history', context('call-history'), page('call-history'), controller.callHistory);
+router.get('/calls/pending', context('pending-calls'), page('pending-calls'), controller.pendingCalls);
+router.get('/calls/scheduled', context('scheduled-calls'), page('scheduled-calls'), controller.scheduledCalls);
+router.get('/calls/completed', context('completed-calls'), page('completed-calls'), controller.completedCalls);
+router.get('/calls/converted', context('converted-calls'), page('converted-calls'), controller.convertedCalls);
+router.get('/calls/transferred', context('transferred-calls'), page('transferred-calls'), controller.transferredCalls);
+router.get('/calls/follow-ups', context('follow-ups'), page('follow-ups'), controller.followUps);
 
 module.exports = router;
-

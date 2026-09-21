@@ -38,7 +38,8 @@ async function serverFixture(t) {
     },
     countDocuments: async filter => { state.historyQueries.push(filter); return 1; }
   };
-  const transfer = load('../routes/leadTransferRoutes', { '../services/leadTransferService': service, '../models/Lead': lead, '../models/LeadImportBatch': batch });
+  const transfer = load('../routes/leadTransferRoutes', { '../services/leadTransferService': service, '../models/Lead': lead, '../models/LeadImportBatch': batch,
+    '../middleware/crmPagePermission': { requireCrmPagePermission: () => (req, res, next) => next() } });
   const noop = (req, res) => res.json({});
   const parent = load('../routes/crmLeadRoutes', {
     '../middleware/authMiddleware': { protect(req, res, next) {
@@ -46,6 +47,7 @@ async function serverFixture(t) {
       req.user = { _id: user, company }; next();
     } },
     '../models/Company': { findById: () => ({ select: () => ({ lean: async () => ({ allowedPages: state.denied ? ['admin-crm-add-lead'] : ['admin-crm-import-export-leads'] }) }) }) },
+    '../middleware/crmPagePermission': { requireCrmPagePermission: () => (req, res, next) => next() },
     '../controllers/crmLeadController': { options: noop, create: noop, team: noop, assign: noop, list: noop },
     '../controllers/leadOverviewController': { overview: noop }, './leadTransferRoutes': transfer
   });
