@@ -22,7 +22,10 @@ router.use(async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
-router.get('/overview', requireCrmPagePermission('/ciisUser/crm/admin/assignments'), controller.overview);
+router.get('/overview', requireCrmPagePermission([
+  '/ciisUser/crm/admin/assignments',
+  '/ciisUser/crm/admin/assignment-bulk'
+]), controller.overview);
 router.post('/bulk', requireCrmPagePermission('/ciisUser/crm/admin/assignment-bulk', 'edit'), controller.bulkAssign);
 router.get('/history', requireCrmPagePermission('/ciisUser/crm/admin/assignment-history'), controller.history);
 router.get('/workload', requireCrmPagePermission('/ciisUser/crm/admin/workload'), controller.workload);

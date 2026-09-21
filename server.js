@@ -1017,8 +1017,13 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 3000;
 
 
-server.listen(PORT, async () => {
+const startServer = async () => {
+  // Do not accept API requests until MongoDB is ready. Previously the HTTP
+  // port opened first, so initial page-permission requests could time out and
+  // make CRM navigation disappear until a full refresh.
   await dbConnectionPromise;
+
+  server.listen(PORT, async () => {
 
   // Temporarily enabled for work-anniversary email template testing.
   try {
@@ -1043,7 +1048,13 @@ server.listen(PORT, async () => {
     console.error("Failed to initialize meeting scheduler:", err);
   }
 
-  void 0;
+    void 0;
+  });
+};
+
+startServer().catch(error => {
+  console.error('Failed to start server:', error);
+  process.exit(1);
 });
 server.on("error", (err) => {
   if (err.code === "EADDRINUSE") {
