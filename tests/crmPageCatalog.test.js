@@ -27,10 +27,10 @@ test('page-list API exposes active CRM pages and excludes removed Marketing and 
   let body;
   await loadRoute(catalog.map(p => p.pageKey))({ user: { company: 'company' } }, { json(value) { body = value; } });
   assert.equal(body.success, true);
-  assert.equal(body.pages.length, 21);
-  assert.equal(new Set(body.pages.map(p => p.path)).size, 21);
+  assert.equal(body.pages.length, 29);
+  assert.equal(new Set(body.pages.map(p => p.path)).size, 29);
   assert.equal(body.pages.some(p => p.path.includes('/crm/marketing/')), false);
-  assert.equal(body.pages.some(p => p.path.includes('/crm/reports/')), false);
+  assert.equal(body.pages.filter(p => p.path.includes('/crm/reports/')).length, 8);
   for (const removed of ['admin-crm-team-overview', 'admin-crm-users', 'admin-crm-add-user', 'admin-crm-user-types']) {
     assert.equal(body.pages.some(p => p.pageKey === removed), false, removed);
   }
