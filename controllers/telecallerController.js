@@ -1,5 +1,8 @@
 const mongoose = require('mongoose');
 const Lead = require('../models/Lead');
+require('../models/LeadSource');
+require('../models/LeadType');
+require('../models/User');
 const outcomes = ['Connected', 'Interested', 'Not Interested', 'Need Callback', 'Follow-up', 'Call Later', 'No Answer', 'Busy', 'Switched Off', 'Not Reachable', 'Wrong Number', 'Wrong Person', 'Invalid Number', 'Language Barrier', 'Do Not Call', 'Duplicate', 'Spam', 'Call Closed', 'Converted', 'Note Added'];
 const callbacks = ['Need Callback', 'Follow-up', 'Call Later'];
 const terminal = ['Converted', 'Call Closed'];
@@ -16,8 +19,8 @@ exports.list = async (req, res, next) => {
 exports.getOne = async (req, res, next) => {
   try {
     if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid lead ID.' });
-    const item = await populated(Lead.findOne({ company: req.telecallerCompany, _id: req.params.id }));
-    if (!item) return res.status(404).json({ message: 'Lead not found in this company.' });
+    const item = await populated(Lead.findOne({ ...scope(req), _id: req.params.id }));
+    if (!item) return res.status(404).json({ message: 'Assigned lead not found.' });
     res.json({ item });
   } catch (error) { next(error); }
 };
@@ -28,9 +31,9 @@ exports.save = async (req, res, next) => {
     if (!mongoose.isValidObjectId(req.params.id) || typeof id !== 'string' || !/^[a-zA-Z0-9-]{8,80}$/.test(id)) return res.status(400).json({ message: 'Invalid lead or call ID.' });
     if (!outcomes.includes(outcome) || !['Inbound', 'Outbound'].includes(callType)) return res.status(400).json({ message: 'Choose a valid call outcome and direction.' });
     if (typeof notes !== 'string' || notes.length > 5000 || (outcome === 'Note Added' && !notes.trim())) return res.status(400).json({ message: 'Enter notes of at most 5,000 characters.' });
-    const filter = { company: req.telecallerCompany, _id: req.params.id };
+    const filter = { ...scope(req), _id: req.params.id };
     const existing = await Lead.findOne(filter).lean();
-    if (!existing) return res.status(404).json({ message: 'Lead not found in this company.' });
+    if (!existing) return res.status(404).json({ message: 'Assigned lead not found.' });
     // A retry after a lost response must not record the same call twice.
     if (existing.callHistory?.some(call => call.id === id)) return res.json({ item: await populated(Lead.findOne(filter)) });
     const noteOnly = outcome === 'Note Added';
@@ -41,7 +44,8 @@ exports.save = async (req, res, next) => {
     const mutation = { $push: { callHistory: call }, $inc: { __v: 1 } };
     if (!noteOnly) {
       const status = outcome === 'Converted' ? 'converted' : outcome === 'Call Closed' ? 'closed' : outcome === 'Interested' ? 'interested' : outcome === 'Not Interested' ? 'not interested' : callbacks.includes(outcome) ? 'follow-up' : existing.status;
-      mutation.$set = { status, nextFollowUp: call.followUp };
+      const nextFollowUp = terminal.includes(outcome) ? null : (nextDate || existing.nextFollowUp || null);
+      mutation.$set = { status, nextFollowUp };
     }
     // Status and history are persisted together in one atomic document update.
     const item = await populated(Lead.findOneAndUpdate({ ...filter, __v: existing.__v ?? 0, status: existing.status, 'callHistory.id': { $ne: id } }, mutation, { new: true, runValidators: true }));
@@ -50,6 +54,67 @@ exports.save = async (req, res, next) => {
       if (latest?.callHistory?.some(call => call.id === id)) return res.json({ item: latest });
       return res.status(409).json({ message: 'The lead changed while saving. Refresh and try again.' });
     }
+
+    if (!noteOnly) {
+      try {
+        const CallLog = require('../models/CallLog');
+        const validStatuses = ["answered", "missed", "not reachable", "rejected"];
+        let logStatus = 'answered';
+        const lower = outcome.toLowerCase();
+        if (validStatuses.includes(lower)) logStatus = lower;
+        else if (['no answer', 'busy'].includes(lower)) logStatus = 'missed';
+        else if (['switched off', 'not reachable'].includes(lower)) logStatus = 'not reachable';
+        else if (['wrong number', 'wrong person', 'invalid number', 'language barrier', 'do not call', 'duplicate', 'spam'].includes(lower)) logStatus = 'rejected';
+
+        const { callLogId, duration } = req.body;
+        if (callLogId && mongoose.isValidObjectId(callLogId)) {
+          await CallLog.findOneAndUpdate(
+            { _id: callLogId, agent: req.user._id || req.user.id },
+            {
+              company: req.telecallerCompany,
+              endTime: new Date(),
+              duration: Number(duration) || 0,
+              status: logStatus,
+              notes: notes.trim()
+            }
+          );
+        } else {
+          await CallLog.create({
+            company: req.telecallerCompany,
+            lead: req.params.id,
+            agent: req.user._id || req.user.id,
+            startTime: new Date(),
+            endTime: new Date(),
+            duration: Number(duration) || 0,
+            status: logStatus,
+            notes: notes.trim()
+          });
+        }
+      } catch (logErr) {}
+    }
+
+    if (nextDate && !noteOnly && !terminal.includes(outcome)) {
+      try {
+        const FollowUp = require('../models/Followup');
+        const existingFollow = await FollowUp.findOne({
+          lead: req.params.id,
+          agent: req.user._id || req.user.id,
+          status: 'pending',
+          date: nextDate
+        });
+        if (!existingFollow) {
+          await FollowUp.create({
+            company: req.telecallerCompany,
+            lead: req.params.id,
+            agent: req.user._id || req.user.id,
+            date: nextDate,
+            note: notes.trim() || outcome,
+            status: 'pending'
+          });
+        }
+      } catch (fErr) {}
+    }
+
     res.json({ item });
   } catch (error) { next(error); }
 };

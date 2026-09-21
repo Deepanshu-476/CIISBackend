@@ -650,7 +650,7 @@ scheduleDbJob('0 9 * * *', 'Daily overdue summary', dailyOverdueSummary);
 
 scheduleDbJob('30 10 * * *', 'Daily absent marking', markDailyAbsent);
 
-scheduleDbJob('* * * * *', 'Pending task reminders', sendPendingTaskReminders);
+scheduleDbJob('*/15 * * * *', 'Pending task reminders', sendPendingTaskReminders);
 
 scheduleDbJob('0 18 * * *', 'Holiday reminders', sendTomorrowHolidayReminders);
 
@@ -781,6 +781,9 @@ app.use('/api/crm/lead-types', require('./routes/leadTypeRoutes.js'));
 app.use('/api/crm/lead-sources', require('./routes/leadSourceRoutes.js'));
 app.use('/api/crm/leads', require('./routes/crmLeadRoutes.js'));
 app.use('/api/crm/telecaller', require('./routes/telecallerRoutes.js'));
+app.use('/api/crm/admin', require('./routes/adminCallRoutes.js'));
+app.use('/api/calls', require('./routes/callRoutes.js'));
+app.use('/api/followups', require('./routes/followUpRoutes.js'));
 app.use('/api/superAdmin', require("./routes/superAdmin.js"));
 app.use("/api/meetings", require("./HR-CDS/routes/meetingRoutes.js"));
 app.use('/api/cmeeting', require("./HR-CDS/routes/clientMeetingRoutes.js"));
