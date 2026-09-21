@@ -1,0 +1,10 @@
+const router = require('express').Router();
+const { protect } = require('../middleware/authMiddleware');
+const permission = require('../middleware/leadSourcePermission');
+const controller = require('../controllers/leadSourceController');
+router.use(protect);
+router.get('/', permission('view'), controller.list);
+router.post('/', permission('edit'), controller.create);
+router.put('/:id', permission('edit'), controller.update);
+router.delete('/:id', permission('delete'), controller.remove);
+module.exports = router;
