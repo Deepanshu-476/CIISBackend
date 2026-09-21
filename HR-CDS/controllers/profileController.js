@@ -10,7 +10,12 @@ exports.getUserProfile = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Unauthorized access' });
     }
 
-    const user = await User.findById(requestedUserId).select('-password');
+    const user = await User.findById(requestedUserId)
+      .select('-password -resetToken -resetTokenExpiry')
+      .populate('company', 'companyName name companyCode')
+      .populate('department', 'name departmentName code')
+      .populate('jobRole', 'name roleName roleNumber')
+      .populate('branch', 'name branchName branchCode');
 
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
