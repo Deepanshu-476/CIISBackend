@@ -143,6 +143,7 @@ test('assign updates assignedTo and assignedAt or unassigns when userId is empty
           })
         };
       }
+      if (name === '../utils/telecallerUsers') return { hasTelecallerAccess: async () => true };
       if (name === '../HR-CDS/models/Client') {
         return {
           findOne: () => ({ select: () => ({ lean: async () => null }) })
@@ -164,4 +165,3 @@ test('assign updates assignedTo and assignedAt or unassigns when userId is empty
   assert.equal(unassignRes.code, 200);
   assert.ok(unassignRes.body.message.includes('unassigned'));
 });
-

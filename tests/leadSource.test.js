@@ -53,7 +53,7 @@ test('used sources cannot be deleted and system sources are excluded atomically'
   assert.equal(filter.company,'own'); assert.equal(filter.isSystem,false); assert.equal(res.code,409);
 });
 
-test('temporary testing mode permits all actions without page grants and retains company checks', async () => {
+test('lead source permissions enforce company enablement and page action grants', async () => {
   const user='507f1f77bcf86cd799439011'; const company='507f1f77bcf86cd799439012';
   let allowedPages=['admin-crm-lead-sources'];
   const module={exports:{}};
@@ -61,7 +61,9 @@ test('temporary testing mode permits all actions without page grants and retains
     module,
     require: name => name === 'mongoose' ? mongoose : name === '../models/Company'
       ? {findById:()=>({select:()=>({lean:async()=>({allowedPages})})})}
-      : assert.fail('Page permissions must not be queried during functionality testing')
+      : name === './crmPagePermission' ? { requireCrmPagePermission: (path, action) => (req, res, next) => {
+        assert.equal(path, '/ciisUser/crm/admin/lead-sources'); assert.ok(['view', 'edit', 'delete'].includes(action)); next();
+      } } : assert.fail(`Unexpected dependency: ${name}`)
   });
   const req={user:{id:user,company,companyRole:'hr'}};
   for (const action of ['view','edit','delete']) {

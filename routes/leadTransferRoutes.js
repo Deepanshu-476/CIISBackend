@@ -9,6 +9,8 @@ const service = require('../services/leadTransferService');
 const Batch = require('../models/LeadImportBatch');
 const Lead = require('../models/Lead');
 const { COLUMNS, MAX_BYTES, readUpload, templateBuffer, safeText, csvLine, leadValues, badRequest } = require('../utils/leadSpreadsheet');
+const { requireCrmPagePermission } = require('../middleware/crmPagePermission');
+const editTransfer = requireCrmPagePermission('/ciisUser/crm/admin/import-export-leads', 'edit');
 const wrap = handler => async (req, res, next) => { try { await handler(req, res); } catch (error) { next(error); } };
 const download = (res, filename, type) => {
   res.setHeader('Content-Type', type);
@@ -37,7 +39,7 @@ router.get('/template', wrap(async (req, res) => {
   download(res, 'lead-import-template.xlsx', xlsxType);
   res.send(Buffer.from(buffer));
 }));
-router.post('/preview', previewLimit, (req, res, next) => upload(req, res, error => {
+router.post('/preview', editTransfer, previewLimit, (req, res, next) => upload(req, res, error => {
   if (error) return res.status(400).json({ message: error.code === 'LIMIT_FILE_SIZE' ? 'Maximum file size is 5 MB.' : 'Upload exactly one file (maximum 5 MB).' });
   next();
 }), wrap(async (req, res) => {
@@ -45,7 +47,7 @@ router.post('/preview', previewLimit, (req, res, next) => upload(req, res, error
   const fileName = String(req.file.originalname).split(/[\\/]/).pop().slice(0, 200);
   res.status(201).json(await service.preview(req, records, fileName));
 }));
-router.post('/imports/:id/confirm', wrap(async (req, res) => res.json(await service.confirm(req))));
+router.post('/imports/:id/confirm', editTransfer, wrap(async (req, res) => res.json(await service.confirm(req))));
 router.get('/imports/:id', wrap(async (req, res) => res.json(service.publicBatch(await service.getBatch(req)))));
 router.get('/imports/:id/errors', wrap(async (req, res) => {
   const batch = await service.getBatch(req);

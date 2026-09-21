@@ -23,12 +23,17 @@ function loadRoute(allowedPages) {
   return handlers.get('/pages');
 }
 
-test('page-list API exposes all assigned CRM pages, including all nine Call Management pages', async () => {
+test('page-list API exposes active CRM pages and excludes removed Marketing and Team & Access pages', async () => {
   let body;
   await loadRoute(catalog.map(p => p.pageKey))({ user: { company: 'company' } }, { json(value) { body = value; } });
   assert.equal(body.success, true);
-  assert.equal(body.pages.length, 38);
-  assert.equal(new Set(body.pages.map(p => p.path)).size, 38);
+  assert.equal(body.pages.length, 21);
+  assert.equal(new Set(body.pages.map(p => p.path)).size, 21);
+  assert.equal(body.pages.some(p => p.path.includes('/crm/marketing/')), false);
+  assert.equal(body.pages.some(p => p.path.includes('/crm/reports/')), false);
+  for (const removed of ['admin-crm-team-overview', 'admin-crm-users', 'admin-crm-add-user', 'admin-crm-user-types']) {
+    assert.equal(body.pages.some(p => p.pageKey === removed), false, removed);
+  }
   for (const slug of ['call-overview', 'assigned-calls', 'todays-calls', 'pending-calls', 'scheduled-calls', 'completed-calls', 'converted-calls', 'transferred-calls', 'call-history']) {
     const page = body.pages.find(p => p.pageKey === `admin-crm-${slug}`);
     assert.equal(page?.viewCount, 1, slug);

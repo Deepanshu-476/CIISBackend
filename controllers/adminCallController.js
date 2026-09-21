@@ -3,6 +3,8 @@ const Lead = require('../models/Lead');
 const CallLog = require('../models/CallLog');
 const FollowUp = require('../models/Followup');
 const User = require('../models/User');
+const LeadAssignmentHistory = require('../models/LeadAssignmentHistory');
+const { telecallerFilter, telecallerUserIds } = require('../utils/telecallerUsers');
 require('../models/LeadSource');
 require('../models/LeadType');
 
@@ -22,6 +24,7 @@ exports.dashboard = async (req, res, next) => {
     const now = new Date();
     const { start: todayStart, end: todayEnd } = getDayBounds(now);
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60000);
+    const eligibleTelecallers = await telecallerUserIds(company);
 
     const [
       totalLeads,
@@ -40,15 +43,10 @@ exports.dashboard = async (req, res, next) => {
       Lead.countDocuments({ company, status: 'converted' }),
       Lead.countDocuments({ company, assignedTo: null }),
       FollowUp.countDocuments({ company, status: 'pending' }),
-      User.find({
-        company,
-        isActive: { $ne: false },
-        role: { $not: /^client$/i },
-        companyRole: { $not: /^client$/i }
-      }).select('name email role companyRole').lean(),
+      User.find(telecallerFilter(company, eligibleTelecallers)).select('name email role companyRole jobRole').lean(),
       Lead.aggregate([
         { $match: { company: new mongoose.Types.ObjectId(String(company)) } },
-        { $group: { _id: '$status', count: { $sum: 1 } } }
+        { $group: { _id: { status: '$status', assigned: { $ne: ['$assignedTo', null] } }, count: { $sum: 1 } } }
       ]),
       CallLog.find({ company })
         .sort({ createdAt: -1 })
@@ -63,13 +61,15 @@ exports.dashboard = async (req, res, next) => {
 
     // Pipeline Distribution
     const statusMap = (leadStatusFacet || []).reduce((acc, curr) => {
-      acc[String(curr._id || '').toLowerCase()] = curr.count;
+      const status = String(curr._id?.status || '').toLowerCase();
+      acc[status] = (acc[status] || 0) + curr.count;
+      acc[`${status}:${curr._id?.assigned ? 'assigned' : 'unassigned'}`] = curr.count;
       return acc;
     }, {});
 
     const pipelineData = [
-      { name: 'New', value: statusMap['new'] || 0, color: '#06b6d4' },
-      { name: 'Assigned', value: totalLeads - (statusMap['new'] || 0) - unassignedLeads, color: '#3b82f6' },
+      { name: 'New', value: statusMap['new:unassigned'] || 0, color: '#06b6d4' },
+      { name: 'Assigned', value: statusMap['new:assigned'] || 0, color: '#3b82f6' },
       { name: 'Interested', value: statusMap['interested'] || 0, color: '#10b981' },
       { name: 'Follow-up', value: statusMap['follow-up'] || 0, color: '#f59e0b' },
       { name: 'Converted', value: convertedLeads, color: '#8b5cf6' },
@@ -488,19 +488,43 @@ exports.convertedCalls = async (req, res, next) => {
 exports.transferredCalls = async (req, res, next) => {
   try {
     const company = req.crmCompany;
-    const items = await Lead.find({
-      company,
-      assignedTo: { $ne: null }
-    })
-      .sort({ assignedAt: -1 })
-      .populate('leadSource', 'name')
-      .populate('leadType', 'name')
-      .populate('assignedTo', 'name email')
+    const history = await LeadAssignmentHistory.find({ company, action: 'reassigned' })
+      .sort({ createdAt: -1 })
+      .populate({ path: 'lead', select: 'name phone remarks status callHistory' })
+      .populate('fromUser', 'name email jobRole role')
+      .populate('toUser', 'name email jobRole role')
+      .populate('performedBy', 'name email jobRole role')
       .lean();
+
+    const items = history.filter(entry => entry.lead).map(entry => {
+      const callsAfterTransfer = (entry.lead.callHistory || []).filter(c =>
+        String(c.agent) === String(entry.toUser?._id) && new Date(c.date) >= new Date(entry.createdAt)
+      );
+      const isHandled = callsAfterTransfer.length > 0 || ['converted', 'closed', 'interested', 'not interested'].includes(entry.lead.status);
+      const status = isHandled ? 'Accepted' : 'Pending';
+
+      const methodLabel = entry.method === 'round-robin' ? 'Round Robin' : entry.method === 'load-balanced' ? 'Load Balanced' : entry.method === 'single' ? 'Manual Reassignment' : entry.method || '';
+      const transferReason = entry.notes || entry.lead.remarks || (methodLabel ? `Reassigned via ${methodLabel}` : 'Lead reassigned');
+
+      return {
+        _id: entry._id,
+        leadId: entry.lead._id,
+        name: entry.lead.name,
+        phone: entry.lead.phone,
+        status,
+        transferredFrom: entry.fromUser,
+        assignedTo: entry.toUser,
+        transferredBy: entry.performedBy,
+        transferReason,
+        assignedAt: entry.createdAt,
+        remarks: entry.lead.remarks || ''
+      };
+    });
 
     res.json({ items });
   } catch (error) { next(error); }
 };
+
 
 // 11. Follow-Up Center List
 exports.followUps = async (req, res, next) => {
@@ -515,4 +539,3 @@ exports.followUps = async (req, res, next) => {
     res.json({ items });
   } catch (error) { next(error); }
 };
-

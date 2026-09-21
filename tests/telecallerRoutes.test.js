@@ -18,6 +18,7 @@ async function fixture(t) {
       if (!req.headers.authorization) return res.status(401).end();
       req.user = { _id: user, company }; next();
     } },
+    '../middleware/crmPagePermission': { requireCrmPagePermission: () => (req, res, next) => next() },
     '../controllers/telecallerController': { list: respond, getOne: respond, save: respond },
   };
   const filename = require.resolve('../routes/telecallerRoutes');

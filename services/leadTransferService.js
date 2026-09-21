@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const crypto = require('node:crypto');
 const { validate } = require('../controllers/crmLeadController');
 const { badRequest, normalizedEmail, normalizedPhone, dateRange } = require('../utils/leadSpreadsheet');
+const { telecallerFilter, telecallerUserIds } = require('../utils/telecallerUsers');
 const defaults = {
   Lead: require('../models/Lead'), Type: require('../models/LeadType'), Source: require('../models/LeadSource'),
   User: require('../models/User'), Client: require('../HR-CDS/models/Client'),
@@ -31,9 +32,7 @@ function createService(models = defaults) {
     return { types, sources };
   }
   async function team(company) {
-    const users = await User.find({ company, isActive: { $ne: false },
-      companyRole: { $not: /^client$/i }, role: { $not: /^client$/i }
-    }).select('name email').sort({ name: 1 }).lean();
+    const users = await User.find(telecallerFilter(company, await telecallerUserIds(company))).select('name email role companyRole jobRole').sort({ name: 1 }).lean();
     // Client.company stores a name, not the tenant ID. Restrict via tenant-owned users.
     const clients = await Client.find({ userId: { $in: users.map(user => user._id) } }).select('userId').lean();
     const clientIds = new Set(clients.map(client => String(client.userId)));

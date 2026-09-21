@@ -218,7 +218,8 @@ test('existing Add Lead creation and assignment still accept normal valid reques
       if (name === 'validator') return require('validator');
       if (name === '../models/Lead') return Lead;
       if (name === '../HR-CDS/models/Client') return { findOne: () => ({ select: () => ({ lean: async () => null }) }) };
-      if (name === '../models/User') return { findOne: filter => { assert.equal(filter.company, company); return { lean: async () => ({ _id: user, name: 'Test User' }) }; } };
+      if (name === '../models/User') return { findOne: filter => { assert.equal(filter.company, company); return { lean: async () => ({ _id: user, name: 'Test User', role: 'telecaller' }) }; } };
+      if (name === '../utils/telecallerUsers') return { hasTelecallerAccess: async () => true };
       return masters;
     }
   });

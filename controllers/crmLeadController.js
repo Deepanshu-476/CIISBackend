@@ -76,6 +76,7 @@ exports.list = async (req, res, next) => {
 exports.team = async (req, res, next) => {
   try {
     const User = require('../models/User');
+    const { telecallerFilter, telecallerUserIds } = require('../utils/telecallerUsers');
     let clientUserIds = [];
     try {
       const Client = mongoose.models.Client || require('../HR-CDS/models/Client');
@@ -85,12 +86,7 @@ exports.team = async (req, res, next) => {
       // Ignore if Client model not available
     }
 
-    const users = await User.find({
-      company: req.crmCompany,
-      isActive: { $ne: false },
-      companyRole: { $not: /^client$/i },
-      role: { $not: /^client$/i }
-    })
+    const users = await User.find(telecallerFilter(req.crmCompany, await telecallerUserIds(req.crmCompany)))
       .select('name email role jobRole companyRole')
       .sort({ name: 1 })
       .lean();
@@ -119,11 +115,28 @@ exports.assign = async (req, res, next) => {
       return res.status(404).json({ message: 'Lead not found.' });
     }
 
+    const previousAssignee = lead.assignedTo || null;
+    const previousAssignedAt = lead.assignedAt || null;
     const { userId } = req.body;
     if (!userId) {
       lead.assignedTo = null;
       lead.assignedAt = null;
       await lead.save();
+      try {
+        if (previousAssignee) {
+          const LeadAssignmentHistory = require('../models/LeadAssignmentHistory');
+          if (typeof LeadAssignmentHistory.create === 'function') {
+            await LeadAssignmentHistory.create({ company: req.crmCompany, lead: lead._id, fromUser: previousAssignee,
+              toUser: null, performedBy: mongoose.isValidObjectId(req.user?._id || req.user?.id) ? (req.user._id || req.user.id) : null,
+              action: 'unassigned', method: 'single' });
+          }
+        }
+      } catch (historyError) {
+        lead.assignedTo = previousAssignee;
+        lead.assignedAt = previousAssignedAt;
+        await lead.save();
+        throw historyError;
+      }
       const populatedLead = await Lead.findById(lead._id)
         .populate('leadType', 'name')
         .populate('leadSource', 'name')
@@ -136,6 +149,7 @@ exports.assign = async (req, res, next) => {
     }
 
     const User = require('../models/User');
+    const { hasTelecallerAccess } = require('../utils/telecallerUsers');
     const user = await User.findOne({ _id: userId, company: req.crmCompany }).lean();
     if (!user) {
       return res.status(404).json({ message: 'Selected user was not found in your company.' });
@@ -144,13 +158,27 @@ exports.assign = async (req, res, next) => {
     const Client = require('../HR-CDS/models/Client');
     const isClient = ['role', 'companyRole'].some(key => String(user[key] || '').trim().toLowerCase() === 'client');
     const clientRecord = await Client.findOne({ userId: user._id }).select('_id').lean();
-    if (user.isActive === false || isClient || clientRecord) {
-      return res.status(400).json({ message: 'Choose an active employee from your company.' });
+    if (user.isActive === false || isClient || clientRecord || !(await hasTelecallerAccess(req.crmCompany, user._id))) {
+      return res.status(400).json({ message: 'Choose an active telecaller from your company.' });
     }
 
     lead.assignedTo = user._id;
     lead.assignedAt = new Date();
     await lead.save();
+
+    const LeadAssignmentHistory = require('../models/LeadAssignmentHistory');
+    try {
+      if (typeof LeadAssignmentHistory.create === 'function') {
+        await LeadAssignmentHistory.create({ company: req.crmCompany, lead: lead._id, fromUser: previousAssignee,
+          toUser: user._id, performedBy: mongoose.isValidObjectId(req.user?._id || req.user?.id) ? (req.user._id || req.user.id) : null,
+          action: previousAssignee ? 'reassigned' : 'assigned', method: 'single' });
+      }
+    } catch (historyError) {
+      lead.assignedTo = previousAssignee;
+      lead.assignedAt = previousAssignedAt;
+      await lead.save();
+      throw historyError;
+    }
 
     const populatedLead = await Lead.findById(lead._id)
       .populate('leadType', 'name')

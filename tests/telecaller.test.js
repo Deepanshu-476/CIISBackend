@@ -6,6 +6,7 @@ const mongoose = require('mongoose');
 const company = '507f1f77bcf86cd799439010', user = '507f1f77bcf86cd799439011', leadId = '507f1f77bcf86cd799439012';
 function fixture() {
   let lead = { _id: leadId, company, assignedTo: user, status: 'new', __v: 0, callHistory: [] };
+  const followUps = [];
   let beforeUpdate;
   const query = value => ({ populate() { return this; }, sort() { return this; }, lean: async () => structuredClone(value) });
   // Match only supplied predicates, like MongoDB; omitting assignee must not
@@ -23,15 +24,45 @@ function fixture() {
       return query(lead);
     }
   };
+  const FollowUp = {
+    async findOneAndUpdate(filter, mutation) {
+      let followUp = followUps.find(item => item.company === filter.company && item.lead === filter.lead && item.agent === filter.agent && item.sourceCallId === filter.sourceCallId);
+      if (!followUp) { followUp = { ...filter, _id: `follow-${followUps.length + 1}` }; followUps.push(followUp); }
+      Object.assign(followUp, mutation.$set || {});
+      return followUp;
+    },
+    async updateMany(filter, mutation) {
+      let modifiedCount = 0;
+      for (const followUp of followUps) {
+        const idMatches = !filter._id?.$ne || followUp._id !== filter._id.$ne;
+        if (idMatches && followUp.company === filter.company && followUp.lead === filter.lead && followUp.agent === filter.agent && followUp.status === filter.status) {
+          Object.assign(followUp, mutation.$set || {});
+          modifiedCount += 1;
+        }
+      }
+      return { modifiedCount };
+    },
+    async create(document) {
+      const followUp = { ...document, _id: `follow-${followUps.length + 1}` };
+      followUps.push(followUp);
+      return followUp;
+    }
+  };
+  const CallLog = { async create() {}, async findOneAndUpdate() {} };
   const module = { exports: {} };
-  vm.runInNewContext(fs.readFileSync(require.resolve('../controllers/telecallerController'), 'utf8'), { module, exports: module.exports, require: name => name === 'mongoose' ? mongoose : Lead, Date });
+  vm.runInNewContext(fs.readFileSync(require.resolve('../controllers/telecallerController'), 'utf8'), {
+    module,
+    exports: module.exports,
+    require: name => name === 'mongoose' ? mongoose : name === '../models/Followup' ? FollowUp : name === '../models/CallLog' ? CallLog : Lead,
+    Date
+  });
   const req = { telecallerCompany: company, user: { _id: user, name: 'Agent' }, params: { id: leadId }, body: { id: 'call-test-0001', outcome: 'Interested', notes: 'Discussed course' } };
   async function invoke(action = 'save', request = req) {
     const res = { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(data) { this.data = data; return this; } };
     await module.exports[action](request, res, error => { throw error; });
     return res;
   }
-  return { req, invoke, getLead: () => lead, beforeUpdate: callback => { beforeUpdate = callback; } };
+  return { req, invoke, getLead: () => lead, getFollowUps: () => followUps, beforeUpdate: callback => { beforeUpdate = callback; } };
 }
 test('assigned leads and saves are isolated by company and authenticated assignee', async () => {
   const f = fixture();
@@ -73,6 +104,7 @@ test('callbacks require future time, notes preserve follow-up, and closing clear
   f.req.body.followUp = new Date(Date.now() + 86400000).toISOString();
   assert.equal((await f.invoke()).statusCode, 200);
   assert.equal(f.getLead().status, 'follow-up');
+  assert.equal(f.getFollowUps().filter(item => item.status === 'pending').length, 1);
   const scheduled = f.getLead().nextFollowUp.getTime();
   f.req.body = { id: 'note-test-0001', outcome: 'Note Added', notes: 'Brochure sent' };
   await f.invoke(); assert.equal(f.getLead().nextFollowUp.getTime(), scheduled);
@@ -81,9 +113,24 @@ test('callbacks require future time, notes preserve follow-up, and closing clear
   await f.invoke(); assert.equal(f.getLead().nextFollowUp.getTime(), scheduled);
   f.req.body = { id: 'call-test-0002', outcome: 'Call Closed' };
   await f.invoke(); assert.equal(f.getLead().status, 'closed'); assert.equal(f.getLead().nextFollowUp, null);
+  assert.equal(f.getFollowUps().filter(item => item.status === 'pending').length, 0);
   await f.invoke(); assert.equal(f.getLead().callHistory.length, 4);
   f.req.body = { id: 'call-test-0003', outcome: 'Connected' };
   assert.equal((await f.invoke()).statusCode, 409);
+});
+
+test('rescheduling retires the previous reminder and leaves one pending follow-up', async () => {
+  const f = fixture();
+  const firstDate = new Date(Date.now() + 86400000).toISOString();
+  const secondDate = new Date(Date.now() + 172800000).toISOString();
+  f.req.body = { id: 'callback-first-01', outcome: 'Need Callback', followUp: firstDate };
+  assert.equal((await f.invoke()).statusCode, 200);
+  f.req.body = { id: 'callback-second-01', outcome: 'Follow-up', followUp: secondDate };
+  assert.equal((await f.invoke()).statusCode, 200);
+  const pending = f.getFollowUps().filter(item => item.status === 'pending');
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].date.toISOString(), secondDate);
+  assert.equal(f.getFollowUps().filter(item => item.status === 'done').length, 1);
 });
 test('conversion and not-interested transitions are supported; malformed inputs are rejected', async () => {
   const f = fixture(); f.req.body.outcome = 'Not Interested';

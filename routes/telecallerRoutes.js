@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const Company = require('../models/Company');
 const { protect } = require('../middleware/authMiddleware');
 const controller = require('../controllers/telecallerController');
+const { requireCrmPagePermission } = require('../middleware/crmPagePermission');
 
 router.use(protect);
 const pages = ['dashboard', 'call-dashboard', 'assigned-calls', 'todays-calls', 'pending-calls', 'scheduled-calls', 'completed-calls', 'call-history', 'follow-ups', 'converted-leads', 'call-workspace', 'lead-detail'];
@@ -25,14 +26,19 @@ router.use(async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
-router.get('/', controller.list);
-router.get('/:id', controller.getOne);
-// Action permissions remain postponed; enforce company page enablement only.
+const telecallerPaths = pages.map(slug => `/ciisUser/telecaller/${slug}`);
+router.get('/', requireCrmPagePermission(telecallerPaths), controller.list);
+router.get('/:id', requireCrmPagePermission(['/ciisUser/telecaller/lead-detail', '/ciisUser/telecaller/call-workspace']), controller.getOne);
 router.post('/:id/calls', (req, res, next) => {
   if (!enabled(req.telecallerPages, 'call-workspace') && !(req.body?.outcome === 'Note Added' && enabled(req.telecallerPages, 'lead-detail'))) {
     return res.status(403).json({ message: 'This call update page is not enabled for your company.' });
   }
   next();
-}, controller.save);
+}, (req, res, next) => requireCrmPagePermission(
+  req.body?.outcome === 'Note Added'
+    ? ['/ciisUser/telecaller/lead-detail', '/ciisUser/telecaller/call-workspace']
+    : '/ciisUser/telecaller/call-workspace',
+  'edit'
+)(req, res, next), controller.save);
 
 module.exports = router;
