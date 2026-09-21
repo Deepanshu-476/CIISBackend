@@ -49,6 +49,20 @@ const APP_PAGES = [
   { pageKey: 'payroll-reports', name: 'Payroll Reports', path: '/ciisUser/payroll-reports', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.payrollReports },
   { pageKey: 'task-management', name: 'Create Task', path: '/ciisUser/task-management', permissionPattern: 'viewEdit' },
   { pageKey: 'admin-task-create', name: 'Admin Create Task', path: '/ciisUser/admin-task-create', permissionPattern: 'viewEdit', permissionActions: { view: 'View', edit: 'Create Task', delete: 'Delete' } },
+  ...require('../utils/crmPermissionPages'),
+  ...[
+    ['dashboard', 'Dashboard'], ['call-dashboard', 'Call Dashboard'],
+    ['assigned-calls', 'My Assigned Calls'], ['todays-calls', "Today's Calls"],
+    ['pending-calls', 'Pending Calls'], ['scheduled-calls', 'Scheduled Calls'],
+    ['completed-calls', 'Completed Calls'], ['call-history', 'Call History'],
+    ['follow-ups', 'My Follow-Ups'], ['converted-leads', 'Converted Leads'],
+    ['call-workspace', 'Call Workspace'], ['lead-detail', 'Lead Detail'],
+  ].map(([slug, name]) => ({
+    pageKey: `admin-telecaller-${slug}`,
+    name: `Admin Telecaller - ${name}`,
+    path: `/ciisUser/telecaller/${slug}`,
+    permissionPattern: 'viewEdit'
+  })),
 ];
 
 const PAGE_PERMISSION_CACHE_PREFIX = 'pagePermissions';
