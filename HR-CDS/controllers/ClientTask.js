@@ -64,6 +64,15 @@ const normalizeClientTaskStatusForDueDate = task => {
   return status === 'overdue' ? 'pending' : (task?.status || 'pending');
 };
 
+const serializeClientTask = task => {
+  if (!task) return task;
+  const rawTask = typeof task.toObject === 'function' ? task.toObject() : task;
+  return {
+    ...rawTask,
+    dueDateTime: rawTask.dueDate
+  };
+};
+
 const parseTaskCheckpoints = value => {
   if (!value || value === 'null') return [];
   const raw = typeof value === 'string' ? JSON.parse(value) : value;
@@ -1818,6 +1827,7 @@ const getTasksByClientService = async (req, res) => {
 
     const responseTasks = tasks.map(task => ({
       ...task,
+      dueDateTime: task.dueDate,
       status: normalizeClientTaskStatusForDueDate(task)
     }));
 
@@ -1873,6 +1883,7 @@ const getClientTasks = async (req, res) => {
 
     const responseTasks = tasks.map(task => ({
       ...task,
+      dueDateTime: task.dueDate,
       status: normalizeClientTaskStatusForDueDate(task)
     }));
 
@@ -2139,7 +2150,7 @@ const addTask = async (req, res) => {
     res.status(201).json({
       success: true,
       message: 'Task added successfully',
-      data: task
+      data: serializeClientTask(task)
     });
   } catch (error) {
     console.error('Error adding task:', error);
@@ -2405,7 +2416,7 @@ const updateTask = async (req, res) => {
     res.json({
       success: true,
       message: 'Task updated successfully',
-      data: task
+      data: serializeClientTask(task)
     });
   } catch (error) {
     console.error('Error updating task:', error);
