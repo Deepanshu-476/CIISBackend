@@ -5,7 +5,7 @@ const Branch = require('../models/Branch');
 const mongoose = require('mongoose');
 
 
-
+  
 
 const getCompanyAssets = async (req, res) => {
   try {
