@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const Lead = require('../models/Lead');
 const User = require('../models/User');
+const JobRole = require('../models/JobRole');
 const LeadAssignmentHistory = require('../models/LeadAssignmentHistory');
 const { telecallerFilter, telecallerUserIds } = require('../utils/telecallerUsers');
 
@@ -45,23 +46,32 @@ exports.overview = async (req, res, next) => {
       { name: { $regex: escaped, $options: 'i' } }, { email: { $regex: escaped, $options: 'i' } },
       { phone: { $regex: escaped, $options: 'i' } }, { address: { $regex: escaped, $options: 'i' } }
     ] } : {}) };
-    const [total, assigned, team, unassignedTotal, unassigned, recent] = await Promise.all([
+    const [total, assigned, team, unassignedTotal, unassigned, recent, jobRoles] = await Promise.all([
       Lead.countDocuments({ company }),
       Lead.countDocuments({ company, assignedTo: { $ne: null } }),
       User.find(activeEmployeeFilter(company, eligibleIds, excluded)).select(teamFields).sort({ name: 1 }).lean(),
       Lead.countDocuments(unassignedFilter),
-      Lead.find(unassignedFilter).select('name email phone address source status leadDate leadType leadSource assignedTo createdAt')
+      Lead.find(unassignedFilter).select('name email phone address source status leadDate leadType leadSource assignedTo gender remarks createdAt')
         .populate('leadType', 'name').populate('leadSource', 'name').populate('assignedTo', 'name').sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
       LeadAssignmentHistory.find({ company }).sort({ createdAt: -1 }).limit(20)
         .populate('lead', 'name phone').populate('fromUser', 'name').populate('toUser', 'name')
-        .populate('performedBy', 'name').lean()
+        .populate('performedBy', 'name').lean(),
+      JobRole.find({ company }).select('name').lean()
     ]);
+    const roleNamesById = new Map(jobRoles.map(role => [String(role._id), role.name]));
+    const resolvedTeam = team.map(user => {
+      const rawRoles = [user.jobRole, user.companyRole, user.role].filter(Boolean);
+      const assignmentRole = rawRoles.map(value => roleNamesById.get(String(value))).find(Boolean)
+        || rawRoles.find(value => !mongoose.isValidObjectId(String(value)))
+        || 'Other';
+      return { ...user, assignmentRole };
+    });
     res.json({
-      metrics: { total, assigned, unassigned: total - assigned, activeAgents: team.length },
+      metrics: { total, assigned, unassigned: total - assigned, activeAgents: resolvedTeam.length },
       unassigned,
       pagination: { page, limit, total: unassignedTotal, pages: Math.max(Math.ceil(unassignedTotal / limit), 1) },
       recent,
-      team
+      team: resolvedTeam
     });
   } catch (error) { next(error); }
 };
@@ -76,20 +86,39 @@ exports.bulkAssign = async (req, res, next) => {
     if (!leadIds.length || leadIds.length > 500 || leadIds.some(id => !mongoose.isValidObjectId(id))) {
       return res.status(400).json({ message: 'Select between 1 and 500 valid leads.' });
     }
-    if (!['specific', 'round-robin', 'load-balanced'].includes(method)) {
+    if (!['specific', 'round-robin', 'load-balanced', 'equal-distribution'].includes(method)) {
       return res.status(400).json({ message: 'Choose a valid assignment method.' });
     }
 
-    const leads = await Lead.find({ _id: { $in: leadIds }, company }).select('_id assignedTo assignedAt').lean();
+    const foundLeads = await Lead.find({ _id: { $in: leadIds }, company }).select('_id assignedTo assignedAt').lean();
+    const leadsById = new Map(foundLeads.map(lead => [String(lead._id), lead]));
+    const leads = leadIds.map(id => leadsById.get(id)).filter(Boolean);
     if (leads.length !== leadIds.length) return res.status(404).json({ message: 'One or more selected leads were not found.' });
 
     let agents;
-    if (method === 'specific') {
+    if (method === 'equal-distribution') {
+      const agentIds = [...new Set(Array.isArray(req.body.agentIds) ? req.body.agentIds.map(String) : [])];
+      if (!agentIds.length || agentIds.length > 500 || agentIds.some(id => !mongoose.isValidObjectId(id))) {
+        return res.status(400).json({ message: 'Select at least one valid user for equal distribution.' });
+      }
+      agents = await User.find({ $and: [
+        activeEmployeeFilter(company, eligibleIds, excluded),
+        { _id: { $in: agentIds } }
+      ] }).select(teamFields).lean();
+      if (agents.length !== agentIds.length) {
+        return res.status(400).json({ message: 'One or more selected users are not eligible for lead assignment.' });
+      }
+      const agentsById = new Map(agents.map(agent => [String(agent._id), agent]));
+      agents = agentIds.map(id => agentsById.get(id));
+    } else if (method === 'specific') {
       if (!mongoose.isValidObjectId(req.body.agentId)) return res.status(400).json({ message: 'Select a valid telecaller.' });
       if (excluded.some(id => String(id) === String(req.body.agentId))) {
         return res.status(400).json({ message: 'Client accounts cannot receive lead assignments.' });
       }
-      agents = await User.find({ ...activeEmployeeFilter(company, eligibleIds), _id: req.body.agentId }).select(teamFields).lean();
+      agents = await User.find({ $and: [
+        activeEmployeeFilter(company, eligibleIds, excluded),
+        { _id: req.body.agentId }
+      ] }).select(teamFields).lean();
     } else {
       agents = await User.find(activeEmployeeFilter(company, eligibleIds, excluded)).select(teamFields).sort({ name: 1, _id: 1 }).lean();
     }
@@ -109,7 +138,7 @@ exports.bulkAssign = async (req, res, next) => {
     const assignments = leads.map((lead, index) => {
       let agent;
       if (method === 'specific') agent = agents[0];
-      else if (method === 'round-robin') agent = agents[index % agents.length];
+      else if (method === 'round-robin' || method === 'equal-distribution') agent = agents[index % agents.length];
       else {
         agent = agents.reduce((best, candidate) => counts.get(String(candidate._id)) < counts.get(String(best._id)) ? candidate : best, agents[0]);
         counts.set(String(agent._id), counts.get(String(agent._id)) + 1);
