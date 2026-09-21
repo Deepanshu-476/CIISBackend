@@ -4,7 +4,7 @@ const { protect, isSuperAdminUser } = require('../middleware/authMiddleware');
 const PagePermission = require('../models/PagePermission');
 const {
   getCompanyAssets,
-  createCompanyAsset,
+  createCompanyAsset,  
   updateCompanyAssetStatus,
   deleteCompanyAsset
 } = require('../controllers/companyAssetController');
