@@ -503,7 +503,10 @@ exports.transferredCalls = async (req, res, next) => {
       const isHandled = callsAfterTransfer.length > 0 || ['converted', 'closed', 'interested', 'not interested'].includes(entry.lead.status);
       const status = isHandled ? 'Accepted' : 'Pending';
 
-      const methodLabel = entry.method === 'round-robin' ? 'Round Robin' : entry.method === 'load-balanced' ? 'Load Balanced' : entry.method === 'single' ? 'Manual Reassignment' : entry.method || '';
+      const methodLabel = entry.method === 'round-robin' ? 'Round Robin'
+        : entry.method === 'load-balanced' ? 'Load Balanced'
+          : entry.method === 'equal-distribution' ? 'Equal Distribution'
+            : entry.method === 'single' ? 'Manual Reassignment' : entry.method || '';
       const transferReason = entry.notes || entry.lead.remarks || (methodLabel ? `Reassigned via ${methodLabel}` : 'Lead reassigned');
 
       return {
