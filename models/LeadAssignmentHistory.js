@@ -14,3 +14,4 @@ leadAssignmentHistorySchema.index({ company: 1, createdAt: -1 });
 leadAssignmentHistorySchema.index({ company: 1, lead: 1, createdAt: -1 });
 
 module.exports = mongoose.model('LeadAssignmentHistory', leadAssignmentHistorySchema);
+                
