@@ -6,7 +6,7 @@ const mongoose = require('mongoose');
 const validator = require('validator');
 const company = '507f1f77bcf86cd799439010';
 const id = '507f1f77bcf86cd799439011';
-const body = { fullName:' Test Client ', email:'CLIENT@example.com', phone:'9876543210', leadDate:'2026-09-15', leadType:id, leadSource:id, customField1:'One', customField2:'Two', customField3:'Three', customField4:'Four', customField5:'Five', remarks:'Notes' };
+const body = { fullName:' Test Client ', email:'CLIENT@example.com', phone:'9876543210', gender:'Female', leadDate:'2026-09-15', leadType:id, leadSource:id, customField1:'One', customField2:'Two', customField3:'Three', customField4:'Four', customField5:'Five', remarks:'Notes' };
 function load({ active=true, create=async data=>data }={}) {
   const module={exports:{}};
   vm.runInNewContext(fs.readFileSync(require.resolve('../controllers/crmLeadController'),'utf8'),{
@@ -30,8 +30,9 @@ test('validates dates, email, phone, required fields and master IDs',()=>{
 test('saves every custom field and forces company, creator, new status and unassigned',async()=>{
   const res=response();
   await load().create({body:{...body,company:'foreign',status:'converted',assignedTo:id,createdBy:'foreign'},crmCompany:company,user:{id}},res,error=>{throw error;});
-  assert.equal(res.code,201); const item=res.body.item;
-  assert.equal(item.company,company);assert.equal(item.status,'new');assert.equal(item.assignedTo,null);assert.equal(item.createdBy,id);
+    assert.equal(res.code,201); const item=res.body.item;
+    assert.equal(item.company,company);assert.equal(item.status,'new');assert.equal(item.assignedTo,null);assert.equal(item.createdBy,id);
+    assert.equal(item.gender, body.gender);
   for(const key of ['customField1','customField2','customField3','customField4','customField5','remarks'])assert.equal(item[key],body[key]);
 });
 test('rejects inactive or foreign-company classification before saving',async()=>{
