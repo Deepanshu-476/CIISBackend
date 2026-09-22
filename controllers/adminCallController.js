@@ -224,11 +224,17 @@ exports.overview = async (req, res, next) => {
     const trendMap = (trendLogs || []).reduce((acc, row) => ({ ...acc, [row._id]: row }), {});
     const daysName = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     
+    // Helper to format date string matching MongoDB's '+05:30' timezone
+    const getISTKey = (date) => {
+      const istDate = new Date(date.getTime() + (5.5 * 60 * 60 * 1000));
+      return istDate.toISOString().slice(0, 10);
+    };
+
     // 7-day trend
     const trendData = [];
     for (let i = 6; i >= 0; i--) {
       const d = new Date(now.getTime() - i * 24 * 60 * 60000);
-      const key = d.toISOString().slice(0, 10);
+      const key = getISTKey(d);
       const entry = trendMap[key] || { total: 0, connected: 0 };
       trendData.push({
         day: daysName[d.getDay()],
@@ -242,7 +248,7 @@ exports.overview = async (req, res, next) => {
     const trendData30d = [];
     for (let i = 29; i >= 0; i--) {
       const d = new Date(now.getTime() - i * 24 * 60 * 60000);
-      const key = d.toISOString().slice(0, 10);
+      const key = getISTKey(d);
       const entry = trendMap[key] || { total: 0, connected: 0 };
       trendData30d.push({
         day: d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
@@ -501,13 +507,13 @@ exports.transferredCalls = async (req, res, next) => {
         String(c.agent) === String(entry.toUser?._id) && new Date(c.date) >= new Date(entry.createdAt)
       );
       const isHandled = callsAfterTransfer.length > 0 || ['converted', 'closed', 'interested', 'not interested'].includes(entry.lead.status);
-      const status = isHandled ? 'Accepted' : 'Pending';
+      const status = isHandled ? 'Handled' : 'Transferred';
 
       const methodLabel = entry.method === 'round-robin' ? 'Round Robin'
         : entry.method === 'load-balanced' ? 'Load Balanced'
           : entry.method === 'equal-distribution' ? 'Equal Distribution'
             : entry.method === 'single' ? 'Manual Reassignment' : entry.method || '';
-      const transferReason = entry.notes || entry.lead.remarks || (methodLabel ? `Reassigned via ${methodLabel}` : 'Lead reassigned');
+      const transferReason = entry.reason || entry.lead.remarks || (methodLabel ? `Reassigned via ${methodLabel}` : 'Lead reassigned');
 
       return {
         _id: entry._id,
@@ -519,6 +525,7 @@ exports.transferredCalls = async (req, res, next) => {
         assignedTo: entry.toUser,
         transferredBy: entry.performedBy,
         transferReason,
+        method: methodLabel || 'Manual Reassignment',
         assignedAt: entry.createdAt,
         remarks: entry.lead.remarks || ''
       };
