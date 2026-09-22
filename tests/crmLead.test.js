@@ -111,6 +111,34 @@ test('list returns populated leads scoped to company', async () => {
   assert.equal(res.body.items[0].name, 'Aman Sharma');
 });
 
+test('team lists all active company employees without requiring telecaller page access', async () => {
+  const res = response();
+  const ctl = { exports: {} };
+  const activeEmployee = { _id: id, name: 'Regular Employee', role: 'user', isActive: true };
+  const clientUser = { _id: '507f1f77bcf86cd799439012', name: 'Client User', role: 'client', isActive: true };
+  vm.runInNewContext(fs.readFileSync(require.resolve('../controllers/crmLeadController'), 'utf8'), {
+    module: ctl, exports: ctl.exports,
+    require(name) {
+      if (name === 'mongoose') return { ...mongoose, models: {} };
+      if (name === 'validator') return validator;
+      if (name === '../models/User') return {
+        find: filter => {
+          assert.equal(filter.company, company);
+          assert.equal(filter.isActive.$ne, false);
+          const chain = { select: () => chain, sort: () => chain, lean: async () => [activeEmployee, clientUser] };
+          return chain;
+        }
+      };
+      if (name === '../HR-CDS/models/Client') return {
+        find: () => ({ select: () => ({ lean: async () => [] }) })
+      };
+      return {};
+    }
+  });
+  await ctl.exports.team({ crmCompany: company }, res, error => { throw error; });
+  assert.deepEqual(Array.from(res.body.users, user => user.name), ['Regular Employee']);
+});
+
 test('assign updates assignedTo and assignedAt or unassigns when userId is empty', async () => {
   const ctl = { exports: {} };
   const leadDoc = { _id: id, company, assignedTo: null, assignedAt: null, save: async () => {} };
@@ -137,8 +165,8 @@ test('assign updates assignedTo and assignedAt or unassigns when userId is empty
             lean: async () => ({
               _id: filter._id,
               name: 'Telecaller 1',
-              role: 'telecaller',
-              companyRole: 'telecaller',
+              role: 'user',
+              companyRole: 'employee',
               isActive: true
             })
           })
@@ -159,6 +187,16 @@ test('assign updates assignedTo and assignedAt or unassigns when userId is empty
   await ctl.exports.assign({ params: { id }, body: { userId: id }, crmCompany: company }, assignRes, error => { throw error; });
   assert.equal(assignRes.code, 200);
   assert.ok(assignRes.body.message.includes('Telecaller 1'));
+
+  const sameAssigneeRes = response();
+  await ctl.exports.assign({ params: { id }, body: { userId: id }, crmCompany: company }, sameAssigneeRes, error => { throw error; });
+  assert.equal(sameAssigneeRes.code, 400);
+  assert.match(sameAssigneeRes.body.message, /already assigned/i);
+
+  const transferRes = response();
+  await ctl.exports.assign({ params: { id }, body: { userId: new mongoose.Types.ObjectId() }, crmCompany: company }, transferRes, error => { throw error; });
+  assert.equal(transferRes.code, 400);
+  assert.match(transferRes.body.message, /transfer reason/i);
 
   // Test Unassign
   const unassignRes = response();

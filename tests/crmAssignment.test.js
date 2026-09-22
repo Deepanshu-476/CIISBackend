@@ -67,6 +67,25 @@ test('bulk assignment rejects a candidate that is not an active telecaller', asy
   }
 });
 
+test('bulk reassignment requires a transfer reason before changing ownership', async () => {
+  const originals = { leadFind: Lead.find, clientFind: Client.find, permissionFind: PagePermission.find };
+  Client.find = () => ({ select: () => ({ lean: async () => [] }) });
+  PagePermission.find = () => ({ select: () => ({ lean: async () => [{ path: '/ciisUser/telecaller/dashboard', viewUsers: [{ user: agent }] }] }) });
+  Lead.find = () => ({ select: () => ({ lean: async () => [{ _id: leadId, assignedTo: new mongoose.Types.ObjectId() }] }) });
+  try {
+    const res = response();
+    await controller.bulkAssign({
+      crmCompany: company,
+      user: { _id: agent },
+      body: { leadIds: [String(leadId)], method: 'specific', agentId: String(agent) }
+    }, res, error => { throw error; });
+    assert.equal(res.code, 400);
+    assert.match(res.body.message, /transfer reason/i);
+  } finally {
+    Lead.find = originals.leadFind; Client.find = originals.clientFind; PagePermission.find = originals.permissionFind;
+  }
+});
+
 test('equal distribution assigns selected leads evenly across selected eligible users', async () => {
   const secondAgent = new mongoose.Types.ObjectId();
   const leadIds = Array.from({ length: 5 }, () => new mongoose.Types.ObjectId());
