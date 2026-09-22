@@ -76,7 +76,6 @@ exports.list = async (req, res, next) => {
 exports.team = async (req, res, next) => {
   try {
     const User = require('../models/User');
-    const { telecallerFilter, telecallerUserIds } = require('../utils/telecallerUsers');
     let clientUserIds = [];
     try {
       const Client = mongoose.models.Client || require('../HR-CDS/models/Client');
@@ -86,7 +85,7 @@ exports.team = async (req, res, next) => {
       // Ignore if Client model not available
     }
 
-    const users = await User.find(telecallerFilter(req.crmCompany, await telecallerUserIds(req.crmCompany)))
+    const users = await User.find({ company: req.crmCompany, isActive: { $ne: false } })
       .select('name email role jobRole companyRole')
       .sort({ name: 1 })
       .lean();
@@ -118,6 +117,7 @@ exports.assign = async (req, res, next) => {
     const previousAssignee = lead.assignedTo || null;
     const previousAssignedAt = lead.assignedAt || null;
     const { userId } = req.body;
+    const reason = String(req.body?.reason || '').trim().replace(/\s+/g, ' ').slice(0, 500);
     if (!userId) {
       lead.assignedTo = null;
       lead.assignedAt = null;
@@ -147,9 +147,15 @@ exports.assign = async (req, res, next) => {
     if (!mongoose.isValidObjectId(userId)) {
       return res.status(400).json({ message: 'Invalid user ID.' });
     }
+    const isReassignment = Boolean(previousAssignee) && String(previousAssignee) !== String(userId);
+    if (previousAssignee && !isReassignment) {
+      return res.status(400).json({ message: 'This lead is already assigned to the selected user.' });
+    }
+    if (isReassignment && !reason) {
+      return res.status(400).json({ message: 'Enter a transfer reason before reassigning this lead.' });
+    }
 
     const User = require('../models/User');
-    const { hasTelecallerAccess } = require('../utils/telecallerUsers');
     const user = await User.findOne({ _id: userId, company: req.crmCompany }).lean();
     if (!user) {
       return res.status(404).json({ message: 'Selected user was not found in your company.' });
@@ -158,8 +164,8 @@ exports.assign = async (req, res, next) => {
     const Client = require('../HR-CDS/models/Client');
     const isClient = ['role', 'companyRole'].some(key => String(user[key] || '').trim().toLowerCase() === 'client');
     const clientRecord = await Client.findOne({ userId: user._id }).select('_id').lean();
-    if (user.isActive === false || isClient || clientRecord || !(await hasTelecallerAccess(req.crmCompany, user._id))) {
-      return res.status(400).json({ message: 'Choose an active telecaller from your company.' });
+    if (user.isActive === false || isClient || clientRecord) {
+      return res.status(400).json({ message: 'Choose an active company employee.' });
     }
 
     lead.assignedTo = user._id;
@@ -171,13 +177,32 @@ exports.assign = async (req, res, next) => {
       if (typeof LeadAssignmentHistory.create === 'function') {
         await LeadAssignmentHistory.create({ company: req.crmCompany, lead: lead._id, fromUser: previousAssignee,
           toUser: user._id, performedBy: mongoose.isValidObjectId(req.user?._id || req.user?.id) ? (req.user._id || req.user.id) : null,
-          action: previousAssignee ? 'reassigned' : 'assigned', method: 'single' });
+          action: previousAssignee ? 'reassigned' : 'assigned', method: 'single', reason: isReassignment ? reason : '' });
       }
     } catch (historyError) {
       lead.assignedTo = previousAssignee;
       lead.assignedAt = previousAssignedAt;
       await lead.save();
       throw historyError;
+    }
+
+    if (mongoose.connection?.readyState === 1) {
+      try {
+        const { notifyDirectUsers } = require('../HR-CDS/utils/systemNotificationService');
+        await notifyDirectUsers({
+          userIds: [user._id],
+          targetPath: '/ciisUser/telecaller/assigned-calls',
+          targetScreen: 'My Assigned Calls',
+          type: previousAssignee ? 'lead_transferred' : 'lead_assigned',
+          title: previousAssignee ? 'Lead transferred to you' : 'New lead assigned',
+          message: `${lead.name || 'A lead'} has been ${previousAssignee ? 'transferred' : 'assigned'} to you.${reason ? ` Reason: ${reason}` : ''}`,
+          actor: req.user?._id || req.user?.id,
+          company: req.crmCompany,
+          data: { leadId: String(lead._id), reason }
+        });
+      } catch (notificationError) {
+        console.error('Lead assignment notification failed:', notificationError.message);
+      }
     }
 
     const populatedLead = await Lead.findById(lead._id)

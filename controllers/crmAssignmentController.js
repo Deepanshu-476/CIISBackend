@@ -83,6 +83,7 @@ exports.bulkAssign = async (req, res, next) => {
     const eligibleIds = await telecallerUserIds(company);
     const leadIds = [...new Set(Array.isArray(req.body.leadIds) ? req.body.leadIds.map(String) : [])];
     const method = req.body.method;
+    const reason = String(req.body?.reason || '').trim().replace(/\s+/g, ' ').slice(0, 500);
     if (!leadIds.length || leadIds.length > 500 || leadIds.some(id => !mongoose.isValidObjectId(id))) {
       return res.status(400).json({ message: 'Select between 1 and 500 valid leads.' });
     }
@@ -94,6 +95,9 @@ exports.bulkAssign = async (req, res, next) => {
     const leadsById = new Map(foundLeads.map(lead => [String(lead._id), lead]));
     const leads = leadIds.map(id => leadsById.get(id)).filter(Boolean);
     if (leads.length !== leadIds.length) return res.status(404).json({ message: 'One or more selected leads were not found.' });
+    if (leads.some(lead => lead.assignedTo) && !reason) {
+      return res.status(400).json({ message: 'Enter a transfer reason before reassigning selected leads.' });
+    }
 
     let agents;
     if (method === 'equal-distribution') {
@@ -146,6 +150,10 @@ exports.bulkAssign = async (req, res, next) => {
       return { lead, agent };
     });
 
+    if (assignments.some(({ lead, agent }) => lead.assignedTo && String(lead.assignedTo) === String(agent._id))) {
+      return res.status(400).json({ message: 'One or more leads are already assigned to the selected telecaller. Choose a different telecaller.' });
+    }
+
     await Lead.bulkWrite(assignments.map(({ lead, agent }) => ({
       updateOne: { filter: { _id: lead._id, company }, update: { $set: { assignedTo: agent._id, assignedAt: now } } }
     })));
@@ -157,13 +165,38 @@ exports.bulkAssign = async (req, res, next) => {
         toUser: agent._id,
         performedBy: actor,
         action: lead.assignedTo ? 'reassigned' : 'assigned',
-        method
+        method,
+        reason: lead.assignedTo ? reason : ''
       })));
     } catch (historyError) {
       await Lead.bulkWrite(assignments.map(({ lead }) => ({
         updateOne: { filter: { _id: lead._id, company }, update: { $set: { assignedTo: lead.assignedTo || null, assignedAt: lead.assignedAt || null } } }
       })));
       throw historyError;
+    }
+
+    if (mongoose.connection?.readyState === 1) {
+      try {
+        const { notifyDirectUsers } = require('../HR-CDS/utils/systemNotificationService');
+        const assignmentsByAgent = assignments.reduce((map, assignment) => {
+          const key = String(assignment.agent._id);
+          map.set(key, (map.get(key) || 0) + 1);
+          return map;
+        }, new Map());
+        await Promise.all([...assignmentsByAgent].map(([userId, count]) => notifyDirectUsers({
+          userIds: [userId],
+          targetPath: '/ciisUser/telecaller/assigned-calls',
+          targetScreen: 'My Assigned Calls',
+          type: reason ? 'lead_transferred' : 'lead_assigned',
+          title: reason ? `${count} lead(s) transferred to you` : (count === 1 ? 'New lead assigned' : `${count} leads assigned`),
+          message: reason ? `${count} lead(s) were transferred to you. Reason: ${reason}` : `${count} lead(s) were assigned to you.`,
+          actor,
+          company,
+          data: { count, reason }
+        })));
+      } catch (notificationError) {
+        console.error('Bulk assignment notification failed:', notificationError.message);
+      }
     }
 
     res.json({ message: `${assignments.length} lead(s) assigned successfully.`, assigned: assignments.length });

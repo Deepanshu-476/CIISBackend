@@ -23,9 +23,10 @@ router.use('/transfer', context('import-export-leads'), requireCrmPagePermission
 router.get('/options', context('add-lead'), requireCrmPagePermission('/ciisUser/crm/admin/add-lead'), controller.options);
 router.get('/overview', context('lead-overview'), requireCrmPagePermission('/ciisUser/crm/admin/lead-overview'), require('../controllers/leadOverviewController').overview);
 router.post('/', context('add-lead'), requireCrmPagePermission('/ciisUser/crm/admin/add-lead', 'edit'), controller.create);
-router.get('/team', context(['all-leads', 'assignments', 'assignment-bulk', 'workload', 'pending-calls', 'completed-calls', 'converted-calls', 'transferred-calls']), requireCrmPagePermission([
+router.get('/team', context(['all-leads', 'assignments', 'assignment-bulk', 'workload', 'assigned-calls', 'todays-calls', 'follow-ups', 'pending-calls', 'completed-calls', 'converted-calls', 'transferred-calls']), requireCrmPagePermission([
   '/ciisUser/crm/admin/all-leads', '/ciisUser/crm/admin/assignments', '/ciisUser/crm/admin/assignment-bulk',
-  '/ciisUser/crm/admin/workload', '/ciisUser/crm/admin/pending-calls', '/ciisUser/crm/admin/completed-calls',
+  '/ciisUser/crm/admin/workload', '/ciisUser/crm/admin/assigned-calls', '/ciisUser/crm/admin/todays-calls',
+  '/ciisUser/crm/admin/follow-ups', '/ciisUser/crm/admin/pending-calls', '/ciisUser/crm/admin/completed-calls',
   '/ciisUser/crm/admin/converted-calls', '/ciisUser/crm/admin/transferred-calls'
 ]), controller.team);
 router.put('/:id/assign', context(['all-leads', 'assignments']), requireCrmPagePermission(['/ciisUser/crm/admin/all-leads', '/ciisUser/crm/admin/assignments'], 'edit'), controller.assign);
