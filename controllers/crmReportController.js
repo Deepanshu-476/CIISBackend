@@ -108,15 +108,95 @@ exports.report = async (req, res, next) => {
       return res.json({ summary: [{ label: 'Active Telecallers', value: users.length }], chartData: rows.map(row => ({ agent: row.Telecaller, calls: row.Calls, conversions: row.Converted })), columns: ['Telecaller', 'Email', 'Assigned Leads', 'Calls', 'Converted', 'Conversion'], rows });
     }
 
-    const [calls, assignments] = await Promise.all([
+    const [calls, assignments, followups] = await Promise.all([
       CallLog.find({ company, ...created }).sort({ createdAt: -1 }).limit(500).populate('lead', 'name').populate('agent', 'name').lean(),
-      Assignment.find({ company, ...created }).sort({ createdAt: -1 }).limit(500).populate('lead', 'name').populate('performedBy', 'name').populate('toUser', 'name').lean()
+      Assignment.find({ company, ...created }).sort({ createdAt: -1 }).limit(500).populate('lead', 'name').populate('performedBy', 'name').populate('toUser', 'name').lean(),
+      FollowUp.find({ company, ...(range ? { createdAt: range } : {}) }).sort({ createdAt: -1 }).limit(500).populate('lead', 'name').populate('agent', 'name').lean()
     ]);
     const rows = [
-      ...calls.map(item => ({ Activity: 'Call logged', Lead: text(item.lead?.name), User: text(item.agent?.name), Detail: text(item.status), Date: date(item.createdAt), sortDate: item.createdAt })),
-      ...assignments.map(item => ({ Activity: text(item.action), Lead: text(item.lead?.name), User: text(item.performedBy?.name), Detail: item.toUser?.name ? `To ${item.toUser.name}` : 'Unassigned', Date: date(item.createdAt), sortDate: item.createdAt }))
-    ].sort((a, b) => new Date(b.sortDate) - new Date(a.sortDate)).slice(0, 1000).map(({ sortDate, ...row }) => row);
-    const chartData = groupedSeries(rows, item => item.Activity, (item, current) => ({ events: (current.events || 0) + 1 }));
-    return res.json({ summary: [{ label: 'Activities', value: rows.length }], chartData, columns: ['Activity', 'Lead', 'User', 'Detail', 'Date'], rows });
+      ...calls.map(item => ({
+        Activity: 'Call Logged',
+        rawType: 'call',
+        Lead: text(item.lead?.name),
+        User: text(item.agent?.name),
+        Detail: text(item.status ? `${item.status} (${Number(item.duration) || 0}s)` : 'Call logged'),
+        Date: date(item.createdAt),
+        sortDate: item.createdAt
+      })),
+      ...assignments.map(item => ({
+        Activity: item.action === 'reassigned' ? 'Lead Reassigned' : 'Lead Assigned',
+        rawType: 'assignment',
+        Lead: text(item.lead?.name),
+        User: text(item.performedBy?.name),
+        Detail: item.toUser?.name ? `To ${item.toUser.name}` : 'Unassigned',
+        Date: date(item.createdAt),
+        sortDate: item.createdAt
+      })),
+      ...followups.map(item => ({
+        Activity: item.status === 'done' ? 'Follow-Up Completed' : 'Follow-Up Scheduled',
+        rawType: 'follow-up',
+        Lead: text(item.lead?.name),
+        User: text(item.agent?.name),
+        Detail: text(item.note || item.status || 'Follow-up logged'),
+        Date: date(item.createdAt || item.date),
+        sortDate: item.createdAt || item.date
+      }))
+    ].sort((a, b) => new Date(b.sortDate) - new Date(a.sortDate)).slice(0, 1000);
+
+    // 1. Daily timeline series for Trend Chart
+    const trendMap = new Map();
+    for (const row of [...rows].reverse()) {
+      const d = shortDate(row.sortDate);
+      if (!trendMap.has(d)) {
+        trendMap.set(d, { date: d, calls: 0, assignments: 0, followups: 0, total: 0 });
+      }
+      const entry = trendMap.get(d);
+      entry.total += 1;
+      if (row.rawType === 'call') entry.calls += 1;
+      else if (row.rawType === 'assignment') entry.assignments += 1;
+      else if (row.rawType === 'follow-up') entry.followups += 1;
+    }
+    const chartData = [...trendMap.values()];
+
+    // 2. Telecaller / User productivity ranking
+    const userMap = new Map();
+    for (const row of rows) {
+      if (!row.User || row.User === '—') continue;
+      if (!userMap.has(row.User)) {
+        userMap.set(row.User, { user: row.User, calls: 0, assignments: 0, followups: 0, total: 0 });
+      }
+      const u = userMap.get(row.User);
+      u.total += 1;
+      if (row.rawType === 'call') u.calls += 1;
+      else if (row.rawType === 'assignment') u.assignments += 1;
+      else if (row.rawType === 'follow-up') u.followups += 1;
+    }
+    const userStats = [...userMap.values()].sort((a, b) => b.total - a.total).slice(0, 10);
+
+    // 3. Activity Type distribution
+    const totalActivities = rows.length;
+    const breakdown = [
+      { name: 'Calls Logged', count: calls.length, color: '#3b82f6', pct: totalActivities ? `${Math.round((calls.length / totalActivities) * 100)}%` : '0%' },
+      { name: 'Lead Assignments', count: assignments.length, color: '#8b5cf6', pct: totalActivities ? `${Math.round((assignments.length / totalActivities) * 100)}%` : '0%' },
+      { name: 'Follow-ups Logged', count: followups.length, color: '#10b981', pct: totalActivities ? `${Math.round((followups.length / totalActivities) * 100)}%` : '0%' }
+    ];
+
+    // 4. Summary KPI Cards
+    const summary = [
+      { label: 'Total Activities', value: totalActivities },
+      { label: 'Calls Logged', value: calls.length },
+      { label: 'Assignments', value: assignments.length },
+      { label: 'Follow-ups Logged', value: followups.length },
+      { label: 'Active Telecallers', value: userStats.length }
+    ];
+
+    return res.json({
+      summary,
+      chartData,
+      userStats,
+      breakdown,
+      columns: ['Activity', 'Lead', 'User', 'Detail', 'Date'],
+      rows: rows.map(({ sortDate, rawType, ...row }) => row)
+    });
   } catch (error) { next(error); }
 };
