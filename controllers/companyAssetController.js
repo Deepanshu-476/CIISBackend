@@ -31,6 +31,23 @@ const getCompanyAssets = async (req, res) => {
 
     const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
     const query = { companyCode: targetCompanyCode };
+
+    const requestedBranch = req.query.branch || req.query.branchId;
+    if (requestedBranch && mongoose.Types.ObjectId.isValid(requestedBranch)) {
+      if (req.userBranchScope && !req.userBranchScope.includes(String(requestedBranch))) {
+        return res.json({
+          success: true,
+          assets: [],
+          count: 0,
+          total: 0,
+          pagination: buildPaginationMeta({ page, limit, total: 0 })
+        });
+      }
+      query.branch = requestedBranch;
+    } else if (req.userBranchScope && req.userBranchScope.length > 0) {
+      query.branch = { $in: req.userBranchScope };
+    }
+
     const search = String(req.query.search || req.query.q || '').trim();
     if (search) {
       const searchRegex = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
@@ -125,6 +142,15 @@ const createCompanyAsset = async (req, res) => {
       }
     }
 
+    if (req.userBranchScope && req.userBranchScope.length > 0) {
+      if (!branch || !req.userBranchScope.includes(String(branch))) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied - You do not have permission to create assets for this branch according to Page Management'
+        });
+      }
+    }
+
     
     const assetData = {
       name: name.trim(),
@@ -210,6 +236,15 @@ const updateCompanyAssetStatus = async (req, res) => {
       });
     }
 
+    if (req.userBranchScope && req.userBranchScope.length > 0 && asset.branch) {
+      if (!req.userBranchScope.includes(String(asset.branch))) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied - You do not have permission to update assets for this branch according to Page Management'
+        });
+      }
+    }
+
     asset.status = status;
     await asset.save();
     await asset.populate('createdBy', 'name email');
@@ -261,6 +296,15 @@ const deleteCompanyAsset = async (req, res) => {
         success: false,
         message: 'Access denied - Asset belongs to different company'
       });
+    }
+
+    if (req.userBranchScope && req.userBranchScope.length > 0 && asset.branch) {
+      if (!req.userBranchScope.includes(String(asset.branch))) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied - You do not have permission to delete assets for this branch according to Page Management'
+        });
+      }
     }
 
     await asset.deleteOne();

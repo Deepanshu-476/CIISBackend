@@ -44,6 +44,16 @@ const generateOTP = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
 };
 
+const isRealEmailSent = (emailResult) => Boolean(
+  emailResult?.success &&
+  !emailResult?.skipped &&
+  !emailResult?.disabled &&
+  !emailResult?.mocked &&
+  !String(emailResult?.messageId || '').startsWith('dev-') &&
+  (!Array.isArray(emailResult?.rejected) || emailResult.rejected.length === 0) &&
+  (!Array.isArray(emailResult?.accepted) || emailResult.accepted.length > 0)
+);
+
 const DEFAULT_CLIENT_DEPARTMENT_ID = '69ae555c9a1e47e80a40204c';
 const DEFAULT_CLIENT_JOB_ROLE_ID = '69ae559b9a1e47e80a4020a2';
 
@@ -759,7 +769,7 @@ exports.companyLogin = async (req, res) => {
     });
 
     
-    await emailService.sendEmail(
+    const emailResult = await emailService.sendEmail(
       user.email,
       "🔐 Company Login Verification OTP",
       `
@@ -774,6 +784,15 @@ exports.companyLogin = async (req, res) => {
       `,
       { emailModuleKey: "company_login_otp" }
     );
+
+    if (!isRealEmailSent(emailResult)) {
+      await LoginOTP.deleteOne({ tempToken });
+      return res.status(503).json({
+        success: false,
+        message: "OTP email could not be sent. Please contact administrator.",
+        errorCode: "EMAIL_NOT_SENT"
+      });
+    }
 
     void 0;
 
@@ -1398,7 +1417,7 @@ exports.login = async (req, res) => {
         { emailModuleKey: "company_login_otp" }
       );
 
-      if (!emailResult?.success) {
+      if (!isRealEmailSent(emailResult)) {
         throw new Error(emailResult?.error || "Email service failed");
       }
 
@@ -1724,7 +1743,7 @@ exports.resendLoginOTP = async (req, res) => {
       { emailModuleKey: "company_login_otp" }
     );
 
-    if (!emailResult?.success) {
+    if (!isRealEmailSent(emailResult)) {
       await LoginOTP.deleteOne({ tempToken });
       return res.status(503).json({
         success: false,
@@ -1783,18 +1802,25 @@ exports.forgotPassword = async (req, res) => {
     });
 
     try {
+      const recipientName = user?.name || client?.client || 'User';
       const emailResult = await emailService.sendEmail(
         cleanEmail,
-        "Password Reset OTP",
+        "CIIS Password Reset OTP",
         `
-          <div style="font-family: Arial; padding:20px;">
+          <div style="font-family: Arial, sans-serif; padding:20px; color:#111827;">
             <h2 style="color:#2563eb;">Password Reset OTP</h2>
-            <p>Hello ${user?.name || client?.client || 'User'},</p>
-            <p>Your OTP is:</p>
-            <h1 style="letter-spacing:4px;">${otp}</h1>
+            <p>Hello ${recipientName},</p>
+            <p>Use this 6-digit OTP to reset your password:</p>
+            <div style="font-size:34px;font-weight:700;letter-spacing:8px;text-align:center;padding:18px;background:#f3f4f6;border-radius:10px;margin:20px 0;">${otp}</div>
+            <p><strong>OTP:</strong> ${otp}</p>
             <p>This OTP is valid for 5 minutes.</p>
+            <p>If you did not request this, please ignore this email.</p>
           </div>
-        `
+        `,
+        {
+          emailModuleKey: "password_reset",
+          text: `Hello ${recipientName},\n\nYour CIIS password reset OTP is: ${otp}\n\nThis OTP is valid for 5 minutes.\n\nIf you did not request this, please ignore this email.`
+        }
       );
 
       if (!emailResult?.success && process.env.NODE_ENV === 'production') {
@@ -1804,31 +1830,29 @@ exports.forgotPassword = async (req, res) => {
           errorCode: "EMAIL_SERVICE_UNAVAILABLE"
         });
       }
-    } catch (emailError) {
-      console.error("Password reset email failed:", emailError);
 
-      if (process.env.NODE_ENV === 'production') {
+      if (
+        !isRealEmailSent(emailResult)
+      ) {
+        await OTP.deleteMany(otpScope);
         return res.status(503).json({
           success: false,
-          message: "Email service is unavailable. Please contact administrator.",
-          errorCode: "EMAIL_SERVICE_UNAVAILABLE"
+          message: "OTP email could not be sent. Please contact administrator.",
+          errorCode: "EMAIL_NOT_SENT"
         });
       }
+    } catch (emailError) {
+      console.error("Password reset email failed:", emailError);
+      await OTP.deleteMany(otpScope);
 
-      void 0;
-      return res.json({
-        success: true,
-        message: "OTP generated. Email could not be sent in development mode.",
-        devOtp: otp
+      return res.status(503).json({
+        success: false,
+        message: "Email service is unavailable. Please contact administrator.",
+        errorCode: "EMAIL_SERVICE_UNAVAILABLE"
       });
     }
 
-    const response = { success: true, message: "OTP sent successfully" };
-    if (process.env.NODE_ENV !== 'production') {
-      response.devOtp = otp;
-    }
-
-    res.json(response);
+    res.json({ success: true, message: "OTP sent successfully" });
 
   } catch (error) {
     console.error(error);
@@ -2148,7 +2172,7 @@ exports.superAdminLogin = async (req, res) => {
     
    try {
 
-  await emailService.sendEmail(
+  const emailResult = await emailService.sendEmail(
     user.email,
     "🔐 Super Admin Login OTP",
     `
@@ -2170,13 +2194,19 @@ exports.superAdminLogin = async (req, res) => {
     { emailModuleKey: "superadmin_login_otp" }
   );
 
-  void 0;
+  if (!isRealEmailSent(emailResult)) {
+    throw new Error(emailResult?.error || "Super Admin OTP email was not sent");
+  }
 
 } catch (emailError) {
+  await LoginOTP.deleteOne({ tempToken });
+  console.error("Super Admin OTP email failed:", emailError.message);
 
-  void 0;
-
-  void 0;
+  return res.status(503).json({
+    success: false,
+    message: "OTP email could not be sent. Please contact administrator.",
+    errorCode: "EMAIL_NOT_SENT",
+  });
 }
 
     void 0;
@@ -2424,7 +2454,7 @@ exports.resendSuperAdminOTP = async (req, res) => {
       expiresAt: new Date(Date.now() + 5 * 60 * 1000),
     });
 
-    await emailService.sendEmail(
+    const emailResult = await emailService.sendEmail(
       email,
       "🔐 New Super Admin OTP",
       `
@@ -2438,6 +2468,15 @@ exports.resendSuperAdminOTP = async (req, res) => {
       `,
       { emailModuleKey: "superadmin_login_otp" }
     );
+
+    if (!isRealEmailSent(emailResult)) {
+      await LoginOTP.deleteOne({ tempToken: newTempToken });
+      return res.status(503).json({
+        success: false,
+        message: "OTP email could not be sent. Please contact administrator.",
+        errorCode: "EMAIL_NOT_SENT",
+      });
+    }
 
     void 0;
 
@@ -2516,7 +2555,9 @@ exports.requestSuperAdminPasswordReset = async (req, res) => {
       { emailModuleKey: "password_reset" },
     );
 
-    if (!emailResult?.success && process.env.NODE_ENV === "production") {
+    if (
+      !isRealEmailSent(emailResult)
+    ) {
       await LoginOTP.deleteOne({ tempToken: `superadmin-reset:${sessionToken}` });
       return res.status(503).json({
         success: false,
@@ -2529,7 +2570,6 @@ exports.requestSuperAdminPasswordReset = async (req, res) => {
       message: "Reset OTP sent successfully",
       resetSessionToken: sessionToken,
     };
-    if (process.env.NODE_ENV !== "production") response.devOtp = otp;
     return res.json(response);
   } catch (error) {
     console.error("SuperAdmin password reset request error:", error);
@@ -3073,6 +3113,3 @@ const blacklistToken = async (token, expiry) => {
 
 exports.isValidLoginOTP = isValidLoginOTP;
 exports.isSuperAdminUser = isSuperAdminUser;
-
-
-
