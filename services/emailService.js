@@ -4,6 +4,7 @@ const nodemailer = require('nodemailer');
 const { getCompanyRegistrationEmailTemplate } = require('../utils/emailTemplates/companyRegistration');
 const {notifyEmailRecipients} = require('../HR-CDS/utils/systemNotificationService');
 const {
+  assertEmailAccepted,
   createEmailTransporter,
   isEmailModuleEnabled,
   resolveEmailModuleKey,
@@ -103,7 +104,8 @@ class EmailService {
           return { 
             success: true, 
             messageId: `dev-mock-${Date.now()}`,
-            preview: html.substring(0, 200) + '...'
+            preview: html.substring(0, 200) + '...',
+            mocked: true
           };
         }
         throw new Error('Email service not configured');
@@ -115,6 +117,7 @@ class EmailService {
         to: Array.isArray(to) ? to.join(', ') : to,
         subject: subject,
         html: html,
+        text: options.text || undefined,
         replyTo: config.replyTo || config.emailUser,
         priority: options.priority || 'high',
         headers: {
@@ -130,6 +133,7 @@ class EmailService {
       }
 
       const info = await transporter.sendMail(mailOptions);
+      const delivery = assertEmailAccepted(info, mailOptions.to, subject);
       
       void 0;
       this.notifyEmailSent(to, subject, options);
@@ -139,8 +143,9 @@ class EmailService {
         moduleKey: emailModuleKey,
         messageId: info.messageId,
         response: info.response,
-        accepted: info.accepted,
-        rejected: info.rejected
+        accepted: delivery.accepted,
+        rejected: delivery.rejected,
+        pending: delivery.pending
       };
 
     } catch (error) {

@@ -561,6 +561,34 @@ const createEmailTransporter = async () => {
   };
 };
 
+const assertEmailAccepted = (info, recipients, context = "Email") => {
+  const accepted = Array.isArray(info?.accepted) ? info.accepted : [];
+  const rejected = Array.isArray(info?.rejected) ? info.rejected : [];
+  const pending = Array.isArray(info?.pending) ? info.pending : [];
+  const recipientList = Array.isArray(recipients)
+    ? recipients
+    : String(recipients || "")
+      .split(",")
+      .map(item => item.trim())
+      .filter(Boolean);
+
+  if (rejected.length) {
+    const error = new Error(`${context} rejected for: ${rejected.join(", ")}`);
+    error.code = "EMAIL_REJECTED";
+    error.emailInfo = { accepted, rejected, pending, response: info?.response, messageId: info?.messageId };
+    throw error;
+  }
+
+  if (Array.isArray(info?.accepted) && recipientList.length && accepted.length === 0) {
+    const error = new Error(`${context} was not accepted by SMTP server`);
+    error.code = "EMAIL_NOT_ACCEPTED";
+    error.emailInfo = { accepted, rejected, pending, response: info?.response, messageId: info?.messageId };
+    throw error;
+  }
+
+  return { accepted, rejected, pending };
+};
+
 const markEmailTestResult = async ({ success, message }) => {
   const settings = await EmailSettings.findOneAndUpdate(
     { key: SETTINGS_KEY },
@@ -577,6 +605,7 @@ const markEmailTestResult = async ({ success, message }) => {
 
 module.exports = {
   EMAIL_MODULES,
+  assertEmailAccepted,
   createEmailTransporter,
   getEmailRuntimeConfig,
   getLoginSettings,

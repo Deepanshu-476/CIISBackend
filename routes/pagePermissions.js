@@ -19,6 +19,10 @@ const payrollPermissionActions = {
   payrollProcess: { view: 'View', edit: 'Review / Settings / Fine', generate: 'Generate', lock: 'Lock', unlock: 'Unlock', delete: 'Delete Process' },
   payslip: { view: 'View', edit: 'Email / Download', delete: 'Delete' },
   payrollReports: { view: 'View Reports', edit: 'Export / Download', delete: 'Delete' },
+  JobRoleManagement: { view: 'View', edit: 'Create / Edit', delete: 'Delete' },
+  jobRoleManagement: { view: 'View', edit: 'Create / Edit', delete: 'Delete' },
+  companyAssets: { view: 'View', edit: 'Create / Edit', delete: 'Delete' },
+  'company-assets': { view: 'View', edit: 'Create / Edit', delete: 'Delete' },
 };
 
 const CUSTOM_ACCESS_FIELDS = {
@@ -34,10 +38,10 @@ const APP_PAGES = [
   { pageKey: 'emp-assets', name: 'Emp - Assets', path: '/ciisUser/emp-assets', permissionPattern: 'approveReject' },
   { pageKey: 'emp-attendance', name: 'Emp - Attendance', path: '/ciisUser/emp-attendance', permissionPattern: 'viewEdit' },
   { pageKey: 'department', name: 'Department Management', path: '/ciisUser/department', permissionPattern: 'viewEdit' },
-  { pageKey: 'JobRoleManagement', name: 'Job Role Management', path: '/ciisUser/JobRoleManagement', permissionPattern: 'viewEdit' },
+  { pageKey: 'JobRoleManagement', name: 'Job Role Management', path: '/ciisUser/JobRoleManagement', permissionPattern: 'viewEdit', permissionActions: { view: 'View', edit: 'Create / Edit', delete: 'Delete' } },
   { pageKey: 'manage-groups', name: 'Manage Group', path: '/ciisUser/manage-groups', permissionPattern: 'viewEdit' },
   { pageKey: 'company-all-task', name: 'Company All Task', path: '/ciisUser/company-all-task', permissionPattern: 'viewEdit' },
-  { pageKey: 'company-assets', name: 'Asset Management', path: '/ciisUser/company-assets', permissionPattern: 'viewEdit' },
+  { pageKey: 'company-assets', name: 'Asset Management', path: '/ciisUser/company-assets', permissionPattern: 'viewEdit', permissionActions: { view: 'View', edit: 'Create / Edit', delete: 'Delete' } },
   { pageKey: 'SidebarManagement', name: 'Sidebar Management', path: '/ciisUser/SidebarManagement', permissionPattern: 'viewEdit' },
   { pageKey: 'emp-client', name: 'Client Management', path: '/ciisUser/emp-client', permissionPattern: 'viewEdit' },
   { pageKey: 'salary-component', name: 'Salary Component', path: '/ciisUser/salary-component', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.salaryComponent },
@@ -234,10 +238,39 @@ const getEffectiveVisibilityCached = (companyId, userId) => getOrSetCached(
   PAGE_PERMISSION_TTL_MS
 );
 
+const resolvePageMeta = (requestedPath = '') => {
+  const clean = String(requestedPath || '').trim();
+  if (!clean) return null;
+  const leaf = clean.split('?')[0].split('#')[0].split('/').filter(Boolean).pop();
+  return APP_PAGES.find(item => {
+    if (item.path === clean) return true;
+    if (item.pageKey.toLowerCase() === clean.toLowerCase()) return true;
+    if (leaf && item.pageKey.toLowerCase() === leaf.toLowerCase()) return true;
+    const itemLeaf = item.path.split('/').filter(Boolean).pop();
+    if (leaf && itemLeaf && itemLeaf.toLowerCase() === leaf.toLowerCase()) return true;
+    return false;
+  }) || null;
+};
+
 const getPageByPathCached = (companyId, path) => getOrSetCached(
   getCacheKey(PAGE_PERMISSION_CACHE_PREFIX, { scope: 'by-path', companyId, path }),
   async () => {
-    const config = await PagePermission.findOne({ company: companyId, path })
+    const pageMeta = resolvePageMeta(path);
+    const searchPaths = [path];
+    if (pageMeta) {
+      if (!searchPaths.includes(pageMeta.path)) searchPaths.push(pageMeta.path);
+      if (!searchPaths.includes(pageMeta.pageKey)) searchPaths.push(pageMeta.pageKey);
+      if (!searchPaths.includes(`/Ciis-network/${pageMeta.pageKey}`)) searchPaths.push(`/Ciis-network/${pageMeta.pageKey}`);
+      if (!searchPaths.includes(`/ciisUser/${pageMeta.pageKey}`)) searchPaths.push(`/ciisUser/${pageMeta.pageKey}`);
+    }
+
+    const config = await PagePermission.findOne({
+      company: companyId,
+      $or: [
+        { path: { $in: searchPaths } },
+        ...(pageMeta ? [{ pageKey: pageMeta.pageKey }] : [])
+      ]
+    })
       .populate('approvers.user', 'name email jobRole companyRole department')
       .populate('viewUsers.user', 'name email jobRole companyRole department')
       .populate('editUsers.user', 'name email jobRole companyRole department')
@@ -248,14 +281,14 @@ const getPageByPathCached = (companyId, path) => getOrSetCached(
       .populate('userAccessScopes.user', 'name email jobRole companyRole department')
       .lean();
 
-    const pageMeta = APP_PAGES.find(item => item.path === (config?.path || path));
+    const resolvedMeta = pageMeta || APP_PAGES.find(item => item.path === (config?.path || path));
 
     return config ? {
-      pageKey: config.pageKey || pageMeta?.pageKey || '',
-      name: config.name || pageMeta?.name || 'Page',
-      path: config.path || pageMeta?.path || path,
-      permissionPattern: pageMeta?.permissionPattern || null,
-      permissionActions: pageMeta?.permissionActions || null,
+      pageKey: config.pageKey || resolvedMeta?.pageKey || '',
+      name: config.name || resolvedMeta?.name || 'Page',
+      path: config.path || resolvedMeta?.path || path,
+      permissionPattern: resolvedMeta?.permissionPattern || null,
+      permissionActions: resolvedMeta?.permissionActions || null,
       approvers: getPageUsers(config, 'approvers'),
       viewUsers: getEffectiveViewUsers(config),
       editUsers: getPageUsers(config, 'editUsers'),
@@ -265,11 +298,11 @@ const getPageByPathCached = (companyId, path) => getOrSetCached(
       unlockUsers: getPageUsers(config, 'unlockUsers'),
       userAccessScopes: getPageUserAccessScopes(config)
     } : {
-      pageKey: pageMeta?.pageKey || '',
-      name: pageMeta?.name || 'Page',
-      path: pageMeta?.path || path,
-      permissionPattern: pageMeta?.permissionPattern || null,
-      permissionActions: pageMeta?.permissionActions || null,
+      pageKey: resolvedMeta?.pageKey || '',
+      name: resolvedMeta?.name || 'Page',
+      path: resolvedMeta?.path || path,
+      permissionPattern: resolvedMeta?.permissionPattern || null,
+      permissionActions: resolvedMeta?.permissionActions || null,
       approvers: [],
       viewUsers: [],
       editUsers: [],

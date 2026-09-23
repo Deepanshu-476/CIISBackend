@@ -5,6 +5,7 @@ const {
   updateEmailSettings,
   updateEmailModuleEnabled,
   updateGlobalEmailEnabled,
+  assertEmailAccepted,
   createEmailTransporter,
   isEmailModuleEnabled,
   markEmailTestResult,
@@ -137,16 +138,20 @@ router.post("/test", async (req, res) => {
         "X-Email-Type": "test-email",
       },
     });
+    const delivery = assertEmailAccepted(info, testEmail || config.emailUser, "Test email");
 
     const settings = await markEmailTestResult({
       success: true,
-      message: `Test email sent to ${testEmail || config.emailUser}`,
+      message: `Test email accepted for ${delivery.accepted.join(", ") || testEmail || config.emailUser}`,
     });
 
     res.json({
       success: true,
-      message: "Test email sent successfully",
+      message: "Test email accepted by SMTP server",
       messageId: info.messageId,
+      accepted: delivery.accepted,
+      rejected: delivery.rejected,
+      pending: delivery.pending,
       settings,
     });
   } catch (error) {

@@ -1,5 +1,6 @@
 const {notifyEmailRecipients} = require('../HR-CDS/utils/systemNotificationService');
 const {
+  assertEmailAccepted,
   createEmailTransporter,
   isEmailModuleEnabled,
   resolveEmailModuleKey,
@@ -65,7 +66,7 @@ const sendEmail = async (to, subject, html, options = {}) => {
           console.warn(`[DEV ONLY] OTP: ${otpMatch[1]}`);
         }
         notifyEmailSent({to, subject, options});
-        return { success: true, messageId: `dev-mock-${Date.now()}` };
+        return { success: true, messageId: `dev-mock-${Date.now()}`, mocked: true };
       }
       throw new Error('Email service not configured');
     }
@@ -77,7 +78,7 @@ const sendEmail = async (to, subject, html, options = {}) => {
     void 0;
 
     
-    const info = await transporter.sendMail({
+    const mailOptions = {
       from: `"${config.senderName || 'CIIS NETWORK'}" <${config.emailUser}>`,
       to: Array.isArray(to) ? to.join(', ') : to,
       subject: subject,
@@ -85,11 +86,22 @@ const sendEmail = async (to, subject, html, options = {}) => {
       text: options.text || undefined,
       replyTo: config.replyTo || config.emailUser,
       priority: options.priority || 'normal'
-    });
+    };
+
+    const info = await transporter.sendMail(mailOptions);
+    const delivery = assertEmailAccepted(info, mailOptions.to, subject);
 
     void 0;
     notifyEmailSent({to, subject, options});
-    return { success: true, messageId: info.messageId, moduleKey: emailModuleKey };
+    return {
+      success: true,
+      messageId: info.messageId,
+      moduleKey: emailModuleKey,
+      response: info.response,
+      accepted: delivery.accepted,
+      rejected: delivery.rejected,
+      pending: delivery.pending,
+    };
 
   } catch (error) {
     const isDev = process.env.NODE_ENV !== 'production';
