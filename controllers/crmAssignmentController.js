@@ -232,7 +232,7 @@ exports.workload = async (req, res, next) => {
     const company = req.crmCompany;
     const excluded = await excludedClientIds();
     const eligibleIds = await telecallerUserIds(company);
-    const [team, grouped] = await Promise.all([
+    const [team, grouped, jobRoles] = await Promise.all([
       User.find(activeEmployeeFilter(company, eligibleIds, excluded)).select(teamFields).sort({ name: 1 }).lean(),
       Lead.aggregate([
         { $match: { company: new mongoose.Types.ObjectId(String(company)), assignedTo: { $ne: null } } },
@@ -244,17 +244,23 @@ exports.workload = async (req, res, next) => {
           followUps: { $sum: { $cond: [{ $ne: ['$nextFollowUp', null] }, 1, 0] } },
           lastActivity: { $max: '$updatedAt' }
         } }
-      ])
+      ]),
+      JobRole.find({ company }).select('name').lean()
     ]);
     const byUser = new Map(grouped.map(item => [String(item._id), item]));
+    const roleNamesById = new Map(jobRoles.map(role => [String(role._id), role.name]));
     const agents = team.map(user => {
       const row = byUser.get(String(user._id)) || {};
       const assigned = row.assigned || 0;
       const completed = row.completed || 0;
-      return { ...user, assigned, completed, pending: assigned - completed, converted: row.converted || 0,
+      const rawRoles = [user.jobRole, user.companyRole, user.role].filter(Boolean);
+      const displayRole = rawRoles.map(value => roleNamesById.get(String(value))).find(Boolean)
+        || rawRoles.find(value => !mongoose.isValidObjectId(String(value)))
+        || 'Telecaller';
+      return { ...user, displayRole, assigned, completed, pending: assigned - completed, converted: row.converted || 0,
         followUps: row.followUps || 0, conversion: assigned ? Math.round((row.converted || 0) * 1000 / assigned) / 10 : 0,
         lastActivity: row.lastActivity || null };
-    });
+    }).filter(agent => agent.assigned > 0);
     const totals = agents.reduce((sum, agent) => ({ assigned: sum.assigned + agent.assigned, completed: sum.completed + agent.completed,
       pending: sum.pending + agent.pending, converted: sum.converted + agent.converted }), { assigned: 0, completed: 0, pending: 0, converted: 0 });
     res.json({ agents, totals });

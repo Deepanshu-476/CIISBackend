@@ -6,16 +6,29 @@ const Lead = require('../models/Lead');
 const CallLog = require('../models/CallLog');
 const FollowUp = require('../models/Followup');
 const User = require('../models/User');
+const JobRole = require('../models/JobRole');
 const PagePermission = require('../models/PagePermission');
+
+const leanQuery = value => ({
+  sort() { return this; },
+  limit() { return this; },
+  populate() { return this; },
+  lean: async () => value
+});
 
 test('Admin CRM: dashboard endpoint aggregates company metrics, pipeline, trends, and team performance', async () => {
   const companyId = new mongoose.Types.ObjectId();
   const userId = new mongoose.Types.ObjectId();
+  const jobRoleId = new mongoose.Types.ObjectId();
+  const followUpId = new mongoose.Types.ObjectId();
 
   const originalLeadCount = Lead.countDocuments;
   const originalCallCount = CallLog.countDocuments;
   const originalFollowCount = FollowUp.countDocuments;
+  const originalFollowFind = FollowUp.find;
+  const originalFollowAggregate = FollowUp.aggregate;
   const originalUserFind = User.find;
+  const originalJobRoleFind = JobRole.find;
   const originalLeadAggregate = Lead.aggregate;
   const originalCallAggregate = CallLog.aggregate;
   const originalCallFind = CallLog.find;
@@ -31,15 +44,25 @@ test('Admin CRM: dashboard endpoint aggregates company metrics, pipeline, trends
     return 40; // total calls
   };
   FollowUp.countDocuments = async () => 3;
+  FollowUp.find = () => leanQuery([{
+    _id: followUpId,
+    date: new Date(),
+    lead: { name: 'Test Lead', phone: '9999999999' },
+    agent: { name: 'Telecaller Test' },
+    priority: 'high',
+    note: 'Call back'
+  }]);
+  FollowUp.aggregate = async () => [];
   PagePermission.find = () => ({ select: () => ({ lean: async () => [{ path: '/ciisUser/telecaller/dashboard', viewUsers: [{ user: userId }] }] }) });
 
   User.find = () => ({
     select: () => ({
       lean: async () => [
-        { _id: userId, name: 'Telecaller Test', role: 'telecaller' }
+        { _id: userId, name: 'Telecaller Test', jobRole: jobRoleId }
       ]
     })
   });
+  JobRole.find = () => ({ select: () => ({ lean: async () => [{ _id: jobRoleId, name: 'Telecaller' }] }) });
 
   Lead.aggregate = async (pipeline) => {
     if (pipeline[1]?.$group?._id === '$status') {
@@ -80,6 +103,7 @@ test('Admin CRM: dashboard endpoint aggregates company metrics, pipeline, trends
     assert.equal(result.metrics.totalLeads, 25);
     assert.equal(result.metrics.totalCalls, 40);
     assert.equal(result.metrics.todaysCalls, 8);
+    assert.equal(result.metrics.todaysFollowUps, 3);
     assert.equal(result.metrics.activeUsers, 1);
     assert.equal(result.metrics.conversionRate, '20%');
     assert.ok(Array.isArray(result.pipelineData));
@@ -88,11 +112,17 @@ test('Admin CRM: dashboard endpoint aggregates company metrics, pipeline, trends
     assert.ok(Array.isArray(result.teamPerformance));
     assert.equal(result.teamPerformance.length, 1);
     assert.equal(result.teamPerformance[0].member, 'Telecaller Test');
+    assert.equal(result.teamPerformance[0].role, 'Telecaller');
+    assert.equal(result.todaysSchedule.length, 1);
+    assert.equal(result.todaysSchedule[0].lead, 'Test Lead');
   } finally {
     Lead.countDocuments = originalLeadCount;
     CallLog.countDocuments = originalCallCount;
     FollowUp.countDocuments = originalFollowCount;
+    FollowUp.find = originalFollowFind;
+    FollowUp.aggregate = originalFollowAggregate;
     User.find = originalUserFind;
+    JobRole.find = originalJobRoleFind;
     Lead.aggregate = originalLeadAggregate;
     CallLog.aggregate = originalCallAggregate;
     CallLog.find = originalCallFind;
@@ -106,6 +136,7 @@ test('Admin CRM: call overview endpoint returns statCards, quickAccessCounts, an
   const originalLeadCount = Lead.countDocuments;
   const originalCallCount = CallLog.countDocuments;
   const originalFollowCount = FollowUp.countDocuments;
+  const originalFollowFind = FollowUp.find;
   const originalCallFind = CallLog.find;
   const originalCallAggregate = CallLog.aggregate;
 
@@ -120,6 +151,7 @@ test('Admin CRM: call overview endpoint returns statCards, quickAccessCounts, an
     return 30;
   };
   FollowUp.countDocuments = async () => 5;
+  FollowUp.find = () => leanQuery([]);
 
   CallLog.find = () => ({
     sort: () => ({
@@ -164,6 +196,7 @@ test('Admin CRM: call overview endpoint returns statCards, quickAccessCounts, an
     Lead.countDocuments = originalLeadCount;
     CallLog.countDocuments = originalCallCount;
     FollowUp.countDocuments = originalFollowCount;
+    FollowUp.find = originalFollowFind;
     CallLog.find = originalCallFind;
     CallLog.aggregate = originalCallAggregate;
   }

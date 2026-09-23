@@ -86,6 +86,54 @@ test('bulk reassignment requires a transfer reason before changing ownership', a
   }
 });
 
+test('workload returns only telecallers who currently have assigned leads', async () => {
+  const unassignedAgent = new mongoose.Types.ObjectId();
+  const jobRoleId = new mongoose.Types.ObjectId();
+  const originals = {
+    leadAggregate: Lead.aggregate,
+    userFind: User.find,
+    clientFind: Client.find,
+    permissionFind: PagePermission.find,
+    jobRoleFind: JobRole.find
+  };
+  Client.find = () => ({ select: () => ({ lean: async () => [] }) });
+  PagePermission.find = () => ({ select: () => ({ lean: async () => [{
+    path: '/ciisUser/telecaller/dashboard',
+    viewUsers: [{ user: agent }, { user: unassignedAgent }]
+  }] }) });
+  User.find = () => {
+    const chain = { select: () => chain, sort: () => chain, lean: async () => [
+      { _id: agent, name: 'Assigned Caller', jobRole: String(jobRoleId) },
+      { _id: unassignedAgent, name: 'Extra Caller', jobRole: String(jobRoleId) }
+    ] };
+    return chain;
+  };
+  Lead.aggregate = async () => [{
+    _id: agent,
+    assigned: 3,
+    completed: 1,
+    converted: 1,
+    followUps: 1,
+    lastActivity: new Date()
+  }];
+  JobRole.find = () => ({ select: () => ({ lean: async () => [{ _id: jobRoleId, name: 'Telecaller' }] }) });
+
+  try {
+    const res = response();
+    await controller.workload({ crmCompany: company }, res, error => { throw error; });
+    assert.equal(res.body.agents.length, 1);
+    assert.equal(String(res.body.agents[0]._id), String(agent));
+    assert.equal(res.body.agents[0].displayRole, 'Telecaller');
+    assert.equal(res.body.totals.assigned, 3);
+  } finally {
+    Lead.aggregate = originals.leadAggregate;
+    User.find = originals.userFind;
+    Client.find = originals.clientFind;
+    PagePermission.find = originals.permissionFind;
+    JobRole.find = originals.jobRoleFind;
+  }
+});
+
 test('equal distribution assigns selected leads evenly across selected eligible users', async () => {
   const secondAgent = new mongoose.Types.ObjectId();
   const leadIds = Array.from({ length: 5 }, () => new mongoose.Types.ObjectId());
