@@ -11,6 +11,11 @@ const followUpSchema = new mongoose.Schema({
     enum: ["pending", "done"],
     default: "pending"
   },
+  priority: {
+    type: String,
+    enum: ["low", "medium", "high"],
+    default: "medium"
+  },
   note: String
 }, { timestamps: true });
 

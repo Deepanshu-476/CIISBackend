@@ -9,7 +9,7 @@ const rowSchema = new mongoose.Schema({
 }, { _id: false });
 const schema = new mongoose.Schema({
   company: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true },
-  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User ', required: true },
   fileName: String,
   status: { type: String, enum: ['preview', 'processing', 'completed', 'partial', 'failed', 'interrupted'], default: 'preview' },
   rows: [rowSchema],
