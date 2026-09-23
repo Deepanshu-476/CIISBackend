@@ -1,6 +1,7 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const PagePermission = require('../models/PagePermission');
+const Company = require('../models/Company');
 const PageDataVisibility = require('../models/PageDataVisibility');
 const User = require('../models/User');
 const Branch = require('../models/Branch');
@@ -44,6 +45,7 @@ const APP_PAGES = [
   { pageKey: 'company-assets', name: 'Asset Management', path: '/ciisUser/company-assets', permissionPattern: 'viewEdit', permissionActions: { view: 'View', edit: 'Create / Edit', delete: 'Delete' } },
   { pageKey: 'SidebarManagement', name: 'Sidebar Management', path: '/ciisUser/SidebarManagement', permissionPattern: 'viewEdit' },
   { pageKey: 'emp-client', name: 'Client Management', path: '/ciisUser/emp-client', permissionPattern: 'viewEdit' },
+  { pageKey: 'active-clients', name: 'Active Clients', path: '/ciisUser/active-clients', permissionPattern: 'viewEdit' },
   { pageKey: 'salary-component', name: 'Salary Component', path: '/ciisUser/salary-component', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.salaryComponent },
   { pageKey: 'salary-structure', name: 'Salary Structure', path: '/ciisUser/salary-structure', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.salaryStructure },
   { pageKey: 'salary-assignment', name: 'Employee Salary', path: '/ciisUser/salary-assignment', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.employeeSalary },
@@ -53,6 +55,20 @@ const APP_PAGES = [
   { pageKey: 'payroll-reports', name: 'Payroll Reports', path: '/ciisUser/payroll-reports', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.payrollReports },
   { pageKey: 'task-management', name: 'Create Task', path: '/ciisUser/task-management', permissionPattern: 'viewEdit' },
   { pageKey: 'admin-task-create', name: 'Admin Create Task', path: '/ciisUser/admin-task-create', permissionPattern: 'viewEdit', permissionActions: { view: 'View', edit: 'Create Task', delete: 'Delete' } },
+  ...require('../utils/crmPermissionPages'),
+  ...[
+    ['dashboard', 'Dashboard'], ['call-dashboard', 'Call Dashboard'],
+    ['assigned-calls', 'My Assigned Calls'], ['todays-calls', "Today's Calls"],
+    ['pending-calls', 'Pending Calls'], ['scheduled-calls', 'Scheduled Calls'],
+    ['completed-calls', 'Completed Calls'], ['call-history', 'Call History'],
+    ['follow-ups', 'My Follow-Ups'], ['converted-leads', 'Converted Leads'],
+    ['call-workspace', 'Call Workspace'], ['lead-detail', 'Lead Detail'],
+  ].map(([slug, name]) => ({
+    pageKey: `admin-telecaller-${slug}`,
+    name: `Admin Telecaller - ${name}`,
+    path: `/ciisUser/telecaller/${slug}`,
+    permissionPattern: 'viewEdit'
+  })),
 ];
 
 const PAGE_PERMISSION_CACHE_PREFIX = 'pagePermissions';
@@ -163,8 +179,8 @@ const getAccessScopeCategory = (scopes = []) => {
   return 'all';
 };
 
-const decoratePageSummaries = async (companyId) => {
-  const configs = await PagePermission.find({ company: companyId })
+const decoratePageSummaries = async (companyId, providedConfigs) => {
+  const configs = providedConfigs || await PagePermission.find({ company: companyId })
     .select('pageKey path approvers viewUsers editUsers deleteUsers generateUsers lockUsers unlockUsers userAccessScopes updatedAt')
     .lean();
   const configMap = new Map(configs.map(config => [config.path, config]));
@@ -182,8 +198,8 @@ const decoratePageSummaries = async (companyId) => {
   });
 };
 
-const decoratePages = async (companyId) => {
-  const configs = await PagePermission.find({ company: companyId })
+const decoratePages = async (companyId, providedConfigs) => {
+  const query = providedConfigs ? null : PagePermission.find({ company: companyId })
     .select('company companyCode pageKey name path approvers viewUsers editUsers deleteUsers generateUsers lockUsers unlockUsers userAccessScopes updatedAt')
     .populate('approvers.user', 'name email jobRole companyRole department')
     .populate('viewUsers.user', 'name email jobRole companyRole department')
@@ -194,6 +210,7 @@ const decoratePages = async (companyId) => {
     .populate('unlockUsers.user', 'name email jobRole companyRole department')
     .populate('userAccessScopes.user', 'name email jobRole companyRole department')
     .lean();
+  const configs = providedConfigs || await query;
   const configMap = new Map(configs.map(config => [config.path, config]));
 
   return APP_PAGES.map(page => {
@@ -202,7 +219,7 @@ const decoratePages = async (companyId) => {
       ...page,
       permissionPattern: page.permissionPattern || null,
       approvers: getPageUsers(config, 'approvers'),
-      viewUsers: getPageUsers(config, 'viewUsers'),
+      viewUsers: getEffectiveViewUsers(config),
       editUsers: getPageUsers(config, 'editUsers'),
       deleteUsers: getPageUsers(config, 'deleteUsers'),
       generateUsers: getPageUsers(config, 'generateUsers'),
@@ -436,8 +453,34 @@ router.get('/pages', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Company not found for current user' });
     }
 
-    const pages = await getPageSummariesCached(companyId);
-    res.json({ success: true, pages });
+    const company = await Company.findById(companyId).select('allowedPages').lean();
+    const normalizeAllowedPage = value => String(value || '').trim().toLowerCase()
+      .replace(/^\/+/, '').replace(/^ciisuser\//, '').replace(/\/+$/, '');
+    const allowedPages = (company?.allowedPages || []).map(normalizeAllowedPage).filter(Boolean);
+    const allowedSet = new Set(allowedPages);
+    const isEnabled = page => {
+      if (!allowedSet.size) return true;
+      const pageKey = normalizeAllowedPage(page.pageKey);
+      const path = normalizeAllowedPage(page.path);
+      if (allowedSet.has(pageKey) || allowedSet.has(path)) return true;
+      if (path.startsWith('crm/') && (allowedSet.has('crm') || allowedSet.has('admin-crm'))) return true;
+      if (path.startsWith('telecaller/') && (allowedSet.has('telecaller') || allowedSet.has('admin-telecaller') || allowedSet.has('crm'))) return true;
+      return false;
+    };
+
+    if (String(req.query?.includeAccess || '').toLowerCase() === 'true') {
+      const configs = await PagePermission.find({ company: companyId })
+        .select('company companyCode pageKey name path approvers viewUsers editUsers deleteUsers generateUsers lockUsers unlockUsers userAccessScopes updatedAt')
+        .lean();
+      const [pageSummaries, accessPages] = await Promise.all([
+        decoratePageSummaries(companyId, configs),
+        decoratePages(companyId, configs)
+      ]);
+      return res.json({ success: true, pages: pageSummaries.filter(isEnabled), accessPages });
+    }
+
+    const pages = (await getPageSummariesCached(companyId)).filter(isEnabled);
+    return res.json({ success: true, pages });
   } catch (error) {
     console.error('Page permissions list error:', error);
     res.status(500).json({ success: false, error: 'Failed to load page permissions' });
