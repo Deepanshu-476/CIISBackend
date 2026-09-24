@@ -22,7 +22,11 @@ const dateFilter = query => {
 const text = value => value == null || value === '' ? '—' : String(value);
 const date = value => value ? new Date(value).toLocaleString('en-IN') : '—';
 
-const shortDate = value => new Date(value).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+const shortDate = value => {
+  if (!value) return 'Unknown';
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? 'Unknown' : d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+};
 const groupedSeries = (items, keyFor, valuesFor) => {
   const groups = new Map();
   for (const item of items) {
@@ -79,8 +83,8 @@ exports.report = async (req, res, next) => {
     if (type === 'follow-ups') {
       const filter = { company, ...(range ? { date: range } : {}) };
       const items = await FollowUp.find(filter).sort({ date: -1 }).limit(1000).populate('lead', 'name phone').populate('agent', 'name').lean();
-      const chartData = groupedSeries(items, item => shortDate(item.date), (item, current) => ({ completed: (current.completed || 0) + (item.status === 'done' ? 1 : 0), pending: (current.pending || 0) + (item.status === 'pending' ? 1 : 0) }));
-      return res.json({ summary: [{ label: 'Follow-ups', value: items.length }, { label: 'Pending', value: items.filter(item => item.status === 'pending').length }], chartData: chartData.reverse(), columns: ['Lead', 'Phone', 'Telecaller', 'Scheduled For', 'Status', 'Note'],
+      const chartData = groupedSeries(items, item => shortDate(item.date || item.createdAt), (item, current) => ({ completed: (current.completed || 0) + (item.status === 'done' ? 1 : 0), pending: (current.pending || 0) + (item.status === 'pending' ? 1 : 0) }));
+      return res.json({ summary: [{ label: 'Follow-ups', value: items.length }, { label: 'Pending', value: items.filter(item => item.status === 'pending').length }], chartData: chartData.map(({ name, ...values }) => ({ day: name, name, ...values })).reverse(), columns: ['Lead', 'Phone', 'Telecaller', 'Scheduled For', 'Status', 'Note'],
         rows: items.map(item => ({ Lead: text(item.lead?.name), Phone: text(item.lead?.phone), Telecaller: text(item.agent?.name), 'Scheduled For': date(item.date), Status: text(item.status), Note: text(item.note) })) });
     }
 
@@ -147,8 +151,9 @@ exports.report = async (req, res, next) => {
     const trendMap = new Map();
     for (const row of [...rows].reverse()) {
       const d = shortDate(row.sortDate);
+      if (!d || d === 'Unknown') continue;
       if (!trendMap.has(d)) {
-        trendMap.set(d, { date: d, calls: 0, assignments: 0, followups: 0, total: 0 });
+        trendMap.set(d, { date: d, day: d, calls: 0, assignments: 0, followups: 0, total: 0 });
       }
       const entry = trendMap.get(d);
       entry.total += 1;

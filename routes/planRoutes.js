@@ -43,7 +43,6 @@ const validatePlanPayload = payload => {
   if (!Number.isFinite(payload.price) || payload.price < 0) errors.push("Valid plan price is required");
   if (!Number.isFinite(payload.durationDays) || payload.durationDays < 1) errors.push("Valid plan duration is required");
   if (!payload.allowedPages.length) errors.push("Select at least one page for this plan");
-  if (!payload.allowedSuperAdminPages.length) errors.push("Select at least one super admin page for this plan");
   return errors;
 };
 
