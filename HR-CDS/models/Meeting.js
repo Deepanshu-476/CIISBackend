@@ -13,4 +13,10 @@ const meetingSchema = new mongoose.Schema({
   
 });
 
+meetingSchema.index({ companyCode: 1, date: 1 });
+meetingSchema.index({ companyCode: 1, date: -1 });
+meetingSchema.index({ attendees: 1, date: 1 });
+meetingSchema.index({ attendees: 1, companyCode: 1, date: 1 });
+meetingSchema.index({ attendees: 1, companyCode: 1, date: -1 });
+
 module.exports = mongoose.model("Meeting", meetingSchema);

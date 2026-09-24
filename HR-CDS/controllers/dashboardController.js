@@ -72,6 +72,39 @@ const mapTaskActivity = task => ({
   status: task.overallStatus || task.status || task.creatorStatus?.status || "pending",
 });
 
+const getDashboardAttendanceStatus = status => {
+  const compact = String(status || "").trim().toUpperCase().replace(/[\s_-]+/g, "");
+  const statusMap = {
+    PRESENT: "present",
+    LATE: "late",
+    HALFDAY: "halfday",
+    SHORTLEAVE: "shortleave",
+    ABSENT: "absent",
+  };
+  return statusMap[compact] || null;
+};
+
+const isSameCalendarMonth = (value, reference) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return false;
+  return date.getMonth() === reference.getMonth() && date.getFullYear() === reference.getFullYear();
+};
+
+const getLeaveDatesInMonth = (leaves, reference) => {
+  const dates = new Set();
+  leaves.forEach(leave => {
+    const status = String(leave.status || "").trim().toUpperCase();
+    if (status !== "APPROVED") return;
+    const cursor = startOfDay(leave.startDate);
+    const end = endOfDay(leave.endDate);
+    if (Number.isNaN(cursor.getTime()) || Number.isNaN(end.getTime())) return;
+    for (let date = cursor; date <= end; date = new Date(date.getTime() + DAY_MS)) {
+      if (isSameCalendarMonth(date, reference)) dates.add(dateKey(date));
+    }
+  });
+  return dates.size;
+};
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 const startOfDay = value => { const date = new Date(value); date.setHours(0, 0, 0, 0); return date; };
 const endOfDay = value => { const date = new Date(value); date.setHours(23, 59, 59, 999); return date; };
@@ -262,6 +295,11 @@ const getEmployeeDashboardSummary = async (req, res) => {
     }
 
     const {start: todayStart, end: todayEnd} = getTodayRange();
+    const summaryStart = new Date(todayStart);
+    summaryStart.setMonth(summaryStart.getMonth() - 11);
+    summaryStart.setDate(1);
+    summaryStart.setHours(0, 0, 0, 0);
+    const summaryEnd = new Date(todayStart.getFullYear(), 11, 31, 23, 59, 59, 999);
 
     const [
       company,
@@ -281,22 +319,31 @@ const getEmployeeDashboardSummary = async (req, res) => {
       }).select("_id name roleName roleNumber roleNo code jobRole title shiftSettings shifts department").lean(),
       Holiday.find({
         isActive: true,
+        date: {$gte: summaryStart, $lte: summaryEnd},
         $or: [
           {companyCode},
           ...(companyId ? [{company: companyId}] : []),
         ],
-      }).sort({date: 1}).lean(),
-      Attendance.find({user: userId, companyCode}).sort({date: -1}).lean(),
+      }).select("name title date type description").sort({date: 1}).lean(),
+      Attendance.find({user: userId, companyCode, date: {$gte: summaryStart, $lte: todayEnd}})
+        .select("user date status inTime outTime isClockedIn totalTime duration hoursWorked shiftName shiftStart shiftEnd shiftWindow createdAt updatedAt")
+        .sort({date: -1})
+        .lean(),
       Attendance.findOne({
         user: userId,
         companyCode,
         date: {$gte: todayStart, $lte: todayEnd},
-      }).lean(),
-      Leave.find({user: userId})
-        .populate("user", "name email jobRole department")
-        .populate("approvalSteps.user", "name email jobRole companyRole")
-        .populate("history.by", "name email")
+      })
+        .select("user date status inTime outTime isClockedIn totalTime duration hoursWorked shiftName shiftStart shiftEnd shiftWindow createdAt updatedAt")
+        .lean(),
+      Leave.find({
+        user: userId,
+        startDate: {$lte: summaryEnd},
+        endDate: {$gte: summaryStart},
+      })
+        .select("user startDate endDate status leaveType reason createdAt updatedAt")
         .sort({startDate: -1})
+        .limit(60)
         .lean(),
       EmployeeTask.find({
         companyCode,
@@ -355,10 +402,28 @@ const getEmployeeDashboardSummary = async (req, res) => {
           isClockedIn: false,
           message: "No attendance recorded yet",
         };
+    const monthReference = new Date(todayStart);
+    const monthlyAttendanceCounts = attendance.reduce((counts, record) => {
+      const status = getDashboardAttendanceStatus(record.status);
+      if (status && isSameCalendarMonth(record.date || record.inTime || record.createdAt, monthReference)) {
+        counts[status] = (counts[status] || 0) + 1;
+      }
+      return counts;
+    }, {});
+    const monthlyStats = {
+      presentDays: monthlyAttendanceCounts.present || 0,
+      lateDays: monthlyAttendanceCounts.late || 0,
+      halfDays: monthlyAttendanceCounts.halfday || 0,
+      shortLeaveDays: monthlyAttendanceCounts.shortleave || 0,
+      absentDays: monthlyAttendanceCounts.absent || 0,
+      leavesTaken: getLeaveDatesInMonth(leaves, monthReference),
+      holidayDays: holidays.filter(holiday => isSameCalendarMonth(holiday.date, monthReference)).length,
+    };
 
     return res.status(200).json({
       success: true,
       data: {
+        monthlyStats,
         dashboardConfig: scopedDashboardConfig,
         jobRoles: jobRoles.map(normalizeRoleForDashboard),
         currentUser: {

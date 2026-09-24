@@ -1402,7 +1402,8 @@ const getAttendanceList = async (req, res) => {
           select: "companyCode companyName"
         }
       })
-      .sort({ date: 1 });
+      .sort({ date: 1 })
+      .lean();
 
     
     const approvedOtRequests = await OvertimeRequest.find({

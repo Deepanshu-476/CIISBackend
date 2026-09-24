@@ -137,6 +137,7 @@ const {sendEmail} = require("./utils/sendEmail");
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const INITIAL_DB_JOB_DELAY_MS = Number(process.env.INITIAL_DB_JOB_DELAY_MS || 60000);
+const MAX_CRON_TASK_BATCH_SIZE = Number(process.env.MAX_CRON_TASK_BATCH_SIZE || 500);
 const runningDbJobs = new Set();
 
 process.on('unhandledRejection', error => {
@@ -315,7 +316,9 @@ const checkAndMarkOverdueTasks = async () => {
       ]
     })
     .populate('assignedUsers', 'name email companyCode company')
-    .populate('createdBy', 'name email companyCode company');
+    .populate('createdBy', 'name email companyCode company')
+    .sort({ dueDateTime: 1 })
+    .limit(MAX_CRON_TASK_BATCH_SIZE);
     
     void 0;
     
@@ -397,7 +400,9 @@ const sendPendingTaskReminders = async () => {
       'statusByUser.status': 'pending',
     })
       .populate('assignedUsers', 'name email')
-      .select('title assignedUsers statusByUser dueDateTime');
+      .select('title assignedUsers statusByUser dueDateTime')
+      .sort({ dueDateTime: 1 })
+      .limit(MAX_CRON_TASK_BATCH_SIZE);
 
     for (const task of tasks) {
       const dueDateText = formatTaskDueDate(task.dueDateTime);
@@ -521,6 +526,7 @@ const dailyOverdueSummary = async () => {
       isActive: true
     })
     .populate('assignedUsers', 'name email')
+    .limit(MAX_CRON_TASK_BATCH_SIZE)
     .lean();
     
     if (overdueTasks.length > 0) {
@@ -721,7 +727,14 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
-
+const compression = require("compression");
+app.use(compression({
+  threshold: 1024,
+  filter: (req, res) => {
+    if (req.headers["x-no-compression"]) return false;
+    return compression.filter(req, res);
+  },
+}));
 
 const cookieParser = require("cookie-parser");
 app.use(cookieParser());
@@ -826,6 +839,7 @@ app.use('/api/followups', require('./routes/followUpRoutes.js'));
 app.use("/api/app-version", require("./routes/appVersionRoutes.js"));
 app.use("/api/attendance", require("./HR-CDS/routes/attendanceRoutes.js"));
 app.use("/api/overtime", require("./HR-CDS/routes/overtimeRoutes.js"));
+app.use("/overtime", require("./HR-CDS/routes/overtimeRoutes.js"));
 app.use("/api/leaves", require("./HR-CDS/routes/LeaveRoutes.js"));
 app.use("/api/asset-requests", require("./HR-CDS/routes/assetRequestRoutes.js"));
 app.use("/api/task", require("./HR-CDS/routes/taskRoute.js"));

@@ -5,6 +5,7 @@
   "scripts": {
     "test": "node --test tests/*.test.js",
     "start": "node server.js",
+    "sync:indexes": "node scripts/syncPerformanceIndexes.js",
     "backfill:client-branch": "node scripts/backfillClientBranch.js --apply",
     "backfill:client-branch:dry": "node scripts/backfillClientBranch.js --dry-run"
   },
