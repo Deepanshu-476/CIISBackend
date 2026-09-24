@@ -16,6 +16,15 @@ test('Call flow: startCall, endCall with duration and status, and getAgentCalls'
   const originalCreate = CallLog.create;
   const originalFindById = CallLog.findById;
   const originalFind = CallLog.find;
+  const originalLeadFindById = Lead.findById;
+
+  Lead.findById = (id) => ({
+    lean: async () => ({
+      _id: leadId,
+      company: new mongoose.Types.ObjectId(),
+      assignedTo: agentId
+    })
+  });
 
   CallLog.create = async (doc) => {
     storedCall = {
@@ -100,6 +109,7 @@ test('Call flow: startCall, endCall with duration and status, and getAgentCalls'
     CallLog.create = originalCreate;
     CallLog.findById = originalFindById;
     CallLog.find = originalFind;
+    Lead.findById = originalLeadFindById;
   }
 });
 
@@ -152,8 +162,26 @@ test('FollowUp flow: createFollowUp, getTodayFollowUps, and completeFollowUp', a
   let storedFollowUp = null;
   const originalCreate = FollowUp.create;
   const originalFind = FollowUp.find;
+  const originalFindOne = FollowUp.findOne;
   const originalFindById = FollowUp.findById;
   const originalFindOneAndUpdate = FollowUp.findOneAndUpdate;
+  const originalLeadFindById = Lead.findById;
+  const originalLeadUpdateOne = Lead.updateOne;
+
+  const mockLead = {
+    _id: leadId,
+    company: new mongoose.Types.ObjectId(),
+    assignedTo: agentId,
+    status: 'new',
+    nextFollowUp: null,
+    save: async function () { return this; }
+  };
+  Lead.findById = async () => mockLead;
+  Lead.updateOne = async () => ({ acknowledged: true });
+
+  FollowUp.findOne = () => ({
+    sort: () => Promise.resolve(null)
+  });
 
   FollowUp.create = async (doc) => {
     storedFollowUp = {
@@ -239,7 +267,10 @@ test('FollowUp flow: createFollowUp, getTodayFollowUps, and completeFollowUp', a
   } finally {
     FollowUp.create = originalCreate;
     FollowUp.find = originalFind;
+    FollowUp.findOne = originalFindOne;
     FollowUp.findById = originalFindById;
     FollowUp.findOneAndUpdate = originalFindOneAndUpdate;
+    Lead.findById = originalLeadFindById;
+    Lead.updateOne = originalLeadUpdateOne;
   }
 });

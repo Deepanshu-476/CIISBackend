@@ -3,6 +3,7 @@ const Lead = require('../models/Lead');
 const CallLog = require('../models/CallLog');
 const FollowUp = require('../models/Followup');
 const User = require('../models/User');
+const JobRole = require('../models/JobRole');
 const LeadAssignmentHistory = require('../models/LeadAssignmentHistory');
 const { telecallerFilter, telecallerUserIds } = require('../utils/telecallerUsers');
 require('../models/LeadSource');
@@ -15,6 +16,21 @@ function getDayBounds(date = new Date()) {
   const start = new Date(local.getTime() - istOffset);
   const end = new Date(start.getTime() + 24 * 60 * 60000);
   return { start, end };
+}
+
+function getIstDateKey(date) {
+  const istOffset = 5.5 * 60 * 60000;
+  return new Date(date.getTime() + istOffset).toISOString().slice(0, 10);
+}
+
+function displayDateTime(date) {
+  return new Date(date).toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
 }
 
 // 1. Dashboard Aggregations
@@ -33,9 +49,11 @@ exports.dashboard = async (req, res, next) => {
       convertedLeads,
       unassignedLeads,
       pendingFollowUps,
+      todaysFollowUps,
       activeUsersList,
       leadStatusFacet,
-      recentCallsList
+      recentCallsList,
+      todaysScheduleList
     ] = await Promise.all([
       Lead.countDocuments({ company }),
       CallLog.countDocuments({ company }),
@@ -43,6 +61,7 @@ exports.dashboard = async (req, res, next) => {
       Lead.countDocuments({ company, status: 'converted' }),
       Lead.countDocuments({ company, assignedTo: null }),
       FollowUp.countDocuments({ company, status: 'pending' }),
+      FollowUp.countDocuments({ company, status: 'pending', date: { $gte: todayStart, $lt: todayEnd } }),
       User.find(telecallerFilter(company, eligibleTelecallers)).select('name email role companyRole jobRole').lean(),
       Lead.aggregate([
         { $match: { company: new mongoose.Types.ObjectId(String(company)) } },
@@ -52,6 +71,12 @@ exports.dashboard = async (req, res, next) => {
         .sort({ createdAt: -1 })
         .limit(10)
         .populate('lead', 'name phone source')
+        .populate('agent', 'name')
+        .lean(),
+      FollowUp.find({ company, status: 'pending', date: { $gte: todayStart, $lt: todayEnd } })
+        .sort({ date: 1 })
+        .limit(10)
+        .populate('lead', 'name phone')
         .populate('agent', 'name')
         .lean()
     ]);
@@ -76,8 +101,8 @@ exports.dashboard = async (req, res, next) => {
       { name: 'Closed', value: statusMap['closed'] || 0, color: '#ef4444' }
     ];
 
-    // 30-Day Trend Aggregations for Leads and Calls
-    const [leadDays, callDays] = await Promise.all([
+    // 30-Day Trend Aggregations for Leads, Calls, and scheduled Follow-Ups
+    const [leadDays, callDays, followUpDays] = await Promise.all([
       Lead.aggregate([
         { $match: { company: new mongoose.Types.ObjectId(String(company)), createdAt: { $gte: thirtyDaysAgo } } },
         { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: '+05:30' } }, count: { $sum: 1 } } }
@@ -85,46 +110,70 @@ exports.dashboard = async (req, res, next) => {
       CallLog.aggregate([
         { $match: { company: new mongoose.Types.ObjectId(String(company)), createdAt: { $gte: thirtyDaysAgo } } },
         { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: '+05:30' } }, count: { $sum: 1 } } }
+      ]),
+      FollowUp.aggregate([
+        { $match: { company: new mongoose.Types.ObjectId(String(company)), date: { $gte: thirtyDaysAgo } } },
+        { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$date', timezone: '+05:30' } }, count: { $sum: 1 } } }
       ])
     ]);
 
     const leadDayMap = (leadDays || []).reduce((acc, r) => ({ ...acc, [r._id]: r.count }), {});
     const callDayMap = (callDays || []).reduce((acc, r) => ({ ...acc, [r._id]: r.count }), {});
+    const followUpDayMap = (followUpDays || []).reduce((acc, r) => ({ ...acc, [r._id]: r.count }), {});
 
     const trendData = [];
     for (let i = 29; i >= 0; i--) {
       const d = new Date(now.getTime() - i * 24 * 60 * 60000);
-      const key = d.toISOString().slice(0, 10);
-      const dayStr = d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+      const key = getIstDateKey(d);
+      const dayStr = new Date(`${key}T00:00:00.000Z`).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', timeZone: 'UTC' });
       trendData.push({
         date: dayStr,
         leads: leadDayMap[key] || 0,
         calls: callDayMap[key] || 0,
-        visits: 0
+        followUps: followUpDayMap[key] || 0
       });
     }
 
     // Team Performance Aggregation
-    const agentCallsFacet = await CallLog.aggregate([
-      { $match: { company: new mongoose.Types.ObjectId(String(company)) } },
-      { $group: { _id: '$agent', totalCalls: { $sum: 1 } } }
+    const [agentCallsFacet, agentLeadsFacet, agentFollowUpsFacet] = await Promise.all([
+      CallLog.aggregate([
+        { $match: { company: new mongoose.Types.ObjectId(String(company)) } },
+        { $group: { _id: '$agent', totalCalls: { $sum: 1 } } }
+      ]),
+      Lead.aggregate([
+        { $match: { company: new mongoose.Types.ObjectId(String(company)), assignedTo: { $ne: null } } },
+        { $group: {
+          _id: '$assignedTo',
+          totalLeads: { $sum: 1 },
+          converted: { $sum: { $cond: [{ $eq: ['$status', 'converted'] }, 1, 0] } }
+        } }
+      ]),
+      FollowUp.aggregate([
+        { $match: { company: new mongoose.Types.ObjectId(String(company)) } },
+        { $group: { _id: '$agent', totalFollowUps: { $sum: 1 } } }
+      ])
     ]);
     const agentCallMap = (agentCallsFacet || []).reduce((acc, c) => ({ ...acc, [String(c._id)]: c.totalCalls }), {});
-
-    const agentLeadsFacet = await Lead.aggregate([
-      { $match: { company: new mongoose.Types.ObjectId(String(company)), assignedTo: { $ne: null } } },
-      { $group: {
-        _id: '$assignedTo',
-        totalLeads: { $sum: 1 },
-        converted: { $sum: { $cond: [{ $eq: ['$status', 'converted'] }, 1, 0] } }
-      } }
-    ]);
     const agentLeadMap = (agentLeadsFacet || []).reduce((acc, l) => ({ ...acc, [String(l._id)]: l }), {});
+    const agentFollowUpMap = (agentFollowUpsFacet || []).reduce((acc, f) => ({ ...acc, [String(f._id)]: f.totalFollowUps }), {});
+
+    const jobRoleIds = [...new Set(activeUsersList
+      .map(user => user.jobRole)
+      .filter(value => mongoose.isValidObjectId(String(value)))
+      .map(String))];
+    const jobRoles = jobRoleIds.length
+      ? await JobRole.find({ company, _id: { $in: jobRoleIds } }).select('name').lean()
+      : [];
+    const roleNamesById = new Map(jobRoles.map(role => [String(role._id), role.name]));
 
     const teamPerformance = activeUsersList.map(user => {
       const uId = String(user._id);
       const uCalls = agentCallMap[uId] || 0;
       const uLeadStats = agentLeadMap[uId] || { totalLeads: 0, converted: 0 };
+      const rawRoles = [user.jobRole, user.companyRole, user.role].filter(Boolean);
+      const resolvedRole = rawRoles.map(value => roleNamesById.get(String(value))).find(Boolean)
+        || rawRoles.find(value => !mongoose.isValidObjectId(String(value)))
+        || 'Telecaller';
       const uConvRate = uLeadStats.totalLeads
         ? `${((uLeadStats.converted / uLeadStats.totalLeads) * 100).toFixed(1)}%`
         : '0%';
@@ -132,10 +181,10 @@ exports.dashboard = async (req, res, next) => {
       return {
         id: uId,
         member: user.name || 'User',
-        role: user.jobRole || user.companyRole || user.role || 'Telecaller',
-        roleBadge: 'blue',
+        role: resolvedRole,
+        roleBadge: /marketing/i.test(resolvedRole) ? 'purple' : 'blue',
         calls: uCalls,
-        visits: 0,
+        followUps: agentFollowUpMap[uId] || 0,
         leads: uLeadStats.totalLeads,
         conversion: uConvRate,
         conversionHigh: parseFloat(uConvRate) >= 10
@@ -148,8 +197,19 @@ exports.dashboard = async (req, res, next) => {
       role: call.agent?.name || 'Agent',
       roleType: 'telecaller',
       action: `Call Logged (${call.status || 'answered'})`,
-      time: new Date(call.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }),
+      time: displayDateTime(call.createdAt),
       type: 'call'
+    }));
+
+    const todaysSchedule = (todaysScheduleList || []).map(item => ({
+      id: String(item._id),
+      date: item.date,
+      time: displayDateTime(item.date),
+      lead: item.lead?.name || 'Lead',
+      phone: item.lead?.phone || '',
+      agent: item.agent?.name || 'Unassigned',
+      priority: item.priority || 'medium',
+      note: item.note || ''
     }));
 
     res.json({
@@ -157,7 +217,8 @@ exports.dashboard = async (req, res, next) => {
         totalLeads,
         totalCalls,
         todaysCalls,
-        todaysVisits: 0,
+        todaysFollowUps,
+        convertedLeads,
         conversionRate: `${conversionRate}%`,
         pendingFollowUps,
         activeUsers: activeUsersCount,
@@ -166,7 +227,8 @@ exports.dashboard = async (req, res, next) => {
       trendData,
       pipelineData,
       teamPerformance,
-      recentActivities
+      recentActivities,
+      todaysSchedule
     });
   } catch (error) { next(error); }
 };
@@ -190,7 +252,8 @@ exports.overview = async (req, res, next) => {
       totalCalls,
       recentLogs,
       trendLogs,
-      outcomeLogs
+      outcomeLogs,
+      nextFollowUps
     ] = await Promise.all([
       Lead.countDocuments({ company, assignedTo: { $ne: null } }),
       CallLog.countDocuments({ company, createdAt: { $gte: todayStart, $lt: todayEnd } }),
@@ -217,7 +280,13 @@ exports.overview = async (req, res, next) => {
       CallLog.aggregate([
         { $match: { company: new mongoose.Types.ObjectId(String(company)) } },
         { $group: { _id: '$status', count: { $sum: 1 } } }
-      ])
+      ]),
+      FollowUp.find({ company, status: 'pending', date: { $gte: todayStart } })
+        .sort({ date: 1 })
+        .limit(10)
+        .populate('lead', 'name phone')
+        .populate('agent', 'name')
+        .lean()
     ]);
 
     // Trend Data for 7 days & 30 days
@@ -290,6 +359,24 @@ exports.overview = async (req, res, next) => {
       duration: log.duration ? `${Math.floor(log.duration / 60)}m ${log.duration % 60}s` : '0s'
     }));
 
+    const formatFollowUp = item => ({
+      id: item._id,
+      leadId: item.lead?._id,
+      name: item.lead?.name || 'Lead',
+      phone: item.lead?.phone || '',
+      date: item.date,
+      priority: item.priority || 'medium',
+      note: item.note || '',
+      agent: item.agent?.name || 'Telecaller'
+    });
+    const todayFollowUps = nextFollowUps
+      .filter(item => new Date(item.date) < todayEnd)
+      .map(formatFollowUp);
+    const upcomingFollowUps = nextFollowUps
+      .filter(item => new Date(item.date) >= todayEnd)
+      .slice(0, 5)
+      .map(formatFollowUp);
+
     res.json({
       statCards: [
         { title: "Assigned Leads", value: String(assignedLeads), badge: "Active Leads", badgeType: "purple" },
@@ -313,7 +400,9 @@ exports.overview = async (req, res, next) => {
       outcomeData: outcomeData.length ? outcomeData : [
         { name: 'Answered', value: 0, percent: '0% of calls', color: '#10b981' }
       ],
-      recentCalls
+      recentCalls,
+      todayFollowUps,
+      upcomingFollowUps
     });
   } catch (error) { next(error); }
 };
