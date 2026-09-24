@@ -8,12 +8,14 @@
     startTime: { type: Date, default: Date.now },
     endTime: Date,
     duration: Number,
+    callType: { type: String, default: "Outbound" },
     status: {
       type: String,       
       enum: ["answered", "missed", "not reachable", "rejected"],    
       default: "answered",
     },      
     notes: String, 
+    recordingUrl: { type: String, default: "" },
   }, { timestamps: true });  
 
   callLogSchema.index(

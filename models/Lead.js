@@ -39,7 +39,9 @@ const leadSchema = new mongoose.Schema({
     callType: String,
     outcome: String,
     notes: String,
-    followUp: Date
+    duration: { type: Number, default: 0 },
+    followUp: Date,
+    recordingUrl: { type: String, default: "" }
   }],
   notes: [
     {
