@@ -7,8 +7,50 @@ const User = require('../../models/User');
 const { protect } = require('../../middleware/authMiddleware');
 
 const router = express.Router({ mergeParams: true });
-const uploadDir = path.join(__dirname, '../../uploads/employee-documents');
+const uploadDir = path.join(__dirname, '../../private-uploads/employee-documents');
+const legacyUploadDir = path.join(__dirname, '../../uploads/employee-documents');
 fs.mkdirSync(uploadDir, { recursive: true });
+
+const migrateLegacyDocuments = () => {
+  if (!fs.existsSync(legacyUploadDir)) return;
+
+  for (const fileName of fs.readdirSync(legacyUploadDir)) {
+    const source = path.join(legacyUploadDir, fileName);
+    const destination = path.join(uploadDir, path.basename(fileName));
+
+    let stat;
+    try {
+      stat = fs.statSync(source);
+    } catch {
+      continue;
+    }
+
+    if (!stat.isFile()) continue;
+
+    try {
+      if (fs.existsSync(destination)) {
+        fs.unlinkSync(source);
+        continue;
+      }
+
+      fs.renameSync(source, destination);
+    } catch (error) {
+      try {
+        fs.copyFileSync(source, destination, fs.constants.COPYFILE_EXCL);
+        fs.unlinkSync(source);
+      } catch (copyError) {
+        console.error('Employee document migration failed', {
+          fileName,
+          message: copyError.message || error.message,
+        });
+      }
+    }
+  }
+};
+
+// Registration documents used to live below /uploads, which is publicly served.
+// Move legacy files out of that tree as soon as this route module is loaded.
+migrateLegacyDocuments();
 
 const allowedExtensions = new Set([
   '.pdf', '.jpg', '.jpeg', '.jfif', '.png', '.webp',
@@ -118,6 +160,8 @@ const sendDocument = disposition => (req, res) => {
   if (!fs.existsSync(filePath)) return res.status(404).json({ message: 'Document file not found' });
   res.setHeader('Content-Type', document.type || 'application/octet-stream');
   res.setHeader('Content-Disposition', `${disposition}; filename="${encodeURIComponent(document.name || 'document')}"`);
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
   res.sendFile(filePath);
 };
 
