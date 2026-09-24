@@ -27,20 +27,23 @@ const getCompanyUserIds = async user => {
 const buildCompanyAlertQuery = async user => {
   const companyId = getCompanyId(user);
   const companyCode = getCompanyCode(user);
-  const companyUserIds = await getCompanyUserIds(user);
   const filters = [];
 
   if (companyId) filters.push({ company: companyId });
   if (companyCode) filters.push({ companyCode });
-  if (companyUserIds.length) {
-    filters.push({
-      company: { $exists: false },
-      companyCode: { $exists: false },
-      createdBy: { $in: companyUserIds }
-    });
+
+  if (!filters.length) {
+    const companyUserIds = await getCompanyUserIds(user);
+    if (companyUserIds.length) {
+      filters.push({
+        company: { $exists: false },
+        companyCode: { $exists: false },
+        createdBy: { $in: companyUserIds }
+      });
+    }
   }
 
-  return filters.length ? { $or: filters } : {};
+  return filters.length ? (filters.length === 1 ? filters[0] : { $or: filters }) : {};
 };
 
 const mergeQueries = (...queries) => {

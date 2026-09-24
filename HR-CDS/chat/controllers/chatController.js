@@ -6,6 +6,18 @@ const {notifyDirectUsers} = require("../../utils/systemNotificationService");
 
 const getUserId = req => req.user._id?.toString() || req.user.id?.toString();
 
+const parsePositiveInt = (value, fallback, max = 100) => {
+  const parsed = parseInt(value, 10);
+  if (Number.isNaN(parsed) || parsed < 1) return fallback;
+  return Math.min(parsed, max);
+};
+
+const parseCursorDate = value => {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
 const populateMessage = query => query
   .populate("sender", "name email profileImage avatar image photo")
   .populate({
@@ -254,6 +266,8 @@ exports.createGroupConversation = async (req, res) => {
 exports.getConversations = async (req, res) => {
   try {
     const userId = getUserId(req);
+    const limit = parsePositiveInt(req.query.limit, 50, 100);
+    const before = parseCursorDate(req.query.before || req.query.beforeUpdatedAt);
 
     
     const activeUserGroups = await Group.find({
@@ -262,13 +276,17 @@ exports.getConversations = async (req, res) => {
     }).select("_id");
     const activeGroupIds = new Set(activeUserGroups.map(g => g._id.toString()));
 
-    const conversations = await Conversation.find({
+    const query = {
       companyId: req.user.company,
       members: userId,
-    })
+    };
+    if (before) query.updatedAt = {$lt: before};
+
+    const conversations = await Conversation.find(query)
       .populate("members", "name email profileImage avatar image photo companyRole isActive")
       .populate("admins", "name email profileImage avatar image photo")
-      .sort({updatedAt: -1});
+      .sort({updatedAt: -1})
+      .limit(limit + 1);
 
     
     
@@ -288,11 +306,24 @@ exports.getConversations = async (req, res) => {
       }
     });
 
+    const pageConversations = activeConversations.slice(0, limit);
     const conversationsWithMeta = await Promise.all(
-      activeConversations.map(conversation => withConversationMeta(conversation, userId, req.user.company))
+      pageConversations.map(conversation => withConversationMeta(conversation, userId, req.user.company))
     );
 
-    res.status(200).json({success: true, conversations: conversationsWithMeta});
+    const nextCursor = conversationsWithMeta.length
+      ? conversationsWithMeta[conversationsWithMeta.length - 1].updatedAt
+      : null;
+
+    res.status(200).json({
+      success: true,
+      conversations: conversationsWithMeta,
+      pagination: {
+        limit,
+        hasMore: activeConversations.length > limit,
+        nextCursor,
+      },
+    });
   } catch (error) {
     res.status(500).json({success: false, message: error.message});
   }
@@ -456,6 +487,9 @@ exports.sendMessage = async (req, res) => {
 exports.getMessages = async (req, res) => {
   try {
     const userId = getUserId(req);
+    const limit = parsePositiveInt(req.query.limit, 50, 100);
+    const before = parseCursorDate(req.query.before || req.query.beforeCreatedAt);
+    const after = parseCursorDate(req.query.after || req.query.afterCreatedAt);
     const conversation = await Conversation.findOne({
       _id: req.params.id,
       companyId: req.user.company,
@@ -466,12 +500,21 @@ exports.getMessages = async (req, res) => {
       return res.status(404).json({success: false, message: "Conversation not found"});
     }
 
-    const messages = await Message.find({
+    const messageQuery = {
       conversationId: req.params.id,
       companyId: req.user.company,
       deletedFor: {$ne: userId},
       ...activeMessageFilter(),
-    })
+    };
+
+    if (before) {
+      messageQuery.createdAt = {$lt: before};
+    } else if (after) {
+      messageQuery.createdAt = {$gt: after};
+    }
+
+    const sortDirection = after ? 1 : -1;
+    const messages = await Message.find(messageQuery)
       .populate("sender", "name email profileImage avatar image photo")
       .populate({
         path: "replyTo",
@@ -480,9 +523,14 @@ exports.getMessages = async (req, res) => {
       })
       .populate("reactions.user", "name profileImage avatar image photo")
       .populate("systemEvent.actor", "name profileImage avatar image photo")
-      .sort({createdAt: 1});
+      .sort({createdAt: sortDirection})
+      .limit(limit + 1);
 
-    const normalizedMessages = messages.map(message => {
+    const hasMore = messages.length > limit;
+    const pageMessages = messages.slice(0, limit);
+    const orderedMessages = after ? pageMessages : [...pageMessages].reverse();
+
+    const normalizedMessages = orderedMessages.map(message => {
       const plain = message.toObject();
       const senderId = plain.sender?._id?.toString() || plain.sender?.toString();
       const seenBy = (plain.seenBy || []).map(member => member.toString());
@@ -499,7 +547,7 @@ exports.getMessages = async (req, res) => {
       };
     });
 
-    const newlySeenMessages = messages
+    const newlySeenMessages = orderedMessages
       .map(message => {
         const senderId = message.sender?._id?.toString() || message.sender?.toString();
         const seenBy = (message.seenBy || []).map(member => member.toString());
@@ -532,7 +580,16 @@ exports.getMessages = async (req, res) => {
       });
     }
 
-    res.status(200).json({success: true, messages: normalizedMessages});
+    res.status(200).json({
+      success: true,
+      messages: normalizedMessages,
+      pagination: {
+        limit,
+        hasMore,
+        nextBefore: normalizedMessages.length ? normalizedMessages[0].createdAt : null,
+        nextAfter: normalizedMessages.length ? normalizedMessages[normalizedMessages.length - 1].createdAt : null,
+      },
+    });
   } catch (error) {
     res.status(500).json({success: false, message: error.message});
   }

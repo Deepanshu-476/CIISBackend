@@ -17,4 +17,8 @@ const deviceSchema = new mongoose.Schema({
   }
 });
 
+deviceSchema.index({ userId: 1, deviceToken: 1 });
+deviceSchema.index({ deviceToken: 1 });
+deviceSchema.index({ updatedAt: -1, createdAt: -1 });
+
 module.exports = mongoose.model('Device', deviceSchema);

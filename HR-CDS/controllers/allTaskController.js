@@ -199,7 +199,10 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
   }
   if (priority) projectTaskElemMatch.priority = new RegExp(`^${priority}$`, 'i');
 
-  const projectQuery = { tasks: { $elemMatch: projectTaskElemMatch } };
+  const projectQuery = {
+    ...(companyFilter ? { companyCode: companyFilter } : {}),
+    tasks: { $elemMatch: projectTaskElemMatch }
+  };
 
   const [personalTasks, clientTasks, projectTasks] = await Promise.all([
     Task.find(personalQuery)

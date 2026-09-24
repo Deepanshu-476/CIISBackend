@@ -7,4 +7,7 @@ const viewSchema = new mongoose.Schema({
   viewedAt: Date,
 });
 
+viewSchema.index({ userId: 1, meetingId: 1 });
+viewSchema.index({ meetingId: 1 });
+
 module.exports = mongoose.model("MeetingView", viewSchema);

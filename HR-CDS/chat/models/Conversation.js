@@ -75,6 +75,10 @@ const conversationSchema = new mongoose.Schema(
 { timestamps: true }
 );
 
+conversationSchema.index({ companyId: 1, members: 1, updatedAt: -1 });
+conversationSchema.index({ companyId: 1, groupId: 1 });
+conversationSchema.index({ companyId: 1, isGroup: 1, updatedAt: -1 });
+
 module.exports = mongoose.model(
     "Conversation",
     conversationSchema
