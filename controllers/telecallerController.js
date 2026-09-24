@@ -22,7 +22,7 @@ const syncCallArtifacts = async (req, { id, outcome, notes, nextDate, noteOnly }
   else if (['wrong number', 'wrong person', 'invalid number', 'language barrier', 'do not call', 'duplicate', 'spam'].includes(lower)) status = 'rejected';
 
   const values = { company: req.telecallerCompany, lead: req.params.id, agent, clientCallId: id,
-    endTime: new Date(), duration: Number(req.body.duration) || 0, status, notes: notes.trim() };
+    endTime: new Date(), duration: Number(req.body.duration) || 0, status, notes: notes.trim(), recordingUrl: req.body.recordingUrl || '', callType: req.body.callType || 'Outgoing' };
   if (req.body.callLogId && mongoose.isValidObjectId(req.body.callLogId)) {
     const log = await CallLog.findOneAndUpdate({ _id: req.body.callLogId, agent }, { $set: values }, { new: true });
     if (!log) throw new Error('The active call log could not be finalized.');
@@ -65,9 +65,10 @@ exports.getOne = async (req, res, next) => {
 
 exports.save = async (req, res, next) => {
   try {
-    const { id, outcome, callType = 'Outbound', notes = '', followUp } = req.body;
+    const { id, outcome, callType = 'Outgoing', notes = '', followUp } = req.body;
+    const allowedCallTypes = ['Inbound', 'Outbound', 'Outgoing', 'Incoming', 'Missed', 'Unknown'];
     if (!mongoose.isValidObjectId(req.params.id) || typeof id !== 'string' || !/^[a-zA-Z0-9-]{8,80}$/.test(id)) return res.status(400).json({ message: 'Invalid lead or call ID.' });
-    if (!outcomes.includes(outcome) || !['Inbound', 'Outbound'].includes(callType)) return res.status(400).json({ message: 'Choose a valid call outcome and direction.' });
+    if (!outcomes.includes(outcome) || !allowedCallTypes.includes(callType)) return res.status(400).json({ message: 'Choose a valid call outcome and direction.' });
     if (typeof notes !== 'string' || notes.length > 5000 || (outcome === 'Note Added' && !notes.trim())) return res.status(400).json({ message: 'Enter notes of at most 5,000 characters.' });
     const filter = { ...scope(req), _id: req.params.id };
     const existing = await Lead.findOne(filter).lean();
@@ -81,7 +82,7 @@ exports.save = async (req, res, next) => {
       await syncCallArtifacts(req, { id, outcome, notes, nextDate, noteOnly });
       return res.json({ item: await populated(Lead.findOne(filter)) });
     }
-    const call = { id, outcome, callType, notes: notes.trim(), agent: req.user._id || req.user.id, createdByName: req.user.name || 'User', date: new Date(), followUp: noteOnly || terminal.includes(outcome) ? null : nextDate };
+    const call = { id, outcome, callType, notes: notes.trim(), agent: req.user._id || req.user.id, createdByName: req.user.name || 'User', date: new Date(), followUp: noteOnly || terminal.includes(outcome) ? null : nextDate, recordingUrl: req.body.recordingUrl || '', duration: Number(req.body.duration) || 0 };
     const mutation = { $push: { callHistory: call }, $inc: { __v: 1 } };
     if (!noteOnly) {
       const status = outcome === 'Converted' ? 'converted' : outcome === 'Call Closed' ? 'closed' : outcome === 'Interested' ? 'interested' : outcome === 'Not Interested' ? 'not interested' : callbacks.includes(outcome) ? 'follow-up' : existing.status;

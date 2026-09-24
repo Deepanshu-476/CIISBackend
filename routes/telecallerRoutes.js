@@ -41,4 +41,30 @@ router.post('/:id/calls', (req, res, next) => {
   'edit'
 )(req, res, next), controller.save);
 
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
+
+const recordingDir = path.join(__dirname, '../uploads/recordings');
+if (!fs.existsSync(recordingDir)) fs.mkdirSync(recordingDir, { recursive: true });
+
+const recordingStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, recordingDir),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname) || '.m4a';
+    cb(null, `rec_${Date.now()}_${Math.round(Math.random() * 1e9)}${ext}`);
+  },
+});
+
+const uploadAudio = multer({
+  storage: recordingStorage,
+  limits: { fileSize: 30 * 1024 * 1024 },
+});
+
+router.post('/:id/recording', uploadAudio.single('audio'), (req, res) => {
+  if (!req.file) return res.status(400).json({ message: 'No audio recording file uploaded.' });
+  const fileUrl = `/uploads/recordings/${req.file.filename}`;
+  res.json({ success: true, recordingUrl: fileUrl, filename: req.file.filename });
+});
+
 module.exports = router;
