@@ -796,10 +796,12 @@ app.use("/uploads", blockSensitiveStaticAccess);
 
 uploadStaticDirs.forEach(uploadDir => {
   app.use("/api/uploads", express.static(uploadDir));
+  app.use("/uploads", express.static(uploadDir));
 });
 // Older chat uploads were written one directory above the backend. Keep those
 // already-sent attachments reachable while new uploads use backend/uploads.
 app.use("/api/uploads/chat", express.static(path.join(__dirname, "..", "uploads", "chat")));
+app.use("/uploads/chat", express.static(path.join(__dirname, "..", "uploads", "chat")));
 app.use(
     "/uploads",
     express.static(
