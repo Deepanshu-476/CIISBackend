@@ -451,7 +451,7 @@ const getLeaveCoverageDateKeys = async ({ userId, companyCode, startDate, endDat
   const leaves = await Leave.find({
     user: userId,
     companyCode,
-    status: { $in: ["Pending", "Approved"] },
+    status: "Approved",
     startDate: { $lte: endDate },
     endDate: { $gte: startDate }
   }).select("startDate endDate").lean();
