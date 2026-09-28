@@ -5,6 +5,7 @@ const path = require('path');
 const multer = require('multer');
 const Client = require('../models/Client');
 const ClientDocument = require('../models/ClientDocument');
+const ClientDocumentDownload = require('../models/ClientDocumentDownload');
 const { protect } = require('../../middleware/authMiddleware');
 
 const router = express.Router();
@@ -168,6 +169,7 @@ const getRequestClientIds = req => {
     req.user?.linkedClient?._id,
     req.user?.linkedClient?.id,
     details.clientId,
+    ...(Array.isArray(details.clientIds) ? details.clientIds : []),
     req.user?.employeeType,
   ].map(value => String(value || '').trim()).filter(Boolean);
 };
@@ -290,6 +292,10 @@ router.get('/', protect, async (req, res) => {
       success: true,
       data: documents.map(document => formatDocument(document, req, client)),
       count: documents.length,
+      downloadsLast30Days: await ClientDocumentDownload.countDocuments({
+        client: client._id,
+        downloadedAt: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+      }),
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
@@ -542,7 +548,15 @@ router.get('/:id/download', protect, async (req, res) => {
       return res.status(404).json({ success: false, message: 'File not found on server' });
     }
 
-    return res.download(filePath, document.originalName || 'document');
+    return res.download(filePath, document.originalName || 'document', error => {
+      if (error) {
+        if (!res.headersSent) res.status(500).json({ success: false, message: 'Document download failed' });
+        return;
+      }
+      ClientDocumentDownload.create({ client: client._id }).catch(error => {
+        console.error('Failed to record document download:', error.message);
+      });
+    });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }

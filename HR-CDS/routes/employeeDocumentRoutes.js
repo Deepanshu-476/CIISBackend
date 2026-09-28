@@ -5,6 +5,7 @@ const multer = require('multer');
 const mongoose = require('mongoose');
 const User = require('../../models/User');
 const { protect } = require('../../middleware/authMiddleware');
+const { resolveEmployeeDocumentFile, employeeDocumentFilename } = require('../utils/employeeDocumentFile');
 
 const router = express.Router({ mergeParams: true });
 const uploadDir = path.join(__dirname, '../../uploads/employee-documents');
@@ -51,6 +52,7 @@ const documentJson = (document, userId) => ({
   name: document.name,
   type: document.type,
   uploadedAt: document.uploadedAt,
+  externalUrl: /^https?:\/\//i.test(document.url || '') ? document.url : undefined,
   viewUrl: `/users/${userId}/documents/${document._id}/view`,
   downloadUrl: `/users/${userId}/documents/${document._id}/download`
 });
@@ -114,11 +116,17 @@ const sendDocument = disposition => (req, res) => {
   }
   const document = req.targetUser.documents.id(req.params.documentId);
   if (!document) return res.status(404).json({ message: 'Document not found' });
-  const filePath = path.join(uploadDir, path.basename(document.url || ''));
-  if (!fs.existsSync(filePath)) return res.status(404).json({ message: 'Document file not found' });
-  res.setHeader('Content-Type', document.type || 'application/octet-stream');
-  res.setHeader('Content-Disposition', `${disposition}; filename="${encodeURIComponent(document.name || 'document')}"`);
-  res.sendFile(filePath);
+  const filePath = resolveEmployeeDocumentFile(document.url);
+  if (!filePath) return res.status(404).json({ message: 'Document file is missing from server storage. Please upload it again.', code: 'DOCUMENT_FILE_MISSING' });
+  // Legacy records store labels such as "pdf" or "image", not MIME types.
+  res.type(path.extname(filePath));
+  const filename = employeeDocumentFilename(document, filePath);
+  res.setHeader('Content-Disposition', `${disposition}; filename="${encodeURIComponent(filename)}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+  res.sendFile(filePath, error => {
+    if (error && !res.headersSent) {
+      res.status(error.statusCode === 404 ? 404 : 500).json({ message: 'Document could not be read from server storage. Please try again.' });
+    }
+  });
 };
 
 router.get('/:documentId/view', sendDocument('inline'));
@@ -130,12 +138,12 @@ router.delete('/:documentId', async (req, res) => {
   }
   const document = req.targetUser.documents.id(req.params.documentId);
   if (!document) return res.status(404).json({ message: 'Document not found' });
-  const filePath = path.join(uploadDir, path.basename(document.url || ''));
+  const filePath = resolveEmployeeDocumentFile(document.url);
   await User.updateOne(
     { _id: req.targetUser._id },
     { $pull: { documents: { _id: document._id } } }
   );
-  fs.unlink(filePath, () => {});
+  if (filePath) fs.unlink(filePath, () => {});
   res.json({ message: 'Document deleted successfully' });
 });
 
