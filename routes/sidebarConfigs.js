@@ -39,14 +39,17 @@ const getRouteKey = item => {
   return rawPath.split('/').filter(Boolean).pop();
 };
 
-const removeLegacyDashboardItems = menuItems => (Array.isArray(menuItems) ? menuItems.filter(item => {
+const removeRetiredSidebarItems = menuItems => (Array.isArray(menuItems) ? menuItems.filter(item => {
   const values = [item?.id, item?.path, item?.name].map(value => String(value || '').trim().toLowerCase());
-  return !values.includes('dashboard-2') && !values.includes('dashboard 2');
+  const isReleasePayroll = values.some(value => (
+    value.split(/[?#]/)[0].replace(/\/+$/, '').split('/').pop().replace(/[^a-z0-9]/g, '') === 'releasepayroll'
+  ));
+  return !isReleasePayroll && !values.includes('dashboard-2') && !values.includes('dashboard 2');
 }) : []);
 
 const sanitizeConfig = config => {
   if (!config) return config;
-  config.menuItems = removeLegacyDashboardItems(config.menuItems);
+  config.menuItems = removeRetiredSidebarItems(config.menuItems);
   return config;
 };
 
@@ -419,7 +422,7 @@ router.post('/', requireSidebarManager, async (req, res) => {
       }
     }
     
-    const cleanedItems = removeLegacyDashboardItems(menuItems);
+    const cleanedItems = removeRetiredSidebarItems(menuItems);
     const cleanedRanges = Array.isArray(ranges) ? ranges : [];
 
     const configKey = {
@@ -536,7 +539,7 @@ router.put('/:id', requireSidebarManager, async (req, res) => {
       }
     }
 
-    const cleanedItems = removeLegacyDashboardItems(menuItems);
+    const cleanedItems = removeRetiredSidebarItems(menuItems);
     const cleanedRanges = Array.isArray(ranges) ? ranges : [];
 
     const updatedConfig = await SidebarConfig.findByIdAndUpdate(
