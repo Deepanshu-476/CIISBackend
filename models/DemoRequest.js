@@ -27,12 +27,26 @@ const demoRequestSchema = new mongoose.Schema({
     trim: true,
     default: '11-50'
   },
+  preferredDemoDateTime: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  modules: {
+    type: [String],
+    default: []
+  },
   requirements: {
     type: String,
     trim: true,
     default: ''
   },
   message: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  source: {
     type: String,
     trim: true,
     default: ''
