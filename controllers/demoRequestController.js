@@ -26,8 +26,11 @@ const normalizeLegacyDemo = (item) => {
     phone: match(/Phone:\s*([^\s,]+)/i),
     companyName: item.companyName || '',
     employeeCount: match(/Demo Request:\s*([^.]+)/i).replace(/Employees/i, '').trim(),
+    preferredDemoDateTime: '',
+    modules: [],
     requirements: match(/Requirements:\s*(.*?)(?=\.\s*Message:|\.\s*Phone:|$)/i),
     message: match(/Message:\s*(.*?)(?=\.\s*Phone:|\.\s*Email:|$)/i),
+    source: 'legacy-service-enquiry',
     status: item.demoStatus || legacyStatusMap[item.status] || 'New',
     notes: item.notes || '',
     createdAt: item.createdAt,
@@ -39,7 +42,18 @@ const normalizeLegacyDemo = (item) => {
 // Create a new Demo Request (Public submission from landing page)
 const createDemoRequest = async (req, res) => {
   try {
-    const { name, email, phone, companyName, employeeCount, requirements, message } = req.body;
+    const {
+      name,
+      email,
+      phone,
+      companyName,
+      employeeCount,
+      preferredDemoDateTime,
+      modules,
+      requirements,
+      message,
+      source
+    } = req.body;
 
     if (!name || !name.trim()) {
       return res.status(400).json({ success: false, message: 'Full name is required' });
@@ -60,8 +74,13 @@ const createDemoRequest = async (req, res) => {
       phone: phone.trim(),
       companyName: companyName.trim(),
       employeeCount: employeeCount ? employeeCount.trim() : '11-50',
+      preferredDemoDateTime: preferredDemoDateTime ? String(preferredDemoDateTime).trim() : '',
+      modules: Array.isArray(modules)
+        ? modules.map((item) => String(item || '').trim()).filter(Boolean)
+        : [],
       requirements: requirements ? requirements.trim() : '',
       message: message ? message.trim() : '',
+      source: source ? String(source).trim() : '',
       status: 'New'
     });
 
@@ -97,6 +116,10 @@ const getDemoRequests = async (req, res) => {
         { email: searchRegex },
         { phone: searchRegex },
         { companyName: searchRegex },
+        { preferredDemoDateTime: searchRegex },
+        { modules: searchRegex },
+        { requirements: searchRegex },
+        { source: searchRegex },
         { message: searchRegex }
       ];
     }

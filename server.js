@@ -882,6 +882,7 @@ app.use('/api/menu-access', require("./routes/menuAccess.js"));
 app.use('/api/menu-items', require("./routes/menuItems.js"));
 app.use('/api/page-permissions', require("./routes/pagePermissions.js"));
 app.use('/api/company', require("./routes/companyRoutes.js"));
+app.use('/api/company-registration-requests', require("./routes/companyRegistrationRequestRoutes.js"));
 app.use('/api/plans', require("./routes/planRoutes.js"));
 app.use('/api/job-roles', require("./routes/jobRoleRoutes.js"));
 app.use('/api/superAdmin', require("./routes/superAdmin.js"));
