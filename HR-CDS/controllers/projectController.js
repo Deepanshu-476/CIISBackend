@@ -390,6 +390,61 @@ const withProjectSummary = (project) => {
   };
 };
 
+const sendProjectAttachment = (res, attachment, fallbackName = "document") => {
+  if (!attachment?.path) {
+    return res.status(404).json({ success: false, message: "Document not found" });
+  }
+
+  const filePath = path.resolve(attachment.path);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ success: false, message: "Document file not found" });
+  }
+
+  return res.download(filePath, attachment.filename || fallbackName);
+};
+
+exports.downloadProjectDocument = async (req, res) => {
+  try {
+    const project = await Project.findById(req.params.id).lean();
+    if (!project) {
+      return res.status(404).json({ success: false, message: "Project not found" });
+    }
+
+    if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
+      return res.status(403).json({ success: false, message: "Access denied to download document" });
+    }
+
+    return sendProjectAttachment(res, project.pdfFile, `${project.projectName || "project"}.pdf`);
+  } catch (error) {
+    console.error("❌ Error downloading project document:", error);
+    return res.status(500).json({ success: false, message: "Error downloading project document" });
+  }
+};
+
+exports.downloadTaskDocument = async (req, res) => {
+  try {
+    const { id, taskId } = req.params;
+    const project = await Project.findById(id).lean();
+    if (!project) {
+      return res.status(404).json({ success: false, message: "Project not found" });
+    }
+
+    if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
+      return res.status(403).json({ success: false, message: "Access denied to download document" });
+    }
+
+    const task = (project.tasks || []).find(item => idsEqual(item._id, taskId));
+    if (!task) {
+      return res.status(404).json({ success: false, message: "Task not found" });
+    }
+
+    return sendProjectAttachment(res, task.pdfFile, `${task.title || "task"}.pdf`);
+  } catch (error) {
+    console.error("❌ Error downloading task document:", error);
+    return res.status(500).json({ success: false, message: "Error downloading task document" });
+  }
+};
+
 
 exports.getUserNotifications = async (req, res) => {
   try {

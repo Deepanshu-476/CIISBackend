@@ -12,6 +12,8 @@ router.delete("/notifications/clear", protect, projectController.clearAllNotific
 
 
 router.get("/", protect, projectController.listProjects);
+router.get("/:id/document", protect, projectController.downloadProjectDocument);
+router.get("/:id/tasks/:taskId/document", protect, projectController.downloadTaskDocument);
 router.get("/:id", protect, projectController.getProjectById);
 
 router.post("/", protect, [
