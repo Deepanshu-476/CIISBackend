@@ -29,6 +29,12 @@ router.get('/team', context(['all-leads', 'assignments', 'assignment-bulk', 'wor
   '/ciisUser/crm/admin/follow-ups', '/ciisUser/crm/admin/pending-calls', '/ciisUser/crm/admin/completed-calls',
   '/ciisUser/crm/admin/converted-calls', '/ciisUser/crm/admin/transferred-calls'
 ]), controller.team);
-router.put('/:id/assign', context(['all-leads', 'assignments']), requireCrmPagePermission(['/ciisUser/crm/admin/all-leads', '/ciisUser/crm/admin/assignments'], 'edit'), controller.assign);
+router.put('/:id/assign', context(['all-leads', 'assignments', 'transferred-calls', 'assigned-calls', 'todays-calls', 'pending-calls', 'completed-calls', 'converted-calls', 'scheduled-calls']), requireCrmPagePermission([
+  '/ciisUser/crm/admin/all-leads', '/ciisUser/crm/admin/assignments',
+  '/ciisUser/crm/admin/transferred-calls', '/ciisUser/crm/admin/assigned-calls',
+  '/ciisUser/crm/admin/todays-calls', '/ciisUser/crm/admin/pending-calls',
+  '/ciisUser/crm/admin/completed-calls', '/ciisUser/crm/admin/converted-calls',
+  '/ciisUser/crm/admin/scheduled-calls'
+], 'edit'), controller.assign);
 router.get('/', context('all-leads'), requireCrmPagePermission('/ciisUser/crm/admin/all-leads'), controller.list);
 module.exports = router;
