@@ -28,7 +28,7 @@ router.use(async (req, res, next) => {
 
 const telecallerPaths = pages.map(slug => `/ciisUser/telecaller/${slug}`);
 router.get('/', requireCrmPagePermission(telecallerPaths), controller.list);
-router.get('/:id', requireCrmPagePermission(['/ciisUser/telecaller/lead-detail', '/ciisUser/telecaller/call-workspace']), controller.getOne);
+router.get('/:id', requireCrmPagePermission(telecallerPaths), controller.getOne);
 router.post('/:id/calls', (req, res, next) => {
   if (!enabled(req.telecallerPages, 'call-workspace') && !(req.body?.outcome === 'Note Added' && enabled(req.telecallerPages, 'lead-detail'))) {
     return res.status(403).json({ message: 'This call update page is not enabled for your company.' });

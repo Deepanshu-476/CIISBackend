@@ -6,7 +6,14 @@ require('../models/User');
 const outcomes = ['Connected', 'Interested', 'Not Interested', 'Need Callback', 'Follow-up', 'Call Later', 'No Answer', 'Busy', 'Switched Off', 'Not Reachable', 'Wrong Number', 'Wrong Person', 'Invalid Number', 'Language Barrier', 'Do Not Call', 'Duplicate', 'Spam', 'Call Closed', 'Converted', 'Note Added'];
 const callbacks = ['Need Callback', 'Follow-up', 'Call Later'];
 const terminal = ['Converted', 'Call Closed'];
-const scope = req => ({ company: req.telecallerCompany, assignedTo: req.user._id || req.user.id });
+const scope = req => {
+  const role = String(req.user?.role || req.user?.companyRole || '').toLowerCase();
+  const isAdmin = ['admin', 'owner', 'superadmin', 'company_admin', 'company admin'].includes(role);
+  if (isAdmin) {
+    return { company: req.telecallerCompany };
+  }
+  return { company: req.telecallerCompany, assignedTo: req.user._id || req.user.id };
+};
 const populated = query => query.populate('leadSource', 'name').populate('leadType', 'name').populate('assignedTo', 'name').lean();
 
 const syncCallArtifacts = async (req, { id, outcome, notes, nextDate, noteOnly }) => {

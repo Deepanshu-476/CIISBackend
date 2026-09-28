@@ -20,10 +20,11 @@ function validate(body = {}) {
     data[key] = typeof body[key] === 'string' ? body[key].trim() : '';
     if (data[key].length > limit) errors[key] = `Maximum ${limit} characters allowed.`;
   }
-  if (!data.fullName) {
+  const rawFullName = body.fullName || body.name || '';
+  if (!rawFullName.trim()) {
     errors.fullName = 'Full Name is required.';
   } else {
-    data.fullName = toTitleCase(data.fullName);
+    data.fullName = toTitleCase(rawFullName.trim());
   }
   data.email = data.email.toLowerCase();
   if (!validator.isEmail(data.email)) errors.email = 'Enter a valid email address.';
@@ -34,13 +35,16 @@ function validate(body = {}) {
     data[key] = typeof body[key] === 'string' ? body[key] : '';
     if (!mongoose.isValidObjectId(data[key])) errors[key] = `Select a valid ${key === 'leadType' ? 'lead type' : 'lead source'}.`;
   }
+  if (!data.remarks && typeof body.notes === 'string') {
+    data.remarks = body.notes.trim();
+  }
   const { fullName, ...fields } = data;
   return { data: { ...fields, name: fullName }, errors };
 }
 exports.validate = validate;
 exports.options = async (req, res, next) => {
   try {
-    const filter = { company: req.crmCompany, status: 'Active' };
+    const filter = { company: req.crmCompany, status: { $ne: 'Inactive' } };
     const [types, sources] = await Promise.all([
       LeadType.find(filter).select('name').sort({ name: 1 }).lean(),
       LeadSource.find(filter).select('name').sort({ name: 1 }).lean()
@@ -54,8 +58,8 @@ exports.create = async (req, res, next) => {
     if (Object.keys(errors).length) return res.status(400).json({ message: 'Please check the highlighted fields.', errors });
     const company = req.crmCompany;
     const [type, source] = await Promise.all([
-      LeadType.findOne({ _id: data.leadType, company, status: 'Active' }).lean(),
-      LeadSource.findOne({ _id: data.leadSource, company, status: 'Active' }).lean()
+      LeadType.findOne({ _id: data.leadType, company, status: { $ne: 'Inactive' } }).lean(),
+      LeadSource.findOne({ _id: data.leadSource, company, status: { $ne: 'Inactive' } }).lean()
     ]);
     if (!type) errors.leadType = 'This lead type is unavailable or inactive. Select an active type.';
     if (!source) errors.leadSource = 'This lead source is unavailable or inactive. Select an active source.';

@@ -377,7 +377,19 @@ exports.overview = async (req, res, next) => {
       .slice(0, 5)
       .map(formatFollowUp);
 
+    const kpis = {
+      assignedLeads,
+      todaysCalls,
+      pendingFollowups,
+      convertedCalls,
+      pendingCalls,
+      scheduledCalls,
+      completedCalls,
+      totalCalls
+    };
+
     res.json({
+      kpis,
       statCards: [
         { title: "Assigned Leads", value: String(assignedLeads), badge: "Active Leads", badgeType: "purple" },
         { title: "Today's Calls", value: String(todaysCalls), badge: "Completed Today", badgeType: "teal" },
@@ -479,7 +491,7 @@ exports.callHistory = async (req, res, next) => {
 
     const items = await CallLog.find(filter)
       .sort({ createdAt: -1 })
-      .populate({ path: 'lead', select: 'name phone source leadType leadSource', populate: [{ path: 'leadType', select: 'name' }, { path: 'leadSource', select: 'name' }] })
+      .populate({ path: 'lead', select: 'name phone email source leadType leadSource remarks address gender status', populate: [{ path: 'leadType', select: 'name' }, { path: 'leadSource', select: 'name' }] })
       .populate('agent', 'name email')
       .lean();
 
