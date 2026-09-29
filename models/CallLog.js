@@ -11,7 +11,7 @@
     callType: { type: String, default: "Outbound" },
     status: {
       type: String,       
-      enum: ["answered", "missed", "not reachable", "rejected"],    
+      enum: ["answered", "missed", "not reachable", "rejected"],      
       default: "answered",
     },      
     notes: String, 
