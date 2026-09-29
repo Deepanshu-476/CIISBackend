@@ -382,11 +382,16 @@ const withSortedProjectTasks = (project) => {
 const withProjectSummary = (project) => {
   const plainProject = typeof project?.toObject === "function" ? project.toObject() : project;
   const taskCount = Array.isArray(plainProject?.tasks) ? plainProject.tasks.length : 0;
+  const completedTaskCount = Array.isArray(plainProject?.tasks)
+    ? plainProject.tasks.filter(task => String(task?.status || "").trim().toLowerCase() === "completed").length
+    : 0;
   const { tasks, notifications, ...summary } = plainProject || {};
 
   return {
     ...summary,
-    taskCount
+    taskCount,
+    completedTaskCount,
+    taskProgress: taskCount ? Math.round((completedTaskCount / taskCount) * 100) : 0
   };
 };
 
@@ -614,7 +619,7 @@ exports.listProjects = async (req, res) => {
     if (summaryMode) {
       const [summaryProjects, total] = await Promise.all([
         Project.find(query)
-          .select('projectName description company companyCode branch status startDate endDate priority pdfFile createdBy createdAt updatedAt tasks._id users')
+          .select('projectName description company companyCode branch status startDate endDate priority pdfFile createdBy createdAt updatedAt tasks._id tasks.status users')
           .sort({ createdAt: -1 })
           .skip(skip)
           .limit(limit)
@@ -625,6 +630,12 @@ exports.listProjects = async (req, res) => {
       const items = summaryProjects.map(project => ({
         ...project,
         taskCount: Array.isArray(project.tasks) ? project.tasks.length : 0,
+        completedTaskCount: Array.isArray(project.tasks)
+          ? project.tasks.filter(task => String(task?.status || "").trim().toLowerCase() === "completed").length
+          : 0,
+        taskProgress: Array.isArray(project.tasks) && project.tasks.length
+          ? Math.round((project.tasks.filter(task => String(task?.status || "").trim().toLowerCase() === "completed").length / project.tasks.length) * 100)
+          : 0,
         userCount: Array.isArray(project.users) ? project.users.length : 0,
         tasks: undefined,
       }));

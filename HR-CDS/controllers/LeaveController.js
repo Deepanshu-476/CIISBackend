@@ -49,6 +49,11 @@ const getApprovalRoleForUser = (user = {}) => {
   return null;
 };
 
+const isLeavePolicyAdmin = (user = {}) => {
+  const roles = [user.companyRole, user.role, user.jobRole].map(normalizeRoleValue);
+  return roles.some(role => ['owner', 'admin', 'hr', 'superadmin', 'companyowner'].includes(role));
+};
+
 const calculateFinalLeaveStatus = (approvals) => {
   const normalizedApprovals = Leave.normalizeApprovals(approvals);
   const statuses = APPROVAL_ROLES.map((role) => normalizedApprovals[role].status);
@@ -126,6 +131,9 @@ const findApplicableLeavePolicy = async ({ companyId, user, leaveType }) => {
   const userDepartmentName = normalizePolicyValue(user.department?.name || user.departmentName || user.department);
   const userJobRole = normalizePolicyValue(user.jobRole?._id || user.jobRole);
   const userJobRoleName = normalizePolicyValue(user.jobRole?.name || user.jobRoleName || user.jobRole);
+  const useAdminFallback = isLeavePolicyAdmin(user) && !userDepartment && !userDepartmentName && !userJobRole && !userJobRoleName;
+
+  if (useAdminFallback) return policies[0] || null;
 
   return policies.find(policy => {
     const policyDepartmentId = normalizePolicyValue(policy.department?._id || policy.department);
@@ -362,7 +370,7 @@ exports.applyLeave = async (req, res) => {
     
     
     const user = await User.findById(req.user._id)
-      .select('name email department jobRole employeeId phone company companyCode employeeType dateOfJoining')
+      .select('name email department jobRole role companyRole employeeId phone company companyCode employeeType dateOfJoining')
       .populate('company', 'companyName companyCode isActive')
       .lean();
 
@@ -2355,7 +2363,7 @@ exports.getAnalytics = async (req, res) => {
 exports.getLeaveBalance = async (req, res) => {
   try {
     const user = await User.findById(req.user._id)
-      .select('department jobRole employeeType company companyCode')
+      .select('department jobRole role companyRole employeeType company companyCode')
       .populate('company', 'companyCode')
       .lean();
     if (!user) return res.status(404).json({ success: false, message: 'User account not found' });

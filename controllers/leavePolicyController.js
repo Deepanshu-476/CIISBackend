@@ -40,6 +40,12 @@ const isFallbackLeavePolicyManager = (user = {}) => {
   return roles.some(role => ["owner", "admin", "hr", "super_admin", "superadmin", "company_owner", "companyowner"].includes(role));
 };
 
+const canUseAdminLeavePolicyFallback = (req, user = {}) => {
+  if (!isFallbackLeavePolicyManager(req.user)) return false;
+  const hasEmployeePolicyScope = Boolean(normalize(user.department) || normalize(user.jobRole));
+  return !hasEmployeePolicyScope;
+};
+
 const hasLeavePolicyPermission = async (req, permission) => {
   const company = companyIdFrom(req);
   const userId = String(req.user?._id || req.user?.id || "");
@@ -253,7 +259,8 @@ exports.getApplicableLeavePolicies = async (req, res, next) => {
     const userRoles = [normalize(user.jobRole), normalize(userJobRoleRecord?.name || userJobRoleRecord?.roleName)].filter(Boolean);
     const isOnProbation = normalize(user.employeeType).includes("probation");
 
-    const applicable = allPolicies.filter(policy => {
+    const useAdminFallback = canUseAdminLeavePolicyFallback(req, user);
+    const applicable = useAdminFallback ? allPolicies : allPolicies.filter(policy => {
       const departments = [
         normalize(policy.department?._id || policy.department),
         normalize(policy.department?.name),
@@ -331,6 +338,7 @@ exports.getApplicableLeavePolicies = async (req, res, next) => {
       hasConfiguredPolicies: allPolicies.length > 0,
       user: {
         isOnProbation,
+        adminPolicyFallback: useAdminFallback,
         department: { value: user.department, name: userDepartmentRecord?.name || (!validId(user.department) ? user.department : "") },
         jobRole: { value: user.jobRole, name: userJobRoleRecord?.name || userJobRoleRecord?.roleName || (!validId(user.jobRole) ? user.jobRole : "") }
       }
