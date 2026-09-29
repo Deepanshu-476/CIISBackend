@@ -44,7 +44,7 @@ function validate(body = {}) {
 exports.validate = validate;
 exports.options = async (req, res, next) => {
   try {
-    const filter = { company: req.crmCompany, status: { $ne: 'Inactive' } };
+    const filter = { company: req.crmCompany, status: 'Active' };
     const [types, sources] = await Promise.all([
       LeadType.find(filter).select('name').sort({ name: 1 }).lean(),
       LeadSource.find(filter).select('name').sort({ name: 1 }).lean()
@@ -58,8 +58,8 @@ exports.create = async (req, res, next) => {
     if (Object.keys(errors).length) return res.status(400).json({ message: 'Please check the highlighted fields.', errors });
     const company = req.crmCompany;
     const [type, source] = await Promise.all([
-      LeadType.findOne({ _id: data.leadType, company, status: { $ne: 'Inactive' } }).lean(),
-      LeadSource.findOne({ _id: data.leadSource, company, status: { $ne: 'Inactive' } }).lean()
+      LeadType.findOne({ _id: data.leadType, company, status: 'Active' }).lean(),
+      LeadSource.findOne({ _id: data.leadSource, company, status: 'Active' }).lean()
     ]);
     if (!type) errors.leadType = 'This lead type is unavailable or inactive. Select an active type.';
     if (!source) errors.leadSource = 'This lead source is unavailable or inactive. Select an active source.';

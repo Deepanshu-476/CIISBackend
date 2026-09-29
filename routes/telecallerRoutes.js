@@ -45,7 +45,9 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 
-const recordingDir = path.join(__dirname, '../uploads/recordings');
+const recordingDir = typeof __dirname === 'string'
+  ? path.join(__dirname, '../uploads/recordings')
+  : path.join('uploads', 'recordings');
 if (!fs.existsSync(recordingDir)) fs.mkdirSync(recordingDir, { recursive: true });
 
 const recordingStorage = multer.diskStorage({
