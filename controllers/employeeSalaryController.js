@@ -1004,8 +1004,15 @@ exports.recalculateSingleEmployee = async (req, res) => {
       return res.status(400).json({ success: false, message: "Valid month and employeeId are required." });
     }
     const run = await PayrollRun.findOne({ company, month });
-    if (run && ["Approved", "Locked"].includes(run.status)) {
+    const nonRecalculableStatuses = ["Released", "Approved", "Locked"];
+    if (run && nonRecalculableStatuses.includes(run.status)) {
       return res.status(409).json({ success: false, message: `${run.status} payroll must be reopened before recalculation.` });
+    }
+    if (run) {
+      const existingEmployee = (run.employees || []).find(emp => employeePayrollKey(emp) === employeeId || String(emp._id || "") === employeeId);
+      if (existingEmployee && nonRecalculableStatuses.includes(existingEmployee.payrollStatus)) {
+        return res.status(409).json({ success: false, message: `${existingEmployee.payrollStatus} employee payroll must be reopened before recalculation.` });
+      }
     }
 
     const calculation = await calculatePayroll(req);

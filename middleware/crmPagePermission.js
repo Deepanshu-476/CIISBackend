@@ -8,8 +8,8 @@ const ids = (page, field) => (page?.[field] || [])
   .filter(Boolean);
 
 const permitted = (page, id, permission, req) => {
-  if (permission === 'edit' && ids(page, 'editUsers').includes(id)) return true;
-  if (permission === 'delete' && ids(page, 'deleteUsers').includes(id)) return true;
+  if (permission === 'delete') return ids(page, 'deleteUsers').includes(id);
+  if (permission === 'edit') return ids(page, 'editUsers').includes(id);
   if (['viewUsers', 'editUsers', 'deleteUsers', 'approvers']
     .some(field => ids(page, field).includes(id))) return true;
 
@@ -18,8 +18,7 @@ const permitted = (page, id, permission, req) => {
   const userRole = String(user?.companyRole || user?.jobRole || user?.role || '').toLowerCase();
   if (userRole === 'client') return false;
 
-  // Company members are permitted if allowed by company policy
-  return true;
+  return false;
 };
 
 const requireCrmPagePermission = (paths, permission = 'view') => async (req, res, next) => {
@@ -36,7 +35,7 @@ const requireCrmPagePermission = (paths, permission = 'view') => async (req, res
     const candidates = (Array.isArray(paths) ? paths : [paths]).filter(Boolean);
     const pages = await PagePermission.find({ company, path: { $in: candidates } }).lean();
     const id = String(currentUser);
-    if (pages.length > 0 && !pages.some(page => permitted(page, id, permission, req))) {
+    if (pages.length === 0 || !pages.some(page => permitted(page, id, permission, req))) {
       return res.status(403).json({ message: `You do not have ${permission} access for this CRM page.` });
     }
     req.crmCompany = company;
