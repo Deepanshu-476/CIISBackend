@@ -6,6 +6,13 @@ const rateLimit = require('express-rate-limit');
 const Company = require('../models/Company');
 const User = require('../models/User');
 const { protect, restrictTo } = require('../middleware/authMiddleware');
+const { getPaginationOptions } = require('../utils/pagination');
+
+const setPaginationHeaders = (res, { total, page, limit }) => {
+  res.set('X-Total-Count', String(total));
+  res.set('X-Page', String(page));
+  res.set('X-Limit', String(limit));
+};
 
 const superAdminLoginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -177,9 +184,17 @@ router.get('/stats', async (req, res) => {
 
 router.get('/companies', async (req, res) => {
   try {
-    const companies = await Company.find()
-      .populate('selectedPlan', 'name price durationDays features allowedPages')
-      .sort({ createdAt: -1 });
+    const { page, limit, skip } = getPaginationOptions(req.query || {}, { limit: 50, maxLimit: 100 });
+    const [companies, total] = await Promise.all([
+      Company.find()
+        .populate('selectedPlan', 'name price durationDays features allowedPages')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Company.countDocuments()
+    ]);
+    setPaginationHeaders(res, { total, page, limit });
     
     res.json(companies);
   } catch (error) {
@@ -190,9 +205,17 @@ router.get('/companies', async (req, res) => {
 
 router.get('/users', async (req, res) => {
   try {
-    const users = await User.find()
-      .populate('company', 'companyName')
-      .sort({ createdAt: -1 });
+    const { page, limit, skip } = getPaginationOptions(req.query || {}, { limit: 50, maxLimit: 100 });
+    const [users, total] = await Promise.all([
+      User.find()
+        .populate('company', 'companyName')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      User.countDocuments()
+    ]);
+    setPaginationHeaders(res, { total, page, limit });
     
     res.json(users);
   } catch (error) {

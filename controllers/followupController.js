@@ -1,11 +1,28 @@
 const mongoose = require("mongoose");
 const FollowUp = require("../models/Followup");
 const Lead = require("../models/Lead");
+const { getPaginationOptions } = require("../utils/pagination");
 
 const privilegedRoles = new Set(["admin", "superadmin", "companyadmin", "company admin"]);
 const getUserId = req => req.user?._id || req.user?.id;
 const getCompanyId = req => req.user?.company?._id || req.user?.company || req.user?.companyId;
 const getRole = req => String(req.user?.role || req.user?.companyRole || "").toLowerCase();
+
+const applyListOptions = (query, { skip, limit }) => {
+  let next = query;
+  if (typeof next.skip === "function") next = next.skip(skip);
+  if (typeof next.limit === "function") next = next.limit(limit);
+  if (typeof next.lean === "function") next = next.lean();
+  return next;
+};
+
+const setPaginationHeaders = async (res, filter, { page, limit }) => {
+  if (typeof res.set !== "function" || typeof FollowUp.countDocuments !== "function") return;
+  const total = await FollowUp.countDocuments(filter);
+  res.set("X-Total-Count", String(total));
+  res.set("X-Page", String(page));
+  res.set("X-Limit", String(limit));
+};
 
 const syncLeadNextFollowUp = async (leadId, companyId) => {
   const pendingQuery = { lead: leadId, status: "pending", date: { $gt: new Date() } };
@@ -85,7 +102,10 @@ exports.getTodayFollowUps = async (req, res) => {
     const tomorrowIST = new Date(todayIST.getTime() + 24 * 60 * 60000);
     const query = { agent: userId, date: { $gte: todayIST, $lt: tomorrowIST }, status: "pending" };
     if (companyId) query.company = companyId;
-    const followUps = await FollowUp.find(query).populate("lead", "name phone email").sort({ date: 1 });
+    const { page, limit, skip } = getPaginationOptions(req.query || {}, { limit: 50, maxLimit: 100 });
+    const followUpsQuery = FollowUp.find(query).populate("lead", "name phone email").sort({ date: 1 });
+    const followUps = await applyListOptions(followUpsQuery, { skip, limit });
+    await setPaginationHeaders(res, query, { page, limit });
     return res.json(followUps);
   } catch (err) {
     return res.status(500).json({ msg: "Error fetching follow-ups", error: err.message });
@@ -97,7 +117,10 @@ exports.getAgentFollowUps = async (req, res) => {
     const query = { agent: getUserId(req) };
     const companyId = getCompanyId(req);
     if (companyId) query.company = companyId;
-    const followUps = await FollowUp.find(query).populate("lead", "name phone email").sort({ date: 1 });
+    const { page, limit, skip } = getPaginationOptions(req.query || {}, { limit: 50, maxLimit: 100 });
+    const followUpsQuery = FollowUp.find(query).populate("lead", "name phone email").sort({ date: 1 });
+    const followUps = await applyListOptions(followUpsQuery, { skip, limit });
+    await setPaginationHeaders(res, query, { page, limit });
     return res.json(followUps);
   } catch (err) {
     return res.status(500).json({ msg: "Error fetching follow-ups", error: err.message });
@@ -113,7 +136,10 @@ exports.getLeadFollowUps = async (req, res) => {
     if (companyId && (!lead.company || String(lead.company) !== String(companyId))) return res.status(403).json({ msg: "Access denied" });
     const query = { lead: req.params.leadId };
     if (companyId) query.company = companyId;
-    const followUps = await FollowUp.find(query).populate("agent", "name email").sort({ date: -1 });
+    const { page, limit, skip } = getPaginationOptions(req.query || {}, { limit: 50, maxLimit: 100 });
+    const followUpsQuery = FollowUp.find(query).populate("agent", "name email").sort({ date: -1 });
+    const followUps = await applyListOptions(followUpsQuery, { skip, limit });
+    await setPaginationHeaders(res, query, { page, limit });
     return res.json(followUps);
   } catch (err) {
     return res.status(500).json({ msg: "Error fetching lead follow-ups", error: err.message });

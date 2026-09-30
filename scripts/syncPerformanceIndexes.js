@@ -13,6 +13,9 @@ const models = [
   require("../HR-CDS/models/Notification"),
   require("../models/User"),
   require("../HR-CDS/models/Attendance"),
+  require("../models/Lead"),
+  require("../models/CallLog"),
+  require("../models/Followup"),
 ];
 
 const mongoOptions = {

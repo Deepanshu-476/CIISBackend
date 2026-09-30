@@ -1,6 +1,23 @@
 const mongoose = require("mongoose");
 const CallLog = require("../models/CallLog");
 const Lead = require("../models/Lead");
+const { getPaginationOptions } = require("../utils/pagination");
+
+const applyListOptions = (query, { skip, limit }) => {
+  let next = query;
+  if (typeof next.skip === "function") next = next.skip(skip);
+  if (typeof next.limit === "function") next = next.limit(limit);
+  if (typeof next.lean === "function") next = next.lean();
+  return next;
+};
+
+const setPaginationHeaders = async (res, filter, { page, limit }) => {
+  if (typeof res.set !== "function" || typeof CallLog.countDocuments !== "function") return;
+  const total = await CallLog.countDocuments(filter);
+  res.set("X-Total-Count", String(total));
+  res.set("X-Page", String(page));
+  res.set("X-Limit", String(limit));
+};
 
 const mapCallStatus = (status) => {
   const valid = ["answered", "missed", "not reachable", "rejected"];
@@ -102,11 +119,14 @@ exports.getAgentCalls = async (req, res) => {
 
     const query = { agent: userId };
     if (companyId) query.company = companyId;
+    const { page, limit, skip } = getPaginationOptions(req.query || {}, { limit: 50, maxLimit: 100 });
 
-    const calls = await CallLog.find(query)
+    const callsQuery = CallLog.find(query)
       .populate("lead", "name phone email")
       .populate("agent", "name email")
       .sort({ createdAt: -1 });
+    const calls = await applyListOptions(callsQuery, { skip, limit });
+    await setPaginationHeaders(res, query, { page, limit });
     res.json(calls);
   } catch (err) {
     res.status(500).json({ msg: "Error fetching call logs", error: err.message });
@@ -128,10 +148,13 @@ exports.getLeadCalls = async (req, res) => {
 
     const query = { lead: req.params.leadId };
     if (companyId) query.company = companyId;
+    const { page, limit, skip } = getPaginationOptions(req.query || {}, { limit: 50, maxLimit: 100 });
 
-    const calls = await CallLog.find(query)
+    const callsQuery = CallLog.find(query)
       .populate("agent", "name email")
       .sort({ createdAt: -1 });
+    const calls = await applyListOptions(callsQuery, { skip, limit });
+    await setPaginationHeaders(res, query, { page, limit });
     res.json(calls);
   } catch (err) {
     res.status(500).json({ msg: "Error fetching lead calls", error: err.message });
