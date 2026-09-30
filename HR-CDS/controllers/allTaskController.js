@@ -129,13 +129,13 @@ const buildAssigneeNameConditions = names => {
 };
 
 
-const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
+const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, companyId = null) => {
   const targetUserId = userId.toString();
 
   const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
   const companyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : companyCode;
   const [targetUser, groups, clients] = await Promise.all([
-    User.findById(userId).select('name email').lean(),
+    User.findById(userId).select('name email company companyCode').lean(),
     Group.find({ members: userId, isActive: true }).select('_id').lean(),
     Client.find(companyFilter ? { companyCode: companyFilter } : {}).select('_id').lean()
   ]);
@@ -199,8 +199,14 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
   }
   if (priority) projectTaskElemMatch.priority = new RegExp(`^${priority}$`, 'i');
 
+  const projectCompanyIds = normalizeIdList([companyId, targetUser?.company]);
+  const projectCompanyClauses = [
+    ...(companyFilter ? [{ companyCode: companyFilter }] : []),
+    ...(projectCompanyIds.length > 0 ? [{ company: { $in: projectCompanyIds } }] : []),
+    { users: userId }
+  ];
   const projectQuery = {
-    ...(companyFilter ? { companyCode: companyFilter } : {}),
+    ...(projectCompanyClauses.length > 0 ? { $or: projectCompanyClauses } : {}),
     tasks: { $elemMatch: projectTaskElemMatch }
   };
 
@@ -615,7 +621,7 @@ exports.getUserAllTasksPaginated = async (req, res) => {
       ? parsePositiveInt(req.query.limit, 5000, 10000)
       : parsePositiveInt(req.query.limit, 10, 50);
 
-    const allTasks = await queryAllUserTasks(userId, req.user.companyCode, req.query);
+    const allTasks = await queryAllUserTasks(userId, req.user.companyCode, req.query, req.user.company?._id || req.user.company);
     const filtered = filterUserTasks(allTasks, req.query);
 
     const sortedFiltered = sortTasksNewestFirst(filtered);
@@ -683,7 +689,7 @@ exports.getUserAllTasksPaginated = async (req, res) => {
 exports.getUserTaskStats = async (req, res) => {
   try {
     const { userId } = req.params;
-    const allTasks = await queryAllUserTasks(userId, req.user.companyCode, req.query);
+    const allTasks = await queryAllUserTasks(userId, req.user.companyCode, req.query, req.user.company?._id || req.user.company);
     const filtered = filterUserTasks(allTasks, req.query);
 
     const statusCounts = calculateUserStatusCounts(filtered);
@@ -710,7 +716,7 @@ exports.getUsersTaskStatsBatch = async (req, res) => {
     const queryParams = { ...req.query, ...(req.body?.filters || {}) };
     const entries = await mapWithConcurrency(userIds, 6, async (userId) => {
       try {
-        const allTasks = await queryAllUserTasks(userId, req.user.companyCode, queryParams);
+        const allTasks = await queryAllUserTasks(userId, req.user.companyCode, queryParams, req.user.company?._id || req.user.company);
         const filtered = filterUserTasks(allTasks, queryParams);
         return [userId, calculateUserStatusCounts(filtered)];
       } catch (err) {
@@ -792,7 +798,12 @@ exports.getCompanyAllTaskOverview = async (req, res) => {
     const entries = await mapWithConcurrency(usersWithAttendance, 6, async (user) => {
       const userId = String(user._id);
       try {
-        const allTasks = await queryAllUserTasks(userId, req.user.companyCode || currentUser.companyCode, queryParams);
+        const allTasks = await queryAllUserTasks(
+          userId,
+          req.user.companyCode || currentUser.companyCode,
+          queryParams,
+          req.user.company?._id || req.user.company || currentUser.company
+        );
         const filtered = filterUserTasks(allTasks, queryParams);
         return [userId, calculateUserStatusCounts(filtered)];
       } catch {
