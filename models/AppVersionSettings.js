@@ -8,7 +8,7 @@ const platformVersionSchema = new mongoose.Schema(
       default: "",
       maxlength: 40,
     },
-    latestVersionCode: {
+    latestVersionCode: {  
       type: Number,
       default: 1,
       min: 0,
