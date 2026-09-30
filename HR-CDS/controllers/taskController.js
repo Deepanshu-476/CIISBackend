@@ -2499,7 +2499,8 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
     ...((requestCompanyId || companyCode) ? {
       $or: [
         ...(requestCompanyId ? [{ company: requestCompanyId }] : []),
-        ...(companyCode ? [{ companyCode: companyFilter }] : [])
+        ...(companyCode ? [{ companyCode: companyFilter }] : []),
+        { users: userId }
       ]
     } : {})
   };
