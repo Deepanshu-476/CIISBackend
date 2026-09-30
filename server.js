@@ -69,7 +69,7 @@ app.use((req, res, next) => {
     res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
     res.setHeader(
       "Content-Security-Policy",
-      "frame-ancestors 'self' https://cds.ciisnetwork.in https://backendcds.ciisnetwork.in http://localhost:* http://127.0.0.1:* https://*.ciisnetwork.in https://ciisnetwork.com https://*.ciisnetwork.com"
+      "frame-ancestors 'self' https://ciisnetwork.com https://backendciisnetwork.com http://localhost:* http://127.0.0.1:* https://*.ciisnetwork.in https://ciisnetwork.com https://*.ciisnetwork.com"
     );
   } else {
     res.setHeader("X-Frame-Options", "SAMEORIGIN");
@@ -92,8 +92,8 @@ const envOrigins = (process.env.ALLOWED_ORIGINS || "")
   .filter(Boolean);
 
 const allowedOrigins = [
-  "https://cds.ciisnetwork.in",
-  "https://backendcds.ciisnetwork.in",
+  "https://ciisnetwork.com",
+  "https://backendciisnetwork.com",
   "https://ciisnetwork.in",
   "https://ciisnetwork.com",
   "https://www.ciisnetwork.com",
@@ -756,7 +756,7 @@ const embeddableStaticHeaders = (req, res, next) => {
   res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
   res.setHeader(
     "Content-Security-Policy",
-    "frame-ancestors 'self' https://cds.ciisnetwork.in https://backendcds.ciisnetwork.in http://localhost:* http://127.0.0.1:* https://*.ciisnetwork.in https://ciisnetwork.com https://*.ciisnetwork.com"
+    "frame-ancestors 'self' https://ciisnetwork.com https://backendciisnetwork.com http://localhost:* http://127.0.0.1:* https://*.ciisnetwork.in https://ciisnetwork.com https://*.ciisnetwork.com"
   );
   next();
 };

@@ -927,10 +927,10 @@ const getWelcomeEmailTemplate = (name, company, email, password, loginUrl) => {
 const getCompanyLoginUrl = (companyCode) => {
   const normalizedCompanyCode = companyCode?.trim();
   if (!normalizedCompanyCode) {
-    return 'https://cds.ciisnetwork.in/login';
+    return 'https://ciisnetwork.com/login';
   }
 
-  return `https://cds.ciisnetwork.in/company/${normalizedCompanyCode}/login`;
+  return `https://ciisnetwork.com/company/${normalizedCompanyCode}/login`;
 };
 
 const sendWelcomeEmail = async (email, name, company, password, companyCode) => {

@@ -1,485 +1,315 @@
-
-
 const getCompanyRegistrationEmailTemplate = (companyData, ownerData, isOwnerEmail = false) => {
   const recipientType = isOwnerEmail ? 'Owner' : 'Company';
-  const primaryColor = '#2563eb';
-  const secondaryColor = '#1e40af';
-  const escapeHtml = value => String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-  const ownerPassword = ownerData?.password
-    ? escapeHtml(ownerData.password)
-    : 'As set during registration';
+  const escapeHtml = (value) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   
-  return `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <style>
-        * {
-          margin: 0;
-          padding: 0;
-          box-sizing: border-box;
-        }
-        body {
-          font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-          line-height: 1.6;
-          color: #1f2937;
-          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-          padding: 20px;
-        }
-        .container {
-          max-width: 650px;
-          margin: 0 auto;
-          background: white;
-          border-radius: 16px;
-          overflow: hidden;
-          box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
-          animation: slideIn 0.5s ease-out;
-        }
-        @keyframes slideIn {
-          from {
-            opacity: 0;
-            transform: translateY(30px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
-        }
-        .header {
-          background: linear-gradient(135deg, ${primaryColor} 0%, ${secondaryColor} 100%);
-          color: white;
-          padding: 40px 30px;
-          text-align: center;
-          position: relative;
-          overflow: hidden;
-        }
-        .header::after {
-          content: '';
-          position: absolute;
-          top: -50%;
-          right: -50%;
-          width: 200%;
-          height: 200%;
-          background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0) 70%);
-          animation: spin 20s linear infinite;
-        }
-        @keyframes spin {
-          100% { transform: rotate(360deg); }
-        }
-        .logo {
-          width: 180px;
-          height: 80px;
-          background: white;
-          border-radius: 12px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          margin: 0 auto 20px;
-          border: 3px solid rgba(255, 255, 255, 0.3);
-          box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
-        }
-        .logo img {
-          width: 200px;
-          height: 60px;
-          object-fit: contain;
-        }
-        .badge {
-          display: inline-block;
-          padding: 8px 20px;
-          background: rgba(255, 255, 255, 0.2);
-          border-radius: 50px;
-          color: white;
-          font-size: 14px;
-          font-weight: 600;
-          margin-top: 15px;
-          backdrop-filter: blur(10px);
-          border: 1px solid rgba(255, 255, 255, 0.3);
-        }
-        .content {
-          padding: 40px 30px;
-          background: white;
-        }
-        .greeting {
-          font-size: 24px;
-          color: ${primaryColor};
-          margin-bottom: 20px;
-          font-weight: 700;
-        }
-        .subtitle {
-          color: #6b7280;
-          margin-bottom: 30px;
-          font-size: 16px;
-          border-bottom: 2px solid #e5e7eb;
-          padding-bottom: 20px;
-        }
-        .section {
-          background: #f8fafc;
-          border-radius: 12px;
-          padding: 25px;
-          margin-bottom: 25px;
-          border: 1px solid #e5e7eb;
-          position: relative;
-        }
-        .section-title {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          margin-bottom: 20px;
-          color: ${primaryColor};
-          font-size: 18px;
-          font-weight: 700;
-        }
-        .section-icon {
-          width: 32px;
-          height: 32px;
-          background: ${primaryColor};
-          border-radius: 8px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          color: white;
-        }
-        .details-grid {
-          display: grid;
-          grid-template-columns: 1fr 2fr;
-          gap: 12px;
-          margin-bottom: 10px;
-        }
-        .detail-label {
-          font-weight: 600;
-          color: #4b5563;
-          font-size: 14px;
-        }
-        .detail-value {
-          color: #1f2937;
-          font-size: 14px;
-          font-weight: 500;
-        }
-        .company-code {
-          background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
-          border: 2px solid ${primaryColor};
-          border-radius: 12px;
-          padding: 20px;
-          text-align: center;
-          margin: 20px 0;
-        }
-        .company-code-label {
-          color: ${primaryColor};
-          font-size: 14px;
-          font-weight: 600;
-          margin-bottom: 10px;
-        }
-        .company-code-value {
-          font-size: 32px;
-          font-weight: 800;
-          color: ${secondaryColor};
-          letter-spacing: 4px;
-          font-family: 'Courier New', monospace;
-          background: white;
-          padding: 10px 20px;
-          border-radius: 8px;
-          display: inline-block;
-          border: 1px dashed ${primaryColor};
-        }
-        .login-details {
-          background: #fef3c7;
-          border-left: 4px solid #f59e0b;
-          padding: 20px;
-          border-radius: 8px;
-          margin: 20px 0;
-        }
-        .button {
-          display: inline-block;
-          padding: 14px 32px;
-          background: linear-gradient(135deg, ${primaryColor} 0%, ${secondaryColor} 100%);
-          color: #ffffff !important;
-          text-decoration: none;
-          border-radius: 8px;
-          font-weight: 600;
-          margin-top: 20px;
-          transition: all 0.3s ease;
-          box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2);
-        }
-        .button:hover {
-          transform: translateY(-2px);
-          box-shadow: 0 6px 16px rgba(37, 99, 235, 0.3);
-        }
-        .qr-section {
-          text-align: center;
-          margin: 30px 0;
-          padding: 20px;
-          background: white;
-          border-radius: 12px;
-          border: 1px solid #e5e7eb;
-        }
-        .qr-placeholder {
-          width: 120px;
-          height: 120px;
-          background: #f3f4f6;
-          border-radius: 12px;
-          margin: 10px auto;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          border: 1px solid #d1d5db;
-        }
-        .warning {
-          background: #fffbeb;
-          border: 1px solid #fcd34d;
-          border-radius: 8px;
-          padding: 15px;
-          margin-top: 20px;
-          display: flex;
-          align-items: center;
-          gap: 10px;
-        }
-        .footer {
-          background: #1f2937;
-          color: white;
-          padding: 30px;
-          text-align: center;
-        }
-        .footer a {
-          color: #93c5fd;
-          text-decoration: none;
-        }
-        .credentials-highlight {
-          background: ${isOwnerEmail ? '#e0f2fe' : '#f0fdf4'};
-          border-radius: 8px;
-          padding: 20px;
-          margin: 15px 0;
-          border: 1px solid ${isOwnerEmail ? '#38bdf8' : '#4ade80'};
-        }
-        @media (max-width: 600px) {
-          .container { margin: 10px; }
-          .content { padding: 20px; }
-          .details-grid { grid-template-columns: 1fr; gap: 5px; }
-          .company-code-value { font-size: 24px; }
-        }
-      </style>
-    </head>
-    <body>
-      <div class="container">
-        <div class="header">
-          <div class="logo">
-            <img src="https://cds.ciisnetwork.in/logoo.png" alt="CIIS NETWORK Logo">
-          </div>
-          <h1 style="font-size: 28px; margin-bottom: 10px; position: relative; z-index: 1;">
-            🎉 Welcome to CIIS NETWORK!
-          </h1>
-          <p style="font-size: 16px; opacity: 0.95; position: relative; z-index: 1;">
-            ${recipientType} Registration Successful
-          </p>
-          <span class="badge">
-            ${isOwnerEmail ? '👑 Owner Account' : '🏢 Company Account'}
-          </span>
-        </div>
+  const ownerPassword = ownerData?.password ? escapeHtml(ownerData.password) : 'As set during registration';
+  const logoUrl = 'https://ciisnetwork.com/logoo.png';
+  const loginUrl = companyData.loginUrl || 'https://ciisnetwork.com/login';
+  
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Welcome to CIIS NETWORK</title>
+  <style>
+    body { margin: 0; padding: 0; background-color: #f1f5f9; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; -webkit-font-smoothing: antialiased; }
+    table { border-spacing: 0; }
+    td { padding: 0; }
+    .wrapper { width: 100%; background-color: #f1f5f9; padding: 30px 0; }
+    .main-container { max-width: 700px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.05); }
+    
+    /* Header */
+    .header-bg { background: linear-gradient(135deg, #021a4f 0%, #03459c 100%); padding: 40px; color: #ffffff; position: relative; }
+    .header-logo { width: 180px; margin-bottom: 25px; }
+    .header-subtitle { font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: #93c5fd; margin-bottom: 10px; display: block; }
+    .header-title { font-size: 36px; margin: 0 0 15px 0; line-height: 1.2; letter-spacing: -0.5px; }
+    .header-text { font-size: 15px; color: #e2e8f0; margin: 0 0 25px 0; max-width: 65%; line-height: 1.5; }
+    .header-badge { display: inline-block; background-color: #22c55e; color: #ffffff; padding: 8px 16px; border-radius: 20px; font-size: 13px; box-shadow: 0 4px 6px rgba(34,197,94,0.3); }
+    
+    /* Content */
+    .content { padding: 40px; }
+    .greeting-title { color: #0f172a; font-size: 20px; margin: 0 0 10px 0; }
+    .greeting-text { color: #475569; font-size: 15px; line-height: 1.6; margin: 0 0 30px 0; }
+    
+    /* Owner Details Card */
+    .card-owner { border: 1px solid #e2e8f0; border-radius: 12px; padding: 25px; margin-bottom: 25px; background: #ffffff; }
+    .card-header-icon { width: 44px; height: 44px; background: #3b82f6; border-radius: 10px; display: inline-block; vertical-align: middle; text-align: center; line-height: 44px; color: white; font-size: 22px; margin-right: 15px; }
+    .card-header-title { display: inline-block; vertical-align: middle; }
+    .card-title { margin: 0; color: #0f172a; font-size: 18px; }
+    .card-subtitle { margin: 2px 0 0 0; color: #64748b; font-size: 13px; }
+    
+    .detail-icon { display: inline-block; background: #eff6ff; color: #3b82f6; width: 28px; height: 28px; text-align: center; line-height: 28px; border-radius: 6px; font-size: 14px; }
+    .detail-label { color: #475569; font-size: 14px; }
+    .detail-val { color: #0f172a; font-size: 14px; }
+    
+    .shield-box { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 10px; padding: 25px 20px; text-align: center; height: 100%; box-sizing: border-box; }
+    
+    /* Company Code Card */
+    .card-code { background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 12px; padding: 25px; margin-bottom: 25px; }
+    .code-display { background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; padding: 12px 25px; font-family: 'Courier New', Courier, monospace; font-size: 26px; letter-spacing: 6px; color: #0f172a; display: inline-block; vertical-align: middle; }
+    .copy-btn { display: inline-block; padding: 14px 20px; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; color: #0f172a; font-size: 14px; vertical-align: middle; margin-left: 15px; cursor: pointer; }
+    
+    /* Login Info Card */
+    .card-login { background: #fffbeb; border: 1px solid #fde68a; border-radius: 12px; padding: 25px; margin-bottom: 25px; }
+    .url-box { background: #ffffff; border: 1px solid #fcd34d; border-radius: 8px; padding: 14px 20px; margin: 20px 0; }
+    .url-link { color: #2563eb; font-size: 14px; text-decoration: underline; word-break: break-all; }
+    .login-btn { display: inline-block; background: #2563eb; color: #ffffff !important; padding: 14px 24px; border-radius: 8px; text-decoration: none; font-size: 14px; }
+    
+    /* How to Login */
+    .card-steps { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 25px; margin-bottom: 25px; }
+    .step-num { display: inline-block; background: #2563eb; color: #ffffff; width: 32px; height: 32px; border-radius: 50%; text-align: center; line-height: 32px; font-size: 15px; margin-right: 12px; vertical-align: top; }
+    .step-text { display: inline-block; width: 140px; vertical-align: top; }
+    .step-title { color: #0f172a; font-size: 14px; margin-bottom: 4px; }
+    .step-desc { color: #64748b; font-size: 12px; line-height: 1.4; }
+    
+    /* Next Steps */
+    .card-next { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 12px; padding: 25px; margin-bottom: 25px; }
+    .check-item { display: inline-block; width: 22%; font-size: 12px; color: #15803d; vertical-align: top; padding-right: 10px; line-height: 1.4; }
+    .check-icon { display: inline-block; background: #22c55e; color: white; width: 18px; height: 18px; border-radius: 50%; text-align: center; line-height: 18px; font-size: 10px; margin-right: 6px; }
+    
+    .dashboard-btn { display: block; width: fit-content; margin: 25px auto 0; background: #2563eb; color: #ffffff !important; padding: 16px 40px; border-radius: 30px; text-decoration: none; font-size: 16px; box-shadow: 0 4px 12px rgba(37,99,235,0.3); }
+    
+    /* Security */
+    .card-security { background: #fef2f2; border: 1px solid #fecaca; border-radius: 12px; padding: 20px 25px; }
+    
+    /* Footer */
+    .footer { background: #0f172a; padding: 30px 40px; border-bottom-left-radius: 16px; border-bottom-right-radius: 16px; }
+    
+    @media only screen and (max-width: 600px) {
+      .header-text { max-width: 100%; }
+      .code-display { font-size: 20px; letter-spacing: 3px; display: block; margin-bottom: 10px; }
+      .copy-btn { margin-left: 0; display: block; width: 100%; text-align: center; box-sizing: border-box; }
+      .step-text { width: 100%; margin-bottom: 15px; }
+      .check-item { width: 100%; display: block; margin-bottom: 10px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="main-container">
+      
+      <!-- Header -->
+      <div class="header-bg">
+        <img src="${logoUrl}" alt="CIIS NETWORK" class="header-logo">
+        <span class="header-subtitle">All-In-One Business Management Platform</span>
+        <h1 class="header-title">Welcome to<br>CIIS NETWORK!</h1>
+        <p class="header-text">Your company has been registered successfully.<br>We're excited to have you on board!</p>
+        <div class="header-badge">✓ Company Registration Successful</div>
+      </div>
+      
+      <div class="content">
+        <h2 class="greeting-title">Dear ${escapeHtml(isOwnerEmail ? ownerData?.name || 'Owner' : companyData?.companyName || 'Company')},</h2>
+        <p class="greeting-text">Thank you for registering with CIIS NETWORK. Your company account has been created successfully.<br>Below you will find your account details and important information to get started.</p>
         
-        <div class="content">
-          <div class="greeting">
-            Dear ${isOwnerEmail ? ownerData?.name || 'Owner' : companyData?.companyName || 'Company'},
+        ${isOwnerEmail ? `
+        <!-- Owner Details -->
+        <div class="card-owner">
+          <div style="margin-bottom: 25px;">
+            <div class="card-header-icon">👑</div>
+            <div class="card-header-title">
+              <h3 class="card-title">Owner Account Details</h3>
+              <p class="card-subtitle">These are your Super Admin credentials. Keep them secure.</p>
+            </div>
           </div>
           
-          <div class="subtitle">
-            Thank you for registering with CIIS NETWORK. Your account has been created successfully!
-          </div>
-
-          ${!isOwnerEmail ? `
-            <!-- Company Details Section - Only for Company Email -->
-            <div class="section">
-              <div class="section-title">
-                <div class="section-icon">🏢</div>
-                <span>Company Information</span>
-              </div>
-              
-              <div class="company-code">
-                <div class="company-code-label">🔑 Your Unique Company Code</div>
-                <div class="company-code-value">${companyData.companyCode}</div>
-                <p style="color: #4b5563; margin-top: 15px; font-size: 14px;">
-                  Use this code for employee registrations and company identification
-                </p>
-              </div>
-              
-              <div class="details-grid">
-                <div class="detail-label">Company Name:</div>
-                <div class="detail-value">${companyData.companyName}</div>
-                
-                <div class="detail-label">Company Email:</div>
-                <div class="detail-value">${companyData.companyEmail}</div>
-                
-                <div class="detail-label">Company Phone:</div>
-                <div class="detail-value">${companyData.companyPhone}</div>
-                
-                <div class="detail-label">Company Address:</div>
-                <div class="detail-value">${companyData.companyAddress}</div>
-                
-                <div class="detail-label">Owner Name:</div>
-                <div class="detail-value">${companyData.ownerName}</div>
-                
-                <div class="detail-label">Registration Date:</div>
-                <div class="detail-value">${new Date(companyData.createdAt).toLocaleDateString('en-IN', { 
-                  day: 'numeric', 
-                  month: 'long', 
-                  year: 'numeric',
-                  hour: '2-digit',
-                  minute: '2-digit'
-                })}</div>
-              </div>
-            </div>
-          ` : `
-            <!-- Owner Details Section - Only for Owner Email -->
-            <div class="section">
-              <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin-bottom: 20px;">
-                <tr>
-                  <td width="40" style="width: 40px; vertical-align: middle;">
-                    <div style="width: 32px; height: 32px; line-height: 32px; background: #2563eb; border-radius: 8px; color: #ffffff; text-align: center; font-size: 18px; font-weight: 700;">&#128081;</div>
-                  </td>
-                  <td style="vertical-align: middle; color: #2563eb; font-size: 18px; font-weight: 700;">
-                    Owner Account Details
-                  </td>
-                </tr>
-              </table>
-              
-              <div class="credentials-highlight">
-                <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin-bottom: 15px;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              <td width="60%" valign="top">
+                <table width="100%" cellpadding="10" cellspacing="0" border="0">
                   <tr>
-                    <td width="55" style="width: 55px; vertical-align: middle;">
-                      <div style="width: 40px; height: 40px; line-height: 40px; background: #2563eb; border-radius: 50%; color: #ffffff; text-align: center; font-size: 20px; font-weight: 700;">&#128100;</div>
-                    </td>
-                    <td style="vertical-align: middle;">
-                      <h3 style="color: #1f2937; margin: 0; font-size: 18px; line-height: 24px;">Super Admin Credentials</h3>
-                      <p style="color: #6b7280; margin: 0; font-size: 13px; line-height: 20px;">Keep these credentials secure</p>
-                    </td>
+                    <td width="40"><span class="detail-icon">📧</span></td>
+                    <td width="120" class="detail-label">Email Address</td>
+                    <td class="detail-val" style="color: #2563eb;">${escapeHtml(ownerData.email)}</td>
+                  </tr>
+                  <tr>
+                    <td><span class="detail-icon">🔒</span></td>
+                    <td class="detail-label">Password</td>
+                    <td class="detail-val" style="color: #16a34a;">${ownerPassword}</td>
+                  </tr>
+                  <tr>
+                    <td><span class="detail-icon">👥</span></td>
+                    <td class="detail-label">Role</td>
+                    <td class="detail-val" style="color: #9333ea;">Super Admin / Owner</td>
+                  </tr>
+                  <tr>
+                    <td><span class="detail-icon">🏢</span></td>
+                    <td class="detail-label">Department</td>
+                    <td class="detail-val">Management</td>
                   </tr>
                 </table>
-                
-                <div style="background: white; padding: 15px; border-radius: 8px;">
-                  <div style="margin-bottom: 12px;">
-                    <span style="font-weight: 600; color: #4b5563;">Email:</span>
-                    <span style="font-weight: 700; color: #2563eb; margin-left: 10px;">${escapeHtml(ownerData.email)}</span>
-                  </div>
-                  <div style="margin-bottom: 12px;">
-                    <span style="font-weight: 600; color: #4b5563;">Password:</span>
-                    <span style="font-weight: 700; color: #059669; margin-left: 10px;">${ownerPassword}</span>
-                  </div>
-                  <div style="margin-bottom: 12px;">
-                    <span style="font-weight: 600; color: #4b5563;">Role:</span>
-                    <span style="font-weight: 700; color: #7c3aed; margin-left: 10px;">Super Admin / Owner</span>
-                  </div>
-                  <div>
-                    <span style="font-weight: 600; color: #4b5563;">Department:</span>
-                    <span style="margin-left: 10px;">Management</span>
-                  </div>
+              </td>
+              <td width="40%" valign="top" style="padding-left: 20px;">
+                <div class="shield-box">
+                  <div style="font-size: 36px; margin-bottom: 12px; color: #2563eb;">🛡️</div>
+                  <div style="color: #0f172a; font-size: 15px; margin-bottom: 8px;">Keep Your Credentials<br>Secure</div>
+                  <div style="color: #64748b; font-size: 12px; line-height: 1.5;">Do not share your login details<br>with anyone.</div>
                 </div>
-              </div>
-            </div>
-
-            <!-- Company Code for Owner -->
-            <div class="company-code" style="margin-bottom: 25px;">
-              <div class="company-code-label">🏢 Your Company Code</div>
-              <div class="company-code-value">${companyData.companyCode}</div>
-              <p style="color: #4b5563; margin-top: 15px; font-size: 14px;">
-                Use this code when adding employees to your company
-              </p>
-            </div>
-          `}
-
-          <!-- Login Details - Common for Both -->
-          <div class="login-details">
-            <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 15px;">
-              <span style="font-size: 24px;">🔐</span>
-              <h3 style="color: #92400e; margin: 0;">Login Information</h3>
-            </div>
-            
-            <div style="margin-bottom: 10px;">
-              <strong style="color: #4b5563;">Login URL:</strong>
-              <a href="${companyData.loginUrl}" style="color: #2563eb; word-break: break-all; display: block; margin-top: 5px;">
-                ${companyData.loginUrl}
-              </a>
-            </div>
-            
-            <div style="margin-top: 15px; padding: 12px; background: white; border-radius: 6px;">
-              <strong style="color: #4b5563;">📱 How to Login:</strong>
-              <ol style="margin: 10px 0 0 20px; color: #4b5563;">
-                <li>Click the login URL above or visit our portal</li>
-                <li>Enter your ${isOwnerEmail ? 'email and password' : 'company credentials'}</li>
-                <li>Access your ${isOwnerEmail ? 'admin dashboard' : 'company dashboard'}</li>
-              </ol>
-            </div>
-          </div>
-
-          <!-- QR Code Placeholder -->
-  
-
-          <!-- Next Steps -->
-          <div style="margin-top: 30px;">
-            <h3 style="color: #1f2937; margin-bottom: 15px;">🚀 Next Steps:</h3>
-            <ul style="list-style: none; padding: 0;">
-              <li style="margin-bottom: 12px; display: flex; align-items: center; gap: 10px;">
-                <span style="color: ${primaryColor};">✓</span>
-                <strong>Login</strong> to your ${isOwnerEmail ? 'admin' : 'company'} dashboard
-              </li>
-              <li style="margin-bottom: 12px; display: flex; align-items: center; gap: 10px;">
-                <span style="color: ${primaryColor};">✓</span>
-                <strong>Complete</strong> your company profile and settings
-              </li>
-              <li style="margin-bottom: 12px; display: flex; align-items: center; gap: 10px;">
-                <span style="color: ${primaryColor};">✓</span>
-                <strong>Add employees</strong> using the company code: <span style="background: #dbeafe; padding: 4px 8px; border-radius: 4px; font-family: monospace; font-weight: bold;">${companyData.companyCode}</span>
-              </li>
-              <li style="margin-bottom: 12px; display: flex; align-items: center; gap: 10px;">
-                <span style="color: ${primaryColor};">✓</span>
-                <strong>Configure</strong> leave policies and departments
-              </li>
-              <li style="margin-bottom: 12px; display: flex; align-items: center; gap: 10px;">
-                <span style="color: ${primaryColor};">✓</span>
-                <strong>Set up</strong> notification preferences
-              </li>
-            </ul>
-          </div>
-
-          <div style="text-align: center;">
-            <a href="${companyData.loginUrl}" class="button">
-              🚀 Access Your Dashboard
-            </a>
-          </div>
-
-          <div class="warning">
-            <span style="font-size: 20px;">⚠️</span>
-            <div style="font-size: 13px;">
-              <strong style="display: block; margin-bottom: 5px;">Important Security Information:</strong>
-              This email contains confidential information. If you didn't create this account, 
-              please contact our support team immediately at <a href="mailto:support@ciisnetwork.com">support@ciisnetwork.com</a>
-            </div>
-          </div>
+              </td>
+            </tr>
+          </table>
         </div>
+        ` : `
+        <!-- Company Details for non-owner -->
+        <div class="card-owner">
+          <div style="margin-bottom: 25px;">
+            <div class="card-header-icon">🏢</div>
+            <div class="card-header-title">
+              <h3 class="card-title">Company Details</h3>
+              <p class="card-subtitle">These are your registered company details.</p>
+            </div>
+          </div>
+          <table width="100%" cellpadding="10" cellspacing="0" border="0">
+            <tr>
+              <td width="40"><span class="detail-icon">🏢</span></td>
+              <td width="120" class="detail-label">Company Name</td>
+              <td class="detail-val">${escapeHtml(companyData.companyName)}</td>
+            </tr>
+            <tr>
+              <td><span class="detail-icon">📧</span></td>
+              <td class="detail-label">Email</td>
+              <td class="detail-val">${escapeHtml(companyData.companyEmail)}</td>
+            </tr>
+            <tr>
+              <td><span class="detail-icon">📞</span></td>
+              <td class="detail-label">Phone</td>
+              <td class="detail-val">${escapeHtml(companyData.companyPhone)}</td>
+            </tr>
+          </table>
+        </div>
+        `}
 
-        <div class="footer">
+        <!-- Company Code -->
+        <div class="card-code">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              <td width="55" valign="top">
+                <div style="width: 40px; height: 40px; background: #38bdf8; border-radius: 10px; display: inline-block; text-align: center; line-height: 40px; color: white; font-size: 20px;">🏢</div>
+              </td>
+              <td valign="top">
+                <h3 class="card-title">Your Company Code</h3>
+                <p class="card-subtitle" style="margin-bottom: 20px;">Use this code when adding employees to your company.</p>
+                <div>
+                  <span class="code-display">${escapeHtml(companyData.companyCode)}</span>
+                  <span class="copy-btn">📑 Copy Code</span>
+                </div>
+              </td>
+            </tr>
+          </table>
+        </div>
+        
+        <!-- Login Info -->
+        <div class="card-login">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              <td width="55" valign="top">
+                <div style="width: 40px; height: 40px; background: #d97706; border-radius: 50%; display: inline-block; text-align: center; line-height: 40px; color: white; font-size: 20px;">🔑</div>
+              </td>
+              <td valign="top">
+                <h3 class="card-title" style="color: #92400e;">Login Information</h3>
+                <p class="card-subtitle" style="color: #b45309;">You can access your account using the following login URL.</p>
+                <div class="url-box">
+                  <span style="font-size: 16px; margin-right: 8px;">🔗</span>
+                  <a href="${loginUrl}" class="url-link">${loginUrl}</a>
+                </div>
+                <a href="${loginUrl}" class="login-btn">Open Login Page ↗</a>
+              </td>
+            </tr>
+          </table>
+        </div>
+        
+        <!-- How to Login -->
+        <div class="card-steps">
           <div style="margin-bottom: 20px;">
-            <a href="https://cds.ciisnetwork.in" target="_blank" style="text-decoration:none;">
-              <img 
-                src="https://cds.ciisnetwork.in/logoo.png" 
-                alt="CIIS"
-                style="width:120px; height:auto; border-radius:8px; display:block; margin:0 auto;"
-              >
-            </a>
+            <span style="font-size: 18px; margin-right: 8px; vertical-align: middle;">📄</span>
+            <span style="color: #0f172a; font-size: 16px; vertical-align: middle;">How to Login</span>
           </div>
-          <p style="color: #6b7280; font-size: 12px; border-top: 1px solid #374151; padding-top: 20px;">
-            © ${new Date().getFullYear()} CIIS NETWORK. All rights reserved.<br>
-            This is a system-generated email. Please do not reply to this message.
-          </p>
+          
+          <table width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              <td width="33%" valign="top">
+                <div class="step-num">1</div>
+                <div class="step-text">
+                  <div class="step-title">Visit the login URL</div>
+                  <div class="step-desc">Click the login link above or visit our portal.</div>
+                </div>
+              </td>
+              <td width="33%" valign="top">
+                <div class="step-num">2</div>
+                <div class="step-text">
+                  <div class="step-title">Enter your credentials</div>
+                  <div class="step-desc">Use your email and password to login.</div>
+                </div>
+              </td>
+              <td width="33%" valign="top">
+                <div class="step-num">3</div>
+                <div class="step-text">
+                  <div class="step-title">Access your dashboard</div>
+                  <div class="step-desc">Start managing your company and team.</div>
+                </div>
+              </td>
+            </tr>
+          </table>
         </div>
+        
+        <!-- Next Steps -->
+        <div class="card-next">
+          <div style="margin-bottom: 20px;">
+            <span style="font-size: 18px; margin-right: 8px; vertical-align: middle;">🚀</span>
+            <span style="color: #166534; font-size: 16px; vertical-align: middle;">Next Steps</span>
+          </div>
+          
+          <div>
+            <div class="check-item"><span class="check-icon">✓</span>Login to your admin dashboard</div>
+            <div class="check-item"><span class="check-icon">✓</span>Complete your company profile</div>
+            <div class="check-item"><span class="check-icon">✓</span>Add employees using the company code</div>
+            <div class="check-item"><span class="check-icon">✓</span>Configure leave policies and departments</div>
+          </div>
+          
+          <a href="${loginUrl}" class="dashboard-btn">🚀 Access Your Dashboard →</a>
+        </div>
+        
+        <!-- Security -->
+        <div class="card-security">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              <td width="40" valign="top">
+                <div style="font-size: 24px;">🛡️</div>
+              </td>
+              <td valign="top">
+                <div style="color: #991b1b; font-size: 14px; margin-bottom: 4px;">Important Security Information</div>
+                <div style="color: #b91c1c; font-size: 12px; line-height: 1.5;">This email contains confidential information. If you didn't create this account, please contact our support team immediately at <a href="mailto:info@ciisnetwork.com" style="color: #1d4ed8;">info@ciisnetwork.com</a>.</div>
+              </td>
+            </tr>
+          </table>
+        </div>
+        
       </div>
-    </body>
-    </html>
-  `;
+      
+      <!-- Footer -->
+      <div class="footer">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0">
+          <tr>
+            <td width="30%" valign="middle">
+              <img src="${logoUrl}" alt="CIIS NETWORK" style="width: 140px;">
+            </td>
+            <td width="40%" align="center" valign="middle" style="color: #64748b; font-size: 12px; line-height: 1.6;">
+              © ${new Date().getFullYear()} CIIS NETWORK. All rights reserved.<br>
+              This is a system-generated email. Please do not reply to this message.
+            </td>
+            <td width="30%" align="right" valign="middle" style="font-size: 14px;">
+              <a href="#" style="display: inline-block; width: 28px; height: 28px; background: #1e293b; color: #38bdf8; text-align: center; line-height: 28px; border-radius: 50%; text-decoration: none; margin-left: 8px;">in</a>
+              <a href="#" style="display: inline-block; width: 28px; height: 28px; background: #1e293b; color: #94a3b8; text-align: center; line-height: 28px; border-radius: 50%; text-decoration: none; margin-left: 8px;">🌐</a>
+              <a href="#" style="display: inline-block; width: 28px; height: 28px; background: #1e293b; color: #ef4444; text-align: center; line-height: 28px; border-radius: 50%; text-decoration: none; margin-left: 8px;">▶</a>
+            </td>
+          </tr>
+        </table>
+      </div>
+      
+    </div>
+  </div>
+</body>
+</html>`;
 };
 
 module.exports = {

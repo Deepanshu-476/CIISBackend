@@ -394,7 +394,7 @@ exports.createCompany = async (req, res) => {
     try {
       
       const baseUrl = `${req.protocol}://${req.get("host")}`;
-      const frontendLoginUrl = `${"https://cds.ciisnetwork.in"}/company/${companyCode}/login`;
+      const frontendLoginUrl = `${"https://ciisnetwork.com"}/company/${companyCode}/login`;
       const apiLoginUrl = `${baseUrl}/api/v1/auth/company/${companyCode}/login`;
       const subscriptionStartDate = new Date();
       const subscriptionExpiry = new Date(

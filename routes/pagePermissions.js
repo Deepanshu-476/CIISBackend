@@ -4,6 +4,7 @@ const PagePermission = require('../models/PagePermission');
 const Company = require('../models/Company');
 const PageDataVisibility = require('../models/PageDataVisibility');
 const User = require('../models/User');
+const Client = require('../HR-CDS/models/Client');
 const Branch = require('../models/Branch');
 const Department = require('../models/Department');
 const { protect, isCompanyOwner } = require('../middleware/authMiddleware');
@@ -94,6 +95,30 @@ const normalizePageUsers = (items = []) => {
   return uniqueIds.map(id => ({ user: id }));
 };
 
+const normalizeRoleToken = (value) => String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+
+const getRoleText = (value) => {
+  if (!value) return '';
+  if (typeof value === 'object') {
+    return String(value.name || value.roleName || value.title || value.jobRoleName || value.companyRole || '').trim();
+  }
+  return String(value).trim();
+};
+
+const isClientUser = (user) => {
+  if (!user || typeof user !== 'object') return false;
+  const roleValues = [
+    user.companyRole,
+    user.role,
+    user.jobRole,
+    user.jobRoleName,
+    user.userType,
+    user.accountType,
+    user.department
+  ].map(getRoleText);
+  return roleValues.some(value => normalizeRoleToken(value) === 'client') || Boolean(user.clientId || user.client);
+};
+
 const normalizeUserAccessScopes = (items = []) => {
   if (!Array.isArray(items)) return [];
 
@@ -121,7 +146,10 @@ const normalizeUserAccessScopes = (items = []) => {
     .filter(Boolean);
 };
 
-const getPageUsers = (config, key) => (config?.[key] || []).map(item => item.user).filter(Boolean);
+const getPageUsers = (config, key) => (config?.[key] || [])
+  .filter(item => !isClientUser(item?.user))
+  .map(item => item.user)
+  .filter(Boolean);
 
 const getPageUserAccessScopes = (config) => (config?.userAccessScopes || []).map(item => ({
   user: item.user,
@@ -373,7 +401,11 @@ const buildVisibilityRuleResponse = (rule, branchMap, departmentMap) => {
 
 const loadVisibilityContext = async (companyId) => {
   const [users, branches, departments, rules] = await Promise.all([
-    User.find({ company: companyId })
+    User.find({
+      company: companyId,
+      companyRole: { $not: /^client$/i },
+      jobRole: { $not: /^client$/i }
+    })
       .select('_id name email jobRole companyRole branch department assignedBranches isActive')
       .populate('branch', 'name branchCode')
       .populate('assignedBranches', 'name branchCode')
@@ -395,7 +427,11 @@ const loadVisibilityContext = async (companyId) => {
   ]);
 
   const roleMap = new Map();
-  users.forEach(user => {
+  const clientUserIds = await Client.find({ userId: { $exists: true, $ne: null } }).distinct('userId');
+  const clientUserIdSet = new Set(clientUserIds.map(id => String(id)));
+  const employeeUsers = users.filter(user => !clientUserIdSet.has(String(user._id)) && !isClientUser(user));
+
+  employeeUsers.forEach(user => {
     [user.jobRole, user.companyRole].filter(Boolean).forEach(role => {
       const key = normalizeSubjectKey(role);
       if (!key) return;
@@ -411,7 +447,7 @@ const loadVisibilityContext = async (companyId) => {
   const userRules = rules.filter(rule => rule.subjectType === 'user');
 
   return {
-    users,
+    users: employeeUsers,
     branches,
     departments,
     roleOptions: [...roleMap.values()].sort((a, b) => a.label.localeCompare(b.label)),
@@ -667,15 +703,26 @@ router.put('/:pageKey', isCompanyOwner, async (req, res) => {
     const uniqueUnlockUserIds = [...new Set(unlockUserIds.map(id => String(id)).filter(id => mongoose.Types.ObjectId.isValid(id)))];
     const allUserIds = [...new Set([...uniqueApproverIds, ...uniqueViewUserIds, ...uniqueEditUserIds, ...uniqueDeleteUserIds, ...uniqueGenerateUserIds, ...uniqueLockUserIds, ...uniqueUnlockUserIds])];
 
+    const linkedClientUserIds = await Client.find({
+      userId: { $in: allUserIds }
+    }).distinct('userId');
+    const linkedClientUserIdSet = new Set(linkedClientUserIds.map(id => String(id)));
+
     const validUsers = await User.find({
       _id: { $in: allUserIds },
       $or: [
         { company: companyId },
         { companyId }
-      ]
+      ],
+      companyRole: { $not: /^client$/i },
+      jobRole: { $not: /^client$/i }
     }).select('_id');
 
-    const validIdSet = new Set(validUsers.map(user => user._id.toString()));
+    const validIdSet = new Set(
+      validUsers
+        .map(user => user._id.toString())
+        .filter(id => !linkedClientUserIdSet.has(id))
+    );
     const validEditIds = uniqueEditUserIds.filter(id => validIdSet.has(id));
     const mergedViewUserIds = [...new Set([...uniqueViewUserIds.filter(id => validIdSet.has(id)), ...validEditIds])];
 

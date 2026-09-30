@@ -112,17 +112,22 @@ class EmailService {
       }
 
       const { config, transporter } = emailTransport;
+      const { convert } = require('html-to-text');
+      const plainText = options.text || (html ? convert(html, { wordwrap: 130 }) : undefined);
+
       const mailOptions = {
         from: `"${config.senderName || 'CIIS NETWORK'}" <${config.emailUser}>`,
         to: Array.isArray(to) ? to.join(', ') : to,
         subject: subject,
         html: html,
-        text: options.text || undefined,
+        text: plainText,
         replyTo: config.replyTo || config.emailUser,
         priority: options.priority || 'high',
         headers: {
           'X-Entity-Ref-ID': options.referenceId || `email-${Date.now()}`,
           'X-Mailer': 'CIIS-NETWORK-Email-Service',
+          'Message-ID': `<${Date.now()}.${Math.random().toString(36).substring(2)}@ciisnetwork.in>`,
+          'List-Unsubscribe': `<mailto:support@ciisnetwork.com?subject=unsubscribe>`,
           ...options.headers
         }
       };
