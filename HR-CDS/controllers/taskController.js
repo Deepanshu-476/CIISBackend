@@ -70,6 +70,13 @@ const buildAssigneeNameConditions = names => {
   ]));
 };
 
+const normalizeCompanyCodeStrict = value => String(value || '').trim().toUpperCase();
+
+const buildExactCompanyCodeFilter = companyCode => {
+  const normalized = normalizeCompanyCodeStrict(companyCode);
+  return normalized ? { $regex: new RegExp(`^${escapeRegex(normalized)}$`, 'i') } : companyCode;
+};
+
 const getRequestedTaskBranchId = (req) => {
   const value = req.body?.branchId || req.body?.branch || req.query?.branchId || req.query?.branch;
   return value ? String(value).trim() : '';
@@ -465,7 +472,7 @@ const calculateTaskWork = (task, workWindow, fallbackRange) => {
   return { seconds: Math.max(0, total), intervals };
 };
 
-const getUserWorkWindow = async (userId, query) => {
+const getUserWorkWindow = async (userId, query, companyCode = '') => {
   const taskRange = getTaskReportDateRange(query);
   const range = getAttendanceReportDateRange(query, taskRange);
   const requestedDateKey = query?.fromDate
@@ -477,9 +484,11 @@ const getUserWorkWindow = async (userId, query) => {
   const userQuery = mongoose.Types.ObjectId.isValid(userId)
     ? { $in: [userId, new mongoose.Types.ObjectId(userId)] }
     : userId;
+  const attendanceCompanyCode = normalizeCompanyCodeStrict(companyCode);
 
   const attendanceCandidates = await Attendance.find({
     user: userQuery,
+    ...(attendanceCompanyCode ? { companyCode: buildExactCompanyCodeFilter(attendanceCompanyCode) } : {}),
     $or: [
       { date: { $gte: searchStart, $lte: searchEnd } },
       { inTime: { $gte: searchStart, $lte: searchEnd } },
@@ -496,6 +505,7 @@ const getUserWorkWindow = async (userId, query) => {
   if (!attendance && query?.fromDate) {
     const nearbyAttendance = await Attendance.find({
       user: userQuery,
+      ...(attendanceCompanyCode ? { companyCode: buildExactCompanyCodeFilter(attendanceCompanyCode) } : {}),
       $or: [
         {
           inTime: {
@@ -525,6 +535,7 @@ const getUserWorkWindow = async (userId, query) => {
   if (!attendance && requestedDateKey === getIndiaWorkDateKey(new Date())) {
     attendance = await Attendance.findOne({
       user: userQuery,
+      ...(attendanceCompanyCode ? { companyCode: buildExactCompanyCodeFilter(attendanceCompanyCode) } : {}),
       isClockedIn: true
     }).select('date inTime outTime isClockedIn status totalTime lateBy earlyLeave createdAt updatedAt companyCode').sort({ updatedAt: -1 }).lean();
   }
@@ -757,6 +768,28 @@ const paginateTasks = (tasks, req) => {
 const getRequestCompanyCode = (req, user = null) => {
   const companyCode = req.user?.companyCode || user?.companyCode || user?.company?.companyCode;
   return typeof companyCode === 'string' ? companyCode.trim().toUpperCase() : companyCode;
+};
+
+const getRequestCompanyId = (req) => {
+  const company = req.user?.company?._id || req.user?.company || req.user?.companyId;
+  return company ? String(company) : '';
+};
+
+const isUserInRequestCompany = (targetUser, req) => {
+  if (!targetUser) return false;
+  const requestCompanyId = getRequestCompanyId(req);
+  const targetCompanyId = targetUser.company?._id || targetUser.company || targetUser.companyId;
+  if (requestCompanyId && targetCompanyId && String(targetCompanyId) === requestCompanyId) return true;
+
+  const requestCompanyCode = normalizeCompanyCodeStrict(getRequestCompanyCode(req));
+  const targetCompanyCode = normalizeCompanyCodeStrict(targetUser.companyCode || targetUser.company?.companyCode);
+  return Boolean(requestCompanyCode && targetCompanyCode && requestCompanyCode === targetCompanyCode);
+};
+
+const loadTargetUserInRequestCompany = async (userId, req, select = 'name email company companyCode') => {
+  if (!mongoose.Types.ObjectId.isValid(String(userId))) return null;
+  const targetUser = await User.findById(userId).select(select).lean();
+  return isUserInRequestCompany(targetUser, req) ? targetUser : null;
 };
 
 const createNotification = async (userId, title, message, type, relatedTask = null, metadata = null) => {
@@ -2254,6 +2287,10 @@ exports.getTaskActivityLogs = async (req, res) => {
 exports.getUserActivityTimeline = async (req, res) => {
   try {
     const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 100 });
+    const targetUser = await loadTargetUserInRequestCompany(req.params.userId, req, '_id company companyCode');
+    if (!targetUser) {
+      return res.status(404).json({ success: false, error: 'User not found in this company' });
+    }
     const filter = { user: req.params.userId };
     const [logs, total] = await Promise.all([
       ActivityLog.find(filter)
@@ -2368,16 +2405,28 @@ exports.getUserDetailedAnalytics = async (req, res) => {
   }
 };
 
-const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
+const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
+  const companyCode = getRequestCompanyCode(req);
+  const requestCompanyId = getRequestCompanyId(req);
+  const groupScopeClauses = [];
+  if (requestCompanyId) groupScopeClauses.push({ $or: [{ company: requestCompanyId }, { company: { $exists: false } }] });
+  if (companyCode) groupScopeClauses.push({ $or: [{ companyCode: buildExactCompanyCodeFilter(companyCode) }, { companyCode: { $exists: false } }] });
   const [targetUser, groups] = await Promise.all([
-    User.findById(userId).select('name email').lean(),
-    Group.find({ members: userId, isActive: true }).select('_id').lean()
+    loadTargetUserInRequestCompany(userId, req, 'name email company companyCode'),
+    Group.find({
+      members: userId,
+      isActive: true,
+      ...(groupScopeClauses.length ? { $and: groupScopeClauses } : {})
+    }).select('_id').lean()
   ]);
+  if (!targetUser) return [];
   const groupIds = groups.map(g => g._id);
 
-  
-  const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
-  const companyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : companyCode;
+  const companyFilter = buildExactCompanyCodeFilter(companyCode);
+  const companyClients = companyCode
+    ? await Client.find({ companyCode: companyFilter }).select('_id').lean()
+    : [];
+  const companyClientIds = companyClients.map(client => client._id);
   const range = getCleanTaskDateRange({
     period: queryOptions.fromDate || queryOptions.toDate ? 'all' : queryOptions.period,
     fromDate: queryOptions.fromDate,
@@ -2412,13 +2461,21 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
   }
 
   const clientQuery = {
+    ...(companyCode ? {
+      $and: [{
+        $or: [
+          { companyCode: companyFilter },
+          ...(companyClientIds.length ? [{ clientId: { $in: companyClientIds } }] : [])
+        ]
+      }]
+    } : {}),
     $or: [
       { assigneeId: userId },
       { assignee: userId.toString() },
       ...buildAssigneeNameConditions([targetUser?.name, targetUser?.email])
     ].filter(condition => Object.values(condition)[0])
   };
-  if (range) clientQuery.$and = [{ $or: [{ dueDate: range }, { createdAt: range }, { updatedAt: range }] }];
+  if (range) clientQuery.$and = [...(clientQuery.$and || []), { $or: [{ dueDate: range }, { createdAt: range }, { updatedAt: range }] }];
   if (priority) clientQuery.priority = new RegExp(`^${priority}$`, 'i');
   if (search) {
     clientQuery.$and = [
@@ -2436,6 +2493,16 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
     ];
   }
   if (priority) projectTaskElemMatch.priority = new RegExp(`^${priority}$`, 'i');
+
+  const projectQuery = {
+    tasks: { $elemMatch: projectTaskElemMatch },
+    ...((requestCompanyId || companyCode) ? {
+      $or: [
+        ...(requestCompanyId ? [{ company: requestCompanyId }] : []),
+        ...(companyCode ? [{ companyCode: companyFilter }] : [])
+      ]
+    } : {})
+  };
 
   const [personalTasks, clientTasks, projectTasks] = await Promise.all([
     Task.find(personalQuery)
@@ -2456,8 +2523,8 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}) => {
       .sort({ createdAt: -1 })
       .lean(),
 
-    Project.find({ tasks: { $elemMatch: projectTaskElemMatch } })
-      .select('projectName description createdBy tasks createdAt updatedAt')
+    Project.find(projectQuery)
+      .select('projectName description createdBy tasks company companyCode createdAt updatedAt')
       .populate('createdBy', 'name email')
       .populate('tasks.assignedTo', 'name email')
       .populate('tasks.createdBy', 'name email')
@@ -2630,7 +2697,11 @@ const filterUserTasks = (tasks, query) => {
 exports.getUserTaskStats = async (req, res) => {
   try {
     const { userId } = req.params;
-    const allTasks = await queryAllUserTasks(userId, req.user.companyCode, req.query);
+    const targetUser = await loadTargetUserInRequestCompany(userId, req, '_id company companyCode');
+    if (!targetUser) {
+      return res.status(404).json({ success: false, error: 'User not found in this company' });
+    }
+    const allTasks = await queryAllUserTasks(userId, req, req.query);
     const filtered = filterUserTasks(allTasks, req.query);
 
     const counts = {
@@ -2920,13 +2991,16 @@ exports.getUserAllTasksPaginated = async (req, res) => {
       : parsePositiveInt(req.query.limit, 10, 50);
 
     const [targetUser, allTasks] = await Promise.all([
-      User.findById(userId).select('name email role jobRole companyRole department company').populate('department', 'name').lean(),
-      queryAllUserTasks(userId, req.user.companyCode, req.query)
+      User.findById(userId).select('name email role jobRole companyRole department company companyCode').populate('department', 'name').lean(),
+      queryAllUserTasks(userId, req, req.query)
     ]);
+    if (!isUserInRequestCompany(targetUser, req)) {
+      return res.status(404).json({ success: false, error: 'User not found in this company' });
+    }
 
     const taskRange = getTaskReportDateRange(req.query);
     const range = getAttendanceReportDateRange(req.query, taskRange);
-    const workWindow = await getUserWorkWindow(userId, req.query);
+    const workWindow = await getUserWorkWindow(userId, req.query, getRequestCompanyCode(req));
 
     const allTasksWithWorkTime = allTasks.map(task => {
       const work = calculateTaskWork(task, workWindow, range);
