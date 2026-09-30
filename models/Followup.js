@@ -23,5 +23,8 @@ followUpSchema.index(
   { company: 1, agent: 1, lead: 1, sourceCallId: 1 },
   { unique: true, partialFilterExpression: { sourceCallId: { $type: 'string' } } }
 );
+followUpSchema.index({ company: 1, agent: 1, status: 1, date: 1 });
+followUpSchema.index({ company: 1, lead: 1, date: -1 });
+followUpSchema.index({ company: 1, status: 1, date: 1 });
 
 module.exports = mongoose.model("FollowUp", followUpSchema);

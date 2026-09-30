@@ -55,4 +55,12 @@ const leadSchema = new mongoose.Schema({
   }
 }, { timestamps: true });
 
+leadSchema.index({ company: 1, createdAt: -1 });
+leadSchema.index({ company: 1, status: 1, createdAt: -1 });
+leadSchema.index({ company: 1, assignedTo: 1, assignedAt: -1 });
+leadSchema.index({ company: 1, assignedTo: 1, createdAt: -1 });
+leadSchema.index({ company: 1, leadType: 1, createdAt: -1 });
+leadSchema.index({ company: 1, leadSource: 1, createdAt: -1 });
+leadSchema.index({ company: 1, nextFollowUp: 1 });
+
 module.exports = mongoose.model("Lead", leadSchema);
