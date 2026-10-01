@@ -19,7 +19,7 @@ const formatDuration = (seconds) => {
   const hrs = Math.floor(seconds / 3600);
   const mins = Math.floor((seconds % 3600) / 60);
   const secs = Math.floor(seconds % 60);
-  
+
   const parts = [];
   if (hrs > 0) parts.push(`${hrs}h`);
   if (mins > 0) parts.push(`${mins}m`);
@@ -195,7 +195,7 @@ const parseClientDueDate = value => {
     return Number.isNaN(value.getTime()) ? null : value;
   }
   let dateStr = String(value).trim();
-  
+
   if (dateStr.includes('T') && !/Z|[+-]\d{2}:?\d{2}$/i.test(dateStr)) {
     dateStr = `${dateStr}+05:30`;
   }
@@ -363,7 +363,7 @@ const calculateClientAssignedStats = tasks => {
 const addClientActivityLogHelper = async (task, logData, req = null) => {
   try {
     const { action, description, user, userName, oldValues, newValues } = logData;
-    
+
     const activityLog = {
       action: action || 'update',
       description: description || 'Task updated',
@@ -419,16 +419,16 @@ const resolveClientPortalUsers = async clientOrId => {
   const email = client.email ? String(client.email).trim().toLowerCase() : '';
   const companyCode = client.companyCode ? String(client.companyCode).trim().toUpperCase() : '';
   const orFilters = [
-    client.userId ? {_id: client.userId} : null,
-    email ? {email} : null,
-    clientId ? {employeeType: clientId} : null,
-    clientId ? {additionalDetails: {$regex: clientId}} : null,
+    client.userId ? { _id: client.userId } : null,
+    email ? { email } : null,
+    clientId ? { employeeType: clientId } : null,
+    clientId ? { additionalDetails: { $regex: clientId } } : null,
   ].filter(Boolean);
 
   if (!orFilters.length) return [];
 
   const query = {
-    isActive: {$ne: false},
+    isActive: { $ne: false },
     $or: orFilters,
   };
 
@@ -561,7 +561,7 @@ const notifyClientTaskCompleted = async ({ task, actor, req }) => {
       actor,
       title: 'Task Completed',
       message,
-      data: {completedAt: task.completedAt},
+      data: { completedAt: task.completedAt },
       priority: 'high',
     });
 
@@ -597,7 +597,7 @@ const deleteImageFiles = (images) => {
     } else if (image.filename) {
       filename = image.filename;
     }
-    
+
     if (filename) {
       const filePath = path.join(__dirname, '../uploads/client-remarks', filename);
       if (fs.existsSync(filePath)) {
@@ -615,12 +615,12 @@ const addClientRemarkWithImages = async (req, res) => {
     const { taskId } = req.params;
     const { text } = req.body;
     const currentUser = req.user;
-    
+
     void 0;
     void 0;
     void 0;
     void 0;
-    
+
     if (!mongoose.Types.ObjectId.isValid(taskId)) {
       void 0;
       return res.status(400).json({
@@ -628,7 +628,7 @@ const addClientRemarkWithImages = async (req, res) => {
         message: 'Invalid task ID format'
       });
     }
-    
+
     const task = await Task.findById(taskId);
     if (!task) {
       void 0;
@@ -637,34 +637,34 @@ const addClientRemarkWithImages = async (req, res) => {
         message: 'Task not found'
       });
     }
-    
+
     void 0;
-    
-    
+
+
     const images = [];
-    
+
     if (req.files && req.files.length > 0) {
       const uploadDir = path.join(__dirname, '../uploads/client-remarks');
-      
-      
+
+
       if (!fs.existsSync(uploadDir)) {
         fs.mkdirSync(uploadDir, { recursive: true });
         void 0;
       }
-      
+
       for (const file of req.files) {
         try {
-          
+
           const timestamp = Date.now();
           const randomStr = Math.random().toString(36).substring(2, 8);
           const filename = `remark_${timestamp}_${randomStr}_${currentUser?._id || 'user'}.jpg`;
-          
-          
+
+
           const savePath = path.join(uploadDir, filename);
-          
+
           void 0;
-          
-          
+
+
           await sharp(file.buffer)
             .resize(1200, 1200, {
               fit: "inside",
@@ -675,12 +675,12 @@ const addClientRemarkWithImages = async (req, res) => {
               progressive: true
             })
             .toFile(savePath);
-          
-          
+
+
           const imageUrl = `/uploads/client-remarks/${filename}`;
-          
+
           void 0;
-          
+
           images.push({
             url: imageUrl,
             filename: filename,
@@ -690,15 +690,15 @@ const addClientRemarkWithImages = async (req, res) => {
             uploadedBy: currentUser?.id || currentUser?._id,
             uploadedAt: new Date()
           });
-          
+
         } catch (imgError) {
           console.error(`❌ Error processing image ${file.originalname}:`, imgError);
         }
       }
     }
-    
+
     void 0;
-    
+
     const remark = {
       text: text || '',
       images: images,
@@ -706,13 +706,13 @@ const addClientRemarkWithImages = async (req, res) => {
       userName: currentUser?.name || currentUser?.username || 'System',
       createdAt: new Date()
     };
-    
+
     if (!task.remarks) {
       task.remarks = [];
     }
-    
+
     task.remarks.push(remark);
-    
+
     await task.save();
     const addedRemark = task.remarks[task.remarks.length - 1];
     const responseRemark = {
@@ -766,7 +766,7 @@ const addClientRemarkWithImages = async (req, res) => {
           actor: currentUser,
           title: 'Client Task Remark',
           message: `${currentUser?.name || 'A user'} added a remark on "${task.name || task.title}"`,
-          data: {remarkId: addedRemark._id},
+          data: { remarkId: addedRemark._id },
           priority: 'medium',
         });
         await notifyAssignedClientTaskUser({
@@ -774,7 +774,7 @@ const addClientRemarkWithImages = async (req, res) => {
           actor: currentUser,
           title: 'Client Task Remark',
           message: `${currentUser?.name || 'A user'} added a remark on client task "${task.name || task.title}"`,
-          data: {remarkId: addedRemark._id},
+          data: { remarkId: addedRemark._id },
           priority: 'medium',
         });
       } catch (notifyErr) {
@@ -791,7 +791,7 @@ const addClientRemarkWithImages = async (req, res) => {
             notificationType: 'task_remark_added',
             notificationTargetPath: '/ciisUser/ClientDashboard',
             notificationMessage: `${currentUser?.name || 'A user'} added a remark on "${task.name || task.title}"`,
-            notificationData: {taskId: task._id, remarkId: addedRemark._id, source: 'client_task'},
+            notificationData: { taskId: task._id, remarkId: addedRemark._id, source: 'client_task' },
             notificationPriority: 'medium',
           });
         }
@@ -799,7 +799,7 @@ const addClientRemarkWithImages = async (req, res) => {
         console.error('Error sending client email for remark:', emailErr);
       }
     });
-    
+
   } catch (error) {
     console.error('❌ Error in addClientRemarkWithImages:', error);
     console.error('Error stack:', error.stack);
@@ -864,7 +864,7 @@ const addClientRemark = async (req, res) => {
     }
 
     task.remarks.push(remark);
-    
+
     await task.save();
     const addedRemark = task.remarks[task.remarks.length - 1];
     const responseRemark = {
@@ -918,7 +918,7 @@ const addClientRemark = async (req, res) => {
           actor: currentUser,
           title: 'Client Task Remark',
           message: `${currentUser?.name || 'A user'} added a remark on "${task.name || task.title}"`,
-          data: {remarkId: addedRemark._id},
+          data: { remarkId: addedRemark._id },
           priority: 'medium',
         });
         await notifyAssignedClientTaskUser({
@@ -926,7 +926,7 @@ const addClientRemark = async (req, res) => {
           actor: currentUser,
           title: 'Client Task Remark',
           message: `${currentUser?.name || 'A user'} added a remark on client task "${task.name || task.title}"`,
-          data: {remarkId: addedRemark._id},
+          data: { remarkId: addedRemark._id },
           priority: 'medium',
         });
       } catch (notifyErr) {
@@ -943,7 +943,7 @@ const addClientRemark = async (req, res) => {
             notificationType: 'task_remark_added',
             notificationTargetPath: '/ciisUser/ClientDashboard',
             notificationMessage: `${currentUser?.name || 'A user'} added a remark on "${task.name || task.title}"`,
-            notificationData: {taskId: task._id, remarkId: addedRemark._id, source: 'client_task'},
+            notificationData: { taskId: task._id, remarkId: addedRemark._id, source: 'client_task' },
             notificationPriority: 'medium',
           });
         }
@@ -993,45 +993,45 @@ const getClientRemarks = async (req, res) => {
     }
 
     let remarks = task.remarks || [];
-    
+
     void 0;
-    
-    
+
+
     let imagesFound = 0;
     let imagesMissing = 0;
-    
+
     remarks = remarks.map(remark => {
       if (remark.images && remark.images.length > 0) {
         remark.images = remark.images.map(img => {
-          
+
           if (img.url && !img.url.startsWith('/')) {
             img.url = '/' + img.url;
           }
-          
-          
+
+
           const filename = img.filename;
           if (filename) {
             const fullPath = path.join(__dirname, '../uploads/client-remarks', filename);
             const fileExists = fs.existsSync(fullPath);
-            
+
             if (fileExists) {
               imagesFound++;
             } else {
               imagesMissing++;
             }
           }
-          
+
           return img;
         });
       }
       return remark;
     });
-    
+
     void 0;
-    
-    
+
+
     remarks.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-    
+
     const startIndex = (page - 1) * limit;
     const endIndex = startIndex + parseInt(limit);
     const paginatedRemarks = remarks.slice(startIndex, endIndex);
@@ -1090,41 +1090,41 @@ const deleteClientRemark = async (req, res) => {
     }
 
     const remark = task.remarks[remarkIndex];
-    
-    
-    const isAuthorized = 
+
+
+    const isAuthorized =
       (remark.user && remark.user.toString() === (currentUser?.id || currentUser?._id)) ||
       currentUser?.role === 'admin';
-    
+
     if (!isAuthorized) {
       return res.status(403).json({
         success: false,
         message: 'Not authorized to delete this remark'
       });
     }
-    
-    
+
+
     if (remark.images && remark.images.length > 0) {
       deleteImageFiles(remark.images);
     }
-    
-    
+
+
     task.remarks.splice(remarkIndex, 1);
-    
+
     await addClientActivityLogHelper(task, {
       action: 'remark_deleted',
       description: `Deleted remark${remark.images?.length ? ` with ${remark.images.length} image(s)` : ''}`,
       user: currentUser?.id || currentUser?._id,
       userName: currentUser?.name || currentUser?.username || 'System'
     }, req);
-    
+
     await task.save();
-    
+
     res.json({
       success: true,
       message: 'Remark deleted successfully'
     });
-    
+
   } catch (error) {
     console.error('❌ Error deleting remark:', error);
     res.status(500).json({
@@ -1217,7 +1217,7 @@ const getClientTaskActivityLogs = async (req, res) => {
 
     let logs = task.activityLogs || [];
     logs.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-    
+
     const startIndex = (page - 1) * limit;
     const endIndex = startIndex + parseInt(limit);
     const paginatedLogs = logs.slice(startIndex, endIndex);
@@ -1262,8 +1262,8 @@ const updateAssignedTaskStatus = async (req, res) => {
       });
     }
 
-    
-    const isAssignedToUser = 
+
+    const isAssignedToUser =
       task.assigneeId?.toString() === currentUser.id?.toString() ||
       task.assigneeId?.toString() === currentUser._id?.toString() ||
       task.assignee === currentUser.id?.toString() ||
@@ -1283,7 +1283,7 @@ const updateAssignedTaskStatus = async (req, res) => {
     const previousCompleted = task.completed;
     const now = new Date();
 
-    
+
     let targetStatus = status;
     if (completed === true) {
       targetStatus = 'completed';
@@ -1307,7 +1307,7 @@ const updateAssignedTaskStatus = async (req, res) => {
       });
     }
 
-    
+
     let elapsedSeconds = 0;
     const holdSeconds = applyClientTaskHoldTransition(task, previousStatus, targetStatus, now);
 
@@ -1320,13 +1320,13 @@ const updateAssignedTaskStatus = async (req, res) => {
       }
     }
 
-    
+
     if (targetStatus === 'in-progress' && previousStatus !== 'in-progress') {
       task.inProgressSince = now;
       void 0;
     }
 
-    
+
     if (targetStatus === 'completed') {
       task.completed = true;
       task.completedAt = now;
@@ -1353,7 +1353,7 @@ const updateAssignedTaskStatus = async (req, res) => {
       task.status = status;
     }
 
-    
+
     if (previousStatus !== task.status) {
       let logDescription = `Status changed from "${previousStatus}" to "${task.status}"`;
       if (elapsedSeconds > 0) {
@@ -1368,15 +1368,15 @@ const updateAssignedTaskStatus = async (req, res) => {
       await addClientActivityLogHelper(task, {
         action: 'status_updated',
         description: logDescription,
-        oldValues: {status: previousStatus},
-        newValues: {status: task.status},
+        oldValues: { status: previousStatus },
+        newValues: { status: task.status },
         user: currentUser?.id || currentUser?._id,
         userName: currentUser?.name || currentUser?.username || 'System'
       }, req);
       void 0;
     }
 
-    
+
     if (previousCompleted !== task.completed) {
       const action = task.completed ? 'completed' : 'reopened';
       await addClientActivityLogHelper(task, {
@@ -1388,7 +1388,7 @@ const updateAssignedTaskStatus = async (req, res) => {
       void 0;
     }
 
-    
+
     if (remarks && remarks.trim()) {
       task.remarks = task.remarks || [];
       const remark = {
@@ -1399,7 +1399,7 @@ const updateAssignedTaskStatus = async (req, res) => {
         createdAt: new Date()
       };
       task.remarks.push(remark);
-      
+
       await addClientActivityLogHelper(task, {
         action: 'remark_added',
         description: `Added remark: ${remarks.substring(0, 100)}${remarks.length > 100 ? '...' : ''}`,
@@ -1427,7 +1427,7 @@ const updateAssignedTaskStatus = async (req, res) => {
 
     const runStatusPostProcessing = async () => {
       if (!previousCompleted && task.completed) {
-        await notifyClientTaskCompleted({task, actor: currentUser, req});
+        await notifyClientTaskCompleted({ task, actor: currentUser, req });
       }
 
       if (previousStatus !== task.status || previousCompleted !== task.completed || (remarks && remarks.trim())) {
@@ -1442,7 +1442,7 @@ const updateAssignedTaskStatus = async (req, res) => {
           type: 'task_status_updated',
           title: 'Client Task Status Updated',
           message: statusMessage,
-          data: {taskId: task._id, status: task.status, source: 'client_task'},
+          data: { taskId: task._id, status: task.status, source: 'client_task' },
           priority: task.completed ? 'high' : 'medium',
         });
         await notifyClientPortalUsers({
@@ -1451,7 +1451,7 @@ const updateAssignedTaskStatus = async (req, res) => {
           actor: currentUser,
           title: 'Task Status Updated',
           message: statusMessage,
-          data: {status: task.status},
+          data: { status: task.status },
           priority: task.completed ? 'high' : 'medium',
         });
       }
@@ -1489,7 +1489,7 @@ const updateAssignedTaskStatus = async (req, res) => {
 const getAssignedToMeTasks = async (req, res) => {
   try {
     const currentUser = req.user;
-    
+
     if (!currentUser) {
       return res.status(401).json({
         success: false,
@@ -1499,7 +1499,7 @@ const getAssignedToMeTasks = async (req, res) => {
 
     const { status, search, period } = req.query;
     await syncExpiredSubscriptionClientTasks();
-    
+
     let filter = await getAssignedClientTaskFilter(currentUser);
 
     if (status && status !== 'all' && status !== '') {
@@ -1564,7 +1564,7 @@ const getAssignedToMeTasks = async (req, res) => {
       } else if (task.status === 'onhold') {
         taskStatus = 'onhold';
       }
-      
+
       if (isClientTaskOverdue(task)) {
         taskStatus = 'overdue';
         overdueCount++;
@@ -1578,11 +1578,11 @@ const getAssignedToMeTasks = async (req, res) => {
         month: 'short',
         day: 'numeric'
       });
-      
+
       if (!groupedTasks[dateKey]) {
         groupedTasks[dateKey] = [];
       }
-      
+
       groupedTasks[dateKey].push({
         _id: task._id,
         title: task.name,
@@ -1750,12 +1750,12 @@ const getAssignedTasksByUserId = async (req, res) => {
       status: task.completed
         ? 'completed'
         : task.status === 'onhold'
-        ? 'onhold'
-        : isClientTaskOverdue(task)
-        ? 'overdue'
-        : task.status === 'in-progress'
-        ? 'in-progress'
-        : task.status || 'pending',
+          ? 'onhold'
+          : isClientTaskOverdue(task)
+            ? 'overdue'
+            : task.status === 'in-progress'
+              ? 'in-progress'
+              : task.status || 'pending',
       priority: (task.priority || 'Medium').toLowerCase(),
       clientName: task.clientId?.name || 'Unknown Client',
       clientId: task.clientId,
@@ -2027,8 +2027,8 @@ const addTask = async (req, res) => {
     const subscriptions = Array.isArray(client.subscription) ? client.subscription : [];
     const selectedSubscription = subscriptionId && mongoose.Types.ObjectId.isValid(subscriptionId)
       ? (typeof client.subscription?.id === 'function'
-          ? client.subscription.id(subscriptionId)
-          : subscriptions.find(sub => String(sub?._id) === String(subscriptionId)))
+        ? client.subscription.id(subscriptionId)
+        : subscriptions.find(sub => String(sub?._id) === String(subscriptionId)))
       : subscriptionNo
         ? subscriptions.find(sub => Number(sub.subscriptionNo) === Number(subscriptionNo))
         : subscriptions[subscriptions.length - 1];
@@ -2094,7 +2094,7 @@ const addTask = async (req, res) => {
 
     await task.save();
 
-    
+
     try {
       await notifyPageUsers({
         companyId: getNotificationCompanyId(client, req.user),
@@ -2129,7 +2129,7 @@ const addTask = async (req, res) => {
       console.error('Error notifying client/assignee for client task create:', notifyErr);
     }
 
-    
+
     try {
       if (client && client.email) {
         const subject = `New Task Created: ${task.name}`;
@@ -2139,7 +2139,7 @@ const addTask = async (req, res) => {
           notificationType: 'task_client',
           notificationTargetPath: '/ciisUser/ClientDashboard',
           notificationMessage: `New task created: ${task.name}`,
-          notificationData: {taskId: task._id, source: 'client_task'},
+          notificationData: { taskId: task._id, source: 'client_task' },
           notificationPriority: 'high',
         });
       }
@@ -2244,14 +2244,14 @@ const updateTask = async (req, res) => {
         message: 'Cannot change status of an overdue task'
       });
     }
-    
-    
+
+
     for (const key of Object.keys(updates)) {
       if (!allowedKeys.has(key)) continue;
 
       const oldValue = task[key];
       let newValue = updates[key];
-      
+
       if (key === 'name') {
         newValue = updates[key].trim();
         if (oldValue !== newValue) {
@@ -2265,8 +2265,8 @@ const updateTask = async (req, res) => {
           changes.push(`on-hold paused for ${formatDuration(holdSeconds)}; due time resumed`);
         }
         task[key] = newValue;
-        
-        
+
+
         if (oldValue === 'in-progress') {
           if (task.inProgressSince) {
             const elapsed = Math.max(0, Math.floor((now - new Date(task.inProgressSince)) / 1000));
@@ -2275,8 +2275,8 @@ const updateTask = async (req, res) => {
             changes.push(`timer stopped (session duration: ${formatDuration(elapsed)}, total: ${formatDuration(task.timeSpent)})`);
           }
         }
-        
-        
+
+
         if (newValue === 'in-progress') {
           task.inProgressSince = now;
           changes.push(`timer started`);
@@ -2298,15 +2298,15 @@ const updateTask = async (req, res) => {
         if (holdSeconds > 0) {
           changes.push(`on-hold paused for ${formatDuration(holdSeconds)}; due time resumed`);
         }
-        
-        
+
+
         if (task.completed && task.status === 'in-progress' && task.inProgressSince) {
           const elapsed = Math.max(0, Math.floor((now - new Date(task.inProgressSince)) / 1000));
           task.timeSpent = (task.timeSpent || 0) + elapsed;
           task.inProgressSince = null;
           changes.push(`timer stopped (session duration: ${formatDuration(elapsed)}, total: ${formatDuration(task.timeSpent)})`);
         }
-        
+
         task.status = completedTargetStatus;
       } else if (key === 'priority') {
         newValue = normalizeClientTaskPriority(newValue);
@@ -2317,8 +2317,8 @@ const updateTask = async (req, res) => {
       } else if (key === 'assignee' && oldValue !== newValue) {
         changes.push(`assignee from "${oldValue}" to "${newValue}"`);
         task[key] = newValue;
-        
-        
+
+
         if (!updates.assigneeId) {
           const client = await Client.findById(task.clientId).select('companyCode').lean();
           const user = await resolveAssigneeUser(newValue, client?.companyCode);
@@ -2356,10 +2356,10 @@ const updateTask = async (req, res) => {
     await task.save({ validateModifiedOnly: true });
 
     if (!previousCompleted && task.completed) {
-      await notifyClientTaskCompleted({task, actor: currentUser, req});
+      await notifyClientTaskCompleted({ task, actor: currentUser, req });
     }
 
-    
+
     if (changes.length > 0) {
       try {
         const client = await Client.findById(task.clientId).select('client name email company companyCode userId');
@@ -2377,7 +2377,7 @@ const updateTask = async (req, res) => {
           actor: currentUser,
           title: 'Client Task Updated',
           message: `${currentUser?.name || 'User'} updated client task "${task.name}"`,
-          data: {changes},
+          data: { changes },
           priority: 'medium',
         });
         await notifyClientPortalUsers({
@@ -2386,14 +2386,14 @@ const updateTask = async (req, res) => {
           actor: currentUser,
           title: 'Task Updated',
           message: `Task updated: ${task.name}`,
-          data: {changes},
+          data: { changes },
           priority: 'medium',
         });
       } catch (notifyErr) {
         console.error('Error notifying users for client task update:', notifyErr);
       }
 
-      
+
       try {
         const client = await Client.findById(task.clientId).select('name email');
         if (client && client.email) {
@@ -2404,7 +2404,7 @@ const updateTask = async (req, res) => {
             notificationType: 'task_client',
             notificationTargetPath: '/ciisUser/ClientDashboard',
             notificationMessage: `Task updated: ${task.name}`,
-            notificationData: {taskId: task._id, source: 'client_task'},
+            notificationData: { taskId: task._id, source: 'client_task' },
             notificationPriority: 'medium',
           });
         }
@@ -2461,7 +2461,7 @@ const toggleTaskCompletion = async (req, res) => {
     const previousCompleted = task.completed;
     const previousStatus = task.status;
     const now = new Date();
-    
+
     let elapsedSeconds = 0;
     if (previousStatus === 'in-progress') {
       if (task.inProgressSince) {
@@ -2476,7 +2476,7 @@ const toggleTaskCompletion = async (req, res) => {
     const targetStatus = task.completed ? 'completed' : 'pending';
     const holdSeconds = applyClientTaskHoldTransition(task, previousStatus, targetStatus, now);
     task.status = targetStatus;
-    
+
     const action = task.completed ? 'completed' : 'reopened';
     let logDescription = `Task ${action}`;
     if (elapsedSeconds > 0) {
@@ -2492,11 +2492,11 @@ const toggleTaskCompletion = async (req, res) => {
       user: currentUser?.id || currentUser?._id,
       userName: currentUser?.name || currentUser?.username || 'System'
     }, req);
-    
+
     await task.save();
 
     if (!previousCompleted && task.completed) {
-      await notifyClientTaskCompleted({task, actor: currentUser, req});
+      await notifyClientTaskCompleted({ task, actor: currentUser, req });
     }
 
     if (previousCompleted && !task.completed) {
@@ -2508,7 +2508,7 @@ const toggleTaskCompletion = async (req, res) => {
           actor: currentUser,
           title: 'Task Reopened',
           message: `Task reopened: ${task.name}`,
-          data: {status: task.status},
+          data: { status: task.status },
           priority: 'medium',
         });
         await notifyAssignedClientTaskUser({
@@ -2516,7 +2516,7 @@ const toggleTaskCompletion = async (req, res) => {
           actor: currentUser,
           title: 'Client Task Reopened',
           message: `${currentUser?.name || 'User'} reopened client task "${task.name}"`,
-          data: {status: task.status},
+          data: { status: task.status },
           priority: 'medium',
         });
       } catch (notifyErr) {
@@ -2594,8 +2594,8 @@ const updateTaskCheckpoint = async (req, res) => {
     await addClientActivityLogHelper(task, {
       action: 'checkpoint_updated',
       description: `${isCompleted ? 'Completed' : 'Reopened'} checkpoint: ${checkpoint.title}`,
-      oldValues: {status: previousStatus, completed: previousCompleted},
-      newValues: {status: task.status, completed: task.completed, checkpointId, checkpointCompleted: isCompleted},
+      oldValues: { status: previousStatus, completed: previousCompleted },
+      newValues: { status: task.status, completed: task.completed, checkpointId, checkpointCompleted: isCompleted },
       user: currentUser?.id || currentUser?._id,
       userName: currentUser?.name || currentUser?.username || 'System'
     }, req);
@@ -2603,7 +2603,7 @@ const updateTaskCheckpoint = async (req, res) => {
     await task.save();
 
     if (!previousCompleted && task.completed) {
-      await notifyClientTaskCompleted({task, actor: currentUser, req});
+      await notifyClientTaskCompleted({ task, actor: currentUser, req });
     }
 
     res.json({
@@ -2648,7 +2648,7 @@ const deleteTask = async (req, res) => {
       user: currentUser?.id || currentUser?._id,
       userName: currentUser?.name || currentUser?.username || 'System'
     }, req);
-    
+
     await task.save();
     await Task.findByIdAndDelete(taskId);
 
@@ -2660,7 +2660,7 @@ const deleteTask = async (req, res) => {
         type: 'task_status_updated',
         title: 'Client Task Deleted',
         message: `${currentUser?.name || 'User'} deleted client task "${task.name}"`,
-        data: {taskId: task._id, source: 'client_task'},
+        data: { taskId: task._id, source: 'client_task' },
         priority: 'medium',
       });
       await notifyAssignedClientTaskUser({
@@ -2719,10 +2719,10 @@ const getTaskStats = async (req, res) => {
         $group: {
           _id: '$service',
           totalTasks: { $sum: 1 },
-          completedTasks: { 
-            $sum: { $cond: [{ $eq: ['$completed', true] }, 1, 0] } 
+          completedTasks: {
+            $sum: { $cond: [{ $eq: ['$completed', true] }, 1, 0] }
           },
-          pendingTasks: { 
+          pendingTasks: {
             $sum: {
               $cond: [
                 {
@@ -2771,8 +2771,8 @@ const getTaskStats = async (req, res) => {
         $group: {
           _id: null,
           totalTasks: { $sum: 1 },
-          completedTasks: { 
-            $sum: { $cond: [{ $eq: ['$completed', true] }, 1, 0] } 
+          completedTasks: {
+            $sum: { $cond: [{ $eq: ['$completed', true] }, 1, 0] }
           },
           pendingTasks: {
             $sum: {
@@ -2874,19 +2874,19 @@ const debugActivityLogs = async (req, res) => {
         message: 'Access denied: Admin or Owner privileges required'
       });
     }
-    
+
     if (!mongoose.Types.ObjectId.isValid(taskId)) {
       return res.status(400).json({
         success: false,
         message: 'Invalid task ID format'
       });
     }
-    
+
     const task = await Task.findById(taskId)
       .select('activityLogs name remarks companyCode')
       .populate('activityLogs.user', 'name email')
       .lean();
-    
+
     if (!task) {
       return res.status(404).json({
         success: false,
@@ -2903,7 +2903,7 @@ const debugActivityLogs = async (req, res) => {
         });
       }
     }
-    
+
     res.json({
       success: true,
       data: {

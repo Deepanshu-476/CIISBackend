@@ -84,7 +84,7 @@ const fetchPersonalTaskList = async (req) => {
     if (t.recurrenceSourceId && String(t.recurrenceSourceId) !== 'null' && t.overallStatus === 'pending') {
       const isAbsent = await isUserAbsentOnDate(req.user._id, t.dueDateTime);
       if (isAbsent) {
-        cleanRecurringTasksForAbsentUser(req.user._id, t.dueDateTime).catch(() => {});
+        cleanRecurringTasksForAbsentUser(req.user._id, t.dueDateTime).catch(() => { });
         continue;
       }
     }
@@ -141,7 +141,7 @@ exports.createTaskForSelf = async (req, res) => {
   try {
     const { title, description, dueDateTime, whatsappNumber, priorityDays, priority, checkpoints } = req.body;
     const companyCode = getRequestCompanyCode(req);
-    
+
     if (!companyCode) {
       return res.status(400).json({ success: false, error: 'Company code is missing. Please login again.' });
     }
