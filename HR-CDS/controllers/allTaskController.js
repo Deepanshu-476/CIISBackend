@@ -355,7 +355,9 @@ const getFilterStatus = (task) => {
 };
 
 const filterUserTasks = (tasks, queryParams) => {
-  const { status, search, period, fromDate, toDate, priority, dateField } = queryParams;
+  const fromDate = queryParams.fromDate || queryParams.startDate;
+  const toDate = queryParams.toDate || queryParams.endDate;
+  const { status, search, period, priority, dateField } = queryParams;
   const range = getCleanTaskDateRange({ period: fromDate || toDate ? 'all' : period, fromDate, toDate });
   const query = search ? String(search).trim().toLowerCase() : '';
 
