@@ -10,6 +10,7 @@ const Notification = require('../models/Notification');
 const ActivityLog = require('../models/ActivityLog');
 const PagePermission = require('../../models/PagePermission');
 const Department = require('../../models/Department');
+const JobRole = require('../../models/JobRole');
 const Branch = require('../../models/Branch');
 const moment = require('moment');
 const mongoose = require('mongoose');
@@ -28,7 +29,7 @@ const {
   generateRecurringOccurrences,
 } = require('../cron/recurringTasks');
 
- 
+
 
 const parsePositiveInt = (value, fallback, max = 100) => {
   const parsed = parseInt(value, 10);
@@ -469,6 +470,12 @@ const calculateTaskWork = (task, workWindow, fallbackRange) => {
     }
   }
 
+  // When a task stores an explicit duration, retain it even if no attendance
+  // clock-in or status-history interval is available for the selected date.
+  if (total === 0 && Number(task.timeSpent) > 0) {
+    total = Number(task.timeSpent);
+  }
+
   return { seconds: Math.max(0, total), intervals };
 };
 
@@ -655,7 +662,7 @@ const calculateUnifiedTaskStats = (tasks, userId) => {
   tasks.forEach(task => {
     let status = 'pending';
     if (userId) {
-      const userStatusEntry = task.statusByUser?.find(s => 
+      const userStatusEntry = task.statusByUser?.find(s =>
         (s.user?._id || s.user)?.toString() === userId.toString()
       );
       status = userStatusEntry?.status || task.status || task.overallStatus || 'pending';
@@ -882,7 +889,7 @@ const sendTaskCreationEmail = async (task, assignedUsers) => {
 };
 
 
- 
+
 
 const fetchPersonalTaskList = async (req) => {
   const companyCode = req.user.companyCode;
@@ -1239,7 +1246,7 @@ const sendCleanTaskList = (res, tasks, view, dateField = 'createdAt', req = null
   });
 };
 
- 
+
 
 exports.getPersonalTasks = async (req, res) => {
   try {
@@ -1575,7 +1582,7 @@ const handleTaskCreation = async (req, res, isSelf) => {
   const { title, description, dueDateTime, whatsappNumber, priorityDays, priority, assignedUsers, assignedGroups, checkpoints } = req.body;
   const companyCode = getRequestCompanyCode(req);
   let branchId = getRequestedTaskBranchId(req);
-  
+
   if (!companyCode) {
     return res.status(400).json({ success: false, error: 'Company code is missing. Please login again.' });
   }
@@ -1665,7 +1672,7 @@ const handleTaskCreation = async (req, res, isSelf) => {
     }
   }
 
-  const parsedGroups = !isSelf && assignedGroups && assignedGroups !== 'null' ? 
+  const parsedGroups = !isSelf && assignedGroups && assignedGroups !== 'null' ?
     (typeof assignedGroups === 'string' ? JSON.parse(assignedGroups) : assignedGroups) : [];
 
   const files = (req.files?.files || []).map(f => ({ filename: f.filename, originalName: f.originalname, path: f.path, uploadedBy: req.user._id }));
@@ -1935,13 +1942,13 @@ exports.updateStatus = async (req, res) => {
     const isCreator = task.createdBy.toString() === currentUserId;
     const isAssigned = task.assignedUsers.some(uid => uid.toString() === currentUserId);
 
-    
+
     const userGroups = await Group.find({ members: req.user._id, isActive: true }).select('_id').lean();
     const groupIds = userGroups.map(g => g._id.toString());
     const isGroupAssigned = task.assignedGroups?.some(gid => groupIds.includes(gid.toString()));
 
-    
-    const isSameCompany = task.companyCode && userCompanyCode && 
+
+    const isSameCompany = task.companyCode && userCompanyCode &&
       task.companyCode.toUpperCase() === userCompanyCode.toUpperCase();
     const allowCompanyAllEdit = canManageTaskFromCompanyAll(req, task);
 
@@ -2188,14 +2195,14 @@ exports.getRemarks = async (req, res) => {
 
 exports.getNotifications = async (req, res) => {
   try {
-    const ownerFilter = {$or: [{recipient: req.user._id}, {user: req.user._id}]};
-    const filter = {...ownerFilter};
+    const ownerFilter = { $or: [{ recipient: req.user._id }, { user: req.user._id }] };
+    const filter = { ...ownerFilter };
     if (req.query.unreadOnly === 'true') filter.isRead = false;
-    
-    
-    
+
+
+
     const notifications = await Notification.find(filter).sort({ createdAt: -1 }).lean();
-    const unreadCount = await Notification.countDocuments({...ownerFilter, isRead: false});
+    const unreadCount = await Notification.countDocuments({ ...ownerFilter, isRead: false });
     res.json({ success: true, notifications, unreadCount });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -2205,9 +2212,9 @@ exports.getNotifications = async (req, res) => {
 exports.markNotificationAsRead = async (req, res) => {
   try {
     const notification = await Notification.findOneAndUpdate(
-      {_id: req.params.notificationId, $or: [{recipient: req.user._id}, {user: req.user._id}]},
-      {isRead: true, readAt: new Date()},
-      {new: true}
+      { _id: req.params.notificationId, $or: [{ recipient: req.user._id }, { user: req.user._id }] },
+      { isRead: true, readAt: new Date() },
+      { new: true }
     );
     res.json({ success: true, notification });
   } catch (err) {
@@ -2218,8 +2225,8 @@ exports.markNotificationAsRead = async (req, res) => {
 exports.markAllNotificationsAsRead = async (req, res) => {
   try {
     await Notification.updateMany(
-      {$or: [{recipient: req.user._id}, {user: req.user._id}], isRead: false},
-      {isRead: true, readAt: new Date()}
+      { $or: [{ recipient: req.user._id }, { user: req.user._id }], isRead: false },
+      { isRead: true, readAt: new Date() }
     );
     res.json({ success: true, message: 'All notifications marked as read' });
   } catch (err) {
@@ -2313,26 +2320,26 @@ exports.getAssignableUsers = async (req, res) => {
     const companyId = req.user.company?._id || req.user.company || req.user.companyId;
     const companyCode = req.user.companyCode || req.user.company?.companyCode;
     const userCompanyFilters = [];
-    if (companyId) userCompanyFilters.push({company: companyId});
-    if (companyCode) userCompanyFilters.push({companyCode});
-    const userCompanyQuery = userCompanyFilters.length > 1 ? {$or: userCompanyFilters} : userCompanyFilters[0] || {};
+    if (companyId) userCompanyFilters.push({ company: companyId });
+    if (companyCode) userCompanyFilters.push({ companyCode });
+    const userCompanyQuery = userCompanyFilters.length > 1 ? { $or: userCompanyFilters } : userCompanyFilters[0] || {};
 
     const users = await User.find({ isActive: true, _id: { $ne: req.user._id }, ...userCompanyQuery }).select('_id name email role jobRole company companyCode').lean();
     const companyUserIds = users.map(user => user._id);
     const groupCompanyFilters = [];
-    if (companyId) groupCompanyFilters.push({company: companyId});
-    if (companyCode) groupCompanyFilters.push({companyCode});
+    if (companyId) groupCompanyFilters.push({ company: companyId });
+    if (companyCode) groupCompanyFilters.push({ companyCode });
     if (companyUserIds.length) {
       groupCompanyFilters.push({
-        company: {$exists: false},
-        companyCode: {$exists: false},
+        company: { $exists: false },
+        companyCode: { $exists: false },
         $or: [
-          {createdBy: {$in: companyUserIds}},
-          {members: {$in: companyUserIds}},
+          { createdBy: { $in: companyUserIds } },
+          { members: { $in: companyUserIds } },
         ],
       });
     }
-    const groupCompanyQuery = groupCompanyFilters.length ? {$or: groupCompanyFilters} : {};
+    const groupCompanyQuery = groupCompanyFilters.length ? { $or: groupCompanyFilters } : {};
 
     const groups = await Group.find({ isActive: true, ...groupCompanyQuery }).populate('members', 'name role email company companyCode').select('name description members company companyCode').lean();
     res.json({ success: true, users, groups });
@@ -2513,7 +2520,7 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
       .populate('remarks.user', 'name email')
       .sort({ createdAt: -1 })
       .lean(),
-    
+
     ClientTask.find(clientQuery)
       .select('name description dueDate priority status completed completedAt checkpoints service timeSpent inProgressSince activityLogs clientId createdAt updatedAt assignee assigneeId remarks')
       .populate('clientId', 'client name email company phone companyCode')
@@ -2644,11 +2651,13 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
 };
 
 const filterUserTasks = (tasks, query) => {
-  const { period, search, status, priority, fromDate, toDate } = query;
+  const { period, search, status, priority } = query;
+  const fromDate = query.fromDate || query.startDate;
+  const toDate = query.toDate || query.endDate;
   const range = getCleanTaskDateRange({ period: fromDate || toDate ? 'all' : period, fromDate, toDate });
 
   return tasks.filter(t => {
-    
+
     if (search && search.trim()) {
       const q = search.trim().toLowerCase();
       const textToSearch = [
@@ -2662,7 +2671,7 @@ const filterUserTasks = (tasks, query) => {
       if (!textToSearch.includes(q)) return false;
     }
 
-    
+
     if (status && status !== 'all') {
       const queryStatus = normalizeTaskStatus(status);
       if (queryStatus === 'overdue') {
@@ -2675,12 +2684,12 @@ const filterUserTasks = (tasks, query) => {
       }
     }
 
-    
+
     if (priority && priority !== 'all') {
       if (t.priority !== priority.toLowerCase()) return false;
     }
 
-    
+
     if (range) {
       const dateToFilter = t.dueDateTime || t.dueDate || t.createdAt;
       const taskDate = dateToFilter ? new Date(dateToFilter) : null;
@@ -2714,8 +2723,11 @@ exports.getUserTaskStats = async (req, res) => {
     };
 
     filtered.forEach(task => {
-      const status = task.status;
-      if (counts[status] !== undefined) {
+      const status = normalizeTaskStatus(task.userStatus || task.status);
+      const overdue = isTaskOverdueForStatus(task.dueDateTime || task.dueDate, status, task);
+      if (overdue) counts.overdue += 1;
+
+      if (status !== 'overdue' && counts[status] !== undefined) {
         counts[status] += 1;
       } else if (status === 'pending') {
         counts.pending += 1;
@@ -2748,7 +2760,7 @@ exports.getUsersWithTaskCounts = async (req, res) => {
     const currentUser = await User.findById(req.user.id).lean();
     const users = await User.find({ isActive: true, company: currentUser.company }).select('name email role employeeType company companyCode').lean();
 
-    
+
     const companyCode = req.user.companyCode;
     const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
     const companyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : companyCode;
@@ -2798,7 +2810,7 @@ exports.getDepartmentUsersWithTaskCounts = async (req, res) => {
     const currentUser = await User.findById(req.user.id).lean();
     const users = await User.find({ isActive: true, company: currentUser.company, department: currentUser.department }).select('name email role employeeType company department companyCode').lean();
 
-    
+
     const companyCode = req.user.companyCode;
     const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
     const companyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : companyCode;
@@ -2990,13 +3002,29 @@ exports.getUserAllTasksPaginated = async (req, res) => {
       ? parsePositiveInt(req.query.limit, 5000, 10000)
       : parsePositiveInt(req.query.limit, 10, 50);
 
-    const [targetUser, allTasks] = await Promise.all([
-      User.findById(userId).select('name email role jobRole companyRole department company companyCode').populate('department', 'name').lean(),
+    const [targetUserRecord, allTasks] = await Promise.all([
+      User.findById(userId).select('name email role jobRole companyRole department company companyCode employeeId').lean(),
       queryAllUserTasks(userId, req, req.query)
     ]);
-    if (!isUserInRequestCompany(targetUser, req)) {
+    if (!isUserInRequestCompany(targetUserRecord, req)) {
       return res.status(404).json({ success: false, error: 'User not found in this company' });
     }
+
+    // User.jobRole and User.department are legacy string fields; some records hold
+    // ObjectId strings. Resolve those values before returning them to the UI.
+    const [jobRoleRecord, departmentRecord] = await Promise.all([
+      mongoose.isValidObjectId(targetUserRecord?.jobRole)
+        ? JobRole.findById(targetUserRecord.jobRole).select('name').lean()
+        : null,
+      mongoose.isValidObjectId(targetUserRecord?.department)
+        ? Department.findById(targetUserRecord.department).select('name').lean()
+        : null,
+    ]);
+    const targetUser = targetUserRecord && {
+      ...targetUserRecord,
+      jobRole: jobRoleRecord?.name || targetUserRecord.jobRole,
+      department: departmentRecord ? { _id: departmentRecord._id, name: departmentRecord.name } : targetUserRecord.department,
+    };
 
     const taskRange = getTaskReportDateRange(req.query);
     const range = getAttendanceReportDateRange(req.query, taskRange);
@@ -3021,9 +3049,10 @@ exports.getUserAllTasksPaginated = async (req, res) => {
     }
     const totalClockedSeconds = workWindow.summary.totalClockedSeconds || 0;
     const untrackedSeconds = Math.max(0, totalClockedSeconds - dayTrackedTaskSeconds);
+    const filtered = filterUserTasks(allTasksWithWorkTime, req.query);
 
     const counts = {
-      total: allTasksWithWorkTime.length,
+      total: filtered.length,
       pending: 0,
       'in-progress': 0,
       completed: 0,
@@ -3031,9 +3060,12 @@ exports.getUserAllTasksPaginated = async (req, res) => {
       onhold: 0
     };
 
-    allTasksWithWorkTime.forEach(task => {
-      const status = task.status;
-      if (counts[status] !== undefined) {
+    filtered.forEach(task => {
+      const status = normalizeTaskStatus(task.userStatus || task.status);
+      const overdue = isTaskOverdueForStatus(task.dueDateTime || task.dueDate, status, task);
+      if (overdue) counts.overdue += 1;
+
+      if (status !== 'overdue' && counts[status] !== undefined) {
         counts[status] += 1;
       } else if (status === 'pending') {
         counts.pending += 1;
@@ -3054,8 +3086,28 @@ exports.getUserAllTasksPaginated = async (req, res) => {
       onhold: toStat(counts.onhold)
     };
 
-    const filtered = filterUserTasks(allTasksWithWorkTime, req.query);
     const sortedFiltered = sortTasksNewestFirst(filtered);
+
+    const completedWithDeadline = filtered.filter(task => {
+      const status = normalizeTaskStatus(task.userStatus || task.status);
+      return status === 'completed' && task.completedAt && (task.dueDateTime || task.dueDate);
+    });
+    const deliveredOnTime = completedWithDeadline.filter(task => {
+      const completedAt = new Date(task.completedAt);
+      const rawDueDate = task.dueDateTime || task.dueDate;
+      const dueDate = new Date(rawDueDate);
+      if (Number.isNaN(completedAt.getTime()) || Number.isNaN(dueDate.getTime())) return false;
+      // A date-only deadline remains valid through the end of that day.
+      if (/^\d{4}-\d{2}-\d{2}$/.test(String(rawDueDate))) dueDate.setHours(23, 59, 59, 999);
+      return completedAt <= dueDate;
+    });
+    const performance = {
+      completedWithDueDate: completedWithDeadline.length,
+      deliveredOnTime: deliveredOnTime.length,
+      onTimeRate: completedWithDeadline.length
+        ? Math.round((deliveredOnTime.length / completedWithDeadline.length) * 100)
+        : null
+    };
 
     const total = sortedFiltered.length;
     const pages = Math.max(1, Math.ceil(total / limit));
@@ -3073,7 +3125,9 @@ exports.getUserAllTasksPaginated = async (req, res) => {
         name: targetUser.name,
         email: targetUser.email,
         role: targetUser.jobRole || targetUser.companyRole || targetUser.role,
-        department: targetUser.department
+        jobRole: targetUser.jobRole,
+        department: targetUser.department,
+        employeeId: targetUser.employeeId
       } : null,
       tasks: enrichedTasks,
       workSummary: {
@@ -3091,7 +3145,8 @@ exports.getUserAllTasksPaginated = async (req, res) => {
         hasNext: safePage * limit < total,
         hasPrev: safePage > 1
       },
-      statusCounts: calculatedStats
+      statusCounts: calculatedStats,
+      performance
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });

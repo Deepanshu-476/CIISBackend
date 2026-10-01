@@ -61,7 +61,7 @@ exports.createTaskForOthers = async (req, res) => {
   try {
     const { title, description, dueDateTime, whatsappNumber, priorityDays, priority, assignedUsers, assignedGroups, checkpoints } = req.body;
     const companyCode = getRequestCompanyCode(req);
-    
+
     if (!companyCode) {
       return res.status(400).json({ success: false, error: 'Company code is missing. Please login again.' });
     }
@@ -71,7 +71,7 @@ exports.createTaskForOthers = async (req, res) => {
       parsedUsers = typeof assignedUsers === 'string' ? JSON.parse(assignedUsers) : assignedUsers;
     }
 
-    const parsedGroups = assignedGroups && assignedGroups !== 'null' ? 
+    const parsedGroups = assignedGroups && assignedGroups !== 'null' ?
       (typeof assignedGroups === 'string' ? JSON.parse(assignedGroups) : assignedGroups) : [];
 
     const files = (req.files?.files || []).map(f => ({ filename: f.filename, originalName: f.originalname, path: f.path, uploadedBy: req.user._id }));
@@ -112,7 +112,7 @@ exports.createTaskForOthers = async (req, res) => {
       await sendTaskCreationEmail(task, task.assignedUsers);
       const targetUsers = task.assignedUsers.map(u => u._id.toString()).filter(id => id !== req.user._id.toString());
       await createNotification(
-        task.createdBy._id, 
+        task.createdBy._id,
         'New Task Assigned',
         `${req.user.name} assigned you task "${title}"`,
         'task_assigned',
@@ -358,12 +358,12 @@ exports.updateStatus = async (req, res) => {
     const isCreator = task.createdBy.toString() === currentUserId;
     const isAssigned = task.assignedUsers.some(uid => uid.toString() === currentUserId);
 
-    
+
     const userGroups = await Group.find({ members: req.user._id, isActive: true }).select('_id').lean();
     const groupIds = userGroups.map(g => g._id.toString());
     const isGroupAssigned = task.assignedGroups?.some(gid => groupIds.includes(gid.toString()));
 
-    const isSameCompany = task.companyCode && userCompanyCode && 
+    const isSameCompany = task.companyCode && userCompanyCode &&
       task.companyCode.toUpperCase() === userCompanyCode.toUpperCase();
 
     if (!isCreator && !isAssigned && !isGroupAssigned && !isSameCompany) {

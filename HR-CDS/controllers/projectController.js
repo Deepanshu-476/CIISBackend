@@ -3,7 +3,7 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const sharp = require("sharp");
-const {notifyDirectUsers} = require("../utils/systemNotificationService");
+const { notifyDirectUsers } = require("../utils/systemNotificationService");
 const { enqueueCompletionJob } = require("../utils/backgroundJobQueue");
 const { sendEmail } = require("../../utils/sendEmail");
 const User = require("../../models/User");
@@ -151,10 +151,10 @@ const fileFilter = (req, file, cb) => {
   }
 };
 
-const upload = multer({ 
+const upload = multer({
   storage: storage,
   fileFilter: fileFilter,
-  limits: { fileSize: 5 * 1024 * 1024 } 
+  limits: { fileSize: 5 * 1024 * 1024 }
 });
 
 
@@ -276,8 +276,8 @@ const projectBelongsToUserCompany = (project, user = {}) => {
   if (projectCompanyId && userCompanyId) return projectCompanyId === userCompanyId;
   if (projectCompanyCode && userCompanyCode) return projectCompanyCode === userCompanyCode;
 
-  
-  
+
+
   return true;
 };
 
@@ -286,19 +286,19 @@ const hasProjectAccess = (project, userId, userRole, user = {}) => {
     return false;
   }
 
-  
+
   if (isProjectAdmin({ role: userRole })) {
     return true;
   }
-  
-  
-  const isUserInProject = project.users.some(user => 
+
+
+  const isUserInProject = project.users.some(user =>
     idsEqual(user, userId)
   );
-  
-  
+
+
   const isCreator = idsEqual(project.createdBy, userId);
-  
+
   return isUserInProject || isCreator;
 };
 
@@ -364,10 +364,10 @@ const getTaskCreatedTime = (task = {}) => {
 const sortProjectTasksByCreatedAt = (tasks = []) => (
   Array.isArray(tasks)
     ? [...tasks].sort((a, b) => {
-        const createdDiff = getTaskCreatedTime(b) - getTaskCreatedTime(a);
-        if (createdDiff !== 0) return createdDiff;
-        return new Date(b.updatedAt || b.dueDate || 0) - new Date(a.updatedAt || a.dueDate || 0);
-      })
+      const createdDiff = getTaskCreatedTime(b) - getTaskCreatedTime(a);
+      if (createdDiff !== 0) return createdDiff;
+      return new Date(b.updatedAt || b.dueDate || 0) - new Date(a.updatedAt || a.dueDate || 0);
+    })
     : []
 );
 
@@ -454,7 +454,7 @@ exports.downloadTaskDocument = async (req, res) => {
 exports.getUserNotifications = async (req, res) => {
   try {
     void 0;
-    
+
     const projects = await Project.find({
       users: req.user.id
     }).populate('notifications.createdBy', 'name email');
@@ -470,7 +470,7 @@ exports.getUserNotifications = async (req, res) => {
       });
     });
 
-    
+
     allNotifications.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
     res.status(200).json({
@@ -480,9 +480,9 @@ exports.getUserNotifications = async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Error fetching notifications:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: "Error fetching notifications" 
+    res.status(500).json({
+      success: false,
+      message: "Error fetching notifications"
     });
   }
 };
@@ -490,22 +490,22 @@ exports.getUserNotifications = async (req, res) => {
 exports.markNotificationAsRead = async (req, res) => {
   try {
     const { notificationId } = req.params;
-    
+
     void 0;
-    
-    
+
+
     const project = await Project.findOne({
       'notifications._id': notificationId
     });
 
     if (!project) {
-      return res.status(404).json({ 
-        success: false, 
-        message: "Notification not found" 
+      return res.status(404).json({
+        success: false,
+        message: "Notification not found"
       });
     }
 
-    
+
     const notification = project.notifications.id(notificationId);
     if (notification) {
       notification.isRead = true;
@@ -518,9 +518,9 @@ exports.markNotificationAsRead = async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Error marking notification as read:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: "Error marking notification as read" 
+    res.status(500).json({
+      success: false,
+      message: "Error marking notification as read"
     });
   }
 };
@@ -528,7 +528,7 @@ exports.markNotificationAsRead = async (req, res) => {
 exports.clearAllNotifications = async (req, res) => {
   try {
     void 0;
-    
+
     await Project.updateMany(
       { users: req.user.id },
       { $set: { notifications: [] } }
@@ -540,9 +540,9 @@ exports.clearAllNotifications = async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Error clearing notifications:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: "Error clearing notifications" 
+    res.status(500).json({
+      success: false,
+      message: "Error clearing notifications"
     });
   }
 };
@@ -582,20 +582,20 @@ exports.listProjects = async (req, res) => {
     const branchRequested = Boolean(requestedBranchId);
     let query = branchRequested
       ? {
-          $and: [
-            { $or: companyFilters },
-            {
-              $or: [
-                { branch: requestedBranchId },
-                { branch: { $exists: false }, ...companyUserFilter },
-                { branch: null, ...companyUserFilter }
-              ]
-            }
-          ]
-        }
+        $and: [
+          { $or: companyFilters },
+          {
+            $or: [
+              { branch: requestedBranchId },
+              { branch: { $exists: false }, ...companyUserFilter },
+              { branch: null, ...companyUserFilter }
+            ]
+          }
+        ]
+      }
       : { $or: companyFilters };
 
-    
+
     if (!isProjectAdmin(req.user)) {
       query = {
         $and: [
@@ -683,9 +683,9 @@ exports.listProjects = async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Error listing projects:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: "Error fetching projects" 
+    res.status(500).json({
+      success: false,
+      message: "Error fetching projects"
     });
   }
 };
@@ -696,7 +696,7 @@ exports.getProjectById = async (req, res) => {
     void 0;
     void 0;
     void 0;
-    
+
     const project = await Project.findById(req.params.id)
       .populate('users', 'name email role _id branch assignedBranches')
       .populate('createdBy', 'name email _id')
@@ -709,25 +709,25 @@ exports.getProjectById = async (req, res) => {
 
     if (!project) {
       void 0;
-      return res.status(404).json({ 
-        success: false, 
-        message: "Project not found" 
+      return res.status(404).json({
+        success: false,
+        message: "Project not found"
       });
     }
 
     void 0;
     void 0;
     void 0;
-    
-    
+
+
     if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
       void 0;
       void 0;
       void 0;
-      
-      
-      return res.status(403).json({ 
-        success: false, 
+
+
+      return res.status(403).json({
+        success: false,
         message: "Access denied. You are not a member of this project.",
         details: {
           userId: req.user.id,
@@ -747,9 +747,9 @@ exports.getProjectById = async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Error fetching project:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: "Error fetching project" 
+    res.status(500).json({
+      success: false,
+      message: "Error fetching project"
     });
   }
 };
@@ -758,9 +758,9 @@ exports.createProject = async (req, res) => {
   try {
     handleFileUpload(req, res, async (err) => {
       if (err) {
-        return res.status(400).json({ 
-          success: false, 
-          message: err.message 
+        return res.status(400).json({
+          success: false,
+          message: err.message
         });
       }
 
@@ -773,12 +773,12 @@ exports.createProject = async (req, res) => {
           message: branchAccess.error.message
         });
       }
-      
+
       void 0;
       void 0;
       void 0;
       void 0;
-      
+
       let usersArray = [];
       try {
         usersArray = JSON.parse(users);
@@ -786,7 +786,7 @@ exports.createProject = async (req, res) => {
         usersArray = Array.isArray(users) ? users : [];
       }
 
-      
+
       usersArray = [...new Set(usersArray.filter(Boolean).map(id => String(id)))];
       const allowedUserIds = await getBranchUserIds(req, branchAccess.branchId);
       usersArray = usersArray.filter(id => allowedUserIds.includes(id));
@@ -800,13 +800,13 @@ exports.createProject = async (req, res) => {
         });
       }
 
-      
+
       if (allowedUserIds.includes(String(req.user.id)) && !usersArray.includes(String(req.user.id))) {
         usersArray.push(String(req.user.id));
         void 0;
       }
 
-      
+
       const projectData = {
         projectName,
         description,
@@ -821,7 +821,7 @@ exports.createProject = async (req, res) => {
         createdBy: req.user.id
       };
 
-      
+
       if (req.file) {
         projectData.pdfFile = {
           filename: req.file.originalname,
@@ -832,7 +832,7 @@ exports.createProject = async (req, res) => {
       const project = new Project(projectData);
       await project.save();
 
-      
+
       const notification = {
         title: "New Project Created",
         message: `${req.user.name} created project "${projectName}"`,
@@ -868,9 +868,9 @@ exports.createProject = async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Error creating project:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: "Error creating project" 
+    res.status(500).json({
+      success: false,
+      message: "Error creating project"
     });
   }
 };
@@ -879,33 +879,33 @@ exports.updateProject = async (req, res) => {
   try {
     handleFileUpload(req, res, async (err) => {
       if (err) {
-        return res.status(400).json({ 
-          success: false, 
-          message: err.message 
+        return res.status(400).json({
+          success: false,
+          message: err.message
         });
       }
 
       const { id } = req.params;
       const { projectName, description, startDate, endDate, priority, status, users } = req.body;
       const requestedBranchId = getRequestedBranchId(req);
-      
+
       void 0;
       void 0;
-      
-      
+
+
       const project = await Project.findById(id);
       if (!project) {
-        return res.status(404).json({ 
-          success: false, 
-          message: "Project not found" 
+        return res.status(404).json({
+          success: false,
+          message: "Project not found"
         });
       }
 
-      
+
       if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
-        return res.status(403).json({ 
-          success: false, 
-          message: "Access denied to update project" 
+        return res.status(403).json({
+          success: false,
+          message: "Access denied to update project"
         });
       }
 
@@ -924,7 +924,7 @@ exports.updateProject = async (req, res) => {
         usersArray = Array.isArray(users) ? users : [];
       }
 
-      
+
       usersArray = [...new Set(usersArray.filter(Boolean).map(id => String(id)))];
       const allowedUserIds = await getBranchUserIds(req, branchAccess.branchId);
       usersArray = usersArray.filter(id => allowedUserIds.includes(id));
@@ -938,7 +938,7 @@ exports.updateProject = async (req, res) => {
         });
       }
 
-      
+
       project.projectName = projectName || project.projectName;
       project.description = description || project.description;
       project.branch = branchAccess.branchId || project.branch;
@@ -948,15 +948,15 @@ exports.updateProject = async (req, res) => {
       project.priority = priority?.toLowerCase() || project.priority;
       project.status = status?.toLowerCase() || project.status;
 
-      
+
       if (req.file) {
-        
+
         if (project.pdfFile && project.pdfFile.path) {
           fs.unlink(project.pdfFile.path, (err) => {
             if (err) console.error("Error deleting old file:", err);
           });
         }
-        
+
         project.pdfFile = {
           filename: req.file.originalname,
           path: req.file.path
@@ -965,7 +965,7 @@ exports.updateProject = async (req, res) => {
 
       await project.save();
 
-      
+
       const notification = {
         title: "Project Updated",
         message: `${req.user.name} updated project "${projectName}"`,
@@ -987,9 +987,9 @@ exports.updateProject = async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Error updating project:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: "Error updating project" 
+    res.status(500).json({
+      success: false,
+      message: "Error updating project"
     });
   }
 };
@@ -998,37 +998,37 @@ exports.deleteProject = async (req, res) => {
   try {
     void 0;
     void 0;
-    
+
     const project = await Project.findById(req.params.id);
-    
+
     if (!project) {
-      return res.status(404).json({ 
-        success: false, 
-        message: "Project not found" 
+      return res.status(404).json({
+        success: false,
+        message: "Project not found"
       });
     }
 
-    
+
     const canDelete = projectBelongsToUserCompany(project, req.user) && (
       isProjectAdmin(req.user) ||
       project.createdBy?.toString() === req.user.id
     );
-    
+
     if (!canDelete) {
-      return res.status(403).json({ 
-        success: false, 
-        message: "Access denied to delete project" 
+      return res.status(403).json({
+        success: false,
+        message: "Access denied to delete project"
       });
     }
 
-    
+
     if (project.pdfFile && project.pdfFile.path) {
       fs.unlink(project.pdfFile.path, (err) => {
         if (err) console.error("Error deleting file:", err);
       });
     }
 
-    
+
     project.tasks.forEach(task => {
       if (task.pdfFile && task.pdfFile.path) {
         fs.unlink(task.pdfFile.path, (err) => {
@@ -1047,9 +1047,9 @@ exports.deleteProject = async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Error deleting project:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: "Error deleting project" 
+    res.status(500).json({
+      success: false,
+      message: "Error deleting project"
     });
   }
 };
@@ -1063,27 +1063,27 @@ exports.getProjectUsers = async (req, res) => {
     void 0;
     void 0;
     void 0;
-    
+
     const project = await Project.findById(req.params.id)
       .select('users projectName createdBy')
       .populate('users', 'name email role _id')
       .populate('createdBy', 'name email _id');
-    
+
     if (!project) {
-      return res.status(404).json({ 
-        success: false, 
-        message: "Project not found" 
+      return res.status(404).json({
+        success: false,
+        message: "Project not found"
       });
     }
-    
-    
+
+
     if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
-      return res.status(403).json({ 
-        success: false, 
-        message: "Access denied to view project users" 
+      return res.status(403).json({
+        success: false,
+        message: "Access denied to view project users"
       });
     }
-    
+
     res.status(200).json({
       success: true,
       projectName: project.projectName,
@@ -1094,9 +1094,9 @@ exports.getProjectUsers = async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Error fetching project users:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: "Error fetching project users" 
+    res.status(500).json({
+      success: false,
+      message: "Error fetching project users"
     });
   }
 };
@@ -1105,46 +1105,46 @@ exports.addUserToProject = async (req, res) => {
   try {
     const { projectId } = req.params;
     const { userId } = req.body;
-    
+
     void 0;
     void 0;
     void 0;
     void 0;
-    
+
     const project = await Project.findById(projectId);
-    
+
     if (!project) {
-      return res.status(404).json({ 
-        success: false, 
-        message: "Project not found" 
+      return res.status(404).json({
+        success: false,
+        message: "Project not found"
       });
     }
-    
-    
+
+
     if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
-      return res.status(403).json({ 
-        success: false, 
-        message: "Access denied to modify project" 
+      return res.status(403).json({
+        success: false,
+        message: "Access denied to modify project"
       });
     }
-    
-    
-    const userExists = project.users.some(userIdObj => 
+
+
+    const userExists = project.users.some(userIdObj =>
       userIdObj.toString() === userId
     );
-    
+
     if (userExists) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "User already in project" 
+      return res.status(400).json({
+        success: false,
+        message: "User already in project"
       });
     }
-    
-    
+
+
     project.users.push(userId);
     await project.save();
-    
-    
+
+
     const notification = {
       title: "User Added to Project",
       message: `${req.user.name} added a new user to project "${project.projectName}"`,
@@ -1153,9 +1153,9 @@ exports.addUserToProject = async (req, res) => {
       referenceId: project._id,
       createdBy: req.user.id
     };
-    
+
     await project.addNotification(notification);
-    
+
     res.status(200).json({
       success: true,
       message: "User added to project successfully",
@@ -1164,9 +1164,9 @@ exports.addUserToProject = async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Error adding user to project:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: "Error adding user to project" 
+    res.status(500).json({
+      success: false,
+      message: "Error adding user to project"
     });
   }
 };
@@ -1178,9 +1178,9 @@ exports.addTask = async (req, res) => {
   try {
     handleFileUpload(req, res, async (err) => {
       if (err) {
-        return res.status(400).json({ 
-          success: false, 
-          message: err.message 
+        return res.status(400).json({
+          success: false,
+          message: err.message
         });
       }
 
@@ -1192,17 +1192,17 @@ exports.addTask = async (req, res) => {
 
       const project = await Project.findById(id);
       if (!project) {
-        return res.status(404).json({ 
-          success: false, 
-          message: "Project not found" 
+        return res.status(404).json({
+          success: false,
+          message: "Project not found"
         });
       }
 
-      
+
       if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
-        return res.status(403).json({ 
-          success: false, 
-          message: "Access denied to add task" 
+        return res.status(403).json({
+          success: false,
+          message: "Access denied to add task"
         });
       }
 
@@ -1230,7 +1230,7 @@ exports.addTask = async (req, res) => {
         });
       }
 
-      
+
       const safeTitle = title?.trim() || "Untitled Task";
       const now = new Date();
       const task = {
@@ -1246,13 +1246,13 @@ exports.addTask = async (req, res) => {
 
       if (assignedUserIds.length) {
         task.assignedUsers = assignedUserIds;
-        
+
         task.assignedTo = assignedUserIds[0];
       }
       if (dueDate) task.dueDate = dueDate;
       syncTaskStatusWithDueDate(task);
 
-      
+
       if (req.file) {
         task.pdfFile = {
           filename: req.file.originalname,
@@ -1260,7 +1260,7 @@ exports.addTask = async (req, res) => {
         };
       }
 
-      
+
       const activityLog = {
         type: "creation",
         description: `Task "${safeTitle}" was created`,
@@ -1269,7 +1269,7 @@ exports.addTask = async (req, res) => {
 
       task.activityLogs = [activityLog];
 
-      
+
       project.tasks.push(task);
       await project.save();
 
@@ -1280,7 +1280,7 @@ exports.addTask = async (req, res) => {
           .select("name email")
           .lean();
 
-        
+
         const notification = {
           title: "New Task Assigned",
           message: `You have been assigned task "${safeTitle}" in project "${project.projectName}"`,
@@ -1300,7 +1300,7 @@ exports.addTask = async (req, res) => {
           message: `${req.user.name} assigned you task "${safeTitle}" in project "${project.projectName}"`,
           actor: req.user.id,
           data: {
-            projectId: project._id, 
+            projectId: project._id,
             taskId: createdTask._id,
             title: safeTitle,
             projectName: project.projectName,
@@ -1329,9 +1329,9 @@ exports.addTask = async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Error adding task:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: "Error adding task" 
+    res.status(500).json({
+      success: false,
+      message: "Error adding task"
     });
   }
 };
@@ -1347,25 +1347,25 @@ exports.updateTask = async (req, res) => {
 
     const project = await Project.findById(id);
     if (!project) {
-      return res.status(404).json({ 
-        success: false, 
-        message: "Project not found" 
+      return res.status(404).json({
+        success: false,
+        message: "Project not found"
       });
     }
 
-    
+
     if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
-      return res.status(403).json({ 
-        success: false, 
-        message: "Access denied to update task" 
+      return res.status(403).json({
+        success: false,
+        message: "Access denied to update task"
       });
     }
 
     const task = project.tasks.id(taskId);
     if (!task) {
-      return res.status(404).json({ 
-        success: false, 
-        message: "Task not found" 
+      return res.status(404).json({
+        success: false,
+        message: "Task not found"
       });
     }
 
@@ -1380,7 +1380,7 @@ exports.updateTask = async (req, res) => {
       newlyAssignedUser = await User.findById(nextAssignedTo).select("name email").lean();
     }
 
-    
+
     Object.keys(updateData).forEach(key => {
       if (key === '_id') return;
 
@@ -1429,7 +1429,7 @@ exports.updateTask = async (req, res) => {
     task.updatedAt = new Date();
     project.markModified("tasks");
 
-    
+
     task.activityLogs.push({
       type: "update",
       description: `Task was updated`,
@@ -1493,9 +1493,9 @@ exports.updateTask = async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Error updating task:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: "Error updating task" 
+    res.status(500).json({
+      success: false,
+      message: "Error updating task"
     });
   }
 };
@@ -1559,36 +1559,36 @@ exports.deleteTask = async (req, res) => {
 
     const project = await Project.findById(id);
     if (!project) {
-      return res.status(404).json({ 
-        success: false, 
-        message: "Project not found" 
+      return res.status(404).json({
+        success: false,
+        message: "Project not found"
       });
     }
 
-    
+
     if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
-      return res.status(403).json({ 
-        success: false, 
-        message: "Access denied to delete task" 
+      return res.status(403).json({
+        success: false,
+        message: "Access denied to delete task"
       });
     }
 
     const task = project.tasks.id(taskId);
     if (!task) {
-      return res.status(404).json({ 
-        success: false, 
-        message: "Task not found" 
+      return res.status(404).json({
+        success: false,
+        message: "Task not found"
       });
     }
 
-    
+
     if (task.pdfFile && task.pdfFile.path) {
       fs.unlink(task.pdfFile.path, (err) => {
         if (err) console.error("Error deleting task file:", err);
       });
     }
 
-    
+
     project.tasks.pull(taskId);
     await project.save();
 
@@ -1600,9 +1600,9 @@ exports.deleteTask = async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Error deleting task:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: "Error deleting task" 
+    res.status(500).json({
+      success: false,
+      message: "Error deleting task"
     });
   }
 };
@@ -1625,25 +1625,25 @@ exports.updateTaskStatus = async (req, res) => {
     const nextProjectStatus = toProjectTaskStatus(status);
 
     if (!TASK_STATUS.includes(nextProjectStatus)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Invalid status value" 
+      return res.status(400).json({
+        success: false,
+        message: "Invalid status value"
       });
     }
 
     const project = await Project.findById(projectId);
     if (!project) {
-      return res.status(404).json({ 
-        success: false, 
-        message: "Project not found" 
+      return res.status(404).json({
+        success: false,
+        message: "Project not found"
       });
     }
 
     const task = project.tasks.id(taskId);
     if (!task) {
-      return res.status(404).json({ 
-        success: false, 
-        message: "Task not found" 
+      return res.status(404).json({
+        success: false,
+        message: "Task not found"
       });
     }
 
@@ -1728,7 +1728,7 @@ exports.updateTaskStatus = async (req, res) => {
       task.completionDate = null;
     }
 
-    
+
     task.activityLogs.push({
       type: "status_change",
       description: `Status changed from ${oldStatus} to ${nextProjectStatus}`,
@@ -1798,9 +1798,9 @@ exports.updateTaskStatus = async (req, res) => {
     }
   } catch (error) {
     console.error("❌ Error updating task status:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: "Error updating task status" 
+    res.status(500).json({
+      success: false,
+      message: "Error updating task status"
     });
   }
 };
@@ -1885,29 +1885,29 @@ exports.getTaskActivityLogs = async (req, res) => {
 
     const project = await Project.findById(projectId);
     if (!project) {
-      return res.status(404).json({ 
-        success: false, 
-        message: "Project not found" 
+      return res.status(404).json({
+        success: false,
+        message: "Project not found"
       });
     }
 
-    
+
     if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
-      return res.status(403).json({ 
-        success: false, 
-        message: "Access denied to view activity logs" 
+      return res.status(403).json({
+        success: false,
+        message: "Access denied to view activity logs"
       });
     }
 
     const task = project.tasks.id(taskId);
     if (!task) {
-      return res.status(404).json({ 
-        success: false, 
-        message: "Task not found" 
+      return res.status(404).json({
+        success: false,
+        message: "Task not found"
       });
     }
 
-    
+
     await Project.populate(task, {
       path: 'activityLogs.performedBy',
       select: 'name email'
@@ -1938,12 +1938,12 @@ exports.getTaskActivityLogs = async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Error fetching activity logs:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: "Error fetching activity logs" 
+    res.status(500).json({
+      success: false,
+      message: "Error fetching activity logs"
     });
   }
-};``
+}; ``
 
 
 
@@ -1985,7 +1985,7 @@ exports.getTaskRemarks = async (req, res) => {
   } catch (error) {
     console.error("❌ Error fetching project task remarks:", error);
     res.status(500).json({
-      success: false, 
+      success: false,
       message: "Error fetching remarks"
     });
   }
@@ -2003,9 +2003,9 @@ exports.addRemark = async (req, res) => {
     void 0;
 
     if (!remarkText && !req.file) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Remark text or image is required" 
+      return res.status(400).json({
+        success: false,
+        message: "Remark text or image is required"
       });
     }
 
@@ -2017,25 +2017,25 @@ exports.addRemark = async (req, res) => {
       .lean();
 
     if (!project) {
-      return res.status(404).json({ 
-        success: false, 
-        message: "Project or task not found" 
+      return res.status(404).json({
+        success: false,
+        message: "Project or task not found"
       });
     }
 
-    
+
     if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
-      return res.status(403).json({ 
-        success: false, 
-        message: "Access denied to add remark" 
+      return res.status(403).json({
+        success: false,
+        message: "Access denied to add remark"
       });
     }
 
     const task = project.tasks?.[0];
     if (!task) {
-      return res.status(404).json({ 
-        success: false, 
-        message: "Task not found" 
+      return res.status(404).json({
+        success: false,
+        message: "Task not found"
       });
     }
 
@@ -2053,7 +2053,7 @@ exports.addRemark = async (req, res) => {
         .toFile(savePath);
     }
 
-    
+
     const now = new Date();
     const remark = {
       _id: new mongoose.Types.ObjectId(),
@@ -2108,9 +2108,9 @@ exports.addRemark = async (req, res) => {
     const savedRemark = {
       ...remark,
       createdBy: {
-      _id: req.user.id,
-      name: req.user.name,
-      email: req.user.email
+        _id: req.user.id,
+        name: req.user.name,
+        email: req.user.email
       }
     };
 
@@ -2121,9 +2121,9 @@ exports.addRemark = async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Error adding remark:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: "Error adding remark" 
+    res.status(500).json({
+      success: false,
+      message: "Error adding remark"
     });
   }
 };
