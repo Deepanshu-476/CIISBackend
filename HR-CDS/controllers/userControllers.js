@@ -169,7 +169,7 @@ const getUserBranchIds = (user = {}) => normalizeIdList([
 
 const canViewAllCompanyBranches = (user = {}) => {
   const roleText = String(user.companyRole || user.jobRole || user.role || '').trim().toLowerCase();
-  return ['owner', 'company_owner', 'companyowner', 'super_admin', 'superadmin'].includes(roleText);
+  return ['owner', 'company_owner', 'companyowner', 'super_admin', 'superadmin', 'admin', 'hr', 'manager', 'career infowis admin'].includes(roleText);
 };
 
 const appendAndCondition = (filter, condition) => {

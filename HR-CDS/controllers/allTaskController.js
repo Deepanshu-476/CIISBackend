@@ -58,7 +58,7 @@ const normalizeIdList = (value) => {
 
 const canViewAllBranchData = (user = {}) => {
   const roleText = String(user.companyRole || user.jobRole || user.role || '').trim().toLowerCase();
-  return ['owner', 'company_owner', 'companyowner', 'super_admin', 'superadmin'].includes(roleText);
+  return ['owner', 'company_owner', 'companyowner', 'super_admin', 'superadmin', 'admin', 'hr', 'manager', 'career infowis admin'].includes(roleText);
 };
 
 const getUserBranchIds = (user = {}) => normalizeIdList([
@@ -743,8 +743,13 @@ exports.getCompanyAllTaskOverview = async (req, res) => {
     }
 
     const rawRole = String(currentUser.companyRole || currentUser.role || currentUser.jobRole || '').toLowerCase();
-    const isOwnerScope = ['owner', 'admin', 'super-admin', 'superadmin', 'hr'].includes(rawRole);
-    const query = { isActive: true };
+    const isOwnerScope = ['owner', 'admin', 'super-admin', 'superadmin', 'hr', 'manager', 'career infowis admin'].includes(rawRole);
+    // Company All Task is an employee workspace. Client portal accounts must
+    // never be returned here, otherwise they appear as a "Client" department.
+    const query = {
+      isActive: true,
+      companyRole: { $not: /^client$/i }
+    };
 
     if (currentUser.company) query.company = currentUser.company;
     else if (currentUser.companyCode) query.companyCode = currentUser.companyCode;
