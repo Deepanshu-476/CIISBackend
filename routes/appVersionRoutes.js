@@ -59,21 +59,7 @@ const mergeWithFallback = (settings) => {
   const raw = settings?.toObject ? settings.toObject() : settings;
   const updatedBy = raw?.updatedBy || null;
   const mergePlatform = (platform) => {
-    const merged = { ...fallback[platform], ...(raw?.[platform] || {}) };
-    const fallbackCode = Number(fallback[platform].latestVersionCode || 0);
-    const mergedCode = Number(merged.latestVersionCode || 0);
-
-    if (fallbackCode > mergedCode) {
-      return {
-        ...merged,
-        latestVersionName: fallback[platform].latestVersionName,
-        latestVersionCode: fallback[platform].latestVersionCode,
-        message: fallback[platform].message,
-        updateEnabled: fallback[platform].updateEnabled,
-      };
-    }
-
-    return merged;
+    return { ...fallback[platform], ...(raw?.[platform] || {}) };
   };
 
   return {
