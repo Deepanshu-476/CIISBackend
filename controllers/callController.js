@@ -3,6 +3,12 @@ const CallLog = require("../models/CallLog");
 const Lead = require("../models/Lead");
 const { getPaginationOptions } = require("../utils/pagination");
 
+let formatCallLogForClient = item => item;
+try {
+  const cascade = require("../services/cascadeSyncEngine");
+  if (typeof cascade.formatCallLogForClient === "function") formatCallLogForClient = cascade.formatCallLogForClient;
+} catch (e) {}
+
 const applyListOptions = (query, { skip, limit }) => {
   let next = query;
   if (typeof next.skip === "function") next = next.skip(skip);
@@ -43,9 +49,10 @@ exports.startCall = async (req, res) => {
     const userId = req.user?._id || req.user?.id;
     const companyId = req.user?.company?._id || req.user?.company || req.user?.companyId;
 
+    let lead = null;
     if (Lead && typeof Lead.findById === "function") {
       try {
-        const lead = await Lead.findById(leadId).lean();
+        lead = await Lead.findById(leadId).lean();
         if (lead) {
           if (companyId && lead.company && String(lead.company) !== String(companyId)) {
             return res.status(403).json({ msg: "Access denied to lead from another company" });
@@ -60,15 +67,31 @@ exports.startCall = async (req, res) => {
       }
     }
 
-    const call = await CallLog.create({
+    const callPayload = {
       company: companyId,
       lead: leadId,
+      leadName: lead?.name || '',
+      leadPhone: lead?.phone || '',
+      leadEmail: lead?.email || '',
+      leadSource: lead?.leadSource || null,
+      leadSourceName: lead?.leadSourceName || lead?.source || '',
+      leadType: lead?.leadType || null,
+      leadTypeName: lead?.leadTypeName || '',
+      leadStatus: lead?.status || '',
+      leadAddress: lead?.address || '',
+      leadGender: lead?.gender || '',
+      leadRemarks: lead?.remarks || '',
       agent: userId,
+      agentName: req.user?.name || '',
+      agentEmail: req.user?.email || '',
+      agentRole: req.user?.role || req.user?.companyRole || '',
       startTime: new Date(),
-    });
+    };
+
+    const call = await CallLog.create(callPayload);
 
     const populated = await CallLog.findById(call._id).populate("lead", "name phone email");
-    res.status(201).json(populated || call);
+    res.status(201).json(formatCallLogForClient(populated || call));
   } catch (err) {
     res.status(400).json({ msg: "Call start failed", error: err.message });
   }
@@ -106,7 +129,7 @@ exports.endCall = async (req, res) => {
     const populated = await CallLog.findById(call._id)
       .populate("lead", "name phone email")
       .populate("agent", "name email");
-    res.json(populated || call);
+    res.json(formatCallLogForClient(populated || call));
   } catch (err) {
     res.status(400).json({ msg: "Call end failed", error: err.message });
   }
@@ -127,7 +150,7 @@ exports.getAgentCalls = async (req, res) => {
       .sort({ createdAt: -1 });
     const calls = await applyListOptions(callsQuery, { skip, limit });
     await setPaginationHeaders(res, query, { page, limit });
-    res.json(calls);
+    res.json((calls || []).map(formatCallLogForClient));
   } catch (err) {
     res.status(500).json({ msg: "Error fetching call logs", error: err.message });
   }
@@ -155,7 +178,7 @@ exports.getLeadCalls = async (req, res) => {
       .sort({ createdAt: -1 });
     const calls = await applyListOptions(callsQuery, { skip, limit });
     await setPaginationHeaders(res, query, { page, limit });
-    res.json(calls);
+    res.json((calls || []).map(formatCallLogForClient));
   } catch (err) {
     res.status(500).json({ msg: "Error fetching lead calls", error: err.message });
   }

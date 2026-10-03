@@ -120,4 +120,14 @@ branchSchema.index({ company: 1, isActive: 1, createdAt: -1 });
 branchSchema.index({ companyCode: 1, isActive: 1, createdAt: -1 });
 branchSchema.index({ company: 1, isDefault: 1, isActive: 1 });
 
+// Post-save cascade synchronization
+branchSchema.post('save', async function(doc) {
+  try {
+    const { cascadeBranchUpdate } = require('../services/cascadeSyncEngine');
+    await cascadeBranchUpdate(doc._id, doc);
+  } catch (err) {
+    console.error('Branch post-save cascade error:', err.message);
+  }
+});
+
 module.exports = mongoose.model("Branch", branchSchema);

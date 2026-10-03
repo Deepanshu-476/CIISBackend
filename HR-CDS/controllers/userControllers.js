@@ -9,6 +9,12 @@ const { errorResponse, successResponse } = require('../utils/responseHelper.js')
 const Task = require('../../HR-CDS/models/Task.js');
 const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
 
+let cascadeUserUpdate = async () => {};
+try {
+  const cascade = require('../../services/cascadeSyncEngine');
+  if (typeof cascade.cascadeUserUpdate === 'function') cascadeUserUpdate = cascade.cascadeUserUpdate;
+} catch (e) {}
+
 const getSocketOnlineUserIds = (companyId) => {
   const onlineIds = new Set();
   const companyKey = companyId?.toString();
@@ -1687,6 +1693,14 @@ exports.updateUser = async (req, res) => {
     .populate('company', 'name companyCode')
     .populate('createdBy', 'name email');
 
+    if (updateData.name || updateData.email || updateData.role || updateData.companyRole) {
+      cascadeUserUpdate(user._id, {
+        name: updateData.name,
+        email: updateData.email,
+        role: updateData.role || updateData.companyRole
+      }).catch(() => {});
+    }
+
     return successResponse(res, 200, {
       message: "User updated successfully",
       user: updatedUser
@@ -1799,6 +1813,14 @@ exports.updateSelfUser = async (req, res) => {
     .select('-password -resetToken -resetTokenExpiry')
     .populate('department', 'name description')
     .populate('company', 'name companyCode');
+
+    if (updateData.name || updateData.email || updateData.role || updateData.companyRole) {
+      cascadeUserUpdate(id, {
+        name: updateData.name,
+        email: updateData.email,
+        role: updateData.role || updateData.companyRole
+      }).catch(() => {});
+    }
 
     return successResponse(res, 200, {
       message: "Profile updated successfully",

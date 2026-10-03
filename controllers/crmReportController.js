@@ -62,18 +62,17 @@ exports.report = async (req, res, next) => {
     }
 
     if (type === 'leads') {
-      const items = await Lead.find({ company, ...created }).sort({ createdAt: -1 }).limit(1000)
-        .populate('leadSource', 'name').populate('leadType', 'name').populate('assignedTo', 'name').lean();
-      const chartData = groupedSeries(items, item => text(item.leadSource?.name || item.source), (item, current) => ({ leads: (current.leads || 0) + 1, qualified: (current.qualified || 0) + (['interested', 'converted'].includes(item.status) ? 1 : 0) }));
+      const items = await Lead.find({ company, ...created }).sort({ createdAt: -1 }).limit(1000).lean();
+      const chartData = groupedSeries(items, item => text(item.leadSourceName || item.leadSource?.name || item.source), (item, current) => ({ leads: (current.leads || 0) + 1, qualified: (current.qualified || 0) + (['interested', 'converted'].includes(item.status) ? 1 : 0) }));
       return res.json({ summary: [{ label: 'Matching Leads', value: items.length }], chartData, columns: ['Lead', 'Phone', 'Source', 'Type', 'Status', 'Assigned To', 'Created'],
-        rows: items.map(item => ({ Lead: text(item.name), Phone: text(item.phone), Source: text(item.leadSource?.name || item.source), Type: text(item.leadType?.name), Status: text(item.status), 'Assigned To': text(item.assignedTo?.name), Created: date(item.createdAt) })) });
+        rows: items.map(item => ({ Lead: text(item.name), Phone: text(item.phone), Source: text(item.leadSourceName || item.leadSource?.name || item.source), Type: text(item.leadTypeName || item.leadType?.name), Status: text(item.status), 'Assigned To': text(item.assignedToName || item.assignedTo?.name), Created: date(item.createdAt) })) });
     }
 
     if (type === 'calls') {
-      const items = await CallLog.find({ company, ...created }).sort({ createdAt: -1 }).limit(1000).populate('lead', 'name phone').populate('agent', 'name').lean();
+      const items = await CallLog.find({ company, ...created }).sort({ createdAt: -1 }).limit(1000).lean();
       const chartData = groupedSeries(items, item => shortDate(item.createdAt), (item, current) => ({ totalCalls: (current.totalCalls || 0) + 1, connected: (current.connected || 0) + (item.status === 'answered' ? 1 : 0) }));
       return res.json({ summary: [{ label: 'Calls Logged', value: items.length }], chartData: chartData.map(({ name, ...values }) => ({ day: name, ...values })).reverse(), columns: ['Lead', 'Phone', 'Telecaller', 'Outcome', 'Duration', 'Date'],
-        rows: items.map(item => ({ Lead: text(item.lead?.name), Phone: text(item.lead?.phone), Telecaller: text(item.agent?.name), Outcome: text(item.status), Duration: `${Number(item.duration) || 0}s`, Date: date(item.createdAt) })) });
+        rows: items.map(item => ({ Lead: text(item.leadName || item.lead?.name), Phone: text(item.leadPhone || item.lead?.phone), Telecaller: text(item.agentName || item.agent?.name), Outcome: text(item.status), Duration: `${Number(item.duration) || 0}s`, Date: date(item.createdAt) })) });
     }
 
     if (type === 'visits') {
@@ -82,10 +81,10 @@ exports.report = async (req, res, next) => {
 
     if (type === 'follow-ups') {
       const filter = { company, ...(range ? { date: range } : {}) };
-      const items = await FollowUp.find(filter).sort({ date: -1 }).limit(1000).populate('lead', 'name phone').populate('agent', 'name').lean();
+      const items = await FollowUp.find(filter).sort({ date: -1 }).limit(1000).lean();
       const chartData = groupedSeries(items, item => shortDate(item.date || item.createdAt), (item, current) => ({ completed: (current.completed || 0) + (item.status === 'done' ? 1 : 0), pending: (current.pending || 0) + (item.status === 'pending' ? 1 : 0) }));
       return res.json({ summary: [{ label: 'Follow-ups', value: items.length }, { label: 'Pending', value: items.filter(item => item.status === 'pending').length }], chartData: chartData.map(({ name, ...values }) => ({ day: name, name, ...values })).reverse(), columns: ['Lead', 'Phone', 'Telecaller', 'Scheduled For', 'Status', 'Note'],
-        rows: items.map(item => ({ Lead: text(item.lead?.name), Phone: text(item.lead?.phone), Telecaller: text(item.agent?.name), 'Scheduled For': date(item.date), Status: text(item.status), Note: text(item.note) })) });
+        rows: items.map(item => ({ Lead: text(item.leadName || item.lead?.name), Phone: text(item.leadPhone || item.lead?.phone), Telecaller: text(item.agentName || item.agent?.name), 'Scheduled For': date(item.date), Status: text(item.status), Note: text(item.note) })) });
     }
 
     if (type === 'conversion-funnel') {
@@ -113,16 +112,16 @@ exports.report = async (req, res, next) => {
     }
 
     const [calls, assignments, followups] = await Promise.all([
-      CallLog.find({ company, ...created }).sort({ createdAt: -1 }).limit(500).populate('lead', 'name').populate('agent', 'name').lean(),
-      Assignment.find({ company, ...created }).sort({ createdAt: -1 }).limit(500).populate('lead', 'name').populate('performedBy', 'name').populate('toUser', 'name').lean(),
-      FollowUp.find({ company, ...(range ? { createdAt: range } : {}) }).sort({ createdAt: -1 }).limit(500).populate('lead', 'name').populate('agent', 'name').lean()
+      CallLog.find({ company, ...created }).sort({ createdAt: -1 }).limit(500).lean(),
+      Assignment.find({ company, ...created }).sort({ createdAt: -1 }).limit(500).lean(),
+      FollowUp.find({ company, ...(range ? { createdAt: range } : {}) }).sort({ createdAt: -1 }).limit(500).lean()
     ]);
     const rows = [
       ...calls.map(item => ({
         Activity: 'Call Logged',
         rawType: 'call',
-        Lead: text(item.lead?.name),
-        User: text(item.agent?.name),
+        Lead: text(item.leadName || item.lead?.name),
+        User: text(item.agentName || item.agent?.name),
         Detail: text(item.status ? `${item.status} (${Number(item.duration) || 0}s)` : 'Call logged'),
         Date: date(item.createdAt),
         sortDate: item.createdAt
@@ -130,17 +129,17 @@ exports.report = async (req, res, next) => {
       ...assignments.map(item => ({
         Activity: item.action === 'reassigned' ? 'Lead Reassigned' : 'Lead Assigned',
         rawType: 'assignment',
-        Lead: text(item.lead?.name),
-        User: text(item.performedBy?.name),
-        Detail: item.toUser?.name ? `To ${item.toUser.name}` : 'Unassigned',
+        Lead: text(item.leadName || item.lead?.name),
+        User: text(item.performedByName || item.performedBy?.name),
+        Detail: (item.toUserName || item.toUser?.name) ? `To ${item.toUserName || item.toUser.name}` : 'Unassigned',
         Date: date(item.createdAt),
         sortDate: item.createdAt
       })),
       ...followups.map(item => ({
         Activity: item.status === 'done' ? 'Follow-Up Completed' : 'Follow-Up Scheduled',
         rawType: 'follow-up',
-        Lead: text(item.lead?.name),
-        User: text(item.agent?.name),
+        Lead: text(item.leadName || item.lead?.name),
+        User: text(item.agentName || item.agent?.name),
         Detail: text(item.note || item.status || 'Follow-up logged'),
         Date: date(item.createdAt || item.date),
         sortDate: item.createdAt || item.date

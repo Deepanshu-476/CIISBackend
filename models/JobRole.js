@@ -52,6 +52,11 @@ const jobRoleSchema = new mongoose.Schema({
     ref: "Department",
     required: true
   },
+  departmentName: {
+    type: String,
+    index: true,
+    default: ""
+  },
   company: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Company",
@@ -69,6 +74,10 @@ const jobRoleSchema = new mongoose.Schema({
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User"
+  },
+  createdByName: {
+    type: String,
+    default: ""
   },
   shiftSettings: {
     type: shiftSettingsSchema,
@@ -94,6 +103,11 @@ jobRoleSchema.index({ companyCode: 1, isActive: 1 });
 
 
 jobRoleSchema.pre('save', async function(next) {
+  try {
+    const { autoResolveJobRole } = require('../services/cascadeSyncEngine');
+    await autoResolveJobRole(this);
+  } catch (err) {}
+
   if (this.isModified('isActive') && !this.isActive) {
     const User = mongoose.model('User');
     const usersCount = await User.countDocuments({ 
@@ -102,7 +116,7 @@ jobRoleSchema.pre('save', async function(next) {
     });
     
     if (usersCount > 0) {
-      next(new Error('Cannot delete job role with active users'));
+      return next(new Error('Cannot delete job role with active users'));
     }
   }
   next();

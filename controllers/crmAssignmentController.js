@@ -4,6 +4,11 @@ const User = require('../models/User');
 const JobRole = require('../models/JobRole');
 const LeadAssignmentHistory = require('../models/LeadAssignmentHistory');
 const { telecallerFilter, telecallerUserIds } = require('../utils/telecallerUsers');
+const {
+  formatLeadForClient,
+  formatAssignmentHistoryForClient,
+  cascadeLeadUpdate
+} = require('../services/cascadeSyncEngine');
 
 const activeEmployeeFilter = (company, userIds, excludedClientIds = []) => ({
   ...telecallerFilter(company, userIds),
@@ -68,9 +73,9 @@ exports.overview = async (req, res, next) => {
     });
     res.json({
       metrics: { total, assigned, unassigned: total - assigned, activeAgents: resolvedTeam.length },
-      unassigned,
+      unassigned: (unassigned || []).map(formatLeadForClient),
       pagination: { page, limit, total: unassignedTotal, pages: Math.max(Math.ceil(unassignedTotal / limit), 1) },
-      recent,
+      recent: (recent || []).map(formatAssignmentHistoryForClient),
       team: resolvedTeam
     });
   } catch (error) { next(error); }
@@ -91,7 +96,7 @@ exports.bulkAssign = async (req, res, next) => {
       return res.status(400).json({ message: 'Choose a valid assignment method.' });
     }
 
-    const foundLeads = await Lead.find({ _id: { $in: leadIds }, company }).select('_id assignedTo assignedAt').lean();
+    const foundLeads = await Lead.find({ _id: { $in: leadIds }, company }).select('_id assignedTo assignedAt name phone email status assignedToName assignedToEmail').lean();
     const leadsById = new Map(foundLeads.map(lead => [String(lead._id), lead]));
     const leads = leadIds.map(id => leadsById.get(id)).filter(Boolean);
     if (leads.length !== leadIds.length) return res.status(404).json({ message: 'One or more selected leads were not found.' });
@@ -155,22 +160,54 @@ exports.bulkAssign = async (req, res, next) => {
     }
 
     await Lead.bulkWrite(assignments.map(({ lead, agent }) => ({
-      updateOne: { filter: { _id: lead._id, company }, update: { $set: { assignedTo: agent._id, assignedAt: now } } }
+      updateOne: {
+        filter: { _id: lead._id, company },
+        update: {
+          $set: {
+            assignedTo: agent._id,
+            assignedToName: agent.name || '',
+            assignedToEmail: agent.email || '',
+            assignedToRole: agent.role || '',
+            assignedAt: now
+          }
+        }
+      }
     })));
     try {
       await LeadAssignmentHistory.insertMany(assignments.map(({ lead, agent }) => ({
         company,
         lead: lead._id,
+        leadName: lead.name || '',
+        leadPhone: lead.phone || '',
+        leadEmail: lead.email || '',
+        leadStatus: lead.status || '',
         fromUser: lead.assignedTo || null,
+        fromUserName: lead.assignedToName || '',
+        fromUserEmail: lead.assignedToEmail || '',
         toUser: agent._id,
+        toUserName: agent.name || '',
+        toUserEmail: agent.email || '',
         performedBy: actor,
+        performedByName: req.user?.name || '',
+        performedByEmail: req.user?.email || '',
         action: lead.assignedTo ? 'reassigned' : 'assigned',
         method,
         reason: lead.assignedTo ? reason : ''
       })));
     } catch (historyError) {
       await Lead.bulkWrite(assignments.map(({ lead }) => ({
-        updateOne: { filter: { _id: lead._id, company }, update: { $set: { assignedTo: lead.assignedTo || null, assignedAt: lead.assignedAt || null } } }
+        updateOne: {
+          filter: { _id: lead._id, company },
+          update: {
+            $set: {
+              assignedTo: lead.assignedTo || null,
+              assignedToName: lead.assignedToName || '',
+              assignedToEmail: lead.assignedToEmail || '',
+              assignedToRole: lead.assignedToRole || '',
+              assignedAt: lead.assignedAt || null
+            }
+          }
+        }
       })));
       throw historyError;
     }
@@ -223,7 +260,7 @@ exports.history = async (req, res, next) => {
         .populate('toUser', 'name email').populate('performedBy', 'name email').lean(),
       LeadAssignmentHistory.countDocuments(filter)
     ]);
-    res.json({ items, total, page, pages: Math.max(Math.ceil(total / limit), 1) });
+    res.json({ items: (items || []).map(formatAssignmentHistoryForClient), total, page, pages: Math.max(Math.ceil(total / limit), 1) });
   } catch (error) { next(error); }
 };
 

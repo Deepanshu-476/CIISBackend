@@ -3,6 +3,13 @@ const validator = require('validator');
 const Lead = require('../models/Lead');
 const LeadType = require('../models/LeadType');
 const LeadSource = require('../models/LeadSource');
+let formatLeadForClient = item => item;
+let cascadeLeadUpdate = async () => {};
+try {
+  const engine = require('../services/cascadeSyncEngine');
+  if (engine && typeof engine.formatLeadForClient === 'function') formatLeadForClient = engine.formatLeadForClient;
+  if (engine && typeof engine.cascadeLeadUpdate === 'function') cascadeLeadUpdate = engine.cascadeLeadUpdate;
+} catch (e) {}
 
 function toTitleCase(str = '') {
   return String(str)
@@ -64,8 +71,17 @@ exports.create = async (req, res, next) => {
     if (!type) errors.leadType = 'This lead type is unavailable or inactive. Select an active type.';
     if (!source) errors.leadSource = 'This lead source is unavailable or inactive. Select an active source.';
     if (Object.keys(errors).length) return res.status(400).json({ message: 'Please update the lead classification.', errors });
-    const item = await Lead.create({ ...data, company, source: source.name, status: 'new', assignedTo: null,
-      createdBy: req.user._id || req.user.id });
+    const item = await Lead.create({
+      ...data,
+      company,
+      source: source.name,
+      leadSourceName: source.name,
+      leadTypeName: type.name,
+      status: 'new',
+      assignedTo: null,
+      createdBy: req.user._id || req.user.id,
+      createdByName: req.user.name || ''
+    });
     res.status(201).json({ item });
   } catch (error) { next(error); }
 };
@@ -73,7 +89,7 @@ exports.list = async (req, res, next) => {
   try {
     const items = await Lead.find({ company: req.crmCompany }).sort({ createdAt: -1, _id: -1 })
       .populate('leadType', 'name').populate('leadSource', 'name').populate('assignedTo', 'name').lean();
-    res.json({ items });
+    res.json({ items: (items || []).map(formatLeadForClient) });
   } catch (error) { next(error); }
 };
 
@@ -124,8 +140,12 @@ exports.assign = async (req, res, next) => {
     const reason = String(req.body?.reason || '').trim().replace(/\s+/g, ' ').slice(0, 500);
     if (!userId) {
       lead.assignedTo = null;
+      lead.assignedToName = '';
+      lead.assignedToEmail = '';
+      lead.assignedToRole = '';
       lead.assignedAt = null;
       await lead.save();
+      try { await cascadeLeadUpdate(lead._id, lead); } catch (e) {}
       try {
         if (previousAssignee) {
           const LeadAssignmentHistory = require('../models/LeadAssignmentHistory');
@@ -173,8 +193,12 @@ exports.assign = async (req, res, next) => {
     }
 
     lead.assignedTo = user._id;
+    lead.assignedToName = user.name || '';
+    lead.assignedToEmail = user.email || '';
+    lead.assignedToRole = user.jobRole || user.role || user.companyRole || 'Telecaller';
     lead.assignedAt = new Date();
     await lead.save();
+    try { await cascadeLeadUpdate(lead._id, lead); } catch (e) {}
 
     const LeadAssignmentHistory = require('../models/LeadAssignmentHistory');
     try {
