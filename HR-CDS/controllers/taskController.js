@@ -620,9 +620,51 @@ const isSameCompanyTaskRequest = (req, task) => {
   return Boolean(requesterCompany && taskCompany && requesterCompany === taskCompany);
 };
 
-const canManageTaskFromCompanyAll = (req, task) => (
-  isCompanyAllTaskEdit(req) && isSameCompanyTaskRequest(req, task)
-);
+const canManageTaskFromCompanyAll = async (req, task) => {
+  if (!isSameCompanyTaskRequest(req, task) || !isCompanyAllTaskEdit(req)) return false;
+  const user = req.user;
+  if (!user) return false;
+
+  if (
+    user.isSuperAdmin === true ||
+    user.superAdmin === true ||
+    user.isCompanyOwner === true ||
+    user.role === 'superadmin' ||
+    user.role === 'admin'
+  ) {
+    return true;
+  }
+
+  const roleTokens = [user.companyRole, user.role, user.jobRole, user.userType]
+    .map(r => String(r || '').toLowerCase().replace(/[\s_-]+/g, ''));
+  if (roleTokens.some(r => ['owner', 'companyowner', 'admin', 'companyadmin', 'superadmin'].includes(r))) {
+    return true;
+  }
+
+  const companyId = user.company?._id || user.company || user.companyId;
+  const userId = String(user._id || user.id || '').trim();
+  if (!companyId || !userId) return false;
+
+  try {
+    const page = await PagePermission.findOne({
+      company: companyId,
+      path: { $in: ['/ciisUser/company-all-task', '/ciisUser/company-all-task/tasks', 'company-all-task', 'company-all-task-tasks'] }
+    }).lean();
+
+    if (!page) return true;
+
+    const editUserIds = (page.editUsers || []).map(u => String(u?.user?._id || u?.user || '')).filter(Boolean);
+    const scopedEditUserIds = (page.userAccessScopes || [])
+      .filter(s => String(s?.accessType || '').toLowerCase() === 'edit')
+      .map(s => String(s?.user?._id || s?.user || ''))
+      .filter(Boolean);
+
+    const allEditUserIds = new Set([...editUserIds, ...scopedEditUserIds]);
+    return allEditUserIds.has(userId) || allEditUserIds.size === 0;
+  } catch {
+    return true;
+  }
+};
 
 const parseTaskCheckpoints = value => {
   if (!value || value === 'null') return [];
@@ -1763,7 +1805,7 @@ exports.updateTask = async (req, res) => {
     const { taskId } = req.params;
     const task = await Task.findById(taskId);
     if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
-    const allowCompanyAllEdit = canManageTaskFromCompanyAll(req, task);
+    const allowCompanyAllEdit = await canManageTaskFromCompanyAll(req, task);
     if (task.createdBy.toString() !== req.user._id.toString() && !allowCompanyAllEdit) return res.status(403).json({ success: false, error: 'Not authorized' });
 
     const hasStatusChangedFromPending = task.overallStatus !== 'pending' || task.statusByUser.some(s => s.status !== 'pending');
@@ -1862,7 +1904,14 @@ exports.updateTask = async (req, res) => {
       }
     }
 
-    await createActivityLog(req.user, 'task_updated', task._id, `Updated task details`, oldTask, task.toObject(), req);
+    const editorName = req.user?.name || req.user?.username || 'Team Member';
+    task.lastEditedBy = req.user?._id || null;
+    task.lastEditedByName = editorName;
+    task.lastEditedAt = new Date();
+    task.lastEditChanges = 'Updated task details';
+    await task.save();
+
+    await createActivityLog(req.user, 'task_updated', task._id, `Updated task details by ${editorName}`, oldTask, task.toObject(), req);
 
     res.json({ success: true, message: 'Task updated successfully', task });
   } catch (err) {
@@ -1950,7 +1999,7 @@ exports.updateStatus = async (req, res) => {
 
     const isSameCompany = task.companyCode && userCompanyCode &&
       task.companyCode.toUpperCase() === userCompanyCode.toUpperCase();
-    const allowCompanyAllEdit = canManageTaskFromCompanyAll(req, task);
+    const allowCompanyAllEdit = await canManageTaskFromCompanyAll(req, task);
 
     if (!isCreator && !isAssigned && !isGroupAssigned && !isSameCompany && !allowCompanyAllEdit) {
       return res.status(403).json({ success: false, error: 'Not authorized' });
@@ -2514,7 +2563,7 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
 
   const [personalTasks, clientTasks, projectTasks] = await Promise.all([
     Task.find(personalQuery)
-      .select('title description dueDate dueDateTime priority priorityDays checkpoints overallStatus statusByUser statusHistory completionDate assignedUsers assignedGroups createdBy companyCode taskFor onHoldReleasedAt createdAt updatedAt remarks')
+      .select('title description dueDate dueDateTime priority priorityDays checkpoints overallStatus statusByUser statusHistory completionDate assignedUsers assignedGroups createdBy companyCode taskFor onHoldReleasedAt createdAt updatedAt remarks lastEditedBy lastEditedByName lastEditedAt lastEditChanges')
       .populate('assignedUsers', 'name email')
       .populate('createdBy', 'name email')
       .populate('statusHistory.changedBy', 'name email')
@@ -2523,7 +2572,7 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
       .lean(),
 
     ClientTask.find(clientQuery)
-      .select('name description dueDate priority status completed completedAt checkpoints service timeSpent inProgressSince activityLogs clientId createdAt updatedAt assignee assigneeId remarks')
+      .select('name description dueDate priority status completed completedAt checkpoints service timeSpent inProgressSince activityLogs clientId createdAt updatedAt assignee assigneeId remarks lastEditedBy lastEditedByName lastEditedAt lastEditChanges')
       .populate('clientId', 'client name email company phone companyCode')
       .populate('assigneeId', 'name email role')
       .populate('activityLogs.user', 'name email')
@@ -2561,7 +2610,11 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
       source: taskSource,
       taskSource,
       __taskSource: taskSource,
-      remarks: Array.isArray(t.remarks) ? t.remarks : []
+      remarks: Array.isArray(t.remarks) ? t.remarks : [],
+      lastEditedBy: t.lastEditedBy || null,
+      lastEditedByName: t.lastEditedByName || '',
+      lastEditedAt: t.lastEditedAt || null,
+      lastEditChanges: t.lastEditChanges || ''
     };
   });
 
@@ -2591,6 +2644,10 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
       inProgressSince: t.inProgressSince || null,
       activityLogs: Array.isArray(t.activityLogs) ? t.activityLogs : [],
       remarks: Array.isArray(t.remarks) ? t.remarks : [],
+      lastEditedBy: t.lastEditedBy || null,
+      lastEditedByName: t.lastEditedByName || '',
+      lastEditedAt: t.lastEditedAt || null,
+      lastEditChanges: t.lastEditChanges || '',
       source: 'client',
       taskSource: 'client',
       __taskSource: 'client'

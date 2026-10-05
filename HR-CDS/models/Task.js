@@ -140,6 +140,8 @@ const taskSchema = new mongoose.Schema(
       type: String,
       enum: ["low", "medium", "high"],
       default: "medium",
+      lowercase: true,
+      trim: true,
     },
     
 
@@ -255,6 +257,25 @@ const taskSchema = new mongoose.Schema(
     completionDate: Date,
 
     lastActivityAt: { type: Date, default: Date.now },
+    lastEditedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+    lastEditedByName: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    lastEditedAt: {
+      type: Date,
+      default: null,
+    },
+    lastEditChanges: {
+      type: String,
+      trim: true,
+      default: "",
+    },
     isActive: { type: Boolean, default: true },
   },
   { timestamps: true }

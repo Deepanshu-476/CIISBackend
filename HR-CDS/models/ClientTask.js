@@ -150,7 +150,26 @@ const clienttaskSchema = new mongoose.Schema({
     ipAddress: String,
     userAgent: String,
     createdAt: { type: Date, default: Date.now }
-  }]
+  }],
+  lastEditedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
+  lastEditedByName: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  lastEditedAt: {
+    type: Date,
+    default: null
+  },
+  lastEditChanges: {
+    type: String,
+    trim: true,
+    default: ''
+  }
 }, {
   timestamps: true,
   toJSON: { virtuals: true },
