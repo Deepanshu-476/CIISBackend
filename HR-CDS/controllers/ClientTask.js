@@ -1804,6 +1804,20 @@ const getTasksByClientService = async (req, res) => {
     await syncExpiredSubscriptionClientTasks([clientId]);
 
     const filter = { clientId, service };
+    const statusQuery = String(req.query.status || req.query.taskFilter || req.query.filter || '').trim().toLowerCase();
+    if (req.query.completed !== undefined) {
+      filter.completed = req.query.completed === 'true' || req.query.completed === true;
+    } else if (statusQuery === 'completed' || statusQuery === 'done') {
+      filter.completed = true;
+    } else if (statusQuery === 'in-progress' || statusQuery === 'inprogress') {
+      filter.completed = false;
+      filter.status = { $in: ['in-progress', 'inprogress', 'In Progress', 'In progress'] };
+    } else if (statusQuery === 'overdue') {
+      filter.completed = false;
+      filter.dueDate = { $ne: null, $lt: getClientTaskOverdueCutoff() };
+      filter.status = { $nin: CLIENT_TASK_OVERDUE_EXCLUDED_STATUSES };
+    }
+
     if (req.query.subscriptionId && mongoose.Types.ObjectId.isValid(req.query.subscriptionId)) {
       filter.subscriptionId = req.query.subscriptionId;
     } else if (req.query.subscriptionNo) {
@@ -1815,10 +1829,14 @@ const getTasksByClientService = async (req, res) => {
       };
     }
 
-    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 100 });
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 300 });
+    const sortObj = filter.completed
+      ? { completedAt: -1, updatedAt: -1, dueDate: -1, createdAt: -1 }
+      : (statusQuery === 'overdue' ? { dueDate: 1, createdAt: -1 } : { completed: 1, dueDate: 1, createdAt: -1 });
+
     const [tasks, total] = await Promise.all([
       Task.find(filter)
-        .sort({ completed: 1, dueDate: 1, createdAt: -1 })
+        .sort(sortObj)
         .skip(skip)
         .limit(limit)
         .lean(),
@@ -1857,7 +1875,24 @@ const getClientTasks = async (req, res) => {
 
     const filter = { clientId };
     if (service) filter.service = service;
-    if (completed !== undefined) filter.completed = completed === 'true';
+
+    const statusQuery = String(req.query.status || req.query.taskFilter || req.query.filter || '').trim().toLowerCase();
+    if (completed !== undefined) {
+      filter.completed = completed === 'true' || completed === true;
+    } else if (statusQuery === 'completed' || statusQuery === 'done') {
+      filter.completed = true;
+    } else if (statusQuery === 'in-progress' || statusQuery === 'inprogress') {
+      filter.completed = false;
+      filter.status = { $in: ['in-progress', 'inprogress', 'In Progress', 'In progress'] };
+    } else if (statusQuery === 'overdue') {
+      filter.completed = false;
+      filter.dueDate = { $ne: null, $lt: getClientTaskOverdueCutoff() };
+      filter.status = { $nin: CLIENT_TASK_OVERDUE_EXCLUDED_STATUSES };
+    } else if (statusQuery === 'pending') {
+      filter.completed = false;
+      filter.status = { $nin: [...CLIENT_TASK_OVERDUE_EXCLUDED_STATUSES, 'in-progress', 'inprogress', 'In Progress', 'In progress'] };
+    }
+
     if (assignee) filter.assignee = assignee;
     if (priority) filter.priority = priority;
     if (subscriptionId && mongoose.Types.ObjectId.isValid(subscriptionId)) filter.subscriptionId = subscriptionId;
@@ -1870,11 +1905,15 @@ const getClientTasks = async (req, res) => {
       };
     }
 
-    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 100 });
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 300 });
+    const sortObj = filter.completed
+      ? { completedAt: -1, updatedAt: -1, dueDate: -1, createdAt: -1 }
+      : (statusQuery === 'overdue' ? { dueDate: 1, createdAt: -1 } : { completed: 1, dueDate: 1, createdAt: -1 });
+
     const [tasks, total] = await Promise.all([
       Task.find(filter)
         .populate('remarks.user', 'name email')
-        .sort({ completed: 1, dueDate: 1, createdAt: -1 })
+        .sort(sortObj)
         .skip(skip)
         .limit(limit)
         .lean(),

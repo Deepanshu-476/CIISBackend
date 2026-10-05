@@ -3,6 +3,12 @@ const Department = require("../models/Department");
 const User = require("../models/User");
 const { getCacheKey, getOrSetCached, invalidateCache } = require("../utils/inMemoryCache");
 
+let cascadeDepartmentUpdate = async () => {};
+try {
+  const cascade = require("../services/cascadeSyncEngine");
+  if (typeof cascade.cascadeDepartmentUpdate === "function") cascadeDepartmentUpdate = cascade.cascadeDepartmentUpdate;
+} catch (e) {}
+
 const DEPARTMENT_CACHE_PREFIX = "departments";
 const DEPARTMENT_SELECT = "name description company companyCode branch branchCode supportHead supportHeadName workingDays workingDayHistory createdBy createdAt updatedAt isActive";
 
@@ -408,6 +414,7 @@ exports.updateDepartment = async (req, res) => {
       const branchObj = await Branch.findById(updateData.branch);
       if (branchObj) {
         updateData.branchCode = branchObj.branchCode;
+        updateData.branchName = branchObj.name;
       }
     }
 
@@ -420,6 +427,10 @@ exports.updateDepartment = async (req, res) => {
     ).populate('createdBy', 'name email')
      .populate('branch', 'name branchCode')
      .lean();
+
+    if (updateData.name) {
+      cascadeDepartmentUpdate(id, updateData.name).catch(() => {});
+    }
 
     void 0;
     void 0;

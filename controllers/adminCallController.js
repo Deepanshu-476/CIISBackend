@@ -8,6 +8,12 @@ const LeadAssignmentHistory = require('../models/LeadAssignmentHistory');
 const { telecallerFilter, telecallerUserIds } = require('../utils/telecallerUsers');
 require('../models/LeadSource');
 require('../models/LeadType');
+const {
+  formatLeadForClient,
+  formatCallLogForClient,
+  formatFollowUpForClient,
+  formatAssignmentHistoryForClient
+} = require('../services/cascadeSyncEngine');
 
 function getDayBounds(date = new Date()) {
   const istOffset = 5.5 * 60 * 60000;
@@ -435,23 +441,21 @@ exports.assignedCalls = async (req, res, next) => {
       if (to) filter.createdAt.$lte = new Date(`${to}T23:59:59.999Z`);
     }
 
-    let items = await Lead.find(filter)
-      .sort({ assignedAt: -1, createdAt: -1 })
-      .populate('leadSource', 'name')
-      .populate('leadType', 'name')
-      .populate('assignedTo', 'name email')
-      .lean();
-
     if (search) {
-      const q = String(search).trim().toLowerCase();
-      items = items.filter(i =>
-        (i.name && i.name.toLowerCase().includes(q)) ||
-        (i.phone && i.phone.includes(q)) ||
-        (i.assignedTo?.name && i.assignedTo.name.toLowerCase().includes(q))
-      );
+      const q = String(search).trim();
+      const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      filter.$or = [
+        { name: { $regex: escaped, $options: 'i' } },
+        { phone: { $regex: escaped, $options: 'i' } },
+        { assignedToName: { $regex: escaped, $options: 'i' } }
+      ];
     }
 
-    res.json({ items });
+    const items = await Lead.find(filter)
+      .sort({ assignedAt: -1, createdAt: -1 })
+      .lean();
+
+    res.json({ items: items.map(formatLeadForClient) });
   } catch (error) { next(error); }
 };
 
@@ -466,11 +470,9 @@ exports.todaysCalls = async (req, res, next) => {
       createdAt: { $gte: todayStart, $lt: todayEnd }
     })
       .sort({ createdAt: -1 })
-      .populate({ path: 'lead', populate: [{ path: 'leadType', select: 'name' }, { path: 'leadSource', select: 'name' }] })
-      .populate('agent', 'name email')
       .lean();
 
-    res.json({ items: calls });
+    res.json({ items: calls.map(formatCallLogForClient) });
   } catch (error) { next(error); }
 };
 
@@ -478,7 +480,7 @@ exports.todaysCalls = async (req, res, next) => {
 exports.callHistory = async (req, res, next) => {
   try {
     const company = req.crmCompany;
-    const { agentId, status, from, to } = req.query;
+    const { agentId, status, from, to, search } = req.query;
 
     const filter = { company };
     if (agentId && mongoose.isValidObjectId(agentId)) filter.agent = agentId;
@@ -488,14 +490,30 @@ exports.callHistory = async (req, res, next) => {
       if (from) filter.createdAt.$gte = new Date(from);
       if (to) filter.createdAt.$lte = new Date(`${to}T23:59:59.999Z`);
     }
+    if (search) {
+      const q = String(search).trim();
+      const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      filter.$or = [
+        { leadName: { $regex: escaped, $options: 'i' } },
+        { leadPhone: { $regex: escaped, $options: 'i' } },
+        { agentName: { $regex: escaped, $options: 'i' } }
+      ];
+    }
 
     const items = await CallLog.find(filter)
       .sort({ createdAt: -1 })
-      .populate({ path: 'lead', select: 'name phone email source leadType leadSource remarks address gender status', populate: [{ path: 'leadType', select: 'name' }, { path: 'leadSource', select: 'name' }] })
-      .populate('agent', 'name email')
+      .populate({
+        path: 'lead',
+        select: 'name phone email source leadSource leadSourceName leadType leadTypeName status address gender remarks',
+        populate: [
+          { path: 'leadSource', select: 'name' },
+          { path: 'leadType', select: 'name' }
+        ]
+      })
+      .populate('agent', 'name email role companyRole jobRole')
       .lean();
 
-    res.json({ items });
+    res.json({ items: items.map(formatCallLogForClient) });
   } catch (error) { next(error); }
 };
 
@@ -503,7 +521,7 @@ exports.callHistory = async (req, res, next) => {
 exports.pendingCalls = async (req, res, next) => {
   try {
     const company = req.crmCompany;
-    const { assignedTo, source, leadType } = req.query;
+    const { assignedTo, source, leadType, search } = req.query;
 
     const filter = {
       company,
@@ -513,15 +531,21 @@ exports.pendingCalls = async (req, res, next) => {
     if (assignedTo && mongoose.isValidObjectId(assignedTo)) filter.assignedTo = assignedTo;
     if (source && mongoose.isValidObjectId(source)) filter.leadSource = source;
     if (leadType && mongoose.isValidObjectId(leadType)) filter.leadType = leadType;
+    if (search) {
+      const q = String(search).trim();
+      const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      filter.$or = [
+        { name: { $regex: escaped, $options: 'i' } },
+        { phone: { $regex: escaped, $options: 'i' } },
+        { assignedToName: { $regex: escaped, $options: 'i' } }
+      ];
+    }
 
     const items = await Lead.find(filter)
       .sort({ assignedAt: -1, createdAt: -1 })
-      .populate('leadSource', 'name')
-      .populate('leadType', 'name')
-      .populate('assignedTo', 'name email')
       .lean();
 
-    res.json({ items });
+    res.json({ items: items.map(formatLeadForClient) });
   } catch (error) { next(error); }
 };
 
@@ -546,12 +570,9 @@ exports.scheduledCalls = async (req, res, next) => {
 
     const items = await Lead.find(filter)
       .sort({ nextFollowUp: 1 })
-      .populate('leadSource', 'name')
-      .populate('leadType', 'name')
-      .populate('assignedTo', 'name email')
       .lean();
 
-    res.json({ items });
+    res.json({ items: items.map(formatLeadForClient) });
   } catch (error) { next(error); }
 };
 
@@ -564,12 +585,9 @@ exports.completedCalls = async (req, res, next) => {
       status: { $in: ['converted', 'closed'] }
     })
       .sort({ updatedAt: -1 })
-      .populate('leadSource', 'name')
-      .populate('leadType', 'name')
-      .populate('assignedTo', 'name email')
       .lean();
 
-    res.json({ items });
+    res.json({ items: items.map(formatLeadForClient) });
   } catch (error) { next(error); }
 };
 
@@ -582,12 +600,9 @@ exports.convertedCalls = async (req, res, next) => {
       status: 'converted'
     })
       .sort({ updatedAt: -1 })
-      .populate('leadSource', 'name')
-      .populate('leadType', 'name')
-      .populate('assignedTo', 'name email')
       .lean();
 
-    res.json({ items });
+    res.json({ items: items.map(formatLeadForClient) });
   } catch (error) { next(error); }
 };
 
@@ -597,30 +612,25 @@ exports.transferredCalls = async (req, res, next) => {
     const company = req.crmCompany;
     const history = await LeadAssignmentHistory.find({ company, action: 'reassigned' })
       .sort({ createdAt: -1 })
-      .populate({ path: 'lead', select: 'name phone remarks status callHistory' })
-      .populate('fromUser', 'name email jobRole role')
-      .populate('toUser', 'name email jobRole role')
-      .populate('performedBy', 'name email jobRole role')
       .lean();
 
-    const items = history.filter(entry => entry.lead).map(entry => {
-      const callsAfterTransfer = (entry.lead.callHistory || []).filter(c =>
-        String(c.agent) === String(entry.toUser?._id) && new Date(c.date) >= new Date(entry.createdAt)
-      );
-      const isHandled = callsAfterTransfer.length > 0 || ['converted', 'closed', 'interested', 'not interested'].includes(entry.lead.status);
+    const formattedHistory = history.map(formatAssignmentHistoryForClient);
+
+    const items = formattedHistory.map(entry => {
+      const isHandled = ['converted', 'closed', 'interested', 'not interested'].includes(entry.lead?.status);
       const status = isHandled ? 'Handled' : 'Transferred';
 
       const methodLabel = entry.method === 'round-robin' ? 'Round Robin'
         : entry.method === 'load-balanced' ? 'Load Balanced'
           : entry.method === 'equal-distribution' ? 'Equal Distribution'
             : entry.method === 'single' ? 'Manual Reassignment' : entry.method || '';
-      const transferReason = entry.reason || entry.lead.remarks || (methodLabel ? `Reassigned via ${methodLabel}` : 'Lead reassigned');
+      const transferReason = entry.reason || entry.lead?.remarks || (methodLabel ? `Reassigned via ${methodLabel}` : 'Lead reassigned');
 
       return {
         _id: entry._id,
-        leadId: entry.lead._id,
-        name: entry.lead.name,
-        phone: entry.lead.phone,
+        leadId: entry.lead?._id || entry.lead,
+        name: entry.lead?.name || entry.leadName || '',
+        phone: entry.lead?.phone || entry.leadPhone || '',
         status,
         transferredFrom: entry.fromUser,
         assignedTo: entry.toUser,
@@ -628,7 +638,7 @@ exports.transferredCalls = async (req, res, next) => {
         transferReason,
         method: methodLabel || 'Manual Reassignment',
         assignedAt: entry.createdAt,
-        remarks: entry.lead.remarks || ''
+        remarks: entry.lead?.remarks || entry.leadRemarks || ''
       };
     });
 
@@ -636,17 +646,14 @@ exports.transferredCalls = async (req, res, next) => {
   } catch (error) { next(error); }
 };
 
-
 // 11. Follow-Up Center List
 exports.followUps = async (req, res, next) => {
   try {
     const company = req.crmCompany;
     const items = await FollowUp.find({ company })
       .sort({ date: 1 })
-      .populate({ path: 'lead', select: 'name phone source leadType leadSource', populate: [{ path: 'leadType', select: 'name' }, { path: 'leadSource', select: 'name' }] })
-      .populate('agent', 'name email')
       .lean();
 
-    res.json({ items });
+    res.json({ items: items.map(formatFollowUpForClient) });
   } catch (error) { next(error); }
 };
