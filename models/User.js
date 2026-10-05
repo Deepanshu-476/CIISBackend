@@ -66,6 +66,12 @@ const userSchema = new mongoose.Schema({
     type: String, 
     index: true
   },
+
+  branchName: {
+    type: String,
+    trim: true,
+    default: ""
+  },
   
   
   name: {
@@ -98,12 +104,24 @@ const userSchema = new mongoose.Schema({
     type: String,
     required: [true, "Department is required"],
   },
+
+  departmentName: {
+    type: String,
+    trim: true,
+    default: ""
+  },
   
   jobRole: {
     type: String,
    
     required: [true, "Job role is required"],
     default: 'user'
+  },
+
+  jobRoleName: {
+    type: String,
+    trim: true,
+    default: ""
   },
 
   shiftId: {
@@ -446,6 +464,16 @@ userSchema.pre("save", async function (next) {
   }
   
   next();
+});
+
+// Post-save cascade synchronization
+userSchema.post('save', async function(doc) {
+  try {
+    const { cascadeUserUpdate } = require('../services/cascadeSyncEngine');
+    await cascadeUserUpdate(doc._id, doc);
+  } catch (err) {
+    console.error('User post-save cascade error:', err.message);
+  }
 });
 
 

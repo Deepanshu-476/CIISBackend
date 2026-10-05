@@ -2,8 +2,13 @@ const JobRole = require("../models/JobRole");
 const User = require("../models/User");
 const Department = require("../models/Department");
 const mongoose = require("mongoose");
-const { getCacheKey, getOrSetCached, invalidateCache } = require("../utils/inMemoryCache");
 const { isSuperAdminUser } = require("../middleware/authMiddleware");
+
+let cascadeJobRoleUpdate = async () => {};
+try {
+  const cascade = require("../services/cascadeSyncEngine");
+  if (typeof cascade.cascadeJobRoleUpdate === "function") cascadeJobRoleUpdate = cascade.cascadeJobRoleUpdate;
+} catch (e) {}
 
 const JOB_ROLE_CACHE_PREFIX = "jobRoles";
 const JOB_ROLE_SELECT = "name description department company companyCode shiftSettings shifts createdBy createdAt updatedAt isActive";
@@ -400,6 +405,10 @@ exports.updateJobRole = async (req, res) => {
     void 0;
     void 0;
     invalidateCache(JOB_ROLE_CACHE_PREFIX);
+
+    if (updateData.name) {
+      cascadeJobRoleUpdate(id, { name: updateData.name, oldName: jobRole.name }).catch(() => {});
+    }
 
     return res.status(200).json({
       success: true,

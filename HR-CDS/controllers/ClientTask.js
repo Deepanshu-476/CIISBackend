@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
 const User = require('../../models/User');
+const PagePermission = require('../../models/PagePermission');
 const { notifyPageUsers, notifyDirectUsers } = require('../utils/systemNotificationService');
 const { enqueueCompletionJob, enqueueBackgroundJob } = require('../utils/backgroundJobQueue');
 const { sendEmail } = require('../../utils/sendEmail');
@@ -42,6 +43,59 @@ const isCompanyAllTaskEdit = (req) => (
   req.body?.allowCompanyAllTaskEdit === 'true' ||
   req.headers?.['x-company-all-task-edit'] === 'true'
 );
+
+const hasCompanyAllTaskEditPermission = async (req) => {
+  const user = req.user;
+  if (!user) return false;
+
+  // 1. Superadmin / admin / companyOwner
+  if (
+    user.isSuperAdmin === true ||
+    user.superAdmin === true ||
+    user.isCompanyOwner === true ||
+    user.role === 'superadmin' ||
+    user.role === 'admin'
+  ) {
+    return true;
+  }
+
+  const roleTokens = [user.companyRole, user.role, user.jobRole, user.userType]
+    .map(r => String(r || '').toLowerCase().replace(/[\s_-]+/g, ''));
+  if (roleTokens.some(r => ['owner', 'companyowner', 'admin', 'companyadmin', 'superadmin'].includes(r))) {
+    return true;
+  }
+
+  // 2. Check PagePermission in DB
+  const companyId = user.company?._id || user.company || user.companyId;
+  const userId = String(user._id || user.id || '').trim();
+  if (!companyId || !userId) return false;
+
+  try {
+    const page = await PagePermission.findOne({
+      company: companyId,
+      path: { $in: ['/ciisUser/company-all-task', '/ciisUser/company-all-task/tasks', 'company-all-task', 'company-all-task-tasks'] }
+    }).lean();
+
+    if (!page) {
+      return isCompanyAllTaskEdit(req);
+    }
+
+    const editUserIds = (page.editUsers || [])
+      .map(item => String(item?.user?._id || item?.user || ''))
+      .filter(Boolean);
+
+    const scopedEditUserIds = (page.userAccessScopes || [])
+      .filter(scope => String(scope?.accessType || '').trim().toLowerCase() === 'edit')
+      .map(scope => String(scope?.user?._id || scope?.user || ''))
+      .filter(Boolean);
+
+    const allEditUserIds = new Set([...editUserIds, ...scopedEditUserIds]);
+    return allEditUserIds.has(userId) || (allEditUserIds.size === 0 && isCompanyAllTaskEdit(req));
+  } catch (err) {
+    console.error('Error checking company all task edit permission:', err);
+    return isCompanyAllTaskEdit(req);
+  }
+};
 
 const isClientTaskOverdue = task => {
   if (!task?.dueDate || task.completed) return false;
@@ -1768,6 +1822,10 @@ const getAssignedTasksByUserId = async (req, res) => {
       createdAt: task.createdAt,
       service: task.service,
       assignee: task.assignee,
+      lastEditedBy: task.lastEditedBy || null,
+      lastEditedByName: task.lastEditedByName || '',
+      lastEditedAt: task.lastEditedAt || null,
+      lastEditChanges: task.lastEditChanges || '',
       source: 'client'
     }));
 
@@ -1804,6 +1862,20 @@ const getTasksByClientService = async (req, res) => {
     await syncExpiredSubscriptionClientTasks([clientId]);
 
     const filter = { clientId, service };
+    const statusQuery = String(req.query.status || req.query.taskFilter || req.query.filter || '').trim().toLowerCase();
+    if (req.query.completed !== undefined) {
+      filter.completed = req.query.completed === 'true' || req.query.completed === true;
+    } else if (statusQuery === 'completed' || statusQuery === 'done') {
+      filter.completed = true;
+    } else if (statusQuery === 'in-progress' || statusQuery === 'inprogress') {
+      filter.completed = false;
+      filter.status = { $in: ['in-progress', 'inprogress', 'In Progress', 'In progress'] };
+    } else if (statusQuery === 'overdue') {
+      filter.completed = false;
+      filter.dueDate = { $ne: null, $lt: getClientTaskOverdueCutoff() };
+      filter.status = { $nin: CLIENT_TASK_OVERDUE_EXCLUDED_STATUSES };
+    }
+
     if (req.query.subscriptionId && mongoose.Types.ObjectId.isValid(req.query.subscriptionId)) {
       filter.subscriptionId = req.query.subscriptionId;
     } else if (req.query.subscriptionNo) {
@@ -1815,10 +1887,14 @@ const getTasksByClientService = async (req, res) => {
       };
     }
 
-    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 100 });
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 300 });
+    const sortObj = filter.completed
+      ? { completedAt: -1, updatedAt: -1, dueDate: -1, createdAt: -1 }
+      : (statusQuery === 'overdue' ? { dueDate: 1, createdAt: -1 } : { completed: 1, dueDate: 1, createdAt: -1 });
+
     const [tasks, total] = await Promise.all([
       Task.find(filter)
-        .sort({ completed: 1, dueDate: 1, createdAt: -1 })
+        .sort(sortObj)
         .skip(skip)
         .limit(limit)
         .lean(),
@@ -1857,7 +1933,24 @@ const getClientTasks = async (req, res) => {
 
     const filter = { clientId };
     if (service) filter.service = service;
-    if (completed !== undefined) filter.completed = completed === 'true';
+
+    const statusQuery = String(req.query.status || req.query.taskFilter || req.query.filter || '').trim().toLowerCase();
+    if (completed !== undefined) {
+      filter.completed = completed === 'true' || completed === true;
+    } else if (statusQuery === 'completed' || statusQuery === 'done') {
+      filter.completed = true;
+    } else if (statusQuery === 'in-progress' || statusQuery === 'inprogress') {
+      filter.completed = false;
+      filter.status = { $in: ['in-progress', 'inprogress', 'In Progress', 'In progress'] };
+    } else if (statusQuery === 'overdue') {
+      filter.completed = false;
+      filter.dueDate = { $ne: null, $lt: getClientTaskOverdueCutoff() };
+      filter.status = { $nin: CLIENT_TASK_OVERDUE_EXCLUDED_STATUSES };
+    } else if (statusQuery === 'pending') {
+      filter.completed = false;
+      filter.status = { $nin: [...CLIENT_TASK_OVERDUE_EXCLUDED_STATUSES, 'in-progress', 'inprogress', 'In Progress', 'In progress'] };
+    }
+
     if (assignee) filter.assignee = assignee;
     if (priority) filter.priority = priority;
     if (subscriptionId && mongoose.Types.ObjectId.isValid(subscriptionId)) filter.subscriptionId = subscriptionId;
@@ -1870,11 +1963,15 @@ const getClientTasks = async (req, res) => {
       };
     }
 
-    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 100 });
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 300 });
+    const sortObj = filter.completed
+      ? { completedAt: -1, updatedAt: -1, dueDate: -1, createdAt: -1 }
+      : (statusQuery === 'overdue' ? { dueDate: 1, createdAt: -1 } : { completed: 1, dueDate: 1, createdAt: -1 });
+
     const [tasks, total] = await Promise.all([
       Task.find(filter)
         .populate('remarks.user', 'name email')
-        .sort({ completed: 1, dueDate: 1, createdAt: -1 })
+        .sort(sortObj)
         .skip(skip)
         .limit(limit)
         .lean(),
@@ -2180,10 +2277,13 @@ const updateTask = async (req, res) => {
     const isAlreadyAssigned = task.assigneeId || (task.assignee && task.assignee !== 'Unassigned');
     const isEditingCoreFields = ['name', 'description', 'dueDate', 'dueDateTime', 'priority'].some(field => Object.prototype.hasOwnProperty.call(updates, field));
     if (isAlreadyAssigned && isEditingCoreFields) {
-      return res.status(403).json({
-        success: false,
-        message: 'This task has already been assigned and cannot be edited.'
-      });
+      const canEdit = await hasCompanyAllTaskEditPermission(req);
+      if (!canEdit) {
+        return res.status(403).json({
+          success: false,
+          message: 'This task has already been assigned and cannot be edited without edit permission in Page Management.'
+        });
+      }
     }
 
     if (updates.name !== undefined && (!updates.name || updates.name.trim().length === 0)) {
@@ -2345,11 +2445,18 @@ const updateTask = async (req, res) => {
     }
 
     if (changes.length > 0) {
+      const editorName = currentUser?.name || currentUser?.username || 'Team Member';
+      const changeText = changes.join(', ');
+      task.lastEditedBy = currentUser?._id || currentUser?.id || null;
+      task.lastEditedByName = editorName;
+      task.lastEditedAt = now;
+      task.lastEditChanges = changeText;
+
       await addClientActivityLogHelper(task, {
-        action: 'updated',
-        description: `Updated: ${changes.join(', ')}`,
+        action: 'edited',
+        description: `Edited by ${editorName}: ${changeText}`,
         user: currentUser?.id || currentUser?._id,
-        userName: currentUser?.name || currentUser?.username || 'System'
+        userName: editorName
       }, req);
     }
 

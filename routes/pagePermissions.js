@@ -25,6 +25,8 @@ const payrollPermissionActions = {
   jobRoleManagement: { view: 'View', edit: 'Create / Edit', delete: 'Delete' },
   companyAssets: { view: 'View', edit: 'Create / Edit', delete: 'Delete' },
   'company-assets': { view: 'View', edit: 'Create / Edit', delete: 'Delete' },
+  'company-all-task': { view: 'View', edit: 'Edit Tasks', delete: 'Delete' },
+  'company-all-task-tasks': { view: 'View', edit: 'Edit Tasks', delete: 'Delete' },
 };
 
 const CUSTOM_ACCESS_FIELDS = {
@@ -42,7 +44,8 @@ const APP_PAGES = [
   { pageKey: 'department', name: 'Department Management', path: '/ciisUser/department', permissionPattern: 'viewEdit' },
   { pageKey: 'JobRoleManagement', name: 'Job Role Management', path: '/ciisUser/JobRoleManagement', permissionPattern: 'viewEdit', permissionActions: { view: 'View', edit: 'Create / Edit', delete: 'Delete' } },
   { pageKey: 'manage-groups', name: 'Manage Group', path: '/ciisUser/manage-groups', permissionPattern: 'viewEdit' },
-  { pageKey: 'company-all-task', name: 'Company All Task', path: '/ciisUser/company-all-task', permissionPattern: 'viewEdit' },
+  { pageKey: 'company-all-task', name: 'Company All Task', path: '/ciisUser/company-all-task', permissionPattern: 'viewEdit', permissionActions: { view: 'View', edit: 'Edit Tasks', delete: 'Delete' } },
+  { pageKey: 'company-all-task-tasks', name: 'Company Tasks', path: '/ciisUser/company-all-task/tasks', permissionPattern: 'viewEdit', permissionActions: { view: 'View', edit: 'Edit Tasks', delete: 'Delete' } },
   { pageKey: 'company-assets', name: 'Asset Management', path: '/ciisUser/company-assets', permissionPattern: 'viewEdit', permissionActions: { view: 'View', edit: 'Create / Edit', delete: 'Delete' } },
   { pageKey: 'SidebarManagement', name: 'Sidebar Management', path: '/ciisUser/SidebarManagement', permissionPattern: 'viewEdit' },
   { pageKey: 'emp-client', name: 'Client Management', path: '/ciisUser/emp-client', permissionPattern: 'viewEdit' },
@@ -307,6 +310,11 @@ const getPageByPathCached = (companyId, path) => getOrSetCached(
       if (!searchPaths.includes(pageMeta.pageKey)) searchPaths.push(pageMeta.pageKey);
       if (!searchPaths.includes(`/Ciis-network/${pageMeta.pageKey}`)) searchPaths.push(`/Ciis-network/${pageMeta.pageKey}`);
       if (!searchPaths.includes(`/ciisUser/${pageMeta.pageKey}`)) searchPaths.push(`/ciisUser/${pageMeta.pageKey}`);
+      if (['company-all-task', 'company-all-task-tasks'].includes(pageMeta.pageKey)) {
+        ['/ciisUser/company-all-task', '/ciisUser/company-all-task/tasks', 'company-all-task', 'company-all-task-tasks'].forEach(p => {
+          if (!searchPaths.includes(p)) searchPaths.push(p);
+        });
+      }
     }
 
     const config = await PagePermission.findOne({

@@ -714,13 +714,13 @@ const findAttendanceRecord = async (id, updateData = {}) => {
     let record = await Attendance.findOne({
       user: userId,
       date: { $gte: searchDate, $lte: endOfDay }
-    }).populate("user", "name email employeeType companyCode");
+    }).populate("user", "name email employeeType companyCode jobRole jobRoleName department departmentName branch branchName");
     
     if (!record) {
       record = await Attendance.findOne({
         user: userId,
         date: searchDate
-      }).populate("user", "name email employeeType companyCode");
+      }).populate("user", "name email employeeType companyCode jobRole jobRoleName department departmentName branch branchName");
     }
 
     if (!record) {
@@ -740,18 +740,18 @@ const findAttendanceRecord = async (id, updateData = {}) => {
         });
         
         await record.save();
-        record = await Attendance.findById(record._id).populate("user", "name email employeeType companyCode");
+        record = await Attendance.findById(record._id).populate("user", "name email employeeType companyCode jobRole jobRoleName department departmentName branch branchName");
       } catch (err) {
         if (err.code === 11000) {
           record = await Attendance.findOne({
             user: userId,
             date: { $gte: searchDate, $lte: endOfDay }
-          }).populate("user", "name email employeeType companyCode");
+          }).populate("user", "name email employeeType companyCode jobRole jobRoleName department departmentName branch branchName");
           if (!record) {
             record = await Attendance.findOne({
               user: userId,
               date: searchDate
-            }).populate("user", "name email employeeType companyCode");
+            }).populate("user", "name email employeeType companyCode jobRole jobRoleName department departmentName branch branchName");
           }
         } else {
           throw err;
@@ -981,7 +981,7 @@ const clockIn = async (req, res) => {
     const populatedRecord = await Attendance.findById(attendanceRecord._id)
       .populate({
         path: "user",
-        select: "name email employeeType companyCode jobRole shiftId shiftName shiftType department",
+        select: "name email employeeType companyCode jobRole jobRoleName shiftId shiftName shiftType department departmentName branch branchName",
         populate: {
           path: "company",
           select: "companyCode companyName"
@@ -1170,7 +1170,7 @@ const clockOut = async (req, res) => {
     const populatedRecord = await Attendance.findById(record._id)
       .populate({
         path: "user",
-        select: "name email employeeType companyCode jobRole shiftId shiftName shiftType department",
+        select: "name email employeeType companyCode jobRole jobRoleName shiftId shiftName shiftType department departmentName branch branchName",
         populate: {
           path: "company",
           select: "companyCode companyName"
@@ -1396,7 +1396,7 @@ const getAttendanceList = async (req, res) => {
     const list = await Attendance.find(query)
       .populate({
         path: "user",
-        select: "name email employeeType companyCode jobRole shiftId shiftName shiftType department",
+        select: "name email employeeType companyCode jobRole jobRoleName shiftId shiftName shiftType department departmentName branch branchName",
         populate: {
           path: "company",
           select: "companyCode companyName"
@@ -1628,7 +1628,7 @@ const getAllUsersAttendance = async (req, res) => {
       Attendance.find(filter)
         .populate({
           path: "user",
-          select: "name email employeeType companyCode jobRole shiftId shiftName shiftType department",
+          select: "name email employeeType companyCode jobRole jobRoleName shiftId shiftName shiftType department departmentName branch branchName",
           populate: {
             path: "company",
             select: "companyCode companyName"
@@ -1866,7 +1866,7 @@ const updateAttendanceRecord = async (req, res) => {
     const populatedRecord = await Attendance.findById(record._id)
       .populate({
         path: "user",
-        select: "name email employeeType companyCode jobRole shiftId shiftName shiftType department",
+        select: "name email employeeType companyCode jobRole jobRoleName shiftId shiftName shiftType department departmentName branch branchName",
         populate: {
           path: "company",
           select: "companyCode companyName"
@@ -2036,7 +2036,7 @@ const createManualAttendance = async (req, res) => {
     const populatedAttendance = await Attendance.findById(attendance._id)
       .populate({
         path: "user",
-        select: "name email employeeType companyCode jobRole shiftId shiftName shiftType department",
+        select: "name email employeeType companyCode jobRole jobRoleName shiftId shiftName shiftType department departmentName branch branchName",
         populate: {
           path: "company",
           select: "companyCode companyName"

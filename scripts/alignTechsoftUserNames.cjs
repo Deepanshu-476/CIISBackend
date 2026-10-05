@@ -14,7 +14,7 @@ async function main(){
  const roles=await db.collection('jobroles').find({company:{$in:[source._id,target._id]}}).toArray();
  const roleName=id=>roles.find(r=>String(r._id)===String(id))?.name||String(id);
  const changes=[];const emails=new Set();
- for(let i=0;i<users.length;i++){
+ for(let i=0;i<users.length;i++){  
   const u=users[i],s=original[i];
   if(u.employeeId!==`TECHSOFT-EMP-${String(i+1).padStart(4,'0')}`||roleName(u.jobRole)!==roleName(s.jobRole)||u.companyRole!==s.companyRole) throw new Error(`Source mapping mismatch at ${i+1}`);
   // Preserve the explicitly requested owner login.
