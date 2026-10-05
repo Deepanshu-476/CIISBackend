@@ -146,6 +146,10 @@ exports.createTaskForSelf = async (req, res) => {
       return res.status(400).json({ success: false, error: 'Company code is missing. Please login again.' });
     }
 
+    if (!title || !String(title).trim()) {
+      return res.status(400).json({ success: false, error: 'Task title is required.' });
+    }
+
     const parsedUsers = [req.user._id.toString()];
     const files = (req.files?.files || []).map(f => ({ filename: f.filename, originalName: f.originalname, path: f.path, uploadedBy: req.user._id }));
     const voiceNote = req.files?.voiceNote?.[0] ? { filename: req.files.voiceNote[0].filename, originalName: req.files.voiceNote[0].originalname, path: req.files.voiceNote[0].path, uploadedBy: req.user._id } : null;
@@ -173,14 +177,18 @@ exports.createTaskForSelf = async (req, res) => {
       }
     }
 
+    const cleanPriority = String(priority || 'medium').trim().toLowerCase();
+    const validPriorities = ['low', 'medium', 'high'];
+    const safePriority = validPriorities.includes(cleanPriority) ? cleanPriority : 'medium';
+
     const task = await Task.create({
-      title,
-      description,
+      title: String(title).trim(),
+      description: String(description || '').trim(),
       startDateTime: taskStartDateTime,
       dueDateTime: taskDueDateTime,
       whatsappNumber,
-      priorityDays,
-      priority: priority || 'medium',
+      priorityDays: priorityDays ? String(priorityDays).trim() : '1',
+      priority: safePriority,
       companyCode,
       assignedUsers: parsedUsers,
       assignedGroups: [],
@@ -217,6 +225,7 @@ exports.createTaskForSelf = async (req, res) => {
 
     return res.status(201).json({ success: true, task, message: 'Self task created successfully' });
   } catch (error) {
+    console.error('createTaskForSelf error:', error);
     return res.status(500).json({ success: false, error: error.message });
   }
 };

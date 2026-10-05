@@ -156,7 +156,14 @@ const canChangeFromOnHold = nextStatus => {
 
 const parseTaskCheckpoints = value => {
   if (!value || value === 'null') return [];
-  const raw = typeof value === 'string' ? JSON.parse(value) : value;
+  let raw = value;
+  if (typeof value === 'string') {
+    try {
+      raw = JSON.parse(value);
+    } catch (_) {
+      return [];
+    }
+  }
   if (!Array.isArray(raw)) return [];
 
   return raw
@@ -319,7 +326,14 @@ const paginateTasks = (tasks, req) => {
 };
 
 const getRequestCompanyCode = (req, user = null) => {
-  const companyCode = req.user?.companyCode || user?.companyCode || user?.company?.companyCode;
+  const companyCode = req?.user?.companyCode
+    || req?.user?.company?.companyCode
+    || user?.companyCode
+    || user?.company?.companyCode
+    || req?.headers?.['x-company-code']
+    || req?.headers?.['companycode']
+    || req?.headers?.['company-code']
+    || req?.body?.companyCode;
   return typeof companyCode === 'string' ? companyCode.trim().toUpperCase() : companyCode;
 };
 
