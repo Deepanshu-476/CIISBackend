@@ -22,14 +22,14 @@ const normalizeBoolean = (value, fallback = false) => {
 
 const getFallbackSettings = () => {
   const iosAppStoreId = process.env.IOS_APP_STORE_ID || '6780872642';
-  const iosLatestVersionName = process.env.IOS_LATEST_VERSION_NAME || '1.1.32';
+  const iosLatestVersionName = process.env.IOS_LATEST_VERSION_NAME || '1.1.33';
   const androidPackageName = process.env.ANDROID_PACKAGE_NAME || 'ciisnetwork.in';
-  const androidLatestVersionName = process.env.ANDROID_LATEST_VERSION_NAME || '1.1.32';
+  const androidLatestVersionName = process.env.ANDROID_LATEST_VERSION_NAME || '1.1.33';
 
   return {
     ios: {
       latestVersionName: iosLatestVersionName,
-      latestVersionCode: parseNumber(process.env.IOS_LATEST_BUILD_NUMBER, 47),
+      latestVersionCode: parseNumber(process.env.IOS_LATEST_BUILD_NUMBER, 48),
       minimumVersionCode: parseNumber(process.env.IOS_MIN_BUILD_NUMBER, 1),
       forceUpdate: process.env.IOS_FORCE_UPDATE === 'true',
       updateEnabled: process.env.IOS_UPDATE_ENABLED !== 'false',
@@ -41,7 +41,7 @@ const getFallbackSettings = () => {
     },
     android: {
       latestVersionName: androidLatestVersionName,
-      latestVersionCode: parseNumber(process.env.ANDROID_LATEST_VERSION_CODE, 41),
+      latestVersionCode: parseNumber(process.env.ANDROID_LATEST_VERSION_CODE, 42),
       minimumVersionCode: parseNumber(process.env.ANDROID_MIN_VERSION_CODE, 1),
       forceUpdate: process.env.ANDROID_FORCE_UPDATE === 'true',
       updateEnabled: process.env.ANDROID_UPDATE_ENABLED !== 'false',
@@ -59,21 +59,7 @@ const mergeWithFallback = (settings) => {
   const raw = settings?.toObject ? settings.toObject() : settings;
   const updatedBy = raw?.updatedBy || null;
   const mergePlatform = (platform) => {
-    const merged = { ...fallback[platform], ...(raw?.[platform] || {}) };
-    const fallbackCode = Number(fallback[platform].latestVersionCode || 0);
-    const mergedCode = Number(merged.latestVersionCode || 0);
-
-    if (fallbackCode > mergedCode) {
-      return {
-        ...merged,
-        latestVersionName: fallback[platform].latestVersionName,
-        latestVersionCode: fallback[platform].latestVersionCode,
-        message: fallback[platform].message,
-        updateEnabled: fallback[platform].updateEnabled,
-      };
-    }
-
-    return merged;
+    return { ...fallback[platform], ...(raw?.[platform] || {}) };
   };
 
   return {

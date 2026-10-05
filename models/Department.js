@@ -31,6 +31,11 @@ const departmentSchema = new mongoose.Schema({
     trim: true,
     index: true
   },
+  branchName: {
+    type: String,
+    trim: true,
+    default: ""
+  },
   isActive: {
     type: Boolean,
     default: true
@@ -38,6 +43,11 @@ const departmentSchema = new mongoose.Schema({
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User"
+  },
+  createdByName: {
+    type: String,
+    trim: true,
+    default: ""
   },
   supportHead: {
     type: mongoose.Schema.Types.ObjectId,
@@ -105,6 +115,11 @@ departmentSchema.statics.removeLegacyGlobalNameIndex = async function() {
 
 
 departmentSchema.pre('save', async function(next) {
+  try {
+    const { autoResolveDepartment } = require('../services/cascadeSyncEngine');
+    await autoResolveDepartment(this);
+  } catch (err) {}
+
   if (this.isModified('isActive') && !this.isActive) {
     const User = mongoose.model('User');
     const usersCount = await User.countDocuments({ 
@@ -113,10 +128,20 @@ departmentSchema.pre('save', async function(next) {
     });
     
     if (usersCount > 0) {
-      next(new Error('Cannot delete department with active users'));
+      return next(new Error('Cannot delete department with active users'));
     }
   }
   next();
+});
+
+// Post-save cascade synchronization
+departmentSchema.post('save', async function(doc) {
+  try {
+    const { cascadeDepartmentUpdate } = require('../services/cascadeSyncEngine');
+    await cascadeDepartmentUpdate(doc._id, doc);
+  } catch (err) {
+    console.error('Department post-save cascade error:', err.message);
+  }
 });
 
 module.exports = mongoose.model("Department", departmentSchema);

@@ -1,6 +1,12 @@
 const mongoose = require('mongoose');
 const LeadType = require('../models/LeadType');
 
+let cascadeLeadTypeUpdate = async () => {};
+try {
+  const cascade = require('../services/cascadeSyncEngine');
+  if (typeof cascade.cascadeLeadTypeUpdate === 'function') cascadeLeadTypeUpdate = cascade.cascadeLeadTypeUpdate;
+} catch (e) {}
+
 const validate = body => {
   const name = typeof body?.name === 'string' ? body.name.trim().replace(/\s+/g, ' ') : '';
   const status = body?.status ?? 'Active';
@@ -33,6 +39,9 @@ exports.update = async (req, res) => {
   try {
     const item = await LeadType.findOneAndUpdate({ _id: req.params.id, company: req.leadTypeCompany }, { $set: data }, { new: true, runValidators: true });
     if (!item) return res.status(404).json({ message: 'Lead type not found.' });
+    if (data.name) {
+      cascadeLeadTypeUpdate(item._id, data.name).catch(() => {});
+    }
     res.json({ item });
   } catch (error) { fail(res, error); }
 };

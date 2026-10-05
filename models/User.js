@@ -448,6 +448,16 @@ userSchema.pre("save", async function (next) {
   next();
 });
 
+// Post-save cascade synchronization
+userSchema.post('save', async function(doc) {
+  try {
+    const { cascadeUserUpdate } = require('../services/cascadeSyncEngine');
+    await cascadeUserUpdate(doc._id, doc);
+  } catch (err) {
+    console.error('User post-save cascade error:', err.message);
+  }
+});
+
 
 
 userSchema.methods.comparePassword = async function (candidatePassword) {
