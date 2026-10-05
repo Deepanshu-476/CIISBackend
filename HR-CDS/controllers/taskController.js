@@ -87,16 +87,23 @@ const getCleanTaskDateRange = ({ period = 'all', fromDate, toDate }) => {
   if (fromDate || toDate) {
     const range = {};
     if (fromDate) {
-      const start = new Date(fromDate);
+      // Date inputs are calendar dates selected in the CIIS UI.  Parsing a
+      // YYYY-MM-DD value directly makes it midnight UTC, which moves the
+      // selected day by 5½ hours for our India-based reports.
+      const start = /^\d{4}-\d{2}-\d{2}$/.test(String(fromDate))
+        ? new Date(`${fromDate}T00:00:00.000+05:30`)
+        : new Date(fromDate);
       if (!isNaN(start.getTime())) {
-        start.setHours(0, 0, 0, 0);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(String(fromDate))) start.setHours(0, 0, 0, 0);
         range.$gte = start;
       }
     }
     if (toDate) {
-      const end = new Date(toDate);
+      const end = /^\d{4}-\d{2}-\d{2}$/.test(String(toDate))
+        ? new Date(`${toDate}T23:59:59.999+05:30`)
+        : new Date(toDate);
       if (!isNaN(end.getTime())) {
-        end.setHours(23, 59, 59, 999);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(String(toDate))) end.setHours(23, 59, 59, 999);
         range.$lte = end;
       }
     }
@@ -1851,6 +1858,15 @@ exports.updateTask = async (req, res) => {
     if (req.body.checkpoints !== undefined) {
       task.checkpoints = parseTaskCheckpoints(req.body.checkpoints);
     }
+    if (req.body.status !== undefined && req.body.status !== 'null') {
+      task.overallStatus = req.body.status;
+      if (Array.isArray(task.statusByUser)) {
+        task.statusByUser.forEach(s => {
+          s.status = req.body.status;
+          if (req.body.status === 'completed') s.completedAt = new Date();
+        });
+      }
+    }
 
     await task.save();
 
@@ -2160,7 +2176,7 @@ exports.addRemark = async (req, res) => {
       await sharp(req.file.buffer).resize(1200, 1200, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 80 }).toFile(savePath);
     }
 
-    const remark = { user: req.user._id, text: text || '', image: imgPath, createdAt: new Date() };
+    const remark = { user: req.user._id, userName: req.user.name || '', text: text || '', image: imgPath, createdAt: new Date() };
     task.remarks.push(remark);
     await task.save();
 
@@ -2236,56 +2252,108 @@ exports.markAllNotificationsAsRead = async (req, res) => {
 
 exports.getTaskActivityLogs = async (req, res) => {
   try {
-    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 100 });
-    const filter = { task: req.params.taskId };
-    let [logs, total] = await Promise.all([
+    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 100, maxLimit: 200 });
+    const taskId = req.params.taskId;
+    const filter = { task: taskId };
+
+    const [dbLogs, task] = await Promise.all([
       ActivityLog.find(filter)
+        .select('user userName action description oldValues newValues createdAt')
         .populate('user', 'name role email')
         .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
+        .limit(100)
         .lean(),
-      ActivityLog.countDocuments(filter)
-    ]);
-
-    // Fallback if no explicit ActivityLog records found
-    if ((!logs || logs.length === 0) && skip === 0) {
-      const task = await Task.findById(req.params.taskId)
+      Task.findById(taskId)
+        .select('title taskFor isSelfTask createdAt statusHistory createdBy assignedUsers')
         .populate('createdBy', 'name email role')
         .populate('statusHistory.changedBy', 'name email role')
-        .lean();
+        .lean()
+    ]);
 
-      if (task) {
-        const fallback = [];
-        if (Array.isArray(task.statusHistory) && task.statusHistory.length > 0) {
-          task.statusHistory.forEach(sh => {
-            fallback.push({
-              _id: `sh_${sh._id || Math.random()}`,
-              action: 'status_updated',
-              user: sh.changedBy,
-              userName: sh.changedBy?.name || 'User',
-              description: sh.remarks || `Status changed to ${sh.status}`,
-              createdAt: sh.changedAt || task.updatedAt
-            });
+    const combinedMap = new Map();
+
+    // 1. Add all explicit ActivityLog records
+    if (Array.isArray(dbLogs)) {
+      dbLogs.forEach((log) => {
+        const timeKey = log.createdAt ? new Date(log.createdAt).getTime() : 0;
+        const key = `${log.action || 'log'}_${timeKey}_${String(log._id || '')}`;
+        combinedMap.set(key, {
+          _id: log._id,
+          action: log.action || 'activity_logged',
+          user: log.user,
+          userName: log.user?.name || log.userName || 'User',
+          description: log.description || log.text || 'Activity logged',
+          oldValues: log.oldValues,
+          newValues: log.newValues,
+          createdAt: log.createdAt || new Date()
+        });
+      });
+    }
+
+    // 2. Add status history records from the task if any are missing
+    if (task && Array.isArray(task.statusHistory)) {
+      task.statusHistory.forEach((sh, idx) => {
+        const shDate = sh.changedAt || (idx === 0 ? task.createdAt : task.updatedAt) || new Date();
+        const shTime = new Date(shDate).getTime();
+        // Check if there's already an activity log within 2 seconds with similar status
+        const exists = Array.from(combinedMap.values()).some((l) => {
+          const lTime = new Date(l.createdAt).getTime();
+          return Math.abs(lTime - shTime) < 3000 && String(l.action).includes('status');
+        });
+
+        if (!exists) {
+          const key = `sh_${shTime}_${idx}`;
+          combinedMap.set(key, {
+            _id: `sh_${sh._id || idx}`,
+            action: 'status_updated',
+            user: sh.changedBy || task.createdBy,
+            userName: sh.changedBy?.name || task.createdBy?.name || 'User',
+            description: sh.remarks || `Status updated to ${sh.status}`,
+            status: sh.status,
+            createdAt: shDate
           });
         }
-        if (task.createdAt) {
-          fallback.push({
-            _id: `create_${task._id}`,
-            action: task.taskFor === 'self' ? 'self_task_created' : 'task_created',
-            user: task.createdBy,
-            userName: task.createdBy?.name || 'User',
-            description: `Task created: ${task.title || 'Task'}`,
-            createdAt: task.createdAt
-          });
-        }
-        fallback.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
-        logs = fallback;
-        total = fallback.length;
+      });
+    }
+
+    // 3. Ensure initial "Task Created" event is always present
+    if (task && task.createdAt) {
+      const createTime = new Date(task.createdAt).getTime();
+      const hasCreateLog = Array.from(combinedMap.values()).some((l) => {
+        const lTime = new Date(l.createdAt).getTime();
+        return Math.abs(lTime - createTime) < 5000 && (String(l.action).includes('create') || String(l.description).toLowerCase().includes('task created'));
+      });
+
+      if (!hasCreateLog) {
+        const isSelf = task.taskFor === 'self' || task.isSelfTask;
+        const key = `create_${createTime}`;
+        combinedMap.set(key, {
+          _id: `create_${task._id}`,
+          action: isSelf ? 'self_task_created' : 'task_created',
+          user: task.createdBy,
+          userName: task.createdBy?.name || 'User',
+          description: `Task created: ${task.title || 'Task'}`,
+          status: 'pending',
+          createdAt: task.createdAt
+        });
       }
     }
 
-    res.json({ success: true, logs, count: logs.length, total, pagination: buildPaginationMeta({ page, limit, total }) });
+    // 4. Sort all combined logs chronologically descending
+    const allLogs = Array.from(combinedMap.values()).sort(
+      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+    );
+
+    const paginatedLogs = allLogs.slice(skip, skip + limit);
+    const total = allLogs.length;
+
+    res.json({
+      success: true,
+      logs: paginatedLogs,
+      count: paginatedLogs.length,
+      total,
+      pagination: buildPaginationMeta({ page, limit, total })
+    });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -2444,10 +2512,12 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
     : '';
   const search = String(queryOptions.search || '').trim();
   const dateOr = range ? [
+    { status: { $in: ['pending', 'in-progress', 'inprogress', 'onhold', 'on-hold', 'reopen'] } },
     { dueDateTime: range },
     { dueDate: range },
     { createdAt: range },
-    { updatedAt: range }
+    { updatedAt: range },
+    { completedAt: range }
   ] : null;
 
   const assignedOnly = String(queryOptions.scope || '').trim().toLowerCase() === 'assigned';
@@ -2482,7 +2552,20 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
       ...buildAssigneeNameConditions([targetUser?.name, targetUser?.email])
     ].filter(condition => Object.values(condition)[0])
   };
-  if (range) clientQuery.$and = [...(clientQuery.$and || []), { $or: [{ dueDate: range }, { createdAt: range }, { updatedAt: range }] }];
+  if (range) {
+    clientQuery.$and = [
+      ...(clientQuery.$and || []),
+      {
+        $or: [
+          { status: { $in: ['pending', 'in-progress', 'inprogress', 'onhold', 'on-hold', 'reopen'] } },
+          { dueDate: range },
+          { createdAt: range },
+          { updatedAt: range },
+          { completedAt: range }
+        ]
+      }
+    ];
+  }
   if (priority) clientQuery.priority = new RegExp(`^${priority}$`, 'i');
   if (search) {
     clientQuery.$and = [
@@ -2494,9 +2577,11 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
   const projectTaskElemMatch = { assignedTo: userId };
   if (range) {
     projectTaskElemMatch.$or = [
+      { status: { $in: ['pending', 'in-progress', 'inprogress', 'onhold', 'on-hold', 'reopen'] } },
       { dueDate: range },
       { createdAt: range },
-      { updatedAt: range }
+      { updatedAt: range },
+      { completedAt: range }
     ];
   }
   if (priority) projectTaskElemMatch.priority = new RegExp(`^${priority}$`, 'i');
@@ -2692,12 +2777,16 @@ const filterUserTasks = (tasks, query) => {
 
 
     if (range) {
-      const dateToFilter = t.dueDateTime || t.dueDate || t.createdAt;
-      const taskDate = dateToFilter ? new Date(dateToFilter) : null;
-      if (!taskDate || Number.isNaN(taskDate.getTime())) return false;
+      const taskStatus = normalizeTaskStatus(t.userStatus || t.status || '');
+      const isOngoing = ['pending', 'in-progress', 'onhold', 'reopen'].includes(taskStatus);
+      if (!isOngoing) {
+        const dateToFilter = t.completedAt || t.updatedAt || t.dueDateTime || t.dueDate || t.createdAt;
+        const taskDate = dateToFilter ? new Date(dateToFilter) : null;
+        if (!taskDate || Number.isNaN(taskDate.getTime())) return false;
 
-      if (range.$gte && taskDate < range.$gte) return false;
-      if (range.$lte && taskDate > range.$lte) return false;
+        if (range.$gte && taskDate < range.$gte) return false;
+        if (range.$lte && taskDate > range.$lte) return false;
+      }
     }
 
     return true;
@@ -2726,9 +2815,12 @@ exports.getUserTaskStats = async (req, res) => {
     filtered.forEach(task => {
       const status = normalizeTaskStatus(task.userStatus || task.status);
       const overdue = isTaskOverdueForStatus(task.dueDateTime || task.dueDate, status, task);
-      if (overdue) counts.overdue += 1;
-
-      if (status !== 'overdue' && counts[status] !== undefined) {
+      // A task belongs to exactly one dashboard bucket.  Counting an overdue
+      // pending/in-progress task in both buckets makes the breakdown exceed
+      // the total and produces percentages above 100%.
+      if (overdue) {
+        counts.overdue += 1;
+      } else if (status !== 'overdue' && counts[status] !== undefined) {
         counts[status] += 1;
       } else if (status === 'pending') {
         counts.pending += 1;
@@ -3064,9 +3156,9 @@ exports.getUserAllTasksPaginated = async (req, res) => {
     filtered.forEach(task => {
       const status = normalizeTaskStatus(task.userStatus || task.status);
       const overdue = isTaskOverdueForStatus(task.dueDateTime || task.dueDate, status, task);
-      if (overdue) counts.overdue += 1;
-
-      if (status !== 'overdue' && counts[status] !== undefined) {
+      if (overdue) {
+        counts.overdue += 1;
+      } else if (status !== 'overdue' && counts[status] !== undefined) {
         counts[status] += 1;
       } else if (status === 'pending') {
         counts.pending += 1;
@@ -3240,7 +3332,7 @@ exports.getOverdueSummary = async (req, res) => {
       summary: {
         total: tasks.length,
         alreadyOverdue: tasks.length,
-        potentialOverdue: 0,
+        potentialOverdue: 0,  
         byPriority: {
           high: tasks.filter(t => t.priority === 'high').length,
           medium: tasks.filter(t => t.priority === 'medium').length,
