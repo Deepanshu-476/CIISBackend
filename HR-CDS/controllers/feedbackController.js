@@ -20,6 +20,11 @@ const isSuperAdmin = user => {
   return role === 'super_admin' || role === 'superadmin';
 };
 
+const canManageFeedback = user => {
+  const role = normalizeText(user?.jobRole || user?.companyRole || user?.role).replace(/[\s-]+/g, '_');
+  return isSuperAdmin(user) || ['owner', 'company_owner', 'company_admin', 'admin', 'hr', 'hr_manager'].includes(role);
+};
+
 const getLoggedCompanyId = user => normalizeId(
   user?.company ||
   user?.companyId ||
@@ -100,8 +105,8 @@ const mapQuestionnaire = questionnaire => ({
 
 exports.createQuestionnaire = async (req, res) => {
   try {
-    if (!isSuperAdmin(req.user)) {
-      return res.status(403).json({ success: false, message: 'Only Super Admin can create feedback questionnaires' });
+    if (!canManageFeedback(req.user)) {
+      return res.status(403).json({ success: false, message: 'You do not have permission to create feedback questionnaires' });
     }
 
     const title = String(req.body.title || '').trim();
@@ -109,7 +114,10 @@ exports.createQuestionnaire = async (req, res) => {
     const targetScope = String(req.body.targetScope || '').trim();
     const recipientMode = String(req.body.recipientMode || 'all').trim();
     const nameVisibility = String(req.body.nameVisibility || 'show_name').trim();
-    const company = getLoggedCompanyId(req.user) || normalizeId(req.body.company);
+    const loggedCompanyId = getLoggedCompanyId(req.user);
+    const company = isSuperAdmin(req.user)
+      ? (loggedCompanyId || normalizeId(req.body.company))
+      : loggedCompanyId;
     const branch = normalizeId(req.body.branch);
     const targetedUsers = Array.isArray(req.body.targetedUsers) ? req.body.targetedUsers : [];
     const questions = sanitizeQuestions(req.body.questions);
@@ -126,7 +134,7 @@ exports.createQuestionnaire = async (req, res) => {
     }
     if (!questions.length) return res.status(400).json({ success: false, message: 'Add at least one question' });
 
-    if (targetScope === 'company' && !company) {
+    if (!company) {
       return res.status(400).json({ success: false, message: 'Company selection is required' });
     }
 
@@ -182,7 +190,7 @@ exports.createQuestionnaire = async (req, res) => {
       createdBy: req.user._id,
       sentAt: new Date(),
       metadata: {
-        createdFrom: 'super_admin',
+        createdFrom: isSuperAdmin(req.user) ? 'super_admin' : 'company_admin',
       },
     });
 
@@ -219,12 +227,22 @@ exports.createQuestionnaire = async (req, res) => {
 
 exports.listQuestionnaires = async (req, res) => {
   try {
-    if (!isSuperAdmin(req.user)) {
-      return res.status(403).json({ success: false, message: 'Only Super Admin can view questionnaires' });
+    if (!canManageFeedback(req.user)) {
+      return res.status(403).json({ success: false, message: 'You do not have permission to view questionnaires' });
     }
 
     const { page, limit, skip } = getPaginationOptions(req.query, { limit: 20, maxLimit: 100 });
     const filter = {};
+    const loggedCompanyId = getLoggedCompanyId(req.user);
+
+    if (!isSuperAdmin(req.user)) {
+      if (!loggedCompanyId) {
+        return res.status(400).json({ success: false, message: 'Company selection is required' });
+      }
+      filter.company = loggedCompanyId;
+    } else if (req.query.company) {
+      filter.company = normalizeId(req.query.company);
+    }
 
     if (req.query.status) {
       filter.status = String(req.query.status).trim();
@@ -257,11 +275,20 @@ exports.listQuestionnaires = async (req, res) => {
 
 exports.getQuestionnaireById = async (req, res) => {
   try {
-    if (!isSuperAdmin(req.user)) {
-      return res.status(403).json({ success: false, message: 'Only Super Admin can view questionnaires' });
+    if (!canManageFeedback(req.user)) {
+      return res.status(403).json({ success: false, message: 'You do not have permission to view questionnaires' });
     }
 
-    const questionnaire = await FeedbackQuestionnaire.findById(req.params.id)
+    const filter = { _id: req.params.id };
+    if (!isSuperAdmin(req.user)) {
+      const loggedCompanyId = getLoggedCompanyId(req.user);
+      if (!loggedCompanyId) {
+        return res.status(400).json({ success: false, message: 'Company selection is required' });
+      }
+      filter.company = loggedCompanyId;
+    }
+
+    const questionnaire = await FeedbackQuestionnaire.findOne(filter)
       .populate('company', 'companyName companyCode')
       .populate('branch', 'name branchCode')
       .populate('createdBy', 'name email')
@@ -402,11 +429,20 @@ exports.submitResponse = async (req, res) => {
 
 exports.getResponses = async (req, res) => {
   try {
-    if (!isSuperAdmin(req.user)) {
-      return res.status(403).json({ success: false, message: 'Only Super Admin can view responses' });
+    if (!canManageFeedback(req.user)) {
+      return res.status(403).json({ success: false, message: 'You do not have permission to view responses' });
     }
 
-    const questionnaire = await FeedbackQuestionnaire.findById(req.params.id)
+    const filter = { _id: req.params.id };
+    if (!isSuperAdmin(req.user)) {
+      const loggedCompanyId = getLoggedCompanyId(req.user);
+      if (!loggedCompanyId) {
+        return res.status(400).json({ success: false, message: 'Company selection is required' });
+      }
+      filter.company = loggedCompanyId;
+    }
+
+    const questionnaire = await FeedbackQuestionnaire.findOne(filter)
       .populate('company', 'companyName companyCode')
       .populate('branch', 'name branchCode')
       .populate('createdBy', 'name email')

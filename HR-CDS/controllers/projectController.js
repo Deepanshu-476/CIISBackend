@@ -11,6 +11,8 @@ const Branch = require("../../models/Branch");
 const mongoose = require("mongoose");
 const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagination");
 
+const PROJECT_USER_POPULATE_FIELDS = 'name email role jobRole companyRole profileImage avatar department branch assignedBranches';
+
 const normalizeIdList = (value) => {
   const input = Array.isArray(value) ? value : value ? [value] : [];
   return [...new Set(input
@@ -705,17 +707,17 @@ exports.listProjects = async (req, res) => {
     }
 
     const projectQuery = Project.find(query)
-      .populate('users', 'name email role company companyCode branch assignedBranches')
+      .populate('users', PROJECT_USER_POPULATE_FIELDS)
       .populate('branch', 'name branchCode')
-      .populate('createdBy', 'name email branch assignedBranches')
+      .populate('createdBy', PROJECT_USER_POPULATE_FIELDS)
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
 
     projectQuery
-      .populate('tasks.assignedTo', 'name email')
-      .populate('tasks.assignedUsers', 'name email')
-      .populate('tasks.createdBy', 'name email');
+      .populate('tasks.assignedTo', PROJECT_USER_POPULATE_FIELDS)
+      .populate('tasks.assignedUsers', PROJECT_USER_POPULATE_FIELDS)
+      .populate('tasks.createdBy', PROJECT_USER_POPULATE_FIELDS);
 
     const [projects, total] = await Promise.all([
       projectQuery.lean(),
@@ -753,13 +755,13 @@ exports.getProjectById = async (req, res) => {
     void 0;
 
     const project = await Project.findById(req.params.id)
-      .populate('users', 'name email role _id branch assignedBranches')
-      .populate('createdBy', 'name email _id')
+      .populate('users', PROJECT_USER_POPULATE_FIELDS)
+      .populate('createdBy', PROJECT_USER_POPULATE_FIELDS)
       .populate('branch', 'name branchCode')
-      .populate('tasks.assignedTo', 'name email')
-      .populate('tasks.assignedUsers', 'name email')
-      .populate('tasks.createdBy', 'name email')
-      .populate('tasks.remarks.createdBy', 'name email')
+      .populate('tasks.assignedTo', PROJECT_USER_POPULATE_FIELDS)
+      .populate('tasks.assignedUsers', PROJECT_USER_POPULATE_FIELDS)
+      .populate('tasks.createdBy', PROJECT_USER_POPULATE_FIELDS)
+      .populate('tasks.remarks.createdBy', PROJECT_USER_POPULATE_FIELDS)
       .lean();
 
     if (!project) {
@@ -1121,8 +1123,8 @@ exports.getProjectUsers = async (req, res) => {
 
     const project = await Project.findById(req.params.id)
       .select('users projectName createdBy')
-      .populate('users', 'name email role _id')
-      .populate('createdBy', 'name email _id');
+      .populate('users', PROJECT_USER_POPULATE_FIELDS)
+      .populate('createdBy', PROJECT_USER_POPULATE_FIELDS);
 
     if (!project) {
       return res.status(404).json({

@@ -61,6 +61,8 @@ const getCompanyAssets = async (req, res) => {
 
     const [assets, total] = await Promise.all([
       CompanyAsset.find(query)
+        .populate('branch', 'name branchCode')
+        .populate('assignedTo', 'name email role jobRole department profileImage')
         .populate('createdBy', 'name email')
         .sort({ createdAt: -1 })
         .skip(skip)
@@ -152,12 +154,19 @@ const createCompanyAsset = async (req, res) => {
     }
 
     
+    let branchName = '';
+    if (branch) {
+      const branchDoc = await Branch.findById(branch).select('name');
+      if (branchDoc) branchName = branchDoc.name;
+    }
+
     const assetData = {
       name: name.trim(),
       description: description ? description.trim() : '',
       quantity: quantity || 0,
       status: 'Available',
       branch: branch || null,
+      branchName: branchName,
       company: req.user.companyName || req.user.company || 'Unknown',
       companyCode: req.user.companyCode,
       createdBy: req.user._id
@@ -173,6 +182,7 @@ const createCompanyAsset = async (req, res) => {
     
     await asset.populate('createdBy', 'name email');
     await asset.populate('branch', 'name branchCode');
+    await asset.populate('assignedTo', 'name email role jobRole department profileImage');
 
     res.status(201).json({
       success: true,

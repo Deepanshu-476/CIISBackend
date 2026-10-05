@@ -137,6 +137,43 @@ async function cascadeUserUpdate(userId, userData = {}) {
     console.error('Error syncing SupportTicket on User update:', e.message);
   }
 
+  // 7. Sync Task records
+  try {
+    const Task = mongoose.models.Task || require('../HR-CDS/models/Task');
+    if (name) {
+      pushUpdate(updates, Task, { lastEditedBy: uid }, { $set: { lastEditedByName: name } });
+    }
+  } catch (e) {
+    console.error('Error syncing Task on User update:', e.message);
+  }
+
+  // 8. Sync CompanyAsset assignedToName
+  try {
+    const CompanyAsset = mongoose.models.CompanyAsset || require('../models/CompanyAsset');
+    if (name) {
+      pushUpdate(updates, CompanyAsset, { assignedTo: uid }, { $set: { assignedToName: name } });
+    }
+  } catch (e) {
+    console.error('Error syncing CompanyAsset on User update:', e.message);
+  }
+
+  // 9. Sync Department supportHead and createdBy
+  try {
+    const Department = mongoose.models.Department || require('../models/Department');
+    if (name) {
+      pushUpdate(updates, Department, { supportHead: uid }, { $set: { supportHeadName: name } });
+      pushUpdate(updates, Department, { createdBy: uid }, { $set: { createdByName: name } });
+    }
+  } catch (e) {}
+
+  // 10. Sync JobRole createdBy
+  try {
+    const JobRole = mongoose.models.JobRole || require('../models/JobRole');
+    if (name) {
+      pushUpdate(updates, JobRole, { createdBy: uid }, { $set: { createdByName: name } });
+    }
+  } catch (e) {}
+
   await Promise.allSettled(updates);
 }
 
@@ -280,28 +317,70 @@ async function cascadeDepartmentUpdate(deptId, deptData = {}) {
   if (!isObjectId(deptId)) return;
   const did = new mongoose.Types.ObjectId(String(deptId));
   const name = safeString(typeof deptData === 'string' ? deptData : deptData?.name);
+  const oldName = safeString(deptData?.oldName);
   if (!name) return;
 
   const updates = [];
   try {
     const JobRole = mongoose.models.JobRole || require('../models/JobRole');
-    pushUpdate(updates, JobRole, { department: did }, { $set: { departmentName: name } });
+    const roleFilter = oldName 
+      ? { $or: [{ department: did }, { departmentName: oldName }] }
+      : { department: did };
+    pushUpdate(updates, JobRole, roleFilter, { $set: { departmentName: name } });
   } catch (e) {
     console.error('Error syncing JobRole on Department update:', e.message);
   }
 
   try {
     const SupportTicket = mongoose.models.SupportTicket || require('../models/SupportTicket');
-    pushUpdate(updates, SupportTicket, { departmentId: did }, { $set: { department: name } });
+    const ticketFilter = oldName 
+      ? { $or: [{ departmentId: did }, { department: oldName }] }
+      : { departmentId: did };
+    pushUpdate(updates, SupportTicket, ticketFilter, { $set: { department: name } });
   } catch (e) {
     console.error('Error syncing SupportTicket on Department update:', e.message);
   }
 
   try {
     const User = mongoose.models.User || require('../models/User');
-    pushUpdate(updates, User, { department: String(deptId) }, { $set: { department: name } });
+    const userFilter = oldName
+      ? { $or: [{ department: String(deptId) }, { department: oldName }, { departmentName: oldName }] }
+      : { $or: [{ department: String(deptId) }, { departmentName: name }] };
+    pushUpdate(updates, User, userFilter, { $set: { departmentName: name, department: name } });
   } catch (e) {
     console.error('Error syncing User on Department update:', e.message);
+  }
+
+  try {
+    const Task = mongoose.models.Task || require('../HR-CDS/models/Task');
+    const taskFilter = oldName
+      ? { $or: [{ department: String(deptId) }, { department: oldName }] }
+      : { department: String(deptId) };
+    pushUpdate(updates, Task, taskFilter, { $set: { department: name } });
+  } catch (e) {}
+
+  await Promise.allSettled(updates);
+}
+
+/**
+ * Cascade updates when a JobRole is updated / renamed
+ */
+async function cascadeJobRoleUpdate(roleId, roleData = {}) {
+  if (!isObjectId(roleId)) return;
+  const rid = new mongoose.Types.ObjectId(String(roleId));
+  const name = safeString(typeof roleData === 'string' ? roleData : roleData?.name);
+  const oldName = safeString(roleData?.oldName);
+  if (!name) return;
+
+  const updates = [];
+  try {
+    const User = mongoose.models.User || require('../models/User');
+    const userFilter = oldName
+      ? { $or: [{ jobRole: String(roleId) }, { jobRole: oldName }, { jobRoleName: oldName }] }
+      : { $or: [{ jobRole: String(roleId) }, { jobRoleName: name }] };
+    pushUpdate(updates, User, userFilter, { $set: { jobRoleName: name } });
+  } catch (e) {
+    console.error('Error syncing User on JobRole update:', e.message);
   }
 
   await Promise.allSettled(updates);
@@ -330,14 +409,31 @@ async function cascadeBranchUpdate(branchId, branchData = {}) {
     console.error('Error syncing Department on Branch update:', e.message);
   }
 
-  if (code) {
-    try {
-      const User = mongoose.models.User || require('../models/User');
-      pushUpdate(updates, User, { branch: bid }, { $set: { branchCode: code } });
-    } catch (e) {
-      console.error('Error syncing User on Branch update:', e.message);
+  try {
+    const User = mongoose.models.User || require('../models/User');
+    const userSet = {};
+    if (code) userSet.branchCode = code;
+    if (name) userSet.branchName = name;
+    if (Object.keys(userSet).length > 0) {
+      pushUpdate(updates, User, { branch: bid }, { $set: userSet });
     }
+  } catch (e) {
+    console.error('Error syncing User on Branch update:', e.message);
   }
+
+  try {
+    const CompanyAsset = mongoose.models.CompanyAsset || require('../models/CompanyAsset');
+    if (name) {
+      pushUpdate(updates, CompanyAsset, { branch: bid }, { $set: { branchName: name } });
+    }
+  } catch (e) {}
+
+  try {
+    const Task = mongoose.models.Task || require('../HR-CDS/models/Task');
+    if (name) {
+      pushUpdate(updates, Task, { branch: bid }, { $set: { branchName: name } });
+    }
+  } catch (e) {}
 
   await Promise.allSettled(updates);
 }
@@ -653,6 +749,78 @@ async function autoResolveJobRole(jobRole) {
 }
 
 /**
+ * Auto-resolves foreign key ObjectIds and cached string names for User
+ */
+async function autoResolveUser(user) {
+  if (!user) return user;
+
+  // 1. Resolve Department Name
+  if (user.department && !user.departmentName) {
+    if (isObjectId(user.department)) {
+      try {
+        const Department = mongoose.models.Department || require('../models/Department');
+        const d = await Department.findById(user.department).select('name').lean();
+        if (d) user.departmentName = d.name;
+      } catch (e) {}
+    } else if (typeof user.department === 'string') {
+      user.departmentName = user.department;
+    }
+  }
+
+  // 2. Resolve JobRole Name
+  if (user.jobRole && !user.jobRoleName) {
+    if (isObjectId(user.jobRole)) {
+      try {
+        const JobRole = mongoose.models.JobRole || require('../models/JobRole');
+        const r = await JobRole.findById(user.jobRole).select('name').lean();
+        if (r) user.jobRoleName = r.name;
+      } catch (e) {}
+    } else if (typeof user.jobRole === 'string') {
+      user.jobRoleName = user.jobRole;
+    }
+  }
+
+  // 3. Resolve Branch Name & Code
+  if (user.branch && isObjectId(user.branch) && (!user.branchName || !user.branchCode)) {
+    try {
+      const Branch = mongoose.models.Branch || require('../models/Branch');
+      const b = await Branch.findById(user.branch).select('name branchCode').lean();
+      if (b) {
+        if (!user.branchName) user.branchName = b.name;
+        if (!user.branchCode) user.branchCode = b.branchCode;
+      }
+    } catch (e) {}
+  }
+
+  return user;
+}
+
+/**
+ * Auto-resolves foreign key ObjectIds and cached string names for CompanyAsset
+ */
+async function autoResolveAsset(asset) {
+  if (!asset) return asset;
+
+  if (asset.branch && isObjectId(asset.branch) && !asset.branchName) {
+    try {
+      const Branch = mongoose.models.Branch || require('../models/Branch');
+      const b = await Branch.findById(asset.branch).select('name').lean();
+      if (b) asset.branchName = b.name;
+    } catch (e) {}
+  }
+
+  if (asset.assignedTo && isObjectId(asset.assignedTo) && !asset.assignedToName) {
+    try {
+      const User = mongoose.models.User || require('../models/User');
+      const u = await User.findById(asset.assignedTo).select('name').lean();
+      if (u) asset.assignedToName = u.name;
+    } catch (e) {}
+  }
+
+  return asset;
+}
+
+/**
  * ============================================================================
  * 3. ZERO BREAKING CHANGES RESPONSE FORMATTERS
  * ============================================================================
@@ -875,6 +1043,7 @@ module.exports = {
   cascadeLeadSourceUpdate,
   cascadeLeadTypeUpdate,
   cascadeDepartmentUpdate,
+  cascadeJobRoleUpdate,
   cascadeBranchUpdate,
   autoResolveLead,
   autoResolveCallLog,
@@ -882,6 +1051,8 @@ module.exports = {
   autoResolveLeadAssignmentHistory,
   autoResolveDepartment,
   autoResolveJobRole,
+  autoResolveUser,
+  autoResolveAsset,
   formatLeadForClient,
   formatCallLogForClient,
   formatFollowUpForClient,

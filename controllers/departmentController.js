@@ -429,7 +429,7 @@ exports.updateDepartment = async (req, res) => {
      .lean();
 
     if (updateData.name) {
-      cascadeDepartmentUpdate(id, updateData.name).catch(() => {});
+      cascadeDepartmentUpdate(id, { name: updateData.name, oldName: department.name }).catch(() => {});
     }
 
     void 0;

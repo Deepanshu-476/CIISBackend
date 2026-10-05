@@ -29,7 +29,9 @@ const {
   generateRecurringOccurrences,
 } = require('../cron/recurringTasks');
 
-
+const TASK_USER_POPULATE_FIELDS = 'name email role jobRole companyRole profileImage avatar department branch assignedBranches';
+const TASK_GROUP_POPULATE_FIELDS = 'name members description';
+const TASK_CREATOR_POPULATE_FIELDS = 'name email role jobRole companyRole profileImage avatar department branch';
 
 const parsePositiveInt = (value, fallback, max = 100) => {
   const parsed = parseInt(value, 10);
@@ -890,7 +892,7 @@ const enrichStatusInfo = async (tasks) => {
 
   if (userIds.length === 0) return tasks;
 
-  const users = await User.find({ _id: { $in: [...new Set(userIds)] } }).select('name role email').lean();
+  const users = await User.find({ _id: { $in: [...new Set(userIds)] } }).select('name role jobRole companyRole email profileImage avatar department branch').lean();
   const userMap = {};
   users.forEach(u => { userMap[u._id.toString()] = u; });
 
@@ -901,11 +903,14 @@ const enrichStatusInfo = async (tasks) => {
       return {
         userId: s.user,
         name: u?.name || 'Unknown',
-        role: u?.role || 'N/A',
+        role: u?.role || u?.jobRole || u?.companyRole || 'N/A',
         email: u?.email || 'N/A',
+        profileImage: u?.profileImage || u?.avatar || null,
+        department: u?.department || null,
+        branch: u?.branch || null,
         status: s.status,
-        ...(s.status === 'approved' && { approvedByUser: `${u?.name} (${u?.role})` }),
-        ...(s.status === 'rejected' && { rejectedByUser: `${u?.name} (${u?.role})` })
+        ...(s.status === 'approved' && { approvedByUser: `${u?.name} (${u?.role || u?.jobRole || 'User'})` }),
+        ...(s.status === 'rejected' && { rejectedByUser: `${u?.name} (${u?.role || u?.jobRole || 'User'})` })
       };
     });
     return { ...task, statusInfo: info };
@@ -943,7 +948,12 @@ const fetchPersonalTaskList = async (req) => {
     createdBy: req.user._id,
     taskFor: 'self',
     isActive: true
-  }).populate('assignedUsers', 'name email').populate('createdBy', 'name email').sort({ createdAt: -1 }).lean();
+  })
+    .populate('assignedUsers', TASK_USER_POPULATE_FIELDS)
+    .populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS)
+    .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
+    .sort({ createdAt: -1 })
+    .lean();
 
   const enriched = await enrichStatusInfo(tasks);
   return enriched.map(t => ({ ...t, status: normalizeTaskStatus(t.overallStatus), taskSource: 'self', __taskSource: 'self' }));
@@ -967,7 +977,12 @@ const fetchAssignedToMeTaskList = async (req) => {
       { assignedUsers: currentUserId },
       { assignedGroups: { $in: groupIds } }
     ]
-  }).populate('assignedUsers', 'name email').populate('createdBy', 'name email').sort({ createdAt: -1 }).lean();
+  })
+    .populate('assignedUsers', TASK_USER_POPULATE_FIELDS)
+    .populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS)
+    .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
+    .sort({ createdAt: -1 })
+    .lean();
 
   const enriched = await enrichStatusInfo(tasks);
   return enriched.map(t => {
@@ -1758,8 +1773,9 @@ const handleTaskCreation = async (req, res, isSelf) => {
     statusHistory: [{ status: 'pending', changedBy: req.user._id, remarks: isSelf ? 'Self task created' : 'Task assigned to others' }]
   });
 
-  await task.populate('assignedUsers', 'name role email');
-  await task.populate('createdBy', 'name email');
+  await task.populate('assignedUsers', TASK_USER_POPULATE_FIELDS);
+  await task.populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS);
+  await task.populate('createdBy', TASK_CREATOR_POPULATE_FIELDS);
 
   if (isSelf && task.isRecurring) {
     try {
@@ -1907,6 +1923,10 @@ exports.updateTask = async (req, res) => {
     await task.save();
 
     await createActivityLog(req.user, 'task_updated', task._id, `Updated task details by ${editorName}`, oldTask, task.toObject(), req);
+
+    await task.populate('assignedUsers', TASK_USER_POPULATE_FIELDS);
+    await task.populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS);
+    await task.populate('createdBy', TASK_CREATOR_POPULATE_FIELDS);
 
     res.json({ success: true, message: 'Task updated successfully', task });
   } catch (err) {
@@ -2368,7 +2388,11 @@ exports.getAssignableUsers = async (req, res) => {
     if (companyCode) userCompanyFilters.push({ companyCode });
     const userCompanyQuery = userCompanyFilters.length > 1 ? { $or: userCompanyFilters } : userCompanyFilters[0] || {};
 
-    const users = await User.find({ isActive: true, _id: { $ne: req.user._id }, ...userCompanyQuery }).select('_id name email role jobRole company companyCode').lean();
+    const users = await User.find({ isActive: true, _id: { $ne: req.user._id }, ...userCompanyQuery })
+      .select('_id name email role jobRole companyRole profileImage avatar department departmentName branch branchName assignedBranches company companyCode')
+      .populate('branch', 'name branchCode')
+      .populate('assignedBranches', 'name branchCode')
+      .lean();
     const companyUserIds = users.map(user => user._id);
     const groupCompanyFilters = [];
     if (companyId) groupCompanyFilters.push({ company: companyId });
@@ -2385,7 +2409,10 @@ exports.getAssignableUsers = async (req, res) => {
     }
     const groupCompanyQuery = groupCompanyFilters.length ? { $or: groupCompanyFilters } : {};
 
-    const groups = await Group.find({ isActive: true, ...groupCompanyQuery }).populate('members', 'name role email company companyCode').select('name description members company companyCode').lean();
+    const groups = await Group.find({ isActive: true, ...groupCompanyQuery })
+      .populate('members', 'name role email jobRole companyRole profileImage avatar department departmentName branch branchName company companyCode')
+      .select('name description members company companyCode')
+      .lean();
     res.json({ success: true, users, groups });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -2425,7 +2452,12 @@ exports.getUserDetailedAnalytics = async (req, res) => {
     };
     if (dateRange) filter.createdAt = dateRange;
 
-    const tasks = await Task.find(filter).populate('assignedUsers', 'name role email').populate('createdBy', 'name role email').sort({ createdAt: -1 }).lean();
+    const tasks = await Task.find(filter)
+      .populate('assignedUsers', TASK_USER_POPULATE_FIELDS)
+      .populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS)
+      .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
+      .sort({ createdAt: -1 })
+      .lean();
 
     const recentTasks = tasks.slice(0, 10).map(t => ({
       _id: t._id,
@@ -2559,28 +2591,30 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
   const [personalTasks, clientTasks, projectTasks] = await Promise.all([
     Task.find(personalQuery)
       .select('title description dueDate dueDateTime priority priorityDays checkpoints overallStatus statusByUser statusHistory completionDate assignedUsers assignedGroups createdBy companyCode taskFor onHoldReleasedAt createdAt updatedAt remarks lastEditedBy lastEditedByName lastEditedAt lastEditChanges')
-      .populate('assignedUsers', 'name email')
-      .populate('createdBy', 'name email')
-      .populate('statusHistory.changedBy', 'name email')
-      .populate('remarks.user', 'name email')
+      .populate('assignedUsers', TASK_USER_POPULATE_FIELDS)
+      .populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS)
+      .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
+      .populate('statusHistory.changedBy', TASK_USER_POPULATE_FIELDS)
+      .populate('remarks.user', TASK_USER_POPULATE_FIELDS)
       .sort({ createdAt: -1 })
       .lean(),
 
     ClientTask.find(clientQuery)
       .select('name description dueDate priority status completed completedAt checkpoints service timeSpent inProgressSince activityLogs clientId createdAt updatedAt assignee assigneeId remarks lastEditedBy lastEditedByName lastEditedAt lastEditChanges')
       .populate('clientId', 'client name email company phone companyCode')
-      .populate('assigneeId', 'name email role')
-      .populate('activityLogs.user', 'name email')
-      .populate('remarks.user', 'name email')
+      .populate('assigneeId', TASK_USER_POPULATE_FIELDS)
+      .populate('activityLogs.user', TASK_USER_POPULATE_FIELDS)
+      .populate('remarks.user', TASK_USER_POPULATE_FIELDS)
       .sort({ createdAt: -1 })
       .lean(),
 
     Project.find(projectQuery)
       .select('projectName description createdBy tasks company companyCode createdAt updatedAt')
-      .populate('createdBy', 'name email')
-      .populate('tasks.assignedTo', 'name email')
-      .populate('tasks.createdBy', 'name email')
-      .populate('tasks.activityLogs.performedBy', 'name email')
+      .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
+      .populate('tasks.assignedTo', TASK_USER_POPULATE_FIELDS)
+      .populate('tasks.assignedUsers', TASK_USER_POPULATE_FIELDS)
+      .populate('tasks.createdBy', TASK_CREATOR_POPULATE_FIELDS)
+      .populate('tasks.activityLogs.performedBy', TASK_USER_POPULATE_FIELDS)
       .lean()
   ]);
 
@@ -2909,7 +2943,12 @@ exports.getUserTasks = async (req, res) => {
     const tasks = await Task.find({
       isActive: true,
       $or: [{ assignedUsers: userId }, { assignedGroups: { $in: groupIds } }, { createdBy: userId }]
-    }).populate('assignedUsers', 'name email').populate('createdBy', 'name email').sort({ createdAt: -1 }).lean();
+    })
+      .populate('assignedUsers', TASK_USER_POPULATE_FIELDS)
+      .populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS)
+      .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
+      .sort({ createdAt: -1 })
+      .lean();
 
     const enhanced = tasks.map(t => {
       const userStatus = t.statusByUser?.find(s => s.user?.toString() === userId);
@@ -3226,7 +3265,12 @@ exports.getUserOverdueTasks = async (req, res) => {
       isActive: true,
       dueDateTime: { $lt: new Date() },
       $or: [{ assignedUsers: userId }, { assignedGroups: { $in: groupIds } }, { createdBy: userId }]
-    }).populate('assignedUsers', 'name email').populate('createdBy', 'name email').sort({ dueDateTime: 1 }).lean();
+    })
+      .populate('assignedUsers', TASK_USER_POPULATE_FIELDS)
+      .populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS)
+      .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
+      .sort({ dueDateTime: 1 })
+      .lean();
 
     const overdueTasks = tasks.filter(t => {
       const userStatus = t.statusByUser?.find(item => item.user?.toString() === userId.toString())?.status || t.overallStatus || 'pending';

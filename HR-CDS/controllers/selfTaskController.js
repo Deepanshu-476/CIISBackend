@@ -21,7 +21,10 @@ const {
   User,
   fs,
   path,
-  sharp
+  sharp,
+  TASK_USER_POPULATE_FIELDS,
+  TASK_GROUP_POPULATE_FIELDS,
+  TASK_CREATOR_POPULATE_FIELDS
 } = require('./taskHelper');
 const { enqueueCompletionJob } = require('../utils/backgroundJobQueue');
 const {
@@ -77,7 +80,12 @@ const fetchPersonalTaskList = async (req) => {
     createdBy: req.user._id,
     taskFor: 'self',
     isActive: true
-  }).populate('assignedUsers', 'name email').populate('createdBy', 'name email').sort({ createdAt: -1 }).lean();
+  })
+    .populate('assignedUsers', TASK_USER_POPULATE_FIELDS)
+    .populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS)
+    .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
+    .sort({ createdAt: -1 })
+    .lean();
 
   const filteredTasks = [];
   for (const t of tasks) {
@@ -218,8 +226,9 @@ exports.createTaskForSelf = async (req, res) => {
       }
     }
 
-    await task.populate('assignedUsers', 'name role email');
-    await task.populate('createdBy', 'name email');
+    await task.populate('assignedUsers', TASK_USER_POPULATE_FIELDS);
+    await task.populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS);
+    await task.populate('createdBy', TASK_CREATOR_POPULATE_FIELDS);
 
     await createActivityLog(req.user, 'self_task_created', task._id, `Created self task: ${title}`, null, task.toObject(), req);
 
