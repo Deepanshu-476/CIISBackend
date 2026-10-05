@@ -1624,13 +1624,14 @@ const handleTaskCreation = async (req, res, isSelf) => {
   const { title, description, dueDateTime, whatsappNumber, priorityDays, priority, assignedUsers, assignedGroups, checkpoints } = req.body;
   const companyCode = getRequestCompanyCode(req);
   let branchId = getRequestedTaskBranchId(req);
+  const failTaskCreation = (status, message) => res.status(status).json({ success: false, error: message, message });
 
   if (!companyCode) {
-    return res.status(400).json({ success: false, error: 'Company code is missing. Please login again.' });
+    return failTaskCreation(400, 'Company code is missing. Please login again.');
   }
 
   if (branchId && !mongoose.Types.ObjectId.isValid(branchId)) {
-    return res.status(400).json({ success: false, error: 'Invalid branch selected' });
+    return failTaskCreation(400, 'Invalid branch selected');
   }
 
   let parsedUsers = isSelf ? [req.user._id.toString()] : [];
@@ -1642,13 +1643,13 @@ const handleTaskCreation = async (req, res, isSelf) => {
   // Validate creator's Page Management scope for admin-task-create
   const pageScope = await getAdminTaskPageScope(req);
   if (!pageScope.hasAccess) {
-    return res.status(403).json({ success: false, error: 'You do not have permission to create tasks' });
+    return failTaskCreation(403, 'You do not have permission to create tasks');
   }
 
   if (!isSelf && !pageScope.isOwner) {
     if (!pageScope.branchIds.includes('all')) {
       if (branchId && !pageScope.branchIds.map(String).includes(String(branchId))) {
-        return res.status(403).json({ success: false, error: 'Cannot create task for a branch outside your assigned scope' });
+        return failTaskCreation(403, 'Cannot create task for a branch outside your assigned scope');
       }
       if (!branchId && pageScope.branchIds.length === 1) {
         branchId = pageScope.branchIds[0];
@@ -1686,10 +1687,7 @@ const handleTaskCreation = async (req, res, isSelf) => {
       const hasInvalidUser = parsedUsers.some(uId => !validUserSet.has(String(uId)));
 
       if (hasInvalidUser) {
-        return res.status(403).json({
-          success: false,
-          error: 'Cannot assign task to users outside your assigned branch/department scope'
-        });
+        return failTaskCreation(403, 'Cannot assign task to users outside your assigned branch/department scope');
       }
     }
   }
@@ -1707,10 +1705,7 @@ const handleTaskCreation = async (req, res, isSelf) => {
     parsedUsers = parsedUsers.filter(userId => allowedUserIds.has(String(userId)));
 
     if (parsedUsers.length === 0) {
-      return res.status(400).json({
-        success: false,
-        error: 'Select at least one user from the selected branch'
-      });
+      return failTaskCreation(400, 'Select at least one user from the selected branch');
     }
   }
 
@@ -1723,7 +1718,7 @@ const handleTaskCreation = async (req, res, isSelf) => {
   let parsedDue = null;
   if (dueDateTime) {
     parsedDue = new Date(dueDateTime);
-    if (isNaN(parsedDue.getTime())) return res.status(400).json({ success: false, error: 'Invalid due date format' });
+    if (isNaN(parsedDue.getTime())) return failTaskCreation(400, 'Invalid due date format');
   }
 
   const statusByUser = parsedUsers.map(uid => ({ user: uid, status: 'pending' }));
