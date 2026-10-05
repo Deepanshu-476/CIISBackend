@@ -21,5 +21,6 @@ router.delete('/:taskId/checkpoints/:checkpointId', protect, assignedTaskControl
 router.patch('/:taskId/checkpoints/:checkpointId', protect, assignedTaskController.updateCheckpoint);
 router.post('/:taskId/remarks', protect, uploadRemarkImage, assignedTaskController.addRemark);
 router.get('/:taskId/remarks', protect, assignedTaskController.getRemarks);
+router.get('/:taskId/activity-logs', protect, require('../controllers/taskController').getTaskActivityLogs);
 
 module.exports = router;

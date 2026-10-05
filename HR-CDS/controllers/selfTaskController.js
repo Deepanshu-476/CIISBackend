@@ -287,6 +287,16 @@ exports.updateTask = async (req, res) => {
     if (req.body.checkpoints !== undefined) {
       task.checkpoints = parseTaskCheckpoints(req.body.checkpoints);
     }
+    if (req.body.status !== undefined && req.body.status !== 'null') {
+      task.overallStatus = req.body.status;
+      task.status = req.body.status;
+      if (Array.isArray(task.statusByUser)) {
+        task.statusByUser.forEach(s => {
+          s.status = req.body.status;
+          if (req.body.status === 'completed') s.completedAt = new Date();
+        });
+      }
+    }
 
     await task.save();
 
@@ -543,7 +553,7 @@ exports.addRemark = async (req, res) => {
       await sharp(req.file.buffer).resize(1200, 1200, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 80 }).toFile(savePath);
     }
 
-    const remark = { user: req.user._id, text: text || '', image: imgPath, createdAt: new Date() };
+    const remark = { user: req.user._id, userName: req.user.name || '', text: text || '', image: imgPath, createdAt: new Date() };
     task.remarks.push(remark);
     await task.save();
 
