@@ -1307,7 +1307,9 @@ exports.getAllUsers = async (req, res) => {
       User.find(filter)
       .select('-password -resetToken -resetTokenExpiry')
       .populate('department', 'name description')
-        .populate('company', 'companyName companyCode')
+      .populate('branch', 'name branchCode')
+      .populate('assignedBranches', 'name branchCode')
+      .populate('company', 'companyName companyCode')
       .populate('createdBy', 'name email')
         .sort({ createdAt: -1 })
         .skip(skip)
@@ -1317,47 +1319,60 @@ exports.getAllUsers = async (req, res) => {
     ]);
 
     
-    const formattedUsers = users.map(user => ({
-      id: user._id,
-      name: user.name,
-      email: user.email,
-      company: user.company,
-      department: user.department,
-      jobRole: user.jobRole,
-      phone: user.phone,
-      profileImage: user.profileImage,
-      address: user.address,
-      gender: user.gender,
-      maritalStatus: user.maritalStatus,
-      dob: user.dob,
-      employeeType: user.employeeType,
-      salary: user.salary,
-      accountNumber: user.accountNumber,
-      ifsc: user.ifsc,
-      bankName: user.bankName,
-      bankHolderName: user.bankHolderName,
-      fatherName: user.fatherName,
-      motherName: user.motherName,
-      documents: user.documents,
-      emergencyName: user.emergencyName,
-      emergencyPhone: user.emergencyPhone,
-      emergencyRelation: user.emergencyRelation,
-      emergencyAddress: user.emergencyAddress,
-      properties: user.properties,
-      propertyOwned: user.propertyOwned,
-      additionalDetails: user.additionalDetails,
-      employeeId: user.employeeId,
-      companyRole: user.companyRole,
-      reportingManager: user.reportingManager,
-      dateOfJoining: user.dateOfJoining,
-      city: user.city,
-      state: user.state,
-      pinCode: user.pinCode,
-      country: user.country,
-      isActive: user.isActive,
-      createdAt: user.createdAt,
-      updatedAt: user.updatedAt
-    }));
+    const formattedUsers = users.map(user => {
+      const deptName = user.departmentName || (user.department?.name) || (typeof user.department === 'string' && !user.department.match(/^[0-9a-fA-F]{24}$/) ? user.department : '');
+      const roleName = user.jobRoleName || (typeof user.jobRole === 'string' && !user.jobRole.match(/^[0-9a-fA-F]{24}$/) ? user.jobRole : '');
+      const bName = user.branchName || user.branch?.name || '';
+      const bCode = user.branchCode || user.branch?.branchCode || '';
+      return {
+        ...user,
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        company: user.company,
+        department: user.department,
+        departmentName: deptName,
+        jobRole: user.jobRole,
+        jobRoleName: roleName,
+        branch: user.branch,
+        branchName: bName,
+        branchCode: bCode,
+        assignedBranches: user.assignedBranches,
+        phone: user.phone,
+        profileImage: user.profileImage,
+        address: user.address,
+        gender: user.gender,
+        maritalStatus: user.maritalStatus,
+        dob: user.dob,
+        employeeType: user.employeeType,
+        salary: user.salary,
+        accountNumber: user.accountNumber,
+        ifsc: user.ifsc,
+        bankName: user.bankName,
+        bankHolderName: user.bankHolderName,
+        fatherName: user.fatherName,
+        motherName: user.motherName,
+        documents: user.documents,
+        emergencyName: user.emergencyName,
+        emergencyPhone: user.emergencyPhone,
+        emergencyRelation: user.emergencyRelation,
+        emergencyAddress: user.emergencyAddress,
+        properties: user.properties,
+        propertyOwned: user.propertyOwned,
+        additionalDetails: user.additionalDetails,
+        employeeId: user.employeeId,
+        companyRole: user.companyRole,
+        reportingManager: user.reportingManager,
+        dateOfJoining: user.dateOfJoining,
+        city: user.city,
+        state: user.state,
+        pinCode: user.pinCode,
+        country: user.country,
+        isActive: user.isActive,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt
+      };
+    });
 
     return successResponse(res, 200, {
       count: formattedUsers.length,
@@ -1400,16 +1415,24 @@ exports.getUser = async (req, res) => {
       return errorResponse(res, 403, "Access denied. User belongs to a different branch.");
     }
 
-    
+    const deptName = user.departmentName || (user.department?.name) || (typeof user.department === 'string' && !user.department.match(/^[0-9a-fA-F]{24}$/) ? user.department : '');
+    const roleName = user.jobRoleName || (typeof user.jobRole === 'string' && !user.jobRole.match(/^[0-9a-fA-F]{24}$/) ? user.jobRole : '');
+    const bName = user.branchName || user.branch?.name || '';
+    const bCode = user.branchCode || user.branch?.branchCode || '';
+
     const formattedUser = {
       id: user._id,
       name: user.name,
       email: user.email,
       company: user.company,
       department: user.department,
+      departmentName: deptName,
       branch: user.branch,
+      branchName: bName,
+      branchCode: bCode,
       assignedBranches: user.assignedBranches || [],
       jobRole: user.jobRole,
+      jobRoleName: roleName,
       phone: user.phone,
       profileImage: user.profileImage,
       address: user.address,
@@ -1619,6 +1642,24 @@ exports.updateUser = async (req, res) => {
       }
     }
 
+    if (updateData.department) {
+      if (mongoose.Types.ObjectId.isValid(updateData.department)) {
+        const deptDoc = await Department.findById(updateData.department).select('name');
+        if (deptDoc) updateData.departmentName = deptDoc.name;
+      } else {
+        updateData.departmentName = updateData.department;
+      }
+    }
+
+    if (updateData.jobRole) {
+      if (mongoose.Types.ObjectId.isValid(updateData.jobRole)) {
+        const roleDoc = await JobRole.findById(updateData.jobRole).select('name');
+        if (roleDoc) updateData.jobRoleName = roleDoc.name;
+      } else {
+        updateData.jobRoleName = updateData.jobRole;
+      }
+    }
+
     if (branchChanged && updateData.branch && isObjectIdLike(updateData.branch)) {
       const branch = await Branch.findOne({
         _id: updateData.branch,
@@ -1631,6 +1672,7 @@ exports.updateUser = async (req, res) => {
       }
 
       updateData.branchCode = branch.branchCode;
+      updateData.branchName = branch.name;
     }
 
     if (req.body.assignedBranches !== undefined || branchChanged) {
@@ -1693,11 +1735,14 @@ exports.updateUser = async (req, res) => {
     .populate('company', 'name companyCode')
     .populate('createdBy', 'name email');
 
-    if (updateData.name || updateData.email || updateData.role || updateData.companyRole) {
+    if (updateData.name || updateData.email || updateData.role || updateData.companyRole || updateData.jobRole || updateData.profileImage || updateData.department) {
       cascadeUserUpdate(user._id, {
         name: updateData.name,
         email: updateData.email,
-        role: updateData.role || updateData.companyRole
+        role: updateData.role || updateData.companyRole || updateData.jobRole,
+        jobRole: updateData.jobRoleName || updateData.jobRole,
+        profileImage: updateData.profileImage,
+        department: updateData.departmentName || updateData.department
       }).catch(() => {});
     }
 
@@ -2184,9 +2229,17 @@ exports.getCompanyUsers = async (req, res) => {
       const stats = statsByUser.get(user._id.toString());
       const total = stats?.total || 0;
       const completed = stats?.completed || 0;
+      const deptName = user.departmentName || (user.department?.name) || (typeof user.department === 'string' && !user.department.match(/^[0-9a-fA-F]{24}$/) ? user.department : '');
+      const roleName = user.jobRoleName || (typeof user.jobRole === 'string' && !user.jobRole.match(/^[0-9a-fA-F]{24}$/) ? user.jobRole : '');
+      const bName = user.branchName || user.branch?.name || '';
+      const bCode = user.branchCode || user.branch?.branchCode || '';
       return {
         ...user,
         id: user._id,
+        departmentName: deptName,
+        jobRoleName: roleName,
+        branchName: bName,
+        branchCode: bCode,
         ...getUserPresence(user, socketOnlineIds),
         taskStats: {
           total,
@@ -2276,46 +2329,59 @@ exports.getCompanyUsersPaginated = async (req, res) => {
       count: users.length,
       total,
       pagination: buildPaginationMeta({ page, limit, total }),
-      users: users.map(user => ({
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        company: user.company,
-        department: user.department,
-        jobRole: user.jobRole,
-        phone: user.phone,
-        address: user.address,
-        gender: user.gender,
-        maritalStatus: user.maritalStatus,
-        dob: user.dob,
-        employeeType: user.employeeType,
-        salary: user.salary,
-        accountNumber: user.accountNumber,
-        ifsc: user.ifsc,
-        bankName: user.bankName,
-        bankHolderName: user.bankHolderName,
-        fatherName: user.fatherName,
-        motherName: user.motherName,
-        documents: user.documents,
-        emergencyName: user.emergencyName,
-        emergencyPhone: user.emergencyPhone,
-        emergencyRelation: user.emergencyRelation,
-        emergencyAddress: user.emergencyAddress,
-        properties: user.properties,
-        propertyOwned: user.propertyOwned,
-        additionalDetails: user.additionalDetails,
-        employeeId: user.employeeId,
-        companyRole: user.companyRole,
-        reportingManager: user.reportingManager,
-        dateOfJoining: user.dateOfJoining,
-        city: user.city,
-        state: user.state,
-        pinCode: user.pinCode,
-        country: user.country,
-      isActive: user.isActive,
-      createdAt: user.createdAt,
-      updatedAt: user.updatedAt
-      }))
+      users: users.map(user => {
+        const deptName = user.departmentName || (user.department?.name) || (typeof user.department === 'string' && !user.department.match(/^[0-9a-fA-F]{24}$/) ? user.department : '');
+        const roleName = user.jobRoleName || (typeof user.jobRole === 'string' && !user.jobRole.match(/^[0-9a-fA-F]{24}$/) ? user.jobRole : '');
+        const bName = user.branchName || user.branch?.name || '';
+        const bCode = user.branchCode || user.branch?.branchCode || '';
+        return {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          company: user.company,
+          department: user.department,
+          departmentName: deptName,
+          jobRole: user.jobRole,
+          jobRoleName: roleName,
+          branch: user.branch,
+          branchName: bName,
+          branchCode: bCode,
+          assignedBranches: user.assignedBranches,
+          phone: user.phone,
+          profileImage: user.profileImage,
+          address: user.address,
+          gender: user.gender,
+          maritalStatus: user.maritalStatus,
+          dob: user.dob,
+          employeeType: user.employeeType,
+          salary: user.salary,
+          accountNumber: user.accountNumber,
+          ifsc: user.ifsc,
+          bankName: user.bankName,
+          bankHolderName: user.bankHolderName,
+          fatherName: user.fatherName,
+          motherName: user.motherName,
+          documents: user.documents,
+          emergencyName: user.emergencyName,
+          emergencyPhone: user.emergencyPhone,
+          emergencyRelation: user.emergencyRelation,
+          emergencyAddress: user.emergencyAddress,
+          properties: user.properties,
+          propertyOwned: user.propertyOwned,
+          additionalDetails: user.additionalDetails,
+          employeeId: user.employeeId,
+          companyRole: user.companyRole,
+          reportingManager: user.reportingManager,
+          dateOfJoining: user.dateOfJoining,
+          city: user.city,
+          state: user.state,
+          pinCode: user.pinCode,
+          country: user.country,
+          isActive: user.isActive,
+          createdAt: user.createdAt,
+          updatedAt: user.updatedAt
+        };
+      })
     });
     
   } catch (err) {

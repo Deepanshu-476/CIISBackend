@@ -472,7 +472,7 @@ exports.applyLeave = async (req, res) => {
 
     
     const populatedLeave = await Leave.findById(leave._id)
-      .populate('user', 'name email jobRole department')
+      .populate('user', 'name email jobRole jobRoleName department departmentName branch branchName')
       .populate('approvalSteps.user', 'name email jobRole companyRole')
       .populate('history.by', 'name email');
 
@@ -607,7 +607,7 @@ exports.getUserLeaves = async (req, res) => {
 
     const [leaves, total] = await Promise.all([
       Leave.find(filter)
-      .populate('user', 'name email jobRole department')
+      .populate('user', 'name email jobRole jobRoleName department departmentName branch branchName')
       .populate('approvedBy', 'name email jobRole companyRole')
       .populate('approvalSteps.user', 'name email jobRole companyRole')
       .populate('history.by', 'name email')
@@ -1162,7 +1162,7 @@ exports.updateLeaveApproval = async (req, res) => {
 exports.getLeaveApprovalOptions = async (req, res) => {
   try {
     const leave = await Leave.findById(req.params.id)
-      .populate('user', 'name company companyId department jobRole employeeType')
+      .populate('user', 'name company companyId department departmentName jobRole jobRoleName employeeType branch branchName')
       .populate('approvalSteps.user', 'name');
     if (!leave) return res.status(404).json({ success: false, error: 'Leave not found' });
 
@@ -1216,7 +1216,7 @@ exports.updateLeaveStatus = async (req, res) => {
 
     
     const leave = await Leave.findById(id)
-      .populate('user', 'name email phone company companyId department jobRole employeeType')
+      .populate('user', 'name email phone company companyId department departmentName jobRole jobRoleName employeeType branch branchName')
       .populate('approvalSteps.user', 'name email jobRole companyRole');
     
     if (!leave) {
@@ -1782,7 +1782,7 @@ exports.getLeavesWithStatus = async (req, res) => {
 
     const [leaves, total] = await Promise.all([
       Leave.find(filter)
-      .populate('user', 'name email jobRole department')
+      .populate('user', 'name email jobRole jobRoleName department departmentName branch branchName')
       .populate('approvalSteps.user', 'name email jobRole companyRole')
       .populate('history.by', 'name email')
       .sort({ startDate: -1 })

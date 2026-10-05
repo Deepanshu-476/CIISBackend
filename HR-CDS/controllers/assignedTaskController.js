@@ -23,9 +23,19 @@ const {
   sendCleanTaskList,
   fs,
   path,
-  sharp
+  sharp,
+  TASK_USER_POPULATE_FIELDS,
+  TASK_GROUP_POPULATE_FIELDS,
+  TASK_CREATOR_POPULATE_FIELDS
 } = require('./taskHelper');
 const { enqueueCompletionJob } = require('../utils/backgroundJobQueue');
+const mongoose = require('mongoose');
+
+const getRequestedTaskBranchId = req => {
+  const branchId = req.body?.branchId || req.body?.branch;
+  const cleanBranchId = branchId ? String(branchId).trim() : '';
+  return mongoose.Types.ObjectId.isValid(cleanBranchId) ? cleanBranchId : '';
+};
 
 
 const fetchAssignedToMeTaskList = async (req) => {
@@ -46,7 +56,12 @@ const fetchAssignedToMeTaskList = async (req) => {
       { assignedUsers: currentUserId },
       { assignedGroups: { $in: groupIds } }
     ]
-  }).populate('assignedUsers', 'name email').populate('createdBy', 'name email').sort({ createdAt: -1 }).lean();
+  })
+    .populate('assignedUsers', TASK_USER_POPULATE_FIELDS)
+    .populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS)
+    .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
+    .sort({ createdAt: -1 })
+    .lean();
 
   const enriched = await enrichStatusInfo(tasks);
   return enriched.map(t => {
@@ -61,6 +76,7 @@ exports.createTaskForOthers = async (req, res) => {
   try {
     const { title, description, dueDateTime, whatsappNumber, priorityDays, priority, assignedUsers, assignedGroups, checkpoints } = req.body;
     const companyCode = getRequestCompanyCode(req);
+    const branchId = getRequestedTaskBranchId(req);
 
     if (!companyCode) {
       return res.status(400).json({ success: false, error: 'Company code is missing. Please login again.' });
@@ -94,6 +110,7 @@ exports.createTaskForOthers = async (req, res) => {
       priorityDays,
       priority: priority || 'medium',
       companyCode,
+      branch: branchId || null,
       assignedUsers: parsedUsers,
       assignedGroups: parsedGroups,
       statusByUser,
@@ -105,8 +122,9 @@ exports.createTaskForOthers = async (req, res) => {
       statusHistory: [{ status: 'pending', changedBy: req.user._id, remarks: 'Task assigned to others' }]
     });
 
-    await task.populate('assignedUsers', 'name role email');
-    await task.populate('createdBy', 'name email');
+    await task.populate('assignedUsers', TASK_USER_POPULATE_FIELDS);
+    await task.populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS);
+    await task.populate('createdBy', TASK_CREATOR_POPULATE_FIELDS);
 
     if (task.assignedUsers?.length > 0) {
       await sendTaskCreationEmail(task, task.assignedUsers);
@@ -331,7 +349,12 @@ exports.getAssignedTasks = async (req, res) => {
       createdBy: currentUserId,
       taskFor: 'others',
       isActive: true
-    }).populate('assignedUsers', 'name role email').populate('createdBy', 'name email').sort({ createdAt: -1 }).lean();
+    })
+      .populate('assignedUsers', TASK_USER_POPULATE_FIELDS)
+      .populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS)
+      .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
+      .sort({ createdAt: -1 })
+      .lean();
 
     const enriched = await enrichStatusInfo(tasks);
     const mapped = enriched.map(t => ({ ...t, status: normalizeTaskStatus(t.overallStatus) }));

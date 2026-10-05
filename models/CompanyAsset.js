@@ -25,10 +25,20 @@ const companyAssetSchema = new mongoose.Schema({
     ref: 'Branch',
     default: null
   },
+  branchName: {
+    type: String,
+    trim: true,
+    default: ''
+  },
   assignedTo: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     default: null
+  },
+  assignedToName: {
+    type: String,
+    trim: true,
+    default: ''
   },
   assignedDate: {
     type: Date,

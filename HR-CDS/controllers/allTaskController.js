@@ -19,7 +19,10 @@ const {
   applyCleanListFilters,
   sendCleanTaskList,
   normalizeProjectTaskStatus,
-  getProjectTaskAssignedBy
+  getProjectTaskAssignedBy,
+  TASK_USER_POPULATE_FIELDS,
+  TASK_GROUP_POPULATE_FIELDS,
+  TASK_CREATOR_POPULATE_FIELDS
 } = require('./taskHelper');
 
 const Attendance = require('../models/Attendance');
@@ -239,19 +242,20 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
   } else {
     personalQueryExec = personalQueryExec
       .select('title description dueDate dueDateTime priority overallStatus statusByUser statusHistory completionDate assignedUsers assignedGroups createdBy companyCode taskFor onHoldReleasedAt createdAt updatedAt remarks lastEditedBy lastEditedByName lastEditedAt lastEditChanges')
-      .populate('assignedUsers', 'name email')
-      .populate('createdBy', 'name email')
-      .populate('statusHistory.changedBy', 'name email')
-      .populate('remarks.user', 'name email')
+      .populate('assignedUsers', TASK_USER_POPULATE_FIELDS)
+      .populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS)
+      .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
+      .populate('statusHistory.changedBy', TASK_USER_POPULATE_FIELDS)
+      .populate('remarks.user', TASK_USER_POPULATE_FIELDS)
       .sort({ createdAt: -1 })
       .lean();
 
     clientQueryExec = clientQueryExec
       .select('name description dueDate priority status completed clientId service createdAt updatedAt assignee assigneeId activityLogs remarks lastEditedBy lastEditedByName lastEditedAt lastEditChanges')
       .populate('clientId', 'client name email company phone companyCode')
-      .populate('assigneeId', 'name email role')
-      .populate('activityLogs.user', 'name email')
-      .populate('remarks.user', 'name email')
+      .populate('assigneeId', TASK_USER_POPULATE_FIELDS)
+      .populate('activityLogs.user', TASK_USER_POPULATE_FIELDS)
+      .populate('remarks.user', TASK_USER_POPULATE_FIELDS)
       .sort({ createdAt: -1 })
       .lean();
 
@@ -266,6 +270,7 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
         'tasks.title',
         'tasks.description',
         'tasks.assignedTo',
+        'tasks.assignedUsers',
         'tasks.dueDate',
         'tasks.priority',
         'tasks.status',
@@ -279,10 +284,11 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
         'tasks.lastEditedAt',
         'tasks.lastEditChanges'
       ].join(' '))
-      .populate('createdBy', 'name email')
-      .populate('tasks.assignedTo', 'name email')
-      .populate('tasks.createdBy', 'name email')
-      .populate('tasks.activityLogs.performedBy', 'name email')
+      .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
+      .populate('tasks.assignedTo', TASK_USER_POPULATE_FIELDS)
+      .populate('tasks.assignedUsers', TASK_USER_POPULATE_FIELDS)
+      .populate('tasks.createdBy', TASK_CREATOR_POPULATE_FIELDS)
+      .populate('tasks.activityLogs.performedBy', TASK_USER_POPULATE_FIELDS)
       .lean();
   }
 

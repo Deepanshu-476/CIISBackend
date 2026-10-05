@@ -66,6 +66,12 @@ const userSchema = new mongoose.Schema({
     type: String, 
     index: true
   },
+
+  branchName: {
+    type: String,
+    trim: true,
+    default: ""
+  },
   
   
   name: {
@@ -98,12 +104,24 @@ const userSchema = new mongoose.Schema({
     type: String,
     required: [true, "Department is required"],
   },
+
+  departmentName: {
+    type: String,
+    trim: true,
+    default: ""
+  },
   
   jobRole: {
     type: String,
    
     required: [true, "Job role is required"],
     default: 'user'
+  },
+
+  jobRoleName: {
+    type: String,
+    trim: true,
+    default: ""
   },
 
   shiftId: {
