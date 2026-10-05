@@ -4,6 +4,12 @@ const User = require("../models/User");
 const Department = require("../models/Department");
 const mongoose = require("mongoose");
 
+let cascadeBranchUpdate = async () => {};
+try {
+  const cascade = require("../services/cascadeSyncEngine");
+  if (typeof cascade.cascadeBranchUpdate === "function") cascadeBranchUpdate = cascade.cascadeBranchUpdate;
+} catch (e) {}
+
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 const escapeRegExp = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -367,6 +373,10 @@ exports.updateBranch = async (req, res) => {
     });
 
     
+    if (updates.name || updates.branchCode) {
+      cascadeBranchUpdate(id, { name: updates.name || branch.name, branchCode: updates.branchCode || branch.branchCode }).catch(() => {});
+    }
+
     if (updates.branchCode) {
       await Promise.all([
         User.updateMany({ branch: id }, { branchCode: updates.branchCode }),

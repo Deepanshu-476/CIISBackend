@@ -11,6 +11,8 @@ const Branch = require("../../models/Branch");
 const mongoose = require("mongoose");
 const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagination");
 
+const PROJECT_USER_POPULATE_FIELDS = 'name email role jobRole companyRole profileImage avatar department branch assignedBranches';
+
 const normalizeIdList = (value) => {
   const input = Array.isArray(value) ? value : value ? [value] : [];
   return [...new Set(input
@@ -395,17 +397,72 @@ const withProjectSummary = (project) => {
   };
 };
 
-const sendProjectAttachment = (res, attachment, fallbackName = "document") => {
-  if (!attachment?.path) {
+const resolveProjectFilePath = (rawPath, filename) => {
+  const cleanName = path.basename(String(rawPath || filename || "").replace(/\\/g, "/"));
+  const normalizedRaw = rawPath ? String(rawPath).replace(/\\/g, "/") : "";
+
+  const candidates = [
+    rawPath ? path.resolve(rawPath) : null,
+    rawPath ? path.resolve(process.cwd(), rawPath) : null,
+    rawPath ? path.resolve(__dirname, "../../", rawPath) : null,
+    rawPath ? path.resolve(__dirname, "../", rawPath) : null,
+    normalizedRaw ? path.resolve(process.cwd(), normalizedRaw.replace(/^\/+/, "")) : null,
+    cleanName ? path.resolve(process.cwd(), "uploads", "projects", cleanName) : null,
+    cleanName ? path.resolve(process.cwd(), "HR-CDS", "uploads", "projects", cleanName) : null,
+    cleanName ? path.resolve(__dirname, "../../uploads/projects", cleanName) : null,
+    cleanName ? path.resolve(__dirname, "../uploads/projects", cleanName) : null,
+    cleanName ? path.resolve("/var/www/app2/uploads/projects", cleanName) : null,
+    cleanName ? path.resolve("/var/www/app1/uploads/projects", cleanName) : null,
+    cleanName ? path.resolve("/var/www/app2/HR-CDS/uploads/projects", cleanName) : null,
+    cleanName ? path.resolve("/var/www/app1/HR-CDS/uploads/projects", cleanName) : null,
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+        return candidate;
+      }
+    } catch (_) {}
+  }
+  return null;
+};
+
+const sendProjectAttachment = (req, res, attachment, fallbackName = "document.pdf") => {
+  const rawPath = attachment?.path || attachment?.url || attachment?.fileUrl;
+  const rawFilename = attachment?.filename || attachment?.originalname || (rawPath ? path.basename(rawPath) : "") || fallbackName;
+
+  if (!rawPath && !attachment?.filename) {
     return res.status(404).json({ success: false, message: "Document not found" });
   }
 
-  const filePath = path.resolve(attachment.path);
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ success: false, message: "Document file not found" });
+  const filePath = resolveProjectFilePath(rawPath, rawFilename);
+  if (!filePath) {
+    return res.status(404).json({ success: false, message: "Document file not found on server" });
   }
 
-  return res.download(filePath, attachment.filename || fallbackName);
+  const filename = attachment?.filename || attachment?.originalname || path.basename(filePath) || fallbackName;
+  const isInline = ["true", "1", "inline", "yes"].includes(
+    String(req.query?.view || req.query?.preview || req.query?.inline || "").toLowerCase()
+  );
+
+  const ext = path.extname(filename).toLowerCase();
+  const mimeTypes = {
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+  };
+  const contentType = mimeTypes[ext] || "application/octet-stream";
+
+  if (isInline) {
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(filename)}"`);
+    return res.sendFile(filePath);
+  }
+
+  return res.download(filePath, filename);
 };
 
 exports.downloadProjectDocument = async (req, res) => {
@@ -419,7 +476,7 @@ exports.downloadProjectDocument = async (req, res) => {
       return res.status(403).json({ success: false, message: "Access denied to download document" });
     }
 
-    return sendProjectAttachment(res, project.pdfFile, `${project.projectName || "project"}.pdf`);
+    return sendProjectAttachment(req, res, project.pdfFile, `${project.projectName || "project"}.pdf`);
   } catch (error) {
     console.error("❌ Error downloading project document:", error);
     return res.status(500).json({ success: false, message: "Error downloading project document" });
@@ -443,7 +500,7 @@ exports.downloadTaskDocument = async (req, res) => {
       return res.status(404).json({ success: false, message: "Task not found" });
     }
 
-    return sendProjectAttachment(res, task.pdfFile, `${task.title || "task"}.pdf`);
+    return sendProjectAttachment(req, res, task.pdfFile, `${task.title || "task"}.pdf`);
   } catch (error) {
     console.error("❌ Error downloading task document:", error);
     return res.status(500).json({ success: false, message: "Error downloading task document" });
@@ -650,17 +707,17 @@ exports.listProjects = async (req, res) => {
     }
 
     const projectQuery = Project.find(query)
-      .populate('users', 'name email role company companyCode branch assignedBranches')
+      .populate('users', PROJECT_USER_POPULATE_FIELDS)
       .populate('branch', 'name branchCode')
-      .populate('createdBy', 'name email branch assignedBranches')
+      .populate('createdBy', PROJECT_USER_POPULATE_FIELDS)
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
 
     projectQuery
-      .populate('tasks.assignedTo', 'name email')
-      .populate('tasks.assignedUsers', 'name email')
-      .populate('tasks.createdBy', 'name email');
+      .populate('tasks.assignedTo', PROJECT_USER_POPULATE_FIELDS)
+      .populate('tasks.assignedUsers', PROJECT_USER_POPULATE_FIELDS)
+      .populate('tasks.createdBy', PROJECT_USER_POPULATE_FIELDS);
 
     const [projects, total] = await Promise.all([
       projectQuery.lean(),
@@ -698,13 +755,13 @@ exports.getProjectById = async (req, res) => {
     void 0;
 
     const project = await Project.findById(req.params.id)
-      .populate('users', 'name email role _id branch assignedBranches')
-      .populate('createdBy', 'name email _id')
+      .populate('users', PROJECT_USER_POPULATE_FIELDS)
+      .populate('createdBy', PROJECT_USER_POPULATE_FIELDS)
       .populate('branch', 'name branchCode')
-      .populate('tasks.assignedTo', 'name email')
-      .populate('tasks.assignedUsers', 'name email')
-      .populate('tasks.createdBy', 'name email')
-      .populate('tasks.remarks.createdBy', 'name email')
+      .populate('tasks.assignedTo', PROJECT_USER_POPULATE_FIELDS)
+      .populate('tasks.assignedUsers', PROJECT_USER_POPULATE_FIELDS)
+      .populate('tasks.createdBy', PROJECT_USER_POPULATE_FIELDS)
+      .populate('tasks.remarks.createdBy', PROJECT_USER_POPULATE_FIELDS)
       .lean();
 
     if (!project) {
@@ -1066,8 +1123,8 @@ exports.getProjectUsers = async (req, res) => {
 
     const project = await Project.findById(req.params.id)
       .select('users projectName createdBy')
-      .populate('users', 'name email role _id')
-      .populate('createdBy', 'name email _id');
+      .populate('users', PROJECT_USER_POPULATE_FIELDS)
+      .populate('createdBy', PROJECT_USER_POPULATE_FIELDS);
 
     if (!project) {
       return res.status(404).json({

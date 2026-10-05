@@ -27,7 +27,11 @@ router.use(async (req, res, next) => {
 });
 
 const telecallerPaths = pages.map(slug => `/ciisUser/telecaller/${slug}`);
+const callLogsHandler = typeof controller.callLogs === 'function'
+  ? controller.callLogs
+  : (req, res) => res.json({ items: [] });
 router.get('/', requireCrmPagePermission(telecallerPaths), controller.list);
+router.get('/call-logs', requireCrmPagePermission(telecallerPaths), callLogsHandler);
 router.get('/:id', requireCrmPagePermission(telecallerPaths), controller.getOne);
 router.post('/:id/calls', (req, res, next) => {
   if (!enabled(req.telecallerPages, 'call-workspace') && !(req.body?.outcome === 'Note Added' && enabled(req.telecallerPages, 'lead-detail'))) {

@@ -3,6 +3,12 @@ const FollowUp = require("../models/Followup");
 const Lead = require("../models/Lead");
 const { getPaginationOptions } = require("../utils/pagination");
 
+let formatFollowUpForClient = item => item;
+try {
+  const cascade = require("../services/cascadeSyncEngine");
+  if (typeof cascade.formatFollowUpForClient === "function") formatFollowUpForClient = cascade.formatFollowUpForClient;
+} catch (e) {}
+
 const privilegedRoles = new Set(["admin", "superadmin", "companyadmin", "company admin"]);
 const getUserId = req => req.user?._id || req.user?.id;
 const getCompanyId = req => req.user?.company?._id || req.user?.company || req.user?.companyId;
@@ -77,14 +83,24 @@ exports.createFollowUp = async (req, res) => {
     const follow = await FollowUp.create({
       company: companyId,
       lead: leadId,
+      leadName: lead.name || '',
+      leadPhone: lead.phone || '',
+      leadEmail: lead.email || '',
+      leadSource: lead.leadSource || null,
+      leadSourceName: lead.leadSourceName || lead.source || '',
+      leadType: lead.leadType || null,
+      leadTypeName: lead.leadTypeName || '',
+      leadStatus: lead.status || '',
       agent: userId,
+      agentName: req.user?.name || '',
+      agentEmail: req.user?.email || '',
       date: followUpDate,
       note: typeof note === "string" ? note.trim() : "",
       priority: normalizedPriority,
       status: "pending"
     });
     const populated = await FollowUp.findById(follow._id).populate("lead", "name phone email");
-    return res.status(201).json(populated || follow);
+    return res.status(201).json(formatFollowUpForClient(populated || follow));
   } catch (err) {
     return res.status(400).json({ msg: "Error creating follow-up", error: err.message });
   }
@@ -106,7 +122,7 @@ exports.getTodayFollowUps = async (req, res) => {
     const followUpsQuery = FollowUp.find(query).populate("lead", "name phone email").sort({ date: 1 });
     const followUps = await applyListOptions(followUpsQuery, { skip, limit });
     await setPaginationHeaders(res, query, { page, limit });
-    return res.json(followUps);
+    return res.json((followUps || []).map(formatFollowUpForClient));
   } catch (err) {
     return res.status(500).json({ msg: "Error fetching follow-ups", error: err.message });
   }
@@ -121,7 +137,7 @@ exports.getAgentFollowUps = async (req, res) => {
     const followUpsQuery = FollowUp.find(query).populate("lead", "name phone email").sort({ date: 1 });
     const followUps = await applyListOptions(followUpsQuery, { skip, limit });
     await setPaginationHeaders(res, query, { page, limit });
-    return res.json(followUps);
+    return res.json((followUps || []).map(formatFollowUpForClient));
   } catch (err) {
     return res.status(500).json({ msg: "Error fetching follow-ups", error: err.message });
   }
@@ -140,7 +156,7 @@ exports.getLeadFollowUps = async (req, res) => {
     const followUpsQuery = FollowUp.find(query).populate("agent", "name email").sort({ date: -1 });
     const followUps = await applyListOptions(followUpsQuery, { skip, limit });
     await setPaginationHeaders(res, query, { page, limit });
-    return res.json(followUps);
+    return res.json((followUps || []).map(formatFollowUpForClient));
   } catch (err) {
     return res.status(500).json({ msg: "Error fetching lead follow-ups", error: err.message });
   }
@@ -173,7 +189,7 @@ exports.updateFollowUp = async (req, res) => {
       .populate("agent", "name email");
     if (!follow) return res.status(404).json({ msg: "Follow-up not found or unauthorized" });
     if (follow.lead) await syncLeadNextFollowUp(follow.lead._id || follow.lead, companyId);
-    return res.json(follow);
+    return res.json(formatFollowUpForClient(follow));
   } catch (err) {
     return res.status(500).json({ msg: "Error updating follow-up", error: err.message });
   }
@@ -189,7 +205,7 @@ exports.completeFollowUp = async (req, res) => {
     const follow = await FollowUp.findOneAndUpdate(query, { status: "done" }, { new: true });
     if (!follow) return res.status(404).json({ msg: "Follow-up not found or unauthorized" });
     if (follow.lead) await syncLeadNextFollowUp(follow.lead, companyId);
-    return res.json(follow);
+    return res.json(formatFollowUpForClient(follow));
   } catch (err) {
     return res.status(500).json({ msg: "Error completing follow-up", error: err.message });
   }

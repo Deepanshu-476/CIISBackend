@@ -19,7 +19,10 @@ const {
   applyCleanListFilters,
   sendCleanTaskList,
   normalizeProjectTaskStatus,
-  getProjectTaskAssignedBy
+  getProjectTaskAssignedBy,
+  TASK_USER_POPULATE_FIELDS,
+  TASK_GROUP_POPULATE_FIELDS,
+  TASK_CREATOR_POPULATE_FIELDS
 } = require('./taskHelper');
 
 const Attendance = require('../models/Attendance');
@@ -131,16 +134,28 @@ const buildAssigneeNameConditions = names => {
 
 const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, companyId = null) => {
   const targetUserId = userId.toString();
+  const isStatsOnly = Boolean(queryOptions.onlyStats);
 
   const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
   const companyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : companyCode;
-  const [targetUser, groups, clients] = await Promise.all([
-    User.findById(userId).select('name email company companyCode').lean(),
-    Group.find({ members: userId, isActive: true }).select('_id').lean(),
-    Client.find(companyFilter ? { companyCode: companyFilter } : {}).select('_id').lean()
-  ]);
-  const groupIds = groups.map(g => g._id);
-  const clientIds = clients.map(c => c._id);
+
+  let targetUser = queryOptions.prefetchedUser;
+  let groupIds = queryOptions.prefetchedGroups;
+  let clientIds = queryOptions.prefetchedClientIds;
+
+  if (!targetUser && !isStatsOnly) {
+    targetUser = await User.findById(userId).select('name email company companyCode').lean();
+  }
+
+  if (!groupIds) {
+    const groups = await Group.find({ members: userId, isActive: true }).select('_id').lean();
+    groupIds = groups.map(g => g._id);
+  }
+
+  if (!clientIds) {
+    const clients = await Client.find(companyFilter ? { companyCode: companyFilter } : {}).select('_id').lean();
+    clientIds = clients.map(c => c._id);
+  }
 
   const range = getCleanTaskDateRange({
     period: queryOptions.fromDate || queryOptions.toDate ? 'all' : queryOptions.period,
@@ -210,26 +225,41 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
     tasks: { $elemMatch: projectTaskElemMatch }
   };
 
-  const [personalTasks, clientTasks, projectTasks] = await Promise.all([
-    Task.find(personalQuery)
-      .select('title description dueDate dueDateTime priority overallStatus statusByUser statusHistory completionDate assignedUsers assignedGroups createdBy companyCode taskFor onHoldReleasedAt createdAt updatedAt remarks')
-      .populate('assignedUsers', 'name email')
-      .populate('createdBy', 'name email')
-      .populate('statusHistory.changedBy', 'name email')
-      .populate('remarks.user', 'name email')
-      .sort({ createdAt: -1 })
-      .lean(),
-    
-    ClientTask.find(clientQuery)
-      .select('name description dueDate priority status completed clientId service createdAt updatedAt assignee assigneeId activityLogs remarks')
-      .populate('clientId', 'client name email company phone companyCode')
-      .populate('assigneeId', 'name email role')
-      .populate('activityLogs.user', 'name email')
-      .populate('remarks.user', 'name email')
-      .sort({ createdAt: -1 })
-      .lean(),
+  let personalQueryExec = Task.find(personalQuery);
+  let clientQueryExec = ClientTask.find(clientQuery);
+  let projectQueryExec = Project.find(projectQuery);
 
-    Project.find(projectQuery)
+  if (isStatsOnly) {
+    personalQueryExec = personalQueryExec
+      .select('overallStatus statusByUser dueDate dueDateTime priority createdAt updatedAt')
+      .lean();
+    clientQueryExec = clientQueryExec
+      .select('status completed dueDate priority createdAt updatedAt')
+      .lean();
+    projectQueryExec = projectQueryExec
+      .select('tasks._id tasks.assignedTo tasks.status tasks.dueDate tasks.priority tasks.createdAt tasks.updatedAt')
+      .lean();
+  } else {
+    personalQueryExec = personalQueryExec
+      .select('title description dueDate dueDateTime priority overallStatus statusByUser statusHistory completionDate assignedUsers assignedGroups createdBy companyCode taskFor onHoldReleasedAt createdAt updatedAt remarks lastEditedBy lastEditedByName lastEditedAt lastEditChanges')
+      .populate('assignedUsers', TASK_USER_POPULATE_FIELDS)
+      .populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS)
+      .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
+      .populate('statusHistory.changedBy', TASK_USER_POPULATE_FIELDS)
+      .populate('remarks.user', TASK_USER_POPULATE_FIELDS)
+      .sort({ createdAt: -1 })
+      .lean();
+
+    clientQueryExec = clientQueryExec
+      .select('name description dueDate priority status completed clientId service createdAt updatedAt assignee assigneeId activityLogs remarks lastEditedBy lastEditedByName lastEditedAt lastEditChanges')
+      .populate('clientId', 'client name email company phone companyCode')
+      .populate('assigneeId', TASK_USER_POPULATE_FIELDS)
+      .populate('activityLogs.user', TASK_USER_POPULATE_FIELDS)
+      .populate('remarks.user', TASK_USER_POPULATE_FIELDS)
+      .sort({ createdAt: -1 })
+      .lean();
+
+    projectQueryExec = projectQueryExec
       .select([
         'projectName',
         'description',
@@ -240,6 +270,7 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
         'tasks.title',
         'tasks.description',
         'tasks.assignedTo',
+        'tasks.assignedUsers',
         'tasks.dueDate',
         'tasks.priority',
         'tasks.status',
@@ -247,13 +278,24 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
         'tasks.createdAt',
         'tasks.updatedAt',
         'tasks.activityLogs',
-        'tasks.remarks'
+        'tasks.remarks',
+        'tasks.lastEditedBy',
+        'tasks.lastEditedByName',
+        'tasks.lastEditedAt',
+        'tasks.lastEditChanges'
       ].join(' '))
-      .populate('createdBy', 'name email')
-      .populate('tasks.assignedTo', 'name email')
-      .populate('tasks.createdBy', 'name email')
-      .populate('tasks.activityLogs.performedBy', 'name email')
-      .lean()
+      .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
+      .populate('tasks.assignedTo', TASK_USER_POPULATE_FIELDS)
+      .populate('tasks.assignedUsers', TASK_USER_POPULATE_FIELDS)
+      .populate('tasks.createdBy', TASK_CREATOR_POPULATE_FIELDS)
+      .populate('tasks.activityLogs.performedBy', TASK_USER_POPULATE_FIELDS)
+      .lean();
+  }
+
+  const [personalTasks, clientTasks, projectTasks] = await Promise.all([
+    personalQueryExec,
+    clientQueryExec,
+    projectQueryExec
   ]);
 
   const personalFormatted = personalTasks.map(t => {
@@ -715,10 +757,42 @@ exports.getUsersTaskStatsBatch = async (req, res) => {
       return res.json({ success: true, statsByUser: {} });
     }
 
-    const queryParams = { ...req.query, ...(req.body?.filters || {}) };
-    const entries = await mapWithConcurrency(userIds, 6, async (userId) => {
+    const companyCode = req.user.companyCode;
+    const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
+    const companyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : companyCode;
+
+    const [prefetchedClients, allGroups, prefetchedUsers] = await Promise.all([
+      Client.find(companyFilter ? { companyCode: companyFilter } : {}).select('_id').lean(),
+      Group.find({ members: { $in: userIds }, isActive: true }).select('_id members').lean(),
+      User.find({ _id: { $in: userIds } }).select('name email company companyCode').lean()
+    ]);
+
+    const prefetchedClientIds = prefetchedClients.map(c => c._id);
+    const groupIdsByUser = new Map();
+    userIds.forEach(uId => groupIdsByUser.set(uId, []));
+    allGroups.forEach(g => {
+      (g.members || []).forEach(m => {
+        const mStr = String(m._id || m);
+        if (groupIdsByUser.has(mStr)) groupIdsByUser.get(mStr).push(g._id);
+      });
+    });
+    const usersMap = new Map(prefetchedUsers.map(u => [String(u._id), u]));
+
+    const queryParams = {
+      ...req.query,
+      ...(req.body?.filters || {}),
+      onlyStats: true,
+      prefetchedClientIds
+    };
+
+    const entries = await mapWithConcurrency(userIds, 10, async (userId) => {
       try {
-        const allTasks = await queryAllUserTasks(userId, req.user.companyCode, queryParams, req.user.company?._id || req.user.company);
+        const userOpts = {
+          ...queryParams,
+          prefetchedGroups: groupIdsByUser.get(userId),
+          prefetchedUser: usersMap.get(userId)
+        };
+        const allTasks = await queryAllUserTasks(userId, companyCode, userOpts, req.user.company?._id || req.user.company);
         const filtered = filterUserTasks(allTasks, queryParams);
         return [userId, calculateUserStatusCounts(filtered)];
       } catch (err) {
@@ -791,6 +865,27 @@ exports.getCompanyAllTaskOverview = async (req, res) => {
       });
     }
 
+    const companyCode = req.user.companyCode || currentUser.companyCode;
+    const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
+    const companyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : companyCode;
+
+    const userIds = usersWithAttendance.map(u => String(u._id));
+    const [prefetchedClients, allGroups] = await Promise.all([
+      Client.find(companyFilter ? { companyCode: companyFilter } : {}).select('_id').lean(),
+      Group.find({ members: { $in: userIds }, isActive: true }).select('_id members').lean()
+    ]);
+
+    const prefetchedClientIds = prefetchedClients.map(c => c._id);
+    const groupIdsByUser = new Map();
+    userIds.forEach(uId => groupIdsByUser.set(uId, []));
+    allGroups.forEach(g => {
+      (g.members || []).forEach(m => {
+        const mStr = String(m._id || m);
+        if (groupIdsByUser.has(mStr)) groupIdsByUser.get(mStr).push(g._id);
+      });
+    });
+    const usersMap = new Map(usersWithAttendance.map(u => [String(u._id), u]));
+
     const queryParams = {
       period: req.query.fromDate || req.query.toDate ? 'all' : (req.query.period || 'today'),
       fromDate: req.query.fromDate,
@@ -800,15 +895,22 @@ exports.getCompanyAllTaskOverview = async (req, res) => {
       search: req.query.search || '',
       branch: req.query.branch,
       branchId: req.query.branchId,
+      onlyStats: true,
+      prefetchedClientIds,
     };
 
-    const entries = await mapWithConcurrency(usersWithAttendance, 6, async (user) => {
+    const entries = await mapWithConcurrency(usersWithAttendance, 10, async (user) => {
       const userId = String(user._id);
       try {
+        const userOpts = {
+          ...queryParams,
+          prefetchedGroups: groupIdsByUser.get(userId),
+          prefetchedUser: usersMap.get(userId)
+        };
         const allTasks = await queryAllUserTasks(
           userId,
-          req.user.companyCode || currentUser.companyCode,
-          queryParams,
+          companyCode,
+          userOpts,
           req.user.company?._id || req.user.company || currentUser.company
         );
         const filtered = filterUserTasks(allTasks, queryParams);

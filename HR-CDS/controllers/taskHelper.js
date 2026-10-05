@@ -17,6 +17,10 @@ const {
   normalizeTaskRecurrenceFields,
 } = require('../utils/taskRecurrence');
 
+const TASK_USER_POPULATE_FIELDS = 'name email role jobRole companyRole profileImage avatar department branch assignedBranches';
+const TASK_GROUP_POPULATE_FIELDS = 'name members description';
+const TASK_CREATOR_POPULATE_FIELDS = 'name email role jobRole companyRole profileImage avatar department branch';
+
 const parsePositiveInt = (value, fallback, max = 100) => {
   const parsed = parseInt(value, 10);
   if (isNaN(parsed) || parsed < 1) return fallback;
@@ -156,7 +160,14 @@ const canChangeFromOnHold = nextStatus => {
 
 const parseTaskCheckpoints = value => {
   if (!value || value === 'null') return [];
-  const raw = typeof value === 'string' ? JSON.parse(value) : value;
+  let raw = value;
+  if (typeof value === 'string') {
+    try {
+      raw = JSON.parse(value);
+    } catch (_) {
+      return [];
+    }
+  }
   if (!Array.isArray(raw)) return [];
 
   return raw
@@ -319,7 +330,14 @@ const paginateTasks = (tasks, req) => {
 };
 
 const getRequestCompanyCode = (req, user = null) => {
-  const companyCode = req.user?.companyCode || user?.companyCode || user?.company?.companyCode;
+  const companyCode = req?.user?.companyCode
+    || req?.user?.company?.companyCode
+    || user?.companyCode
+    || user?.company?.companyCode
+    || req?.headers?.['x-company-code']
+    || req?.headers?.['companycode']
+    || req?.headers?.['company-code']
+    || req?.body?.companyCode;
   return typeof companyCode === 'string' ? companyCode.trim().toUpperCase() : companyCode;
 };
 
@@ -372,7 +390,7 @@ const enrichStatusInfo = async (tasks) => {
 
   if (userIds.length === 0) return tasks;
 
-  const users = await User.find({ _id: { $in: [...new Set(userIds)] } }).select('name role email').lean();
+  const users = await User.find({ _id: { $in: [...new Set(userIds)] } }).select('name role jobRole companyRole email profileImage avatar department branch').lean();
   const userMap = {};
   users.forEach(u => { userMap[u._id.toString()] = u; });
 
@@ -383,11 +401,14 @@ const enrichStatusInfo = async (tasks) => {
       return {
         userId: s.user,
         name: u?.name || 'Unknown',
-        role: u?.role || 'N/A',
+        role: u?.role || u?.jobRole || u?.companyRole || 'N/A',
         email: u?.email || 'N/A',
+        profileImage: u?.profileImage || u?.avatar || null,
+        department: u?.department || null,
+        branch: u?.branch || null,
         status: s.status,
-        ...(s.status === 'approved' && { approvedByUser: `${u?.name} (${u?.role})` }),
-        ...(s.status === 'rejected' && { rejectedByUser: `${u?.name} (${u?.role})` })
+        ...(s.status === 'approved' && { approvedByUser: `${u?.name} (${u?.role || u?.jobRole || 'User'})` }),
+        ...(s.status === 'rejected' && { rejectedByUser: `${u?.name} (${u?.role || u?.jobRole || 'User'})` })
       };
     });
     return { ...task, ...normalizeTaskRecurrenceFields(task), statusInfo: info };
@@ -535,8 +556,9 @@ const fetchPersonalTaskList = async (req) => {
     // Keeping them out of list responses prevents large task documents from
     // dominating transfer and JSON serialization time.
     .select('-remarks -statusHistory')
-    .populate('assignedUsers', 'name email')
-    .populate('createdBy', 'name email')
+    .populate('assignedUsers', TASK_USER_POPULATE_FIELDS)
+    .populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS)
+    .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
     .sort({ createdAt: -1 })
     .lean();
 
@@ -564,8 +586,9 @@ const fetchAssignedToMeTaskList = async (req) => {
     ]
   })
     .select('-remarks -statusHistory')
-    .populate('assignedUsers', 'name email')
-    .populate('createdBy', 'name email')
+    .populate('assignedUsers', TASK_USER_POPULATE_FIELDS)
+    .populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS)
+    .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
     .sort({ createdAt: -1 })
     .lean();
 
@@ -631,9 +654,10 @@ const fetchAssignedProjectTaskList = async (req) => {
 
   const projects = await Project.find({ 'tasks.assignedTo': currentUserId })
     .select('projectName description createdBy users tasks createdAt updatedAt')
-    .populate('createdBy', 'name email')
-    .populate('tasks.assignedTo', 'name email')
-    .populate('tasks.createdBy', 'name email')
+    .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
+    .populate('tasks.assignedTo', TASK_USER_POPULATE_FIELDS)
+    .populate('tasks.assignedUsers', TASK_USER_POPULATE_FIELDS)
+    .populate('tasks.createdBy', TASK_CREATOR_POPULATE_FIELDS)
     .lean();
 
   const tasks = [];
@@ -746,5 +770,8 @@ module.exports = {
   fetchPersonalTaskList,
   fetchAssignedToMeTaskList,
   fetchAssignedClientTaskList,
-  fetchAssignedProjectTaskList
+  fetchAssignedProjectTaskList,
+  TASK_USER_POPULATE_FIELDS,
+  TASK_GROUP_POPULATE_FIELDS,
+  TASK_CREATOR_POPULATE_FIELDS
 };
