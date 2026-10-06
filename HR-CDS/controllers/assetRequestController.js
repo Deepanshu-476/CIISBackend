@@ -79,6 +79,8 @@ const getEmployeeAssetsPageAccess = async (user = {}) => {
   if (!companyId || !mongoose.Types.ObjectId.isValid(companyId) || !userId) {
     return {
       hasConfig: false,
+      hasApproverConfig: false,
+      hasDeleteConfig: false,
       isApprover: false,
       isDeleteUser: false,
       hasPageAccess: false
@@ -101,15 +103,17 @@ const getEmployeeAssetsPageAccess = async (user = {}) => {
 
   return {
     hasConfig: Boolean(pagePermission),
+    hasApproverConfig: approverIds.length > 0,
+    hasDeleteConfig: deleteUserIds.length > 0,
     isApprover,
     isDeleteUser,
-    hasPageAccess: isApprover || isDeleteUser
+    hasPageAccess: (approverIds.length > 0 ? isApprover : true) || isDeleteUser
   };
 };
 
 const getUserRoleScope = (user = {}) => {
   if (user.isSuperAdmin === true || user.superAdmin === true || user.isCompanyOwner === true) {
-    return { canManage: true, canDelete: true };
+    return { canManage: true, canDelete: true, isSuperOrOwner: true };
   }
   const roles = [
     user.companyRole,
@@ -124,9 +128,20 @@ const getUserRoleScope = (user = {}) => {
     'hr', 'manager', 'superadmin', 'super_admin'
   ].includes(role));
 
+  const isSuperOrOwner = roles.some(role => [
+    'owner', 'companyowner', 'company_owner',
+    'admin', 'companyadmin', 'company_admin',
+    'superadmin', 'super_admin'
+  ].includes(role));
+
+  const isHR = roles.some(role => [
+    'hr', 'hrmanager', 'hr_manager', 'hradmin', 'hr_admin'
+  ].includes(role));
+
   return {
     canManage: isPrivileged,
-    canDelete: isPrivileged
+    canDelete: isSuperOrOwner || isHR,
+    isSuperOrOwner
   };
 };
 
@@ -295,33 +310,53 @@ const sendAssetRequestStatusEmail = async ({ to, userName, assetName, status, ad
 
 exports.getAvailableAssets = async (req, res) => {
   try {
-    void 0;
-    
+    const companyCode = String(req.user.companyCode || req.user.company?.companyCode || '').trim();
     const query = { 
-      companyCode: req.user.companyCode,
       $or: [
         { status: 'Available' },
+        { status: 'available' },
         { status: { $exists: false } },
         { status: null },
         { status: '' }
       ]
     };
+
+    if (companyCode) {
+      query.companyCode = { $regex: new RegExp(`^${companyCode}$`, 'i') };
+    }
     
-    const assets = await CompanyAsset.find(query)
-      .select('name description status companyCode branch quantity')
-      .sort({ name: 1 });
+    let assets = await CompanyAsset.find(query)
+      .select('name description status companyCode branch quantity serialNumber model category type')
+      .sort({ name: 1 })
+      .lean();
+
+    if (!assets.length && companyCode) {
+      assets = await CompanyAsset.find({
+        $or: [
+          { status: 'Available' },
+          { status: 'available' },
+          { status: { $exists: false } },
+          { status: null },
+          { status: '' }
+        ]
+      })
+        .select('name description status companyCode branch quantity serialNumber model category type')
+        .sort({ name: 1 })
+        .lean();
+
+      assets = assets.filter(a => String(a.companyCode || '').trim().toLowerCase() === companyCode.toLowerCase());
+    }
     
-    void 0;
-    
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       assets: assets
     });
     
   } catch (err) {
     console.error('❌ Error fetching available assets:', err);
-    res.status(500).json({ 
+    return res.status(500).json({ 
       success: false, 
+      message: 'Server error while fetching assets',
       error: 'Server error while fetching assets' 
     });
   }
@@ -1345,42 +1380,144 @@ exports.deleteCommentAttachment = async (req, res) => {
 exports.deleteRequest = async (req, res) => {
   try {
     const { id } = req.params;
+    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid request ID format',
+        error: 'Invalid request ID format'
+      });
+    }
+
     const pageAccess = await getEmployeeAssetsPageAccess(req.user);
     const roleScope = getUserRoleScope(req.user);
-    const canDeleteRequest = pageAccess.hasConfig ? pageAccess.isDeleteUser : roleScope.canDelete;
+
+    // If explicit deleteUsers configured on page permission, allow user in deleteUsers OR super/owner/admin.
+    // If NO explicit deleteUsers configured, fallback to roleScope.canDelete (owner, admin, hr, superadmin).
+    const canDeleteRequest = roleScope.isSuperOrOwner || (
+      pageAccess.hasDeleteConfig
+        ? pageAccess.isDeleteUser
+        : roleScope.canDelete
+    );
 
     if (!canDeleteRequest) {
       return res.status(403).json({
         success: false,
-        error: pageAccess.hasConfig
+        message: pageAccess.hasDeleteConfig
+          ? 'You are not selected as a delete user for employee assets.'
+          : 'You do not have permission to delete asset requests.',
+        error: pageAccess.hasDeleteConfig
           ? 'You are not selected as a delete user for employee assets.'
           : 'You do not have permission to delete asset requests.'
       });
     }
 
-    const request = await AssetRequest.findOne({
-      _id: id,
-      companyCode: req.user.companyCode
-    });
+    const companyCode = String(req.user.companyCode || req.user.company?.companyCode || '').trim();
+    const query = { _id: id };
+
+    // Scope by companyCode (case-insensitive regex) unless superadmin without company
+    if (companyCode && !req.user.isSuperAdmin) {
+      query.companyCode = { $regex: new RegExp(`^${companyCode}$`, 'i') };
+    }
+
+    let request = await AssetRequest.findOne(query);
+
+    // Fallback if companyCode had minor discrepancy
+    if (!request && !req.user.isSuperAdmin && companyCode) {
+      const fallbackRequest = await AssetRequest.findById(id);
+      if (fallbackRequest) {
+        const reqCompanyCode = String(fallbackRequest.companyCode || '').trim().toLowerCase();
+        if (reqCompanyCode === companyCode.toLowerCase()) {
+          request = fallbackRequest;
+        } else {
+          const userCompanyId = await getUserCompanyId(req.user);
+          if (userCompanyId) {
+            const reqUser = await User.findById(fallbackRequest.user).select('company companyCode').lean();
+            if (reqUser && (normalizeId(reqUser.company) === userCompanyId || String(reqUser.companyCode || '').toLowerCase() === companyCode.toLowerCase())) {
+              request = fallbackRequest;
+            }
+          }
+        }
+      }
+    } else if (!request && req.user.isSuperAdmin) {
+      request = await AssetRequest.findById(id);
+    }
 
     if (!request) {
       return res.status(404).json({ 
         success: false, 
+        message: 'Request not found',
         error: 'Request not found' 
       });
     }
 
+    // If asset was assigned to this request, reset asset to available if no other active requests
+    if (request.asset) {
+      try {
+        const assetId = request.asset._id || request.asset;
+        const currentAsset = await CompanyAsset.findById(assetId);
+        if (currentAsset && String(currentAsset.assignedTo) === String(request.user)) {
+          const otherActiveRequests = await AssetRequest.find({
+            _id: { $ne: request._id },
+            asset: assetId,
+            status: { $in: ['approved', 'return_requested', 'pending_verification'] }
+          });
+          if (otherActiveRequests.length === 0) {
+            await CompanyAsset.findByIdAndUpdate(assetId, {
+              status: 'Available',
+              assignedTo: null,
+              assignedDate: null
+            });
+          }
+        }
+      } catch (assetCleanupErr) {
+        console.warn('Asset status cleanup warning on request delete:', assetCleanupErr.message);
+      }
+    }
+
+    // Clean up comment images
+    if (Array.isArray(request.adminComments)) {
+      const uploadRoot = path.resolve(__dirname, '../../uploads/asset-comments');
+      for (const comment of request.adminComments) {
+        if (comment.image) {
+          const storedName = path.basename(String(comment.image).replace(/\\/g, '/'));
+          const storedFile = path.resolve(uploadRoot, storedName);
+          if (storedFile.startsWith(uploadRoot) && fs.existsSync(storedFile)) {
+            try {
+              await fs.promises.unlink(storedFile);
+            } catch (_) {}
+          }
+        }
+      }
+    }
+
+    // Clean up approval images
+    if (Array.isArray(request.approvalDetails?.images)) {
+      const uploadRoot = path.resolve(__dirname, '../../uploads/asset-comments');
+      for (const img of request.approvalDetails.images) {
+        if (img.image) {
+          const storedName = path.basename(String(img.image).replace(/\\/g, '/'));
+          const storedFile = path.resolve(uploadRoot, storedName);
+          if (storedFile.startsWith(uploadRoot) && fs.existsSync(storedFile)) {
+            try {
+              await fs.promises.unlink(storedFile);
+            } catch (_) {}
+          }
+        }
+      }
+    }
+
     await request.deleteOne();
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: '🗑️ Request deleted successfully'
+      message: 'Request deleted successfully'
     });
 
   } catch (err) {
     console.error('❌ Delete error:', err);
-    res.status(500).json({ 
+    return res.status(500).json({ 
       success: false, 
+      message: err.message || 'Server error while deleting request',
       error: 'Server error while deleting request' 
     });
   }

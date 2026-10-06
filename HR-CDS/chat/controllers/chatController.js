@@ -114,18 +114,26 @@ const emitUnreadCounts = async (conversation, senderId) => {
   }));
 };
 
+const getRawCompanyId = company => {
+  if (!company) return '';
+  if (typeof company === 'string') return company;
+  if (company._id) return company._id.toString();
+  if (company.id) return company.id.toString();
+  return company.toString();
+};
+
 const getSocketOnlineUserIds = (companyId) => {
   const onlineIds = new Set();
-  const companyKey = companyId?.toString();
+  const companyKey = getRawCompanyId(companyId);
 
   if (!global.io?.sockets?.sockets) return onlineIds;
 
   global.io.sockets.sockets.forEach(socket => {
     const socketUserId = socket.userId?.toString();
-    const socketCompanyId = socket.companyId?.toString();
+    const socketCompanyId = getRawCompanyId(socket.companyId);
 
     if (!socketUserId) return;
-    if (companyKey && socketCompanyId !== companyKey) return;
+    if (companyKey && socketCompanyId && socketCompanyId !== companyKey) return;
 
     onlineIds.add(socketUserId);
   });
@@ -158,7 +166,7 @@ const isRecentlyOnlineInDb = (user) => {
   const lastSeenTime = new Date(user.lastSeen).getTime();
   if (Number.isNaN(lastSeenTime)) return true;
 
-  return Date.now() - lastSeenTime < 30 * 1000;
+  return Date.now() - lastSeenTime < 10 * 60 * 1000;
 };
 
 exports.createConversation = async (req, res) => {
@@ -741,10 +749,21 @@ exports.updateMessageReaction = async (req, res) => {
 
 exports.getCompanyUsers = async (req, res) => {
   try {
-    const socketOnlineIds = getSocketOnlineUserIds(req.user.company);
+    const requesterId = getUserId(req);
+    const companyId = getRawCompanyId(req.user.company);
+    const socketOnlineIds = getSocketOnlineUserIds(companyId);
+
+    // Keep requester's own presence fresh in database
+    if (requesterId) {
+      User.findByIdAndUpdate(requesterId, {
+        isOnline: true,
+        lastSeen: new Date(),
+      }).catch(() => {});
+    }
+
     const users = await User.find({
-      company: req.user.company,
-      _id: {$ne: req.user.id},
+      company: req.user.company?._id || req.user.company || companyId,
+      _id: {$ne: requesterId},
       isActive: true,
       companyRole: { $not: /^client$/i },
     }).select("name email profileImage avatar image photo companyRole isOnline lastSeen").lean();
