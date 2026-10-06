@@ -10,6 +10,29 @@ const {
   resolveEmailModuleKey,
 } = require('./emailSettingsService');
 
+const convertHtmlToText = (htmlContent) => {
+  if (!htmlContent) return undefined;
+  try {
+    const { convert } = require('html-to-text');
+    return convert(htmlContent, { wordwrap: 130 });
+  } catch (_error) {
+    return String(htmlContent)
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+      .replace(/<br\s*[\/]?>/gi, '\n')
+      .replace(/<\/p>/gi, '\n\n')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/\n\s*\n\s*\n/g, '\n\n')
+      .trim();
+  }
+};
+
 class EmailService {
   constructor() {
     this.transporter = null;
@@ -112,8 +135,14 @@ class EmailService {
       }
 
       const { config, transporter } = emailTransport;
-      const { convert } = require('html-to-text');
-      const plainText = options.text || (html ? convert(html, { wordwrap: 130 }) : undefined);
+      const plainText = options.text || convertHtmlToText(html);
+
+      const headers = {
+        'X-Entity-Ref-ID': options.referenceId || `email-${Date.now()}`,
+        'X-Mailer': 'CIIS-NETWORK-Email-Service',
+        'List-Unsubscribe': `<mailto:support@ciisnetwork.com?subject=unsubscribe>`,
+        ...options.headers
+      };
 
       const mailOptions = {
         from: `"${config.senderName || 'CIIS NETWORK'}" <${config.emailUser}>`,
@@ -123,13 +152,7 @@ class EmailService {
         text: plainText,
         replyTo: config.replyTo || config.emailUser,
         priority: options.priority || 'high',
-        headers: {
-          'X-Entity-Ref-ID': options.referenceId || `email-${Date.now()}`,
-          'X-Mailer': 'CIIS-NETWORK-Email-Service',
-          'Message-ID': `<${Date.now()}.${Math.random().toString(36).substring(2)}@ciisnetwork.in>`,
-          'List-Unsubscribe': `<mailto:support@ciisnetwork.com?subject=unsubscribe>`,
-          ...options.headers
-        }
+        headers
       };
 
       
@@ -281,8 +304,9 @@ class EmailService {
   
   async testEmailConfig(testEmail) {
     try {
+      const recipient = testEmail || process.env.EMAIL_USER;
       const testResult = await this.sendEmail(
-        testEmail || process.env.EMAIL_USER,
+        recipient,
         'CIIS NETWORK - Email Configuration Test',
         `
           <!DOCTYPE html>
@@ -290,18 +314,22 @@ class EmailService {
           <body style="font-family: Arial, sans-serif; padding: 20px;">
             <h2 style="color: #2563eb;">✅ Email Service Test Successful</h2>
             <p>Your CIIS NETWORK email configuration is working correctly!</p>
-            <p>Test timestamp: ${new Date().toLocaleString()}</p>
+            <p>Test timestamp: ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</p>
             <hr>
-            <p style="color: #6b7280; font-size: 12px;">This is a test email from your leave management system.</p>
+            <p style="color: #6b7280; font-size: 12px;">This is a test email from CIIS NETWORK.</p>
           </body>
           </html>
         `,
-        { priority: 'low' }
+        {
+          priority: 'low',
+          emailModuleKey: 'test_email',
+          referenceId: `test-${Date.now()}`
+        }
       );
       
       return {
-        success: true,
-        message: 'Email configuration test successful',
+        success: Boolean(testResult?.success && !testResult?.skipped),
+        message: testResult?.skipped ? `Email module is disabled: ${testResult.message}` : 'Email configuration test successful',
         details: testResult
       };
     } catch (error) {
