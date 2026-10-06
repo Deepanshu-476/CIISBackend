@@ -6,6 +6,29 @@ const {
   resolveEmailModuleKey,
 } = require('../services/emailSettingsService');
 
+const convertHtmlToText = (htmlContent) => {
+  if (!htmlContent) return undefined;
+  try {
+    const { convert } = require('html-to-text');
+    return convert(htmlContent, { wordwrap: 130 });
+  } catch (_error) {
+    return String(htmlContent)
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+      .replace(/<br\s*[\/]?>/gi, '\n')
+      .replace(/<\/p>/gi, '\n\n')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/\n\s*\n\s*\n/g, '\n\n')
+      .trim();
+  }
+};
+
 const notifyEmailSent = ({to, subject, options = {}}) => {
   if (options.skipNotification) return;
 
@@ -73,17 +96,12 @@ const sendEmail = async (to, subject, html, options = {}) => {
 
     const { config, transporter } = emailTransport;
 
-    
-    await transporter.verify();
-    void 0;
-
-    
     const mailOptions = {
       from: `"${config.senderName || 'CIIS NETWORK'}" <${config.emailUser}>`,
       to: Array.isArray(to) ? to.join(', ') : to,
       subject: subject,
       html: html,
-      text: options.text || undefined,
+      text: options.text || convertHtmlToText(html),
       replyTo: config.replyTo || config.emailUser,
       priority: options.priority || 'normal'
     };
