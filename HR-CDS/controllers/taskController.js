@@ -2031,10 +2031,12 @@ exports.updateStatus = async (req, res) => {
       });
     }
 
+    const isOverdueTransitionAllowed = ['in-progress', 'completed', 'onhold', 'cancelled', 'rejected'].includes(normalizedStatus);
     if (
       normalizedStatus !== 'overdue' &&
       normalizeTaskStatus(oldStatus) === 'overdue' &&
-      !allowCompanyAllEdit
+      !allowCompanyAllEdit &&
+      !isOverdueTransitionAllowed
     ) {
       return res.status(400).json({ success: false, error: 'Cannot change status of an overdue task' });
     }
@@ -2044,6 +2046,7 @@ exports.updateStatus = async (req, res) => {
     if (
       !['overdue', 'onhold'].includes(normalizedStatus) &&
       !isResumedFromHold &&
+      !isOverdueTransitionAllowed &&
       isTaskOverdueForStatus(task.dueDateTime || task.dueDate, oldStatus, task) &&
       !allowCompanyAllEdit
     ) {
@@ -2523,7 +2526,8 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
     { dueDateTime: range },
     { dueDate: range },
     { createdAt: range },
-    { updatedAt: range }
+    { completionDate: range },
+    { completedAt: range }
   ] : null;
 
   const assignedOnly = String(queryOptions.scope || '').trim().toLowerCase() === 'assigned';
@@ -2558,7 +2562,7 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
       ...buildAssigneeNameConditions([targetUser?.name, targetUser?.email])
     ].filter(condition => Object.values(condition)[0])
   };
-  if (range) clientQuery.$and = [...(clientQuery.$and || []), { $or: [{ dueDate: range }, { createdAt: range }, { updatedAt: range }] }];
+  if (range) clientQuery.$and = [...(clientQuery.$and || []), { $or: [{ dueDate: range }, { createdAt: range }, { completedAt: range }] }];
   if (priority) clientQuery.priority = new RegExp(`^${priority}$`, 'i');
   if (search) {
     clientQuery.$and = [
@@ -2572,7 +2576,7 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
     projectTaskElemMatch.$or = [
       { dueDate: range },
       { createdAt: range },
-      { updatedAt: range }
+      { completedAt: range }
     ];
   }
   if (priority) projectTaskElemMatch.priority = new RegExp(`^${priority}$`, 'i');
@@ -2778,12 +2782,53 @@ const filterUserTasks = (tasks, query) => {
 
 
     if (range) {
-      const dateToFilter = t.dueDateTime || t.dueDate || t.createdAt;
-      const taskDate = dateToFilter ? new Date(dateToFilter) : null;
-      if (!taskDate || Number.isNaN(taskDate.getTime())) return false;
+      const field = String(queryOptions.dateField || '').trim().toLowerCase();
+      if (field === 'createdat' || field === 'createddate') {
+        const d = t.createdAt ? new Date(t.createdAt) : null;
+        if (!d || Number.isNaN(d.getTime())) return false;
+        if (range.$gte && d < range.$gte) return false;
+        if (range.$lte && d > range.$lte) return false;
+        return true;
+      }
+      if (field === 'duedate' || field === 'duedatetime') {
+        const d = (t.dueDateTime || t.dueDate) ? new Date(t.dueDateTime || t.dueDate) : null;
+        if (!d || Number.isNaN(d.getTime())) return false;
+        if (range.$gte && d < range.$gte) return false;
+        if (range.$lte && d > range.$lte) return false;
+        return true;
+      }
+      if (field === 'completedat' || field === 'completiondate') {
+        const d = (t.completionDate || t.completedAt) ? new Date(t.completionDate || t.completedAt) : null;
+        if (!d || Number.isNaN(d.getTime())) return false;
+        if (range.$gte && d < range.$gte) return false;
+        if (range.$lte && d > range.$lte) return false;
+        return true;
+      }
 
-      if (range.$gte && taskDate < range.$gte) return false;
-      if (range.$lte && taskDate > range.$lte) return false;
+      // Default: match if any relevant task date falls in range
+      const candidateDates = [
+        t.dueDateTime,
+        t.dueDate,
+        t.createdAt,
+        t.completionDate,
+        t.completedAt
+      ].filter(Boolean).map(v => new Date(v)).filter(d => !Number.isNaN(d.getTime()));
+
+      const hasMatchingDate = candidateDates.some(d => {
+        if (range.$gte && d < range.$gte) return false;
+        if (range.$lte && d > range.$lte) return false;
+        return true;
+      });
+
+      if (!hasMatchingDate) {
+        // If range covers current moment, include actively in-progress tasks
+        const now = new Date();
+        const coversNow = (!range.$gte || now >= range.$gte) && (!range.$lte || now <= range.$lte);
+        const normStatus = normalizeTaskStatus(t.userStatus || t.status || t.overallStatus);
+        if (!coversNow || normStatus !== 'in-progress') {
+          return false;
+        }
+      }
     }
 
     return true;
@@ -3155,11 +3200,11 @@ exports.getUserAllTasksPaginated = async (req, res) => {
     filtered.forEach(task => {
       const status = normalizeTaskStatus(task.userStatus || task.status);
       const overdue = isTaskOverdueForStatus(task.dueDateTime || task.dueDate, status, task);
-      if (overdue) counts.overdue += 1;
-
-      if (status !== 'overdue' && counts[status] !== undefined) {
+      if (overdue) {
+        counts.overdue += 1;
+      } else if (counts[status] !== undefined) {
         counts[status] += 1;
-      } else if (status === 'pending') {
+      } else {
         counts.pending += 1;
       }
     });
@@ -3218,7 +3263,9 @@ exports.getUserAllTasksPaginated = async (req, res) => {
         email: targetUser.email,
         role: targetUser.jobRole || targetUser.companyRole || targetUser.role,
         jobRole: targetUser.jobRole,
-        department: targetUser.department,
+        department: typeof targetUser.department === 'object' && targetUser.department !== null
+          ? (targetUser.department.name || targetUser.department._id || '')
+          : (targetUser.department || ''),
         employeeId: targetUser.employeeId
       } : null,
       tasks: enrichedTasks,
@@ -3390,7 +3437,7 @@ exports.updateCreatorStatus = async (req, res) => {
       return res.status(403).json({ success: false, error: 'Not authorized to change admin status' });
     }
 
-    if (task.overallStatus === 'overdue') {
+    if (task.overallStatus === 'overdue' && !['pending', 'completed', 'in-progress', 'approved', 'rejected'].includes(normalizeTaskStatus(status))) {
       return res.status(400).json({ success: false, error: 'Cannot change status of an overdue task' });
     }
 

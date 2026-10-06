@@ -170,7 +170,8 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
     { dueDateTime: range },
     { dueDate: range },
     { createdAt: range },
-    { updatedAt: range }
+    { completionDate: range },
+    { completedAt: range }
   ] : null;
 
   const personalQuery = {
@@ -195,7 +196,7 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
       ...buildAssigneeNameConditions([targetUser?.name, targetUser?.email])
     ].filter(condition => Object.values(condition)[0])
   };
-  if (dateOr) clientQuery.$and = [{ $or: [{ dueDate: range }, { createdAt: range }, { updatedAt: range }] }];
+  if (dateOr) clientQuery.$and = [{ $or: [{ dueDate: range }, { createdAt: range }, { completedAt: range }] }];
   if (priority) clientQuery.priority = new RegExp(`^${priority}$`, 'i');
   if (hasSearch) {
     clientQuery.$and = [
@@ -209,7 +210,7 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
     projectTaskElemMatch.$or = [
       { dueDate: range },
       { createdAt: range },
-      { updatedAt: range }
+      { completedAt: range }
     ];
   }
   if (priority) projectTaskElemMatch.priority = new RegExp(`^${priority}$`, 'i');
@@ -422,11 +423,53 @@ const filterUserTasks = (tasks, queryParams) => {
       if (!haystack.includes(query)) return false;
     }
     if (range) {
-      const sourceDate = getFilterDate(t, dateField);
-      const dateVal = new Date(sourceDate);
-      if (isNaN(dateVal.getTime())) return false;
-      if (range.$gte && dateVal < range.$gte) return false;
-      if (range.$lte && dateVal > range.$lte) return false;
+      const field = String(dateField || '').trim().toLowerCase();
+      if (field === 'createdat' || field === 'createddate') {
+        const d = t.createdAt ? new Date(t.createdAt) : null;
+        if (!d || isNaN(d.getTime())) return false;
+        if (range.$gte && d < range.$gte) return false;
+        if (range.$lte && d > range.$lte) return false;
+        return true;
+      }
+      if (field === 'duedate' || field === 'duedatetime') {
+        const d = (t.dueDateTime || t.dueDate) ? new Date(t.dueDateTime || t.dueDate) : null;
+        if (!d || isNaN(d.getTime())) return false;
+        if (range.$gte && d < range.$gte) return false;
+        if (range.$lte && d > range.$lte) return false;
+        return true;
+      }
+      if (field === 'completedat' || field === 'completiondate') {
+        const d = (t.completionDate || t.completedAt) ? new Date(t.completionDate || t.completedAt) : null;
+        if (!d || isNaN(d.getTime())) return false;
+        if (range.$gte && d < range.$gte) return false;
+        if (range.$lte && d > range.$lte) return false;
+        return true;
+      }
+
+      // Default: match if any relevant task date falls in range
+      const candidateDates = [
+        t.dueDateTime,
+        t.dueDate,
+        t.createdAt,
+        t.completionDate,
+        t.completedAt
+      ].filter(Boolean).map(v => new Date(v)).filter(d => !isNaN(d.getTime()));
+
+      const hasMatchingDate = candidateDates.some(d => {
+        if (range.$gte && d < range.$gte) return false;
+        if (range.$lte && d > range.$lte) return false;
+        return true;
+      });
+
+      if (!hasMatchingDate) {
+        // If range covers current moment, include actively in-progress tasks
+        const now = new Date();
+        const coversNow = (!range.$gte || now >= range.$gte) && (!range.$lte || now <= range.$lte);
+        const normStatus = normalizeTaskStatus(t.userStatus || t.status || t.overallStatus);
+        if (!coversNow || normStatus !== 'in-progress') {
+          return false;
+        }
+      }
     }
     return true;
   });
@@ -462,10 +505,14 @@ const calculateUserStatusCounts = (filtered) => {
   };
 
   filtered.forEach(task => {
-    const status = task.status;
+    let rawStatus = task.userStatus || task.status || task.overallStatus || 'pending';
+    let status = normalizeTaskStatus(rawStatus);
+    if (isTaskOverdueForStatus(task.dueDateTime || task.dueDate, status, task)) {
+      status = 'overdue';
+    }
     if (counts[status] !== undefined) {
       counts[status] += 1;
-    } else if (status === 'pending') {
+    } else {
       counts.pending += 1;
     }
   });

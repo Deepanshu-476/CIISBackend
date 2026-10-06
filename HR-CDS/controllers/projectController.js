@@ -289,7 +289,7 @@ const hasProjectAccess = (project, userId, userRole, user = {}) => {
   }
 
 
-  if (isProjectAdmin({ role: userRole })) {
+  if (isProjectAdmin({ ...user, role: userRole || user.role })) {
     return true;
   }
 
@@ -1737,8 +1737,9 @@ exports.updateTaskStatus = async (req, res) => {
     }
 
     const allowCompanyAllEdit = isCompanyAllTaskEdit(req);
+    const isOverdueTransitionAllowed = ['in-progress', 'completed', 'onhold', 'cancelled', 'rejected'].includes(nextStatus);
 
-    if (nextStatus !== "overdue" && normalizedOldStatus === "overdue" && !allowCompanyAllEdit) {
+    if (nextStatus !== "overdue" && normalizedOldStatus === "overdue" && !allowCompanyAllEdit && !isOverdueTransitionAllowed) {
       return res.status(400).json({
         success: false,
         message: "Cannot change status of an overdue task"
@@ -1747,7 +1748,7 @@ exports.updateTaskStatus = async (req, res) => {
 
     const isResumedFromHold = (normalizedOldStatus === "onhold" || normalizedOldStatus === "on hold") && nextStatus === "in-progress";
 
-    if (!["overdue", "onhold"].includes(nextStatus) && !isResumedFromHold && isPendingTaskPastDue(task) && !allowCompanyAllEdit) {
+    if (!["overdue", "onhold"].includes(nextStatus) && !isResumedFromHold && !isOverdueTransitionAllowed && isPendingTaskPastDue(task) && !allowCompanyAllEdit) {
       if (isPendingTaskPastDue(task)) {
         task.status = "overdue";
         task.updatedAt = new Date();
