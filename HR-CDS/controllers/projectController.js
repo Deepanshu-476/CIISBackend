@@ -373,11 +373,58 @@ const sortProjectTasksByCreatedAt = (tasks = []) => (
     : []
 );
 
+const sanitizeFileBaseName = (value, fallback = 'Document') => {
+  const clean = String(value || '')
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, '')
+    .replace(/\s+/g, '_')
+    .slice(0, 60);
+  return clean || fallback;
+};
+
+const getProjectDocumentName = (project, originalName = '') => {
+  const safeName = sanitizeFileBaseName(project?.projectName || project?.name || 'Project');
+  const ext = path.extname(originalName || project?.pdfFile?.filename || project?.pdfFile?.path || '.pdf') || '.pdf';
+  return `${safeName}_Document${ext.toLowerCase()}`;
+};
+
+const getTaskDocumentName = (task, project = null, originalName = '') => {
+  const safeTitle = sanitizeFileBaseName(task?.title || 'Task');
+  const ext = path.extname(originalName || task?.pdfFile?.filename || task?.pdfFile?.path || '.pdf') || '.pdf';
+  return `${safeTitle}_Document${ext.toLowerCase()}`;
+};
+
+const normalizeProjectPdfFile = (project) => {
+  if (!project?.pdfFile) return project?.pdfFile;
+  const expectedName = getProjectDocumentName(project, project.pdfFile.filename || project.pdfFile.originalName);
+  return {
+    ...project.pdfFile,
+    filename: expectedName,
+    originalName: expectedName,
+  };
+};
+
+const normalizeTaskPdfFile = (task, project = null) => {
+  if (!task?.pdfFile) return task?.pdfFile;
+  const expectedName = getTaskDocumentName(task, project, task.pdfFile.filename || task.pdfFile.originalName);
+  return {
+    ...task.pdfFile,
+    filename: expectedName,
+    originalName: expectedName,
+  };
+};
+
 const withSortedProjectTasks = (project) => {
   const plainProject = typeof project?.toObject === "function" ? project.toObject() : project;
+  const sortedTasks = sortProjectTasksByCreatedAt(plainProject?.tasks);
+  const normalizedTasks = sortedTasks.map(t => ({
+    ...t,
+    pdfFile: normalizeTaskPdfFile(t, plainProject),
+  }));
   return {
     ...plainProject,
-    tasks: sortProjectTasksByCreatedAt(plainProject?.tasks)
+    pdfFile: normalizeProjectPdfFile(plainProject),
+    tasks: normalizedTasks
   };
 };
 
@@ -391,6 +438,7 @@ const withProjectSummary = (project) => {
 
   return {
     ...summary,
+    pdfFile: normalizeProjectPdfFile(plainProject),
     taskCount,
     completedTaskCount,
     taskProgress: taskCount ? Math.round((completedTaskCount / taskCount) * 100) : 0
@@ -476,7 +524,8 @@ exports.downloadProjectDocument = async (req, res) => {
       return res.status(403).json({ success: false, message: "Access denied to download document" });
     }
 
-    return sendProjectAttachment(req, res, project.pdfFile, `${project.projectName || "project"}.pdf`);
+    const documentName = getProjectDocumentName(project, project.pdfFile?.filename || project.pdfFile?.originalName);
+    return sendProjectAttachment(req, res, { ...project.pdfFile, filename: documentName }, documentName);
   } catch (error) {
     console.error("❌ Error downloading project document:", error);
     return res.status(500).json({ success: false, message: "Error downloading project document" });
@@ -500,7 +549,8 @@ exports.downloadTaskDocument = async (req, res) => {
       return res.status(404).json({ success: false, message: "Task not found" });
     }
 
-    return sendProjectAttachment(req, res, task.pdfFile, `${task.title || "task"}.pdf`);
+    const documentName = getTaskDocumentName(task, project, task.pdfFile?.filename || task.pdfFile?.originalName);
+    return sendProjectAttachment(req, res, { ...task.pdfFile, filename: documentName }, documentName);
   } catch (error) {
     console.error("❌ Error downloading task document:", error);
     return res.status(500).json({ success: false, message: "Error downloading task document" });
@@ -686,6 +736,7 @@ exports.listProjects = async (req, res) => {
 
       const items = summaryProjects.map(project => ({
         ...project,
+        pdfFile: normalizeProjectPdfFile(project),
         taskCount: Array.isArray(project.tasks) ? project.tasks.length : 0,
         completedTaskCount: Array.isArray(project.tasks)
           ? project.tasks.filter(task => String(task?.status || "").trim().toLowerCase() === "completed").length
@@ -880,8 +931,10 @@ exports.createProject = async (req, res) => {
 
 
       if (req.file) {
+        const projectFileName = getProjectDocumentName(projectData, req.file.originalname || req.file.filename);
         projectData.pdfFile = {
-          filename: req.file.originalname,
+          filename: projectFileName,
+          originalName: projectFileName,
           path: req.file.path
         };
       }
@@ -1014,8 +1067,10 @@ exports.updateProject = async (req, res) => {
           });
         }
 
+        const projectFileName = getProjectDocumentName(project, req.file.originalname || req.file.filename);
         project.pdfFile = {
-          filename: req.file.originalname,
+          filename: projectFileName,
+          originalName: projectFileName,
           path: req.file.path
         };
       }
@@ -1311,8 +1366,10 @@ exports.addTask = async (req, res) => {
 
 
       if (req.file) {
+        const taskFileName = getTaskDocumentName(task, project, req.file.originalname || req.file.filename);
         task.pdfFile = {
-          filename: req.file.originalname,
+          filename: taskFileName,
+          originalName: taskFileName,
           path: req.file.path
         };
       }
