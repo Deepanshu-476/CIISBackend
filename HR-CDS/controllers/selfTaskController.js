@@ -416,10 +416,12 @@ exports.updateStatus = async (req, res) => {
       });
     }
 
+    const isOverdueTransitionAllowed = ['in-progress', 'completed', 'onhold', 'cancelled', 'rejected'].includes(normalizedStatus);
     if (
       normalizedStatus !== 'overdue' &&
       normalizeTaskStatus(oldStatus) === 'overdue' &&
-      !allowCompanyAllEdit
+      !allowCompanyAllEdit &&
+      !isOverdueTransitionAllowed
     ) {
       return res.status(400).json({ success: false, error: 'Cannot change status of an overdue task' });
     }
@@ -429,6 +431,7 @@ exports.updateStatus = async (req, res) => {
     if (
       !['overdue', 'onhold'].includes(normalizedStatus) &&
       !isResumedFromHold &&
+      !isOverdueTransitionAllowed &&
       isTaskOverdueForStatus(task.dueDateTime || task.dueDate, oldStatus, task) &&
       !allowCompanyAllEdit
     ) {

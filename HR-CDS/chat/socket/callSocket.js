@@ -1,3 +1,6 @@
+const User = require("../../../models/User");
+const {sendPushToUsers} = require("../../utils/firebasePushService");
+
 const activeCalls = new Map();
 const CALL_RING_TIMEOUT_MS = 45 * 1000;
 
@@ -59,8 +62,34 @@ const getUserId = (value) => {
 const isUserOnline = (io, userId) => {
     const normalizedUserId = getUserId(userId);
     if (!normalizedUserId) return false;
-    const room = io.sockets.adapter.rooms.get(`user:${normalizedUserId}`);
-    return Boolean(room && room.size > 0);
+    const room = io.sockets.adapter?.rooms?.get(`user:${normalizedUserId}`);
+    if (room && room.size > 0) return true;
+    if (io.sockets?.sockets) {
+        for (const [_, s] of io.sockets.sockets) {
+            if (s.userId && s.userId.toString() === normalizedUserId) {
+                s.join(`user:${normalizedUserId}`);
+                return true;
+            }
+        }
+    }
+    return false;
+};
+
+const isUserAvailableForCall = async (io, userId) => {
+    if (isUserOnline(io, userId)) return true;
+    const normalizedUserId = getUserId(userId);
+    if (!normalizedUserId) return false;
+    try {
+        const u = await User.findById(normalizedUserId).select("isOnline lastSeen isActive").lean();
+        if (u && u.isActive !== false) {
+            if (u.isOnline) return true;
+            if (u.lastSeen) {
+                const diff = Date.now() - new Date(u.lastSeen).getTime();
+                if (diff < 15 * 60 * 1000) return true;
+            }
+        }
+    } catch (_) {}
+    return false;
 };
 
 const getParticipantIds = (data = {}) => {
@@ -120,23 +149,30 @@ const closeCallRoom = (callId) => {
 };
 
 const callSocket = (io, socket) => {
-    socket.on("call:check-availability", (data = {}, callback) => {
+    socket.on("call:check-availability", async (data = {}, callback) => {
         const participantIds = getParticipantIds(data).filter(userId => userId !== socket.userId);
-        const unavailableIds = participantIds.filter(userId => !isUserOnline(io, userId));
-        const onlineCount = participantIds.length - unavailableIds.length;
-        const available = onlineCount > 0;
+        const availabilityChecks = await Promise.all(
+            participantIds.map(async id => ({
+                id,
+                available: await isUserAvailableForCall(io, id),
+            }))
+        );
+        const availableIds = availabilityChecks.filter(item => item.available).map(item => item.id);
+        const unavailableIds = participantIds.filter(id => !availableIds.includes(id));
+        const available = availableIds.length > 0;
 
         if (typeof callback === "function") {
             callback({
                 success: available,
                 available,
+                availableIds,
                 unavailableIds,
-                reason: available ? "" : "Users are offline",
+                reason: available ? "" : "User is currently offline",
             });
         }
     });
 
-    socket.on("call:invite", (data = {}) => {
+    socket.on("call:invite", async (data = {}) => {
         const participantIds = getParticipantIds(data).filter(userId => userId !== socket.userId);
         const callType = data.callType === "video" ? "video" : "audio";
 
@@ -145,9 +181,16 @@ const callSocket = (io, socket) => {
             return;
         }
 
-        const onlineParticipantIds = participantIds.filter(userId => isUserOnline(io, userId));
-        if (onlineParticipantIds.length === 0) {
-            emitCallUnavailable(socket, data, "Users are offline");
+        const availabilityChecks = await Promise.all(
+            participantIds.map(async id => ({
+                id,
+                available: await isUserAvailableForCall(io, id),
+            }))
+        );
+        const targetParticipantIds = availabilityChecks.filter(item => item.available).map(item => item.id);
+
+        if (targetParticipantIds.length === 0) {
+            emitCallUnavailable(socket, data, "User is currently offline");
             return;
         }
 
@@ -173,7 +216,7 @@ const callSocket = (io, socket) => {
             user: callerUser,
         });
 
-        onlineParticipantIds.forEach(userId => {
+        targetParticipantIds.forEach(userId => {
             room.participants.set(userId, {
                 status: "invited",
                 user: null,
@@ -197,23 +240,39 @@ const callSocket = (io, socket) => {
             activeCalls.delete(callId);
         }, CALL_RING_TIMEOUT_MS);
 
-        onlineParticipantIds.forEach(userId => {
+        targetParticipantIds.forEach(userId => {
             emitToUser(io, userId, "call:incoming", {
                 callId,
                 fromUserId: socket.userId,
                 fromUser: callerUser,
                 callerUser,
-                participantIds: [socket.userId, ...onlineParticipantIds],
+                participantIds: [socket.userId, ...targetParticipantIds],
                 title: callTitle,
                 isGroupCall,
                 callType,
             });
         });
 
+        // Trigger push notifications to wake devices if in background/locked
+        try {
+            sendPushToUsers({
+                userIds: targetParticipantIds,
+                title: `Incoming ${callType === "video" ? "Video" : "Voice"} Call`,
+                body: `${callerUser.name || "A team member"} is calling you...`,
+                data: {
+                    type: "call:incoming",
+                    callId,
+                    callType,
+                    fromUserId: socket.userId,
+                    title: callTitle,
+                },
+            }).catch(() => {});
+        } catch (_) {}
+
         socket.emit("call:ringing", {
             callId,
-            toUserIds: onlineParticipantIds,
-            unavailableIds: participantIds.filter(userId => !onlineParticipantIds.includes(userId)),
+            toUserIds: targetParticipantIds,
+            unavailableIds: participantIds.filter(userId => !targetParticipantIds.includes(userId)),
             callType,
         });
     });

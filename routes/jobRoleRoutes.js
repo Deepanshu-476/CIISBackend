@@ -98,9 +98,16 @@ const requireJobRolePermission = (action = 'edit') => async (req, res, next) => 
 };
 
 router.get("/", jobRoleController.getAllJobRoles);
-router.get("/getJobRoles/:companyid", jobRoleController.getJobRolesByDepartment);
-router.post("/", requireJobRolePermission('edit'), jobRoleController.createJobRole);
+router.get("/getJobRoles/:companyid", jobRoleController.getJobRolesByCompany);
+router.get("/company/:companyId", jobRoleController.getJobRolesByCompany);
+router.get("/by-company/:companyId", jobRoleController.getJobRolesByCompany);
+router.get("/company/:companyId/department/:departmentId", jobRoleController.getJobRolesByCompany);
+
 router.get("/department/:departmentId", jobRoleController.getJobRolesByDepartmentId);
+router.get("/by-department/:departmentId", jobRoleController.getJobRolesByDepartmentId);
+router.get("/department-id/:departmentId", jobRoleController.getJobRolesByDepartmentId);
+
+router.post("/", requireJobRolePermission('edit'), jobRoleController.createJobRole);
 router.put("/:id", requireJobRolePermission('edit'), jobRoleController.updateJobRole);
 router.delete("/:id", requireJobRolePermission('delete'), jobRoleController.deleteJobRole);
 

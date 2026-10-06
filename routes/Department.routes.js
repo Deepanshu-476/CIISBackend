@@ -14,6 +14,9 @@ router.get("/", departmentController.getAllDepartments);
 
 
 router.get("/company/:companyId", departmentController.getDepartmentsByCompany);
+router.get("/by-company/:companyId", departmentController.getDepartmentsByCompany);
+router.get("/code/:companyCode", departmentController.getDepartmentsByCompany);
+router.get("/company-code/:companyCode", departmentController.getDepartmentsByCompany);
 
 
 router.post("/", departmentController.createDepartment);
