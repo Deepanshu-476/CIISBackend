@@ -56,6 +56,8 @@ const normalizeShifts = (shifts, shiftSettings) => {
 };
 
 
+const escapeRegex = (str = "") => String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 const isSuperAdmin = (user, reqUser) => {
   return isSuperAdminUser(reqUser) || isSuperAdminUser(user);
 };
@@ -63,27 +65,19 @@ const isSuperAdmin = (user, reqUser) => {
 
 exports.createJobRole = async (req, res) => {
   try {
-    void 0;
-    void 0;
-    void 0;
-    void 0;
-    void 0;
-    
     const { name, description, department, shiftSettings, shifts } = req.body;
     const createdBy = req.user ? req.user.id : null;
 
     if (!createdBy) {
-      void 0;
       return errorResponse(res, 401, "User not authenticated");
     }
 
-    if (!name) {
-      void 0;
+    const trimmedName = String(name || '').trim();
+    if (!trimmedName) {
       return errorResponse(res, 400, "Job role name is required");
     }
 
     if (!department) {
-      void 0;
       return errorResponse(res, 400, "Department is required");
     }
 
@@ -92,29 +86,24 @@ exports.createJobRole = async (req, res) => {
       return errorResponse(res, 400, "At least one shift is required");
     }
 
-    void 0;
-    
-    
-    const user = await User.findById(createdBy).select("role jobRole company companyCode isSuperAdmin").lean();
+    const user = await User.findById(createdBy).select("name role jobRole company companyCode isSuperAdmin").lean();
     if (!user) {
-      void 0;
       return errorResponse(res, 400, "User not found");
     }
 
-    if (!user.company) {
-      void 0;
+    if (!user.company && !isSuperAdmin(user, req.user)) {
       return errorResponse(res, 400, "User company not found");
     }
 
     const isSuper = isSuperAdmin(user, req.user);
-    void 0;
     
     let companyId, companyCode;
     
     if (isSuper) {
-      void 0;
-      
       companyId = req.body.company || user.company;
+      if (!companyId) {
+        return errorResponse(res, 400, "Company is required for job role");
+      }
       const Company = require("../models/Company");
       const selectedCompany = await Company.findById(companyId).select("companyCode");
       if (!selectedCompany) {
@@ -122,16 +111,15 @@ exports.createJobRole = async (req, res) => {
       }
       companyCode = selectedCompany.companyCode;
     } else {
-      void 0;
-      
       companyId = user.company;
       companyCode = user.companyCode;
+      if (!companyCode) {
+        const Company = require("../models/Company");
+        const selectedCompany = await Company.findById(companyId).select("companyCode");
+        companyCode = selectedCompany?.companyCode || "";
+      }
     }
 
-    void 0;
-
-    
-    void 0;
     const departmentExists = await Department.findOne({
       _id: department,
       company: companyId,
@@ -139,120 +127,99 @@ exports.createJobRole = async (req, res) => {
     });
     
     if (!departmentExists) {
-      void 0;
       return errorResponse(res, 404, "Department not found or access denied");
     }
 
-    
-    void 0;
     const existingJobRole = await JobRole.findOne({ 
-      name: { $regex: new RegExp(`^${name}$`, 'i') },
+      name: { $regex: new RegExp(`^${escapeRegex(trimmedName)}$`, 'i') },
       department: department,
       company: companyId,
       isActive: true
     });
     
     if (existingJobRole) {
-      void 0;
       return errorResponse(res, 409, "Job role already exists in this department");
     }
 
-    void 0;
-    
     const jobRole = await JobRole.create({
-      name,
-      description,
+      name: trimmedName,
+      description: String(description || '').trim(),
       department,
+      departmentName: departmentExists.name || "",
       company: companyId,
       companyCode,
       createdBy,
+      createdByName: user.name || "",
       shiftSettings: normalizedShifts[0],
       shifts: normalizedShifts
     });
 
-    void 0;
-    void 0;
-    invalidateCache(JOB_ROLE_CACHE_PREFIX);
+    try {
+      invalidateCache(JOB_ROLE_CACHE_PREFIX);
+    } catch (cacheErr) {
+      console.warn("JobRole cache invalidate warning:", cacheErr.message);
+    }
+
+    const populatedJobRole = await JobRole.findById(jobRole._id)
+      .select(JOB_ROLE_SELECT)
+      .populate('createdBy', 'name email')
+      .populate('department', 'name')
+      .populate('company', 'companyName companyCode')
+      .lean();
 
     return res.status(201).json({
       success: true,
       message: "Job role created successfully",
-      jobRole
+      jobRole: populatedJobRole || jobRole
     });
   } catch (err) {
     console.error("❌ CREATE JOB ROLE ERROR:", err.message);
     console.error("Error stack:", err.stack);
     
-    
     if (err.code === 11000) {
-      void 0;
       return errorResponse(res, 409, "Job role already exists in this department");
     }
     
-    return errorResponse(res, 500, "Failed to create job role");
+    return errorResponse(res, 500, err.message || "Failed to create job role");
   }
 };
 
 
 exports.getAllJobRoles = async (req, res) => {
   try {
-    void 0;
-    void 0;
-    void 0;
-    void 0;
-    void 0;
-    
-    const { company, department } = req.query;
+    const targetCompany = req.query.company || req.query.companyId;
+    const targetDepartment = req.query.department || req.query.departmentId || req.query.dept;
     
     if (!req.user) {
-      void 0;
       return errorResponse(res, 401, "User not authenticated");
     }
 
-    void 0;
-    
-    
     const user = await User.findById(req.user.id).select("role jobRole company companyCode isSuperAdmin").lean();
     if (!user) {
-      void 0;
       return errorResponse(res, 400, "User not found");
     }
 
     const isSuper = isSuperAdmin(user, req.user);
-    void 0;
     
     let query = { isActive: true };
-    void 0;
     
     if (!isSuper) {
-      void 0;
       if (!user.company) {
-        void 0;
         return errorResponse(res, 400, "User company not found");
       }
-      if (company && company.toString() !== user.company.toString()) {
+      if (targetCompany && targetCompany.toString() !== user.company.toString()) {
         return errorResponse(res, 403, "Access denied. You cannot view job roles of another company.");
       }
       query.company = user.company;
-      void 0;
-    } else if (company) {
-      void 0;
-      query.company = company;
-    } else {
-      if (!user.company) {
-        return errorResponse(res, 400, "User company not found");
-      }
+    } else if (targetCompany) {
+      query.company = targetCompany;
+    } else if (user.company) {
       query.company = user.company;
     }
     
-    
-    if (department) {
-      void 0;
-      query.department = department;
+    if (targetDepartment) {
+      query.department = targetDepartment;
     }
-    
-    void 0;
-    void 0;
     
     const cacheKey = getCacheKey(JOB_ROLE_CACHE_PREFIX, {
       company: query.company,
@@ -263,12 +230,9 @@ exports.getAllJobRoles = async (req, res) => {
       .select(JOB_ROLE_SELECT)
       .populate('createdBy', 'name email')
       .populate('department', 'name')
-      .populate('company', 'name')
+      .populate('company', 'companyName companyCode')
       .sort({ createdAt: -1 })
       .lean());
-
-    void 0;
-    void 0;
 
     return res.status(200).json({
       success: true,
@@ -358,10 +322,10 @@ exports.updateJobRole = async (req, res) => {
     
     if (updateData.name && updateData.name !== jobRole.name) {
       const departmentId = updateData.department || jobRole.department;
-      void 0;
+      const cleanName = String(updateData.name).trim();
       
       const existingJobRole = await JobRole.findOne({ 
-        name: { $regex: new RegExp(`^${updateData.name}$`, 'i') },
+        name: { $regex: new RegExp(`^${escapeRegex(cleanName)}$`, 'i') },
         department: departmentId,
         company: jobRole.company,
         _id: { $ne: id },
@@ -369,15 +333,12 @@ exports.updateJobRole = async (req, res) => {
       });
       
       if (existingJobRole) {
-        void 0;
         return errorResponse(res, 409, "Job role name already exists in this department");
       }
-      void 0;
+      updateData.name = cleanName;
     }
 
-    
     if (!isSuper) {
-      void 0;
       delete updateData.company;
       delete updateData.companyCode;
     }
@@ -391,8 +352,6 @@ exports.updateJobRole = async (req, res) => {
       updateData.shiftSettings = normalizedShifts[0];
     }
 
-    void 0;
-    
     const updatedJobRole = await JobRole.findByIdAndUpdate(
       id,
       updateData,
@@ -400,12 +359,14 @@ exports.updateJobRole = async (req, res) => {
     )
     .populate('createdBy', 'name email')
     .populate('department', 'name')
-    .populate('company', 'name')
+    .populate('company', 'companyName companyCode')
     .lean();
 
-    void 0;
-    void 0;
-    invalidateCache(JOB_ROLE_CACHE_PREFIX);
+    try {
+      invalidateCache(JOB_ROLE_CACHE_PREFIX);
+    } catch (cacheErr) {
+      console.warn("JobRole cache invalidate warning:", cacheErr.message);
+    }
 
     if (updateData.name) {
       cascadeJobRoleUpdate(id, { name: updateData.name, oldName: jobRole.name }).catch(() => {});
@@ -420,89 +381,62 @@ exports.updateJobRole = async (req, res) => {
     console.error("❌ UPDATE JOB ROLE ERROR:", err.message);
     console.error("Error stack:", err.stack);
     
-    
     if (err.code === 11000) {
-      void 0;
       return errorResponse(res, 409, "Job role name already exists in this department");
     }
     
-    return errorResponse(res, 500, "Failed to update job role");
+    return errorResponse(res, 500, err.message || "Failed to update job role");
   }
 };
 
 
 exports.deleteJobRole = async (req, res) => {
   try {
-    void 0;
-    void 0;
-    void 0;
-    void 0;
-    void 0;
-    
     const { id } = req.params;
     
     if (!req.user) {
-      void 0;
       return errorResponse(res, 401, "User not authenticated");
     }
 
-    void 0;
     const user = await User.findById(req.user.id).select("role jobRole company companyCode isSuperAdmin").lean();
     if (!user) {
-      void 0;
       return errorResponse(res, 400, "User not found");
     }
 
-    void 0;
     const isSuper = isSuperAdmin(user, req.user);
-    void 0;
 
-    void 0;
     const jobRole = await JobRole.findById(id);
     if (!jobRole) {
-      void 0;
       return errorResponse(res, 404, "Job role not found");
     }
 
-    void 0;
-
-    
     if (!isSuper) {
-      void 0;
       if (!user.company) {
-        void 0;
         return errorResponse(res, 400, "User company not found");
       }
       
       if (jobRole.company.toString() !== user.company.toString()) {
-        void 0;
         return errorResponse(res, 403, "You can only delete job roles from your company");
       }
-      void 0;
     }
 
-    
-    void 0;
     const usersCount = await User.countDocuments({ 
       jobRole: id, 
       isActive: true 
     });
     
-    void 0;
-    
     if (usersCount > 0) {
-      void 0;
       return errorResponse(res, 400, "Cannot delete job role with active users");
     }
 
-    
-    void 0;
     jobRole.isActive = false;
     await jobRole.save();
 
-    void 0;
-    void 0;
-    invalidateCache(JOB_ROLE_CACHE_PREFIX);
+    try {
+      invalidateCache(JOB_ROLE_CACHE_PREFIX);
+    } catch (cacheErr) {
+      console.warn("JobRole cache invalidate warning:", cacheErr.message);
+    }
 
     return res.status(200).json({
       success: true,
@@ -513,88 +447,59 @@ exports.deleteJobRole = async (req, res) => {
     console.error("Error stack:", err.stack);
     
     if (err.message === 'Cannot delete job role with active users') {
-      void 0;
       return errorResponse(res, 400, err.message);
     }
     
-    return errorResponse(res, 500, "Failed to delete job role");
+    return errorResponse(res, 500, err.message || "Failed to delete job role");
   }
 };
 
 
 exports.getJobRolesByDepartment = async (req, res) => {
   try {
-    void 0;
-    void 0;
-    void 0;
-    void 0;
-    void 0;
-    
-    const { departmentId } = req.params;
+    const departmentId = req.params.departmentId || req.params.companyid;
     
     if (!req.user) {
-      void 0;
       return errorResponse(res, 401, "User not authenticated");
     }
 
-    void 0;
     const user = await User.findById(req.user.id).select("role jobRole company companyCode isSuperAdmin").lean();
     if (!user) {
-      void 0;
       return errorResponse(res, 400, "User not found");
     }
 
-    void 0;
-
     const isSuper = isSuperAdmin(user, req.user);
-    void 0;
-    
     
     const department = await Department.findById(departmentId).select("company").lean();
     if (!department) {
-      void 0;
       return errorResponse(res, 404, "Department not found");
     }
 
-    void 0;
-
-    
     if (!isSuper) {
-      void 0;
       if (!user.company) {
-        void 0;
         return errorResponse(res, 400, "User company not found");
       }
       
-      void 0;
-      void 0;
-      void 0;
-      
       if (user.company.toString() !== department.company.toString()) {
-        void 0;
         return errorResponse(res, 403, "Access denied");
       }
-      void 0;
     }
     
     let query = { 
       isActive: true,
-      department: departmentId 
+      department: departmentId,
+      company: department.company
     };
     
-    void 0;
     const cacheKey = getCacheKey(JOB_ROLE_CACHE_PREFIX, {
       department: departmentId,
-      company: query.company || department.company,
+      company: department.company,
       scope: "department",
     });
     const jobRoles = await getOrSetCached(cacheKey, () => JobRole.find(query)
       .select('name description')
       .sort({ name: 1 })
       .lean());
-
-    void 0;
-    void 0;
 
     return res.status(200).json({
       success: true,
@@ -610,77 +515,49 @@ exports.getJobRolesByDepartment = async (req, res) => {
 
 exports.getJobRolesByDepartmentId = async (req, res) => {
   try {
-    void 0;
-    void 0;
-    void 0;
-    void 0;
-    void 0;
-    
     const { departmentId } = req.params;
     
     if (!req.user) {
-      void 0;
       return errorResponse(res, 401, "User not authenticated");
     }
 
-    void 0;
     const user = await User.findById(req.user.id).select("role jobRole company companyCode isSuperAdmin").lean();
     if (!user) {
-      void 0;
       return errorResponse(res, 400, "User not found");
     }
 
-    void 0;
-
-    
     const isSuper = isSuperAdmin(user, req.user);
-    void 0;
 
-    
     const department = await Department.findById(departmentId).select("company").lean();
     if (!department) {
-      void 0;
       return errorResponse(res, 404, "Department not found");
     }
 
-    void 0;
-
-    
-    let query = { 
-      department: departmentId,
-      isActive: true 
-    };
-
-    
     if (!isSuper) {
       if (!user.company) {
-        void 0;
         return errorResponse(res, 400, "User company not found");
       }
       
-      void 0;
-      query.company = user.company;
-      
-      
       if (department.company.toString() !== user.company.toString()) {
-        void 0;
         return errorResponse(res, 403, "Access denied");
       }
     }
 
-    void 0;
+    let query = { 
+      department: departmentId,
+      company: department.company,
+      isActive: true 
+    };
+
     const cacheKey = getCacheKey(JOB_ROLE_CACHE_PREFIX, {
       department: departmentId,
-      company: query.company || department.company,
+      company: department.company,
       scope: "department-id",
     });
     const jobRoles = await getOrSetCached(cacheKey, () => JobRole.find(query)
       .select('name description')
       .sort({ name: 1 })
       .lean());
-
-    void 0;
-    void 0;
 
     return res.status(200).json({
       success: true,
