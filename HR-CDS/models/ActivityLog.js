@@ -19,7 +19,9 @@ const activityLogSchema = new mongoose.Schema({
       'task_assigned',
       'task_created_for_others',
       'task_completed',
-      'self_task_created'
+      'self_task_created',
+      'checkpoint_updated',
+      'recurring_task_stopped'
     ]
   },
   task: {
