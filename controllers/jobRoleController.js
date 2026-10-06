@@ -3,6 +3,7 @@ const User = require("../models/User");
 const Department = require("../models/Department");
 const mongoose = require("mongoose");
 const { isSuperAdminUser } = require("../middleware/authMiddleware");
+const { getCacheKey, getOrSetCached, invalidateCache } = require("../utils/inMemoryCache");
 
 let cascadeJobRoleUpdate = async () => {};
 try {
