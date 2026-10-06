@@ -51,6 +51,7 @@ router.patch(
 );
 router.delete('/update/:id/comments/:commentId/attachment', protect, assetController.deleteCommentAttachment);
 router.delete('/delete/:id', protect, assetController.deleteRequest);      
+router.delete('/:id', protect, assetController.deleteRequest);      
 
 
 const isCompanyAdminOrOwner = (user) => {

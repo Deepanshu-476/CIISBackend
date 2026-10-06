@@ -1,7 +1,11 @@
 
 const Department = require("../models/Department");
 const User = require("../models/User");
+const Company = require("../models/Company");
+const Branch = require("../models/Branch");
+const mongoose = require("mongoose");
 const { getCacheKey, getOrSetCached, invalidateCache } = require("../utils/inMemoryCache");
+const { isSuperAdminUser } = require("../middleware/authMiddleware");
 
 let cascadeDepartmentUpdate = async () => {};
 try {
@@ -37,8 +41,8 @@ const normalizeWorkingDays = (value) => {
   return { value: parsed };
 };
 
-
-const isSuperAdmin = (user) => {
+const isSuperAdmin = (user, reqUser) => {
+  if (isSuperAdminUser(reqUser) || isSuperAdminUser(user)) return true;
   if (!user) return false;
 
   const normalizedRole = String(user.role || '')
@@ -49,11 +53,47 @@ const isSuperAdmin = (user) => {
     .trim()
     .toLowerCase()
     .replace(/[-\s]+/g, '_');
-  const isSuper = normalizedRole === 'super-admin' || normalizedJobRole === 'super_admin';
+  const normalizedCompanyRole = String(user.companyRole || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[-\s]+/g, '_');
 
-  void 0;
-  
-  return isSuper;
+  return normalizedRole === 'super-admin' ||
+    normalizedJobRole === 'super_admin' ||
+    normalizedCompanyRole === 'super_admin' ||
+    user.isSuperAdmin === true;
+};
+
+const resolveCompanyScope = async (target, user) => {
+  if (!target) {
+    if (user && user.company) {
+      return { companyId: user.company, companyCode: user.companyCode };
+    }
+    return null;
+  }
+
+  const cleanTarget = String(target).trim();
+  if (mongoose.Types.ObjectId.isValid(cleanTarget)) {
+    const companyDoc = await Company.findById(cleanTarget).select('_id companyCode').lean();
+    if (companyDoc) {
+      return { companyId: companyDoc._id, companyCode: companyDoc.companyCode };
+    }
+    return { companyId: new mongoose.Types.ObjectId(cleanTarget), companyCode: null };
+  }
+
+  const companyDoc = await Company.findOne({
+    $or: [
+      { companyCode: cleanTarget.toUpperCase() },
+      { companyCode: cleanTarget },
+      { dbIdentifier: cleanTarget }
+    ]
+  }).select('_id companyCode').lean();
+
+  if (companyDoc) {
+    return { companyId: companyDoc._id, companyCode: companyDoc.companyCode };
+  }
+
+  return { companyCode: cleanTarget };
 };
 
 
@@ -103,56 +143,52 @@ exports.createDepartment = async (req, res) => {
     }
 
     
-    const isSuper = isSuperAdmin(user);
-    void 0;
-    
-    
+    const isSuper = isSuperAdmin(user, req.user);
     let companyId, companyCode;
     
     if (isSuper) {
-      void 0;
-      
-      companyId = req.body.company || user.company;
-      const Company = require("../models/Company");
-      const selectedCompany = await Company.findById(companyId).select("companyCode");
-      if (!selectedCompany) {
+      const targetCompany = req.body.company || user.company;
+      if (!targetCompany) {
+        return errorResponse(res, 400, "Company is required");
+      }
+      const companyScope = await resolveCompanyScope(targetCompany, user);
+      if (!companyScope?.companyId) {
         return errorResponse(res, 400, "Selected company not found");
       }
-      companyCode = selectedCompany.companyCode;
+      companyId = companyScope.companyId;
+      companyCode = companyScope.companyCode || "";
     } else {
-      void 0;
-      
       companyId = user.company;
       companyCode = user.companyCode;
+      if (!companyCode) {
+        const companyScope = await resolveCompanyScope(companyId, user);
+        companyCode = companyScope?.companyCode || "";
+      }
     }
 
-    void 0;
-
-    
-    void 0;
     const existingDept = await Department.findOne({ 
-      name: { $regex: new RegExp(`^${name}$`, 'i') },
+      name: { $regex: new RegExp(`^${name.trim()}$`, 'i') },
       company: companyId,
       isActive: true
     });
     
     if (existingDept) {
-      void 0;
       return errorResponse(res, 409, "Department already exists in this company");
     }
 
-    
-    let branchId = branch || null;
+    let branchId = null;
     let branchCodeVal = "";
     
-    if (branchId) {
-      const Branch = require("../models/Branch");
-      const branchObj = await Branch.findById(branchId);
-      if (branchObj) {
-        branchCodeVal = branchObj.branchCode;
+    if (branch) {
+      const cleanBranch = String(branch).trim();
+      if (mongoose.Types.ObjectId.isValid(cleanBranch)) {
+        const branchObj = await Branch.findById(cleanBranch);
+        if (branchObj) {
+          branchId = branchObj._id;
+          branchCodeVal = branchObj.branchCode;
+        }
       }
     } else {
-      const Branch = require("../models/Branch");
       const defaultBranch = await Branch.findOne({ company: companyId, isDefault: true });
       if (defaultBranch) {
         branchId = defaultBranch._id;
@@ -204,79 +240,80 @@ exports.createDepartment = async (req, res) => {
 
 exports.getAllDepartments = async (req, res) => {
   try {
-    void 0;
-    void 0;
-    void 0;
-    void 0;
-    void 0;
-    
-    const { company, branch } = req.query;
-    
+    const rawCompany = req.query.company || req.query.companyId || req.query.companyCode || req.query.code;
+    const rawBranch = req.query.branch || req.query.branchId;
+
     if (!req.user) {
-      void 0;
       return errorResponse(res, 401, "User not authenticated");
     }
 
-    void 0;
-    
-    
-    const user = await User.findById(req.user.id).select("role jobRole company companyCode").lean();
+    const user = await User.findById(req.user.id).select("role jobRole company companyCode isSuperAdmin").lean();
     if (!user) {
-      void 0;
       return errorResponse(res, 400, "User not found");
     }
 
-    void 0;
-
-    
-    const isSuper = isSuperAdmin(user);
-    void 0;
-    
+    const isSuper = isSuperAdmin(user, req.user);
     let query = { isActive: true };
-    void 0;
-    
-    
+
     if (!isSuper) {
-      void 0;
       if (!user.company) {
-        void 0;
         return errorResponse(res, 400, "User company not found");
       }
-      query.company = user.company;
-      void 0;
-    } else if (company) {
-      
-      void 0;
-      query.company = company;
+
+      if (rawCompany) {
+        const cleanCompany = String(rawCompany).trim();
+        const matchesCompanyId = cleanCompany === user.company.toString();
+        const matchesCompanyCode = user.companyCode && cleanCompany.toUpperCase() === user.companyCode.toUpperCase();
+        if (!matchesCompanyId && !matchesCompanyCode) {
+          return errorResponse(res, 403, "Access denied. You cannot view departments of another company.");
+        }
+      }
+
+      query.$or = [
+        { company: user.company },
+        ...(user.companyCode ? [{ companyCode: user.companyCode }] : [])
+      ];
     } else {
-      if (!user.company) {
-        return errorResponse(res, 400, "User company not found");
+      if (rawCompany) {
+        const companyScope = await resolveCompanyScope(rawCompany, user);
+        if (companyScope?.companyId) {
+          query.$or = [
+            { company: companyScope.companyId },
+            ...(companyScope.companyCode ? [{ companyCode: companyScope.companyCode }] : [])
+          ];
+        } else if (companyScope?.companyCode) {
+          query.companyCode = companyScope.companyCode;
+        }
+      } else if (user.company) {
+        query.$or = [
+          { company: user.company },
+          ...(user.companyCode ? [{ companyCode: user.companyCode }] : [])
+        ];
       }
-      query.company = user.company;
     }
 
-    if (branch) {
-      query.branch = branch;
+    if (rawBranch) {
+      const cleanBranch = String(rawBranch).trim();
+      if (mongoose.Types.ObjectId.isValid(cleanBranch)) {
+        query.branch = new mongoose.Types.ObjectId(cleanBranch);
+      } else {
+        query.branchCode = cleanBranch;
+      }
     }
-    
-    void 0;
-    void 0;
-    
+
     const cacheKey = getCacheKey(DEPARTMENT_CACHE_PREFIX, {
-      company: query.company,
-      branch: query.branch,
+      company: rawCompany || (user.company ? user.company.toString() : "all"),
+      branch: rawBranch || "all",
       role: isSuper ? "super" : "company",
     });
+
     const departments = await getOrSetCached(cacheKey, () => Department.find(query)
       .select(DEPARTMENT_SELECT)
       .populate('createdBy', 'name email')
       .populate('branch', 'name branchCode')
+      .populate('company', 'companyName companyCode')
       .sort({ createdAt: -1 })
       .lean());
-
-    void 0;
-    void 0;
-    void 0;
 
     return res.status(200).json({
       success: true,
@@ -555,74 +592,72 @@ exports.getDepartmentsByCompany = async (req, res) => {
     void 0;
     void 0;
     
-    const { companyId } = req.params;
-    const { branch } = req.query;
-    
+    const rawCompany = req.params.companyId || req.params.companyCode || req.params.id;
+    const rawBranch = req.query.branch || req.query.branchId;
+
     if (!req.user) {
-      void 0;
       return errorResponse(res, 401, "User not authenticated");
     }
 
-    void 0;
-    const user = await User.findById(req.user.id).select("role jobRole company companyCode").lean();
+    const user = await User.findById(req.user.id).select("role jobRole company companyCode isSuperAdmin").lean();
     if (!user) {
-      void 0;
       return errorResponse(res, 400, "User not found");
     }
 
-    void 0;
+    const isSuper = isSuperAdmin(user, req.user);
 
-    const isSuper = isSuperAdmin(user);
-    void 0;
-    
-    let query = { 
-      isActive: true,
-      company: companyId 
-    };
-
-    if (branch) {
-      query.branch = branch;
-    }
-    
-    void 0;
-    
-    
     if (!isSuper) {
-      void 0;
       if (!user.company) {
-        void 0;
         return errorResponse(res, 400, "User company not found");
       }
-      
-      void 0;
-      void 0;
-      void 0;
-      
-      if (user.company.toString() !== companyId) {
-        void 0;
+      const cleanCompany = String(rawCompany).trim();
+      const matchesCompanyId = cleanCompany === user.company.toString();
+      const matchesCompanyCode = user.companyCode && cleanCompany.toUpperCase() === user.companyCode.toUpperCase();
+      if (!matchesCompanyId && !matchesCompanyCode) {
         return errorResponse(res, 403, "Access denied");
       }
-      void 0;
     }
-    
-    void 0;
+
+    const companyScope = await resolveCompanyScope(rawCompany, user);
+    let query = { isActive: true };
+
+    if (companyScope?.companyId) {
+      query.$or = [
+        { company: companyScope.companyId },
+        ...(companyScope.companyCode ? [{ companyCode: companyScope.companyCode }] : [])
+      ];
+    } else if (companyScope?.companyCode) {
+      query.companyCode = companyScope.companyCode;
+    } else if (user.company) {
+      query.company = user.company;
+    }
+
+    if (rawBranch) {
+      const cleanBranch = String(rawBranch).trim();
+      if (mongoose.Types.ObjectId.isValid(cleanBranch)) {
+        query.branch = new mongoose.Types.ObjectId(cleanBranch);
+      } else {
+        query.branchCode = cleanBranch;
+      }
+    }
+
     const cacheKey = getCacheKey(DEPARTMENT_CACHE_PREFIX, {
-      company: companyId,
-      branch: query.branch,
+      company: rawCompany,
+      branch: rawBranch || "all",
       scope: "company",
     });
+
     const departments = await getOrSetCached(cacheKey, () => Department.find(query)
       .populate('branch', 'name branchCode')
-      .select('name description branch workingDays workingDayHistory')
+      .populate('createdBy', 'name email')
+      .populate('company', 'companyName companyCode')
+      .select('name description branch branchCode company companyCode workingDays workingDayHistory')
       .sort({ name: 1 })
       .lean());
 
-    void 0;
-    void 0;
-
     return res.status(200).json({
       success: true,
-      count: departments.length,    
+      count: departments.length,
       departments
     });
   } catch (err) {

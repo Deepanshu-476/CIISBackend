@@ -2047,10 +2047,12 @@ exports.updateStatus = async (req, res) => {
       });
     }
 
+    const isOverdueTransitionAllowed = ['in-progress', 'completed', 'onhold', 'cancelled', 'rejected'].includes(normalizedStatus);
     if (
       normalizedStatus !== 'overdue' &&
       normalizeTaskStatus(oldStatus) === 'overdue' &&
-      !allowCompanyAllEdit
+      !allowCompanyAllEdit &&
+      !isOverdueTransitionAllowed
     ) {
       return res.status(400).json({ success: false, error: 'Cannot change status of an overdue task' });
     }
@@ -2060,6 +2062,7 @@ exports.updateStatus = async (req, res) => {
     if (
       !['overdue', 'onhold'].includes(normalizedStatus) &&
       !isResumedFromHold &&
+      !isOverdueTransitionAllowed &&
       isTaskOverdueForStatus(task.dueDateTime || task.dueDate, oldStatus, task) &&
       !allowCompanyAllEdit
     ) {
@@ -2593,6 +2596,7 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
     { dueDate: range },
     { createdAt: range },
     { updatedAt: range },
+    { completionDate: range },
     { completedAt: range }
   ] : null;
 
@@ -2637,6 +2641,7 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
           { dueDate: range },
           { createdAt: range },
           { updatedAt: range },
+          { completionDate: range },
           { completedAt: range }
         ]
       }
@@ -2656,7 +2661,8 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
       { status: { $in: ['pending', 'in-progress', 'inprogress', 'onhold', 'on-hold', 'reopen'] } },
       { dueDate: range },
       { createdAt: range },
-      { updatedAt: range },
+    { updatedAt: range },
+      { completionDate: range },
       { completedAt: range }
     ];
   }
@@ -3251,7 +3257,7 @@ exports.getUserAllTasksPaginated = async (req, res) => {
         counts.overdue += 1;
       } else if (status !== 'overdue' && counts[status] !== undefined) {
         counts[status] += 1;
-      } else if (status === 'pending') {
+      } else {
         counts.pending += 1;
       }
     });
@@ -3310,7 +3316,9 @@ exports.getUserAllTasksPaginated = async (req, res) => {
         email: targetUser.email,
         role: targetUser.jobRole || targetUser.companyRole || targetUser.role,
         jobRole: targetUser.jobRole,
-        department: targetUser.department,
+        department: typeof targetUser.department === 'object' && targetUser.department !== null
+          ? (targetUser.department.name || targetUser.department._id || '')
+          : (targetUser.department || ''),
         employeeId: targetUser.employeeId
       } : null,
       tasks: enrichedTasks,
@@ -3482,7 +3490,7 @@ exports.updateCreatorStatus = async (req, res) => {
       return res.status(403).json({ success: false, error: 'Not authorized to change admin status' });
     }
 
-    if (task.overallStatus === 'overdue') {
+    if (task.overallStatus === 'overdue' && !['pending', 'completed', 'in-progress', 'approved', 'rejected'].includes(normalizeTaskStatus(status))) {
       return res.status(400).json({ success: false, error: 'Cannot change status of an overdue task' });
     }
 

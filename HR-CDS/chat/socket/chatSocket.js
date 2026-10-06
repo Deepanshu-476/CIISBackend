@@ -36,15 +36,23 @@ const emitOnlineUsers = (io, companyId) => {
     );
 };
 
+const getRawCompanyId = company => {
+    if (!company) return "";
+    if (typeof company === "string") return company;
+    if (company._id) return company._id.toString();
+    if (company.id) return company.id.toString();
+    return company.toString();
+};
+
 const getCompanyOnlineUsers = (io, companyId) => {
-    if (!companyId) return getOnlineUserIds();
+    const companyKey = getRawCompanyId(companyId);
+    if (!companyKey) return getOnlineUserIds();
 
     const userIds = new Set();
-    const companyKey = companyId.toString();
 
     io.sockets.sockets.forEach(connectedSocket => {
-        const socketCompanyId = connectedSocket.companyId?.toString();
-        if (socketCompanyId !== companyKey) return;
+        const socketCompId = getRawCompanyId(connectedSocket.companyId);
+        if (companyKey && socketCompId && socketCompId !== companyKey) return;
         if (!connectedSocket.userId) return;
         userIds.add(connectedSocket.userId.toString());
     });
@@ -99,6 +107,12 @@ const chatSocket = (io, socket) => {
             callback(users);
         } else {
             socket.emit("chat:online-users", users);
+        }
+    });
+
+    socket.on("chat:heartbeat", (callback) => {
+        if (typeof callback === "function") {
+            callback({ status: "ok", timestamp: Date.now() });
         }
     });
 
