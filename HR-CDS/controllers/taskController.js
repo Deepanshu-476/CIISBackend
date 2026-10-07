@@ -2896,7 +2896,7 @@ exports.getUserTaskStats = async (req, res) => {
     const filtered = filterUserTasks(allTasks, req.query);
 
     const counts = {
-      total: filtered.length,
+      total: allTasks.length,
       pending: 0,
       'in-progress': 0,
       completed: 0,
@@ -2904,7 +2904,7 @@ exports.getUserTaskStats = async (req, res) => {
       onhold: 0
     };
 
-    filtered.forEach(task => {
+    allTasks.forEach(task => {
       const status = normalizeTaskStatus(task.userStatus || task.status);
       const overdue = isTaskOverdueForStatus(task.dueDateTime || task.dueDate, status, task);
       // A task belongs to exactly one dashboard bucket.  Counting an overdue
@@ -2919,7 +2919,7 @@ exports.getUserTaskStats = async (req, res) => {
       }
     });
 
-    const total = filtered.length;
+    const total = allTasks.length;
     const toStat = (count) => ({
       count,
       percentage: total > 0 ? Math.round((count / total) * 100) : 0
@@ -3242,7 +3242,7 @@ exports.getUserAllTasksPaginated = async (req, res) => {
     const filtered = filterUserTasks(allTasksWithWorkTime, req.query);
 
     const counts = {
-      total: filtered.length,
+      total: allTasksWithWorkTime.length,
       pending: 0,
       'in-progress': 0,
       completed: 0,
@@ -3250,7 +3250,7 @@ exports.getUserAllTasksPaginated = async (req, res) => {
       onhold: 0
     };
 
-    filtered.forEach(task => {
+    allTasksWithWorkTime.forEach(task => {
       const status = normalizeTaskStatus(task.userStatus || task.status);
       const overdue = isTaskOverdueForStatus(task.dueDateTime || task.dueDate, status, task);
       if (overdue) {
@@ -3278,7 +3278,7 @@ exports.getUserAllTasksPaginated = async (req, res) => {
 
     const sortedFiltered = sortTasksNewestFirst(filtered);
 
-    const completedWithDeadline = filtered.filter(task => {
+    const completedWithDeadline = allTasksWithWorkTime.filter(task => {
       const status = normalizeTaskStatus(task.userStatus || task.status);
       return status === 'completed' && task.completedAt && (task.dueDateTime || task.dueDate);
     });
