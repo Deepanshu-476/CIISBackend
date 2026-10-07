@@ -2869,15 +2869,52 @@ const filterUserTasks = (tasks, query) => {
 
 
     if (range) {
-      const taskStatus = normalizeTaskStatus(t.userStatus || t.status || '');
-      const isOngoing = ['pending', 'in-progress', 'onhold', 'reopen'].includes(taskStatus);
-      if (!isOngoing) {
-        const dateToFilter = t.completedAt || t.updatedAt || t.dueDateTime || t.dueDate || t.createdAt;
-        const taskDate = dateToFilter ? new Date(dateToFilter) : null;
-        if (!taskDate || Number.isNaN(taskDate.getTime())) return false;
+      const field = String(query.dateField || '').trim().toLowerCase();
+      if (field === 'createdat' || field === 'createddate') {
+        const d = t.createdAt ? new Date(t.createdAt) : null;
+        if (!d || isNaN(d.getTime())) return false;
+        if (range.$gte && d < range.$gte) return false;
+        if (range.$lte && d > range.$lte) return false;
+        return true;
+      }
+      if (field === 'duedate' || field === 'duedatetime') {
+        const d = (t.dueDateTime || t.dueDate) ? new Date(t.dueDateTime || t.dueDate) : null;
+        if (!d || isNaN(d.getTime())) return false;
+        if (range.$gte && d < range.$gte) return false;
+        if (range.$lte && d > range.$lte) return false;
+        return true;
+      }
+      if (field === 'completedat' || field === 'completiondate') {
+        const d = (t.completionDate || t.completedAt) ? new Date(t.completionDate || t.completedAt) : null;
+        if (!d || isNaN(d.getTime())) return false;
+        if (range.$gte && d < range.$gte) return false;
+        if (range.$lte && d > range.$lte) return false;
+        return true;
+      }
 
-        if (range.$gte && taskDate < range.$gte) return false;
-        if (range.$lte && taskDate > range.$lte) return false;
+      // Default: match if any relevant task date falls in range
+      const candidateDates = [
+        t.dueDateTime,
+        t.dueDate,
+        t.createdAt,
+        t.completionDate,
+        t.completedAt
+      ].filter(Boolean).map(v => new Date(v)).filter(d => !isNaN(d.getTime()));
+
+      const hasMatchingDate = candidateDates.some(d => {
+        if (range.$gte && d < range.$gte) return false;
+        if (range.$lte && d > range.$lte) return false;
+        return true;
+      });
+
+      if (!hasMatchingDate) {
+        // If range covers current moment, include actively in-progress tasks
+        const now = new Date();
+        const coversNow = (!range.$gte || now >= range.$gte) && (!range.$lte || now <= range.$lte);
+        const normStatus = normalizeTaskStatus(t.userStatus || t.status || t.overallStatus);
+        if (!coversNow || normStatus !== 'in-progress') {
+          return false;
+        }
       }
     }
 
@@ -2896,7 +2933,7 @@ exports.getUserTaskStats = async (req, res) => {
     const filtered = filterUserTasks(allTasks, req.query);
 
     const counts = {
-      total: allTasks.length,
+      total: filtered.length,
       pending: 0,
       'in-progress': 0,
       completed: 0,
@@ -2904,7 +2941,7 @@ exports.getUserTaskStats = async (req, res) => {
       onhold: 0
     };
 
-    allTasks.forEach(task => {
+    filtered.forEach(task => {
       const status = normalizeTaskStatus(task.userStatus || task.status);
       const overdue = isTaskOverdueForStatus(task.dueDateTime || task.dueDate, status, task);
       // A task belongs to exactly one dashboard bucket.  Counting an overdue
@@ -2919,7 +2956,7 @@ exports.getUserTaskStats = async (req, res) => {
       }
     });
 
-    const total = allTasks.length;
+    const total = filtered.length;
     const toStat = (count) => ({
       count,
       percentage: total > 0 ? Math.round((count / total) * 100) : 0
