@@ -726,7 +726,7 @@ exports.getUserAllTasksPaginated = async (req, res) => {
     const enrichedTasks = await enrichTasksWithActivityAndRemarks(tasks);
 
     const counts = {
-      total: total,
+      total: allTasks.length,
       pending: 0,
       'in-progress': 0,
       completed: 0,
@@ -734,7 +734,7 @@ exports.getUserAllTasksPaginated = async (req, res) => {
       onhold: 0
     };
 
-    filtered.forEach(task => {
+    allTasks.forEach(task => {
       const status = task.status;
       if (counts[status] !== undefined) {
         counts[status] += 1;
@@ -745,11 +745,11 @@ exports.getUserAllTasksPaginated = async (req, res) => {
 
     const toStat = (count) => ({
       count,
-      percentage: total > 0 ? Math.round((count / total) * 100) : 0
+      percentage: allTasks.length > 0 ? Math.round((count / allTasks.length) * 100) : 0
     });
 
     const calculatedStats = {
-      total: total,
+      total: allTasks.length,
       pending: toStat(counts.pending),
       inProgress: toStat(counts['in-progress']),
       completed: toStat(counts.completed),
