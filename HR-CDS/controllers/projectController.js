@@ -397,22 +397,22 @@ const getTaskDocumentName = (task, project = null, originalName = '') => {
 const normalizeProjectPdfFile = (project) => {
   const pdfFile = project?.pdfFile;
   if (!pdfFile || (!pdfFile.path && !pdfFile.url)) return null;
-  const expectedName = getProjectDocumentName(project, pdfFile.filename || pdfFile.originalName);
+  const original = pdfFile.originalName || pdfFile.filename || (pdfFile.path ? path.basename(pdfFile.path) : '') || 'Document.pdf';
   return {
     ...pdfFile,
-    filename: expectedName,
-    originalName: expectedName,
+    filename: original,
+    originalName: original,
   };
 };
 
 const normalizeTaskPdfFile = (task, project = null) => {
   const pdfFile = task?.pdfFile;
   if (!pdfFile || (!pdfFile.path && !pdfFile.url)) return null;
-  const expectedName = getTaskDocumentName(task, project, pdfFile.filename || pdfFile.originalName);
+  const original = pdfFile.originalName || pdfFile.filename || (pdfFile.path ? path.basename(pdfFile.path) : '') || 'Attachment';
   return {
     ...pdfFile,
-    filename: expectedName,
-    originalName: expectedName,
+    filename: original,
+    originalName: original,
   };
 };
 
