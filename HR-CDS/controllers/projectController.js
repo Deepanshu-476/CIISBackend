@@ -395,20 +395,22 @@ const getTaskDocumentName = (task, project = null, originalName = '') => {
 };
 
 const normalizeProjectPdfFile = (project) => {
-  if (!project?.pdfFile) return project?.pdfFile;
-  const expectedName = getProjectDocumentName(project, project.pdfFile.filename || project.pdfFile.originalName);
+  const pdfFile = project?.pdfFile;
+  if (!pdfFile || (!pdfFile.path && !pdfFile.url)) return null;
+  const expectedName = getProjectDocumentName(project, pdfFile.filename || pdfFile.originalName);
   return {
-    ...project.pdfFile,
+    ...pdfFile,
     filename: expectedName,
     originalName: expectedName,
   };
 };
 
 const normalizeTaskPdfFile = (task, project = null) => {
-  if (!task?.pdfFile) return task?.pdfFile;
-  const expectedName = getTaskDocumentName(task, project, task.pdfFile.filename || task.pdfFile.originalName);
+  const pdfFile = task?.pdfFile;
+  if (!pdfFile || (!pdfFile.path && !pdfFile.url)) return null;
+  const expectedName = getTaskDocumentName(task, project, pdfFile.filename || pdfFile.originalName);
   return {
-    ...task.pdfFile,
+    ...pdfFile,
     filename: expectedName,
     originalName: expectedName,
   };
