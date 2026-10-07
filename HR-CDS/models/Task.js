@@ -71,6 +71,7 @@ const remarkSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
+    userName: { type: String },
     text: { type: String },
     createdAt: { type: Date, default: Date.now },
     image: String,

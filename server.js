@@ -794,21 +794,28 @@ const blockSensitiveStaticAccess = (req, res, next) => {
 app.use("/api/uploads", blockSensitiveStaticAccess);
 app.use("/uploads", blockSensitiveStaticAccess);
 
+const staticCacheOptions = {
+  maxAge: '7d',
+  etag: true,
+  lastModified: true
+};
+
 uploadStaticDirs.forEach(uploadDir => {
-  app.use("/api/uploads", express.static(uploadDir));
-  app.use("/uploads", express.static(uploadDir));
+  app.use("/api/uploads", express.static(uploadDir, staticCacheOptions));
+  app.use("/uploads", express.static(uploadDir, staticCacheOptions));
 });
 // Older chat uploads were written one directory above the backend. Keep those
 // already-sent attachments reachable while new uploads use backend/uploads.
-app.use("/api/uploads/chat", express.static(path.join(__dirname, "..", "uploads", "chat")));
-app.use("/uploads/chat", express.static(path.join(__dirname, "..", "uploads", "chat")));
+app.use("/api/uploads/chat", express.static(path.join(__dirname, "..", "uploads", "chat"), staticCacheOptions));
+app.use("/uploads/chat", express.static(path.join(__dirname, "..", "uploads", "chat"), staticCacheOptions));
 app.use(
     "/uploads",
     express.static(
         path.join(
             __dirname,
             "uploads"
-        )
+        ),
+        staticCacheOptions
     )
 );
 

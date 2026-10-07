@@ -1430,6 +1430,21 @@ const getAttendanceList = async (req, res) => {
       }
     });
 
+    const holidayQuery = {
+      $or: [
+        { companyCode: userCompanyCode },
+        ...(targetUser.company ? [{ company: targetUser.company }] : [])
+      ],
+      isActive: { $ne: false },
+      date: { $gte: startDate, $lte: endDate }
+    };
+    const holidays = await Holiday.find(holidayQuery).select('title date description').lean();
+    const holidayDateMap = new Map();
+    holidays.forEach(h => {
+      const hDateKey = formatIndiaDateKey(h.date);
+      holidayDateMap.set(hDateKey, h.title || 'Holiday');
+    });
+
     const existingRecordsMap = {};
     dedupeAttendanceRecordsByIndiaDate(list).forEach(({ dateKey, record }) => {
       existingRecordsMap[dateKey] = record;
@@ -1487,6 +1502,8 @@ const getAttendanceList = async (req, res) => {
           }
         }
 
+        const isHolidayDay = holidayDateMap.has(dateKey) && !recordObject.inTime && !recordObject.outTime;
+
         return {
           ...recordObject,
           dateKey,
@@ -1512,18 +1529,27 @@ const getAttendanceList = async (req, res) => {
           logout: formattedLogout,
           inTime: recordObject.inTime || null,
           outTime: isClockedIn ? null : (recordObject.outTime || null),
-          status: isLeaveCoveredDay ? 'LEAVE' : (record.status || 'ABSENT')
+          status: isLeaveCoveredDay ? 'LEAVE' : (isHolidayDay ? 'HOLIDAY' : (record.status || 'ABSENT')),
+          holidayName: isHolidayDay ? holidayDateMap.get(dateKey) : undefined
         };
       } else {
-        
+        const isHoliday = holidayDateMap.has(dateKey);
         const isWeekend = isDepartmentWeekend(targetUser.department, date);
         const fallbackSchedule = buildShiftSchedule(date, targetShiftSettings);
         const fallbackShift = buildShiftSnapshot(targetShiftSettings || {}, fallbackSchedule);
         const fallbackShiftTime = fallbackShift.shiftTime || formatShiftTimeWindow(fallbackShift.shiftStart, fallbackShift.shiftEnd);
         const isLeaveCoveredDay = leaveCoverageDateKeys.has(dateKey);
 
+        const status = isHoliday
+          ? "HOLIDAY"
+          : isWeekend
+            ? "WEEKEND"
+            : isLeaveCoveredDay
+              ? "LEAVE"
+              : "ABSENT";
+
         return {
-          _id: `absent_${targetUserId}_${dateKey}`,
+          _id: `${status.toLowerCase()}_${targetUserId}_${dateKey}`,
           dateKey,
           user: {
             _id: targetUserId,
@@ -1535,7 +1561,8 @@ const getAttendanceList = async (req, res) => {
           date: date,
           inTime: null,
           outTime: null,
-          status: isWeekend ? "WEEKEND" : (isLeaveCoveredDay ? "LEAVE" : "ABSENT"),
+          status,
+          holidayName: isHoliday ? holidayDateMap.get(dateKey) : undefined,
           lateBy: "00:00:00",
           earlyLeave: "00:00:00",
           overTime: "00:00:00",
