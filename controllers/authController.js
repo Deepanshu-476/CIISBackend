@@ -123,10 +123,28 @@ const parseAdditionalDetails = (value) => {
 const resolveClientForUser = async (user) => {
   if (!user) return null;
 
+  const roleValues = [
+    user.role,
+    user.companyRole,
+    user.jobRole?.name,
+    user.jobRole,
+    user.userType,
+  ].map(r => String(r || '').trim().toLowerCase().replace(/[\s_-]+/g, ''));
+
+  const isStaffOrAdmin = roleValues.some(r =>
+    ['superadmin', 'admin', 'owner', 'companyadmin', 'hr', 'employee', 'manager', 'telecaller', 'developer', 'staff'].includes(r)
+  );
+
+  const isExplicitClient = roleValues.includes('client');
   const details = parseAdditionalDetails(user.additionalDetails);
+  const isClientRepresentative = details?.isClientRepresentative === true;
+
+  if (isStaffOrAdmin && !isExplicitClient && !isClientRepresentative) {
+    return null;
+  }
+
   const possibleClientIds = [
     details.clientId,
-    user.employeeType,
     user.clientId,
   ].filter(Boolean);
 
@@ -137,16 +155,19 @@ const resolveClientForUser = async (user) => {
     }
   }
 
-  if (user._id) {
-    const linkedClient = await Client.findOne({userId: user._id}).select('_id email userId companyCode client company phone');
-    if (linkedClient) return linkedClient;
-  }
+  if (isExplicitClient || isClientRepresentative) {
+    if (user._id) {
+      const linkedClient = await Client.findOne({clientUserId: user._id}).select('_id email userId companyCode client company phone') ||
+        await Client.findOne({userId: user._id}).select('_id email userId companyCode client company phone');
+      if (linkedClient) return linkedClient;
+    }
 
-  if (user.email) {
-    return Client.findOne({
-      email: String(user.email).trim().toLowerCase(),
-      ...(user.companyCode ? {companyCode: user.companyCode} : {}),
-    }).select('_id email userId companyCode client company phone');
+    if (user.email) {
+      return Client.findOne({
+        email: String(user.email).trim().toLowerCase(),
+        ...(user.companyCode ? {companyCode: user.companyCode} : {}),
+      }).select('_id email userId companyCode client company phone');
+    }
   }
 
   return null;
