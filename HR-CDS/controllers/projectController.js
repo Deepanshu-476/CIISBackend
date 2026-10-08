@@ -1344,6 +1344,13 @@ exports.addTask = async (req, res) => {
         });
       }
 
+      if (normalizeTaskStatus(status) === "in-progress" && assignedUserIds.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Assign at least one user before moving a task to In Progress"
+        });
+      }
+
 
       const safeTitle = title?.trim() || "Untitled Task";
       const now = new Date();
@@ -1760,6 +1767,13 @@ exports.updateTaskStatus = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: "Task not found"
+      });
+    }
+
+    if (nextStatus === "in-progress" && getTaskAssigneeIds(task).length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Assign at least one user before moving this task to In Progress"
       });
     }
 

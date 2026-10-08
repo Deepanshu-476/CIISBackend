@@ -395,7 +395,34 @@ const getFilterDate = (task, dateField) => {
   const normalizedField = String(dateField || '').toLowerCase();
   if (normalizedField === 'createdat' || normalizedField === 'createddate') return task.createdAt;
   if (normalizedField === 'updatedat' || normalizedField === 'updateddate') return task.updatedAt || task.createdAt;
-  return task.dueDateTime || task.dueDate || task.createdAt;
+  if (normalizedField === 'completedat' || normalizedField === 'completiondate') return task.completionDate || task.completedAt;
+  return getTaskReportDate(task);
+};
+
+const getTaskCompletionDate = task => {
+  const directDate = task?.completionDate || task?.completedAt;
+  if (directDate) return directDate;
+  const statusHistory = Array.isArray(task?.statusHistory) ? task.statusHistory : [];
+  const historyDate = statusHistory
+    .filter(entry => normalizeTaskStatus(entry?.status || entry?.newValue || entry?.newValues?.status) === 'completed')
+    .map(entry => entry.changedAt || entry.createdAt || entry.updatedAt)
+    .filter(Boolean)
+    .sort((a, b) => new Date(b) - new Date(a))[0];
+  if (historyDate) return historyDate;
+  const activityLogs = Array.isArray(task?.activityLogs) ? task.activityLogs : [];
+  return activityLogs
+    .filter(entry => normalizeTaskStatus(entry?.newValue || entry?.newValues?.status || entry?.status) === 'completed')
+    .map(entry => entry.performedAt || entry.changedAt || entry.createdAt || entry.updatedAt)
+    .filter(Boolean)
+    .sort((a, b) => new Date(b) - new Date(a))[0] || null;
+};
+
+const getTaskReportDate = task => {
+  const status = normalizeTaskStatus(task?.userStatus || task?.status || task?.overallStatus);
+  if (status === 'completed') {
+    return getTaskCompletionDate(task) || task?.updatedAt || task?.dueDateTime || task?.dueDate || task?.createdAt;
+  }
+  return task?.dueDateTime || task?.dueDate || task?.createdAt;
 };
 
 const getFilterStatus = (task) => {
@@ -446,20 +473,11 @@ const filterUserTasks = (tasks, queryParams) => {
         return true;
       }
 
-      // Default: match if any relevant task date falls in range
-      const candidateDates = [
-        t.dueDateTime,
-        t.dueDate,
-        t.createdAt,
-        t.completionDate,
-        t.completedAt
-      ].filter(Boolean).map(v => new Date(v)).filter(d => !isNaN(d.getTime()));
-
-      const hasMatchingDate = candidateDates.some(d => {
-        if (range.$gte && d < range.$gte) return false;
-        if (range.$lte && d > range.$lte) return false;
-        return true;
-      });
+      const reportDate = getTaskReportDate(t);
+      const reportDateValue = reportDate ? new Date(reportDate) : null;
+      const hasMatchingDate = reportDateValue && !isNaN(reportDateValue.getTime()) &&
+        (!range.$gte || reportDateValue >= range.$gte) &&
+        (!range.$lte || reportDateValue <= range.$lte);
 
       if (!hasMatchingDate) {
         // If range covers current moment, include actively in-progress tasks
@@ -553,8 +571,23 @@ exports.getAllMyTaskViews = async (req, res) => {
       fetchAssignedClientTaskList(req),
       fetchAssignedProjectTaskList(req)
     ]);
-    const list = applyCleanListFilters([...personal, ...assigned, ...client, ...project], req);
-    return sendCleanTaskList(res, list, 'all', 'source-aware', req);
+    const requestedView = String(req.query.view || req.query.taskType || req.query.type || 'all').trim().toLowerCase();
+    const viewMap = {
+      all: [...personal, ...assigned, ...client, ...project],
+      self: personal,
+      personal,
+      'my-personal-task': personal,
+      'my-personal-tasks': personal,
+      assigned,
+      'assigned-to-me': assigned,
+      client,
+      'client-tasks': client,
+      project,
+      'project-tasks': project
+    };
+    const view = Object.prototype.hasOwnProperty.call(viewMap, requestedView) ? requestedView : 'all';
+    const list = applyCleanListFilters(viewMap[view], req);
+    return sendCleanTaskList(res, list, view, 'source-aware', req);
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
@@ -576,8 +609,23 @@ exports.getAllMyTaskStats = async (req, res) => {
       fetchAssignedClientTaskList(req),
       fetchAssignedProjectTaskList(req)
     ]);
-    const list = applyCleanListFilters([...personal, ...assigned, ...client, ...project], req);
-    return res.json({ success: true, view: 'all', stats: calculateUnifiedTaskStats(list) });
+    const requestedView = String(req.query.view || req.query.taskType || req.query.type || 'all').trim().toLowerCase();
+    const viewMap = {
+      all: [...personal, ...assigned, ...client, ...project],
+      self: personal,
+      personal,
+      'my-personal-task': personal,
+      'my-personal-tasks': personal,
+      assigned,
+      'assigned-to-me': assigned,
+      client,
+      'client-tasks': client,
+      project,
+      'project-tasks': project
+    };
+    const view = Object.prototype.hasOwnProperty.call(viewMap, requestedView) ? requestedView : 'all';
+    const list = applyCleanListFilters(viewMap[view], req);
+    return res.json({ success: true, view, stats: calculateUnifiedTaskStats(list) });
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }

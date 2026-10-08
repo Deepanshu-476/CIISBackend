@@ -219,6 +219,18 @@ const removeDocumentFile = filePath => {
   }
 };
 
+const getDocumentFilePath = document => {
+  if (document.path && fs.existsSync(document.path)) {
+    return document.path;
+  }
+
+  const fallbackPath = document.storedName
+    ? path.join(uploadDir, document.storedName)
+    : (document.path ? path.join(uploadDir, path.basename(document.path)) : '');
+
+  return fallbackPath && fs.existsSync(fallbackPath) ? fallbackPath : '';
+};
+
 const getClientStorageUsed = async clientId => {
   const result = await ClientDocument.aggregate([
     { $match: { client: clientId } },
@@ -534,16 +546,7 @@ router.get('/:id/download', protect, async (req, res) => {
       return res.status(403).json({ success: false, message: 'Access denied for this document' });
     }
 
-    let filePath = document.path;
-    if (!filePath || !fs.existsSync(filePath)) {
-      const fallbackPath = document.storedName
-        ? path.join(uploadDir, document.storedName)
-        : (document.path ? path.join(uploadDir, path.basename(document.path)) : '');
-      if (fallbackPath && fs.existsSync(fallbackPath)) {
-        filePath = fallbackPath;
-      }
-    }
-
+    const filePath = getDocumentFilePath(document);
     if (!filePath || !fs.existsSync(filePath)) {
       return res.status(404).json({ success: false, message: 'File not found on server' });
     }
@@ -557,6 +560,36 @@ router.get('/:id/download', protect, async (req, res) => {
         console.error('Failed to record document download:', error.message);
       });
     });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.get('/:id/view', protect, async (req, res) => {
+  try {
+    const document = await ClientDocument.findById(req.params.id).lean();
+    if (!document) {
+      return res.status(404).json({ success: false, message: 'Document not found' });
+    }
+
+    if (document.isDeleted) {
+      return res.status(410).json({ success: false, message: 'Document is in trash' });
+    }
+
+    const client = await Client.findById(document.client).lean();
+    if (!client || !canAccessClient(req, client)) {
+      return res.status(403).json({ success: false, message: 'Access denied for this document' });
+    }
+
+    const filePath = getDocumentFilePath(document);
+    if (!filePath || !fs.existsSync(filePath)) {
+      return res.status(404).json({ success: false, message: 'File not found on server' });
+    }
+
+    const fileName = safeOriginalName(document.originalName || 'document');
+    res.setHeader('Content-Type', document.mimeType || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `inline; filename="${fileName.replace(/"/g, '')}"`);
+    return res.sendFile(path.resolve(filePath));
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
