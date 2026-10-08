@@ -396,23 +396,27 @@ const getTaskDocumentName = (task, project = null, originalName = '') => {
 
 const normalizeProjectPdfFile = (project) => {
   const pdfFile = project?.pdfFile;
-  if (!pdfFile || (!pdfFile.path && !pdfFile.url)) return null;
-  const expectedName = getProjectDocumentName(project, pdfFile.filename || pdfFile.originalName);
+  const rawPath = String(pdfFile?.path || pdfFile?.url || '').trim();
+  if (!pdfFile || !rawPath) return null;
+  const original = pdfFile.originalName || pdfFile.filename || path.basename(rawPath);
   return {
     ...pdfFile,
-    filename: expectedName,
-    originalName: expectedName,
+    filename: original,
+    originalName: original,
+    path: rawPath,
   };
 };
 
 const normalizeTaskPdfFile = (task, project = null) => {
   const pdfFile = task?.pdfFile;
-  if (!pdfFile || (!pdfFile.path && !pdfFile.url)) return null;
-  const expectedName = getTaskDocumentName(task, project, pdfFile.filename || pdfFile.originalName);
+  const rawPath = String(pdfFile?.path || pdfFile?.url || '').trim();
+  if (!pdfFile || !rawPath) return null;
+  const original = pdfFile.originalName || pdfFile.filename || path.basename(rawPath);
   return {
     ...pdfFile,
-    filename: expectedName,
-    originalName: expectedName,
+    filename: original,
+    originalName: original,
+    path: rawPath,
   };
 };
 
@@ -1440,7 +1444,10 @@ exports.addTask = async (req, res) => {
       res.status(201).json({
         success: true,
         message: "Task added successfully",
-        task: createdTask
+        task: {
+          ...(typeof createdTask.toObject === 'function' ? createdTask.toObject() : createdTask),
+          pdfFile: normalizeTaskPdfFile(createdTask, project)
+        }
       });
     });
   } catch (error) {
@@ -2164,10 +2171,15 @@ exports.addRemark = async (req, res) => {
       const savePath = path.join(uploadDir, filename);
       imgPath = `remarks/${filename}`;
 
-      await sharp(req.file.buffer)
-        .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
-        .jpeg({ quality: 80 })
-        .toFile(savePath);
+      try {
+        await sharp(req.file.buffer)
+          .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
+          .jpeg({ quality: 80 })
+          .toFile(savePath);
+      } catch (sharpErr) {
+        console.warn('Sharp compression failed in projectController.addRemark, saving raw buffer:', sharpErr.message);
+        fs.writeFileSync(savePath, req.file.buffer);
+      }
     }
 
 

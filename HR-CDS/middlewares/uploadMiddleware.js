@@ -50,15 +50,32 @@ const uploadTaskImage = multer({
 }).single("image");
 
 
-const uploadRemarkImage = multer({
+const remarkMulter = multer({
   storage: remarksStorage,
   fileFilter: (req, file, cb) => {
-    const allowed = ["image/jpeg", "image/png", "image/jpg", "image/gif", "image/webp"];
-    if (!allowed.includes(file.mimetype)) return cb(new Error("Only image files are allowed (JPG, PNG, JPEG, GIF, WEBP)"));
-    cb(null, true);
+    const mime = (file.mimetype || "").toLowerCase();
+    const ext = path.extname(file.originalname || "").toLowerCase();
+    const allowedExts = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif"];
+    if (mime.startsWith("image/") || allowedExts.includes(ext)) {
+      return cb(null, true);
+    }
+    return cb(new Error("Only image files are allowed (JPG, PNG, JPEG, GIF, WEBP, HEIC)"));
   },
-  limits: { fileSize: 5 * 1024 * 1024 }, 
-}).single("image"); 
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB
+}).single("image");
+
+const uploadRemarkImage = (req, res, next) => {
+  remarkMulter(req, res, (err) => {
+    if (err) {
+      console.error("Remark image upload error:", err);
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(400).json({ success: false, message: "Image size exceeds 25MB limit." });
+      }
+      return res.status(400).json({ success: false, message: err.message || "Image upload failed" });
+    }
+    next();
+  });
+}; 
 
 module.exports = {
   uploadPDF,

@@ -410,12 +410,61 @@ const getEmployeeDashboardSummary = async (req, res) => {
       }
       return counts;
     }, {});
+
+    const userDepartment = currentUser?.department;
+    const rawWorkingDays = Number(userDepartment?.workingDays);
+    const departmentWorkingDays = Number.isInteger(rawWorkingDays) && rawWorkingDays >= 1 && rawWorkingDays <= 7 ? rawWorkingDays : 5;
+
+    const attendedDateKeys = new Set(
+      attendance
+        .filter(record => isSameCalendarMonth(record.date || record.inTime || record.createdAt, monthReference))
+        .map(record => {
+          const d = new Date(record.date || record.inTime || record.createdAt);
+          return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+        })
+    );
+    const holidayDateKeys = new Set(
+      holidays
+        .filter(h => isSameCalendarMonth(h.date, monthReference))
+        .map(h => {
+          const d = new Date(h.date);
+          return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+        })
+    );
+    const leaveDateKeys = new Set();
+    leaves.forEach(leave => {
+      const status = String(leave.status || "").trim().toUpperCase();
+      if (status !== "APPROVED") return;
+      const cur = new Date(leave.startDate);
+      const end = new Date(leave.endDate);
+      while (cur <= end) {
+        if (isSameCalendarMonth(cur, monthReference)) {
+          leaveDateKeys.add(`${cur.getFullYear()}-${cur.getMonth()}-${cur.getDate()}`);
+        }
+        cur.setDate(cur.getDate() + 1);
+      }
+    });
+
+    let calculatedAbsentDays = monthlyAttendanceCounts.absent || 0;
+    const currentMonthDays = new Date(monthReference.getFullYear(), monthReference.getMonth() + 1, 0).getDate();
+    for (let day = 1; day <= currentMonthDays; day++) {
+      const dayDate = new Date(monthReference.getFullYear(), monthReference.getMonth(), day);
+      if (dayDate >= todayStart) break;
+      const key = `${dayDate.getFullYear()}-${dayDate.getMonth()}-${day}`;
+      const dayOfWeek = dayDate.getDay();
+      const mondayBasedDay = dayOfWeek === 0 ? 7 : dayOfWeek;
+      const isWeekend = mondayBasedDay > departmentWorkingDays;
+      if (!isWeekend && !attendedDateKeys.has(key) && !holidayDateKeys.has(key) && !leaveDateKeys.has(key)) {
+        calculatedAbsentDays++;
+      }
+    }
+
     const monthlyStats = {
       presentDays: monthlyAttendanceCounts.present || 0,
       lateDays: monthlyAttendanceCounts.late || 0,
       halfDays: monthlyAttendanceCounts.halfday || 0,
       shortLeaveDays: monthlyAttendanceCounts.shortleave || 0,
-      absentDays: monthlyAttendanceCounts.absent || 0,
+      absentDays: calculatedAbsentDays,
       leavesTaken: getLeaveDatesInMonth(leaves, monthReference),
       holidayDays: holidays.filter(holiday => isSameCalendarMonth(holiday.date, monthReference)).length,
     };

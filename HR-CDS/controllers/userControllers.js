@@ -250,7 +250,7 @@ const USER_FIELDS = {
   BASIC: ['name', 'email', 'password', 'department', 'jobRole'],
   
   
-  PERSONAL: ['phone', 'address', 'gender', 'maritalStatus', 'dob', 
+  PERSONAL: ['phone', 'profileImage', 'address', 'gender', 'maritalStatus', 'dob', 
              'fatherName', 'motherName', 'city', 'state', 'pinCode', 'country'],
   
   
@@ -1415,8 +1415,40 @@ exports.getUser = async (req, res) => {
       return errorResponse(res, 403, "Access denied. User belongs to a different branch.");
     }
 
-    const deptName = user.departmentName || (user.department?.name) || (typeof user.department === 'string' && !user.department.match(/^[0-9a-fA-F]{24}$/) ? user.department : '');
-    const roleName = user.jobRoleName || (typeof user.jobRole === 'string' && !user.jobRole.match(/^[0-9a-fA-F]{24}$/) ? user.jobRole : '');
+    let deptName = user.departmentName || (user.department?.name) || (typeof user.department === 'string' && !user.department.match(/^[0-9a-fA-F]{24}$/) ? user.department : '');
+    let roleName = user.jobRoleName || (user.jobRole?.name) || (user.jobRole?.roleName) || (typeof user.jobRole === 'string' && !user.jobRole.match(/^[0-9a-fA-F]{24}$/) ? user.jobRole : '');
+
+    let resolvedDept = user.department;
+    if (!deptName && user.department && mongoose.Types.ObjectId.isValid(String(user.department))) {
+      try {
+        const deptDoc = await Department.findById(user.department).select('name code description').lean();
+        if (deptDoc?.name) {
+          deptName = deptDoc.name;
+          resolvedDept = { _id: deptDoc._id, name: deptDoc.name, code: deptDoc.code };
+          User.updateOne({ _id: user._id }, { departmentName: deptDoc.name }).catch(() => {});
+        }
+      } catch (_) {}
+    }
+
+    let resolvedJobRole = user.jobRole;
+    if (!roleName && user.jobRole && mongoose.Types.ObjectId.isValid(String(user.jobRole))) {
+      try {
+        const roleDoc = await JobRole.findById(user.jobRole).select('name roleName roleNumber description').lean();
+        if (roleDoc) {
+          roleName = roleDoc.name || roleDoc.roleName || '';
+          resolvedJobRole = {
+            _id: roleDoc._id,
+            name: roleDoc.name,
+            roleName: roleDoc.roleName || roleDoc.name,
+            roleNumber: roleDoc.roleNumber,
+          };
+          if (roleName) {
+            User.updateOne({ _id: user._id }, { jobRoleName: roleName }).catch(() => {});
+          }
+        }
+      } catch (_) {}
+    }
+
     const bName = user.branchName || user.branch?.name || '';
     const bCode = user.branchCode || user.branch?.branchCode || '';
 
@@ -1425,13 +1457,13 @@ exports.getUser = async (req, res) => {
       name: user.name,
       email: user.email,
       company: user.company,
-      department: user.department,
+      department: resolvedDept,
       departmentName: deptName,
       branch: user.branch,
       branchName: bName,
       branchCode: bCode,
       assignedBranches: user.assignedBranches || [],
-      jobRole: user.jobRole,
+      jobRole: resolvedJobRole,
       jobRoleName: roleName,
       phone: user.phone,
       profileImage: user.profileImage,
@@ -1623,6 +1655,22 @@ exports.updateUser = async (req, res) => {
     if (dateFieldError) {
       return errorResponse(res, 400, dateFieldError);
     }
+
+    if (updateData.phone !== undefined) {
+      const cleanPhone = String(updateData.phone || '').trim().replace(/\D/g, '');
+      if (cleanPhone && cleanPhone.length !== 10) {
+        return errorResponse(res, 400, "Phone number must be exactly 10 digits");
+      }
+      updateData.phone = cleanPhone;
+    }
+
+    if (updateData.emergencyPhone !== undefined) {
+      const cleanEmerg = String(updateData.emergencyPhone || '').trim().replace(/\D/g, '');
+      if (cleanEmerg && cleanEmerg.length !== 10) {
+        return errorResponse(res, 400, "Emergency phone must be exactly 10 digits");
+      }
+      updateData.emergencyPhone = cleanEmerg;
+    }
     
     
     
@@ -1813,6 +1861,22 @@ exports.updateSelfUser = async (req, res) => {
     const dateFieldError = normalizeUserDateFields(updateData);
     if (dateFieldError) {
       return errorResponse(res, 400, dateFieldError);
+    }
+
+    if (updateData.phone !== undefined) {
+      const cleanPhone = String(updateData.phone || '').trim().replace(/\D/g, '');
+      if (cleanPhone && cleanPhone.length !== 10) {
+        return errorResponse(res, 400, "Phone number must be exactly 10 digits");
+      }
+      updateData.phone = cleanPhone;
+    }
+
+    if (updateData.emergencyPhone !== undefined) {
+      const cleanEmerg = String(updateData.emergencyPhone || '').trim().replace(/\D/g, '');
+      if (cleanEmerg && cleanEmerg.length !== 10) {
+        return errorResponse(res, 400, "Emergency phone must be exactly 10 digits");
+      }
+      updateData.emergencyPhone = cleanEmerg;
     }
 
     const employmentLocationError = normalizeEmploymentLocationFields(updateData, user);
