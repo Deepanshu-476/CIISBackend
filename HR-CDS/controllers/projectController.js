@@ -394,11 +394,43 @@ const getTaskDocumentName = (task, project = null, originalName = '') => {
   return `${safeTitle}_Document${ext.toLowerCase()}`;
 };
 
+const resolveProjectFilePath = (rawPath, filename) => {
+  const cleanName = path.basename(String(rawPath || filename || "").replace(/\\/g, "/"));
+  const normalizedRaw = rawPath ? String(rawPath).replace(/\\/g, "/") : "";
+
+  const candidates = [
+    rawPath ? path.resolve(rawPath) : null,
+    rawPath ? path.resolve(process.cwd(), rawPath) : null,
+    rawPath ? path.resolve(__dirname, "../../", rawPath) : null,
+    rawPath ? path.resolve(__dirname, "../", rawPath) : null,
+    normalizedRaw ? path.resolve(process.cwd(), normalizedRaw.replace(/^\/+/, "")) : null,
+    cleanName ? path.resolve(process.cwd(), "uploads", "projects", cleanName) : null,
+    cleanName ? path.resolve(process.cwd(), "HR-CDS", "uploads", "projects", cleanName) : null,
+    cleanName ? path.resolve(__dirname, "../../uploads/projects", cleanName) : null,
+    cleanName ? path.resolve(__dirname, "../uploads/projects", cleanName) : null,
+    cleanName ? path.resolve("/var/www/app2/uploads/projects", cleanName) : null,
+    cleanName ? path.resolve("/var/www/app1/uploads/projects", cleanName) : null,
+    cleanName ? path.resolve("/var/www/app2/HR-CDS/uploads/projects", cleanName) : null,
+    cleanName ? path.resolve("/var/www/app1/HR-CDS/uploads/projects", cleanName) : null,
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+        return candidate;
+      }
+    } catch (_) {}
+  }
+  return null;
+};
+
 const normalizeProjectPdfFile = (project) => {
   const pdfFile = project?.pdfFile;
   const rawPath = String(pdfFile?.path || pdfFile?.url || '').trim();
   if (!pdfFile || !rawPath) return null;
   const original = pdfFile.originalName || pdfFile.filename || path.basename(rawPath);
+  const resolved = resolveProjectFilePath(rawPath, original);
+  if (!resolved && !String(rawPath).startsWith('http')) return null;
   return {
     ...pdfFile,
     filename: original,
@@ -412,6 +444,8 @@ const normalizeTaskPdfFile = (task, project = null) => {
   const rawPath = String(pdfFile?.path || pdfFile?.url || '').trim();
   if (!pdfFile || !rawPath) return null;
   const original = pdfFile.originalName || pdfFile.filename || path.basename(rawPath);
+  const resolved = resolveProjectFilePath(rawPath, original);
+  if (!resolved && !String(rawPath).startsWith('http')) return null;
   return {
     ...pdfFile,
     filename: original,
@@ -449,36 +483,6 @@ const withProjectSummary = (project) => {
     completedTaskCount,
     taskProgress: taskCount ? Math.round((completedTaskCount / taskCount) * 100) : 0
   };
-};
-
-const resolveProjectFilePath = (rawPath, filename) => {
-  const cleanName = path.basename(String(rawPath || filename || "").replace(/\\/g, "/"));
-  const normalizedRaw = rawPath ? String(rawPath).replace(/\\/g, "/") : "";
-
-  const candidates = [
-    rawPath ? path.resolve(rawPath) : null,
-    rawPath ? path.resolve(process.cwd(), rawPath) : null,
-    rawPath ? path.resolve(__dirname, "../../", rawPath) : null,
-    rawPath ? path.resolve(__dirname, "../", rawPath) : null,
-    normalizedRaw ? path.resolve(process.cwd(), normalizedRaw.replace(/^\/+/, "")) : null,
-    cleanName ? path.resolve(process.cwd(), "uploads", "projects", cleanName) : null,
-    cleanName ? path.resolve(process.cwd(), "HR-CDS", "uploads", "projects", cleanName) : null,
-    cleanName ? path.resolve(__dirname, "../../uploads/projects", cleanName) : null,
-    cleanName ? path.resolve(__dirname, "../uploads/projects", cleanName) : null,
-    cleanName ? path.resolve("/var/www/app2/uploads/projects", cleanName) : null,
-    cleanName ? path.resolve("/var/www/app1/uploads/projects", cleanName) : null,
-    cleanName ? path.resolve("/var/www/app2/HR-CDS/uploads/projects", cleanName) : null,
-    cleanName ? path.resolve("/var/www/app1/HR-CDS/uploads/projects", cleanName) : null,
-  ].filter(Boolean);
-
-  for (const candidate of candidates) {
-    try {
-      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
-        return candidate;
-      }
-    } catch (_) {}
-  }
-  return null;
 };
 
 const sendProjectAttachment = (req, res, attachment, fallbackName = "document.pdf") => {
