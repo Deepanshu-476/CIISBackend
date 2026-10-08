@@ -47,22 +47,33 @@ if (!fs.existsSync(uploadDir)) {
 const storage = multer.memoryStorage();
 
 const fileFilter = (req, file, cb) => {
-  const allowedTypes = /jpeg|jpg|png|gif|webp/;
-  const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-  const mimetype = allowedTypes.test(file.mimetype);
-  
-  if (mimetype && extname) {
+  const mime = (file.mimetype || '').toLowerCase();
+  const ext = path.extname(file.originalname || '').toLowerCase();
+  const allowedExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif'];
+  if (mime.startsWith('image/') || allowedExts.includes(ext)) {
     return cb(null, true);
-  } else {
-    cb(new Error('Only image files are allowed (jpeg, jpg, png, gif, webp)'));
   }
+  return cb(new Error('Only image files are allowed (jpeg, jpg, png, gif, webp, heic)'));
 };
 
 const upload = multer({ 
   storage: storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, 
+  limits: { fileSize: 25 * 1024 * 1024 }, 
   fileFilter: fileFilter
 });
+
+const safeClientRemarkUpload = (req, res, next) => {
+  upload.array('images', 5)(req, res, (err) => {
+    if (err) {
+      console.error('Client remark upload error:', err);
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ success: false, message: 'Image size exceeds 25MB limit.' });
+      }
+      return res.status(400).json({ success: false, message: err.message || 'Image upload failed' });
+    }
+    next();
+  });
+};
 
 
 const compressImage = async (req, res, next) => {
@@ -153,7 +164,7 @@ router.post('/:taskId/client-remarks', authMiddleware, taskController.addClientR
 router.post(
   '/:taskId/client-remarks/upload-images',
   authMiddleware,
-  upload.array('images', 5),
+  safeClientRemarkUpload,
   compressImage,
   taskController.addClientRemarkWithImages
 );

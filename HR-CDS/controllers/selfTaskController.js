@@ -571,7 +571,12 @@ exports.addRemark = async (req, res) => {
       const savePath = path.join(uploadDir, filename);
       imgPath = `remarks/${filename}`;
 
-      await sharp(req.file.buffer).resize(1200, 1200, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 80 }).toFile(savePath);
+      try {
+        await sharp(req.file.buffer).resize(1200, 1200, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 80 }).toFile(savePath);
+      } catch (sharpErr) {
+        console.warn('Sharp compression failed in selfTaskController.addRemark, saving raw buffer:', sharpErr.message);
+        fs.writeFileSync(savePath, req.file.buffer);
+      }
     }
 
     const remark = { user: req.user._id, userName: req.user.name || '', text: text || '', image: imgPath, createdAt: new Date() };
