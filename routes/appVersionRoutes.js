@@ -22,17 +22,17 @@ const normalizeBoolean = (value, fallback = false) => {
 
 const getFallbackSettings = () => {
   const iosAppStoreId = process.env.IOS_APP_STORE_ID || '6780872642';
-  const iosLatestVersionName = process.env.IOS_LATEST_VERSION_NAME || '1.1.33';
+  const iosLatestVersionName = process.env.IOS_LATEST_VERSION_NAME || '1.1.34';
   const androidPackageName = process.env.ANDROID_PACKAGE_NAME || 'ciisnetwork.in';
-  const androidLatestVersionName = process.env.ANDROID_LATEST_VERSION_NAME || '1.1.33';
+  const androidLatestVersionName = process.env.ANDROID_LATEST_VERSION_NAME || '1.1.34';
 
   return {
     ios: {
       latestVersionName: iosLatestVersionName,
-      latestVersionCode: parseNumber(process.env.IOS_LATEST_BUILD_NUMBER, 48),
+      latestVersionCode: parseNumber(process.env.IOS_LATEST_BUILD_NUMBER, 49),
       minimumVersionCode: parseNumber(process.env.IOS_MIN_BUILD_NUMBER, 1),
       forceUpdate: process.env.IOS_FORCE_UPDATE === 'true',
-      updateEnabled: process.env.IOS_UPDATE_ENABLED !== 'false',
+      updateEnabled: process.env.IOS_UPDATE_ENABLED === 'true',
       title: process.env.IOS_UPDATE_TITLE || 'New Update Available',
       message: process.env.IOS_UPDATE_MESSAGE || `Please update CIIS Network to version ${iosLatestVersionName}.`,
       storeUrl: process.env.IOS_APP_STORE_URL || `https://apps.apple.com/app/id${iosAppStoreId}`,
@@ -41,10 +41,10 @@ const getFallbackSettings = () => {
     },
     android: {
       latestVersionName: androidLatestVersionName,
-      latestVersionCode: parseNumber(process.env.ANDROID_LATEST_VERSION_CODE, 42),
+      latestVersionCode: parseNumber(process.env.ANDROID_LATEST_VERSION_CODE, 43),
       minimumVersionCode: parseNumber(process.env.ANDROID_MIN_VERSION_CODE, 1),
       forceUpdate: process.env.ANDROID_FORCE_UPDATE === 'true',
-      updateEnabled: process.env.ANDROID_UPDATE_ENABLED !== 'false',
+      updateEnabled: process.env.ANDROID_UPDATE_ENABLED === 'true',
       title: process.env.ANDROID_UPDATE_TITLE || 'New Update Available',
       message: process.env.ANDROID_UPDATE_MESSAGE || `Please update CIIS Network to version ${androidLatestVersionName}.`,
       storeUrl: process.env.ANDROID_PLAY_STORE_URL || `https://play.google.com/store/apps/details?id=${androidPackageName}`,
