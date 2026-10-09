@@ -1,4 +1,5 @@
 
+const mongoose = require('mongoose');
 const User = require('../../models/User');
 const Department = require('../../models/Department');
 const JobRole = require('../../models/JobRole');
@@ -281,6 +282,69 @@ const USER_FIELDS = {
   }
 };
 
+const sanitizeAdminUserUpdateData = updateData => {
+  const clean = { ...updateData };
+  const stringFields = [
+    'name', 'email', 'password', 'department', 'departmentName', 'jobRole', 'jobRoleName',
+    'phone', 'address', 'gender', 'maritalStatus', 'fatherName', 'motherName',
+    'city', 'state', 'pinCode', 'country', 'employeeType', 'propertyOwned',
+    'companyRole', 'shiftId', 'shiftName', 'shiftType', 'aadharCard', 'panCard',
+    'accountNumber', 'ifsc', 'bankName', 'bankHolderName', 'emergencyName',
+    'emergencyPhone', 'emergencyRelation', 'emergencyAddress', 'profileImage'
+  ];
+
+  stringFields.forEach(field => {
+    if (clean[field] === undefined || clean[field] === null) return;
+    if (typeof clean[field] === 'object') {
+      clean[field] = clean[field]._id || clean[field].id || clean[field].name || clean[field].roleName || clean[field].departmentName || clean[field].branchName || '';
+    }
+    clean[field] = String(clean[field]).trim();
+  });
+
+  ['phone', 'emergencyPhone'].forEach(field => {
+    if (clean[field] !== undefined) clean[field] = String(clean[field] || '').replace(/\D/g, '').slice(0, 10);
+  });
+  if (clean.pinCode !== undefined) clean.pinCode = String(clean.pinCode || '').replace(/\D/g, '').slice(0, 6);
+
+  if (clean.ifsc) clean.ifsc = String(clean.ifsc).trim().toUpperCase();
+
+  if (clean.salary === '' || clean.salary === null || clean.salary === undefined) {
+    delete clean.salary;
+  } else {
+    clean.salary = Number(clean.salary);
+  }
+
+  if (!Number.isFinite(clean.salary)) delete clean.salary;
+
+  if (clean.reportingManager !== undefined) {
+    const managerId = clean.reportingManager?._id || clean.reportingManager?.id || clean.reportingManager;
+    if (isObjectIdLike(managerId)) clean.reportingManager = managerId;
+    else delete clean.reportingManager;
+  }
+
+  if (clean.branch !== undefined) {
+    const branchId = clean.branch?._id || clean.branch?.id || clean.branch?.branchId || clean.branch;
+    if (isObjectIdLike(branchId)) clean.branch = branchId;
+    else delete clean.branch;
+  }
+
+  if (Array.isArray(clean.assignedBranches)) {
+    clean.assignedBranches = clean.assignedBranches
+      .map(value => value?._id || value?.id || value)
+      .filter(isObjectIdLike);
+  }
+
+  return clean;
+};
+
+const getDuplicateKeyMessage = err => {
+  const field = Object.keys(err?.keyPattern || err?.keyValue || {})[0] || 'field';
+  const label = field
+    .replace(/([A-Z])/g, ' $1')
+    .replace(/^./, char => char.toUpperCase());
+  return `${label} already exists. Please use a different value.`;
+};
+
 
 const validateUserData = (data, isUpdate = false) => {
   const errors = [];
@@ -374,6 +438,51 @@ const normalizeUserDateFields = (data = {}) => {
 const hasChangedValue = (nextValue, currentValue) => {
   if (nextValue === undefined) return false;
   return String(nextValue ?? '').trim() !== String(currentValue ?? '').trim();
+};
+
+const hasOnlyLetters = value => /^[A-Za-z][A-Za-z\s.'-]*$/.test(String(value || '').trim());
+
+const validateProfileUpdateFields = body => {
+  const errors = [];
+  const letterFields = [
+    ['name', 'Full Name'],
+    ['city', 'City'],
+    ['state', 'State'],
+    ['country', 'Country'],
+    ['bankHolderName', 'Account Holder Name'],
+    ['bankName', 'Bank Name'],
+    ['fatherName', "Father's Name"],
+    ['motherName', "Mother's Name"],
+    ['spouseName', 'Spouse Name'],
+    ['emergencyName', 'Emergency Contact Name'],
+    ['emergencyRelation', 'Emergency Relation']
+  ];
+
+  letterFields.forEach(([field, label]) => {
+    if (body[field] !== undefined && String(body[field] || '').trim() && !hasOnlyLetters(body[field])) {
+      errors.push(`${label} should contain letters only`);
+    }
+  });
+
+  const digitFields = [
+    ['phone', 'Mobile Number', 10, 10],
+    ['emergencyPhone', 'Emergency Contact Number', 10, 10],
+    ['pinCode', 'PIN Code', 6, 6],
+    ['aadharCard', 'Aadhar Card Number', 12, 12],
+    ['aadhaar', 'Aadhar Card Number', 12, 12],
+    ['accountNumber', 'Account Number', 9, 18],
+    ['confirmAccountNumber', 'Confirm Account Number', 9, 18]
+  ];
+
+  digitFields.forEach(([field, label, min, max]) => {
+    if (body[field] === undefined || !String(body[field] || '').trim()) return;
+    const value = String(body[field]).trim();
+    if (!new RegExp(`^\\d{${min},${max}}$`).test(value)) {
+      errors.push(min === max ? `${label} must contain exactly ${min} digits` : `${label} must contain ${min} to ${max} digits`);
+    }
+  });
+
+  return errors;
 };
 
 const REGISTER_REQUEST_PATH = '/ciisUser/register-request';
@@ -587,6 +696,25 @@ exports.updateMe = async (req, res) => {
     const existingUser = await User.findById(userId).lean();
     if (!existingUser) return errorResponse(res, 404, "User not found");
 
+    if (req.body.aadhaar !== undefined && req.body.aadharCard === undefined) {
+      req.body.aadharCard = req.body.aadhaar;
+    }
+
+    ['phone', 'emergencyPhone', 'pinCode', 'aadharCard', 'aadhaar', 'accountNumber', 'confirmAccountNumber'].forEach(field => {
+      if (req.body[field] !== undefined) req.body[field] = String(req.body[field] || '').replace(/\D/g, '');
+    });
+    if (req.body.panCard !== undefined) {
+      req.body.panCard = String(req.body.panCard || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+    }
+    if (req.body.ifsc !== undefined) {
+      req.body.ifsc = String(req.body.ifsc || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+    }
+
+    const profileValidationErrors = validateProfileUpdateFields(req.body);
+    if (profileValidationErrors.length) {
+      return errorResponse(res, 400, profileValidationErrors.join(', '));
+    }
+
     const currentAadhaar = existingUser.aadharCard || '';
     const currentPan = existingUser.panCard || '';
     const requiredProfileFields = [
@@ -707,6 +835,9 @@ exports.updateMe = async (req, res) => {
     });
   } catch (err) {
     console.error("❌ Update me error:", err);
+    if (err.code === 11000) {
+      return errorResponse(res, 409, getDuplicateKeyMessage(err));
+    }
     if (err.name === 'ValidationError') {
       return errorResponse(res, 400, err.message);
     }
@@ -1520,7 +1651,8 @@ exports.updateUser = async (req, res) => {
 
     
     
-    const isSelfUpdate = requestingUser.id.toString() === id;
+    const requestingUserId = requestingUser._id || requestingUser.id;
+    const isSelfUpdate = Boolean(id && requestingUserId && String(requestingUserId) === String(id));
     const requesterRole = String(requestingUser.companyRole || requestingUser.jobRole || requestingUser.role || '').toLowerCase();
     const isPrivilegedUser = ['super_admin', 'superadmin', 'owner', 'admin', 'hr'].includes(requesterRole) || requestingUser.isSuperAdmin === true;
 
@@ -1596,6 +1728,9 @@ exports.updateUser = async (req, res) => {
 
     delete updateData.userId;
     delete updateData.targetUserId;
+    const sanitizedUpdateData = sanitizeAdminUserUpdateData(updateData);
+    Object.keys(updateData).forEach(key => delete updateData[key]);
+    Object.assign(updateData, sanitizedUpdateData);
 
     ['gender', 'maritalStatus'].forEach(field => {
       if (updateData[field] === undefined) return;
@@ -1604,10 +1739,6 @@ exports.updateUser = async (req, res) => {
       else delete updateData[field];
     });
 
-    if (req.body.documents !== undefined) {
-      updateData.documents = req.body.documents;
-    }
-    
     if (req.body.properties !== undefined) {
       updateData.properties = req.body.properties;
     }
@@ -1755,6 +1886,9 @@ exports.updateUser = async (req, res) => {
     if (err.name === 'ValidationError') {
       return errorResponse(res, 400, err.message);
     }
+    if (err.code === 11000) {
+      return errorResponse(res, 409, getDuplicateKeyMessage(err));
+    }
     if (err.name === 'CastError') {
       return errorResponse(res, 400, `Invalid ${err.path || 'field'} value`);
     }
@@ -1801,10 +1935,6 @@ exports.updateSelfUser = async (req, res) => {
         updateData[key] = req.body[key];
       }
     });
-    
-    if (req.body.documents !== undefined) {
-      updateData.documents = req.body.documents;
-    }
     
     if (req.body.properties !== undefined) {
       updateData.properties = req.body.properties;
