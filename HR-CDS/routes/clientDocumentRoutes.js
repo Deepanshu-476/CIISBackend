@@ -220,15 +220,36 @@ const removeDocumentFile = filePath => {
 };
 
 const getDocumentFilePath = document => {
+  if (!document) return '';
+
   if (document.path && fs.existsSync(document.path)) {
     return document.path;
   }
 
-  const fallbackPath = document.storedName
-    ? path.join(uploadDir, document.storedName)
-    : (document.path ? path.join(uploadDir, path.basename(document.path)) : '');
+  const candidateDirs = [
+    uploadDir,
+    path.join(__dirname, '../uploads/client-documents'),
+    path.resolve(__dirname, '../../../backupbackendciis/HR-CDS/uploads/client-documents'),
+    path.resolve(__dirname, '../../../CIISBackend/HR-CDS/uploads/client-documents'),
+    path.resolve('D:/ciisnetwork/backupbackendciis/HR-CDS/uploads/client-documents'),
+    path.resolve('D:/ciisnetwork/CIISBackend/HR-CDS/uploads/client-documents'),
+  ];
 
-  return fallbackPath && fs.existsSync(fallbackPath) ? fallbackPath : '';
+  const baseNames = [
+    document.storedName,
+    document.path ? path.basename(document.path) : '',
+  ].filter(Boolean);
+
+  for (const base of baseNames) {
+    for (const dir of candidateDirs) {
+      const candidate = path.join(dir, base);
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  }
+
+  return '';
 };
 
 const getClientStorageUsed = async clientId => {
@@ -587,7 +608,23 @@ router.get('/:id/view', protect, async (req, res) => {
     }
 
     const fileName = safeOriginalName(document.originalName || 'document');
-    res.setHeader('Content-Type', document.mimeType || 'application/octet-stream');
+    const ext = path.extname(fileName).toLowerCase();
+    const mimeByExt = {
+      '.pdf': 'application/pdf',
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.webp': 'image/webp',
+      '.gif': 'image/gif',
+      '.svg': 'image/svg+xml',
+      '.txt': 'text/plain',
+      '.html': 'text/html',
+      '.csv': 'text/csv',
+    }[ext];
+    const contentType = (document.mimeType && document.mimeType !== 'application/octet-stream')
+      ? document.mimeType
+      : (mimeByExt || document.mimeType || 'application/octet-stream');
+    res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', `inline; filename="${fileName.replace(/"/g, '')}"`);
     return res.sendFile(path.resolve(filePath));
   } catch (error) {
