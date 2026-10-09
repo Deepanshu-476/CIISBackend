@@ -25,6 +25,7 @@ const {
   normalizeTaskRecurrenceFields,
   getNextRecurringDate,
 } = require('../utils/taskRecurrence');
+const { normalizeTaskReminderSettings } = require('../utils/taskReminderSettings');
 const {
   generateRecurringOccurrences,
 } = require('../cron/recurringTasks');
@@ -1825,6 +1826,7 @@ const handleTaskCreation = async (req, res, isSelf) => {
 
   const statusByUser = parsedUsers.map(uid => ({ user: uid, status: 'pending' }));
   const parsedCheckpoints = parseTaskCheckpoints(checkpoints);
+  const reminderSettings = normalizeTaskReminderSettings(req.body);
   const recurringSettings = isSelf ? parseRecurringSettingsFromBody(req.body) : {
     repeatPattern: 'none',
     repeatDays: [],
@@ -1844,6 +1846,7 @@ const handleTaskCreation = async (req, res, isSelf) => {
     assignedGroups: parsedGroups,
     statusByUser,
     checkpoints: parsedCheckpoints,
+    reminderSettings,
     files,
     voiceNote,
     createdBy: req.user._id,
@@ -1903,6 +1906,18 @@ exports.updateTask = async (req, res) => {
     const { taskId } = req.params;
     const task = await Task.findById(taskId);
     if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
+
+    const currentUserId = (req.user._id || req.user.id).toString();
+    const isAssignedUser = (task.assignedUsers || []).some(u => String(u._id || u.id || u) === currentUserId);
+    const isOnlyReminderUpdate = ['reminderSettings', 'reminderEnabled', 'reminderOptions', 'reminderTime', 'customTime']
+      .some(field => Object.prototype.hasOwnProperty.call(req.body, field)) &&
+      Object.keys(req.body).every(k => ['reminderSettings', 'reminderEnabled', 'reminderOptions', 'reminderTime', 'customTime'].includes(k));
+
+    if (isOnlyReminderUpdate && (isAssignedUser || (task.createdBy && task.createdBy.toString() === currentUserId))) {
+      task.reminderSettings = normalizeTaskReminderSettings(req.body);
+      await task.save();
+      return res.json({ success: true, message: 'Reminder settings updated successfully', task });
+    }
     const allowCompanyAllEdit = await canManageTaskFromCompanyAll(req, task);
     if (task.createdBy.toString() !== req.user._id.toString() && !allowCompanyAllEdit) return res.status(403).json({ success: false, error: 'Not authorized' });
 
@@ -1990,6 +2005,13 @@ exports.updateTask = async (req, res) => {
     }
     if (req.body.checkpoints !== undefined) {
       task.checkpoints = parseTaskCheckpoints(req.body.checkpoints);
+    }
+    if (
+      req.body.reminderSettings !== undefined ||
+      req.body.reminderEnabled !== undefined ||
+      req.body.reminderOptions !== undefined
+    ) {
+      task.reminderSettings = normalizeTaskReminderSettings(req.body);
     }
     if (req.body.status !== undefined && req.body.status !== 'null') {
       task.overallStatus = req.body.status;
@@ -2761,7 +2783,7 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
 
   const [personalTasks, clientTasks, projectTasks] = await Promise.all([
     Task.find(personalQuery)
-      .select('title description dueDate dueDateTime priority priorityDays checkpoints overallStatus statusByUser statusHistory completionDate assignedUsers assignedGroups createdBy companyCode taskFor onHoldReleasedAt createdAt updatedAt remarks lastEditedBy lastEditedByName lastEditedAt lastEditChanges')
+      .select('title description dueDate dueDateTime priority priorityDays checkpoints reminderSettings overallStatus statusByUser statusHistory completionDate assignedUsers assignedGroups createdBy companyCode taskFor onHoldReleasedAt createdAt updatedAt remarks lastEditedBy lastEditedByName lastEditedAt lastEditChanges')
       .populate('assignedUsers', TASK_USER_POPULATE_FIELDS)
       .populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS)
       .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
@@ -2771,7 +2793,7 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
       .lean(),
 
     ClientTask.find(clientQuery)
-      .select('name description dueDate priority status completed completedAt checkpoints service timeSpent inProgressSince activityLogs clientId createdAt updatedAt assignee assigneeId remarks lastEditedBy lastEditedByName lastEditedAt lastEditChanges')
+      .select('name description dueDate priority status completed completedAt checkpoints reminderSettings service timeSpent inProgressSince activityLogs clientId createdAt updatedAt assignee assigneeId remarks lastEditedBy lastEditedByName lastEditedAt lastEditChanges')
       .populate('clientId', 'client name email company phone companyCode')
       .populate('assigneeId', TASK_USER_POPULATE_FIELDS)
       .populate('activityLogs.user', TASK_USER_POPULATE_FIELDS)
@@ -2811,6 +2833,7 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
       taskSource,
       __taskSource: taskSource,
       remarks: Array.isArray(t.remarks) ? t.remarks : [],
+      reminderSettings: t.reminderSettings,
       lastEditedBy: t.lastEditedBy || null,
       lastEditedByName: t.lastEditedByName || '',
       lastEditedAt: t.lastEditedAt || null,
@@ -2831,6 +2854,7 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
       completed: t.completed,
       completedAt: t.completedAt || null,
       checkpoints: t.checkpoints || [],
+      reminderSettings: t.reminderSettings,
       priority: String(t.priority || 'Medium').toLowerCase(),
       status: displayStatus,
       userStatus: clientStatus,
@@ -2888,6 +2912,7 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
         assignedToName: task.assignedTo?.name || 'Unknown',
         assignedToEmail: task.assignedTo?.email || '',
         checkpoints: task.checkpoints || [],
+        reminderSettings: task.reminderSettings,
         files: task.pdfFile?.path ? [{
           filename: task.pdfFile.filename,
           originalName: task.pdfFile.filename,
@@ -3652,6 +3677,30 @@ exports.updateCreatorStatus = async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+exports.updateTaskReminder = async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    const task = await Task.findById(taskId);
+    if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
+
+    const currentUserId = (req.user._id || req.user.id).toString();
+    const isCreator = task.createdBy && task.createdBy.toString() === currentUserId;
+    const isAssigned = (task.assignedUsers || []).some(u => String(u._id || u.id || u) === currentUserId);
+    const allowCompanyAllEdit = await canManageTaskFromCompanyAll(req, task);
+
+    if (!isCreator && !isAssigned && !allowCompanyAllEdit) {
+      return res.status(403).json({ success: false, error: 'Not authorized to update reminder on this task' });
+    }
+
+    task.reminderSettings = normalizeTaskReminderSettings(req.body);
+    await task.save();
+
+    return res.json({ success: true, message: 'Reminder updated successfully', task });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
   }
 };
 
