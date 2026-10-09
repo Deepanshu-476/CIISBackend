@@ -180,6 +180,9 @@ router.get('/summary/bulk', authMiddleware, taskController.getClientTaskSummarie
 router.get('/client/:clientId', authMiddleware, taskController.getClientTasks);
 router.get('/client/:clientId/stats', authMiddleware, taskController.getTaskStats);
 router.put('/:taskId', authMiddleware, taskController.updateTask);
+router.patch('/:taskId', authMiddleware, taskController.updateTask);
+router.patch('/:taskId/reminder', authMiddleware, taskController.updateTask);
+router.put('/:taskId/reminder', authMiddleware, taskController.updateTask);
 router.patch('/:taskId/checkpoints/:checkpointId', authMiddleware, taskController.updateTaskCheckpoint);
 router.patch('/:taskId/toggle', authMiddleware, taskController.toggleTaskCompletion);
 router.delete('/:taskId', authMiddleware, taskController.deleteTask);
