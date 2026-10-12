@@ -14,6 +14,8 @@ const uploadFields = upload.fields([
 router.get('/assigned-to-me', protect, projectTaskController.getAssignedProjectTasks);
 router.post('/:id/tasks', protect, uploadFields, projectTaskController.addTask);
 router.patch('/:id/tasks/:taskId', protect, uploadFields, projectTaskController.updateTask);
+router.patch('/:id/tasks/:taskId/reminder', protect, projectTaskController.updateTaskReminder);
+router.put('/:id/tasks/:taskId/reminder', protect, projectTaskController.updateTaskReminder);
 router.delete('/:id/tasks/:taskId', protect, projectTaskController.deleteTask);
 router.patch('/:projectId/tasks/:taskId/status', protect, projectTaskController.updateTaskStatus);
 router.patch('/:projectId/tasks/:taskId/checkpoints/:checkpointId', protect, projectTaskController.updateTaskCheckpoint);
