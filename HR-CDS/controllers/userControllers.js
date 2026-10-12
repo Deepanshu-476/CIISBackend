@@ -178,6 +178,59 @@ const canViewAllCompanyBranches = (user = {}) => {
   return ['owner', 'company_owner', 'companyowner', 'super_admin', 'superadmin', 'admin', 'hr', 'manager', 'career infowis admin'].includes(roleText);
 };
 
+const isPrivilegedPiiViewer = (user = {}) => {
+  if (user?.isSuperAdmin === true || user?.superAdmin === true) return true;
+  const roles = [user?.companyRole, user?.jobRole, user?.role]
+    .filter(Boolean)
+    .map(r => String(r).trim().toLowerCase());
+  return roles.some(r => ['owner', 'company_owner', 'companyowner', 'super_admin', 'superadmin', 'admin', 'hr', 'career infowis admin'].includes(r));
+};
+
+const SENSITIVE_USER_LIST_KEYS = [
+  'password',
+  'resetToken',
+  'resetTokenExpiry',
+  'salary',
+  'accountNumber',
+  'ifsc',
+  'bankName',
+  'bankHolderName',
+  'aadhaar',
+  'aadhar',
+  'aadharCard',
+  'aadhaarNumber',
+  'pan',
+  'panCard',
+  'panNumber',
+  'fatherName',
+  'motherName',
+  'documents',
+];
+
+const sanitizeUserRecordForList = (userObj = {}, req = {}) => {
+  const includeSensitive = String(req?.query?.includeSensitive || '').toLowerCase() === 'true';
+  const requesterId = String(req?.user?._id || req?.user?.id || '');
+  const targetId = String(userObj?._id || userObj?.id || '');
+  if (requesterId && targetId && requesterId === targetId) {
+    return userObj;
+  }
+  if (includeSensitive && isPrivilegedPiiViewer(req?.user)) {
+    return userObj;
+  }
+  const cloned = { ...userObj };
+  SENSITIVE_USER_LIST_KEYS.forEach(key => {
+    delete cloned[key];
+  });
+  if (cloned.additionalDetails && typeof cloned.additionalDetails === 'object') {
+    const safeAdditional = { ...cloned.additionalDetails };
+    SENSITIVE_USER_LIST_KEYS.forEach(key => {
+      delete safeAdditional[key];
+    });
+    cloned.additionalDetails = safeAdditional;
+  }
+  return cloned;
+};
+
 const appendAndCondition = (filter, condition) => {
   if (!condition || Object.keys(condition).length === 0) return filter;
   filter.$and = Array.isArray(filter.$and) ? [...filter.$and, condition] : [condition];
@@ -1324,7 +1377,7 @@ exports.getAllUsers = async (req, res) => {
       const roleName = user.jobRoleName || (typeof user.jobRole === 'string' && !user.jobRole.match(/^[0-9a-fA-F]{24}$/) ? user.jobRole : '');
       const bName = user.branchName || user.branch?.name || '';
       const bCode = user.branchCode || user.branch?.branchCode || '';
-      return {
+      return sanitizeUserRecordForList({
         ...user,
         id: user._id,
         name: user.name,
@@ -1371,7 +1424,7 @@ exports.getAllUsers = async (req, res) => {
         isActive: user.isActive,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt
-      };
+      }, req);
     });
 
     return successResponse(res, 200, {
@@ -2168,7 +2221,7 @@ exports.getCompanydepartmentUsers = async (req, res) => {
       count: users.length,
       total,
       pagination: buildPaginationMeta({ page, limit, total }),
-      users: users.map(user => ({
+      users: users.map(user => sanitizeUserRecordForList({
         id: user._id,
         name: user.name,
         email: user.email,
@@ -2211,7 +2264,7 @@ exports.getCompanydepartmentUsers = async (req, res) => {
         ...getUserPresence(user, socketOnlineIds),
         createdAt: user.createdAt,
         updatedAt: user.updatedAt
-      }))
+      }, req))
     });
     
   } catch (err) {
@@ -2297,7 +2350,7 @@ exports.getCompanyUsers = async (req, res) => {
       const roleName = user.jobRoleName || (typeof user.jobRole === 'string' && !user.jobRole.match(/^[0-9a-fA-F]{24}$/) ? user.jobRole : '');
       const bName = user.branchName || user.branch?.name || '';
       const bCode = user.branchCode || user.branch?.branchCode || '';
-      return {
+      return sanitizeUserRecordForList({
         ...user,
         id: user._id,
         departmentName: deptName,
@@ -2310,7 +2363,7 @@ exports.getCompanyUsers = async (req, res) => {
           completed,
           completionRate: total > 0 ? Math.round((completed / total) * 100) : 0
         }
-      };
+      }, req);
     });
 
     return successResponse(res, 200, {
@@ -2398,7 +2451,7 @@ exports.getCompanyUsersPaginated = async (req, res) => {
         const roleName = user.jobRoleName || (typeof user.jobRole === 'string' && !user.jobRole.match(/^[0-9a-fA-F]{24}$/) ? user.jobRole : '');
         const bName = user.branchName || user.branch?.name || '';
         const bCode = user.branchCode || user.branch?.branchCode || '';
-        return {
+        return sanitizeUserRecordForList({
           id: user._id,
           name: user.name,
           email: user.email,
@@ -2444,7 +2497,7 @@ exports.getCompanyUsersPaginated = async (req, res) => {
           isActive: user.isActive,
           createdAt: user.createdAt,
           updatedAt: user.updatedAt
-        };
+        }, req);
       })
     });
     
@@ -2509,7 +2562,7 @@ exports.searchUsers = async (req, res) => {
       count: users.length,
       total,
       pagination: buildPaginationMeta({ page, limit, total }),
-      users
+      users: users.map(u => sanitizeUserRecordForList(u, req))
     });
   } catch (err) {
     console.error("❌ Search users error:", err);

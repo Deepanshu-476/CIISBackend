@@ -91,6 +91,7 @@ router.post("/verify-reset-otp", passwordResetLimiter, authController.verifyPass
 router.post("/reset-password", passwordResetLimiter, authController.resetPassword);   
 router.get("/verify-email/:token", authController.verifyEmail);
 router.post("/refresh-token", authController.refreshToken);
+router.post("/refresh", authController.refreshToken);
 router.post("/logout", authController.logout); 
  
  
@@ -113,7 +114,6 @@ router.post("/company/:companyCode/resend-otp", otpLimiter, authController.resen
 router.get("/company/:identifier", authController.getCompanyDetailsByIdentifier);
 
 
-router.get("/test", authController.testAPI);
 router.get("/test", (req, res, next) => {
   if (process.env.NODE_ENV === 'production') {
     return res.status(404).json({ success: false, message: 'Not found' });

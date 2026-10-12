@@ -123,9 +123,12 @@ const findApplicableLeavePolicy = async ({ companyId, user, leaveType }) => {
     leaveType: { $regex: new RegExp(`^${String(leaveType).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
   })
     .populate('department', 'name')
+    .populate('departments', 'name')
     .populate('jobRoles', 'name')
     .sort({ sortOrder: 1, createdAt: 1 })
     .lean();
+
+  if (!policies.length) return null;
 
   const userDepartment = normalizePolicyValue(user.department?._id || user.department);
   const userDepartmentName = normalizePolicyValue(user.department?.name || user.departmentName || user.department);
@@ -135,12 +138,18 @@ const findApplicableLeavePolicy = async ({ companyId, user, leaveType }) => {
 
   if (useAdminFallback) return policies[0] || null;
 
-  return policies.find(policy => {
-    const policyDepartmentId = normalizePolicyValue(policy.department?._id || policy.department);
-    const policyDepartmentName = normalizePolicyValue(policy.department?.name || policy.department);
+  const exactMatch = policies.find(policy => {
+    const policyDepts = [
+      normalizePolicyValue(policy.department?._id || policy.department),
+      normalizePolicyValue(policy.department?.name || policy.department),
+      ...(policy.departments || []).flatMap(dept => [
+        normalizePolicyValue(dept?._id || dept),
+        normalizePolicyValue(dept?.name || dept)
+      ])
+    ].filter(Boolean);
     const departmentMatches = [userDepartment, userDepartmentName]
       .filter(Boolean)
-      .some(value => value === policyDepartmentId || value === policyDepartmentName);
+      .some(value => policyDepts.includes(value));
 
     const roleValues = [
       ...(policy.jobRoles || []).flatMap(role => [
@@ -151,7 +160,24 @@ const findApplicableLeavePolicy = async ({ companyId, user, leaveType }) => {
     ].filter(Boolean);
     const roleMatches = [userJobRole, userJobRoleName].filter(Boolean).some(value => roleValues.includes(value));
     return departmentMatches && roleMatches;
-  }) || null;
+  });
+
+  if (exactMatch) return exactMatch;
+
+  // Fallback to department match or company-wide active policy for this leaveType (e.g. Management dept, LV-03)
+  const deptOnlyMatch = policies.find(policy => {
+    const policyDepts = [
+      normalizePolicyValue(policy.department?._id || policy.department),
+      normalizePolicyValue(policy.department?.name || policy.department),
+      ...(policy.departments || []).flatMap(dept => [
+        normalizePolicyValue(dept?._id || dept),
+        normalizePolicyValue(dept?.name || dept)
+      ])
+    ].filter(Boolean);
+    return [userDepartment, userDepartmentName].filter(Boolean).some(value => policyDepts.includes(value));
+  });
+
+  return deptOnlyMatch || policies[0] || null;
 };
 
 const validateLeaveAgainstPolicy = async ({ policy, user, start, end, excludeLeaveId = null }) => {
@@ -227,7 +253,7 @@ const validateLeaveAgainstPolicy = async ({ policy, user, start, end, excludeLea
   return null;
 };
 
-const getLeaveApprovalStepsForCompany = async (companyId) => {
+const getLeaveApprovalStepsForCompany = async (companyId, applicantUserId = null) => {
   if (!companyId || !mongoose.isValidObjectId(companyId)) return [];
 
   const pagePermission = await PagePermission.findOne({
@@ -241,14 +267,21 @@ const getLeaveApprovalStepsForCompany = async (companyId) => {
 
   if (approverIds.length === 0) return [];
 
-  return [...new Set(approverIds.map(id => normalizeId(id)))]
-    .filter(id => mongoose.isValidObjectId(id))
-    .map(id => ({
-      user: id,
-      status: 'Pending',
-      remarks: '',
-      actionedAt: null
-    }));
+  const uniqueValidIds = [...new Set(approverIds.map(id => normalizeId(id)))]
+    .filter(id => mongoose.isValidObjectId(id));
+
+  // Exclude the leave applicant from their own approvalSteps (LV-01)
+  const applicantIdStr = normalizeId(applicantUserId);
+  const nonSelfIds = applicantIdStr
+    ? uniqueValidIds.filter(id => id !== applicantIdStr)
+    : uniqueValidIds;
+
+  return nonSelfIds.map(id => ({
+    user: id,
+    status: 'Pending',
+    remarks: '',
+    actionedAt: null
+  }));
 };
 
 const getEmployeeLeavesPageAccess = async (companyId, userId) => {
@@ -422,7 +455,7 @@ exports.applyLeave = async (req, res) => {
       }
     }
 
-    const approvalSteps = await getLeaveApprovalStepsForCompany(userCompanyId);
+    const approvalSteps = await getLeaveApprovalStepsForCompany(userCompanyId, req.user._id);
 
     
     const leave = new Leave({
@@ -986,6 +1019,13 @@ exports.updateLeaveApproval = async (req, res) => {
       });
     }
 
+    if (normalizeId(leave.user?._id || leave.user) === normalizeId(currentUser._id)) {
+      return res.status(403).json({
+        success: false,
+        error: 'You cannot approve or reject your own leave request.'
+      });
+    }
+
     if (isTerminalLeaveStatus(leave.status)) {
       return res.status(409).json({
         success: false,
@@ -1029,11 +1069,9 @@ exports.updateLeaveApproval = async (req, res) => {
     };
     leave.markModified('approvals');
 
-    if (status === 'Approved' || status === 'Rejected') {
-      leave.status = status;
+    leave.status = calculateFinalLeaveStatus(leave.approvals);
+    if (leave.status === 'Approved' || leave.status === 'Rejected') {
       leave.approvedBy = currentUser._id;
-    } else {
-      leave.status = calculateFinalLeaveStatus(leave.approvals);
     }
 
     leave.remarks = remarks || leave.remarks || '';
@@ -1254,7 +1292,22 @@ exports.updateLeaveStatus = async (req, res) => {
       return res.status(403).json({ success: false, error: 'You cannot update another company\'s leave request.' });
     }
     const currentUserId = normalizeId(currentUser._id);
+    const leaveApplicantId = normalizeId(leave.user?._id || leave.user);
+    const isSelfRequest = currentUserId && leaveApplicantId && currentUserId === leaveApplicantId;
     const isOwner = String(currentUser.companyRole || '').toLowerCase() === 'owner';
+
+    // Remove self from approvalSteps if other approvers exist (LV-01)
+    if (Array.isArray(leave.approvalSteps) && leave.approvalSteps.length > 1) {
+      leave.approvalSteps = leave.approvalSteps.filter(step => normalizeId(step.user) !== leaveApplicantId);
+    }
+
+    if (isSelfRequest) {
+      return res.status(403).json({
+        success: false,
+        error: 'You cannot approve or reject your own leave request.'
+      });
+    }
+
     const hasApprovalSteps = Array.isArray(leave.approvalSteps) && leave.approvalSteps.length > 0;
     let approvalStepIndex = hasApprovalSteps
       ? leave.approvalSteps.findIndex(step => normalizeId(step.user) === currentUserId)
@@ -1263,7 +1316,7 @@ exports.updateLeaveStatus = async (req, res) => {
 
     // Permissions may change after a leave was submitted. Add a newly
     // configured Page Management approver to the saved workflow on demand.
-    if (hasApprovalSteps && approvalStepIndex === -1 && pageAccess.isApprover) {
+    if (hasApprovalSteps && approvalStepIndex === -1 && (pageAccess.isApprover || isOwner)) {
       leave.approvalSteps.push({
         user: currentUser._id,
         status: 'Pending',
@@ -1360,6 +1413,17 @@ exports.updateLeaveStatus = async (req, res) => {
         leave.approvedBy = currentUser._id;
       } else {
         leave.status = 'Pending';
+      }
+
+      // Mark remaining Pending steps as Not Required once leave is Rejected or Approved (LV-01)
+      if (leave.status === 'Rejected' || leave.status === 'Approved') {
+        leave.approvalSteps.forEach((step, idx) => {
+          if (idx !== approvalStepIndex && (!step.status || step.status === 'Pending')) {
+            step.status = 'Not Required';
+            step.remarks = step.remarks || `Resolved by ${currentUser.name || 'another approver'}`;
+            step.actionedAt = new Date();
+          }
+        });
       }
     } else {
       leave.status = status;
@@ -1923,16 +1987,22 @@ exports.getLeaveStats = async (req, res) => {
 
   try {
     const userId = req.user._id;
-    const userRole = req.user.jobRole?.toLowerCase();
+    const userRole = String(req.user.jobRole || req.user.companyRole || req.user.role || '').toLowerCase();
+    const userCompanyId = getUserCompanyId(req.user);
+    const pageAccess = await getEmployeeLeavesPageAccess(userCompanyId, userId);
+    const isPrivileged = ['admin', 'hr', 'manager', 'owner', 'super_admin', 'superadmin', 'company_owner'].includes(userRole) || pageAccess.hasPageAccess;
     
     let stats = {};
 
-    if (['admin', 'hr', 'manager'].includes(userRole)) {
+    if (isPrivileged && userCompanyId) {
+      const companyUserIds = await getBranchScopedCompanyUserIds(userCompanyId, req.query.branch);
+      let filter = {
+        user: { $in: companyUserIds }
+      };
       
-      let filter = {};
-      
-      if (userRole === 'manager' && req.user.department) {
+      if (userRole === 'manager' && !pageAccess.hasPageAccess && req.user.department) {
         const departmentUsers = await User.find({ 
+          _id: { $in: companyUserIds },
           department: req.user.department 
         }, '_id');
         
