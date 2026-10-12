@@ -119,7 +119,7 @@ const getAlerts = async (req, res) => {
     const alerts = await Alert.find(mergeQueries(companyQuery, assignmentQuery))
       .populate('assignedUsers', 'name email')
       .populate('assignedGroups', 'name')
-      .populate('createdBy', 'name email role department')
+      .populate('createdBy', 'name email role department departmentName')
       .populate('company', 'companyName companyCode logo')
       .sort({ createdAt: -1 });
     
@@ -209,7 +209,7 @@ const addAlert = async (req, res) => {
     });
     
     await alert.save();
-    await alert.populate('createdBy', 'name email role department');
+    await alert.populate('createdBy', 'name email role department departmentName');
     
     res.status(201).json({
       success: true,
@@ -258,7 +258,7 @@ const updateAlert = async (req, res) => {
     if (attachments !== undefined) alert.attachments = Array.isArray(attachments) ? attachments : [];
     
     await alert.save();
-    await alert.populate('createdBy', 'name email role department');
+    await alert.populate('createdBy', 'name email role department departmentName');
     
     res.json({
       success: true,

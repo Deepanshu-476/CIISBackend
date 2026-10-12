@@ -972,6 +972,7 @@ const fetchPersonalTaskList = async (req) => {
     taskFor: 'self',
     isActive: true
   })
+    .select('-remarks -statusHistory')
     .populate('assignedUsers', TASK_USER_POPULATE_FIELDS)
     .populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS)
     .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
@@ -1001,6 +1002,7 @@ const fetchAssignedToMeTaskList = async (req) => {
       { assignedGroups: { $in: groupIds } }
     ]
   })
+    .select('-remarks -statusHistory')
     .populate('assignedUsers', TASK_USER_POPULATE_FIELDS)
     .populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS)
     .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
@@ -1141,7 +1143,11 @@ const fetchAssignedClientTaskList = async (req) => {
       { assignee: currentUser.name },
       { assignee: currentUser.email }
     ].filter(Boolean)
-  }).populate('clientId', 'client name email company phone companyCode').sort({ createdAt: -1 }).lean();
+  })
+    .select('-remarks -activityLogs')
+    .populate('clientId', 'client name email company phone companyCode')
+    .sort({ createdAt: -1 })
+    .lean();
 
   return tasks.map(t => {
     const status = t.completed ? 'completed' : normalizeTaskStatus(t.status || 'pending');
@@ -1183,11 +1189,10 @@ const fetchAssignedProjectTaskList = async (req) => {
   const currentUserId = (req.user._id || req.user.id).toString();
 
   const projects = await Project.find({ 'tasks.assignedTo': currentUserId })
-    .select('projectName description createdBy users tasks createdAt updatedAt')
+    .select('-notifications -tasks.remarks -tasks.activityLogs')
     .populate('createdBy', 'name email')
     .populate('tasks.assignedTo', 'name email')
     .populate('tasks.createdBy', 'name email')
-    .populate('tasks.activityLogs.performedBy', 'name email')
     .lean();
 
   const tasks = [];
