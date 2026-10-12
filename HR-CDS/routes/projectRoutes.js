@@ -44,6 +44,8 @@ router.delete("/:id/tasks/:taskId/attachment", protect, projectController.delete
 router.delete("/:id/tasks/:taskId", protect, projectController.deleteTask);
 
 
+router.patch("/:projectId/tasks/:taskId/reminder", protect, projectController.updateTaskReminder);
+router.put("/:projectId/tasks/:taskId/reminder", protect, projectController.updateTaskReminder);
 router.patch("/:projectId/tasks/:taskId/status", protect, [
   check("status").notEmpty().withMessage("Status is required")
 ], projectController.updateTaskStatus);

@@ -28,6 +28,8 @@ router.post('/create', protect, safeUploadFields, selfTaskController.createTaskF
 router.get('/', protect, selfTaskController.getPersonalTasks);
 router.get('/stats', protect, selfTaskController.getPersonalTaskStats);
 router.put('/:taskId', protect, safeUploadFields, selfTaskController.updateTask);
+router.patch('/:taskId/reminder', protect, selfTaskController.updateTaskReminder);
+router.put('/:taskId/reminder', protect, selfTaskController.updateTaskReminder);
 router.patch('/:taskId/stop-recurring', protect, selfTaskController.stopRecurringTask);
 router.delete('/:taskId', protect, selfTaskController.deleteTask);
 router.patch('/:taskId/status', protect, selfTaskController.updateStatus);
