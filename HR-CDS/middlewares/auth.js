@@ -3,7 +3,11 @@ const User = require('../../models/User');
 
 const authMiddleware = async (req, res, next) => {
   try {
-    const token = req.header('Authorization')?.replace('Bearer ', '');
+    const token =
+      req.header('Authorization')?.replace('Bearer ', '') ||
+      req.cookies?.access_token ||
+      req.cookies?.auth_token ||
+      req.cookies?.token;
     
     if (!token) {
       return res.status(401).json({
@@ -21,7 +25,7 @@ const authMiddleware = async (req, res, next) => {
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const user = await User.findById(decoded.id || decoded._id)
-      .select('-password')
+      .select('-password -resetToken -resetTokenExpiry')
       .populate('company', 'isActive companyCode');
     
     if (!user) {
