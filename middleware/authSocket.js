@@ -2,10 +2,23 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
+const parseCookieToken = (cookieHeader = '') => {
+  if (!cookieHeader || typeof cookieHeader !== 'string') return null;
+  const cookies = Object.fromEntries(
+    cookieHeader.split(';').map(part => {
+      const idx = part.indexOf('=');
+      if (idx === -1) return ['', ''];
+      return [part.slice(0, idx).trim(), decodeURIComponent(part.slice(idx + 1).trim())];
+    })
+  );
+  return cookies.access_token || cookies.auth_token || cookies.token || null;
+};
+
 const authSocket = async (socket, next) => {
   try {
-    const token = socket.handshake.auth.token || 
-                  socket.handshake.headers.authorization?.split(' ')[1];
+    const token = socket.handshake.auth?.token || 
+                  socket.handshake.headers?.authorization?.split(' ')[1] ||
+                  parseCookieToken(socket.handshake.headers?.cookie);
     
     if (!token) { 
       void 0;
