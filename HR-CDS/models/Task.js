@@ -128,6 +128,23 @@ const checkpointSchema = new mongoose.Schema(
   }
 );
 
+const reminderSettingsSchema = new mongoose.Schema(
+  {
+    enabled: { type: Boolean, default: false },
+    options: {
+      type: [String],
+      enum: ["hourly", "halfHourly", "oneHourBefore", "custom", "interval", "beforeDue"],
+      default: [],
+    },
+    reminderTime: { type: Date, default: null },
+    customTime: { type: String, default: null },
+    repeatIntervalMinutes: { type: Number, default: null },
+    minutesBeforeDue: { type: Number, default: null },
+    sentKeys: { type: [String], default: [] },
+  },
+  { _id: false }
+);
+
  
 const taskSchema = new mongoose.Schema(
   {
@@ -170,6 +187,10 @@ const taskSchema = new mongoose.Schema(
     statusByUser: [statusSchema],
     statusHistory: [statusHistorySchema],
     checkpoints: [checkpointSchema],
+    reminderSettings: {
+      type: reminderSettingsSchema,
+      default: () => ({ enabled: false, options: [], sentKeys: [] }),
+    },
     remarks: [remarkSchema],
     snoozedUntil: {type: Date, default: null},
     isSnoozed: {

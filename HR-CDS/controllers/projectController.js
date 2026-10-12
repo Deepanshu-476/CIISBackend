@@ -6,6 +6,7 @@ const sharp = require("sharp");
 const { notifyDirectUsers } = require("../utils/systemNotificationService");
 const { enqueueCompletionJob } = require("../utils/backgroundJobQueue");
 const { sendEmail } = require("../../utils/sendEmail");
+const { normalizeTaskReminderSettings } = require("../utils/taskReminderSettings");
 const User = require("../../models/User");
 const Branch = require("../../models/Branch");
 const mongoose = require("mongoose");
@@ -1355,6 +1356,13 @@ exports.addTask = async (req, res) => {
         });
       }
 
+      if (normalizeTaskStatus(status) === "in-progress" && assignedUserIds.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Assign at least one user before moving a task to In Progress"
+        });
+      }
+
 
       const safeTitle = title?.trim() || "Untitled Task";
       const now = new Date();
@@ -1364,6 +1372,7 @@ exports.addTask = async (req, res) => {
         priority: priority?.toLowerCase(),
         status: status?.toLowerCase() || 'pending',
         checkpoints: parseTaskCheckpoints(checkpoints),
+        reminderSettings: normalizeTaskReminderSettings(req.body),
         createdBy: req.user.id,
         createdAt: now,
         updatedAt: now
@@ -1550,6 +1559,11 @@ exports.updateTask = async (req, res) => {
 
       if (key === 'checkpoints') {
         task.checkpoints = parseTaskCheckpoints(updateData[key]);
+        return;
+      }
+
+      if (key === 'reminderSettings' || key === 'reminderEnabled' || key === 'reminderOptions') {
+        task.reminderSettings = normalizeTaskReminderSettings(updateData);
         return;
       }
 
@@ -1774,6 +1788,13 @@ exports.updateTaskStatus = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: "Task not found"
+      });
+    }
+
+    if (nextStatus === "in-progress" && getTaskAssigneeIds(task).length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Assign at least one user before moving this task to In Progress"
       });
     }
 
@@ -2263,4 +2284,42 @@ exports.addRemark = async (req, res) => {
     });
   }
 };
-void 0;
+
+exports.updateTaskReminder = async (req, res) => {
+  try {
+    const { id, projectId, taskId } = req.params;
+    const targetProjectId = projectId || id;
+    const project = await Project.findById(targetProjectId);
+    if (!project) {
+      return res.status(404).json({ success: false, message: "Project not found" });
+    }
+    const task = project.tasks.id(taskId);
+    if (!task) {
+      return res.status(404).json({ success: false, message: "Task not found" });
+    }
+
+    const isAssignee = idsEqual(task.assignedTo, req.user.id);
+    const hasAccess = hasProjectAccess(project, req.user.id, req.user.role, req.user);
+    if (!hasAccess && !isAssignee) {
+      return res.status(403).json({ success: false, message: "Access denied to update task reminder" });
+    }
+
+    task.reminderSettings = normalizeTaskReminderSettings(req.body);
+    project.markModified("tasks");
+    await project.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Project task reminder updated successfully",
+      task,
+      reminderSettings: task.reminderSettings
+    });
+  } catch (error) {
+    console.error("❌ Error updating project task reminder:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error updating task reminder",
+      error: error.message
+    });
+  }
+};
