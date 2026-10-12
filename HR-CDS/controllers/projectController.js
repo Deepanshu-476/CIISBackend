@@ -394,25 +394,66 @@ const getTaskDocumentName = (task, project = null, originalName = '') => {
   return `${safeTitle}_Document${ext.toLowerCase()}`;
 };
 
+const resolveProjectFilePath = (rawPath, filename) => {
+  const cleanName = path.basename(String(rawPath || filename || "").replace(/\\/g, "/"));
+  const normalizedRaw = rawPath ? String(rawPath).replace(/\\/g, "/") : "";
+
+  const candidates = [
+    rawPath ? path.resolve(rawPath) : null,
+    rawPath ? path.resolve(process.cwd(), rawPath) : null,
+    rawPath ? path.resolve(__dirname, "../../", rawPath) : null,
+    rawPath ? path.resolve(__dirname, "../", rawPath) : null,
+    normalizedRaw ? path.resolve(process.cwd(), normalizedRaw.replace(/^\/+/, "")) : null,
+    cleanName ? path.resolve(process.cwd(), "uploads", "projects", cleanName) : null,
+    cleanName ? path.resolve(process.cwd(), "HR-CDS", "uploads", "projects", cleanName) : null,
+    cleanName ? path.resolve(__dirname, "../../uploads/projects", cleanName) : null,
+    cleanName ? path.resolve(__dirname, "../uploads/projects", cleanName) : null,
+    cleanName ? path.resolve("/var/www/app2/uploads/projects", cleanName) : null,
+    cleanName ? path.resolve("/var/www/app1/uploads/projects", cleanName) : null,
+    cleanName ? path.resolve("/var/www/app2/HR-CDS/uploads/projects", cleanName) : null,
+    cleanName ? path.resolve("/var/www/app1/HR-CDS/uploads/projects", cleanName) : null,
+    cleanName ? path.resolve("/var/www/backendruno/uploads/projects", cleanName) : null,
+    cleanName ? path.resolve("/var/www/backendruno/HR-CDS/uploads/projects", cleanName) : null,
+    cleanName ? path.resolve("/var/www/backendruno_backup_20261007/uploads/projects", cleanName) : null,
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+        return candidate;
+      }
+    } catch (_) {}
+  }
+  return null;
+};
+
 const normalizeProjectPdfFile = (project) => {
   const pdfFile = project?.pdfFile;
-  if (!pdfFile || (!pdfFile.path && !pdfFile.url)) return null;
-  const original = pdfFile.originalName || pdfFile.filename || (pdfFile.path ? path.basename(pdfFile.path) : '') || 'Document.pdf';
+  const rawPath = String(pdfFile?.path || pdfFile?.url || '').trim();
+  if (!pdfFile || !rawPath) return null;
+  const original = pdfFile.originalName || pdfFile.filename || path.basename(rawPath);
+  const resolved = resolveProjectFilePath(rawPath, original);
+  if (!resolved && !String(rawPath).startsWith('http')) return null;
   return {
     ...pdfFile,
     filename: original,
     originalName: original,
+    path: rawPath.replace(/\\/g, '/'),
   };
 };
 
 const normalizeTaskPdfFile = (task, project = null) => {
   const pdfFile = task?.pdfFile;
-  if (!pdfFile || (!pdfFile.path && !pdfFile.url)) return null;
-  const original = pdfFile.originalName || pdfFile.filename || (pdfFile.path ? path.basename(pdfFile.path) : '') || 'Attachment';
+  const rawPath = String(pdfFile?.path || pdfFile?.url || '').trim();
+  if (!pdfFile || !rawPath) return null;
+  const original = pdfFile.originalName || pdfFile.filename || path.basename(rawPath);
+  const resolved = resolveProjectFilePath(rawPath, original);
+  if (!resolved && !String(rawPath).startsWith('http')) return null;
   return {
     ...pdfFile,
     filename: original,
     originalName: original,
+    path: rawPath.replace(/\\/g, '/'),
   };
 };
 
@@ -445,36 +486,6 @@ const withProjectSummary = (project) => {
     completedTaskCount,
     taskProgress: taskCount ? Math.round((completedTaskCount / taskCount) * 100) : 0
   };
-};
-
-const resolveProjectFilePath = (rawPath, filename) => {
-  const cleanName = path.basename(String(rawPath || filename || "").replace(/\\/g, "/"));
-  const normalizedRaw = rawPath ? String(rawPath).replace(/\\/g, "/") : "";
-
-  const candidates = [
-    rawPath ? path.resolve(rawPath) : null,
-    rawPath ? path.resolve(process.cwd(), rawPath) : null,
-    rawPath ? path.resolve(__dirname, "../../", rawPath) : null,
-    rawPath ? path.resolve(__dirname, "../", rawPath) : null,
-    normalizedRaw ? path.resolve(process.cwd(), normalizedRaw.replace(/^\/+/, "")) : null,
-    cleanName ? path.resolve(process.cwd(), "uploads", "projects", cleanName) : null,
-    cleanName ? path.resolve(process.cwd(), "HR-CDS", "uploads", "projects", cleanName) : null,
-    cleanName ? path.resolve(__dirname, "../../uploads/projects", cleanName) : null,
-    cleanName ? path.resolve(__dirname, "../uploads/projects", cleanName) : null,
-    cleanName ? path.resolve("/var/www/app2/uploads/projects", cleanName) : null,
-    cleanName ? path.resolve("/var/www/app1/uploads/projects", cleanName) : null,
-    cleanName ? path.resolve("/var/www/app2/HR-CDS/uploads/projects", cleanName) : null,
-    cleanName ? path.resolve("/var/www/app1/HR-CDS/uploads/projects", cleanName) : null,
-  ].filter(Boolean);
-
-  for (const candidate of candidates) {
-    try {
-      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
-        return candidate;
-      }
-    } catch (_) {}
-  }
-  return null;
 };
 
 const sendProjectAttachment = (req, res, attachment, fallbackName = "document.pdf") => {
@@ -1440,7 +1451,10 @@ exports.addTask = async (req, res) => {
       res.status(201).json({
         success: true,
         message: "Task added successfully",
-        task: createdTask
+        task: {
+          ...(typeof createdTask.toObject === 'function' ? createdTask.toObject() : createdTask),
+          pdfFile: normalizeTaskPdfFile(createdTask, project)
+        }
       });
     });
   } catch (error) {
@@ -2164,10 +2178,15 @@ exports.addRemark = async (req, res) => {
       const savePath = path.join(uploadDir, filename);
       imgPath = `remarks/${filename}`;
 
-      await sharp(req.file.buffer)
-        .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
-        .jpeg({ quality: 80 })
-        .toFile(savePath);
+      try {
+        await sharp(req.file.buffer)
+          .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
+          .jpeg({ quality: 80 })
+          .toFile(savePath);
+      } catch (sharpErr) {
+        console.warn('Sharp compression failed in projectController.addRemark, saving raw buffer:', sharpErr.message);
+        fs.writeFileSync(savePath, req.file.buffer);
+      }
     }
 
 
