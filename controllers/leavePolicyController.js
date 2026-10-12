@@ -260,7 +260,7 @@ exports.getApplicableLeavePolicies = async (req, res, next) => {
     const isOnProbation = normalize(user.employeeType).includes("probation");
 
     const useAdminFallback = canUseAdminLeavePolicyFallback(req, user);
-    const applicable = useAdminFallback ? allPolicies : allPolicies.filter(policy => {
+    let applicable = useAdminFallback ? allPolicies : allPolicies.filter(policy => {
       const departments = [
         normalize(policy.department?._id || policy.department),
         normalize(policy.department?.name),
@@ -274,6 +274,27 @@ exports.getApplicableLeavePolicies = async (req, res, next) => {
         userRoles.some(value => roles.includes(value)) &&
         (!isOnProbation || policy.probationApplicable === "Yes");
     });
+
+    // If no department+role match exists (e.g. Management / Super Admin), fallback to department match or company-wide active policies deduplicated by leaveType (LV-03)
+    if (applicable.length === 0 && allPolicies.length > 0) {
+      const probationFiltered = allPolicies.filter(policy => !isOnProbation || policy.probationApplicable === "Yes");
+      const deptMatched = probationFiltered.filter(policy => {
+        const departments = [
+          normalize(policy.department?._id || policy.department),
+          normalize(policy.department?.name),
+          ...(policy.departments || []).flatMap(dept => [normalize(dept?._id || dept), normalize(dept?.name)])
+        ].filter(Boolean);
+        return userDepartments.some(value => departments.includes(value));
+      });
+      const candidatePool = deptMatched.length > 0 ? deptMatched : probationFiltered;
+      const seenTypes = new Set();
+      applicable = candidatePool.filter(policy => {
+        const key = normalize(policy.leaveType);
+        if (!key || seenTypes.has(key)) return false;
+        seenTypes.add(key);
+        return true;
+      });
+    }
 
     const now = new Date();
     const yearStart = new Date(now.getFullYear(), 0, 1);
