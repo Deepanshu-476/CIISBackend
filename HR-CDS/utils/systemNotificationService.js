@@ -169,7 +169,24 @@ exports.sendSystemNotification = async ({
   const actorId = getId(actor) || null;
   const companyId = getId(company) || null;
 
-  const docs = recipientIds.map(recipient => ({
+  // Deduplicate identical notifications created within the last 60 seconds (N-01)
+  const dedupeSince = new Date(Date.now() - 60 * 1000);
+  const recentExisting = await Notification.find({
+    recipient: { $in: recipientIds },
+    type,
+    title,
+    message,
+    createdAt: { $gte: dedupeSince },
+  }).select('recipient').lean();
+  const alreadyNotifiedRecipients = new Set(recentExisting.map(item => String(item.recipient)));
+  const filteredRecipientIds = recipientIds.filter(id => !alreadyNotifiedRecipients.has(String(id)));
+
+  if (!filteredRecipientIds.length) {
+    logNotificationDebug('sendSystemNotification:skip-duplicate', { type, title });
+    return [];
+  }
+
+  const docs = filteredRecipientIds.map(recipient => ({
     recipient,
     type,
     title,
@@ -190,7 +207,7 @@ exports.sendSystemNotification = async ({
   });
 
   
-  const users = await User.find({_id: {$in: recipientIds}}).select('_id notificationPreferences name');
+  const users = await User.find({_id: {$in: filteredRecipientIds}}).select('_id notificationPreferences name');
   const prefsById = users.reduce((acc, u) => {
     acc[String(u._id)] = u.notificationPreferences || {};
     return acc;
@@ -209,6 +226,8 @@ exports.sendSystemNotification = async ({
       'project': 'projects',
       'chat': 'chats',
       'attendance': 'attendance',
+      'attendance_clock_in': 'attendance',
+      'attendance_clock_out': 'attendance',
     };
     return map[t] || null;
   };
@@ -344,9 +363,17 @@ exports.notifyPageUsers = async ({
   companyId,
   targetPath,
   excludeUserIds = [],
+  privilegedOnly = false,
   ...notification
 }) => {
-  const users = await exports.resolveUsersWithPageAccess({companyId, targetPath, excludeUserIds});
+  let users = await exports.resolveUsersWithPageAccess({companyId, targetPath, excludeUserIds});
+  if (privilegedOnly) {
+    const privilegedRoles = new Set(['super-admin', 'superadmin', 'owner', 'company-owner', 'companyowner', 'admin', 'hr']);
+    users = users.filter(user =>
+      privilegedRoles.has(normalize(user.jobRole)) ||
+      privilegedRoles.has(normalize(user.companyRole))
+    );
+  }
   return exports.sendSystemNotification({
     recipients: users.map(user => user._id),
     targetPath,
