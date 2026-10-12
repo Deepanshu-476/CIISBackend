@@ -243,6 +243,8 @@ const calculateUnifiedTaskStats = (tasks, userId) => {
 
 const getTaskSourceAwareDate = task => {
   if (!task) return null;
+  const reportDate = getTaskReportDate(task);
+  if (reportDate) return reportDate;
   const source = String(task.__taskSource || task.taskSource || task.source || '').toLowerCase();
   if (source === 'client') {
     return task.dueDate || task.dueDateTime || task.createdAt;
@@ -262,6 +264,34 @@ const getTaskSourceAwareDate = task => {
     return task.createdAt;
   }
   return task.dueDateTime || task.dueDate || task.createdAt;
+};
+
+const getTaskCompletionDate = task => {
+  const directDate = task?.completionDate || task?.completedAt;
+  if (directDate) return directDate;
+
+  const statusHistory = Array.isArray(task?.statusHistory) ? task.statusHistory : [];
+  const historyDate = statusHistory
+    .filter(entry => normalizeTaskStatus(entry?.status || entry?.newValue || entry?.newValues?.status) === 'completed')
+    .map(entry => entry.changedAt || entry.createdAt || entry.updatedAt)
+    .filter(Boolean)
+    .sort((a, b) => new Date(b) - new Date(a))[0];
+  if (historyDate) return historyDate;
+
+  const activityLogs = Array.isArray(task?.activityLogs) ? task.activityLogs : [];
+  return activityLogs
+    .filter(entry => normalizeTaskStatus(entry?.newValue || entry?.newValues?.status || entry?.status) === 'completed')
+    .map(entry => entry.performedAt || entry.changedAt || entry.createdAt || entry.updatedAt)
+    .filter(Boolean)
+    .sort((a, b) => new Date(b) - new Date(a))[0] || null;
+};
+
+const getTaskReportDate = task => {
+  const status = normalizeTaskStatus(task?.userStatus || task?.status || task?.overallStatus);
+  if (status === 'completed') {
+    return getTaskCompletionDate(task) || task?.updatedAt || task?.dueDateTime || task?.dueDate || task?.createdAt;
+  }
+  return task?.dueDateTime || task?.dueDate || task?.createdAt;
 };
 
 const groupTasksByDate = (tasks, dateField = 'createdAt', serialKey = 'serialNo') => {
@@ -442,10 +472,16 @@ const getCleanFilterDate = (task, dateField) => {
   if (normalizedField === 'updatedat' || normalizedField === 'updateddate') {
     return task.updatedAt || task.createdAt;
   }
+  if (normalizedField === 'completedat' || normalizedField === 'completiondate') {
+    return task.completionDate || task.completedAt;
+  }
+  if (normalizedField === 'reportdate' || normalizedField === 'completion-aware' || normalizedField === 'completionaware') {
+    return getTaskReportDate(task);
+  }
   if (normalizedField === 'source-aware' || normalizedField === 'sourceaware') {
     return getTaskSourceAwareDate(task);
   }
-  return task.dueDateTime || task.dueDate || task.createdAt;
+  return getTaskReportDate(task);
 };
 
 const getCleanTaskStatus = task => {
@@ -767,6 +803,8 @@ module.exports = {
   sendCleanTaskList,
   normalizeProjectTaskStatus,
   getProjectTaskAssignedBy,
+  getTaskCompletionDate,
+  getTaskReportDate,
   fetchPersonalTaskList,
   fetchAssignedToMeTaskList,
   fetchAssignedClientTaskList,

@@ -25,6 +25,7 @@ const {
   normalizeTaskRecurrenceFields,
   getNextRecurringDate,
 } = require('../utils/taskRecurrence');
+const { normalizeTaskReminderSettings } = require('../utils/taskReminderSettings');
 const {
   generateRecurringOccurrences,
 } = require('../cron/recurringTasks');
@@ -85,6 +86,12 @@ const getRequestedTaskBranchId = (req) => {
   return value ? String(value).trim() : '';
 };
 
+const toIstBoundaryDate = (dateMoment, boundary) => (
+  boundary === 'end'
+    ? dateMoment.clone().endOf('day').toDate()
+    : dateMoment.clone().startOf('day').toDate()
+);
+
 const getCleanTaskDateRange = ({ period = 'all', fromDate, toDate }) => {
   if (fromDate || toDate) {
     const range = {};
@@ -114,61 +121,44 @@ const getCleanTaskDateRange = ({ period = 'all', fromDate, toDate }) => {
 
   if (period === 'all') return null;
 
-  const now = new Date();
-  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const now = moment().utcOffset(330);
+  const startOfDay = now.clone().startOf('day');
 
   switch (period) {
     case 'today':
-      return { $gte: startOfDay, $lte: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999) };
+      return { $gte: toIstBoundaryDate(startOfDay, 'start'), $lte: toIstBoundaryDate(startOfDay, 'end') };
     case 'yesterday': {
-      const start = new Date(startOfDay);
-      start.setDate(start.getDate() - 1);
-      const end = new Date(start);
-      end.setHours(23, 59, 59, 999);
-      return { $gte: start, $lte: end };
+      const day = startOfDay.clone().subtract(1, 'day');
+      return { $gte: toIstBoundaryDate(day, 'start'), $lte: toIstBoundaryDate(day, 'end') };
     }
     case 'this-week':
     case 'week': {
-      const start = new Date(startOfDay);
-      start.setDate(startOfDay.getDate() - startOfDay.getDay());
-      const end = new Date(start);
-      end.setDate(start.getDate() + 6);
-      end.setHours(23, 59, 59, 999);
-      return { $gte: start, $lte: end };
+      const start = startOfDay.clone().subtract(startOfDay.day(), 'days');
+      return { $gte: toIstBoundaryDate(start, 'start'), $lte: toIstBoundaryDate(start.clone().add(6, 'days'), 'end') };
     }
     case 'last-week': {
-      const start = new Date(startOfDay);
-      start.setDate(startOfDay.getDate() - startOfDay.getDay() - 7);
-      const end = new Date(start);
-      end.setDate(start.getDate() + 6);
-      end.setHours(23, 59, 59, 999);
-      return { $gte: start, $lte: end };
+      const start = startOfDay.clone().subtract(startOfDay.day() + 7, 'days');
+      return { $gte: toIstBoundaryDate(start, 'start'), $lte: toIstBoundaryDate(start.clone().add(6, 'days'), 'end') };
     }
     case 'this-month':
     case 'month':
       return {
-        $gte: new Date(now.getFullYear(), now.getMonth(), 1),
-        $lte: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999)
+        $gte: now.clone().startOf('month').toDate(),
+        $lte: now.clone().endOf('month').toDate()
       };
     case 'last-month':
       return {
-        $gte: new Date(now.getFullYear(), now.getMonth() - 1, 1),
-        $lte: new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999)
+        $gte: now.clone().subtract(1, 'month').startOf('month').toDate(),
+        $lte: now.clone().subtract(1, 'month').endOf('month').toDate()
       };
     case '7days': {
-      const start = new Date(startOfDay);
-      start.setDate(start.getDate() - 7);
-      return { $gte: start, $lte: now };
+      return { $gte: startOfDay.clone().subtract(7, 'days').toDate(), $lte: now.toDate() };
     }
     case '30days': {
-      const start = new Date(startOfDay);
-      start.setDate(start.getDate() - 30);
-      return { $gte: start, $lte: now };
+      return { $gte: startOfDay.clone().subtract(30, 'days').toDate(), $lte: now.toDate() };
     }
     case '90days': {
-      const start = new Date(startOfDay);
-      start.setDate(start.getDate() - 90);
-      return { $gte: start, $lte: now };
+      return { $gte: startOfDay.clone().subtract(90, 'days').toDate(), $lte: now.toDate() };
     }
     default:
       return null;
@@ -721,6 +711,12 @@ const parseTaskCheckpoints = value => {
 
 const calculateUnifiedTaskStats = (tasks, userId) => {
   const counts = {
+    highPriority: 0,
+    highPriorityCompleted: 0,
+    mediumPriority: 0,
+    mediumPriorityCompleted: 0,
+    lowPriority: 0,
+    lowPriorityCompleted: 0,
     pending: 0,
     'in-progress': 0,
     completed: 0,
@@ -749,6 +745,18 @@ const calculateUnifiedTaskStats = (tasks, userId) => {
       status = 'overdue';
     }
 
+    const priority = String(task.priority || '').toLowerCase();
+    if (priority === 'high') {
+      counts.highPriority++;
+      if (status === 'completed' || status === 'approved') counts.highPriorityCompleted++;
+    } else if (priority === 'medium') {
+      counts.mediumPriority++;
+      if (status === 'completed' || status === 'approved') counts.mediumPriorityCompleted++;
+    } else if (priority === 'low') {
+      counts.lowPriority++;
+      if (status === 'completed' || status === 'approved') counts.lowPriorityCompleted++;
+    }
+
     if (counts[status] !== undefined) {
       counts[status]++;
     } else {
@@ -761,6 +769,21 @@ const calculateUnifiedTaskStats = (tasks, userId) => {
 
   return {
     total,
+    highPriority: {
+      count: counts.highPriority,
+      completed: counts.highPriorityCompleted,
+      percentage: counts.highPriority > 0 ? Math.round((counts.highPriorityCompleted / counts.highPriority) * 100) : 0
+    },
+    mediumPriority: {
+      count: counts.mediumPriority,
+      completed: counts.mediumPriorityCompleted,
+      percentage: counts.mediumPriority > 0 ? Math.round((counts.mediumPriorityCompleted / counts.mediumPriority) * 100) : 0
+    },
+    lowPriority: {
+      count: counts.lowPriority,
+      completed: counts.lowPriorityCompleted,
+      percentage: counts.lowPriority > 0 ? Math.round((counts.lowPriorityCompleted / counts.lowPriority) * 100) : 0
+    },
     pending: { count: counts.pending, percentage: pct(counts.pending) },
     inProgress: { count: counts['in-progress'], percentage: pct(counts['in-progress']) },
     completed: { count: counts.completed, percentage: pct(counts.completed) },
@@ -778,15 +801,8 @@ const groupTasksByDate = (tasks, dateField = 'createdAt', serialKey = 'serialNo'
 
   tasks.forEach(task => {
     let dateValue = task[dateField] || task.createdAt;
-    if (dateField === 'source-aware') {
-      const source = String(task.__taskSource || task.taskSource || '').toLowerCase();
-      if (source === 'client') {
-        dateValue = task.dueDate || task.dueDateTime || task.createdAt;
-      } else if (source === 'project') {
-        dateValue = task.lastActivityAt || task.updatedAt || task.createdAt;
-      } else {
-        dateValue = task.dueDateTime || task.dueDate || task.createdAt;
-      }
+    if (dateField === 'source-aware' || dateField === 'reportDate') {
+      dateValue = getTaskReportDate(task);
     }
     const dateKey = dateValue ? moment(dateValue).format('DD-MM-YYYY') : 'No Date';
     if (!grouped[dateKey]) grouped[dateKey] = [];
@@ -813,7 +829,7 @@ const groupTasksByDate = (tasks, dateField = 'createdAt', serialKey = 'serialNo'
 };
 
 const getTaskSortDate = task => {
-  const dateValue = task?.createdAt || task?.createdDate || task?.updatedAt || task?.dueDateTime || task?.dueDate;
+  const dateValue = getTaskReportDate(task) || task?.createdAt || task?.createdDate || task?.updatedAt || task?.dueDateTime || task?.dueDate;
   const date = new Date(dateValue || 0);
   return Number.isNaN(date.getTime()) ? 0 : date.getTime();
 };
@@ -1254,7 +1270,41 @@ const getCleanFilterDate = (task, dateField) => {
   if (normalizedField === 'createdat' || normalizedField === 'createddate') {
     return task.createdAt;
   }
+  if (normalizedField === 'completedat' || normalizedField === 'completiondate') {
+    return task.completionDate || task.completedAt;
+  }
+  if (normalizedField === 'reportdate' || normalizedField === 'completion-aware' || normalizedField === 'completionaware') {
+    return getTaskReportDate(task);
+  }
   return task.dueDateTime || task.dueDate || task.createdAt;
+};
+
+const getTaskCompletionDate = task => {
+  const directDate = task?.completionDate || task?.completedAt;
+  if (directDate) return directDate;
+
+  const statusHistory = Array.isArray(task?.statusHistory) ? task.statusHistory : [];
+  const historyDate = statusHistory
+    .filter(entry => normalizeTaskStatus(entry?.status || entry?.newValue || entry?.newValues?.status) === 'completed')
+    .map(entry => entry.changedAt || entry.createdAt || entry.updatedAt)
+    .filter(Boolean)
+    .sort((a, b) => new Date(b) - new Date(a))[0];
+  if (historyDate) return historyDate;
+
+  const activityLogs = Array.isArray(task?.activityLogs) ? task.activityLogs : [];
+  return activityLogs
+    .filter(entry => normalizeTaskStatus(entry?.newValue || entry?.newValues?.status || entry?.status) === 'completed')
+    .map(entry => entry.performedAt || entry.changedAt || entry.createdAt || entry.updatedAt)
+    .filter(Boolean)
+    .sort((a, b) => new Date(b) - new Date(a))[0] || null;
+};
+
+const getTaskReportDate = task => {
+  const status = normalizeTaskStatus(task?.userStatus || task?.status || task?.overallStatus);
+  if (status === 'completed') {
+    return getTaskCompletionDate(task) || task?.updatedAt || task?.dueDateTime || task?.dueDate || task?.createdAt;
+  }
+  return task?.dueDateTime || task?.dueDate || task?.createdAt;
 };
 
 const matchesAssignedUser = (task, assignedTo) => {
@@ -1276,7 +1326,12 @@ const applyCleanListFilters = (tasks, req) => {
   return tasks.filter(t => {
     if (status && status !== 'all') {
       const requestedStatus = normalizeTaskStatus(status);
-      if (requestedStatus === 'overdue') {
+      const requestedPriority = String(status).toLowerCase().replace('-priority', '');
+      if (['high', 'medium', 'low'].includes(requestedPriority) && String(t.priority || '').toLowerCase() !== requestedPriority) {
+        return false;
+      } else if (['high', 'medium', 'low'].includes(requestedPriority)) {
+        // Priority stat cards filter by priority, not by task status.
+      } else if (requestedStatus === 'overdue') {
         const taskOverdue = isTaskOverdueForStatus(t.dueDateTime || t.dueDate, t.status || t.overallStatus, t);
         if (!taskOverdue && normalizeTaskStatus(t.status) !== 'overdue') return false;
       } else if (normalizeTaskStatus(t.status) !== requestedStatus) {
@@ -1369,8 +1424,23 @@ exports.getAllMyTaskViews = async (req, res) => {
       fetchAssignedClientTaskList(req),
       fetchAssignedProjectTaskList(req)
     ]);
-    const list = applyCleanListFilters([...personal, ...assigned, ...client, ...project], req);
-    return sendCleanTaskList(res, list, 'all', 'createdAt', req);
+    const requestedView = String(req.query.view || req.query.taskType || req.query.type || 'all').trim().toLowerCase();
+    const viewMap = {
+      all: [...personal, ...assigned, ...client, ...project],
+      self: personal,
+      personal,
+      'my-personal-task': personal,
+      'my-personal-tasks': personal,
+      assigned,
+      'assigned-to-me': assigned,
+      client,
+      'client-tasks': client,
+      project,
+      'project-tasks': project
+    };
+    const view = Object.prototype.hasOwnProperty.call(viewMap, requestedView) ? requestedView : 'all';
+    const list = applyCleanListFilters(viewMap[view], req);
+    return sendCleanTaskList(res, list, view, 'createdAt', req);
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
@@ -1402,8 +1472,19 @@ exports.getAllMyTaskStats = async (req, res) => {
       fetchAssignedClientTaskList(req),
       fetchAssignedProjectTaskList(req)
     ]);
-    const list = applyCleanListFilters([...personal, ...assigned, ...client, ...project], req);
-    return res.json({ success: true, view: 'all', stats: calculateUnifiedTaskStats(list) });
+    const requestedView = String(req.query.view || req.query.taskType || req.query.type || 'all').trim().toLowerCase();
+    const viewMap = {
+      all: [...personal, ...assigned, ...client, ...project],
+      self: personal,
+      personal,
+      assigned,
+      'assigned-to-me': assigned,
+      client,
+      project
+    };
+    const view = Object.prototype.hasOwnProperty.call(viewMap, requestedView) ? requestedView : 'all';
+    const list = applyCleanListFilters(viewMap[view], req);
+    return res.json({ success: true, view, stats: calculateUnifiedTaskStats(list) });
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
@@ -1767,6 +1848,7 @@ const handleTaskCreation = async (req, res, isSelf) => {
 
   const statusByUser = parsedUsers.map(uid => ({ user: uid, status: 'pending' }));
   const parsedCheckpoints = parseTaskCheckpoints(checkpoints);
+  const reminderSettings = normalizeTaskReminderSettings(req.body);
   const recurringSettings = isSelf ? parseRecurringSettingsFromBody(req.body) : {
     repeatPattern: 'none',
     repeatDays: [],
@@ -1786,6 +1868,7 @@ const handleTaskCreation = async (req, res, isSelf) => {
     assignedGroups: parsedGroups,
     statusByUser,
     checkpoints: parsedCheckpoints,
+    reminderSettings,
     files,
     voiceNote,
     createdBy: req.user._id,
@@ -1845,6 +1928,18 @@ exports.updateTask = async (req, res) => {
     const { taskId } = req.params;
     const task = await Task.findById(taskId);
     if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
+
+    const currentUserId = (req.user._id || req.user.id).toString();
+    const isAssignedUser = (task.assignedUsers || []).some(u => String(u._id || u.id || u) === currentUserId);
+    const isOnlyReminderUpdate = ['reminderSettings', 'reminderEnabled', 'reminderOptions', 'reminderTime', 'customTime']
+      .some(field => Object.prototype.hasOwnProperty.call(req.body, field)) &&
+      Object.keys(req.body).every(k => ['reminderSettings', 'reminderEnabled', 'reminderOptions', 'reminderTime', 'customTime'].includes(k));
+
+    if (isOnlyReminderUpdate && (isAssignedUser || (task.createdBy && task.createdBy.toString() === currentUserId))) {
+      task.reminderSettings = normalizeTaskReminderSettings(req.body);
+      await task.save();
+      return res.json({ success: true, message: 'Reminder settings updated successfully', task });
+    }
     const allowCompanyAllEdit = await canManageTaskFromCompanyAll(req, task);
     if (task.createdBy.toString() !== req.user._id.toString() && !allowCompanyAllEdit) return res.status(403).json({ success: false, error: 'Not authorized' });
 
@@ -1932,6 +2027,13 @@ exports.updateTask = async (req, res) => {
     }
     if (req.body.checkpoints !== undefined) {
       task.checkpoints = parseTaskCheckpoints(req.body.checkpoints);
+    }
+    if (
+      req.body.reminderSettings !== undefined ||
+      req.body.reminderEnabled !== undefined ||
+      req.body.reminderOptions !== undefined
+    ) {
+      task.reminderSettings = normalizeTaskReminderSettings(req.body);
     }
     if (req.body.status !== undefined && req.body.status !== 'null') {
       task.overallStatus = req.body.status;
@@ -2708,7 +2810,7 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
 
   const [personalTasks, clientTasks, projectTasks] = await Promise.all([
     Task.find(personalQuery)
-      .select('title description dueDate dueDateTime priority priorityDays checkpoints overallStatus statusByUser statusHistory completionDate assignedUsers assignedGroups createdBy companyCode taskFor onHoldReleasedAt createdAt updatedAt remarks lastEditedBy lastEditedByName lastEditedAt lastEditChanges')
+      .select('title description dueDate dueDateTime priority priorityDays checkpoints reminderSettings overallStatus statusByUser statusHistory completionDate assignedUsers assignedGroups createdBy companyCode taskFor onHoldReleasedAt createdAt updatedAt remarks lastEditedBy lastEditedByName lastEditedAt lastEditChanges')
       .populate('assignedUsers', TASK_USER_POPULATE_FIELDS)
       .populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS)
       .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
@@ -2718,7 +2820,7 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
       .lean(),
 
     ClientTask.find(clientQuery)
-      .select('name description dueDate priority status completed completedAt checkpoints service timeSpent inProgressSince activityLogs clientId createdAt updatedAt assignee assigneeId remarks lastEditedBy lastEditedByName lastEditedAt lastEditChanges')
+      .select('name description dueDate priority status completed completedAt checkpoints reminderSettings service timeSpent inProgressSince activityLogs clientId createdAt updatedAt assignee assigneeId remarks lastEditedBy lastEditedByName lastEditedAt lastEditChanges')
       .populate('clientId', 'client name email company phone companyCode')
       .populate('assigneeId', TASK_USER_POPULATE_FIELDS)
       .populate('activityLogs.user', TASK_USER_POPULATE_FIELDS)
@@ -2758,6 +2860,7 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
       taskSource,
       __taskSource: taskSource,
       remarks: Array.isArray(t.remarks) ? t.remarks : [],
+      reminderSettings: t.reminderSettings,
       lastEditedBy: t.lastEditedBy || null,
       lastEditedByName: t.lastEditedByName || '',
       lastEditedAt: t.lastEditedAt || null,
@@ -2778,6 +2881,7 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
       completed: t.completed,
       completedAt: t.completedAt || null,
       checkpoints: t.checkpoints || [],
+      reminderSettings: t.reminderSettings,
       priority: String(t.priority || 'Medium').toLowerCase(),
       status: displayStatus,
       userStatus: clientStatus,
@@ -2836,6 +2940,7 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
         assignedToName: task.assignedTo?.name || 'Unknown',
         assignedToEmail: task.assignedTo?.email || '',
         checkpoints: task.checkpoints || [],
+        reminderSettings: task.reminderSettings,
         files: task.pdfFile?.path ? [{
           filename: task.pdfFile.filename,
           originalName: task.pdfFile.filename,
@@ -2856,8 +2961,22 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
   return [...personalFormatted, ...clientFormatted, ...projectFormatted];
 };
 
+const getTaskFilterType = (task) => {
+  const source = String(task?.__taskSource || task?.taskSource || task?.source || '').toLowerCase();
+  if (source === 'self' || source === 'personal') return 'personal';
+  return 'work';
+};
+
+const getTaskProjectName = (task) => String(task?.projectName || task?.project?.name || task?.project?.title || task?.project || '').trim();
+
+const getTaskClientName = (task) => String(task?.clientName || task?.client?.name || task?.client?.companyName || task?.clientId?.client || task?.clientId?.name || task?.clientId?.company || '').trim();
+
 const filterUserTasks = (tasks, query) => {
+<<<<<<< HEAD
   const { period, search, status, priority, project, client, taskType } = query;
+=======
+  const { period, search, status, priority, taskType, project, client } = query;
+>>>>>>> 3dea52965343424aa79ddb3306842ffad70fe21c
   const fromDate = query.fromDate || query.startDate;
   const toDate = query.toDate || query.endDate;
   const range = getCleanTaskDateRange({ period: fromDate || toDate ? 'all' : period, fromDate, toDate });
@@ -2895,6 +3014,7 @@ const filterUserTasks = (tasks, query) => {
       if (t.priority !== priority.toLowerCase()) return false;
     }
 
+<<<<<<< HEAD
     if (project && project !== 'all' && String(t.projectName || '') !== String(project)) return false;
     if (client && client !== 'all' && String(t.clientName || '') !== String(client)) return false;
     if (taskType && taskType !== 'all') {
@@ -2902,6 +3022,21 @@ const filterUserTasks = (tasks, query) => {
       const matchesPersonal = source === 'self' || source === 'personal';
       const matchesWork = ['assigned', 'project', 'client'].includes(source);
       if ((taskType === 'personal' && !matchesPersonal) || (taskType === 'work' && !matchesWork)) return false;
+=======
+    if (project && project !== 'all') {
+      if (getTaskProjectName(t) !== String(project).trim()) return false;
+    }
+
+    if (client && client !== 'all') {
+      if (getTaskClientName(t) !== String(client).trim()) return false;
+    }
+
+    if (taskType && taskType !== 'all') {
+      const requestedType = String(taskType).toLowerCase().trim();
+      const actualType = getTaskFilterType(t);
+      if (requestedType === 'personal' && actualType !== 'personal') return false;
+      if (requestedType === 'work' && actualType !== 'work') return false;
+>>>>>>> 3dea52965343424aa79ddb3306842ffad70fe21c
     }
 
 
@@ -2929,20 +3064,11 @@ const filterUserTasks = (tasks, query) => {
         return true;
       }
 
-      // Default: match if any relevant task date falls in range
-      const candidateDates = [
-        t.dueDateTime,
-        t.dueDate,
-        t.createdAt,
-        t.completionDate,
-        t.completedAt
-      ].filter(Boolean).map(v => new Date(v)).filter(d => !isNaN(d.getTime()));
-
-      const hasMatchingDate = candidateDates.some(d => {
-        if (range.$gte && d < range.$gte) return false;
-        if (range.$lte && d > range.$lte) return false;
-        return true;
-      });
+      const reportDate = getTaskReportDate(t);
+      const reportDateValue = reportDate ? new Date(reportDate) : null;
+      const hasMatchingDate = reportDateValue && !isNaN(reportDateValue.getTime()) &&
+        (!range.$gte || reportDateValue >= range.$gte) &&
+        (!range.$lte || reportDateValue <= range.$lte);
 
       if (!hasMatchingDate) {
         // If range covers current moment, include actively in-progress tasks
@@ -3306,21 +3432,27 @@ exports.getUserAllTasksPaginated = async (req, res) => {
       };
     });
 
-    const allIntervals = allTasksWithWorkTime.flatMap(task => task.__workIntervals || []);
+    const filtered = filterUserTasks(allTasksWithWorkTime, req.query);
+    const allIntervals = filtered.flatMap(task => task.__workIntervals || []);
     let dayTrackedTaskSeconds = getMergedIntervalSeconds(allIntervals);
     if (dayTrackedTaskSeconds === 0) {
-      dayTrackedTaskSeconds = allTasksWithWorkTime.reduce((sum, task) => sum + (task.workTime?.seconds || 0), 0);
+      dayTrackedTaskSeconds = filtered.reduce((sum, task) => sum + (task.workTime?.seconds || 0), 0);
     }
     const totalClockedSeconds = workWindow.summary.totalClockedSeconds || 0;
     const untrackedSeconds = Math.max(0, totalClockedSeconds - dayTrackedTaskSeconds);
+<<<<<<< HEAD
     const filterOptions = {
       projects: [...new Set(allTasksWithWorkTime.map(task => String(task.projectName || '').trim()).filter(Boolean))].sort(),
       clients: [...new Set(allTasksWithWorkTime.map(task => String(task.clientName || '').trim()).filter(Boolean))].sort()
     };
     const filtered = filterUserTasks(allTasksWithWorkTime, req.query);
+=======
+    const statsQuery = { ...req.query, status: 'all' };
+    const statsBaseTasks = filterUserTasks(allTasksWithWorkTime, statsQuery);
+>>>>>>> 3dea52965343424aa79ddb3306842ffad70fe21c
 
     const counts = {
-      total: allTasksWithWorkTime.length,
+      total: statsBaseTasks.length,
       pending: 0,
       'in-progress': 0,
       completed: 0,
@@ -3328,7 +3460,7 @@ exports.getUserAllTasksPaginated = async (req, res) => {
       onhold: 0
     };
 
-    allTasksWithWorkTime.forEach(task => {
+    statsBaseTasks.forEach(task => {
       const status = normalizeTaskStatus(task.userStatus || task.status);
       const overdue = isTaskOverdueForStatus(task.dueDateTime || task.dueDate, status, task);
       if (overdue) {
@@ -3596,6 +3728,30 @@ exports.updateCreatorStatus = async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+exports.updateTaskReminder = async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    const task = await Task.findById(taskId);
+    if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
+
+    const currentUserId = (req.user._id || req.user.id).toString();
+    const isCreator = task.createdBy && task.createdBy.toString() === currentUserId;
+    const isAssigned = (task.assignedUsers || []).some(u => String(u._id || u.id || u) === currentUserId);
+    const allowCompanyAllEdit = await canManageTaskFromCompanyAll(req, task);
+
+    if (!isCreator && !isAssigned && !allowCompanyAllEdit) {
+      return res.status(403).json({ success: false, error: 'Not authorized to update reminder on this task' });
+    }
+
+    task.reminderSettings = normalizeTaskReminderSettings(req.body);
+    await task.save();
+
+    return res.json({ success: true, message: 'Reminder updated successfully', task });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
   }
 };
 
