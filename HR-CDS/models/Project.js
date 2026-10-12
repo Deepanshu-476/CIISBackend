@@ -75,7 +75,7 @@ const TaskSchema = new Schema(
     pdfFile: {
       filename: String,
       path: String,
-      uploadedAt: { type: Date, default: Date.now }
+      uploadedAt: Date
     },
     checkpoints: [CheckpointSchema],
     remarks: [RemarkSchema],
@@ -101,7 +101,7 @@ const ProjectSchema = new Schema(
     pdfFile: {
       filename: String,
       path: String,
-      uploadedAt: { type: Date, default: Date.now }
+      uploadedAt: Date
     },
     tasks: [TaskSchema],
     notifications: [NotificationSchema],

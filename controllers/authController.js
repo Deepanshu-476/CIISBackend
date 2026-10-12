@@ -292,6 +292,48 @@ const buildCompanyDetails = (company) => {
   } : null;
 };
 
+const SENSITIVE_PII_KEYS = new Set([
+  'aadhaar', 'aadhar', 'aadharcard', 'aadhaarcard',
+  'pan', 'pancard', 'accountnumber', 'ifsc', 'ifsccode',
+  'bankname', 'bankholdername', 'salary', 'dob', 'dateofbirth',
+  'fathername', 'mothername', 'spousename', 'permanentaddress', 'presentaddress'
+]);
+
+const sanitizeAdditionalDetails = (details) => {
+  if (!details || typeof details !== 'object' || Array.isArray(details)) return {};
+  const cleaned = {};
+  for (const [k, v] of Object.entries(details)) {
+    if (!SENSITIVE_PII_KEYS.has(String(k).toLowerCase().replace(/[\s_-]+/g, ''))) {
+      cleaned[k] = v;
+    }
+  }
+  return cleaned;
+};
+
+const DEFAULT_JWT_EXPIRE = process.env.JWT_EXPIRE || "24h";
+const ACCESS_COOKIE_MAX_AGE = 24 * 60 * 60 * 1000;
+const REFRESH_COOKIE_MAX_AGE = 7 * 24 * 60 * 60 * 1000;
+
+const setAuthCookies = (res, accessToken, refreshToken) => {
+  const isProd = process.env.NODE_ENV === "production";
+  const cookieOpts = {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: "strict",
+    maxAge: ACCESS_COOKIE_MAX_AGE,
+  };
+  res.cookie("auth_token", accessToken, cookieOpts);
+  res.cookie("access_token", accessToken, cookieOpts);
+  if (refreshToken) {
+    res.cookie("refresh_token", refreshToken, {
+      httpOnly: true,
+      secure: isProd,
+      sameSite: "strict",
+      maxAge: REFRESH_COOKIE_MAX_AGE,
+    });
+  }
+};
+
 const completeStandardLogin = async (userId, res, { message = "Login successful" } = {}) => {
   const user = await User.findById(userId)
     .select("-password -loginAttempts -lockUntil")
@@ -311,12 +353,14 @@ const completeStandardLogin = async (userId, res, { message = "Login successful"
   await user.save();
 
   const linkedClient = await resolveClientForUser(user);
-  const additionalDetails = parseAdditionalDetails(user.additionalDetails);
-  const clientId = linkedClient?._id || additionalDetails.clientId || null;
+  const rawAdditionalDetails = parseAdditionalDetails(user.additionalDetails);
+  const clientId = linkedClient?._id || rawAdditionalDetails.clientId || null;
+  const additionalDetails = sanitizeAdditionalDetails(rawAdditionalDetails);
 
   const tokenPayload = {
     id: user._id.toString(),
     _id: user._id.toString(),
+    userId: user._id.toString(),
     email: user.email,
     companyCode: user.companyCode || (user.company && user.company.companyCode),
     role: user.role?._id || user.role,
@@ -326,25 +370,28 @@ const completeStandardLogin = async (userId, res, { message = "Login successful"
   const finalToken = jwt.sign(
     tokenPayload,
     process.env.JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRE || "30d" }
+    { expiresIn: DEFAULT_JWT_EXPIRE }
+  );
+
+  const refreshSecret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
+  const refreshToken = jwt.sign(
+    { userId: user._id.toString(), id: user._id.toString(), type: "refresh" },
+    refreshSecret,
+    { expiresIn: "7d" }
   );
 
   await LoginOTP.deleteMany({ email: user.email });
 
-  res.cookie("auth_token", finalToken, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
-    maxAge: 30 * 24 * 60 * 60 * 1000,
-  });
+  setAuthCookies(res, finalToken, refreshToken);
 
   return res.json({
     success: true,
     requiresOTP: false,
     message,
     token: finalToken,
+    refreshToken,
     tokenType: "Bearer",
-    expiresIn: process.env.JWT_EXPIRE || "30d",
+    expiresIn: DEFAULT_JWT_EXPIRE,
     user: {
       _id: user._id,
       id: user._id,
@@ -1581,13 +1628,15 @@ exports.verifyLoginOTP = async (req, res) => {
     await user.save();
 
     const linkedClient = await resolveClientForUser(user);
-    const additionalDetails = parseAdditionalDetails(user.additionalDetails);
-    const clientId = linkedClient?._id || additionalDetails.clientId || null;
+    const rawAdditionalDetails = parseAdditionalDetails(user.additionalDetails);
+    const clientId = linkedClient?._id || rawAdditionalDetails.clientId || null;
+    const additionalDetails = sanitizeAdditionalDetails(rawAdditionalDetails);
 
     
     const tokenPayload = {
       id: user._id.toString(),
       _id: user._id.toString(),
+      userId: user._id.toString(),
       email: user.email,
       companyCode: user.companyCode || (user.company && user.company.companyCode),
       role: user.role?._id || user.role,
@@ -1597,7 +1646,14 @@ exports.verifyLoginOTP = async (req, res) => {
     const finalToken = jwt.sign(
       tokenPayload,
       process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRE || "30d" }
+      { expiresIn: DEFAULT_JWT_EXPIRE }
+    );
+
+    const refreshSecret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
+    const refreshToken = jwt.sign(
+      { userId: user._id.toString(), id: user._id.toString(), type: "refresh" },
+      refreshSecret,
+      { expiresIn: "7d" }
     );
 
     
@@ -1625,8 +1681,9 @@ exports.verifyLoginOTP = async (req, res) => {
       success: true,
       message: "Login successful",
       token: finalToken,
+      refreshToken,
       tokenType: "Bearer",
-      expiresIn: process.env.JWT_EXPIRE || "30d",
+      expiresIn: DEFAULT_JWT_EXPIRE,
       user: {
         _id: user._id,
         id: user._id,
@@ -1668,13 +1725,7 @@ exports.verifyLoginOTP = async (req, res) => {
       companyDetails: companyDetails
     };
 
-    
-    res.cookie("auth_token", finalToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
-      maxAge: 30 * 24 * 60 * 60 * 1000, 
-    });
+    setAuthCookies(res, finalToken, refreshToken);
 
     void 0;
 
@@ -2001,6 +2052,7 @@ const completeSuperAdminLogin = async (userId, res, { message = "Super Admin log
     {
       id: user._id.toString(),
       _id: user._id.toString(),
+      userId: user._id.toString(),
       email: user.email,
       companyCode: user.companyCode,
       companyRole: user.companyRole,
@@ -2010,25 +2062,28 @@ const completeSuperAdminLogin = async (userId, res, { message = "Super Admin log
       loginType: "superadmin",
     },
     process.env.JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRE || "30d" }
+    { expiresIn: DEFAULT_JWT_EXPIRE }
+  );
+
+  const refreshSecret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
+  const refreshToken = jwt.sign(
+    { userId: user._id.toString(), id: user._id.toString(), type: "refresh" },
+    refreshSecret,
+    { expiresIn: "7d" }
   );
 
   await LoginOTP.deleteMany({ email: user.email });
 
-  res.cookie("auth_token", finalToken, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
-    maxAge: 30 * 24 * 60 * 60 * 1000,
-  });
+  setAuthCookies(res, finalToken, refreshToken);
 
   return res.status(200).json({
     success: true,
     requiresOTP: false,
     message,
     token: finalToken,
+    refreshToken,
     tokenType: "Bearer",
-    expiresIn: process.env.JWT_EXPIRE || "30d",
+    expiresIn: DEFAULT_JWT_EXPIRE,
     user: {
       _id: user._id,
       name: user.name,
@@ -2341,6 +2396,7 @@ exports.verifySuperAdminOTP = async (req, res) => {
       {
         id: user._id.toString(),
         _id: user._id.toString(),
+        userId: user._id.toString(),
         email: user.email,
         companyCode: user.companyCode,
         companyRole: user.companyRole,
@@ -2350,18 +2406,20 @@ exports.verifySuperAdminOTP = async (req, res) => {
         loginType: "superadmin",
       },
       process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRE || "30d" }
+      { expiresIn: DEFAULT_JWT_EXPIRE }
+    );
+
+    const refreshSecret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
+    const refreshToken = jwt.sign(
+      { userId: user._id.toString(), id: user._id.toString(), type: "refresh" },
+      refreshSecret,
+      { expiresIn: "7d" }
     );
 
     
     await LoginOTP.deleteMany({ email });
 
-    res.cookie("auth_token", finalToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
-      maxAge: 30 * 24 * 60 * 60 * 1000,
-    });
+    setAuthCookies(res, finalToken, refreshToken);
 
     void 0;
 
@@ -2369,8 +2427,9 @@ exports.verifySuperAdminOTP = async (req, res) => {
       success: true,
       message: "Super Admin login successful",
       token: finalToken,
+      refreshToken,
       tokenType: "Bearer",
-      expiresIn: process.env.JWT_EXPIRE || "30d",
+      expiresIn: DEFAULT_JWT_EXPIRE,
       user: {
         _id: user._id,
         name: user.name,
@@ -2700,6 +2759,7 @@ exports.resetSuperAdminPassword = async (req, res) => {
 
     user.password = newPassword;
     user.passwordChangedAt = new Date();
+    user.lastPasswordChange = new Date();
     user.loginAttempts = 0;
     user.lockUntil = undefined;
     await user.save();
@@ -2784,9 +2844,9 @@ exports.resetPassword = async (req, res) => {
     }
 
     if (!createdClientUser) {
-      
       user.password = newPassword;
-      user.passwordChangedAt = Date.now();
+      user.passwordChangedAt = new Date();
+      user.lastPasswordChange = new Date();
       await user.save();
     }
 
@@ -2851,7 +2911,11 @@ exports.verifyEmail = async (req, res) => {
 
 exports.refreshToken = async (req, res) => {
   try {
-    const { refreshToken } = req.body;
+    const refreshToken =
+      req.body?.refreshToken ||
+      req.cookies?.refresh_token ||
+      req.cookies?.auth_token ||
+      req.cookies?.access_token;
     
     if (!refreshToken) {
       return errorResponse(res, 400, "Refresh token is required");
@@ -2862,14 +2926,19 @@ exports.refreshToken = async (req, res) => {
       return errorResponse(res, 500, "Authentication service is not configured");
     }
 
-    const decoded = jwt.verify(refreshToken, refreshSecret);
+    let decoded;
+    try {
+      decoded = jwt.verify(refreshToken, refreshSecret);
+    } catch (_) {
+      decoded = jwt.verify(refreshToken, process.env.JWT_SECRET);
+    }
     
-    const user = await User.findById(decoded.userId);
-    if (!user) {
-      return errorResponse(res, 404, "User not found");
+    const targetUserId = decoded.userId || decoded.id || decoded._id;
+    const user = await User.findById(targetUserId);
+    if (!user || !user.isActive) {
+      return errorResponse(res, 404, "User not found or inactive");
     }
 
-    
     const newToken = jwt.sign(
       {
         id: user._id.toString(),
@@ -2877,16 +2946,26 @@ exports.refreshToken = async (req, res) => {
         userId: user._id.toString(),
         email: user.email,
         companyCode: user.companyCode,
-        role: user.jobRole
+        role: user.role?._id || user.role || user.jobRole,
+        jobRole: user.jobRole
       },
       process.env.JWT_SECRET,
-      { expiresIn: '15m' }
+      { expiresIn: DEFAULT_JWT_EXPIRE }
     );
+
+    const newRefreshToken = jwt.sign(
+      { userId: user._id.toString(), id: user._id.toString(), type: "refresh" },
+      refreshSecret,
+      { expiresIn: "7d" }
+    );
+
+    setAuthCookies(res, newToken, newRefreshToken);
 
     return res.status(200).json({
       success: true,
       token: newToken,
-      expiresIn: '15m'
+      refreshToken: newRefreshToken,
+      expiresIn: DEFAULT_JWT_EXPIRE
     });
 
   } catch (err) {
@@ -2907,15 +2986,9 @@ exports.refreshToken = async (req, res) => {
 
 exports.logout = async (req, res) => {
   try {
-    
     res.clearCookie('auth_token');
-    
-    
-    const token = req.headers.authorization?.split(' ')[1];
-    if (token) {
-      
-      await blacklistToken(token, '1d');
-    }
+    res.clearCookie('access_token');
+    res.clearCookie('refresh_token');
 
     return res.status(200).json({
       success: true,
