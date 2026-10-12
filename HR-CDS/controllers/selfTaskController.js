@@ -40,6 +40,7 @@ const {
   isUserAbsentOnDate,
   cleanRecurringTasksForAbsentUser,
 } = require('../cron/recurringTasks');
+const { normalizeTaskReminderSettings } = require('../utils/taskReminderSettings');
 
 const parseRecurringSettingsFromBody = (body = {}) => {
   const normalized = normalizeTaskRecurrenceFields(body);
@@ -170,6 +171,7 @@ exports.createTaskForSelf = async (req, res) => {
 
     const statusByUser = parsedUsers.map(uid => ({ user: uid, status: 'pending' }));
     const parsedCheckpoints = parseTaskCheckpoints(checkpoints);
+    const reminderSettings = normalizeTaskReminderSettings(req.body);
     const recurringSettings = parseRecurringSettingsFromBody(req.body);
     let taskStartDateTime = null;
     let taskDueDateTime = parsedDue;
@@ -202,6 +204,7 @@ exports.createTaskForSelf = async (req, res) => {
       assignedGroups: [],
       statusByUser,
       checkpoints: parsedCheckpoints,
+      reminderSettings,
       files,
       voiceNote,
       createdBy: req.user._id,
@@ -305,6 +308,15 @@ exports.updateTask = async (req, res) => {
     if (req.body.checkpoints !== undefined) {
       task.checkpoints = parseTaskCheckpoints(req.body.checkpoints);
     }
+    if (
+      req.body.reminderSettings !== undefined ||
+      req.body.reminderEnabled !== undefined ||
+      req.body.reminderOptions !== undefined ||
+      req.body.reminderTime !== undefined ||
+      req.body.customTime !== undefined
+    ) {
+      task.reminderSettings = normalizeTaskReminderSettings(req.body);
+    }
     if (req.body.status !== undefined && req.body.status !== 'null') {
       task.overallStatus = req.body.status;
       task.status = req.body.status;
@@ -329,6 +341,24 @@ exports.updateTask = async (req, res) => {
     await createActivityLog(req.user, 'task_updated', task._id, `Updated task details`, oldTask, task.toObject(), req);
 
     res.json({ success: true, message: 'Task updated successfully', task });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+exports.updateTaskReminder = async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    const task = await Task.findById(taskId);
+    if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
+    if (!(await canManagePersonalTask(req, task))) return res.status(403).json({ success: false, error: 'Not authorized' });
+
+    task.reminderSettings = normalizeTaskReminderSettings(req.body);
+    await task.save();
+
+    await createActivityLog(req.user, 'task_reminder_updated', task._id, 'Updated task reminder settings', null, task.toObject(), req);
+
+    res.json({ success: true, message: 'Reminder settings updated successfully', task });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

@@ -129,6 +129,8 @@ const sensitiveActionLimiter = rateLimit({
 
 
 const Task = require("./HR-CDS/models/Task");
+const ClientTask = require("./HR-CDS/models/ClientTask");
+const { Project } = require("./HR-CDS/models/Project");
 const Attendance = require("./HR-CDS/models/Attendance");
 const Holiday = require("./HR-CDS/models/Holiday");
 const User = require("./models/User");
@@ -141,6 +143,17 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const INITIAL_DB_JOB_DELAY_MS = Number(process.env.INITIAL_DB_JOB_DELAY_MS || 60000);
 const MAX_CRON_TASK_BATCH_SIZE = Number(process.env.MAX_CRON_TASK_BATCH_SIZE || 500);
 const runningDbJobs = new Set();
+const REMINDER_INTERVAL_MS = {
+  hourly: 60 * 60 * 1000,
+  halfHourly: 30 * 60 * 1000,
+  oneHourBefore: 60 * 60 * 1000,
+};
+const REMINDER_LABELS = {
+  hourly: "Every 1 hour",
+  halfHourly: "Every 30 minutes",
+  oneHourBefore: "1 hour before due time",
+  custom: "Scheduled reminder",
+};
 
 process.on('unhandledRejection', error => {
   console.error('Unhandled promise rejection:', error);
@@ -252,6 +265,7 @@ const formatTaskDueDate = dueDateTime => {
     dateStyle: 'medium',
     timeStyle: 'short',
     timeZone: process.env.TZ || 'Asia/Kolkata',
+    hour12: true,
   });
 };
 
@@ -265,6 +279,124 @@ const buildPendingTaskReminderEmail = ({userName, taskTitle, dueDateText}) => `
     <p style="font-size: 12px; color: #6b7280;">This is an automated reminder. Please do not reply to this email.</p>
   </div>
 `;
+
+const getTaskReminderDueOptions = (task, now = new Date()) => {
+  const settings = task?.reminderSettings || {};
+  if (!settings.enabled) return [];
+  const due = new Date(task.dueDateTime || task.dueDate);
+  if (Number.isNaN(due.getTime()) || due <= now) return [];
+
+  const diffMs = due.getTime() - now.getTime();
+  const sentKeys = new Set((settings.sentKeys || []).map(String));
+  const toleranceMs = 90 * 1000;
+  const dueIso = due.toISOString();
+  const results = [];
+
+  // 1. Preset interval options
+  (settings.options || []).forEach(option => {
+    if (['custom', 'interval', 'beforeDue'].includes(option)) return;
+    const interval = REMINDER_INTERVAL_MS[option];
+    if (!interval) return;
+    const remainder = diffMs % interval;
+    const nearInterval = remainder <= toleranceMs || interval - remainder <= toleranceMs;
+    if (!nearInterval) return;
+    if (option === 'oneHourBefore' && Math.abs(diffMs - interval) > toleranceMs) return;
+    const slot = Math.round(diffMs / interval);
+    const key = `${option}:${dueIso}:${slot}`;
+    if (!sentKeys.has(key)) {
+      results.push({
+        option,
+        key,
+        label: REMINDER_LABELS[option] || 'task',
+        due,
+      });
+    }
+  });
+
+  // 2. Custom repeat interval in minutes
+  const repeatIntervalMinutes = Number(settings.repeatIntervalMinutes);
+  if (Number.isFinite(repeatIntervalMinutes) && repeatIntervalMinutes > 0) {
+    const intervalMs = repeatIntervalMinutes * 60 * 1000;
+    const remainder = diffMs % intervalMs;
+    const nearInterval = remainder <= toleranceMs || intervalMs - remainder <= toleranceMs;
+    if (nearInterval) {
+      const slot = Math.round(diffMs / intervalMs);
+      const key = `interval:${repeatIntervalMinutes}:${dueIso}:${slot}`;
+      if (!sentKeys.has(key)) {
+        results.push({
+          option: 'interval',
+          key,
+          label: `Every ${repeatIntervalMinutes} minutes`,
+          due,
+        });
+      }
+    }
+  }
+
+  // 3. Custom minutes before due time
+  const minutesBeforeDue = Number(settings.minutesBeforeDue);
+  if (Number.isFinite(minutesBeforeDue) && minutesBeforeDue > 0) {
+    const beforeDueMs = minutesBeforeDue * 60 * 1000;
+    const targetReminderTime = new Date(due.getTime() - beforeDueMs);
+    const diffTargetMs = targetReminderTime.getTime() - now.getTime();
+    if (diffTargetMs <= toleranceMs && diffTargetMs >= -120 * 1000) {
+      const key = `beforeDue:${minutesBeforeDue}:${dueIso}`;
+      if (!sentKeys.has(key)) {
+        results.push({
+          option: 'beforeDue',
+          key,
+          label: `${minutesBeforeDue} minutes before due time (${formatTaskDueDate(targetReminderTime)})`,
+          due,
+        });
+      }
+    }
+  }
+
+  // 4. One-time specific date/time reminder
+  if (settings.reminderTime) {
+    const customReminder = new Date(settings.reminderTime);
+    if (!Number.isNaN(customReminder.getTime())) {
+      const diffCustomMs = customReminder.getTime() - now.getTime();
+      if (diffCustomMs <= toleranceMs && diffCustomMs >= -120 * 1000) {
+        const key = `custom:${customReminder.toISOString()}`;
+        if (!sentKeys.has(key)) {
+          results.push({
+            option: 'custom',
+            key,
+            label: `Scheduled reminder at ${formatTaskDueDate(customReminder)}`,
+            due,
+          });
+        }
+      }
+    }
+  }
+
+  return results;
+};
+
+const sendReminderForTask = async ({ task, recipients, title, taskTitle, taskType, dueDate, reminder }) => {
+  const userIds = [...new Set((recipients || []).map(user => String(user?._id || user?.id || user || '')).filter(Boolean))];
+  if (!userIds.length) return 0;
+  const dueDateText = formatTaskDueDate(dueDate);
+
+  await notifyDirectUsers({
+    userIds,
+    targetPath: '/ciisUser/task-management',
+    type: 'task_due_reminder',
+    title,
+    message: `${taskType} "${taskTitle}" is due at ${dueDateText}. Reminder: ${reminder.label}.`,
+    data: {
+      taskId: task._id,
+      taskTitle,
+      taskType,
+      dueDateTime: dueDate,
+      reminderOption: reminder.option,
+    },
+    priority: 'high',
+  });
+
+  return userIds.length;
+};
 
 
 
@@ -466,6 +598,129 @@ const sendPendingTaskReminders = async () => {
   } catch (error) {
     if (isTransientMongoError(error)) throw error;
     console.error('❌ Pending task reminder failed:'  , error.message);
+  }
+};
+
+const sendConfiguredTaskReminders = async () => {
+  try {
+    const now = new Date();
+    const tasks = await Task.find({
+      isActive: true,
+      dueDateTime: {$gt: now},
+      'reminderSettings.enabled': true,
+      overallStatus: { $nin: ['completed', 'approved', 'rejected', 'cancelled', 'overdue', 'onhold'] },
+    })
+      .populate('assignedUsers', 'name email')
+      .populate('createdBy', 'name email')
+      .select('title assignedUsers statusByUser dueDateTime reminderSettings overallStatus createdBy taskFor')
+      .sort({ dueDateTime: 1 })
+      .limit(MAX_CRON_TASK_BATCH_SIZE);
+
+    for (const task of tasks) {
+      const dueReminders = getTaskReminderDueOptions(task, now);
+      if (!dueReminders.length) continue;
+      const usersById = new Map((task.assignedUsers || []).map(user => [String(user._id || user.id || user), user]));
+      const pendingUserIds = (task.statusByUser || [])
+        .filter(item => ['pending', 'in-progress', 'reopen'].includes(String(item.status || '').toLowerCase()) && item.user)
+        .map(item => String(item.user));
+      let recipients = pendingUserIds.length
+        ? pendingUserIds.map(userId => usersById.get(userId) || userId)
+        : (task.assignedUsers && task.assignedUsers.length ? task.assignedUsers : []);
+      if (!recipients.length && task.createdBy) {
+        recipients = [task.createdBy];
+      }
+      const isPersonal = task.taskFor === 'self';
+      const taskType = isPersonal ? 'Personal Task' : 'Assigned Task';
+      const reminderTitle = isPersonal ? 'Personal Task Reminder' : 'Task Reminder';
+
+      for (const reminder of dueReminders) {
+        await sendReminderForTask({
+          task,
+          recipients,
+          title: reminderTitle,
+          taskTitle: task.title,
+          taskType,
+          dueDate: task.dueDateTime,
+          reminder,
+        });
+        task.reminderSettings.sentKeys = [...new Set([...(task.reminderSettings.sentKeys || []), reminder.key])];
+      }
+      await task.save();
+    }
+
+    const clientTasks = await ClientTask.find({
+      dueDate: {$gt: now},
+      completed: {$ne: true},
+      status: { $nin: ['completed', 'overdue', 'onhold'] },
+      'reminderSettings.enabled': true,
+    })
+      .populate('assigneeId', 'name email')
+      .populate('createdBy', 'name email')
+      .select('name dueDate assigneeId createdBy reminderSettings status completed')
+      .sort({ dueDate: 1 })
+      .limit(MAX_CRON_TASK_BATCH_SIZE);
+
+    for (const task of clientTasks) {
+      const dueReminders = getTaskReminderDueOptions(task, now);
+      if (!dueReminders.length) continue;
+      const recipients = task.assigneeId ? [task.assigneeId] : (task.createdBy ? [task.createdBy] : []);
+      if (!recipients.length) continue;
+      for (const reminder of dueReminders) {
+        await sendReminderForTask({
+          task,
+          recipients,
+          title: 'Client Task Reminder',
+          taskTitle: task.name,
+          taskType: 'Client Task',
+          dueDate: task.dueDate,
+          reminder,
+        });
+        task.reminderSettings.sentKeys = [...new Set([...(task.reminderSettings.sentKeys || []), reminder.key])];
+      }
+      await task.save();
+    }
+
+    const projects = await Project.find({
+      'tasks.reminderSettings.enabled': true,
+      'tasks.dueDate': {$gt: now},
+    })
+      .populate('tasks.assignedUsers', 'name email')
+      .populate('tasks.assignedTo', 'name email')
+      .select('projectName tasks')
+      .limit(MAX_CRON_TASK_BATCH_SIZE);
+
+    for (const project of projects) {
+      let changed = false;
+      for (const task of project.tasks || []) {
+        if (!task?.reminderSettings?.enabled || ['completed', 'cancelled', 'overdue', 'on hold'].includes(String(task.status || '').toLowerCase())) continue;
+        const dueReminders = getTaskReminderDueOptions(task, now);
+        if (!dueReminders.length) continue;
+        const recipients = Array.isArray(task.assignedUsers) && task.assignedUsers.length
+          ? task.assignedUsers
+          : (task.assignedTo ? [task.assignedTo] : []);
+        if (!recipients.length) continue;
+        for (const reminder of dueReminders) {
+          await sendReminderForTask({
+            task,
+            recipients,
+            title: 'Project Task Reminder',
+            taskTitle: task.title,
+            taskType: `Project task (${project.projectName || 'Project'})`,
+            dueDate: task.dueDate,
+            reminder,
+          });
+          task.reminderSettings.sentKeys = [...new Set([...(task.reminderSettings.sentKeys || []), reminder.key])];
+          changed = true;
+        }
+      }
+      if (changed) {
+        project.markModified('tasks');
+        await project.save();
+      }
+    }
+  } catch (error) {
+    if (isTransientMongoError(error)) throw error;
+    console.error('❌ Configured task reminder failed:', error.message);
   }
 };
 
@@ -684,7 +939,7 @@ scheduleDbJob('0 9 * * *', 'Daily overdue summary', dailyOverdueSummary);
 
 scheduleDbJob('30 10 * * *', 'Daily absent marking', markDailyAbsent);
 
-scheduleDbJob('* * * * *', 'Pending task reminders', sendPendingTaskReminders);
+scheduleDbJob('* * * * *', 'Pending task reminders', sendConfiguredTaskReminders);
 
 scheduleDbJob('0 18 * * *', 'Holiday reminders', sendTomorrowHolidayReminders);
 

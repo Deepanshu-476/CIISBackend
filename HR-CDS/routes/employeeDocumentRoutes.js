@@ -41,14 +41,25 @@ const sameCompany = (user, target) => {
   return String(user.company?._id || user.company || '') === String(target.company?._id || target.company || '');
 };
 
+const getNormalizedUserRoles = user => [
+  user?.companyRole,
+  user?.jobRole,
+  user?.role,
+  user?.userType
+].filter(Boolean).map(r => String(r).trim().toLowerCase().replace(/[\s_-]+/g, '_'));
+
+const canViewDocuments = (user, target) => {
+  if (!user) return false;
+  if (user.isSuperAdmin || user.isCompanyOwner) return true;
+  const isOwnDocument = String(user._id || user.id) === String(target._id || target.id);
+  return isOwnDocument || sameCompany(user, target);
+};
+
 const canManageDocuments = (user, target) => {
   if (!user) return false;
   if (user.isSuperAdmin || user.isCompanyOwner) return true;
   const isOwnDocument = String(user._id || user.id) === String(target._id || target.id);
   if (isOwnDocument) return true;
-
-  // Users in the same company who have access to view company tasks can view documents
-  if (sameCompany(user, target)) return true;
 
   const allowedRoles = new Set([
     'super_admin', 'superadmin',
@@ -57,14 +68,8 @@ const canManageDocuments = (user, target) => {
     'hr', 'hr_manager', 'hrmanager',
     'manager', 'team_lead', 'teamlead'
   ]);
-  const userRoles = [
-    user.companyRole,
-    user.jobRole,
-    user.role,
-    user.userType
-  ].filter(Boolean).map(r => String(r).trim().toLowerCase().replace(/[\s_-]+/g, '_'));
 
-  return userRoles.some(r => allowedRoles.has(r));
+  return sameCompany(user, target) && getNormalizedUserRoles(user).some(r => allowedRoles.has(r));
 };
 
 const documentJson = (document, userId) => ({
@@ -88,7 +93,7 @@ const loadUser = async (req, res, next) => {
 router.use(protect, loadUser);
 
 router.get('/', (req, res) => {
-  if (!canManageDocuments(req.user, req.targetUser)) {
+  if (!canViewDocuments(req.user, req.targetUser)) {
     return res.status(403).json({ message: 'You do not have permission to view documents for this employee' });
   }
   res.json({ documents: req.targetUser.documents.map(doc => documentJson(doc, req.targetUser._id)) });
@@ -131,7 +136,7 @@ router.post('/', upload.single('document'), async (req, res) => {
 });
 
 const sendDocument = disposition => async (req, res) => {
-  if (!canManageDocuments(req.user, req.targetUser)) {
+  if (!canViewDocuments(req.user, req.targetUser)) {
     return res.status(403).json({ message: 'You do not have permission to access documents for this employee' });
   }
   const document = req.targetUser.documents.id(req.params.documentId);

@@ -10,6 +10,7 @@ const { notifyPageUsers, notifyDirectUsers } = require('../utils/systemNotificat
 const { enqueueCompletionJob, enqueueBackgroundJob } = require('../utils/backgroundJobQueue');
 const { sendEmail } = require('../../utils/sendEmail');
 const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
+const { normalizeTaskReminderSettings } = require('../utils/taskReminderSettings');
 
 void 0;
 
@@ -2176,6 +2177,7 @@ const addTask = async (req, res) => {
       status: 'pending',
       completed: false,
       checkpoints: parseTaskCheckpoints(checkpoints),
+      reminderSettings: normalizeTaskReminderSettings(req.body),
       activityLogs: [],
       remarks: []
     });
@@ -2275,6 +2277,7 @@ const updateTask = async (req, res) => {
     }
 
     const isAlreadyAssigned = task.assigneeId || (task.assignee && task.assignee !== 'Unassigned');
+    const hasReminderUpdate = updates.reminderSettings !== undefined || updates.reminderEnabled !== undefined || updates.reminderOptions !== undefined;
     const isEditingCoreFields = ['name', 'description', 'dueDate', 'dueDateTime', 'priority'].some(field => Object.prototype.hasOwnProperty.call(updates, field));
     if (isAlreadyAssigned && isEditingCoreFields) {
       const canEdit = await hasCompanyAllTaskEditPermission(req);
@@ -2308,8 +2311,13 @@ const updateTask = async (req, res) => {
       'assigneeId',
       'dueDate',
       'checkpoints',
+      'reminderSettings',
       'description'
     ]);
+
+    if (hasReminderUpdate) {
+      updates.reminderSettings = normalizeTaskReminderSettings(updates);
+    }
 
     const changes = [];
     const previousCompleted = task.completed;
@@ -2439,6 +2447,9 @@ const updateTask = async (req, res) => {
         const parsedCheckpoints = parseTaskCheckpoints(newValue);
         changes.push(`checkpoints updated`);
         task.checkpoints = parsedCheckpoints;
+      } else if (key === 'reminderSettings') {
+        task.reminderSettings = newValue;
+        changes.push('reminder settings updated');
       } else if (updates[key] !== undefined) {
         task[key] = updates[key];
       }
