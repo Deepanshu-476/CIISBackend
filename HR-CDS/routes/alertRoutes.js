@@ -7,8 +7,24 @@ const { protect, authorize } = require('../../middleware/authMiddleware');
 
 
 const canManageAlerts = (req, res, next) => {
-  const role = req.user?.role?.toLowerCase();
-  if (['admin', 'hr', 'manager', 'owner', 'company_admin', 'company admin'].includes(role)) {
+  const normalize = r => String(r || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  const allowed = [
+    'admin',
+    'hr',
+    'manager',
+    'owner',
+    'company_admin',
+    'companyadmin',
+    'company_owner',
+    'companyowner',
+    'superadmin',
+    'super_admin',
+  ];
+  const role = normalize(req.user?.role);
+  const companyRole = normalize(req.user?.companyRole);
+  const jobRole = normalize(req.user?.jobRoleName || req.user?.jobRole);
+
+  if (allowed.includes(role) || allowed.includes(companyRole) || allowed.includes(jobRole)) {
     return next();
   }
   return res.status(403).json({
