@@ -53,9 +53,31 @@ const mergeQueries = (...queries) => {
   return { $and: parts };
 };
 
-const canViewCompanyAlerts = role => ['admin', 'hr', 'manager', 'owner', 'company_admin', 'company admin'].includes(String(role || '').toLowerCase());
+const normalizeRole = r => String(r || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+
+const canViewCompanyAlerts = (role, companyRole, jobRole) => {
+  const allowed = [
+    'admin',
+    'hr',
+    'manager',
+    'owner',
+    'company_admin',
+    'companyadmin',
+    'company_owner',
+    'companyowner',
+    'superadmin',
+    'super_admin',
+  ];
+  return [role, companyRole, jobRole].some(r => allowed.includes(normalizeRole(r)));
+};
 
 const assertAlertInCompany = async (alert, user) => {
+  const role = normalizeRole(user?.role);
+  const companyRole = normalizeRole(user?.companyRole);
+  if (['superadmin', 'super_admin'].includes(role) || ['superadmin', 'super_admin'].includes(companyRole)) {
+    return true;
+  }
+
   const companyId = String(getCompanyId(user) || '');
   const companyCode = String(getCompanyCode(user) || '');
   if (!companyId && !companyCode) return true;
@@ -75,14 +97,12 @@ const assertAlertInCompany = async (alert, user) => {
 const getAlerts = async (req, res) => {
   try {
     const userId = req.user?._id;
-    const userRole = req.user?.role?.toLowerCase();
+    const isManager = canViewCompanyAlerts(req.user?.role, req.user?.companyRole, req.user?.jobRole);
     const companyQuery = await buildCompanyAlertQuery(req.user);
     
     let assignmentQuery = {};
     
-    
-    if (userRole && !canViewCompanyAlerts(userRole)) {
-
+    if (!isManager) {
       const userGroups = await Group.find({ members: userId }).select('_id');
       const userGroupIds = userGroups.map(group => group._id);
       
@@ -100,6 +120,7 @@ const getAlerts = async (req, res) => {
       .populate('assignedUsers', 'name email')
       .populate('assignedGroups', 'name')
       .populate('createdBy', 'name email role department')
+      .populate('company', 'companyName companyCode logo')
       .sort({ createdAt: -1 });
     
     res.json({
@@ -121,16 +142,14 @@ const getAlerts = async (req, res) => {
 const getUnreadCount = async (req, res) => {
   try {
     const userId = req.user._id;
-    const userRole = req.user?.role?.toLowerCase();
+    const isManager = canViewCompanyAlerts(req.user?.role, req.user?.companyRole, req.user?.jobRole);
     const companyQuery = await buildCompanyAlertQuery(req.user);
     
     let query = mergeQueries(companyQuery, {
       readBy: { $ne: userId }
     });
     
-    
-    if (userRole && !canViewCompanyAlerts(userRole)) {
-      
+    if (!isManager) {
       const userGroups = await Group.find({ members: userId }).select('_id');
       const userGroupIds = userGroups.map(group => group._id);
       
@@ -162,8 +181,8 @@ const addAlert = async (req, res) => {
   try {
     const { title, type, message, assignedUsers = [], assignedGroups = [], attachments = [] } = req.body;
     const createdBy = req.user._id;
-    const company = getCompanyId(req.user);
-    const companyCode = getCompanyCode(req.user);
+    const company = req.body.company || getCompanyId(req.user);
+    const companyCode = req.body.companyCode || getCompanyCode(req.user);
     
     
     if (!message || !message.trim()) {
