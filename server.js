@@ -55,8 +55,9 @@ if (process.env.NODE_ENV === "development" || process.env.ENABLE_API_TIMING === 
 app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-  res.setHeader("Permissions-Policy", "camera=(self), microphone=(self), geolocation=(self)");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(self)");
   res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
 
   const requestUrl = String(req.originalUrl || req.path || "").toLowerCase();
   const isEmbeddableResource =
@@ -72,12 +73,12 @@ app.use((req, res, next) => {
       "frame-ancestors 'self' https://ciisnetwork.com https://backendciisnetwork.com http://localhost:* http://127.0.0.1:* https://*.ciisnetwork.in https://ciisnetwork.com https://*.ciisnetwork.com"
     );
   } else {
-    res.setHeader("X-Frame-Options", "SAMEORIGIN");
+    res.setHeader("X-Frame-Options", "DENY");
     res.setHeader("Cross-Origin-Resource-Policy", "same-site");
-  }
-
-  if (process.env.NODE_ENV === "production") {
-    res.setHeader("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
+    res.setHeader(
+      "Content-Security-Policy",
+      "default-src 'self'; connect-src 'self' https://backendcds.ciisnetwork.in wss://backendcds.ciisnetwork.in https://*.ciisnetwork.com https://*.ciisnetwork.in; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; frame-ancestors 'none'"
+    );
   }
 
   next();

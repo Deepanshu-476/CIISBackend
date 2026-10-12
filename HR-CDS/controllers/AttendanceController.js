@@ -191,6 +191,32 @@ const isDepartmentWeekend = (department, date) => {
   return mondayBasedDay > workingDays;
 };
 
+const resolveUserDepartmentDoc = async (user = {}) => {
+  const dept = user?.department;
+  if (dept && typeof dept === 'object' && (dept.workingDays !== undefined || Array.isArray(dept.workingDayHistory))) {
+    return dept;
+  }
+  const companyId = user?.company?._id || user?.company;
+  const companyCode = user?.companyCode || user?.company?.companyCode;
+  const rawDept = typeof dept === 'object' ? (dept._id || dept.id || dept.name) : (dept || user?.departmentName);
+  if (!rawDept) return null;
+
+  const deptStr = String(rawDept).trim();
+  if (mongoose.Types.ObjectId.isValid(deptStr)) {
+    const foundById = await Department.findById(deptStr).select('name workingDays workingDayHistory').lean();
+    if (foundById) return foundById;
+  }
+  const filter = {
+    name: { $regex: new RegExp(`^${deptStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+  };
+  if (companyId && mongoose.Types.ObjectId.isValid(String(companyId))) {
+    filter.company = companyId;
+  } else if (companyCode) {
+    filter.companyCode = companyCode;
+  }
+  return Department.findOne(filter).select('name workingDays workingDayHistory').lean();
+};
+
 const getIndiaDayRange = value => ({
   start: getIndiaDayStart(value),
   end: getIndiaDayEnd(value),
@@ -807,6 +833,7 @@ const notifyEmployeeAttendancePage = async ({
       targetPath: '/ciisUser/emp-attendance',
       targetScreen: 'Employee Attendance',
       excludeUserIds: [userId],
+      privilegedOnly: true,
       type,
       title,
       message,
@@ -1237,6 +1264,45 @@ const getTodayStatus = async (req, res) => {
       const { userObj } = await getAttendanceSettingsContext({ companyCode: userCompanyCode, userId });
       const shiftSettings = await resolveSelectedShiftSettings(userObj);
       const schedule = buildShiftSchedule(now, shiftSettings);
+      const deptDoc = await resolveUserDepartmentDoc(userObj || req.user);
+      const todayKey = formatIndiaDateKey(now);
+      const leaveKeys = await getLeaveCoverageDateKeys({
+        userId,
+        companyCode: userCompanyCode,
+        startDate: todayStart,
+        endDate: todayEnd
+      });
+      const holidayDoc = await Holiday.findOne({
+        $or: [
+          { companyCode: userCompanyCode },
+          ...(req.user?.company ? [{ company: req.user.company?._id || req.user.company }] : [])
+        ],
+        isActive: { $ne: false },
+        date: { $gte: todayStart, $lte: todayEnd }
+      }).select('title').lean();
+
+      const isLeaveToday = leaveKeys.has(todayKey);
+      const isHolidayToday = Boolean(holidayDoc);
+      const isWeekendToday = isDepartmentWeekend(deptDoc, now);
+
+      if (isLeaveToday || isHolidayToday || isWeekendToday) {
+        const offStatus = isHolidayToday ? "HOLIDAY" : isLeaveToday ? "LEAVE" : "WEEKEND";
+        return res.status(200).json({
+          isClockedIn: false,
+          status: offStatus,
+          holidayName: holidayDoc?.title,
+          shiftId: shiftSettings?.shiftId,
+          shiftName: shiftSettings?.shiftName,
+          shiftStart: schedule.shiftStartStr,
+          shiftEnd: schedule.shiftEndStr,
+          shiftTime: formatShiftTimeWindow(schedule.shiftStartStr, schedule.shiftEndStr),
+          message: isHolidayToday
+            ? `Holiday: ${holidayDoc?.title || 'Company Holiday'}`
+            : isLeaveToday
+              ? "On Approved Leave"
+              : "Weekly Off"
+        });
+      }
       
       if (now > schedule.shiftEnd) {
         return res.status(200).json({
@@ -1329,13 +1395,14 @@ const getAttendanceList = async (req, res) => {
     
     
     const targetUser = await User.findById(targetUserId)
-      .select('name email employeeType companyCode company jobRole shiftId shiftName shiftType department createdAt')
-      .populate('department', 'workingDays workingDayHistory');
+      .select('name email employeeType companyCode company jobRole shiftId shiftName shiftType department departmentName createdAt')
+      .populate('department', 'name workingDays workingDayHistory');
     if (!targetUser || targetUser.companyCode !== userCompanyCode) {
       return res.status(403).json({ 
         message: "Access denied. User belongs to different company." 
       });
     }
+    const resolvedTargetDept = await resolveUserDepartmentDoc(targetUser);
     
     let query = { 
       user: targetUserId,
@@ -1460,7 +1527,10 @@ const getAttendanceList = async (req, res) => {
         const recordObject = record.toObject ? record.toObject() : record;
         const fallbackSchedule = buildShiftSchedule(record.date, targetShiftSettings);
         const fallbackShift = buildShiftSnapshot(targetShiftSettings || {}, fallbackSchedule);
-        const isLeaveCoveredDay = leaveCoverageDateKeys.has(dateKey) && !recordObject.inTime && !recordObject.outTime;
+        const hasPunch = Boolean(recordObject.inTime || recordObject.outTime);
+        const isLeaveCoveredDay = leaveCoverageDateKeys.has(dateKey) && !hasPunch;
+        const isHolidayDay = holidayDateMap.has(dateKey) && !hasPunch;
+        const isWeekendDay = isDepartmentWeekend(resolvedTargetDept, date);
         const isClockedIn = recordObject.isClockedIn === true || (!recordObject.outTime && Boolean(recordObject.inTime));
         const formattedLogin = recordObject.inTime ? formatTime(recordObject.inTime) : "";
         const formattedLogout = (!isClockedIn && recordObject.outTime) ? formatTime(recordObject.outTime) : "";
@@ -1502,7 +1572,19 @@ const getAttendanceList = async (req, res) => {
           }
         }
 
-        const isHolidayDay = holidayDateMap.has(dateKey) && !recordObject.inTime && !recordObject.outTime;
+        let resolvedStatus = record.status || 'ABSENT';
+        if (isFullDayOt) {
+          resolvedStatus = 'PRESENT';
+        } else if (isLeaveCoveredDay) {
+          resolvedStatus = 'LEAVE';
+        } else if (isHolidayDay) {
+          resolvedStatus = 'HOLIDAY';
+        } else if (isWeekendDay && !hasPunch) {
+          resolvedStatus = 'WEEKEND';
+        } else if (isWeekendDay && hasPunch && ['HALF DAY', 'SHORT LEAVE', 'LATE'].includes(String(resolvedStatus).toUpperCase())) {
+          // Do not penalize weekend extra work as Half Day / Late (ATT-03)
+          resolvedStatus = 'PRESENT';
+        }
 
         return {
           ...recordObject,
@@ -1512,7 +1594,6 @@ const getAttendanceList = async (req, res) => {
           isFullDayOt,
           overTime: effectiveOverTime,
           overTimeMinutes: effectiveOverTimeMinutes,
-          status: isFullDayOt ? 'PRESENT' : (recordObject.status || 'ABSENT'),
           shiftId: recordObject.shiftId || fallbackShift.shiftId,
           shiftName: effectiveShiftName,
           shiftType: recordObject.shiftType || fallbackShift.shiftType,
@@ -1529,12 +1610,12 @@ const getAttendanceList = async (req, res) => {
           logout: formattedLogout,
           inTime: recordObject.inTime || null,
           outTime: isClockedIn ? null : (recordObject.outTime || null),
-          status: isLeaveCoveredDay ? 'LEAVE' : (isHolidayDay ? 'HOLIDAY' : (record.status || 'ABSENT')),
+          status: resolvedStatus,
           holidayName: isHolidayDay ? holidayDateMap.get(dateKey) : undefined
         };
       } else {
         const isHoliday = holidayDateMap.has(dateKey);
-        const isWeekend = isDepartmentWeekend(targetUser.department, date);
+        const isWeekend = isDepartmentWeekend(resolvedTargetDept, date);
         const fallbackSchedule = buildShiftSchedule(date, targetShiftSettings);
         const fallbackShift = buildShiftSnapshot(targetShiftSettings || {}, fallbackSchedule);
         const fallbackShiftTime = fallbackShift.shiftTime || formatShiftTimeWindow(fallbackShift.shiftStart, fallbackShift.shiftEnd);
@@ -2167,12 +2248,13 @@ const getAttendanceByUser = async (req, res) => {
       });
     }
     
-    const user = await User.findById(userId).populate('department', 'workingDays workingDayHistory');
+    const user = await User.findById(userId).populate('department', 'name workingDays workingDayHistory');
     if (!user) {
       return res.status(404).json({ 
         message: "User not found" 
       });
     }
+    const resolvedUserDept = await resolveUserDepartmentDoc(user);
 
     const isSelf = String(req.user._id) === String(userId);
     if (!isSelf && !isPrivilegedAttendanceUser(req.user, true)) {
@@ -2209,9 +2291,24 @@ const getAttendanceByUser = async (req, res) => {
     }
     
     const records = await Attendance.find(query)
-      .select('date status inTime outTime totalTime lateBy earlyLeave overTime notes')
+      .select('date status inTime outTime totalTime lateBy earlyLeave overTime notes clockOutMode')
       .sort({ date: -1 })
       .lean();
+
+    const holidayDateMap = new Map();
+    if (query.date?.$gte && query.date?.$lte) {
+      const holidays = await Holiday.find({
+        $or: [
+          { companyCode: userCompanyCode },
+          ...(user.company ? [{ company: user.company }] : [])
+        ],
+        isActive: { $ne: false },
+        date: query.date
+      }).select('title date').lean();
+      holidays.forEach(h => {
+        holidayDateMap.set(formatIndiaDateKey(h.date), h.title || 'Holiday');
+      });
+    }
 
     let responseRecords = records;
     if (month !== undefined && year !== undefined) {
@@ -2228,18 +2325,18 @@ const getAttendanceByUser = async (req, res) => {
         const savedRecord = recordsByDate.get(dateKey);
         if (savedRecord) return savedRecord;
 
+        const isHol = holidayDateMap.has(dateKey);
+        const isWknd = isDepartmentWeekend(resolvedUserDept, date);
         return {
           _id: `calendar-${dateKey}`,
           date,
-          status: dateKey > todayKey ? 'UPCOMING' : (isDepartmentWeekend(user.department, date) ? 'WEEKEND' : 'NO RECORD'),
+          status: isHol ? 'HOLIDAY' : isWknd ? 'WEEKEND' : (dateKey > todayKey ? 'UPCOMING' : 'NO RECORD'),
+          holidayName: isHol ? holidayDateMap.get(dateKey) : undefined,
           isGenerated: true
         };
       });
     }
     
-    const dedupedRecords = dedupeAttendanceRecordsByIndiaDate(records)
-      .map(({ record }) => record)
-      .sort((a, b) => new Date(b.date) - new Date(a.date));
     const leaveCoverageKeysForRange = await getLeaveCoverageDateKeys({
       userId,
       companyCode: userCompanyCode,
@@ -2249,12 +2346,28 @@ const getAttendanceByUser = async (req, res) => {
 
     res.status(200).json({ 
       message: "Attendance records fetched successfully", 
-      data: responseRecords.map(record => ({
-        ...record,
-        status: leaveCoverageKeysForRange.has(formatIndiaDateKey(record.date)) && !record.inTime && !record.outTime
-          ? 'LEAVE'
-          : (record.status || 'ABSENT')
-      }))
+      data: responseRecords.map(record => {
+        const dateKey = formatIndiaDateKey(record.date);
+        const hasPunch = Boolean(record.inTime || record.outTime);
+        const isLeave = leaveCoverageKeysForRange.has(dateKey) && !hasPunch;
+        const isHol = holidayDateMap.has(dateKey) && !hasPunch;
+        const isWknd = isDepartmentWeekend(resolvedUserDept, record.date);
+        let finalStatus = record.status || 'ABSENT';
+        if (isLeave) {
+          finalStatus = 'LEAVE';
+        } else if (isHol) {
+          finalStatus = 'HOLIDAY';
+        } else if (isWknd && !hasPunch) {
+          finalStatus = 'WEEKEND';
+        } else if (isWknd && hasPunch && ['HALF DAY', 'SHORT LEAVE', 'LATE'].includes(String(finalStatus).toUpperCase())) {
+          finalStatus = 'PRESENT';
+        }
+        return {
+          ...record,
+          status: finalStatus,
+          holidayName: isHol ? holidayDateMap.get(dateKey) : record.holidayName
+        };
+      })
     });
   } catch (err) {
     console.error("Get Attendance by User Error:", err.message);

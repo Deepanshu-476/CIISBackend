@@ -178,6 +178,59 @@ const canViewAllCompanyBranches = (user = {}) => {
   return ['owner', 'company_owner', 'companyowner', 'super_admin', 'superadmin', 'admin', 'hr', 'manager', 'career infowis admin'].includes(roleText);
 };
 
+const isPrivilegedPiiViewer = (user = {}) => {
+  if (user?.isSuperAdmin === true || user?.superAdmin === true) return true;
+  const roles = [user?.companyRole, user?.jobRole, user?.role]
+    .filter(Boolean)
+    .map(r => String(r).trim().toLowerCase());
+  return roles.some(r => ['owner', 'company_owner', 'companyowner', 'super_admin', 'superadmin', 'admin', 'hr', 'career infowis admin'].includes(r));
+};
+
+const SENSITIVE_USER_LIST_KEYS = [
+  'password',
+  'resetToken',
+  'resetTokenExpiry',
+  'salary',
+  'accountNumber',
+  'ifsc',
+  'bankName',
+  'bankHolderName',
+  'aadhaar',
+  'aadhar',
+  'aadharCard',
+  'aadhaarNumber',
+  'pan',
+  'panCard',
+  'panNumber',
+  'fatherName',
+  'motherName',
+  'documents',
+];
+
+const sanitizeUserRecordForList = (userObj = {}, req = {}) => {
+  const includeSensitive = String(req?.query?.includeSensitive || '').toLowerCase() === 'true';
+  const requesterId = String(req?.user?._id || req?.user?.id || '');
+  const targetId = String(userObj?._id || userObj?.id || '');
+  if (requesterId && targetId && requesterId === targetId) {
+    return userObj;
+  }
+  if (includeSensitive && isPrivilegedPiiViewer(req?.user)) {
+    return userObj;
+  }
+  const cloned = { ...userObj };
+  SENSITIVE_USER_LIST_KEYS.forEach(key => {
+    delete cloned[key];
+  });
+  if (cloned.additionalDetails && typeof cloned.additionalDetails === 'object') {
+    const safeAdditional = { ...cloned.additionalDetails };
+    SENSITIVE_USER_LIST_KEYS.forEach(key => {
+      delete safeAdditional[key];
+    });
+    cloned.additionalDetails = safeAdditional;
+  }
+  return cloned;
+};
+
 const appendAndCondition = (filter, condition) => {
   if (!condition || Object.keys(condition).length === 0) return filter;
   filter.$and = Array.isArray(filter.$and) ? [...filter.$and, condition] : [condition];
@@ -250,7 +303,7 @@ const USER_FIELDS = {
   BASIC: ['name', 'email', 'password', 'department', 'jobRole'],
   
   
-  PERSONAL: ['phone', 'address', 'gender', 'maritalStatus', 'dob', 
+  PERSONAL: ['phone', 'profileImage', 'address', 'gender', 'maritalStatus', 'dob', 
              'fatherName', 'motherName', 'city', 'state', 'pinCode', 'country'],
   
   
@@ -1324,7 +1377,7 @@ exports.getAllUsers = async (req, res) => {
       const roleName = user.jobRoleName || (typeof user.jobRole === 'string' && !user.jobRole.match(/^[0-9a-fA-F]{24}$/) ? user.jobRole : '');
       const bName = user.branchName || user.branch?.name || '';
       const bCode = user.branchCode || user.branch?.branchCode || '';
-      return {
+      return sanitizeUserRecordForList({
         ...user,
         id: user._id,
         name: user.name,
@@ -1371,7 +1424,7 @@ exports.getAllUsers = async (req, res) => {
         isActive: user.isActive,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt
-      };
+      }, req);
     });
 
     return successResponse(res, 200, {
@@ -1415,8 +1468,40 @@ exports.getUser = async (req, res) => {
       return errorResponse(res, 403, "Access denied. User belongs to a different branch.");
     }
 
-    const deptName = user.departmentName || (user.department?.name) || (typeof user.department === 'string' && !user.department.match(/^[0-9a-fA-F]{24}$/) ? user.department : '');
-    const roleName = user.jobRoleName || (typeof user.jobRole === 'string' && !user.jobRole.match(/^[0-9a-fA-F]{24}$/) ? user.jobRole : '');
+    let deptName = user.departmentName || (user.department?.name) || (typeof user.department === 'string' && !user.department.match(/^[0-9a-fA-F]{24}$/) ? user.department : '');
+    let roleName = user.jobRoleName || (user.jobRole?.name) || (user.jobRole?.roleName) || (typeof user.jobRole === 'string' && !user.jobRole.match(/^[0-9a-fA-F]{24}$/) ? user.jobRole : '');
+
+    let resolvedDept = user.department;
+    if (!deptName && user.department && mongoose.Types.ObjectId.isValid(String(user.department))) {
+      try {
+        const deptDoc = await Department.findById(user.department).select('name code description').lean();
+        if (deptDoc?.name) {
+          deptName = deptDoc.name;
+          resolvedDept = { _id: deptDoc._id, name: deptDoc.name, code: deptDoc.code };
+          User.updateOne({ _id: user._id }, { departmentName: deptDoc.name }).catch(() => {});
+        }
+      } catch (_) {}
+    }
+
+    let resolvedJobRole = user.jobRole;
+    if (!roleName && user.jobRole && mongoose.Types.ObjectId.isValid(String(user.jobRole))) {
+      try {
+        const roleDoc = await JobRole.findById(user.jobRole).select('name roleName roleNumber description').lean();
+        if (roleDoc) {
+          roleName = roleDoc.name || roleDoc.roleName || '';
+          resolvedJobRole = {
+            _id: roleDoc._id,
+            name: roleDoc.name,
+            roleName: roleDoc.roleName || roleDoc.name,
+            roleNumber: roleDoc.roleNumber,
+          };
+          if (roleName) {
+            User.updateOne({ _id: user._id }, { jobRoleName: roleName }).catch(() => {});
+          }
+        }
+      } catch (_) {}
+    }
+
     const bName = user.branchName || user.branch?.name || '';
     const bCode = user.branchCode || user.branch?.branchCode || '';
 
@@ -1425,13 +1510,13 @@ exports.getUser = async (req, res) => {
       name: user.name,
       email: user.email,
       company: user.company,
-      department: user.department,
+      department: resolvedDept,
       departmentName: deptName,
       branch: user.branch,
       branchName: bName,
       branchCode: bCode,
       assignedBranches: user.assignedBranches || [],
-      jobRole: user.jobRole,
+      jobRole: resolvedJobRole,
       jobRoleName: roleName,
       phone: user.phone,
       profileImage: user.profileImage,
@@ -1623,6 +1708,22 @@ exports.updateUser = async (req, res) => {
     if (dateFieldError) {
       return errorResponse(res, 400, dateFieldError);
     }
+
+    if (updateData.phone !== undefined) {
+      const cleanPhone = String(updateData.phone || '').trim().replace(/\D/g, '');
+      if (cleanPhone && cleanPhone.length !== 10) {
+        return errorResponse(res, 400, "Phone number must be exactly 10 digits");
+      }
+      updateData.phone = cleanPhone;
+    }
+
+    if (updateData.emergencyPhone !== undefined) {
+      const cleanEmerg = String(updateData.emergencyPhone || '').trim().replace(/\D/g, '');
+      if (cleanEmerg && cleanEmerg.length !== 10) {
+        return errorResponse(res, 400, "Emergency phone must be exactly 10 digits");
+      }
+      updateData.emergencyPhone = cleanEmerg;
+    }
     
     
     
@@ -1813,6 +1914,22 @@ exports.updateSelfUser = async (req, res) => {
     const dateFieldError = normalizeUserDateFields(updateData);
     if (dateFieldError) {
       return errorResponse(res, 400, dateFieldError);
+    }
+
+    if (updateData.phone !== undefined) {
+      const cleanPhone = String(updateData.phone || '').trim().replace(/\D/g, '');
+      if (cleanPhone && cleanPhone.length !== 10) {
+        return errorResponse(res, 400, "Phone number must be exactly 10 digits");
+      }
+      updateData.phone = cleanPhone;
+    }
+
+    if (updateData.emergencyPhone !== undefined) {
+      const cleanEmerg = String(updateData.emergencyPhone || '').trim().replace(/\D/g, '');
+      if (cleanEmerg && cleanEmerg.length !== 10) {
+        return errorResponse(res, 400, "Emergency phone must be exactly 10 digits");
+      }
+      updateData.emergencyPhone = cleanEmerg;
     }
 
     const employmentLocationError = normalizeEmploymentLocationFields(updateData, user);
@@ -2104,7 +2221,7 @@ exports.getCompanydepartmentUsers = async (req, res) => {
       count: users.length,
       total,
       pagination: buildPaginationMeta({ page, limit, total }),
-      users: users.map(user => ({
+      users: users.map(user => sanitizeUserRecordForList({
         id: user._id,
         name: user.name,
         email: user.email,
@@ -2147,7 +2264,7 @@ exports.getCompanydepartmentUsers = async (req, res) => {
         ...getUserPresence(user, socketOnlineIds),
         createdAt: user.createdAt,
         updatedAt: user.updatedAt
-      }))
+      }, req))
     });
     
   } catch (err) {
@@ -2233,7 +2350,7 @@ exports.getCompanyUsers = async (req, res) => {
       const roleName = user.jobRoleName || (typeof user.jobRole === 'string' && !user.jobRole.match(/^[0-9a-fA-F]{24}$/) ? user.jobRole : '');
       const bName = user.branchName || user.branch?.name || '';
       const bCode = user.branchCode || user.branch?.branchCode || '';
-      return {
+      return sanitizeUserRecordForList({
         ...user,
         id: user._id,
         departmentName: deptName,
@@ -2246,7 +2363,7 @@ exports.getCompanyUsers = async (req, res) => {
           completed,
           completionRate: total > 0 ? Math.round((completed / total) * 100) : 0
         }
-      };
+      }, req);
     });
 
     return successResponse(res, 200, {
@@ -2334,7 +2451,7 @@ exports.getCompanyUsersPaginated = async (req, res) => {
         const roleName = user.jobRoleName || (typeof user.jobRole === 'string' && !user.jobRole.match(/^[0-9a-fA-F]{24}$/) ? user.jobRole : '');
         const bName = user.branchName || user.branch?.name || '';
         const bCode = user.branchCode || user.branch?.branchCode || '';
-        return {
+        return sanitizeUserRecordForList({
           id: user._id,
           name: user.name,
           email: user.email,
@@ -2380,7 +2497,7 @@ exports.getCompanyUsersPaginated = async (req, res) => {
           isActive: user.isActive,
           createdAt: user.createdAt,
           updatedAt: user.updatedAt
-        };
+        }, req);
       })
     });
     
@@ -2445,7 +2562,7 @@ exports.searchUsers = async (req, res) => {
       count: users.length,
       total,
       pagination: buildPaginationMeta({ page, limit, total }),
-      users
+      users: users.map(u => sanitizeUserRecordForList(u, req))
     });
   } catch (err) {
     console.error("❌ Search users error:", err);

@@ -9,10 +9,11 @@ exports.verify = async (req, res) => {
   try {
     let token;
 
-    
     if (req.headers.authorization && req.headers.authorization.startsWith("Bearer")) {
       token = req.headers.authorization.split(" ")[1];
-    }  
+    } else if (req.cookies) {
+      token = req.cookies.access_token || req.cookies.auth_token || req.cookies.token;
+    }
  
     if (!token) {
       return res.status(401).json({    
@@ -67,16 +68,10 @@ exports.protect = async (req, res, next) => {
   try {
     let token;
     
-    
     if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
       token = req.headers.authorization.split(' ')[1];
-      
-    } else {
-      void 0;
-      return res.status(401).json({
-        success: false,
-        message: "Not authorized to access this route - No token"
-      });
+    } else if (req.cookies) {
+      token = req.cookies.access_token || req.cookies.auth_token || req.cookies.token;
     }
     
     if (!token) {
@@ -109,15 +104,10 @@ exports.protect = async (req, res, next) => {
         });
       }
       
-      
-      
-      
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       
-      
-      
       const user = await User.findById(userId)
-        .select('+lastPasswordChange')
+        .select('+lastPasswordChange +passwordChangedAt')
         .populate('company', 'companyName companyCode logo isActive')
         .populate('assignedBranches', 'name branchCode')
         .populate('department', 'name');
@@ -130,17 +120,6 @@ exports.protect = async (req, res, next) => {
           message: "User not found"
         });
       }
-      
-      
-      
-      
-      
-      
-      
-      
-      
-      
-      
       
       if (!user.isActive) {
         void 0;
@@ -159,10 +138,10 @@ exports.protect = async (req, res, next) => {
         });
       }
       
-      
-      if (user.lastPasswordChange && decoded.iat) {
+      const pwdChangeDate = user.lastPasswordChange || user.passwordChangedAt;
+      if (pwdChangeDate && decoded.iat) {
         const changedTimestamp = parseInt(
-          user.lastPasswordChange.getTime() / 1000,
+          new Date(pwdChangeDate).getTime() / 1000,
           10
         );
         

@@ -1561,7 +1561,15 @@ const getAssignedToMeTasks = async (req, res) => {
         filter.completed = true;
       } else if (status === 'pending') {
         filter.completed = false;
-        filter.status = 'pending';
+        filter.status = { $nin: [...CLIENT_TASK_OVERDUE_EXCLUDED_STATUSES, 'in-progress', 'inprogress', 'In Progress', 'In progress'] };
+        filter.$and = filter.$and || [];
+        filter.$and.push({
+          $or: [
+            { dueDate: null },
+            { dueDate: { $exists: false } },
+            { dueDate: { $gte: getClientTaskOverdueCutoff() } }
+          ]
+        });
       } else if (status === 'in-progress') {
         filter.status = 'in-progress';
         filter.completed = false;
@@ -1595,7 +1603,7 @@ const getAssignedToMeTasks = async (req, res) => {
       String(req.query.all || req.query.noPagination || '').toLowerCase()
     );
     let tasksQuery = Task.find(filter)
-      .populate('clientId', 'name email company phone')
+      .populate('clientId', 'client name email company phone')
       .sort({ dueDate: 1, createdAt: -1 });
 
     if (!returnAllTasks) {
@@ -1647,7 +1655,7 @@ const getAssignedToMeTasks = async (req, res) => {
         completed: task.completed,
         status: taskStatus,
         priority: (task.priority || 'Medium').toLowerCase(),
-        clientName: task.clientId?.name || 'Unknown Client',
+        clientName: task.clientId?.client || task.clientId?.company || task.clientId?.name || 'Unknown Client',
         clientId: task.clientId,
         clientEmail: task.clientId?.email,
         clientCompany: task.clientId?.company,
@@ -1719,7 +1727,15 @@ const getAssignedToMeTaskStats = async (req, res) => {
         filter.completed = true;
       } else if (status === 'pending') {
         filter.completed = false;
-        filter.status = 'pending';
+        filter.status = { $nin: [...CLIENT_TASK_OVERDUE_EXCLUDED_STATUSES, 'in-progress', 'inprogress', 'In Progress', 'In progress'] };
+        filter.$and = filter.$and || [];
+        filter.$and.push({
+          $or: [
+            { dueDate: null },
+            { dueDate: { $exists: false } },
+            { dueDate: { $gte: getClientTaskOverdueCutoff() } }
+          ]
+        });
       } else if (status === 'in-progress') {
         filter.status = 'in-progress';
         filter.completed = false;
@@ -1790,7 +1806,7 @@ const getAssignedTasksByUserId = async (req, res) => {
         ...buildAssigneeNameConditions([user.name, user.email])
       ].filter(Boolean)
     })
-      .populate('clientId', 'name email company phone')
+      .populate('clientId', 'client name email company phone')
       .sort({ createdAt: -1 });
 
     const formattedTasks = tasks.map(task => ({
@@ -1811,7 +1827,7 @@ const getAssignedTasksByUserId = async (req, res) => {
               ? 'in-progress'
               : task.status || 'pending',
       priority: (task.priority || 'Medium').toLowerCase(),
-      clientName: task.clientId?.name || 'Unknown Client',
+      clientName: task.clientId?.client || task.clientId?.company || task.clientId?.name || 'Unknown Client',
       clientId: task.clientId,
       clientEmail: task.clientId?.email,
       clientCompany: task.clientId?.company,
@@ -1874,6 +1890,17 @@ const getTasksByClientService = async (req, res) => {
       filter.completed = false;
       filter.dueDate = { $ne: null, $lt: getClientTaskOverdueCutoff() };
       filter.status = { $nin: CLIENT_TASK_OVERDUE_EXCLUDED_STATUSES };
+    } else if (statusQuery === 'pending') {
+      filter.completed = false;
+      filter.status = { $nin: [...CLIENT_TASK_OVERDUE_EXCLUDED_STATUSES, 'in-progress', 'inprogress', 'In Progress', 'In progress'] };
+      filter.$and = filter.$and || [];
+      filter.$and.push({
+        $or: [
+          { dueDate: null },
+          { dueDate: { $exists: false } },
+          { dueDate: { $gte: getClientTaskOverdueCutoff() } }
+        ]
+      });
     }
 
     if (req.query.subscriptionId && mongoose.Types.ObjectId.isValid(req.query.subscriptionId)) {
@@ -1949,6 +1976,14 @@ const getClientTasks = async (req, res) => {
     } else if (statusQuery === 'pending') {
       filter.completed = false;
       filter.status = { $nin: [...CLIENT_TASK_OVERDUE_EXCLUDED_STATUSES, 'in-progress', 'inprogress', 'In Progress', 'In progress'] };
+      filter.$and = filter.$and || [];
+      filter.$and.push({
+        $or: [
+          { dueDate: null },
+          { dueDate: { $exists: false } },
+          { dueDate: { $gte: getClientTaskOverdueCutoff() } }
+        ]
+      });
     }
 
     if (assignee) filter.assignee = assignee;

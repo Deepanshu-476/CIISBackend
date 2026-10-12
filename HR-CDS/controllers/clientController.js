@@ -211,8 +211,9 @@ const toCompanyCard = (client, taskSummary = {}) => {
     parentClientId: client.parentClientId || client._id,
     parentClientName: client.parentClientName || client.client,
     companyLogo: client.companyLogo || '',
-    companyName: client.company,
-    company: client.company,
+    companyName: client.company || client.businessName || client.client,
+    company: client.company || client.businessName || client.client,
+    clientCode: client.clientCode || client.code || `CL-${String(client._id).slice(-4).toUpperCase()}`,
     gst: client.gst || '',
     pan: client.pan || '',
     email: client.email || '',
@@ -221,6 +222,9 @@ const toCompanyCard = (client, taskSummary = {}) => {
     activePlan: latestSubscription?.planName || '',
     totalServices: Array.isArray(client.services) ? client.services.length : 0,
     totalTasks: taskSummary.total || 0,
+    completedTasks: taskSummary.completed || 0,
+    pendingTasks: taskSummary.pending || 0,
+    overdueTasks: taskSummary.overdue || 0,
     lastPayment: lastPayment ? {
       amount: lastPayment.amount || 0,
       date: lastPayment.verifiedAt || lastPayment.uploadDate || null,
@@ -1081,6 +1085,7 @@ const getAllClients = async (req, res) => {
 
     if (groupByClient === 'true') {
       const clientIds = clients.map(client => client._id);
+      const nowCutoff = new Date();
       const taskCounts = await ClientTask.aggregate([
         { $match: { clientId: { $in: clientIds } } },
         {
@@ -1088,7 +1093,42 @@ const getAllClients = async (req, res) => {
             _id: '$clientId',
             total: { $sum: 1 },
             completed: { $sum: { $cond: [{ $eq: ['$completed', true] }, 1, 0] } },
-            pending: { $sum: { $cond: [{ $eq: ['$completed', true] }, 0, 1] } }
+            overdue: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $ne: ['$completed', true] },
+                      { $ne: ['$status', 'onhold'] },
+                      { $ne: ['$dueDate', null] },
+                      { $lt: ['$dueDate', nowCutoff] }
+                    ]
+                  },
+                  1,
+                  0
+                ]
+              }
+            },
+            pending: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $ne: ['$completed', true] },
+                      { $ne: ['$status', 'onhold'] },
+                      {
+                        $or: [
+                          { $eq: ['$dueDate', null] },
+                          { $gte: ['$dueDate', nowCutoff] }
+                        ]
+                      }
+                    ]
+                  },
+                  1,
+                  0
+                ]
+              }
+            }
           }
         }
       ]);
@@ -1099,7 +1139,10 @@ const getAllClients = async (req, res) => {
       const groupedMap = new Map();
 
       clients.forEach(companyClient => {
-        const key = String(companyClient.parentClientId || companyClient.parentClientName || companyClient.client || companyClient._id);
+        const normalizedGroupName = String(
+          companyClient.parentClientName || companyClient.company || companyClient.client || ''
+        ).trim().toLowerCase();
+        const key = String(companyClient.parentClientId || normalizedGroupName || companyClient._id);
         const latestSubscription = getLatestSubscription(companyClient);
         const revenue = getClientRevenueTotal(companyClient);
         const isExpired = latestSubscription?.endDate
@@ -1110,6 +1153,8 @@ const getAllClients = async (req, res) => {
           groupedMap.set(key, {
             _id: companyClient.parentClientId || companyClient._id,
             client: companyClient.parentClientName || companyClient.client,
+            company: companyClient.company || companyClient.businessName || companyClient.client,
+            clientCode: companyClient.clientCode || companyClient.code || `CL-${String(companyClient._id).slice(-4).toUpperCase()}`,
             companyCode: companyClient.companyCode,
             totalCompanies: 0,
             activeCompanies: 0,
@@ -1168,6 +1213,11 @@ const getClientDashboardOverview = async (req, res) => {
     const currentUser = req.user || {};
     const userCompanyId = currentUser.company?._id || currentUser.company || currentUser.companyId || null;
     const companyRole = String(currentUser.companyRole || currentUser.role || currentUser.userRole || '').toLowerCase();
+    const jobRole = String(currentUser.jobRole || '').toLowerCase();
+    const isPrivilegedPortalViewer = ['owner', 'company_owner', 'companyowner', 'admin', 'super_admin', 'superadmin', 'hr', 'manager'].includes(companyRole) ||
+      ['owner', 'company_owner', 'companyowner', 'admin', 'super_admin', 'superadmin', 'hr', 'manager'].includes(jobRole) ||
+      currentUser.isSuperAdmin === true;
+
     const usersFilter = {
       isActive: true,
       companyRole: { $not: /^client$/i },
@@ -1184,16 +1234,19 @@ const getClientDashboardOverview = async (req, res) => {
         .lean(),
       SupportTicket.find({
         companyCode,
-        requester: currentUser._id,
+        ...(isPrivilegedPortalViewer ? {} : { requester: currentUser._id }),
       }).sort({ updatedAt: -1 }).limit(100).lean(),
     ]);
 
-    const matchingClients = clients.filter(client => isClientForLoggedInUser(client, currentUser));
+    const userMatchedClients = clients.filter(client => isClientForLoggedInUser(client, currentUser));
+    const availableClients = userMatchedClients.length > 0
+      ? userMatchedClients
+      : (isPrivilegedPortalViewer ? clients : []);
     const currentClient = (
       selectedClientId
-        ? matchingClients.find(client => String(client._id) === selectedClientId || String(client.id || '') === selectedClientId)
+        ? availableClients.find(client => String(client._id) === selectedClientId || String(client.id || '') === selectedClientId)
         : null
-    ) || matchingClients[0] || null;
+    ) || availableClients[0] || null;
 
     if (!currentClient) {
       return res.json({
@@ -1223,7 +1276,7 @@ const getClientDashboardOverview = async (req, res) => {
     return res.json({
       success: true,
       data: {
-        availableClients: matchingClients,
+        availableClients,
         client: currentClient,
         services,
         projectManagers: collectProjectMembers(currentClient, companyUsers),
@@ -1258,11 +1311,12 @@ const getClientDashboardStats = async (req, res) => {
       acc.total += 1;
       acc[status] = (acc[status] || 0) + 1;
       if (task.service) {
-        acc.byService[task.service] = acc.byService[task.service] || { total: 0, completed: 0, pending: 0, overdue: 0, inProgress: 0 };
+        acc.byService[task.service] = acc.byService[task.service] || { total: 0, completed: 0, pending: 0, overdue: 0, inProgress: 0, onhold: 0 };
         acc.byService[task.service].total += 1;
         if (status === 'completed') acc.byService[task.service].completed += 1;
         else if (status === 'overdue') acc.byService[task.service].overdue += 1;
         else if (status === 'in-progress') acc.byService[task.service].inProgress += 1;
+        else if (status === 'onhold') acc.byService[task.service].onhold += 1;
         else acc.byService[task.service].pending += 1;
       }
       return acc;

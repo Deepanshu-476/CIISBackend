@@ -57,6 +57,20 @@ const normalizeShifts = (shifts, shiftSettings) => {
   return list.map(normalizeShift).filter(shift => shift.shiftName);
 };
 
+const normalizeJobRoleName = (name = "") => {
+  const trimmed = String(name || "").trim();
+  if (/^taskmanger$/i.test(trimmed)) return "TaskManager";
+  return trimmed.replace(/\bTaskManger\b/gi, "TaskManager");
+};
+
+const normalizeJobRoleRecord = (role) => {
+  if (!role || typeof role !== "object") return role;
+  return {
+    ...role,
+    name: normalizeJobRoleName(role.name),
+  };
+};
+
 const escapeRegex = (str = "") => String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const isSuperAdmin = (user, reqUser) => {
@@ -317,10 +331,12 @@ exports.getAllJobRoles = async (req, res) => {
       .sort({ createdAt: -1 })
       .lean());
 
+    const normalizedJobRoles = (jobRoles || []).map(normalizeJobRoleRecord);
+
     return res.status(200).json({
       success: true,
-      count: jobRoles.length,
-      jobRoles
+      count: normalizedJobRoles.length,
+      jobRoles: normalizedJobRoles
     });
   } catch (err) {
     console.error("❌ GET JOB ROLES ERROR:", err.message);
@@ -610,10 +626,12 @@ exports.getJobRolesByCompany = async (req, res) => {
       .sort({ name: 1 })
       .lean());
 
+    const normalizedCompanyRoles = (jobRoles || []).map(normalizeJobRoleRecord);
+
     return res.status(200).json({
       success: true,
-      count: jobRoles.length,
-      jobRoles
+      count: normalizedCompanyRoles.length,
+      jobRoles: normalizedCompanyRoles
     });
   } catch (err) {
     console.error("❌ GET JOB ROLES BY COMPANY ERROR:", err.message);
@@ -679,10 +697,12 @@ exports.getJobRolesByDepartment = async (req, res) => {
       .sort({ name: 1 })
       .lean());
 
+    const normalizedDeptRoles = (jobRoles || []).map(normalizeJobRoleRecord);
+
     return res.status(200).json({
       success: true,
-      count: jobRoles.length,
-      jobRoles
+      count: normalizedDeptRoles.length,
+      jobRoles: normalizedDeptRoles
     });
   } catch (err) {
     console.error("❌ GET JOB ROLES BY DEPARTMENT ERROR:", err.message);
@@ -749,10 +769,12 @@ exports.getJobRolesByDepartmentId = async (req, res) => {
       .sort({ name: 1 })
       .lean());
 
+    const normalizedDeptIdRoles = (jobRoles || []).map(normalizeJobRoleRecord);
+
     return res.status(200).json({
       success: true,
-      count: jobRoles.length,
-      jobRoles
+      count: normalizedDeptIdRoles.length,
+      jobRoles: normalizedDeptIdRoles
     });
   } catch (err) {
     console.error("❌ GET JOB ROLES BY DEPARTMENT ID ERROR:", err.message);

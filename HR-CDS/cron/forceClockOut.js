@@ -284,107 +284,143 @@ const resolveSelectedShiftSettings = async (userObj) => {
     || null;
 };
 
+let isAutoClockOutSweepRunning = false;
+
 const runAutoClockOutSweep = async () => {
   if (mongoose.connection.readyState !== 1) return { processed: 0, updated: 0 };
+  if (isAutoClockOutSweepRunning) return { processed: 0, updated: 0, skipped: true };
 
-  const now = new Date();
-  const scanFrom = addIndiaDays(getIndiaDayStart(now), -2);
+  isAutoClockOutSweepRunning = true;
+  try {
+    const now = new Date();
+    const scanFrom = addIndiaDays(getIndiaDayStart(now), -2);
 
-  const records = await Attendance.find({
-    isClockedIn: true,
-    outTime: null,
-    inTime: { $ne: null, $gte: scanFrom }
-  }).populate({
-    path: 'user',
-    select: 'name email company jobRole shiftId shiftName shiftType companyCode',
-    populate: {
-      path: 'company',
-      select: 'companyCode companyName'
-    }
-  });
-
-  let updated = 0;
-
-  for (const record of records) {
-    try {
-      const recordUser = record.user;
-      if (!recordUser) continue;
-
-      const shiftSettings = record.shiftStart && record.shiftEnd
-        ? getRecordShiftSettings(record)
-        : await resolveSelectedShiftSettings(recordUser);
-
-      if (!shiftSettings) continue;
-
-      const schedule = buildShiftSchedule(record.inTime || record.date || now, shiftSettings);
-      const forcedOutTime = addMinutes(schedule.shiftEnd, 30);
-      if (now < forcedOutTime) continue;
-
-      // Overtime Check: If user has approved overtime for this date, DO NOT auto clock-out!
-      const hasApprovedOvertime = record.hasOvertimeApproved || (await isOvertimeApprovedForUserDate(recordUser._id, record.inTime || record.date || now));
-      if (hasApprovedOvertime) {
-        if (!record.hasOvertimeApproved) {
-          record.hasOvertimeApproved = true;
-          await record.save();
-        }
-        // User continues their overtime shift without being automatically forced out
-        continue;
+    const records = await Attendance.find({
+      isClockedIn: true,
+      outTime: null,
+      inTime: { $ne: null, $gte: scanFrom }
+    }).populate({
+      path: 'user',
+      select: 'name email company jobRole shiftId shiftName shiftType companyCode',
+      populate: {
+        path: 'company',
+        select: 'companyCode companyName'
       }
+    });
 
-      const snapshot = buildShiftSnapshot(shiftSettings, schedule);
-      const recalculated = calculateAttendanceByShift({
-        inTime: record.inTime,
-        outTime: forcedOutTime,
-        shiftSettings,
-        currentStatus: record.status
-      });
+    let updated = 0;
 
-      applyShiftSnapshot(record, snapshot);
-      record.outTime = forcedOutTime;
-      record.clockOutMode = 'AUTO';
-      record.isClockedIn = false;
-      record.totalTime = recalculated.totalTime;
-      record.earlyLeave = recalculated.earlyLeave;
-      record.overTime = '00:00:00';
-      record.overTimeMinutes = 0;
-      record.hasOvertimeApproved = false;
-      record.status = recalculated.status;
-      if (!record.companyCode && recordUser.companyCode) {
-        record.companyCode = recordUser.companyCode;
-      }
-
-      record.notes = record.notes || 'Auto clocked out after shift end + 30 minutes.';
-      await record.save();
-      updated++;
-
+    for (const record of records) {
       try {
-        await notifyDirectUsers({
-          userIds: [recordUser._id],
-          targetPath: '/ciisUser/emp-attendance',
-          type: 'attendance_clock_out',
-          title: 'Auto Clock Out',
-          message: `${snapshot.shiftName || 'Your shift'} was auto clocked out at ${formatTime(forcedOutTime)} after 30 minutes of shift end.`,
-          actor: null,
-          data: {
-            attendanceId: record._id,
-            userId: recordUser._id,
-            status: record.status,
-            time: forcedOutTime,
-            clockOutMode: 'AUTO',
-            shiftName: snapshot.shiftName,
-            shiftEnd: snapshot.shiftEnd
-          },
-          priority: 'high'
-        });
-      } catch (notifyError) {
-        console.error('[AutoClockOut] notification failed:', notifyError.message);
-      }
-    } catch (error) {
-      console.error('[AutoClockOut] failed to finalize record:', error.message);
-    }
-  }
+        const recordUser = record.user;
+        if (!recordUser) continue;
 
-  return { processed: records.length, updated };
+        const shiftSettings = record.shiftStart && record.shiftEnd
+          ? getRecordShiftSettings(record)
+          : await resolveSelectedShiftSettings(recordUser);
+
+        if (!shiftSettings) continue;
+
+        const schedule = buildShiftSchedule(record.inTime || record.date || now, shiftSettings);
+        const forcedOutTriggerTime = addMinutes(schedule.shiftEnd, 30);
+        if (now < forcedOutTriggerTime) continue;
+
+        // Overtime Check: If user has approved overtime for this date, DO NOT auto clock-out!
+        const hasApprovedOvertime = record.hasOvertimeApproved || (await isOvertimeApprovedForUserDate(recordUser._id, record.inTime || record.date || now));
+        if (hasApprovedOvertime) {
+          if (!record.hasOvertimeApproved) {
+            record.hasOvertimeApproved = true;
+            await record.save();
+          }
+          // User continues their overtime shift without being automatically forced out
+          continue;
+        }
+
+        // Cap credited outTime at shiftEnd so missed punch does not credit 30 extra minutes (ATT-02)
+        const effectiveOutTime = record.inTime && record.inTime > schedule.shiftEnd
+          ? forcedOutTriggerTime
+          : schedule.shiftEnd;
+
+        const snapshot = buildShiftSnapshot(shiftSettings, schedule);
+        const recalculated = calculateAttendanceByShift({
+          inTime: record.inTime,
+          outTime: effectiveOutTime,
+          shiftSettings,
+          currentStatus: record.status
+        });
+
+        const autoNote = record.notes || 'Auto clocked out by system (Missed Punch — capped at shift end).';
+        const updateSet = {
+          shiftId: snapshot.shiftId,
+          shiftName: snapshot.shiftName,
+          shiftType: snapshot.shiftType,
+          shiftStart: snapshot.shiftStart,
+          shiftEnd: snapshot.shiftEnd,
+          earlyClockInStart: snapshot.earlyClockInStart,
+          lateGraceLimit: snapshot.lateGraceLimit,
+          halfDayLateLimit: snapshot.halfDayLateLimit,
+          shortLeaveEarlyLimit: snapshot.shortLeaveEarlyLimit,
+          halfDayEarlyLimit: snapshot.halfDayEarlyLimit,
+          shiftWindow: snapshot.shiftWindow,
+          outTime: effectiveOutTime,
+          clockOutMode: 'AUTO',
+          isClockedIn: false,
+          totalTime: recalculated.totalTime,
+          earlyLeave: recalculated.earlyLeave,
+          overTime: '00:00:00',
+          overTimeMinutes: 0,
+          hasOvertimeApproved: false,
+          status: recalculated.status,
+          notes: autoNote
+        };
+        if (!record.companyCode && recordUser.companyCode) {
+          updateSet.companyCode = recordUser.companyCode;
+        }
+
+        const updatedRecord = await Attendance.findOneAndUpdate(
+          { _id: record._id, isClockedIn: true, outTime: null },
+          { $set: updateSet },
+          { new: true }
+        );
+
+        if (!updatedRecord) {
+          // Already finalized by a concurrent sweep
+          continue;
+        }
+
+        updated++;
+
+        try {
+          await notifyDirectUsers({
+            userIds: [recordUser._id],
+            targetPath: '/ciisUser/emp-attendance',
+            type: 'attendance_clock_out',
+            title: 'Auto Clock Out (Missed Punch)',
+            message: `${snapshot.shiftName || 'Your shift'} was auto clocked out at ${formatTime(effectiveOutTime)} (shift end).`,
+            actor: null,
+            data: {
+              attendanceId: record._id,
+              userId: recordUser._id,
+              status: updatedRecord.status,
+              time: effectiveOutTime,
+              clockOutMode: 'AUTO',
+              shiftName: snapshot.shiftName,
+              shiftEnd: snapshot.shiftEnd
+            },
+            priority: 'high'
+          });
+        } catch (notifyError) {
+          console.error('[AutoClockOut] notification failed:', notifyError.message);
+        }
+      } catch (error) {
+        console.error('[AutoClockOut] failed to finalize record:', error.message);
+      }
+    }
+
+    return { processed: records.length, updated };
+  } finally {
+    isAutoClockOutSweepRunning = false;
+  }
 };
 
 let autoClockOutJob = null;
