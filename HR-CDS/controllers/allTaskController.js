@@ -762,10 +762,10 @@ exports.getUserAllTasksPaginated = async (req, res) => {
 
     const allTasks = await queryAllUserTasks(userId, req.user.companyCode, req.query, req.user.company?._id || req.user.company);
     const filtered = filterUserTasks(allTasks, req.query);
+    const statsFiltered = filterUserTasks(allTasks, { ...req.query, status: 'all' });
 
     const sortedFiltered = sortTasksNewestFirst(filtered);
 
-    
     const total = sortedFiltered.length;
     const pages = Math.max(1, Math.ceil(total / limit));
     const safePage = Math.min(page, pages);
@@ -773,37 +773,7 @@ exports.getUserAllTasksPaginated = async (req, res) => {
     const tasks = sortedFiltered.slice(start, start + limit);
     const enrichedTasks = await enrichTasksWithActivityAndRemarks(tasks);
 
-    const counts = {
-      total: allTasks.length,
-      pending: 0,
-      'in-progress': 0,
-      completed: 0,
-      overdue: 0,
-      onhold: 0
-    };
-
-    allTasks.forEach(task => {
-      const status = task.status;
-      if (counts[status] !== undefined) {
-        counts[status] += 1;
-      } else if (status === 'pending') {
-        counts.pending += 1;
-      }
-    });
-
-    const toStat = (count) => ({
-      count,
-      percentage: allTasks.length > 0 ? Math.round((count / allTasks.length) * 100) : 0
-    });
-
-    const calculatedStats = {
-      total: allTasks.length,
-      pending: toStat(counts.pending),
-      inProgress: toStat(counts['in-progress']),
-      completed: toStat(counts.completed),
-      overdue: toStat(counts.overdue),
-      onhold: toStat(counts.onhold)
-    };
+    const calculatedStats = calculateUserStatusCounts(statsFiltered);
 
     res.json({
       success: true,

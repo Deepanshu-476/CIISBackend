@@ -3407,7 +3407,10 @@ exports.getUserAllTasksPaginated = async (req, res) => {
       'in-progress': 0,
       completed: 0,
       overdue: 0,
-      onhold: 0
+      onhold: 0,
+      reopen: 0,
+      rejected: 0,
+      cancelled: 0
     };
 
     statsBaseTasks.forEach(task => {
@@ -3433,7 +3436,11 @@ exports.getUserAllTasksPaginated = async (req, res) => {
       inProgress: toStat(counts['in-progress']),
       completed: toStat(counts.completed),
       overdue: toStat(counts.overdue),
-      onhold: toStat(counts.onhold)
+      onhold: toStat(counts.onhold),
+      onHold: toStat(counts.onhold),
+      reopen: toStat(counts.reopen),
+      rejected: toStat(counts.rejected),
+      cancelled: toStat(counts.cancelled)
     };
 
     const sortedFiltered = sortTasksNewestFirst(filtered);
