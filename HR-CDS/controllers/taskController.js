@@ -19,7 +19,7 @@ const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
 const { notifyDirectUsers, notifyPageUsers } = require('../utils/systemNotificationService');
-const { enqueueCompletionJob } = require('../utils/backgroundJobQueue');
+const { enqueueCompletionJob, enqueueBackgroundJob } = require('../utils/backgroundJobQueue');
 const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
 const {
   normalizeTaskRecurrenceFields,
@@ -1880,21 +1880,32 @@ const handleTaskCreation = async (req, res, isSelf) => {
     }
   }
 
+  await createActivityLog(req.user, isSelf ? 'self_task_created' : 'task_created_for_others', task._id, `Created task: ${title}`, null, task.toObject(), req);
+
   if (task.assignedUsers?.length > 0) {
-    await sendTaskCreationEmail(task, task.assignedUsers);
-    const targetUsers = task.assignedUsers.map(u => u._id.toString()).filter(id => id !== req.user._id.toString());
-    await notifyDirectUsers({
-      userIds: targetUsers,
-      targetPath: '/ciisUser/task-management',
-      type: 'task_assigned',
-      title: 'New Task Assigned',
-      message: `${req.user.name} assigned you task "${title}"`,
-      data: { taskId: task._id, title, priority, dueDateTime: parsedDue },
-      priority: priority || 'medium'
+    const taskId = task._id;
+    const assignedUsers = task.assignedUsers.map(user => ({
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+    }));
+    const creatorId = req.user._id;
+    const creatorName = req.user.name || 'Someone';
+    const targetUsers = assignedUsers.map(u => u._id.toString()).filter(id => id !== creatorId.toString());
+
+    enqueueBackgroundJob(async () => {
+      await sendTaskCreationEmail({ ...task.toObject(), _id: taskId, assignedUsers }, assignedUsers);
+      await notifyDirectUsers({
+        userIds: targetUsers,
+        targetPath: '/ciisUser/task-management',
+        type: 'task_assigned',
+        title: 'New Task Assigned',
+        message: `${creatorName} assigned you task "${title}"`,
+        data: { taskId, title, priority, dueDateTime: parsedDue },
+        priority: priority || 'medium'
+      });
     });
   }
-
-  await createActivityLog(req.user, isSelf ? 'self_task_created' : 'task_created_for_others', task._id, `Created task: ${title}`, null, task.toObject(), req);
 
   return res.status(201).json({ success: true, task, message: 'Task created successfully' });
 };
