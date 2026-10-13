@@ -1,5 +1,7 @@
 const express = require("express");
 const router = express.Router();
+const crypto = require("crypto");
+const rateLimit = require("express-rate-limit");
 
 const {
   createConversation,
@@ -50,6 +52,56 @@ const uploadStatusFile = (req, res, next) => {
   });
 };
 
+const turnCredentialsLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: "Too many TURN credential requests" },
+});
+
+const splitList = (value = "") =>
+  String(value)
+    .split(",")
+    .map(item => item.trim())
+    .filter(Boolean);
+
+const getCoturnUrls = () => {
+  const urls = splitList(process.env.COTURN_URLS || process.env.TURN_URLS);
+  if (urls.length) return urls;
+
+  const host = String(process.env.COTURN_HOST || process.env.TURN_HOST || "").trim();
+  if (!host) return [];
+
+  return [
+    `stun:${host}:3478`,
+    `turn:${host}:3478?transport=udp`,
+    `turn:${host}:3478?transport=tcp`,
+  ];
+};
+
+const createCoturnIceServers = () => {
+  const secret = String(process.env.COTURN_STATIC_AUTH_SECRET || process.env.TURN_STATIC_AUTH_SECRET || "").trim();
+  const urls = getCoturnUrls();
+  if (!secret || !urls.length) return null;
+
+  const ttlSeconds = Math.max(60, Number(process.env.COTURN_CREDENTIAL_TTL_SECONDS || 3600));
+  const expiresAt = Math.floor(Date.now() / 1000) + ttlSeconds;
+  const username = `${expiresAt}`;
+  const credential = crypto
+    .createHmac("sha1", secret)
+    .update(username)
+    .digest("base64");
+
+  const stunUrls = urls.filter(url => /^stuns?:/i.test(url));
+  const turnUrls = urls.filter(url => /^turns?:/i.test(url));
+
+  return [
+    ...(stunUrls.length ? [{ urls: stunUrls }] : []),
+    ...(turnUrls.length ? [{ urls: turnUrls, username, credential }] : []),
+  ];
+};
+
 router.get("/users", authMiddleware, getCompanyUsers);
 router.get("/conversations", authMiddleware, getConversations);
 router.get("/conversation/:id", authMiddleware, getConversation);
@@ -70,45 +122,18 @@ router.post("/statuses", authMiddleware, uploadStatusFile, compressUploadedMedia
 router.patch("/statuses/:statusId/view", authMiddleware, markViewed);
 router.delete("/statuses/:statusId", authMiddleware, deleteStatus);
 
-router.get("/turn-credentials", authMiddleware, async (_req, res) => {
-  const apiKey = process.env.METERED_TURN_API_KEY;
-  const appName = process.env.METERED_TURN_APP_NAME;
+router.get("/turn-credentials", authMiddleware, turnCredentialsLimiter, async (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
 
-  if (!apiKey || !appName) {
+  const coturnIceServers = createCoturnIceServers();
+  if (!coturnIceServers || !coturnIceServers.length) {
     return res.status(503).json({
       success: false,
-      message: "TURN server is not configured",
+      message: "Self-hosted TURN server is not configured",
     });
   }
 
-  try {
-    const endpoint = new URL(
-      `https://${appName}.metered.live/api/v1/turn/credentials`
-    );
-    endpoint.searchParams.set("apiKey", apiKey);
-
-    const response = await fetch(endpoint, {
-      signal: AbortSignal.timeout(10000),
-    });
-
-    if (!response.ok) {
-      throw new Error(`TURN provider responded with ${response.status}`);
-    }
-
-    const iceServers = await response.json();
-
-    if (!Array.isArray(iceServers) || iceServers.length === 0) {
-      throw new Error("TURN provider returned no ICE servers");
-    }
-
-    return res.json(iceServers);
-  } catch (error) {
-    console.error("TURN credentials fetch failed:", error.message);
-    return res.status(502).json({
-      success: false,
-      message: "Unable to fetch TURN credentials",
-    });
-  }
+  return res.json(coturnIceServers);
 });
 
 router.get("/test", (req, res) => {
