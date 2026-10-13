@@ -2057,12 +2057,17 @@ exports.getTaskActivityLogs = async (req, res) => {
   try {
     const { projectId, taskId } = req.params;
 
-    void 0;
-    void 0;
-    void 0;
-    void 0;
-
-    const project = await Project.findById(projectId);
+    const project = await Project.findOne(
+      { _id: projectId, "tasks._id": taskId },
+      {
+        projectName: 1,
+        company: 1,
+        companyCode: 1,
+        users: 1,
+        createdBy: 1,
+        tasks: { $elemMatch: { _id: taskId } }
+      }
+    ).lean();
     if (!project) {
       return res.status(404).json({
         success: false,
@@ -2078,7 +2083,7 @@ exports.getTaskActivityLogs = async (req, res) => {
       });
     }
 
-    const task = project.tasks.id(taskId);
+    const task = Array.isArray(project.tasks) ? project.tasks[0] : null;
     if (!task) {
       return res.status(404).json({
         success: false,
@@ -2086,19 +2091,17 @@ exports.getTaskActivityLogs = async (req, res) => {
       });
     }
 
-
-    await Project.populate(task, {
-      path: 'activityLogs.performedBy',
-      select: 'name email'
-    });
-
-    void 0;
+    const performerIds = [...new Set((task.activityLogs || [])
+      .map(entry => normalizeId(entry.performedBy))
+      .filter(Boolean))];
+    const performers = performerIds.length
+      ? await User.find({ _id: { $in: performerIds } }).select('name email').lean()
+      : [];
+    const performersById = new Map(performers.map(user => [String(user._id), user]));
 
     const activityLogs = (task.activityLogs || []).map((entry) => {
-      const log = typeof entry.toObject === 'function' ? entry.toObject() : entry;
-      const actor = log.performedBy && typeof log.performedBy === 'object'
-        ? log.performedBy
-        : null;
+      const log = entry || {};
+      const actor = performersById.get(normalizeId(log.performedBy)) || null;
 
       return {
         ...log,
