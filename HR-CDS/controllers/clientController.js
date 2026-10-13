@@ -1262,21 +1262,47 @@ const getClientDashboardOverview = async (req, res) => {
       });
     }
 
+    const availableClientIds = availableClients.map(c => c._id).filter(Boolean);
     const services = Array.isArray(currentClient.services) ? currentClient.services : [];
-    const serviceTasks = services.length
-      ? await ClientTask.find({
-          clientId: currentClient._id,
-          service: { $in: services },
-        })
-          .sort({ completed: 1, dueDate: 1, createdAt: -1 })
-          .limit(500)
-          .lean()
-      : [];
+
+    const [serviceTasks, allAvailableClientTasks] = await Promise.all([
+      services.length
+        ? ClientTask.find({
+            clientId: currentClient._id,
+            service: { $in: services },
+          })
+            .sort({ completed: 1, dueDate: 1, createdAt: -1 })
+            .limit(500)
+            .lean()
+        : Promise.resolve([]),
+      availableClientIds.length
+        ? ClientTask.find({ clientId: { $in: availableClientIds } })
+            .select('clientId service')
+            .lean()
+        : Promise.resolve([]),
+    ]);
+
+    const clientTaskCountMap = {};
+    allAvailableClientTasks.forEach(task => {
+      const cId = String(task.clientId || '');
+      if (!cId) return;
+      clientTaskCountMap[cId] = (clientTaskCountMap[cId] || 0) + 1;
+    });
+
+    const enrichedAvailableClients = availableClients.map(c => {
+      const cId = String(c._id || '');
+      const count = clientTaskCountMap[cId] ?? (Array.isArray(c.tasks) ? c.tasks.length : 0);
+      return {
+        ...c,
+        totalTasks: count,
+        taskCount: count,
+      };
+    });
 
     return res.json({
       success: true,
       data: {
-        availableClients,
+        availableClients: enrichedAvailableClients,
         client: currentClient,
         services,
         projectManagers: collectProjectMembers(currentClient, companyUsers),
