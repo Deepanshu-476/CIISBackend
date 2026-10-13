@@ -4,7 +4,7 @@ const path = require("path");
 const fs = require("fs");
 const sharp = require("sharp");
 const { notifyDirectUsers } = require("../utils/systemNotificationService");
-const { enqueueCompletionJob } = require("../utils/backgroundJobQueue");
+const { enqueueCompletionJob, enqueueBackgroundJob } = require("../utils/backgroundJobQueue");
 const { sendEmail } = require("../../utils/sendEmail");
 const { normalizeTaskReminderSettings } = require("../utils/taskReminderSettings");
 const User = require("../../models/User");
@@ -1017,7 +1017,9 @@ exports.updateProject = async (req, res) => {
       void 0;
 
 
-      const project = await Project.findById(id);
+      const project = await Project.findById(id)
+        .select('projectName users createdBy company companyCode branch')
+        .lean();
       if (!project) {
         return res.status(404).json({
           success: false,
@@ -1367,6 +1369,7 @@ exports.addTask = async (req, res) => {
       const safeTitle = title?.trim() || "Untitled Task";
       const now = new Date();
       const task = {
+        _id: new mongoose.Types.ObjectId(),
         title: safeTitle,
         description: description?.trim() || "",
         priority: priority?.toLowerCase(),
@@ -1406,10 +1409,23 @@ exports.addTask = async (req, res) => {
       task.activityLogs = [activityLog];
 
 
-      project.tasks.push(task);
-      await project.save();
+      const updateResult = await Project.updateOne(
+        { _id: id },
+        {
+          $push: { tasks: task },
+          $set: { updatedAt: now }
+        },
+        { runValidators: true }
+      );
 
-      const createdTask = project.tasks[project.tasks.length - 1];
+      if (!updateResult.modifiedCount) {
+        return res.status(500).json({
+          success: false,
+          message: "Task could not be added"
+        });
+      }
+
+      const createdTask = task;
 
       if (assignedUserIds.length) {
         const assignedUsers = await User.find({ _id: { $in: assignedUserIds } })
@@ -1426,33 +1442,44 @@ exports.addTask = async (req, res) => {
           createdBy: req.user.id
         };
 
-        await project.addNotification(notification);
+        enqueueBackgroundJob(async () => {
+          const results = await Promise.allSettled([
+            Project.updateOne(
+              { _id: project._id },
+              { $push: { notifications: notification } }
+            ),
+            notifyDirectUsers({
+              userIds: assignedUserIds,
+              targetPath: '/ciisUser/task-management',
+              type: 'project_task_assigned',
+              title: 'New Project Task',
+              message: `${req.user.name} assigned you task "${safeTitle}" in project "${project.projectName}"`,
+              actor: req.user.id,
+              data: {
+                projectId: project._id,
+                taskId: createdTask._id,
+                title: safeTitle,
+                projectName: project.projectName,
+              },
+              priority: priority?.toLowerCase() || 'medium',
+            }),
+            ...assignedUsers.map(user =>
+            sendProjectTaskAssignmentEmail({
+              user,
+              actorName: req.user.name,
+              taskTitle: safeTitle,
+              projectName: project.projectName,
+              dueDate: createdTask.dueDate
+            })
+            )
+          ]);
 
-        await notifyDirectUsers({
-          userIds: assignedUserIds,
-          targetPath: '/ciisUser/task-management',
-          type: 'project_task_assigned',
-          title: 'New Project Task',
-          message: `${req.user.name} assigned you task "${safeTitle}" in project "${project.projectName}"`,
-          actor: req.user.id,
-          data: {
-            projectId: project._id,
-            taskId: createdTask._id,
-            title: safeTitle,
-            projectName: project.projectName,
-          },
-          priority: priority?.toLowerCase() || 'medium',
+          results.forEach(result => {
+            if (result.status === 'rejected') {
+              console.error('Project task create background notification failed:', result.reason);
+            }
+          });
         });
-
-        await Promise.allSettled(assignedUsers.map(user =>
-          sendProjectTaskAssignmentEmail({
-            user,
-            actorName: req.user.name,
-            taskTitle: safeTitle,
-            projectName: project.projectName,
-            dueDate: createdTask.dueDate
-          })
-        ));
       }
 
       void 0;
@@ -1461,7 +1488,7 @@ exports.addTask = async (req, res) => {
         success: true,
         message: "Task added successfully",
         task: {
-          ...(typeof createdTask.toObject === 'function' ? createdTask.toObject() : createdTask),
+          ...createdTask,
           pdfFile: normalizeTaskPdfFile(createdTask, project)
         }
       });

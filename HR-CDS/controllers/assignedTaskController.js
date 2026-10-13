@@ -28,7 +28,7 @@ const {
   TASK_GROUP_POPULATE_FIELDS,
   TASK_CREATOR_POPULATE_FIELDS
 } = require('./taskHelper');
-const { enqueueCompletionJob } = require('../utils/backgroundJobQueue');
+const { enqueueCompletionJob, enqueueBackgroundJob } = require('../utils/backgroundJobQueue');
 const mongoose = require('mongoose');
 
 const getRequestedTaskBranchId = req => {
@@ -126,20 +126,31 @@ exports.createTaskForOthers = async (req, res) => {
     await task.populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS);
     await task.populate('createdBy', TASK_CREATOR_POPULATE_FIELDS);
 
-    if (task.assignedUsers?.length > 0) {
-      await sendTaskCreationEmail(task, task.assignedUsers);
-      const targetUsers = task.assignedUsers.map(u => u._id.toString()).filter(id => id !== req.user._id.toString());
-      await createNotification(
-        task.createdBy._id,
-        'New Task Assigned',
-        `${req.user.name} assigned you task "${title}"`,
-        'task_assigned',
-        task._id,
-        { priority, dueDateTime: parsedDue, targetUsers }
-      );
-    }
-
     await createActivityLog(req.user, 'task_created_for_others', task._id, `Created task for others: ${title}`, null, task.toObject(), req);
+
+    if (task.assignedUsers?.length > 0) {
+      const assignedUsers = task.assignedUsers.map(user => ({
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+      }));
+      const targetUsers = assignedUsers.map(u => u._id.toString()).filter(id => id !== req.user._id.toString());
+      const createdById = task.createdBy._id;
+      const taskId = task._id;
+      const creatorName = req.user.name || 'Someone';
+
+      enqueueBackgroundJob(async () => {
+        await sendTaskCreationEmail({ ...task.toObject(), _id: taskId, assignedUsers }, assignedUsers);
+        await createNotification(
+          createdById,
+          'New Task Assigned',
+          `${creatorName} assigned you task "${title}"`,
+          'task_assigned',
+          taskId,
+          { priority, dueDateTime: parsedDue, targetUsers }
+        );
+      });
+    }
 
     return res.status(201).json({ success: true, task, message: 'Task created successfully' });
   } catch (error) {
