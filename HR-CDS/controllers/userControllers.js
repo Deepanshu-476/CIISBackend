@@ -881,7 +881,27 @@ exports.updateMe = async (req, res) => {
     .select('-password -resetToken -resetTokenExpiry')
     .populate('department', 'name description')
     .populate('company', 'name companyCode');
-    
+
+    // If the user has a linked Client record, keep Client name, phone, address synchronized
+    try {
+      const Client = mongoose.models.Client || require('../models/Client');
+      const clientUpdate = {};
+      if (updateData.name) clientUpdate.client = updateData.name;
+      if (updateData.phone) clientUpdate.phone = updateData.phone;
+      if (updateData.address) clientUpdate.address = updateData.address;
+      if (updateData.city) clientUpdate.city = updateData.city;
+      if (updateData.state) clientUpdate.state = updateData.state;
+      if (updateData.pinCode) clientUpdate.pincode = updateData.pinCode;
+      if (Object.keys(clientUpdate).length > 0) {
+        await Client.updateMany(
+          { $or: [{ userId: updatedUser._id }, { email: updatedUser.email }] },
+          { $set: clientUpdate }
+        );
+      }
+    } catch (clientSyncErr) {
+      console.warn("Client model sync warning:", clientSyncErr.message);
+    }
+
     return successResponse(res, 200, {
       message: "Profile updated successfully",
       user: updatedUser
