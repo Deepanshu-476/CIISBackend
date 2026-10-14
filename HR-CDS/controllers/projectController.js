@@ -814,11 +814,298 @@ exports.listProjects = async (req, res) => {
 
 exports.getProjectById = async (req, res) => {
   try {
-    const project = await Project.findById(req.params.id)
-      .populate('users', PROJECT_USER_POPULATE_FIELDS)
-      .populate('createdBy', PROJECT_USER_POPULATE_FIELDS)
-      .populate('branch', 'name branchCode')
-      .lean();
+    const projectId = req.params.id;
+    if (!mongoose.Types.ObjectId.isValid(projectId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid project ID"
+      });
+    }
+
+    const id = new mongoose.Types.ObjectId(projectId);
+    const now = new Date();
+
+    // Pagination & Filter params
+    const isAllRequested = ['1', 'true', 'yes'].includes(String(req.query.all || '').toLowerCase());
+    const rawPage = parseInt(req.query.page, 10);
+    const page = Number.isInteger(rawPage) && rawPage > 0 ? rawPage : 1;
+
+    const rawLimit = parseInt(req.query.limit, 10);
+    const limit = Number.isInteger(rawLimit) && rawLimit > 0 ? Math.min(Math.max(rawLimit, 1), 100) : 10;
+    const startIndex = (page - 1) * limit;
+
+    // Build filter conditions for tasks
+    const filterConds = [];
+
+    const statusFilter = String(req.query.status || '').trim().toLowerCase();
+    if (statusFilter && statusFilter !== 'all') {
+      if (statusFilter === 'overdue') {
+        filterConds.push({
+          $or: [
+            { $eq: [{ $toLower: { $ifNull: ["$$t.status", "pending"] } }, "overdue"] },
+            {
+              $and: [
+                { $eq: [{ $toLower: { $ifNull: ["$$t.status", "pending"] } }, "pending"] },
+                { $lt: ["$$t.dueDate", now] }
+              ]
+            }
+          ]
+        });
+      } else if (statusFilter === 'high priority' || statusFilter === 'high-priority') {
+        filterConds.push({
+          $eq: [{ $toLower: { $ifNull: ["$$t.priority", "medium"] } }, "high"]
+        });
+      } else if (statusFilter === 'in-progress' || statusFilter === 'in progress') {
+        filterConds.push({
+          $in: [{ $toLower: { $ifNull: ["$$t.status", "pending"] } }, ["in-progress", "in progress", "inprogress"]]
+        });
+      } else if (statusFilter === 'onhold' || statusFilter === 'on hold') {
+        filterConds.push({
+          $in: [{ $toLower: { $ifNull: ["$$t.status", "pending"] } }, ["onhold", "on hold"]]
+        });
+      } else if (statusFilter === 'pending') {
+        filterConds.push({
+          $and: [
+            { $eq: [{ $toLower: { $ifNull: ["$$t.status", "pending"] } }, "pending"] },
+            {
+              $or: [
+                { $eq: [{ $ifNull: ["$$t.dueDate", null] }, null] },
+                { $gte: ["$$t.dueDate", now] }
+              ]
+            }
+          ]
+        });
+      } else {
+        filterConds.push({
+          $eq: [{ $toLower: { $ifNull: ["$$t.status", "pending"] } }, statusFilter]
+        });
+      }
+    }
+
+    const teamFilter = String(req.query.team || req.query.assignee || '').trim();
+    if (teamFilter && teamFilter !== 'all') {
+      if (teamFilter === 'unassigned') {
+        filterConds.push({
+          $and: [
+            { $eq: [{ $ifNull: ["$$t.assignedTo", null] }, null] },
+            { $eq: [{ $size: { $ifNull: ["$$t.assignedUsers", []] } }, 0] }
+          ]
+        });
+      } else if (mongoose.Types.ObjectId.isValid(teamFilter)) {
+        const teamObjId = new mongoose.Types.ObjectId(teamFilter);
+        filterConds.push({
+          $or: [
+            { $eq: ["$$t.assignedTo", teamObjId] },
+            { $in: [teamObjId, { $ifNull: ["$$t.assignedUsers", []] }] }
+          ]
+        });
+      }
+    }
+
+    const searchTerm = String(req.query.search || '').trim();
+    if (searchTerm) {
+      filterConds.push({
+        $or: [
+          { $regexMatch: { input: { $ifNull: ["$$t.title", ""] }, regex: searchTerm, options: "i" } },
+          { $regexMatch: { input: { $ifNull: ["$$t.description", ""] }, regex: searchTerm, options: "i" } }
+        ]
+      });
+    }
+
+    const taskFilterExpr = filterConds.length === 0
+      ? { $ifNull: ["$tasks", []] }
+      : {
+          $filter: {
+            input: { $ifNull: ["$tasks", []] },
+            as: "t",
+            cond: { $and: filterConds }
+          }
+        };
+
+    // Run project metadata query and task aggregation in parallel
+    const [project, aggResults] = await Promise.all([
+      Project.findById(id)
+        .select('projectName description company companyCode branch users status startDate endDate priority pdfFile createdBy createdAt updatedAt')
+        .populate('users', PROJECT_USER_POPULATE_FIELDS)
+        .populate('createdBy', PROJECT_USER_POPULATE_FIELDS)
+        .populate('branch', 'name branchCode')
+        .lean(),
+      Project.aggregate([
+        { $match: { _id: id } },
+        {
+          $project: {
+            stats: {
+              totalTasks: { $size: { $ifNull: ["$tasks", []] } },
+              completedTasks: {
+                $size: {
+                  $filter: {
+                    input: { $ifNull: ["$tasks", []] },
+                    as: "t",
+                    cond: { $eq: [{ $toLower: { $ifNull: ["$$t.status", "pending"] } }, "completed"] }
+                  }
+                }
+              },
+              inProgressTasks: {
+                $size: {
+                  $filter: {
+                    input: { $ifNull: ["$tasks", []] },
+                    as: "t",
+                    cond: {
+                      $in: [
+                        { $toLower: { $ifNull: ["$$t.status", "pending"] } },
+                        ["in-progress", "in progress", "inprogress"]
+                      ]
+                    }
+                  }
+                }
+              },
+              overdueTasks: {
+                $size: {
+                  $filter: {
+                    input: { $ifNull: ["$tasks", []] },
+                    as: "t",
+                    cond: {
+                      $or: [
+                        { $eq: [{ $toLower: { $ifNull: ["$$t.status", "pending"] } }, "overdue"] },
+                        {
+                          $and: [
+                            { $eq: [{ $toLower: { $ifNull: ["$$t.status", "pending"] } }, "pending"] },
+                            { $lt: ["$$t.dueDate", now] }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              },
+              pendingTasks: {
+                $size: {
+                  $filter: {
+                    input: { $ifNull: ["$tasks", []] },
+                    as: "t",
+                    cond: {
+                      $and: [
+                        { $eq: [{ $toLower: { $ifNull: ["$$t.status", "pending"] } }, "pending"] },
+                        {
+                          $or: [
+                            { $eq: [{ $ifNull: ["$$t.dueDate", null] }, null] },
+                            { $gte: ["$$t.dueDate", now] }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              },
+              onHoldTasks: {
+                $size: {
+                  $filter: {
+                    input: { $ifNull: ["$tasks", []] },
+                    as: "t",
+                    cond: {
+                      $in: [
+                        { $toLower: { $ifNull: ["$$t.status", "pending"] } },
+                        ["onhold", "on hold"]
+                      ]
+                    }
+                  }
+                }
+              },
+              cancelledTasks: {
+                $size: {
+                  $filter: {
+                    input: { $ifNull: ["$tasks", []] },
+                    as: "t",
+                    cond: { $eq: [{ $toLower: { $ifNull: ["$$t.status", "pending"] } }, "cancelled"] }
+                  }
+                }
+              },
+              unassignedTasks: {
+                $size: {
+                  $filter: {
+                    input: { $ifNull: ["$tasks", []] },
+                    as: "t",
+                    cond: {
+                      $and: [
+                        { $eq: [{ $ifNull: ["$$t.assignedTo", null] }, null] },
+                        { $eq: [{ $size: { $ifNull: ["$$t.assignedUsers", []] } }, 0] }
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            tasksSummary: {
+              $map: {
+                input: { $ifNull: ["$tasks", []] },
+                as: "t",
+                in: {
+                  assignedTo: "$$t.assignedTo",
+                  assignedUsers: "$$t.assignedUsers",
+                  status: "$$t.status",
+                  dueDate: "$$t.dueDate"
+                }
+              }
+            },
+            matchedTasks: {
+              $sortArray: {
+                input: taskFilterExpr,
+                sortBy: { createdAt: -1 }
+              }
+            }
+          }
+        },
+        {
+          $project: {
+            stats: {
+              $mergeObjects: [
+                "$stats",
+                {
+                  progress: {
+                    $cond: [
+                      { $gt: ["$stats.totalTasks", 0] },
+                      { $round: [{ $multiply: [{ $divide: ["$stats.completedTasks", "$stats.totalTasks"] }, 100] }, 0] },
+                      0
+                    ]
+                  }
+                }
+              ]
+            },
+            tasksSummary: 1,
+            totalFiltered: { $size: "$matchedTasks" },
+            // Omit activityLogs from slicedTasks for ultra-lightweight response (activity logs load on demand via /activity endpoint)
+            slicedTasks: {
+              $map: {
+                input: isAllRequested
+                  ? "$matchedTasks"
+                  : { $slice: ["$matchedTasks", startIndex, limit] },
+                as: "st",
+                in: {
+                  _id: "$$st._id",
+                  title: "$$st.title",
+                  description: "$$st.description",
+                  assignedTo: "$$st.assignedTo",
+                  assignedUsers: "$$st.assignedUsers",
+                  dueDate: "$$st.dueDate",
+                  dueDateTime: "$$st.dueDateTime",
+                  onHoldReleasedAt: "$$st.onHoldReleasedAt",
+                  completionDate: "$$st.completionDate",
+                  priority: "$$st.priority",
+                  status: "$$st.status",
+                  pdfFile: "$$st.pdfFile",
+                  checkpoints: "$$st.checkpoints",
+                  reminderSettings: "$$st.reminderSettings",
+                  remarks: "$$st.remarks",
+                  createdBy: "$$st.createdBy",
+                  createdAt: "$$st.createdAt",
+                  updatedAt: "$$st.updatedAt"
+                }
+              }
+            }
+          }
+        }
+      ])
+    ]);
 
     if (!project) {
       return res.status(404).json({
@@ -827,7 +1114,23 @@ exports.getProjectById = async (req, res) => {
       });
     }
 
-    if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
+    const agg = aggResults[0] || {};
+    const totalFiltered = agg.totalFiltered || 0;
+    const totalPages = Math.max(1, Math.ceil(totalFiltered / limit));
+    const safePage = Math.min(page, totalPages);
+    const slicedTasks = agg.slicedTasks || [];
+    const tasksSummary = agg.tasksSummary || [];
+
+    // Access control check
+    const isCompanyAdmin = isProjectAdmin(req.user);
+    const isMember = Array.isArray(project.users) && project.users.some(u => idsEqual(u, req.user.id));
+    const isCreator = idsEqual(project.createdBy, req.user.id);
+    const hasAssignedTask = tasksSummary.some(t => {
+      const assignees = [t.assignedTo, ...(t.assignedUsers || [])].filter(Boolean);
+      return assignees.some(a => idsEqual(a, req.user.id));
+    });
+
+    if (!projectBelongsToUserCompany(project, req.user) || (!isCompanyAdmin && !isMember && !isCreator && !hasAssignedTask)) {
       return res.status(403).json({
         success: false,
         message: "Access denied. You are not a member of this project.",
@@ -840,144 +1143,7 @@ exports.getProjectById = async (req, res) => {
       });
     }
 
-    const allTasks = Array.isArray(project.tasks) ? project.tasks : [];
-    const totalTasks = allTasks.length;
-
-    // Calculate global stats over ALL tasks (unaffected by pagination)
-    let completedTasks = 0;
-    let pendingTasks = 0;
-    let inProgressTasks = 0;
-    let overdueTasks = 0;
-    let onHoldTasks = 0;
-    let cancelledTasks = 0;
-    let unassignedTasks = 0;
-
-    allTasks.forEach(task => {
-      const status = normalizeTaskStatus(task.status);
-      if (status === 'completed') {
-        completedTasks++;
-      } else if (status === 'pending') {
-        if (isPendingTaskPastDue(task)) {
-          overdueTasks++;
-        } else {
-          pendingTasks++;
-        }
-      } else if (['in-progress', 'in progress'].includes(status)) {
-        inProgressTasks++;
-      } else if (status === 'overdue') {
-        overdueTasks++;
-      } else if (['onhold', 'on hold'].includes(status)) {
-        onHoldTasks++;
-      } else if (status === 'cancelled') {
-        cancelledTasks++;
-      }
-
-      const assignees = getTaskAssigneeIds(task);
-      if (assignees.length === 0) {
-        unassignedTasks++;
-      }
-    });
-
-    const progress = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
-    const globalStats = {
-      totalTasks,
-      completedTasks,
-      pendingTasks,
-      inProgressTasks,
-      overdueTasks,
-      onHoldTasks,
-      cancelledTasks,
-      unassignedTasks,
-      progress,
-    };
-
-    // Calculate user task summary over ALL tasks
-    const projectUsers = Array.isArray(project.users) ? project.users : [];
-    const userTaskSummary = projectUsers.map(member => {
-      const memberId = normalizeId(member._id || member.id || member);
-      const memberTasks = allTasks.filter(task => getTaskAssigneeIds(task).includes(memberId));
-      return {
-        id: memberId,
-        name: member?.name || member?.email || (memberId ? `User (${memberId.slice(-4)})` : 'Member'),
-        email: member?.email || '',
-        role: member?.role || member?.jobRole || member?.companyRole || '',
-        total: memberTasks.length,
-        completed: memberTasks.filter(t => normalizeTaskStatus(t.status) === 'completed').length,
-        pending: memberTasks.filter(t => normalizeTaskStatus(t.status) === 'pending' && !isPendingTaskPastDue(t)).length,
-        inProgress: memberTasks.filter(t => ['in-progress', 'in progress'].includes(normalizeTaskStatus(t.status))).length,
-      };
-    });
-
-    if (unassignedTasks > 0 || userTaskSummary.length === 0) {
-      const unassignedList = allTasks.filter(task => getTaskAssigneeIds(task).length === 0);
-      userTaskSummary.push({
-        id: 'unassigned',
-        name: 'Unassigned',
-        email: '',
-        role: '',
-        total: unassignedList.length,
-        completed: unassignedList.filter(t => normalizeTaskStatus(t.status) === 'completed').length,
-        pending: unassignedList.filter(t => normalizeTaskStatus(t.status) === 'pending' && !isPendingTaskPastDue(t)).length,
-        inProgress: unassignedList.filter(t => ['in-progress', 'in progress'].includes(normalizeTaskStatus(t.status))).length,
-      });
-    }
-
-    // Pagination & Filter params
-    const isAllRequested = ['1', 'true', 'yes'].includes(String(req.query.all || '').toLowerCase());
-    const rawPage = parseInt(req.query.page, 10);
-    const page = Number.isInteger(rawPage) && rawPage > 0 ? rawPage : 1;
-
-    const rawLimit = parseInt(req.query.limit, 10);
-    // User requirement: initially 10 tasks ("phle 10 aaye gy"), max 100 via dropdown ("100 tak la skata h")
-    const limit = Number.isInteger(rawLimit) && rawLimit > 0 ? Math.min(Math.max(rawLimit, 1), 100) : 10;
-
-    let filteredTasks = [...allTasks];
-
-    // Status filter
-    const statusFilter = String(req.query.status || '').trim().toLowerCase();
-    if (statusFilter && statusFilter !== 'all') {
-      if (statusFilter === 'overdue') {
-        filteredTasks = filteredTasks.filter(t => isPendingTaskPastDue(t) || normalizeTaskStatus(t.status) === 'overdue');
-      } else if (statusFilter === 'high priority' || statusFilter === 'high-priority') {
-        filteredTasks = filteredTasks.filter(t => String(t.priority || '').toLowerCase() === 'high');
-      } else {
-        filteredTasks = filteredTasks.filter(t => normalizeTaskStatus(t.status) === normalizeTaskStatus(statusFilter));
-      }
-    }
-
-    // Team / Assignee filter
-    const teamFilter = String(req.query.team || req.query.assignee || '').trim();
-    if (teamFilter && teamFilter !== 'all') {
-      if (teamFilter === 'unassigned') {
-        filteredTasks = filteredTasks.filter(t => getTaskAssigneeIds(t).length === 0);
-      } else {
-        filteredTasks = filteredTasks.filter(t => getTaskAssigneeIds(t).includes(teamFilter));
-      }
-    }
-
-    // Search filter
-    const searchTerm = String(req.query.search || '').trim().toLowerCase();
-    if (searchTerm) {
-      filteredTasks = filteredTasks.filter(t => {
-        const titleMatch = String(t.title || '').toLowerCase().includes(searchTerm);
-        const descMatch = String(t.description || '').toLowerCase().includes(searchTerm);
-        return titleMatch || descMatch;
-      });
-    }
-
-    // Sort tasks
-    filteredTasks = sortProjectTasksByCreatedAt(filteredTasks);
-
-    const totalFiltered = filteredTasks.length;
-    const totalPages = Math.max(1, Math.ceil(totalFiltered / limit));
-    const safePage = Math.min(page, totalPages);
-    const startIndex = (safePage - 1) * limit;
-
-    const slicedTasks = isAllRequested
-      ? filteredTasks
-      : filteredTasks.slice(startIndex, startIndex + limit);
-
-    // Populate user details on ONLY the sliced tasks (ultra fast!)
+    // Populate user details on ONLY the sliced tasks (super fast!)
     if (slicedTasks.length > 0) {
       await Project.populate(slicedTasks, [
         { path: 'assignedTo', select: PROJECT_TASK_USER_POPULATE_FIELDS, model: 'User' },
@@ -985,6 +1151,41 @@ exports.getProjectById = async (req, res) => {
         { path: 'createdBy', select: PROJECT_TASK_USER_POPULATE_FIELDS, model: 'User' },
         { path: 'remarks.createdBy', select: PROJECT_TASK_USER_POPULATE_FIELDS, model: 'User' }
       ]);
+    }
+
+    // Calculate user task summary over ALL tasks (in memory, ~1ms)
+    const projectUsers = Array.isArray(project.users) ? project.users : [];
+    const userTaskSummary = projectUsers.map(member => {
+      const memberId = normalizeId(member._id || member.id || member);
+      const memberTasks = tasksSummary.filter(t => {
+        const assignees = [t.assignedTo, ...(t.assignedUsers || [])].filter(Boolean).map(a => normalizeId(a?._id || a?.id || a));
+        return assignees.includes(memberId);
+      });
+      return {
+        id: memberId,
+        name: member?.name || member?.email || (memberId ? `User (${memberId.slice(-4)})` : 'Member'),
+        email: member?.email || '',
+        role: member?.role || member?.jobRole || member?.companyRole || '',
+        total: memberTasks.length,
+        completed: memberTasks.filter(t => normalizeTaskStatus(t.status) === 'completed').length,
+        pending: memberTasks.filter(t => normalizeTaskStatus(t.status) === 'pending' && (!t.dueDate || new Date(t.dueDate) >= now)).length,
+        inProgress: memberTasks.filter(t => ['in-progress', 'in progress'].includes(normalizeTaskStatus(t.status))).length,
+      };
+    });
+
+    const unassignedTasksCount = agg.stats?.unassignedTasks || 0;
+    if (unassignedTasksCount > 0 || userTaskSummary.length === 0) {
+      const unassignedList = tasksSummary.filter(t => [t.assignedTo, ...(t.assignedUsers || [])].filter(Boolean).length === 0);
+      userTaskSummary.push({
+        id: 'unassigned',
+        name: 'Unassigned',
+        email: '',
+        role: '',
+        total: unassignedList.length,
+        completed: unassignedList.filter(t => normalizeTaskStatus(t.status) === 'completed').length,
+        pending: unassignedList.filter(t => normalizeTaskStatus(t.status) === 'pending' && (!t.dueDate || new Date(t.dueDate) >= now)).length,
+        inProgress: unassignedList.filter(t => ['in-progress', 'in progress'].includes(normalizeTaskStatus(t.status))).length,
+      });
     }
 
     const normalizedTasks = slicedTasks.map(t => ({
@@ -997,7 +1198,17 @@ exports.getProjectById = async (req, res) => {
       ...project,
       pdfFile: normalizeProjectPdfFile(project),
       tasks: normalizedTasks,
-      stats: globalStats,
+      stats: agg.stats || {
+        totalTasks: 0,
+        completedTasks: 0,
+        pendingTasks: 0,
+        inProgressTasks: 0,
+        overdueTasks: 0,
+        onHoldTasks: 0,
+        cancelledTasks: 0,
+        unassignedTasks: 0,
+        progress: 0,
+      },
       userTaskSummary,
       pagination: {
         total: totalFiltered,
