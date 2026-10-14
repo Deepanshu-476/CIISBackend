@@ -1274,22 +1274,32 @@ const getClientDashboardOverview = async (req, res) => {
     const services = Array.isArray(currentClient.services) ? currentClient.services : [];
 
     const [serviceTasks, allAvailableClientTasks, taskStatsAggregation] = await Promise.all([
-      services.length
-        ? ClientTask.find({
-            clientId: currentClient._id,
-            service: { $in: services },
-          })
-            .select('_id name task title service completed status dueDate createdAt updatedAt')
-            .sort({ updatedAt: -1, createdAt: -1 })
-            .lean()
-        : Promise.resolve([]),
+      ClientTask.find({
+        clientId: currentClient._id,
+        ...(services.length ? {
+          $or: [
+            { service: { $in: services } },
+            { service: { $in: services.map(s => new RegExp(`^${escapeRegExp(s)}$`, 'i')) } }
+          ]
+        } : {})
+      })
+        .select('_id name task title service completed status dueDate createdAt updatedAt')
+        .sort({ updatedAt: -1, createdAt: -1 })
+        .lean(),
       availableClientIds.length
         ? ClientTask.find({ clientId: { $in: availableClientIds } })
             .select('clientId service')
             .lean()
         : Promise.resolve([]),
       ClientTask.aggregate([
-        { $match: { clientId: currentClient._id } },
+        {
+          $match: {
+            $or: [
+              { clientId: currentClient._id },
+              ...(mongoose.Types.ObjectId.isValid(currentClient._id) ? [{ clientId: new mongoose.Types.ObjectId(currentClient._id) }] : [])
+            ]
+          }
+        },
         {
           $group: {
             _id: '$service',
@@ -1383,6 +1393,7 @@ const getClientDashboardOverview = async (req, res) => {
         serviceTasks: serviceTasks.map(task => ({
           ...task,
           serviceName: task.service,
+          completed: Boolean(task.completed || String(task.status || '').toLowerCase() === 'completed'),
           status: normalizeClientTaskStatus(task),
         })),
         supportTickets: supportTickets.map(serializeSupportTicketForClient),
