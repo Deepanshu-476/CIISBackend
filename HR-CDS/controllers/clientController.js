@@ -2269,6 +2269,15 @@ const updateClient = async (req, res) => {
       });
     }
 
+    if (updatedClient?.userId) {
+      const userUpdate = {};
+      if (updateData.client) userUpdate.name = updateData.client;
+      if (updateData.phone) userUpdate.phone = updateData.phone;
+      if (Object.keys(userUpdate).length > 0) {
+        await User.findByIdAndUpdate(updatedClient.userId, { $set: userUpdate });
+      }
+    }
+
     void 0;
     void 0;
     
