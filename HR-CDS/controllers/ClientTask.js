@@ -1915,10 +1915,17 @@ const getTasksByClientService = async (req, res) => {
       };
     }
 
-    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 300 });
+    const isFetchAll = req.query.limit === 'all' || req.query.all === 'true' || Number(req.query.limit) >= 1000;
+    const { page, limit, skip } = isFetchAll
+      ? { page: 1, limit: 2000, skip: 0 }
+      : getPaginationOptions(req.query, { limit: 50, maxLimit: 2000 });
     const sortObj = filter.completed
       ? { completedAt: -1, updatedAt: -1, dueDate: -1, createdAt: -1 }
-      : (statusQuery === 'overdue' ? { dueDate: 1, createdAt: -1 } : { completed: 1, dueDate: 1, createdAt: -1 });
+      : (statusQuery === 'overdue'
+          ? { dueDate: 1, createdAt: -1 }
+          : (isFetchAll || limit >= 500
+              ? { updatedAt: -1, createdAt: -1 }
+              : { completed: 1, dueDate: 1, createdAt: -1 }));
 
     const [tasks, total] = await Promise.all([
       Task.find(filter)
@@ -1999,10 +2006,17 @@ const getClientTasks = async (req, res) => {
       };
     }
 
-    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 300 });
+    const isFetchAll = req.query.limit === 'all' || req.query.all === 'true' || Number(req.query.limit) >= 1000;
+    const { page, limit, skip } = isFetchAll
+      ? { page: 1, limit: 2000, skip: 0 }
+      : getPaginationOptions(req.query, { limit: 50, maxLimit: 2000 });
     const sortObj = filter.completed
       ? { completedAt: -1, updatedAt: -1, dueDate: -1, createdAt: -1 }
-      : (statusQuery === 'overdue' ? { dueDate: 1, createdAt: -1 } : { completed: 1, dueDate: 1, createdAt: -1 });
+      : (statusQuery === 'overdue'
+          ? { dueDate: 1, createdAt: -1 }
+          : (isFetchAll || limit >= 500
+              ? { updatedAt: -1, createdAt: -1 }
+              : { completed: 1, dueDate: 1, createdAt: -1 }));
 
     const [tasks, total] = await Promise.all([
       Task.find(filter)
