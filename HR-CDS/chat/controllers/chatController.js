@@ -159,6 +159,17 @@ const emitMessageDelivered = (message, conversation, deliveredTo) => {
   });
 };
 
+const emitMessageToConversationMembers = (conversation, eventName, payload) => {
+  if (!global.io || !conversation?._id) return;
+
+  let target = global.io.to(`conversation:${conversation._id}`);
+  (conversation.members || []).forEach(member => {
+    const memberId = member.toString();
+    if (memberId) target = target.to(`user:${memberId}`);
+  });
+  target.emit(eventName, payload);
+};
+
 const isRecentlyOnlineInDb = (user) => {
   if (!user?.isOnline) return false;
   if (!user.lastSeen) return true;
@@ -320,6 +331,12 @@ exports.getConversations = async (req, res) => {
     const conversationsWithMeta = await Promise.all(
       pageConversations.map(conversation => withConversationMeta(conversation, userId, req.user.company))
     );
+    conversationsWithMeta.sort((first, second) => {
+      const firstTime = new Date(first.lastMessage?.createdAt || first.updatedAt || 0).getTime();
+      const secondTime = new Date(second.lastMessage?.createdAt || second.updatedAt || 0).getTime();
+      if (secondTime !== firstTime) return secondTime - firstTime;
+      return first._id.toString().localeCompare(second._id.toString());
+    });
 
     const nextCursor = conversationsWithMeta.length
       ? conversationsWithMeta[conversationsWithMeta.length - 1].updatedAt
@@ -445,9 +462,18 @@ exports.sendMessage = async (req, res) => {
 
     const populatedMessage = await populateMessage(Message.findById(message._id));
 
+    conversation.updatedAt = message.createdAt || new Date();
+    await conversation.save();
+
     if (global.io) {
-      const room = `conversation:${conversationId}`;
-      global.io.to(room).emit("chat:receive-message", populatedMessage);
+      emitMessageToConversationMembers(conversation, "chat:receive-message", populatedMessage);
+      emitMessageToConversationMembers(conversation, "chat:conversation-updated", {
+        conversationId: conversation._id,
+        lastMessage: populatedMessage,
+        updatedAt: conversation.updatedAt,
+        isGroup: conversation.isGroup,
+        groupId: conversation.groupId,
+      });
       emitMessageDelivered(message, conversation, deliveredTo);
     }
 
