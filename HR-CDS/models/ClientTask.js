@@ -101,7 +101,7 @@ const clienttaskSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'in-progress', 'completed', 'overdue', 'onhold'],
+    enum: ['pending', 'in-progress', 'completed', 'overdue', 'onhold', 'reopen'],
     default: 'pending'
   },
   completed: {
