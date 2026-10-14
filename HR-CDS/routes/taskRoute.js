@@ -17,6 +17,7 @@ router.get('/project-assigned', protect, taskController.getAssignedProjectTasks)
 router.get('/assigned', protect, taskController.getAssignedTasks);
 router.get('/all', protect, taskController.getAllMyTaskViews);
 router.get('/all/stats', protect, taskController.getAllMyTaskStats);
+router.get('/counts', protect, taskController.getAllMyTaskStats);
 
 
 
