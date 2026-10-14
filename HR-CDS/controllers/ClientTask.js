@@ -2213,73 +2213,66 @@ const addTask = async (req, res) => {
       completed: false,
       checkpoints: parseTaskCheckpoints(checkpoints),
       reminderSettings: normalizeTaskReminderSettings(req.body),
-      activityLogs: [],
+      activityLogs: [{
+        action: 'created',
+        description: `Task "${name.trim()}" created`,
+        user: currentUser?.id || currentUser?._id,
+        userName: currentUser?.name || currentUser?.username || 'System',
+        createdAt: new Date()
+      }],
       remarks: []
     });
 
     await task.save();
 
-    await addClientActivityLogHelper(task, {
-      action: 'created',
-      description: `Task "${task.name}" created`,
-      user: currentUser?.id || currentUser?._id,
-      userName: currentUser?.name || currentUser?.username || 'System'
-    }, req);
+    enqueueBackgroundJob(async () => {
+      const backgroundTasks = [
+        notifyPageUsers({
+          companyId: getNotificationCompanyId(client, req.user),
+          targetPath: '/ciisUser/company-all-task',
+          type: 'task_assigned',
+          title: 'New Client Task Created',
+          message: `${currentUser?.name || 'User'} created task "${task.name}" for client ${client.client || client.name}`,
+          data: { taskId: task._id },
+          priority: 'medium'
+        }),
+        notifyAssignedClientTaskUser({
+          task,
+          actor: currentUser,
+          title: 'New Client Task Assigned',
+          message: `You have been assigned client task "${task.name}" for ${getClientDisplayName(client)}`,
+          priority: 'high',
+        }),
+        notifyClientPortalUsers({
+          client,
+          task,
+          actor: currentUser,
+          title: 'New Task Created',
+          message: `New task created: ${task.name}`,
+          priority: 'high',
+        })
+      ];
 
-    await task.save();
-
-
-    try {
-      await notifyPageUsers({
-        companyId: getNotificationCompanyId(client, req.user),
-        targetPath: '/ciisUser/company-all-task',
-        type: 'task_assigned',
-        title: 'New Client Task Created',
-        message: `${currentUser?.name || 'User'} created task "${task.name}" for client ${client.client || client.name}`,
-        data: { taskId: task._id },
-        priority: 'medium'
-      });
-    } catch (notifyErr) {
-      console.error('Error notifying page users for client task create:', notifyErr);
-    }
-
-    try {
-      await notifyAssignedClientTaskUser({
-        task,
-        actor: currentUser,
-        title: 'New Client Task Assigned',
-        message: `You have been assigned client task "${task.name}" for ${getClientDisplayName(client)}`,
-        priority: 'high',
-      });
-      await notifyClientPortalUsers({
-        client,
-        task,
-        actor: currentUser,
-        title: 'New Task Created',
-        message: `New task created: ${task.name}`,
-        priority: 'high',
-      });
-    } catch (notifyErr) {
-      console.error('Error notifying client/assignee for client task create:', notifyErr);
-    }
-
-
-    try {
       if (client && client.email) {
         const subject = `New Task Created: ${task.name}`;
         const html = `<p>Hello ${client.client || client.name || 'Client'},</p><p>A new task "${task.name}" has been created for your project/service.</p><p>Details: ${task.description || ''}</p>`;
-        await sendEmail(client.email, subject, html, {
+        backgroundTasks.push(sendEmail(client.email, subject, html, {
           skipNotification: true,
           notificationType: 'task_client',
           notificationTargetPath: '/ciisUser/ClientDashboard',
           notificationMessage: `New task created: ${task.name}`,
           notificationData: { taskId: task._id, source: 'client_task' },
           notificationPriority: 'high',
-        });
+        }));
       }
-    } catch (emailErr) {
-      console.error('Error sending client email for new task:', emailErr);
-    }
+
+      const results = await Promise.allSettled(backgroundTasks);
+      results.forEach(result => {
+        if (result.status === 'rejected') {
+          console.error('Client task create background notification failed:', result.reason);
+        }
+      });
+    });
 
     res.status(201).json({
       success: true,
