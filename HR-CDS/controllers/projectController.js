@@ -13,6 +13,7 @@ const mongoose = require("mongoose");
 const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagination");
 
 const PROJECT_USER_POPULATE_FIELDS = 'name email role jobRole companyRole profileImage avatar department branch assignedBranches';
+const PROJECT_TASK_USER_POPULATE_FIELDS = 'name email role jobRole companyRole';
 
 const normalizeIdList = (value) => {
   const input = Array.isArray(value) ? value : value ? [value] : [];
@@ -284,27 +285,6 @@ const projectBelongsToUserCompany = (project, user = {}) => {
   return true;
 };
 
-const hasProjectAccess = (project, userId, userRole, user = {}) => {
-  if (!projectBelongsToUserCompany(project, user)) {
-    return false;
-  }
-
-
-  if (isProjectAdmin({ ...user, role: userRole || user.role })) {
-    return true;
-  }
-
-
-  const isUserInProject = project.users.some(user =>
-    idsEqual(user, userId)
-  );
-
-
-  const isCreator = idsEqual(project.createdBy, userId);
-
-  return isUserInProject || isCreator;
-};
-
 const idsEqual = (left, right) => {
   if (!left || !right) return false;
   const leftId = left._id || left.id || left;
@@ -320,6 +300,28 @@ const getTaskAssigneeIds = (task = {}) => {
 
 const isTaskAssignedToUser = (task, userId) =>
   getTaskAssigneeIds(task).some(assigneeId => idsEqual(assigneeId, userId));
+
+const hasProjectAccess = (project, userId, userRole, user = {}) => {
+  if (!projectBelongsToUserCompany(project, user)) {
+    return false;
+  }
+
+  if (isProjectAdmin({ ...user, role: userRole || user.role })) {
+    return true;
+  }
+
+  const isUserInProject = Array.isArray(project.users) && project.users.some(u =>
+    idsEqual(u, userId)
+  );
+
+  const isCreator = idsEqual(project.createdBy, userId);
+
+  const hasAssignedTask = Array.isArray(project.tasks) && project.tasks.some(task =>
+    isTaskAssignedToUser(task, userId)
+  );
+
+  return Boolean(isUserInProject || isCreator || hasAssignedTask);
+};
 
 const sendProjectTaskAssignmentEmail = async ({ user, actorName, taskTitle, projectName, dueDate }) => {
   if (!user?.email) return;
@@ -448,8 +450,6 @@ const normalizeTaskPdfFile = (task, project = null) => {
   const rawPath = String(pdfFile?.path || pdfFile?.url || '').trim();
   if (!pdfFile || !rawPath) return null;
   const original = pdfFile.originalName || pdfFile.filename || path.basename(rawPath);
-  const resolved = resolveProjectFilePath(rawPath, original);
-  if (!resolved && !String(rawPath).startsWith('http')) return null;
   return {
     ...pdfFile,
     filename: original,
@@ -780,9 +780,9 @@ exports.listProjects = async (req, res) => {
       .limit(limit);
 
     projectQuery
-      .populate('tasks.assignedTo', PROJECT_USER_POPULATE_FIELDS)
-      .populate('tasks.assignedUsers', PROJECT_USER_POPULATE_FIELDS)
-      .populate('tasks.createdBy', PROJECT_USER_POPULATE_FIELDS);
+      .populate('tasks.assignedTo', PROJECT_TASK_USER_POPULATE_FIELDS)
+      .populate('tasks.assignedUsers', PROJECT_TASK_USER_POPULATE_FIELDS)
+      .populate('tasks.createdBy', PROJECT_TASK_USER_POPULATE_FIELDS);
 
     const [projects, total] = await Promise.all([
       projectQuery.lean(),
@@ -814,40 +814,20 @@ exports.listProjects = async (req, res) => {
 
 exports.getProjectById = async (req, res) => {
   try {
-    void 0;
-    void 0;
-    void 0;
-    void 0;
-
     const project = await Project.findById(req.params.id)
       .populate('users', PROJECT_USER_POPULATE_FIELDS)
       .populate('createdBy', PROJECT_USER_POPULATE_FIELDS)
       .populate('branch', 'name branchCode')
-      .populate('tasks.assignedTo', PROJECT_USER_POPULATE_FIELDS)
-      .populate('tasks.assignedUsers', PROJECT_USER_POPULATE_FIELDS)
-      .populate('tasks.createdBy', PROJECT_USER_POPULATE_FIELDS)
-      .populate('tasks.remarks.createdBy', PROJECT_USER_POPULATE_FIELDS)
       .lean();
 
     if (!project) {
-      void 0;
       return res.status(404).json({
         success: false,
         message: "Project not found"
       });
     }
 
-    void 0;
-    void 0;
-    void 0;
-
-
     if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
-      void 0;
-      void 0;
-      void 0;
-
-
       return res.status(403).json({
         success: false,
         message: "Access denied. You are not a member of this project.",
@@ -860,12 +840,174 @@ exports.getProjectById = async (req, res) => {
       });
     }
 
-    void 0;
+    const allTasks = Array.isArray(project.tasks) ? project.tasks : [];
+    const totalTasks = allTasks.length;
+
+    // Calculate global stats over ALL tasks (unaffected by pagination)
+    let completedTasks = 0;
+    let pendingTasks = 0;
+    let inProgressTasks = 0;
+    let overdueTasks = 0;
+    let onHoldTasks = 0;
+    let cancelledTasks = 0;
+    let unassignedTasks = 0;
+
+    allTasks.forEach(task => {
+      const status = normalizeTaskStatus(task.status);
+      if (status === 'completed') {
+        completedTasks++;
+      } else if (status === 'pending') {
+        if (isPendingTaskPastDue(task)) {
+          overdueTasks++;
+        } else {
+          pendingTasks++;
+        }
+      } else if (['in-progress', 'in progress'].includes(status)) {
+        inProgressTasks++;
+      } else if (status === 'overdue') {
+        overdueTasks++;
+      } else if (['onhold', 'on hold'].includes(status)) {
+        onHoldTasks++;
+      } else if (status === 'cancelled') {
+        cancelledTasks++;
+      }
+
+      const assignees = getTaskAssigneeIds(task);
+      if (assignees.length === 0) {
+        unassignedTasks++;
+      }
+    });
+
+    const progress = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+    const globalStats = {
+      totalTasks,
+      completedTasks,
+      pendingTasks,
+      inProgressTasks,
+      overdueTasks,
+      onHoldTasks,
+      cancelledTasks,
+      unassignedTasks,
+      progress,
+    };
+
+    // Calculate user task summary over ALL tasks
+    const projectUsers = Array.isArray(project.users) ? project.users : [];
+    const userTaskSummary = projectUsers.map(member => {
+      const memberId = normalizeId(member._id || member.id || member);
+      const memberTasks = allTasks.filter(task => getTaskAssigneeIds(task).includes(memberId));
+      return {
+        id: memberId,
+        name: member?.name || member?.email || (memberId ? `User (${memberId.slice(-4)})` : 'Member'),
+        email: member?.email || '',
+        role: member?.role || member?.jobRole || member?.companyRole || '',
+        total: memberTasks.length,
+        completed: memberTasks.filter(t => normalizeTaskStatus(t.status) === 'completed').length,
+        pending: memberTasks.filter(t => normalizeTaskStatus(t.status) === 'pending' && !isPendingTaskPastDue(t)).length,
+        inProgress: memberTasks.filter(t => ['in-progress', 'in progress'].includes(normalizeTaskStatus(t.status))).length,
+      };
+    });
+
+    if (unassignedTasks > 0 || userTaskSummary.length === 0) {
+      const unassignedList = allTasks.filter(task => getTaskAssigneeIds(task).length === 0);
+      userTaskSummary.push({
+        id: 'unassigned',
+        name: 'Unassigned',
+        email: '',
+        role: '',
+        total: unassignedList.length,
+        completed: unassignedList.filter(t => normalizeTaskStatus(t.status) === 'completed').length,
+        pending: unassignedList.filter(t => normalizeTaskStatus(t.status) === 'pending' && !isPendingTaskPastDue(t)).length,
+        inProgress: unassignedList.filter(t => ['in-progress', 'in progress'].includes(normalizeTaskStatus(t.status))).length,
+      });
+    }
+
+    // Pagination & Filter params
+    const isAllRequested = ['1', 'true', 'yes'].includes(String(req.query.all || '').toLowerCase());
+    const rawPage = parseInt(req.query.page, 10);
+    const page = Number.isInteger(rawPage) && rawPage > 0 ? rawPage : 1;
+
+    const rawLimit = parseInt(req.query.limit, 10);
+    // User requirement: initially 10 tasks ("phle 10 aaye gy"), max 100 via dropdown ("100 tak la skata h")
+    const limit = Number.isInteger(rawLimit) && rawLimit > 0 ? Math.min(Math.max(rawLimit, 1), 100) : 10;
+
+    let filteredTasks = [...allTasks];
+
+    // Status filter
+    const statusFilter = String(req.query.status || '').trim().toLowerCase();
+    if (statusFilter && statusFilter !== 'all') {
+      if (statusFilter === 'overdue') {
+        filteredTasks = filteredTasks.filter(t => isPendingTaskPastDue(t) || normalizeTaskStatus(t.status) === 'overdue');
+      } else if (statusFilter === 'high priority' || statusFilter === 'high-priority') {
+        filteredTasks = filteredTasks.filter(t => String(t.priority || '').toLowerCase() === 'high');
+      } else {
+        filteredTasks = filteredTasks.filter(t => normalizeTaskStatus(t.status) === normalizeTaskStatus(statusFilter));
+      }
+    }
+
+    // Team / Assignee filter
+    const teamFilter = String(req.query.team || req.query.assignee || '').trim();
+    if (teamFilter && teamFilter !== 'all') {
+      if (teamFilter === 'unassigned') {
+        filteredTasks = filteredTasks.filter(t => getTaskAssigneeIds(t).length === 0);
+      } else {
+        filteredTasks = filteredTasks.filter(t => getTaskAssigneeIds(t).includes(teamFilter));
+      }
+    }
+
+    // Search filter
+    const searchTerm = String(req.query.search || '').trim().toLowerCase();
+    if (searchTerm) {
+      filteredTasks = filteredTasks.filter(t => {
+        const titleMatch = String(t.title || '').toLowerCase().includes(searchTerm);
+        const descMatch = String(t.description || '').toLowerCase().includes(searchTerm);
+        return titleMatch || descMatch;
+      });
+    }
+
+    // Sort tasks
+    filteredTasks = sortProjectTasksByCreatedAt(filteredTasks);
+
+    const totalFiltered = filteredTasks.length;
+    const totalPages = Math.max(1, Math.ceil(totalFiltered / limit));
+    const safePage = Math.min(page, totalPages);
+    const startIndex = (safePage - 1) * limit;
+
+    const slicedTasks = isAllRequested
+      ? filteredTasks
+      : filteredTasks.slice(startIndex, startIndex + limit);
+
+    // Populate user details on ONLY the sliced tasks (ultra fast!)
+    if (slicedTasks.length > 0) {
+      await Project.populate(slicedTasks, [
+        { path: 'assignedTo', select: PROJECT_TASK_USER_POPULATE_FIELDS, model: 'User' },
+        { path: 'assignedUsers', select: PROJECT_TASK_USER_POPULATE_FIELDS, model: 'User' },
+        { path: 'createdBy', select: PROJECT_TASK_USER_POPULATE_FIELDS, model: 'User' },
+        { path: 'remarks.createdBy', select: PROJECT_TASK_USER_POPULATE_FIELDS, model: 'User' }
+      ]);
+    }
+
+    const normalizedTasks = slicedTasks.map(t => ({
+      ...t,
+      pdfFile: normalizeTaskPdfFile(t, project),
+    }));
 
     res.status(200).json({
       success: true,
-      ...withSortedProjectTasks(project),
-      userHasAccess: true
+      ...project,
+      pdfFile: normalizeProjectPdfFile(project),
+      tasks: normalizedTasks,
+      stats: globalStats,
+      userTaskSummary,
+      pagination: {
+        total: totalFiltered,
+        page: safePage,
+        limit,
+        totalPages,
+        hasNextPage: safePage < totalPages,
+        hasPrevPage: safePage > 1,
+      },
+      userHasAccess: true,
     });
   } catch (error) {
     console.error("❌ Error fetching project:", error);
