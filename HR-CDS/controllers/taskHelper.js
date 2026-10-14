@@ -7,6 +7,7 @@ const User = require('../../models/User');
 const Group = require('../models/Group');
 const Notification = require('../models/Notification');
 const ActivityLog = require('../models/ActivityLog');
+const mongoose = require('mongoose');
 const moment = require('moment');
 const { sendEmail } = require('../../utils/sendEmail');
 const fs = require('fs');
@@ -687,27 +688,83 @@ const fetchAssignedClientTaskList = async (req) => {
 
 const fetchAssignedProjectTaskList = async (req) => {
   const currentUserId = (req.user._id || req.user.id).toString();
+  const currentUserObjectId = mongoose.Types.ObjectId.isValid(currentUserId)
+    ? new mongoose.Types.ObjectId(currentUserId)
+    : currentUserId;
 
-  const projects = await Project.find({ 'tasks.assignedTo': currentUserId })
-    .select('projectName description createdBy users tasks createdAt updatedAt')
-    .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
-    .populate('tasks.assignedTo', TASK_USER_POPULATE_FIELDS)
-    .populate('tasks.assignedUsers', TASK_USER_POPULATE_FIELDS)
-    .populate('tasks.createdBy', TASK_CREATOR_POPULATE_FIELDS)
-    .lean();
+  const projects = await Project.aggregate([
+    { $match: { 'tasks.assignedTo': currentUserObjectId } },
+    {
+      $project: {
+        projectName: 1,
+        description: 1,
+        createdBy: 1,
+        createdAt: 1,
+        updatedAt: 1,
+        tasks: {
+          $filter: {
+            input: '$tasks',
+            as: 'task',
+            cond: { $eq: ['$$task.assignedTo', currentUserObjectId] }
+          }
+        }
+      }
+    }
+  ]);
+
+  const userIds = new Set();
+  projects.forEach(project => {
+    if (project.createdBy) userIds.add(String(project.createdBy));
+    (project.tasks || []).forEach(task => {
+      if (task.assignedTo) userIds.add(String(task.assignedTo));
+      if (task.createdBy) userIds.add(String(task.createdBy));
+      (task.assignedUsers || []).forEach(userId => {
+        if (userId) userIds.add(String(userId));
+      });
+      (task.activityLogs || []).forEach(log => {
+        if (log.performedBy) userIds.add(String(log.performedBy));
+      });
+    });
+  });
+
+  const users = userIds.size
+    ? await User.find({ _id: { $in: [...userIds] } }).select(TASK_CREATOR_POPULATE_FIELDS).lean()
+    : [];
+  const usersById = new Map(users.map(user => [String(user._id), user]));
+  const hydrateUser = value => {
+    if (!value) return value;
+    if (typeof value === 'object' && value.name) return value;
+    return usersById.get(String(value)) || value;
+  };
 
   const tasks = [];
 
   projects.forEach(project => {
+    const projectCreatedBy = hydrateUser(project.createdBy);
     (project.tasks || []).forEach(task => {
-      const assignedTo = task.assignedTo?._id || task.assignedTo;
+      const assignedTo = hydrateUser(task.assignedTo);
+      const assignedToId = assignedTo?._id || assignedTo;
       const isAssignedToMe = assignedTo?.toString() === currentUserId;
-      if (!isAssignedToMe) return;
+      const isHydratedAssignedToMe = assignedToId?.toString() === currentUserId;
+      if (!isAssignedToMe && !isHydratedAssignedToMe) return;
+
+      const assignedUsers = Array.isArray(task.assignedUsers)
+        ? task.assignedUsers.map(hydrateUser)
+        : [];
+      const taskCreatedBy = hydrateUser(task.createdBy);
+      const activityLogs = Array.isArray(task.activityLogs)
+        ? task.activityLogs.map(log => ({
+          ...log,
+          performedBy: hydrateUser(log.performedBy)
+        }))
+        : [];
 
       const status = normalizeProjectTaskStatus(task.status);
       const lastActivityAt = task.updatedAt || task.createdAt || project.updatedAt || project.createdAt;
-      const assignedBy = getProjectTaskAssignedBy(task, project);
-      const activityLogs = Array.isArray(task.activityLogs) ? task.activityLogs : [];
+      const assignedBy = getProjectTaskAssignedBy(
+        { ...task, createdBy: taskCreatedBy, activityLogs },
+        { ...project, createdBy: projectCreatedBy }
+      );
       const latestActivityDate = (predicate) => activityLogs
         .filter(predicate)
         .map(log => log.performedAt || log.createdAt)
@@ -733,12 +790,13 @@ const fetchAssignedProjectTaskList = async (req) => {
         priority: String(task.priority || 'medium').toLowerCase(),
         status,
         userStatus: status,
-        assignedTo: task.assignedTo,
+        assignedTo,
+        assignedUsers,
         createdBy: assignedBy,
         assignedBy,
         assignedByName: assignedBy?.name || assignedBy?.email || 'Unknown',
-        assignedToName: task.assignedTo?.name || 'Unknown',
-        assignedToEmail: task.assignedTo?.email || '',
+        assignedToName: assignedTo?.name || 'Unknown',
+        assignedToEmail: assignedTo?.email || '',
         projectName: project.projectName,
         projectTaskId: task._id,
         checkpoints: task.checkpoints || [],
