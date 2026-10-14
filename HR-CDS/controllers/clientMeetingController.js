@@ -10,11 +10,32 @@ const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagin
 
 const clientMeetingJobs = new Map();
 
-const normalizeCompanyCode = (value) => value?.trim().toUpperCase();
+const normalizeCompanyCode = (value) => value ? String(value).trim().toUpperCase() : '';
 
 const buildCompanyFilter = (req) => {
-  const companyCode = normalizeCompanyCode(req.query.companyCode || req.body?.companyCode);
-  return companyCode ? { companyCode } : {};
+  const userCompanyCode = normalizeCompanyCode(
+    req.user?.companyCode ||
+    req.user?.company?.companyCode ||
+    (typeof req.user?.company === 'string' ? '' : req.user?.company?.companyCode)
+  );
+  const isSuperAdmin = req.user?.loginType === 'superadmin' ||
+    String(req.user?.role || '').toLowerCase() === 'superadmin';
+
+  const requestedCode = normalizeCompanyCode(
+    req.query?.companyCode ||
+    req.body?.companyCode ||
+    req.headers?.['x-company-code']
+  );
+
+  if (isSuperAdmin) {
+    return requestedCode ? { companyCode: requestedCode } : {};
+  }
+
+  if (userCompanyCode) {
+    return { companyCode: userCompanyCode };
+  }
+
+  return requestedCode ? { companyCode: requestedCode } : {};
 };
 
 const getMeetingStartDateTime = (date, timeStr) => {
@@ -246,6 +267,13 @@ const getMeeting = async (req, res, next) => {
   try {
     const meeting = await ClientMeeting.findById(req.params.id).populate(meetingPopulate).lean();
     if (!meeting) return res.status(404).json({ success: false, error: 'Meeting not found' });
+
+    const userCompanyCode = normalizeCompanyCode(req.user?.companyCode || req.user?.company?.companyCode);
+    const isSuperAdmin = req.user?.loginType === 'superadmin' || String(req.user?.role || '').toLowerCase() === 'superadmin';
+    if (!isSuperAdmin && userCompanyCode && normalizeCompanyCode(meeting.companyCode) !== userCompanyCode) {
+      return res.status(403).json({ success: false, error: 'Access denied: meeting belongs to another company' });
+    }
+
     res.status(200).json({ success: true, data: meeting });
   } catch (error) {
     next(error);
@@ -277,7 +305,11 @@ const createMeeting = async (req, res, next) => {
       createdBy
     } = req.body;
 
-    const normalizedCompanyCode = normalizeCompanyCode(companyCode || req.user?.companyCode || req.query?.companyCode || 'CIIS');
+    const userCompanyCode = normalizeCompanyCode(req.user?.companyCode || req.user?.company?.companyCode);
+    const isSuperAdmin = req.user?.loginType === 'superadmin' || String(req.user?.role || '').toLowerCase() === 'superadmin';
+    const normalizedCompanyCode = (isSuperAdmin && companyCode)
+      ? normalizeCompanyCode(companyCode)
+      : (userCompanyCode || normalizeCompanyCode(companyCode || 'CIIS'));
     const dateList = Array.isArray(dates) && dates.length ? dates : meetingDate ? [meetingDate] : [];
 
     if (!dateList.length || !meetingTime) {
@@ -381,6 +413,12 @@ const updateMeeting = async (req, res, next) => {
     let meeting = await ClientMeeting.findById(req.params.id);
     if (!meeting) return res.status(404).json({ success: false, error: 'Meeting not found' });
 
+    const userCompanyCode = normalizeCompanyCode(req.user?.companyCode || req.user?.company?.companyCode);
+    const isSuperAdmin = req.user?.loginType === 'superadmin' || String(req.user?.role || '').toLowerCase() === 'superadmin';
+    if (!isSuperAdmin && userCompanyCode && normalizeCompanyCode(meeting.companyCode) !== userCompanyCode) {
+      return res.status(403).json({ success: false, error: 'Access denied: meeting belongs to another company' });
+    }
+
     const updateData = { ...req.body };
     if (updateData.companyCode) updateData.companyCode = normalizeCompanyCode(updateData.companyCode);
 
@@ -453,6 +491,12 @@ const deleteMeeting = async (req, res, next) => {
     const meeting = await ClientMeeting.findById(req.params.id);
     if (!meeting) return res.status(404).json({ success: false, error: 'Meeting not found' });
 
+    const userCompanyCode = normalizeCompanyCode(req.user?.companyCode || req.user?.company?.companyCode);
+    const isSuperAdmin = req.user?.loginType === 'superadmin' || String(req.user?.role || '').toLowerCase() === 'superadmin';
+    if (!isSuperAdmin && userCompanyCode && normalizeCompanyCode(meeting.companyCode) !== userCompanyCode) {
+      return res.status(403).json({ success: false, error: 'Access denied: meeting belongs to another company' });
+    }
+
     cancelClientMeetingReminder(meeting._id);
     await ClientMeetingView.deleteMany({ meetingId: meeting._id });
     await meeting.deleteOne();
@@ -508,12 +552,20 @@ const updateMeetingStatus = async (req, res, next) => {
       return res.status(400).json({ success: false, error: 'Invalid status value' });
     }
 
+    const existingMeeting = await ClientMeeting.findById(req.params.id);
+    if (!existingMeeting) return res.status(404).json({ success: false, error: 'Meeting not found' });
+
+    const userCompanyCode = normalizeCompanyCode(req.user?.companyCode || req.user?.company?.companyCode);
+    const isSuperAdmin = req.user?.loginType === 'superadmin' || String(req.user?.role || '').toLowerCase() === 'superadmin';
+    if (!isSuperAdmin && userCompanyCode && normalizeCompanyCode(existingMeeting.companyCode) !== userCompanyCode) {
+      return res.status(403).json({ success: false, error: 'Access denied: meeting belongs to another company' });
+    }
+
     const meeting = await ClientMeeting.findByIdAndUpdate(req.params.id, { status }, {
       new: true,
       runValidators: true
     });
 
-    if (!meeting) return res.status(404).json({ success: false, error: 'Meeting not found' });
     res.status(200).json({ success: true, message: 'Meeting status updated successfully', data: meeting });
   } catch (error) {
     next(error);
