@@ -245,12 +245,14 @@ exports.createGroupConversation = async (req, res) => {
         members,
         isGroup: true,
         groupId,
-        groupName: group.name,
+      groupName: group.name,
+      groupImage: group.profileImage || group.avatar || group.image || "",
         admins: [group.createdBy],
       });
     } else {
       conversation.members = members;
       conversation.groupName = group.name;
+      conversation.groupImage = group.profileImage || group.avatar || group.image || conversation.groupImage || "";
       if (!conversation.admins || !conversation.admins.length) {
         conversation.admins = [group.createdBy];
       }
@@ -371,7 +373,7 @@ exports.getCompanyGroups = async (req, res) => {
       members: getUserId(req),
       isActive: true,
     })
-      .select("name description members createdBy")
+      .select("name description members createdBy avatar profileImage image")
       .populate("createdBy", "name email profileImage avatar image photo")
       .populate("members", "name email profileImage avatar image photo companyRole");
 
