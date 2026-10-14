@@ -1348,7 +1348,8 @@ const updateAssignedTaskStatus = async (req, res) => {
 
     if (
       targetStatus !== 'overdue' &&
-      (previousStatus === 'overdue' || isClientTaskOverdue(task)) &&
+      targetStatus !== 'reopen' &&
+      (previousStatus === 'overdue' || (previousStatus !== 'completed' && isClientTaskOverdue(task))) &&
       !isCompanyAllTaskEdit(req)
     ) {
       if (previousStatus !== 'overdue' && isClientTaskOverdue(task)) {
@@ -1386,6 +1387,11 @@ const updateAssignedTaskStatus = async (req, res) => {
       task.completed = true;
       task.completedAt = now;
       task.status = 'completed';
+      void 0;
+    } else if (targetStatus === 'reopen') {
+      task.completed = false;
+      task.completedAt = null;
+      task.status = 'reopen';
       void 0;
     } else if (targetStatus === 'in-progress') {
       task.completed = false;
