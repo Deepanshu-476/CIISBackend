@@ -1265,14 +1265,14 @@ const getClientDashboardOverview = async (req, res) => {
     const availableClientIds = availableClients.map(c => c._id).filter(Boolean);
     const services = Array.isArray(currentClient.services) ? currentClient.services : [];
 
-    const [serviceTasks, allAvailableClientTasks] = await Promise.all([
+    const [serviceTasks, allAvailableClientTasks, taskStatsAggregation] = await Promise.all([
       services.length
         ? ClientTask.find({
             clientId: currentClient._id,
             service: { $in: services },
           })
-            .sort({ completed: 1, dueDate: 1, createdAt: -1 })
-            .limit(500)
+            .select('_id name task title service completed status dueDate createdAt updatedAt')
+            .sort({ updatedAt: -1, createdAt: -1 })
             .lean()
         : Promise.resolve([]),
       availableClientIds.length
@@ -1280,7 +1280,64 @@ const getClientDashboardOverview = async (req, res) => {
             .select('clientId service')
             .lean()
         : Promise.resolve([]),
+      ClientTask.aggregate([
+        { $match: { clientId: currentClient._id } },
+        {
+          $group: {
+            _id: '$service',
+            total: { $sum: 1 },
+            completed: { $sum: { $cond: [{ $eq: ['$completed', true] }, 1, 0] } },
+            inProgress: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $ne: ['$completed', true] },
+                      { $regexMatch: { input: { $ifNull: ['$status', ''] }, regex: /progress/i } }
+                    ]
+                  },
+                  1,
+                  0
+                ]
+              }
+            },
+            open: { $sum: { $cond: [{ $ne: ['$completed', true] }, 1, 0] } },
+            overdue: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $ne: ['$completed', true] },
+                      { $in: [{ $toLower: { $ifNull: ['$status', ''] } }, ['overdue']] }
+                    ]
+                  },
+                  1,
+                  0
+                ]
+              }
+            }
+          }
+        }
+      ]),
     ]);
+
+    let overall = { total: 0, completed: 0, inProgress: 0, open: 0, overdue: 0 };
+    const serviceStatsMap = {};
+    (taskStatsAggregation || []).forEach(item => {
+      overall.total += item.total || 0;
+      overall.completed += item.completed || 0;
+      overall.inProgress += item.inProgress || 0;
+      overall.open += item.open || 0;
+      overall.overdue += item.overdue || 0;
+      serviceStatsMap[item._id] = {
+        total: item.total || 0,
+        completed: item.completed || 0,
+        inProgress: item.inProgress || 0,
+        open: item.open || 0,
+        overdue: item.overdue || 0,
+        progress: item.total ? Math.round(((item.completed || 0) / item.total) * 100) : 0,
+      };
+    });
 
     const clientTaskCountMap = {};
     allAvailableClientTasks.forEach(task => {
@@ -1306,6 +1363,15 @@ const getClientDashboardOverview = async (req, res) => {
         client: currentClient,
         services,
         projectManagers: collectProjectMembers(currentClient, companyUsers),
+        taskStats: {
+          total: overall.total,
+          completed: overall.completed,
+          inProgress: overall.inProgress,
+          open: overall.open,
+          overdue: overall.overdue,
+          pending: Math.max(0, overall.open - overall.overdue),
+        },
+        serviceTaskStats: serviceStatsMap,
         serviceTasks: serviceTasks.map(task => ({
           ...task,
           serviceName: task.service,
