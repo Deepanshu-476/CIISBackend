@@ -173,6 +173,7 @@ const normalizeTaskStatus = (value = "pending") => {
   const normalized = String(value || "pending").trim().toLowerCase();
   if (normalized === "in progress" || normalized === "inprogress") return "in-progress";
   if (normalized === "on hold" || normalized === "onhold") return "onhold";
+  if (normalized === "re-open" || normalized === "re open") return "reopen";
   return normalized;
 };
 
@@ -180,6 +181,7 @@ const toProjectTaskStatus = (value = "pending") => {
   const normalized = normalizeTaskStatus(value);
   if (normalized === "in-progress") return "in progress";
   if (normalized === "onhold") return "on hold";
+  if (normalized === "reopen" || normalized === "re-open") return "reopen";
   return normalized;
 };
 
@@ -2211,7 +2213,7 @@ exports.updateTaskStatus = async (req, res) => {
     }
 
     const allowCompanyAllEdit = isCompanyAllTaskEdit(req);
-    const isOverdueTransitionAllowed = ['in-progress', 'completed', 'onhold', 'cancelled', 'rejected'].includes(nextStatus);
+    const isOverdueTransitionAllowed = ['in-progress', 'completed', 'onhold', 'cancelled', 'rejected', 'reopen'].includes(nextStatus);
 
     if (nextStatus !== "overdue" && normalizedOldStatus === "overdue" && !allowCompanyAllEdit && !isOverdueTransitionAllowed) {
       return res.status(400).json({
@@ -2220,9 +2222,16 @@ exports.updateTaskStatus = async (req, res) => {
       });
     }
 
+    if (normalizedOldStatus === 'completed' && nextStatus !== 'completed' && nextStatus !== 'reopen' && !allowCompanyAllEdit) {
+      return res.status(400).json({
+        success: false,
+        message: "Completed tasks can only be reopened."
+      });
+    }
+
     const isResumedFromHold = (normalizedOldStatus === "onhold" || normalizedOldStatus === "on hold") && nextStatus === "in-progress";
 
-    if (!["overdue", "onhold"].includes(nextStatus) && !isResumedFromHold && !isOverdueTransitionAllowed && isPendingTaskPastDue(task) && !allowCompanyAllEdit) {
+    if (!["overdue", "onhold", "reopen"].includes(nextStatus) && !isResumedFromHold && !isOverdueTransitionAllowed && isPendingTaskPastDue(task) && !allowCompanyAllEdit) {
       if (isPendingTaskPastDue(task)) {
         task.status = "overdue";
         task.updatedAt = new Date();
