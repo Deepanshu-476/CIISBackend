@@ -72,6 +72,62 @@ const mapTaskActivity = task => ({
   status: task.overallStatus || task.status || task.creatorStatus?.status || "pending",
 });
 
+const normalizeDashboardTaskStatus = (task, userId) => {
+  const userStatus = (task.statusByUser || []).find(item => String(item.user) === String(userId));
+  return normalizeProductivityStatus(userStatus?.status || task.overallStatus || task.status || task.creatorStatus?.status || "pending");
+};
+
+const buildDashboardTaskStats = (tasks, userId, todayStart, todayEnd) => {
+  const stats = {total: 0, completed: 0, inProgress: 0, pending: 0, overdue: 0, onHold: 0};
+  const today = {total: 0, completed: 0, inProgress: 0};
+  const now = new Date();
+
+  tasks.forEach(task => {
+    const status = normalizeDashboardTaskStatus(task, userId);
+    if (excludedTaskStatuses.has(status)) return;
+
+    stats.total += 1;
+    if (completedStatuses.has(status)) stats.completed += 1;
+    else if (["in-progress", "inprogress", "reopen"].includes(status)) stats.inProgress += 1;
+    else if (["on-hold", "onhold", "hold"].includes(status)) stats.onHold += 1;
+    else if (status === "overdue" || (task.dueDateTime && new Date(task.dueDateTime) < now && !completedStatuses.has(status))) stats.overdue += 1;
+    else stats.pending += 1;
+
+    const dueDate = task.dueDateTime ? new Date(task.dueDateTime) : null;
+    const updatedAt = task.updatedAt ? new Date(task.updatedAt) : null;
+    const createdAt = task.createdAt ? new Date(task.createdAt) : null;
+    const isDueToday = dueDate && dueDate >= todayStart && dueDate <= todayEnd;
+    const touchedToday = (updatedAt && updatedAt >= todayStart && updatedAt <= todayEnd) || (createdAt && createdAt >= todayStart && createdAt <= todayEnd);
+
+    if (isDueToday) today.total += 1;
+    if ((isDueToday || touchedToday) && completedStatuses.has(status)) today.completed += 1;
+    if ((isDueToday || touchedToday) && ["in-progress", "inprogress", "reopen"].includes(status)) today.inProgress += 1;
+  });
+
+  const focusStats = {
+    dueToday: today.total,
+    inProgress: today.inProgress,
+    completedToday: today.completed,
+    dailyProgress: today.total
+      ? Math.min(100, Math.round(((today.completed + (today.inProgress * 0.5)) / today.total) * 100))
+      : (today.completed > 0 ? 100 : (today.inProgress > 0 ? 50 : 0)),
+  };
+
+  return {taskStats: stats, focusStats};
+};
+
+const buildUpcomingMeetings = (meetings = []) => {
+  const now = new Date();
+  return meetings
+    .map(meeting => ({
+      ...meeting,
+      scheduledAt: new Date(`${meeting.date}T${meeting.time || "00:00"}`),
+    }))
+    .filter(meeting => !Number.isNaN(meeting.scheduledAt.getTime()) && meeting.scheduledAt >= now && String(meeting.status || "").toLowerCase() !== "cancelled")
+    .sort((a, b) => a.scheduledAt - b.scheduledAt)
+    .slice(0, 5);
+};
+
 const getDashboardAttendanceStatus = status => {
   const compact = String(status || "").trim().toUpperCase().replace(/[\s_-]+/g, "");
   const statusMap = {
@@ -308,7 +364,10 @@ const getEmployeeDashboardSummary = async (req, res) => {
       attendance,
       todayAttendance,
       leaves,
-      tasks,
+      recentTasks,
+      dashboardTasks,
+      meetings,
+      projects,
       currentUser,
       branch,
     ] = await Promise.all([
@@ -357,6 +416,31 @@ const getEmployeeDashboardSummary = async (req, res) => {
         .populate("assignedUsers", "name email")
         .sort({updatedAt: -1, createdAt: -1})
         .limit(8)
+        .lean(),
+      EmployeeTask.find({
+        companyCode,
+        isActive: {$ne: false},
+        $or: [
+          {createdBy: userId},
+          {assignedUsers: userId},
+          {"statusByUser.user": userId},
+        ],
+      })
+        .select("createdAt updatedAt dueDateTime completionDate overallStatus status statusByUser statusHistory creatorStatus")
+        .lean(),
+      Meeting.find({
+        companyCode,
+        attendees: userId,
+      })
+        .sort({date: 1, time: 1})
+        .limit(20)
+        .populate("createdBy", "name email")
+        .select("title subject agenda description date time status mode meetingLink link createdBy createdAt")
+        .lean(),
+      Project.find({companyCode})
+        .sort({updatedAt: -1, createdAt: -1})
+        .limit(6)
+        .select("projectName name title tasks updatedAt createdAt")
         .lean(),
       User.findById(userId)
         .select("_id name email employeeId jobRole department employeeType shiftId shiftName shiftType")
@@ -468,11 +552,58 @@ const getEmployeeDashboardSummary = async (req, res) => {
       leavesTaken: getLeaveDatesInMonth(leaves, monthReference),
       holidayDays: holidays.filter(holiday => isSameCalendarMonth(holiday.date, monthReference)).length,
     };
+    const {taskStats, focusStats} = buildDashboardTaskStats(dashboardTasks, userId, todayStart, todayEnd);
+    const upcomingMeetings = buildUpcomingMeetings(meetings);
+    const productivityStart = new Date(todayStart.getTime() - (6 * DAY_MS));
+    const excludedDates = new Set(holidays.map(item => dateKey(item.date)));
+    leaves.forEach(leave => {
+      if (String(leave.status || "").trim().toUpperCase() !== "APPROVED") return;
+      for (let cursor = startOfDay(leave.startDate); cursor <= endOfDay(leave.endDate); cursor = new Date(cursor.getTime() + DAY_MS)) {
+        excludedDates.add(dateKey(cursor));
+      }
+    });
+    const productivityOverall = calculateProductivityMetrics({
+      start: productivityStart,
+      end: todayEnd,
+      attendance,
+      tasks: dashboardTasks,
+      excludedDates,
+      userId,
+    });
+    const productivityBuckets = buildProductivityBuckets(productivityStart, todayEnd, "weekly");
+    const productivitySeries = productivityBuckets.buckets.map(bucket => ({
+      ...bucket,
+      ...calculateProductivityMetrics({...bucket, attendance, tasks: dashboardTasks, excludedDates, userId}),
+    })).map(item => ({
+      date: item.start,
+      label: item.label,
+      score: item.score,
+      hasData: item.hasData,
+      breakdown: item.breakdown,
+      counts: item.counts,
+    }));
+    const [productivityLabel, productivityTone] = productivityBand(productivityOverall.score);
 
     return res.status(200).json({
       success: true,
       data: {
         monthlyStats,
+        focusStats,
+        taskStats,
+        productivity: {
+          period: "weekly",
+          from: dateKey(productivityStart),
+          to: dateKey(todayEnd),
+          granularity: productivityBuckets.granularity,
+          score: productivityOverall.score,
+          label: productivityLabel,
+          tone: productivityTone,
+          hasData: productivityOverall.hasData,
+          limitedData: [productivityOverall.breakdown.taskCompletion, productivityOverall.breakdown.onTimeDelivery, productivityOverall.breakdown.attendance].filter(Number.isFinite).length < 3,
+          breakdown: productivityOverall.breakdown,
+          counts: productivityOverall.counts,
+          series: productivitySeries,
+        },
         dashboardConfig: scopedDashboardConfig,
         jobRoles: jobRoles.map(normalizeRoleForDashboard),
         currentUser: {
@@ -483,8 +614,10 @@ const getEmployeeDashboardSummary = async (req, res) => {
         attendance,
         attendanceStatus,
         leaves,
-        recentTasks: tasks,
-        recentActivity: tasks.map(mapTaskActivity),
+        recentTasks,
+        recentActivity: recentTasks.map(mapTaskActivity),
+        upcomingMeetings,
+        projects,
       },
     });
   } catch (error) {
