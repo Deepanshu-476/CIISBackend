@@ -395,9 +395,11 @@ const normalizeProjectMember = person => {
   if (!name) return null;
   return {
     _id: typeof person === 'object' && person ? person._id || person.id || person.userId || person.employeeId || name : name,
-    name,
+    name: typeof person === 'object' && person?.name ? person.name : name,
     email: getPersonEmail(person),
-    role: getPersonRole(person)
+    phone: typeof person === 'object' && person ? person.phone || person.mobile || '' : '',
+    role: getPersonRole(person),
+    avatar: typeof person === 'object' && person ? person.avatar || person.profileImage || person.image || '' : '',
   };
 };
 
@@ -417,20 +419,26 @@ const findUserForAssignedMember = (member, users = []) => {
     const userId = String(user._id || user.id || user.userId || user.employeeId || '').toLowerCase();
     const userName = String(user.name || user.fullName || user.employeeName || '').trim().toLowerCase();
     const userEmail = String(user.email || user.employeeEmail || '').trim().toLowerCase();
-    return (
-      (memberId && userId && String(memberId).toLowerCase() === userId) ||
-      (memberEmail && userEmail && memberEmail === userEmail) ||
-      (memberName && userName && memberName === userName)
-    );
+    if (memberId && userId && String(memberId).toLowerCase() === userId) return true;
+    if (memberEmail && userEmail && memberEmail === userEmail) return true;
+    if (memberName && userName) {
+      if (memberName === userName) return true;
+      const cleanMember = memberName.replace(/[^a-z0-9]/g, '');
+      const cleanUser = userName.replace(/[^a-z0-9]/g, '');
+      if (cleanMember.length >= 3 && (cleanUser.startsWith(cleanMember) || cleanMember.startsWith(cleanUser))) {
+        return true;
+      }
+    }
+    return false;
   });
 };
 
 const collectProjectMembers = (currentClient, users = []) => {
   const membersMap = new Map();
-  [currentClient?.projectManagers, currentClient?.projectManager].forEach(group => {
+  [currentClient?.projectManagers, currentClient?.projectManager, currentClient?.accountManager, currentClient?.assignedTo].forEach(group => {
     if (Array.isArray(group)) {
       group.forEach(person => addUniqueProjectMember(membersMap, findUserForAssignedMember(person, users) || person));
-    } else {
+    } else if (group) {
       addUniqueProjectMember(membersMap, findUserForAssignedMember(group, users) || group);
     }
   });
