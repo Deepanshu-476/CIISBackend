@@ -167,6 +167,10 @@ exports.create = async (req, res) => {
   try {
     const company = getCompanyId(req);
     if (!company) return res.status(400).json({ success: false, message: "Company is required." });
+    if (!req.body.sortOrder || isNaN(Number(req.body.sortOrder)) || Number(req.body.sortOrder) < 1) {
+      const highest = await SalaryComponent.findOne({ company }).sort({ sortOrder: -1 }).select("sortOrder").lean();
+      req.body.sortOrder = (highest?.sortOrder || 0) + 1;
+    }
     const payload = normalizePayload(req.body);
     const validationError = validatePayload(payload);
     if (validationError) return res.status(400).json({ success: false, message: validationError });
