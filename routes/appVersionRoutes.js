@@ -29,7 +29,7 @@ const getFallbackSettings = () => {
   return {
     ios: {
       latestVersionName: iosLatestVersionName,
-      latestVersionCode: parseNumber(process.env.IOS_LATEST_BUILD_NUMBER, 52),
+      latestVersionCode: parseNumber(process.env.IOS_LATEST_BUILD_NUMBER, 53),
       minimumVersionCode: parseNumber(process.env.IOS_MIN_BUILD_NUMBER, 1),
       forceUpdate: process.env.IOS_FORCE_UPDATE === 'true',
       updateEnabled: process.env.IOS_UPDATE_ENABLED === 'true',
