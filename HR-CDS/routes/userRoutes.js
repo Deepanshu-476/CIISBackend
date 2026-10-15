@@ -191,6 +191,13 @@ router.get('/test', (req, res, next) => {
   }
 });
 
+router.get('/profile', (req, res, next) => {
+  req.params.id = req.user._id.toString();
+  return require('../controllers/profileController').getUserProfile(req, res, next);
+});
+router.get('/profile/:id', (req, res, next) => {
+  return require('../controllers/profileController').getUserProfile(req, res, next);
+});
 router.get('/:id', userController.getUser);
 router.put('/profile-update/:id', userController.updateSelfUser);
 router.put('/:id', userController.updateUser);

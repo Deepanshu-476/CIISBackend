@@ -11,7 +11,7 @@ const companyCode = String(process.argv.find(value => value.startsWith("--compan
 if (!companyCode) throw new Error("Use --company=COMPANY_CODE.");
 const round = value => Math.round(Number(value || 0) * 100) / 100;
 const employeeKey = employee => String(employee?.user?._id || employee?.user || employee?._id || "");
-
+  
 async function main() {
   await mongoose.connect(process.env.MONGO_URI);
   const company = await Company.findOne({ companyCode: companyCode.toUpperCase() }).select("_id companyCode").lean();

@@ -105,10 +105,14 @@ const supportTicketSchema = new mongoose.Schema({
 
 supportTicketSchema.pre("save", async function (next) {
   if (!this.ticketNumber) {
-    const count = await mongoose.model("SupportTicket").countDocuments({
-      companyCode: this.companyCode,
-    });
-    this.ticketNumber = `SUP-${String(count + 1001).padStart(4, "0")}`;
+    const code = (this.companyCode || "SUP").replace(/[^a-zA-Z0-9]/g, "").slice(0, 4).toUpperCase();
+    let num = (await mongoose.model("SupportTicket").countDocuments({ companyCode: this.companyCode })) + 1001;
+    let candidate = `${code}-${String(num).padStart(4, "0")}`;
+    while (await mongoose.model("SupportTicket").exists({ ticketNumber: candidate })) {
+      num += 1;
+      candidate = `${code}-${String(num).padStart(4, "0")}`;
+    }
+    this.ticketNumber = candidate;
   }
 
   if (!this.slaDueAt) {
