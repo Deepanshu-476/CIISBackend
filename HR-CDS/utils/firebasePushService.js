@@ -265,24 +265,28 @@ exports.sendPushToUsers = async ({userIds, title, body, data = {}}) => {
 
   for (let b = 0; b < batches.length; b++) {
     const batchTokens = batches[b];
+    const isCall = String(data.type || '').startsWith('call:');
+    const isIncomingCall = data.type === 'call:incoming';
     const message = {
       tokens: batchTokens,
-      notification: {
+      ...(!isCall && {notification: {
         title: title || 'New notification',
         body: body || '',
-      },
+      }}),
       data: stringifyData(data),
       android: {
         priority: 'high',
-        notification: {
+        ...(isCall ? {ttl: 45000} : {notification: {
           sound: 'default',
           channelId: 'ciis_high_priority',
-        },
+        }}),
       },
       apns: {
         payload: {
           aps: {
-            sound: 'default',
+            ...(!isCall || isIncomingCall ? {sound: 'default'} : {}),
+            ...(isCall && {contentAvailable: true}),
+            ...(isIncomingCall && {alert: {title, body}}),
           },
         },
       },

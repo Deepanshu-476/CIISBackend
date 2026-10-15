@@ -2024,13 +2024,14 @@ const getClientTasks = async (req, res) => {
               ? { updatedAt: -1, createdAt: -1 }
               : { completed: 1, dueDate: 1, createdAt: -1 }));
 
+    const taskQuery = Task.find(filter);
+    if (req.query.compact === 'true') {
+      taskQuery.select('-remarks -activityLogs');
+    } else {
+      taskQuery.populate('remarks.user', 'name email');
+    }
     const [tasks, total] = await Promise.all([
-      Task.find(filter)
-        .populate('remarks.user', 'name email')
-        .sort(sortObj)
-        .skip(skip)
-        .limit(limit)
-        .lean(),
+      taskQuery.sort(sortObj).skip(skip).limit(limit).lean(),
       Task.countDocuments(filter)
     ]);
 
@@ -2879,7 +2880,7 @@ const getTaskStats = async (req, res) => {
     ];
     const notOverdueExpression = { $not: [{ $and: overdueExpression }] };
 
-    const stats = await Task.aggregate([
+    const stats = req.query.summaryOnly === 'true' ? [] : await Task.aggregate([
       { $match: { clientId: new mongoose.Types.ObjectId(clientId) } },
       {
         $group: {
