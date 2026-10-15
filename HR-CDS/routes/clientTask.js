@@ -185,6 +185,19 @@ router.get('/:taskId/debug', (req, res, next) => {
 }, authMiddleware, taskController.debugActivityLogs);
 
 
+router.get('/', authMiddleware, (req, res, next) => {
+  if (req.query.clientId && req.query.service) {
+    req.params.clientId = req.query.clientId;
+    req.params.service = req.query.service;
+    return taskController.getTasksByClientService(req, res, next);
+  }
+  if (req.query.clientId) {
+    req.params.clientId = req.query.clientId;
+    return taskController.getClientTasks(req, res, next);
+  }
+  return res.status(400).json({ success: false, message: 'clientId parameter is required' });
+});
+
 router.get('/client/:clientId/service/:service', authMiddleware, taskController.getTasksByClientService);
 router.post('/client/:clientId/service/:service', authMiddleware, taskController.addTask);
 router.get('/summary/bulk', authMiddleware, taskController.getClientTaskSummaries);
