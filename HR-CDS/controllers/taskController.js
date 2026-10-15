@@ -2972,11 +2972,7 @@ const getTaskProjectName = (task) => String(task?.projectName || task?.project?.
 const getTaskClientName = (task) => String(task?.clientName || task?.client?.name || task?.client?.companyName || task?.clientId?.client || task?.clientId?.name || task?.clientId?.company || '').trim();
 
 const filterUserTasks = (tasks, query) => {
-<<<<<<< HEAD
-  const { period, search, status, priority, project, client, taskType } = query;
-=======
   const { period, search, status, priority, taskType, project, client } = query;
->>>>>>> 3dea52965343424aa79ddb3306842ffad70fe21c
   const fromDate = query.fromDate || query.startDate;
   const toDate = query.toDate || query.endDate;
   const range = getCleanTaskDateRange({ period: fromDate || toDate ? 'all' : period, fromDate, toDate });
@@ -3014,15 +3010,6 @@ const filterUserTasks = (tasks, query) => {
       if (t.priority !== priority.toLowerCase()) return false;
     }
 
-<<<<<<< HEAD
-    if (project && project !== 'all' && String(t.projectName || '') !== String(project)) return false;
-    if (client && client !== 'all' && String(t.clientName || '') !== String(client)) return false;
-    if (taskType && taskType !== 'all') {
-      const source = String(t.taskSource || t.source || '').toLowerCase();
-      const matchesPersonal = source === 'self' || source === 'personal';
-      const matchesWork = ['assigned', 'project', 'client'].includes(source);
-      if ((taskType === 'personal' && !matchesPersonal) || (taskType === 'work' && !matchesWork)) return false;
-=======
     if (project && project !== 'all') {
       if (getTaskProjectName(t) !== String(project).trim()) return false;
     }
@@ -3036,7 +3023,6 @@ const filterUserTasks = (tasks, query) => {
       const actualType = getTaskFilterType(t);
       if (requestedType === 'personal' && actualType !== 'personal') return false;
       if (requestedType === 'work' && actualType !== 'work') return false;
->>>>>>> 3dea52965343424aa79ddb3306842ffad70fe21c
     }
 
 
@@ -3440,16 +3426,8 @@ exports.getUserAllTasksPaginated = async (req, res) => {
     }
     const totalClockedSeconds = workWindow.summary.totalClockedSeconds || 0;
     const untrackedSeconds = Math.max(0, totalClockedSeconds - dayTrackedTaskSeconds);
-<<<<<<< HEAD
-    const filterOptions = {
-      projects: [...new Set(allTasksWithWorkTime.map(task => String(task.projectName || '').trim()).filter(Boolean))].sort(),
-      clients: [...new Set(allTasksWithWorkTime.map(task => String(task.clientName || '').trim()).filter(Boolean))].sort()
-    };
-    const filtered = filterUserTasks(allTasksWithWorkTime, req.query);
-=======
     const statsQuery = { ...req.query, status: 'all' };
     const statsBaseTasks = filterUserTasks(allTasksWithWorkTime, statsQuery);
->>>>>>> 3dea52965343424aa79ddb3306842ffad70fe21c
 
     const counts = {
       total: statsBaseTasks.length,

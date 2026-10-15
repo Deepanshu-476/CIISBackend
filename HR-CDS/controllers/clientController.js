@@ -1322,7 +1322,7 @@ const getClientDashboardStats = async (req, res) => {
       return acc;
     }, { total: 0, completed: 0, pending: 0, overdue: 0, 'in-progress': 0, onhold: 0, byService: {} });
 
-    return res.json({ success: true, stats });
+    return res.json({ success: true, stats, data: stats });
   } catch (error) {
     console.error('❌ Error fetching client dashboard stats:', error);
     return res.status(500).json({ success: false, message: 'Failed to fetch client dashboard stats' });
