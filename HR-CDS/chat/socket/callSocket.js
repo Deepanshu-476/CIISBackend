@@ -77,21 +77,31 @@ const isUserOnline = (io, userId) => {
     return false;
 };
 
-const isUserAvailableForCall = async (io, userId) => {
-    if (isUserOnline(io, userId)) return true;
-    const normalizedUserId = getUserId(userId);
-    if (!normalizedUserId) return false;
+// A signed-in device can be woken by push even when it has no live socket.
+const isUserAvailableForCall = async (_io, userId, companyId) => {
+    if (!getUserId(userId) || !companyId) return false;
     try {
-        const u = await User.findById(normalizedUserId).select("isOnline lastSeen isActive").lean();
-        if (u && u.isActive !== false) {
-            if (u.isOnline) return true;
-            if (u.lastSeen) {
-                const diff = Date.now() - new Date(u.lastSeen).getTime();
-                if (diff < 15 * 60 * 1000) return true;
-            }
-        }
-    } catch (_) {}
-    return false;
+        return Boolean(await User.findOne({
+            _id: getUserId(userId), company: companyId, isActive: {$ne: false},
+        }).select("_id").lean());
+    } catch (_) { return false; }
+};
+
+const incomingPayload = (room, userId) => ({
+    callId: room.callId,
+    conversationId: room.conversationId,
+    fromUserId: room.hostUserId,
+    fromUser: room.participants.get(room.hostUserId)?.user,
+    participantIds: Array.from(room.participants.keys()),
+    title: room.title,
+    isGroupCall: room.isGroupCall,
+    callType: room.callType,
+    expiresAt: room.participants.get(userId)?.expiresAt || room.expiresAt,
+});
+
+const clearCallPush = (userIds, callId) => {
+    if (!userIds.length) return;
+    sendPushToUsers({userIds, data: {type: "call:cancelled", callId}}).catch(() => {});
 };
 
 const getParticipantIds = (data = {}) => {
@@ -119,6 +129,9 @@ const emitToJoinedParticipants = (io, room, eventName, payload, exceptUserId) =>
 
 const emitToCallParticipants = (io, room, eventName, payload, exceptUserId) => {
     if (!room) return;
+    if (["call:ended", "call:missed"].includes(eventName)) {
+        clearCallPush(Array.from(room.participants.keys()).filter(id => id !== exceptUserId), room.callId);
+    }
     room.participants.forEach((participant, userId) => {
         if (userId === exceptUserId || !["joined", "invited"].includes(participant.status)) return;
         emitToUser(io, userId, eventName, payload);
@@ -162,7 +175,7 @@ const callSocket = (io, socket) => {
         const availabilityChecks = await Promise.all(
             participantIds.map(async id => ({
                 id,
-                available: await isUserAvailableForCall(io, id),
+                available: await isUserAvailableForCall(io, id, socket.companyId),
             }))
         );
         const availableIds = availabilityChecks.filter(item => item.available).map(item => item.id);
@@ -175,7 +188,7 @@ const callSocket = (io, socket) => {
                 available,
                 availableIds,
                 unavailableIds,
-                reason: available ? "" : "User is currently offline",
+                reason: available ? "" : "Call recipient is unavailable",
             });
         }
     });
@@ -192,17 +205,21 @@ const callSocket = (io, socket) => {
         const availabilityChecks = await Promise.all(
             participantIds.map(async id => ({
                 id,
-                available: await isUserAvailableForCall(io, id),
+                available: await isUserAvailableForCall(io, id, socket.companyId),
             }))
         );
         const targetParticipantIds = availabilityChecks.filter(item => item.available).map(item => item.id);
 
         if (targetParticipantIds.length === 0) {
-            emitCallUnavailable(socket, data, "User is currently offline");
+            emitCallUnavailable(socket, data, "Call recipient is unavailable");
             return;
         }
 
         const callId = data.callId?.toString();
+        if (!callId || activeCalls.has(callId)) {
+            emitCallUnavailable(socket, data, "Invalid or duplicate call");
+            return;
+        }
         const callerUser = normalizeCallerUser(socket, data);
         const isGroupCall = Boolean(data.isGroupCall || participantIds.length > 1);
         const callTitle = isGroupCall
@@ -212,6 +229,8 @@ const callSocket = (io, socket) => {
         const room = {
             callId,
             callType,
+            conversationId: data.conversationId,
+            expiresAt: Date.now() + CALL_RING_TIMEOUT_MS,
             hostUserId: socket.userId,
             title: callTitle,
             isGroupCall,
@@ -227,6 +246,7 @@ const callSocket = (io, socket) => {
         targetParticipantIds.forEach(userId => {
             room.participants.set(userId, {
                 status: "invited",
+                expiresAt: room.expiresAt,
                 user: null,
             });
         });
@@ -258,6 +278,8 @@ const callSocket = (io, socket) => {
                 title: callTitle,
                 isGroupCall,
                 callType,
+                conversationId: room.conversationId,
+                expiresAt: room.expiresAt,
             });
         });
 
@@ -273,6 +295,11 @@ const callSocket = (io, socket) => {
                     callType,
                     fromUserId: socket.userId,
                     title: callTitle,
+                    fromUser: callerUser,
+                    conversationId: data.conversationId,
+                    participantIds: [socket.userId, ...targetParticipantIds],
+                    isGroupCall,
+                    expiresAt: room.expiresAt,
                 },
             }).catch(() => {});
         } catch (_) {}
@@ -285,15 +312,28 @@ const callSocket = (io, socket) => {
         });
     });
 
+    // Restore an invitation after the notification wakes a cold-started app.
+    socket.on("call:sync-incoming", (data = {}, callback) => {
+        if (typeof callback !== "function") return;
+        const room = data.callId ? getCallRoom(data.callId) : Array.from(activeCalls.values())
+            .find(item => item.participants.get(socket.userId)?.status === "invited");
+        const participant = room?.participants.get(socket.userId);
+        callback(room && participant?.status === "invited" && (participant.expiresAt || room.expiresAt) > Date.now()
+            ? {success: true, call: incomingPayload(room, socket.userId)}
+            : {success: false, reason: "Call is no longer ringing"});
+    });
+
     socket.on("call:accept", (data = {}) => {
         const callId = data.callId?.toString();
         const room = getCallRoom(callId);
 
-        if (!room) {
+        const invited = room?.participants.get(socket.userId);
+        if (!room || invited?.status !== "invited" || (invited.expiresAt || room.expiresAt) <= Date.now()) {
             emitCallUnavailable(socket, data, "Call is no longer active");
             return;
         }
 
+        clearCallPush([socket.userId], callId);
         const participantUser = getPublicUser(socket.user);
         const existingJoinedParticipants = Array.from(room.participants.entries())
             .filter(([userId, participant]) => userId !== socket.userId && participant.status === "joined")
@@ -353,14 +393,14 @@ const callSocket = (io, socket) => {
         const availabilityChecks = await Promise.all(
             requestedIds.map(async id => ({
                 id,
-                available: await isUserAvailableForCall(io, id),
+                available: await isUserAvailableForCall(io, id, socket.companyId),
             }))
         );
         const targetParticipantIds = availabilityChecks.filter(item => item.available).map(item => item.id);
         const unavailableIds = requestedIds.filter(userId => !targetParticipantIds.includes(userId));
 
         if (targetParticipantIds.length === 0) {
-            emitCallUnavailable(socket, data, "Selected users are currently offline");
+            emitCallUnavailable(socket, data, "Selected call recipients are unavailable");
             return;
         }
 
@@ -375,6 +415,7 @@ const callSocket = (io, socket) => {
         targetParticipantIds.forEach(userId => {
             room.participants.set(userId, {
                 status: "invited",
+                expiresAt: Date.now() + CALL_RING_TIMEOUT_MS,
                 user: null,
             });
         });
@@ -400,9 +441,14 @@ const callSocket = (io, socket) => {
                 data: {
                     type: "call:incoming",
                     callId,
-                    callType,
+                    callType: room.callType,
                     fromUserId: socket.userId,
                     title: callTitle,
+                    fromUser: inviterUser,
+                    conversationId: room.conversationId,
+                    participantIds: [...joinedIds, ...targetParticipantIds],
+                    isGroupCall: true,
+                    expiresAt: Date.now() + CALL_RING_TIMEOUT_MS,
                 },
             }).catch(() => {});
         } catch (_) {}
@@ -419,6 +465,8 @@ const callSocket = (io, socket) => {
         const callId = data.callId?.toString();
         const room = getCallRoom(callId);
 
+        if (!room?.participants.has(socket.userId)) return;
+        clearCallPush([socket.userId], callId);
         if (room?.participants.has(socket.userId)) {
             room.participants.set(socket.userId, {
                 ...room.participants.get(socket.userId),
@@ -472,6 +520,8 @@ const callSocket = (io, socket) => {
         const callId = data.callId?.toString();
         const room = getCallRoom(callId);
 
+        if (!room?.participants.has(socket.userId)) return;
+        clearCallPush([socket.userId], callId);
         if (room?.participants.has(socket.userId)) {
             room.participants.set(socket.userId, {
                 ...room.participants.get(socket.userId),
@@ -515,7 +565,12 @@ const callSocket = (io, socket) => {
             if (isUserOnline(io, socket.userId)) return;
 
             activeCalls.forEach((room, callId) => {
-                if (!room.participants.has(socket.userId)) return;
+                if (room.participants.get(socket.userId)?.status !== "joined") return;
+                if (room.hostUserId === socket.userId) {
+                    emitToCallParticipants(io, room, "call:ended", {callId, fromUserId: socket.userId, reason: "Disconnected"}, socket.userId);
+                    closeCallRoom(callId);
+                    return;
+                }
 
                 room.participants.set(socket.userId, {
                     ...room.participants.get(socket.userId),
