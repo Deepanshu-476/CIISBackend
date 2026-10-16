@@ -19,7 +19,7 @@ const getActorName = (req) => req.user?.name || req.user?.fullName || req.user?.
 
 const populateQuery = (query) =>
   query
-    .populate("user", "name email department jobRole employeeId empId phone profileImage status dateOfJoining bankName accountNumber ifsc bankHolderName panCard panNo pan aadharCard aadharNo aadhar aadhaar aadhaarCard dob")
+    .populate("user", "name email department jobRole employeeId empId phone profileImage status employeeStatus isActive registrationStatus dateOfJoining bankName accountNumber ifsc bankHolderName panCard panNo pan aadharCard aadharNo aadhar aadhaar aadhaarCard dob")
     .populate("salaryStructure", "name code salaryType salaryInputType effectiveFrom status description components")
     .populate("components.component", "name code type proRata taxable grossSalary pfWage esiWage ptWage")
     .populate("createdBy", "name email")
@@ -289,9 +289,19 @@ exports.payrollPreview = async (req, res) => {
     const monthIndex = Number(match[2]) - 1;
     const start = new Date(Date.UTC(year, monthIndex, 1) - (330 * 60 * 1000));
     const end = new Date(Date.UTC(year, monthIndex + 1, 1) - (330 * 60 * 1000) - 1);
-    const assignments = await populateQuery(EmployeeSalary.find({ company, status: "active" }))
+    const rawAssignments = await populateQuery(EmployeeSalary.find({ company, status: "active" }))
       .populate("components.component", "name code type proRata")
       .lean();
+    const assignments = rawAssignments.filter(item => {
+      const u = item.user;
+      if (!u) return false;
+      if (u.isActive === false || u.isActive === "false") return false;
+      const st = String(u.status || u.employeeStatus || "").toLowerCase().trim();
+      if (["inactive", "terminated", "resigned", "suspended"].includes(st)) return false;
+      const regStatus = String(u.registrationStatus || "").toLowerCase().trim();
+      if (regStatus === "rejected") return false;
+      return true;
+    });
     const userIds = assignments.map(item => item.user?._id || item.user).filter(Boolean);
     const departmentIds = [...new Set(assignments.map(item => item.user?.department).filter(id => mongoose.isValidObjectId(id)).map(String))];
 
@@ -1441,10 +1451,14 @@ exports.list = async (req, res) => {
         $and: [
           companyFilter,
           { companyRole: { $not: /^client$/i } },
-          { $or: [{ isSuperAdmin: { $ne: true } }, { isSuperAdmin: { $exists: false } }] }
+          { $or: [{ isSuperAdmin: { $ne: true } }, { isSuperAdmin: { $exists: false } }] },
+          { isActive: { $ne: false } },
+          { status: { $not: /^(inactive|terminated|resigned|suspended)$/i } },
+          { employeeStatus: { $not: /^(inactive|terminated|resigned|suspended)$/i } },
+          { registrationStatus: { $not: /^rejected$/i } }
         ]
       })
-        .select("name email department jobRole designation employeeId empId phone profileImage status dateOfJoining bankName accountNumber ifsc bankHolderName panCard panNo pan aadharCard aadharNo aadhar dob")
+        .select("name email department jobRole designation employeeId empId phone profileImage status employeeStatus isActive registrationStatus dateOfJoining bankName accountNumber ifsc bankHolderName panCard panNo pan aadharCard aadharNo aadhar dob")
         .lean(),
       Department.find(company ? { $or: [{ company }, ...(mongoose.isValidObjectId(company) ? [{ company: new mongoose.Types.ObjectId(company) }] : [])] } : {}).select("name").lean(),
       JobRole.find(company ? { $or: [{ company }, ...(mongoose.isValidObjectId(company) ? [{ company: new mongoose.Types.ObjectId(company) }] : [])] } : {})

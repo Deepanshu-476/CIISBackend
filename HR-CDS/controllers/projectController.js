@@ -4,7 +4,7 @@ const path = require("path");
 const fs = require("fs");
 const sharp = require("sharp");
 const { notifyDirectUsers } = require("../utils/systemNotificationService");
-const { enqueueCompletionJob } = require("../utils/backgroundJobQueue");
+const { enqueueCompletionJob, enqueueBackgroundJob } = require("../utils/backgroundJobQueue");
 const { sendEmail } = require("../../utils/sendEmail");
 const { normalizeTaskReminderSettings } = require("../utils/taskReminderSettings");
 const User = require("../../models/User");
@@ -289,20 +289,21 @@ const hasProjectAccess = (project, userId, userRole, user = {}) => {
     return false;
   }
 
-
   if (isProjectAdmin({ ...user, role: userRole || user.role })) {
     return true;
   }
 
-
-  const isUserInProject = project.users.some(user =>
+  const isUserInProject = (project.users || []).some(user =>
     idsEqual(user, userId)
   );
 
-
   const isCreator = idsEqual(project.createdBy, userId);
 
-  return isUserInProject || isCreator;
+  const hasAssignedTask = (project.tasks || []).some(task =>
+    isTaskAssignedToUser(task, userId)
+  );
+
+  return isUserInProject || isCreator || hasAssignedTask;
 };
 
 const idsEqual = (left, right) => {
@@ -718,13 +719,22 @@ exports.listProjects = async (req, res) => {
 
 
     if (!isProjectAdmin(req.user)) {
+      const userObjId = mongoose.Types.ObjectId.isValid(req.user.id) ? new mongoose.Types.ObjectId(req.user.id) : null;
       query = {
         $and: [
           query,
           {
             $or: [
               { users: req.user.id },
-              { createdBy: req.user.id }
+              { createdBy: req.user.id },
+              { "tasks.assignedTo": req.user.id },
+              { "tasks.assignedUsers": req.user.id },
+              ...(userObjId ? [
+                { users: userObjId },
+                { createdBy: userObjId },
+                { "tasks.assignedTo": userObjId },
+                { "tasks.assignedUsers": userObjId },
+              ] : [])
             ]
           }
         ]
@@ -1017,7 +1027,9 @@ exports.updateProject = async (req, res) => {
       void 0;
 
 
-      const project = await Project.findById(id);
+      const project = await Project.findById(id)
+        .select('projectName users createdBy company companyCode branch')
+        .lean();
       if (!project) {
         return res.status(404).json({
           success: false,
@@ -1367,6 +1379,7 @@ exports.addTask = async (req, res) => {
       const safeTitle = title?.trim() || "Untitled Task";
       const now = new Date();
       const task = {
+        _id: new mongoose.Types.ObjectId(),
         title: safeTitle,
         description: description?.trim() || "",
         priority: priority?.toLowerCase(),
@@ -1406,10 +1419,23 @@ exports.addTask = async (req, res) => {
       task.activityLogs = [activityLog];
 
 
-      project.tasks.push(task);
-      await project.save();
+      const updateResult = await Project.updateOne(
+        { _id: id },
+        {
+          $push: { tasks: task },
+          $set: { updatedAt: now }
+        },
+        { runValidators: true }
+      );
 
-      const createdTask = project.tasks[project.tasks.length - 1];
+      if (!updateResult.modifiedCount) {
+        return res.status(500).json({
+          success: false,
+          message: "Task could not be added"
+        });
+      }
+
+      const createdTask = task;
 
       if (assignedUserIds.length) {
         const assignedUsers = await User.find({ _id: { $in: assignedUserIds } })
@@ -1426,33 +1452,44 @@ exports.addTask = async (req, res) => {
           createdBy: req.user.id
         };
 
-        await project.addNotification(notification);
+        enqueueBackgroundJob(async () => {
+          const results = await Promise.allSettled([
+            Project.updateOne(
+              { _id: project._id },
+              { $push: { notifications: notification } }
+            ),
+            notifyDirectUsers({
+              userIds: assignedUserIds,
+              targetPath: '/ciisUser/task-management',
+              type: 'project_task_assigned',
+              title: 'New Project Task',
+              message: `${req.user.name} assigned you task "${safeTitle}" in project "${project.projectName}"`,
+              actor: req.user.id,
+              data: {
+                projectId: project._id,
+                taskId: createdTask._id,
+                title: safeTitle,
+                projectName: project.projectName,
+              },
+              priority: priority?.toLowerCase() || 'medium',
+            }),
+            ...assignedUsers.map(user =>
+            sendProjectTaskAssignmentEmail({
+              user,
+              actorName: req.user.name,
+              taskTitle: safeTitle,
+              projectName: project.projectName,
+              dueDate: createdTask.dueDate
+            })
+            )
+          ]);
 
-        await notifyDirectUsers({
-          userIds: assignedUserIds,
-          targetPath: '/ciisUser/task-management',
-          type: 'project_task_assigned',
-          title: 'New Project Task',
-          message: `${req.user.name} assigned you task "${safeTitle}" in project "${project.projectName}"`,
-          actor: req.user.id,
-          data: {
-            projectId: project._id,
-            taskId: createdTask._id,
-            title: safeTitle,
-            projectName: project.projectName,
-          },
-          priority: priority?.toLowerCase() || 'medium',
+          results.forEach(result => {
+            if (result.status === 'rejected') {
+              console.error('Project task create background notification failed:', result.reason);
+            }
+          });
         });
-
-        await Promise.allSettled(assignedUsers.map(user =>
-          sendProjectTaskAssignmentEmail({
-            user,
-            actorName: req.user.name,
-            taskTitle: safeTitle,
-            projectName: project.projectName,
-            dueDate: createdTask.dueDate
-          })
-        ));
       }
 
       void 0;
@@ -1461,7 +1498,7 @@ exports.addTask = async (req, res) => {
         success: true,
         message: "Task added successfully",
         task: {
-          ...(typeof createdTask.toObject === 'function' ? createdTask.toObject() : createdTask),
+          ...createdTask,
           pdfFile: normalizeTaskPdfFile(createdTask, project)
         }
       });
@@ -2030,12 +2067,17 @@ exports.getTaskActivityLogs = async (req, res) => {
   try {
     const { projectId, taskId } = req.params;
 
-    void 0;
-    void 0;
-    void 0;
-    void 0;
-
-    const project = await Project.findById(projectId);
+    const project = await Project.findOne(
+      { _id: projectId, "tasks._id": taskId },
+      {
+        projectName: 1,
+        company: 1,
+        companyCode: 1,
+        users: 1,
+        createdBy: 1,
+        tasks: { $elemMatch: { _id: taskId } }
+      }
+    ).lean();
     if (!project) {
       return res.status(404).json({
         success: false,
@@ -2051,7 +2093,7 @@ exports.getTaskActivityLogs = async (req, res) => {
       });
     }
 
-    const task = project.tasks.id(taskId);
+    const task = Array.isArray(project.tasks) ? project.tasks[0] : null;
     if (!task) {
       return res.status(404).json({
         success: false,
@@ -2059,19 +2101,17 @@ exports.getTaskActivityLogs = async (req, res) => {
       });
     }
 
-
-    await Project.populate(task, {
-      path: 'activityLogs.performedBy',
-      select: 'name email'
-    });
-
-    void 0;
+    const performerIds = [...new Set((task.activityLogs || [])
+      .map(entry => normalizeId(entry.performedBy))
+      .filter(Boolean))];
+    const performers = performerIds.length
+      ? await User.find({ _id: { $in: performerIds } }).select('name email').lean()
+      : [];
+    const performersById = new Map(performers.map(user => [String(user._id), user]));
 
     const activityLogs = (task.activityLogs || []).map((entry) => {
-      const log = typeof entry.toObject === 'function' ? entry.toObject() : entry;
-      const actor = log.performedBy && typeof log.performedBy === 'object'
-        ? log.performedBy
-        : null;
+      const log = entry || {};
+      const actor = performersById.get(normalizeId(log.performedBy)) || null;
 
       return {
         ...log,

@@ -572,29 +572,32 @@ exports.getAllMyTaskViews = async (req, res) => {
       fetchAssignedProjectTaskList
     } = require('./taskHelper');
 
-    const [personal, assigned, client, project] = await Promise.all([
-      fetchPersonalTaskList(req),
-      fetchAssignedToMeTaskList(req),
-      fetchAssignedClientTaskList(req),
-      fetchAssignedProjectTaskList(req)
-    ]);
     const requestedView = String(req.query.view || req.query.taskType || req.query.type || 'all').trim().toLowerCase();
-    const viewMap = {
-      all: [...personal, ...assigned, ...client, ...project],
-      self: personal,
-      personal,
-      'my-personal-task': personal,
-      'my-personal-tasks': personal,
-      assigned,
-      'assigned-to-me': assigned,
-      client,
-      'client-tasks': client,
-      project,
-      'project-tasks': project
+    const fetchers = {
+      self: fetchPersonalTaskList,
+      personal: fetchPersonalTaskList,
+      'my-personal-task': fetchPersonalTaskList,
+      'my-personal-tasks': fetchPersonalTaskList,
+      assigned: fetchAssignedToMeTaskList,
+      'assigned-to-me': fetchAssignedToMeTaskList,
+      client: fetchAssignedClientTaskList,
+      'client-tasks': fetchAssignedClientTaskList,
+      project: fetchAssignedProjectTaskList,
+      'project-tasks': fetchAssignedProjectTaskList
     };
-    const view = Object.prototype.hasOwnProperty.call(viewMap, requestedView) ? requestedView : 'all';
-    const list = applyCleanListFilters(viewMap[view], req);
-    return sendCleanTaskList(res, list, view, 'source-aware', req);
+    const view = requestedView === 'all' || Object.prototype.hasOwnProperty.call(fetchers, requestedView)
+      ? requestedView
+      : 'all';
+    const list = view === 'all'
+      ? (await Promise.all([
+        fetchPersonalTaskList(req, { includeCreatedForOthers: true }),
+        fetchAssignedToMeTaskList(req),
+        fetchAssignedClientTaskList(req),
+        fetchAssignedProjectTaskList(req)
+      ])).flat()
+      : await fetchers[view](req);
+    const filteredList = applyCleanListFilters(list, req);
+    return sendCleanTaskList(res, filteredList, view, 'source-aware', req);
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
@@ -610,29 +613,32 @@ exports.getAllMyTaskStats = async (req, res) => {
       fetchAssignedProjectTaskList
     } = require('./taskHelper');
 
-    const [personal, assigned, client, project] = await Promise.all([
-      fetchPersonalTaskList(req),
-      fetchAssignedToMeTaskList(req),
-      fetchAssignedClientTaskList(req),
-      fetchAssignedProjectTaskList(req)
-    ]);
     const requestedView = String(req.query.view || req.query.taskType || req.query.type || 'all').trim().toLowerCase();
-    const viewMap = {
-      all: [...personal, ...assigned, ...client, ...project],
-      self: personal,
-      personal,
-      'my-personal-task': personal,
-      'my-personal-tasks': personal,
-      assigned,
-      'assigned-to-me': assigned,
-      client,
-      'client-tasks': client,
-      project,
-      'project-tasks': project
+    const fetchers = {
+      self: fetchPersonalTaskList,
+      personal: fetchPersonalTaskList,
+      'my-personal-task': fetchPersonalTaskList,
+      'my-personal-tasks': fetchPersonalTaskList,
+      assigned: fetchAssignedToMeTaskList,
+      'assigned-to-me': fetchAssignedToMeTaskList,
+      client: fetchAssignedClientTaskList,
+      'client-tasks': fetchAssignedClientTaskList,
+      project: fetchAssignedProjectTaskList,
+      'project-tasks': fetchAssignedProjectTaskList
     };
-    const view = Object.prototype.hasOwnProperty.call(viewMap, requestedView) ? requestedView : 'all';
-    const list = applyCleanListFilters(viewMap[view], req);
-    return res.json({ success: true, view, stats: calculateUnifiedTaskStats(list) });
+    const view = requestedView === 'all' || Object.prototype.hasOwnProperty.call(fetchers, requestedView)
+      ? requestedView
+      : 'all';
+    const list = view === 'all'
+      ? (await Promise.all([
+        fetchPersonalTaskList(req, { includeCreatedForOthers: true }),
+        fetchAssignedToMeTaskList(req),
+        fetchAssignedClientTaskList(req),
+        fetchAssignedProjectTaskList(req)
+      ])).flat()
+      : await fetchers[view](req);
+    const filteredList = applyCleanListFilters(list, req);
+    return res.json({ success: true, view, stats: calculateUnifiedTaskStats(filteredList) });
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
@@ -780,37 +786,9 @@ exports.getUserAllTasksPaginated = async (req, res) => {
     const tasks = sortedFiltered.slice(start, start + limit);
     const enrichedTasks = await enrichTasksWithActivityAndRemarks(tasks);
 
-    const counts = {
-      total: allTasks.length,
-      pending: 0,
-      'in-progress': 0,
-      completed: 0,
-      overdue: 0,
-      onhold: 0
-    };
-
-    allTasks.forEach(task => {
-      const status = task.status;
-      if (counts[status] !== undefined) {
-        counts[status] += 1;
-      } else if (status === 'pending') {
-        counts.pending += 1;
-      }
-    });
-
-    const toStat = (count) => ({
-      count,
-      percentage: allTasks.length > 0 ? Math.round((count / allTasks.length) * 100) : 0
-    });
-
-    const calculatedStats = {
-      total: allTasks.length,
-      pending: toStat(counts.pending),
-      inProgress: toStat(counts['in-progress']),
-      completed: toStat(counts.completed),
-      overdue: toStat(counts.overdue),
-      onhold: toStat(counts.onhold)
-    };
+    // The counters must describe the same filtered list returned to the user.
+    // Using allTasks here made the card count differ from the visible task list.
+    const calculatedStats = calculateUserStatusCounts(sortedFiltered);
 
     res.json({
       success: true,
