@@ -126,7 +126,6 @@ supportTicketSchema.pre("save", async function (next) {
     if (exists) {
       candidate = this._id ? `SUP-${this._id.toString().toUpperCase()}` : `${prefix}-${Date.now().toString().slice(-6)}-${Math.random().toString(36).substring(2, 5).toUpperCase()}`;
     }
-
     this.ticketNumber = candidate;
   }
 

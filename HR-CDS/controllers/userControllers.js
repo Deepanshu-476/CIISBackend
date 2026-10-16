@@ -1594,6 +1594,9 @@ exports.getAllUsers = async (req, res) => {
 
 exports.getUser = async (req, res) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return errorResponse(res, 400, "Invalid user ID");
+    }
     const user = await User.findById(req.params.id)
       .select('-password -resetToken -resetTokenExpiry')
       .populate('department', 'name description')

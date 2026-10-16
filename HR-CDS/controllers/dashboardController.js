@@ -289,28 +289,48 @@ const buildProductivityBuckets = (start, end, period) => {
 const getEmployeeProductivity = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
+    const companyId = getScopedCompanyId(req.user);
     const companyCode = String(req.user.companyCode || req.user.company?.companyCode || "").trim();
     const {start, end, period} = getProductivityRange(req.query);
+    const userObjectId = (userId && mongoose.Types.ObjectId.isValid(userId)) ? new mongoose.Types.ObjectId(userId) : null;
+    const companyMatches = [
+      ...(companyCode ? [{companyCode}, {companyCode: companyCode.toUpperCase()}] : []),
+      ...(companyId ? [{company: companyId}] : []),
+    ];
+    const companyScope = companyMatches.length ? {$or: companyMatches} : {};
+
     const [attendance, employeeTasks, projects, leaves, holidays] = await Promise.all([
-      Attendance.find({user: userId, companyCode, date: {$gte: start, $lte: end}}).lean(),
-      EmployeeTask.find({companyCode, isActive: {$ne: false}, createdAt: {$lte: end}, $or: [{assignedUsers: userId}, {"statusByUser.user": userId}]}).select("createdAt updatedAt dueDateTime completionDate overallStatus statusByUser statusHistory").lean(),
-      Project.aggregate([
-        {$match: {tasks: {$elemMatch: {assignedTo: new mongoose.Types.ObjectId(userId), createdAt: {$lte: end}}}}},
+      Attendance.find({user: userId, ...companyScope, date: {$gte: start, $lte: end}}).lean(),
+      EmployeeTask.find({
+        ...companyScope,
+        isActive: {$ne: false},
+        createdAt: {$lte: end},
+        $or: [
+          {assignedUsers: userId},
+          {"statusByUser.user": userId},
+          ...(userObjectId ? [{assignedUsers: userObjectId}, {"statusByUser.user": userObjectId}] : [])
+        ]
+      }).select("createdAt updatedAt dueDateTime completionDate overallStatus statusByUser statusHistory").lean(),
+      userObjectId ? Project.aggregate([
+        {$match: {
+          ...companyScope,
+          tasks: {$elemMatch: {assignedTo: userObjectId, createdAt: {$lte: end}}}
+        }},
         {$project: {
           tasks: {$filter: {
             input: "$tasks",
             as: "task",
             cond: {$and: [
-              {$eq: ["$$task.assignedTo", new mongoose.Types.ObjectId(userId)]},
+              {$eq: ["$$task.assignedTo", userObjectId]},
               {$lte: ["$$task.createdAt", end]},
             ]},
           }},
         }},
-      ]),
+      ]) : Promise.resolve([]),
       Leave.find({user: userId, status: /^approved$/i, startDate: {$lte: end}, endDate: {$gte: start}}).select("startDate endDate").lean(),
-      Holiday.find({companyCode, isActive: true, date: {$gte: start, $lte: end}}).select("date").lean(),
+      Holiday.find({...companyScope, isActive: true, date: {$gte: start, $lte: end}}).select("date").lean(),
     ]);
-    const projectTasks = projects.flatMap(project => (project.tasks || [])
+    const projectTasks = (Array.isArray(projects) ? projects : []).flatMap(project => (project.tasks || [])
       .filter(task => String(task.assignedTo) === String(userId) && new Date(task.createdAt) <= end)
       .map(task => ({
         _id: task._id,
@@ -339,6 +359,7 @@ const getEmployeeProductivity = async (req, res) => {
 const getEmployeeDashboardSummary = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
+    const userObjectId = (userId && mongoose.Types.ObjectId.isValid(userId)) ? new mongoose.Types.ObjectId(userId) : null;
     const companyId = getScopedCompanyId(req.user);
     const branchId = getScopedBranchId(req.user);
     const companyCode = String(req.user.companyCode || req.user.company?.companyCode || "").trim();
@@ -374,23 +395,39 @@ const getEmployeeDashboardSummary = async (req, res) => {
       companyId ? Company.findById(companyId).select("dashboardConfig officeLocation").lean() : null,
       JobRole.find({
         isActive: true,
-        ...(companyId ? {company: companyId} : {companyCode}),
+        $or: [
+          ...(companyId ? [{company: companyId}] : []),
+          ...(companyCode ? [{companyCode}, {companyCode: companyCode.toUpperCase()}] : []),
+        ],
       }).select("_id name roleName roleNumber roleNo code jobRole title shiftSettings shifts department").lean(),
       Holiday.find({
         isActive: true,
         date: {$gte: summaryStart, $lte: summaryEnd},
         $or: [
           {companyCode},
+          ...(companyCode ? [{companyCode: companyCode.toUpperCase()}] : []),
           ...(companyId ? [{company: companyId}] : []),
         ],
       }).select("name title date type description").sort({date: 1}).lean(),
-      Attendance.find({user: userId, companyCode, date: {$gte: summaryStart, $lte: todayEnd}})
+      Attendance.find({
+        user: userId,
+        $or: [
+          {companyCode},
+          ...(companyCode ? [{companyCode: companyCode.toUpperCase()}] : []),
+          ...(companyId ? [{company: companyId}] : []),
+        ],
+        date: {$gte: summaryStart, $lte: todayEnd}
+      })
         .select("user date status inTime outTime isClockedIn totalTime duration hoursWorked shiftName shiftStart shiftEnd shiftWindow createdAt updatedAt")
         .sort({date: -1})
         .lean(),
       Attendance.findOne({
         user: userId,
-        companyCode,
+        $or: [
+          {companyCode},
+          ...(companyCode ? [{companyCode: companyCode.toUpperCase()}] : []),
+          ...(companyId ? [{company: companyId}] : []),
+        ],
         date: {$gte: todayStart, $lte: todayEnd},
       })
         .select("user date status inTime outTime isClockedIn totalTime duration hoursWorked shiftName shiftStart shiftEnd shiftWindow createdAt updatedAt")
@@ -405,7 +442,11 @@ const getEmployeeDashboardSummary = async (req, res) => {
         .limit(60)
         .lean(),
       EmployeeTask.find({
-        companyCode,
+        $or: [
+          {companyCode},
+          ...(companyCode ? [{companyCode: companyCode.toUpperCase()}] : []),
+          ...(companyId ? [{company: companyId}] : []),
+        ],
         isActive: {$ne: false},
         $or: [
           {createdBy: userId},
@@ -418,7 +459,11 @@ const getEmployeeDashboardSummary = async (req, res) => {
         .limit(8)
         .lean(),
       EmployeeTask.find({
-        companyCode,
+        $or: [
+          {companyCode},
+          ...(companyCode ? [{companyCode: companyCode.toUpperCase()}] : []),
+          ...(companyId ? [{company: companyId}] : []),
+        ],
         isActive: {$ne: false},
         $or: [
           {createdBy: userId},
@@ -429,7 +474,11 @@ const getEmployeeDashboardSummary = async (req, res) => {
         .select("createdAt updatedAt dueDateTime completionDate overallStatus status statusByUser statusHistory creatorStatus")
         .lean(),
       Meeting.find({
-        companyCode,
+        $or: [
+          {companyCode},
+          ...(companyCode ? [{companyCode: companyCode.toUpperCase()}] : []),
+          ...(companyId ? [{company: companyId}] : []),
+        ],
         attendees: userId,
       })
         .sort({date: 1, time: 1})
@@ -437,10 +486,25 @@ const getEmployeeDashboardSummary = async (req, res) => {
         .populate("createdBy", "name email")
         .select("title subject agenda description date time status mode meetingLink link createdBy createdAt")
         .lean(),
-      Project.find({companyCode})
+      Project.find({
+        $or: [
+          { users: userId },
+          { createdBy: userId },
+          { "tasks.assignedTo": userId },
+          { "tasks.assignedUsers": userId },
+          ...(userObjectId ? [
+            { users: userObjectId },
+            { createdBy: userObjectId },
+            { "tasks.assignedTo": userObjectId },
+            { "tasks.assignedUsers": userObjectId },
+          ] : []),
+          ...(companyCode ? [{companyCode}, {companyCode: companyCode.toUpperCase()}] : []),
+          ...(companyId ? [{company: companyId}] : []),
+        ]
+      })
         .sort({updatedAt: -1, createdAt: -1})
-        .limit(6)
-        .select("projectName name title tasks updatedAt createdAt")
+        .limit(12)
+        .select("projectName name title tasks updatedAt createdAt users createdBy")
         .lean(),
       User.findById(userId)
         .select("_id name email employeeId jobRole department employeeType shiftId shiftName shiftType")
@@ -562,27 +626,73 @@ const getEmployeeDashboardSummary = async (req, res) => {
         excludedDates.add(dateKey(cursor));
       }
     });
-    const productivityOverall = calculateProductivityMetrics({
-      start: productivityStart,
-      end: todayEnd,
-      attendance,
-      tasks: dashboardTasks,
-      excludedDates,
-      userId,
+
+    let productivityResult = {
+      period: "weekly",
+      from: dateKey(productivityStart),
+      to: dateKey(todayEnd),
+      granularity: "daily",
+      score: 0,
+      label: "Poor",
+      tone: "danger",
+      hasData: false,
+      limitedData: true,
+      breakdown: { taskCompletion: null, onTimeDelivery: null, attendance: null },
+      counts: { attendanceDays: 0, tasks: 0, completed: 0, onTime: 0, deliveryEligible: 0 },
+      series: [],
+    };
+
+    try {
+      const productivityOverall = calculateProductivityMetrics({
+        start: productivityStart,
+        end: todayEnd,
+        attendance,
+        tasks: dashboardTasks,
+        excludedDates,
+        userId,
+      });
+      const productivityBuckets = buildProductivityBuckets(productivityStart, todayEnd, "weekly");
+      const productivitySeries = productivityBuckets.buckets.map(bucket => ({
+        ...bucket,
+        ...calculateProductivityMetrics({...bucket, attendance, tasks: dashboardTasks, excludedDates, userId}),
+      })).map(item => ({
+        date: item.start,
+        label: item.label,
+        score: item.score,
+        hasData: item.hasData,
+        breakdown: item.breakdown,
+        counts: item.counts,
+      }));
+      const [productivityLabel, productivityTone] = productivityBand(productivityOverall.score);
+      productivityResult = {
+        period: "weekly",
+        from: dateKey(productivityStart),
+        to: dateKey(todayEnd),
+        granularity: productivityBuckets.granularity,
+        score: productivityOverall.score,
+        label: productivityLabel,
+        tone: productivityTone,
+        hasData: productivityOverall.hasData,
+        limitedData: [productivityOverall.breakdown.taskCompletion, productivityOverall.breakdown.onTimeDelivery, productivityOverall.breakdown.attendance].filter(Number.isFinite).length < 3,
+        breakdown: productivityOverall.breakdown,
+        counts: productivityOverall.counts,
+        series: productivitySeries,
+      };
+    } catch (prodCalcErr) {
+      console.warn("Productivity calculation skipped due to error:", prodCalcErr.message);
+    }
+
+    const sortedProjects = (projects || []).sort((a, b) => {
+      const aInvolved = (a.users || []).some(id => String(id) === String(userId)) ||
+        String(a.createdBy) === String(userId) ||
+        (a.tasks || []).some(t => String(t.assignedTo) === String(userId) || (t.assignedUsers || []).some(id => String(id) === String(userId)));
+      const bInvolved = (b.users || []).some(id => String(id) === String(userId)) ||
+        String(b.createdBy) === String(userId) ||
+        (b.tasks || []).some(t => String(t.assignedTo) === String(userId) || (t.assignedUsers || []).some(id => String(id) === String(userId)));
+      if (aInvolved && !bInvolved) return -1;
+      if (!aInvolved && bInvolved) return 1;
+      return new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0);
     });
-    const productivityBuckets = buildProductivityBuckets(productivityStart, todayEnd, "weekly");
-    const productivitySeries = productivityBuckets.buckets.map(bucket => ({
-      ...bucket,
-      ...calculateProductivityMetrics({...bucket, attendance, tasks: dashboardTasks, excludedDates, userId}),
-    })).map(item => ({
-      date: item.start,
-      label: item.label,
-      score: item.score,
-      hasData: item.hasData,
-      breakdown: item.breakdown,
-      counts: item.counts,
-    }));
-    const [productivityLabel, productivityTone] = productivityBand(productivityOverall.score);
 
     return res.status(200).json({
       success: true,
@@ -590,20 +700,7 @@ const getEmployeeDashboardSummary = async (req, res) => {
         monthlyStats,
         focusStats,
         taskStats,
-        productivity: {
-          period: "weekly",
-          from: dateKey(productivityStart),
-          to: dateKey(todayEnd),
-          granularity: productivityBuckets.granularity,
-          score: productivityOverall.score,
-          label: productivityLabel,
-          tone: productivityTone,
-          hasData: productivityOverall.hasData,
-          limitedData: [productivityOverall.breakdown.taskCompletion, productivityOverall.breakdown.onTimeDelivery, productivityOverall.breakdown.attendance].filter(Number.isFinite).length < 3,
-          breakdown: productivityOverall.breakdown,
-          counts: productivityOverall.counts,
-          series: productivitySeries,
-        },
+        productivity: productivityResult,
         dashboardConfig: scopedDashboardConfig,
         jobRoles: jobRoles.map(normalizeRoleForDashboard),
         currentUser: {
@@ -617,7 +714,7 @@ const getEmployeeDashboardSummary = async (req, res) => {
         recentTasks,
         recentActivity: recentTasks.map(mapTaskActivity),
         upcomingMeetings,
-        projects,
+        projects: sortedProjects,
       },
     });
   } catch (error) {
