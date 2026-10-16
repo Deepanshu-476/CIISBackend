@@ -53,6 +53,12 @@ const sanitizeConfig = config => {
   return config;
 };
 
+const toMutableConfig = config => {
+  if (!config) return config;
+  if (typeof config.toObject === 'function') return config.toObject();
+  return { ...config };
+};
+
 const getRouteAccessKeys = item => {
   const id = String(item?.id || '').trim();
   const rawPath = String(item?.path || '').trim();
@@ -100,6 +106,16 @@ const filterMenuItemsByCompanyAccess = async (companyId, menuItems) => {
     const itemKeys = [...getRouteAccessKeys(item)].map(key => normalizeKey(key)).filter(Boolean);
     return itemKeys.some(key => allowedSet.has(key));
   });
+};
+
+const sanitizeConfigForCompanyAccess = async (config) => {
+  if (!config) return config;
+  const mutableConfig = sanitizeConfig(toMutableConfig(config));
+  mutableConfig.menuItems = await filterMenuItemsByCompanyAccess(
+    mutableConfig.companyId?._id || mutableConfig.companyId,
+    mutableConfig.menuItems
+  );
+  return mutableConfig;
 };
 
 const escapeRegex = value => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -203,16 +219,6 @@ const findSidebarConfig = async ({ companyId, branchId, departmentId, role }) =>
     if (anyConfig) return anyConfig;
   }
 
-  if (baseQuery.departmentId) {
-    const roleOnlyQuery = { companyId, role: roleQuery, isActive: { $ne: false } };
-    if (branchId && mongoose.Types.ObjectId.isValid(branchId)) {
-      const branchRoleConfig = await SidebarConfig.findOne({ ...roleOnlyQuery, branchId }).sort({ updatedAt: -1 });
-      if (branchRoleConfig) return branchRoleConfig;
-    }
-    const anyRoleConfig = await SidebarConfig.findOne(roleOnlyQuery).sort({ updatedAt: -1 });
-    if (anyRoleConfig) return anyRoleConfig;
-  }
-
   return null;
 };
 
@@ -258,10 +264,12 @@ router.get('/', async (req, res) => {
       .populate('departmentId', 'name')
       .sort({ createdAt: -1 });
     
+    const sanitizedConfigs = await Promise.all(configs.map(sanitizeConfigForCompanyAccess));
+
     res.json({
       success: true,
-      count: configs.length,
-      data: configs.map(sanitizeConfig)
+      count: sanitizedConfigs.length,
+      data: sanitizedConfigs
     });
   } catch (error) {
     console.error('Error fetching sidebar configs:', error);
@@ -345,12 +353,12 @@ router.get('/config', async (req, res) => {
       });
     }
 
-    sanitizeConfig(config);
+    const sanitizedConfig = await sanitizeConfigForCompanyAccess(config);
     
     res.json({
       success: true,
       message: 'Configuration found',
-      data: config
+      data: sanitizedConfig
     });
   } catch (error) {
     console.error('Error fetching config:', error);
@@ -422,7 +430,10 @@ router.post('/', requireSidebarManager, async (req, res) => {
       }
     }
     
-    const cleanedItems = removeRetiredSidebarItems(menuItems);
+    const cleanedItems = await filterMenuItemsByCompanyAccess(
+      companyId,
+      removeRetiredSidebarItems(menuItems)
+    );
     const cleanedRanges = Array.isArray(ranges) ? ranges : [];
 
     const configKey = {
@@ -444,28 +455,6 @@ router.post('/', requireSidebarManager, async (req, res) => {
       { $set: configValues, $setOnInsert: configKey },
       { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
     );
-
-    // Synchronize all other configs for this role in this company
-    // so every user assigned this role receives the changes!
-    try {
-      const { query: roleQuery } = await buildRoleQuery(companyId, departmentId, role);
-      await SidebarConfig.updateMany(
-        {
-          companyId,
-          role: roleQuery,
-          _id: { $ne: savedConfig._id }
-        },
-        {
-          $set: {
-            menuItems: cleanedItems,
-            ranges: cleanedRanges,
-            updatedAt: new Date()
-          }
-        }
-      );
-    } catch (syncErr) {
-      console.warn('Warning: sync cross-branch error in POST:', syncErr.message);
-    }
 
     const populatedConfig = await SidebarConfig.findById(savedConfig._id)
       .populate('companyId', 'companyName companyCode')
@@ -539,7 +528,10 @@ router.put('/:id', requireSidebarManager, async (req, res) => {
       }
     }
 
-    const cleanedItems = removeRetiredSidebarItems(menuItems);
+    const cleanedItems = await filterMenuItemsByCompanyAccess(
+      targetCompanyId,
+      removeRetiredSidebarItems(menuItems)
+    );
     const cleanedRanges = Array.isArray(ranges) ? ranges : [];
 
     const updatedConfig = await SidebarConfig.findByIdAndUpdate(
@@ -556,33 +548,6 @@ router.put('/:id', requireSidebarManager, async (req, res) => {
     ).populate('companyId', 'companyName')
      .populate('departmentId', 'name');
 
-    // Also synchronize this role's other configs across the company
-    try {
-      const targetRole = role || existingConfig.role;
-      const targetDept = departmentId || existingConfig.departmentId?._id || existingConfig.departmentId;
-
-      if (targetCompanyId && targetRole) {
-        const { query: roleQuery } = await buildRoleQuery(targetCompanyId, targetDept, targetRole);
-
-        await SidebarConfig.updateMany(
-          {
-            companyId: targetCompanyId,
-            role: roleQuery,
-            _id: { $ne: id }
-          },
-          {
-            $set: {
-              menuItems: cleanedItems,
-              ranges: cleanedRanges,
-              updatedAt: new Date()
-            }
-          }
-        );
-      }
-    } catch (syncError) {
-      console.warn('Warning: Could not sync cross-branch configs:', syncError.message);
-    }
-    
     res.json({
       success: true,
       message: 'Configuration updated successfully',
@@ -681,12 +646,12 @@ router.get('/user-config', async (req, res) => {
       });
     }
 
-    sanitizeConfig(config);
+    const sanitizedConfig = await sanitizeConfigForCompanyAccess(config);
     
     res.json({
       success: true,
       message: 'Configuration found',
-      data: config
+      data: sanitizedConfig
     });
   } catch (error) {
     console.error('Error fetching user config:', error);

@@ -105,7 +105,29 @@ const supportTicketSchema = new mongoose.Schema({
 
 supportTicketSchema.pre("save", async function (next) {
   if (!this.ticketNumber) {
-    this.ticketNumber = `SUP-${this._id.toString().toUpperCase()}`;
+    const rawCode = String(this.companyCode || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const prefix = rawCode ? `${rawCode}-SUP` : "SUP";
+
+    const count = await mongoose.model("SupportTicket").countDocuments({
+      companyCode: this.companyCode,
+    });
+    let seq = count + 1001;
+    let candidate = `${prefix}-${String(seq).padStart(4, "0")}`;
+
+    let exists = await mongoose.model("SupportTicket").exists({ ticketNumber: candidate });
+    let attempts = 0;
+    while (exists && attempts < 50) {
+      seq += 1;
+      candidate = `${prefix}-${String(seq).padStart(4, "0")}`;
+      exists = await mongoose.model("SupportTicket").exists({ ticketNumber: candidate });
+      attempts += 1;
+    }
+
+    if (exists) {
+      candidate = this._id ? `SUP-${this._id.toString().toUpperCase()}` : `${prefix}-${Date.now().toString().slice(-6)}-${Math.random().toString(36).substring(2, 5).toUpperCase()}`;
+    }
+
+    this.ticketNumber = candidate;
   }
 
   if (!this.slaDueAt) {
