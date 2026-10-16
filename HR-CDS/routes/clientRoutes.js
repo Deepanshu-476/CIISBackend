@@ -31,6 +31,7 @@ const {
   uploadClientReceipt,
   updateClientReceiptStatus,
   markClientReceiptPaymentDone,
+  deleteClientReceipt,
   getClientDashboardOverview,
   getClientDashboardStats
 } = require('../controllers/clientController');
@@ -92,6 +93,7 @@ router.post('/due-invoice/:id', addClientDueInvoice);
 router.post('/upload-receipt/:id', uploadReceipt.single('receipt'), uploadClientReceipt);
 router.patch('/:id/receipt/:receiptId/payment-done', markClientReceiptPaymentDone);
 router.patch('/:id/receipt/:receiptId/status', updateClientReceiptStatus);
+router.delete('/:id/receipt/:receiptId', deleteClientReceipt);
 
 
 
