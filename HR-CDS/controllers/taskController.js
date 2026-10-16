@@ -821,8 +821,26 @@ const sortTasksNewestFirst = tasks => {
 };
 
 const paginateTasks = (tasks, req) => {
-  const page = parsePositiveInt(req.query.page, 1);
-  const limit = parsePositiveInt(req.query.limit, 10, 100);
+  if (
+    req.query.all === 'true' ||
+    req.query.pagination === 'false' ||
+    req.query.limit === 'all' ||
+    req.query.limit === '0' ||
+    req.query.limit === '-1'
+  ) {
+    return {
+      page: 1,
+      limit: tasks.length,
+      total: tasks.length,
+      pages: 1,
+      hasNext: false,
+      hasPrev: false,
+      tasks
+    };
+  }
+
+  const page = parsePositiveInt(req.query.page, 1, 100000);
+  const limit = parsePositiveInt(req.query.limit, 10, 1000);
   const total = tasks.length;
   const pages = Math.max(1, Math.ceil(total / limit));
   const safePage = Math.min(page, pages);
