@@ -134,16 +134,18 @@ const normalizePayload = (body = {}) => {
   const payload = {
     name: String(body.name || "").trim(),
     type: body.type,
-    sortOrder: Number(body.sortOrder),
     status: body.status || "active",
   };
+  if (body.sortOrder !== undefined && body.sortOrder !== "" && !Number.isNaN(Number(body.sortOrder))) {
+    payload.sortOrder = Number(body.sortOrder);
+  }
   booleanFields.forEach((field) => { payload[field] = Boolean(body[field]); });
   return payload;
 };
 
 const validatePayload = (payload) => {
-  if (!payload.name || !Number.isInteger(payload.sortOrder) || payload.sortOrder < 1) {
-    return "Component name and a valid sort order are required.";
+  if (!payload.name) {
+    return "Component name is required.";
   }
   if (!["earning", "deduction"].includes(payload.type)) return "Invalid component type.";
   if (!["active", "inactive"].includes(payload.status)) return "Invalid component status.";
@@ -174,6 +176,13 @@ exports.create = async (req, res) => {
     const payload = normalizePayload(req.body);
     const validationError = validatePayload(payload);
     if (validationError) return res.status(400).json({ success: false, message: validationError });
+
+    // Automatic sortOrder calculation
+    if (!payload.sortOrder || payload.sortOrder < 1 || !Number.isInteger(payload.sortOrder)) {
+      const maxComp = await SalaryComponent.findOne({ company }).sort({ sortOrder: -1 }).select("sortOrder").lean();
+      payload.sortOrder = (Number(maxComp?.sortOrder) || 0) + 1;
+    }
+
     const userId = req.user?._id || req.user?.id;
     payload.code = await generateUniqueCode(company, payload.name);
     const component = await SalaryComponent.create({ ...payload, company, createdBy: userId, updatedBy: userId });
@@ -194,6 +203,9 @@ exports.update = async (req, res) => {
     const userId = req.user?._id || req.user?.id;
     const existingComponent = await SalaryComponent.findOne({ _id: req.params.id, company }).lean();
     if (!existingComponent) return res.status(404).json({ success: false, message: "Salary component not found." });
+    if (!payload.sortOrder || payload.sortOrder < 1 || !Number.isInteger(payload.sortOrder)) {
+      payload.sortOrder = existingComponent.sortOrder || 1;
+    }
     if (existingComponent.type !== payload.type) {
       const SalaryStructure = require("../models/SalaryStructure");
       const inUse = await SalaryStructure.findOne({ company, "components.component": req.params.id }).select("name code").lean();

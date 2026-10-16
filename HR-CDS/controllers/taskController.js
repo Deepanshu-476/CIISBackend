@@ -428,6 +428,9 @@ const parseDurationStringToSeconds = (str) => {
 const calculateTaskWork = (task, workWindow, fallbackRange) => {
   const windowStart = workWindow?.start || fallbackRange?.start;
   const windowEnd = workWindow?.end || fallbackRange?.end || new Date();
+  const workIntervals = Array.isArray(workWindow?.intervals) && workWindow.intervals.length > 0
+    ? workWindow.intervals
+    : [{ start: windowStart, end: windowEnd }];
 
   if (!windowStart || !windowEnd) {
     if (task.timeSpent > 0) return { seconds: task.timeSpent, intervals: [] };
@@ -441,30 +444,32 @@ const calculateTaskWork = (task, workWindow, fallbackRange) => {
   );
 
   let intervals = sessions
-    .map(session => getClippedInterval(
+    .flatMap(session => workIntervals.map(workInterval => getClippedInterval(
       session.start,
       session.end,
-      windowStart,
-      windowEnd
-    ))
+      workInterval.start,
+      workInterval.end
+    )))
     .filter(Boolean);
   let total = getMergedIntervalSeconds(intervals);
 
   if (total === 0) {
     if (task.taskSource === 'client') {
-      const activeInterval = normalizeTaskStatus(task.status) === 'in-progress' && task.inProgressSince
-        ? getClippedInterval(task.inProgressSince, windowEnd, windowStart, windowEnd)
-        : null;
-      const activeSeconds = activeInterval ? getOverlapSeconds(activeInterval.start, activeInterval.end, windowStart, windowEnd) : 0;
+      const activeIntervals = normalizeTaskStatus(task.status) === 'in-progress' && task.inProgressSince
+        ? workIntervals.map(workInterval => getClippedInterval(task.inProgressSince, windowEnd, workInterval.start, workInterval.end)).filter(Boolean)
+        : [];
+      const activeSeconds = getMergedIntervalSeconds(activeIntervals);
       total = activeSeconds > 0 ? activeSeconds : (task.timeSpent || 0);
-      intervals = activeInterval ? [activeInterval] : [];
+      intervals = activeIntervals;
     } else if (normalizeTaskStatus(task.status || task.userStatus) === 'in-progress' && (task.updatedAt || task.createdAt)) {
       const startCandidate = task.inProgressSince || task.updatedAt || task.createdAt;
-      const activeInterval = getClippedInterval(startCandidate, windowEnd, windowStart, windowEnd);
-      const activeSeconds = activeInterval ? getOverlapSeconds(activeInterval.start, activeInterval.end, windowStart, windowEnd) : 0;
+      const activeIntervals = workIntervals
+        .map(workInterval => getClippedInterval(startCandidate, windowEnd, workInterval.start, workInterval.end))
+        .filter(Boolean);
+      const activeSeconds = getMergedIntervalSeconds(activeIntervals);
       if (activeSeconds > 0) {
         total = activeSeconds;
-        intervals = activeInterval ? [activeInterval] : [];
+        intervals = activeIntervals;
       }
     }
   }
@@ -546,22 +551,39 @@ const getUserWorkWindow = async (userId, query, companyCode = '') => {
     }).select('date inTime outTime isClockedIn status totalTime lateBy earlyLeave createdAt updatedAt companyCode').sort({ updatedAt: -1 }).lean();
   }
 
+  // Aggregate one attendance interval per India calendar day. Earlier code
+  // used only the first selected day's attendance for a multi-day report.
+  const byDay = new Map();
+  [...attendanceCandidates, ...(attendance ? [attendance] : [])].forEach(record => {
+    const clockIn = toValidWorkDate(record.inTime);
+    if (!clockIn) return;
+    const dayKey = getIndiaWorkDateKey(record.date || record.inTime);
+    if (!dayKey) return;
+    const existing = byDay.get(dayKey);
+    const updatedAt = new Date(record.updatedAt || record.inTime || 0).getTime();
+    const existingUpdatedAt = new Date(existing?.updatedAt || existing?.inTime || 0).getTime();
+    if (!existing || updatedAt >= existingUpdatedAt) byDay.set(dayKey, record);
+  });
+
+  const now = new Date();
+  const intervals = [...byDay.values()].map(record => {
+    const clockIn = toValidWorkDate(record.inTime);
+    const explicitSeconds = parseDurationStringToSeconds(record.totalTime);
+    const rawClockOut = toValidWorkDate(record.outTime)
+      || (record.isClockedIn ? now : null)
+      || (explicitSeconds > 0 ? new Date(clockIn.getTime() + explicitSeconds * 1000) : null);
+    return getClippedInterval(clockIn, rawClockOut, range.start, range.end);
+  }).filter(Boolean);
+  const totalSeconds = getMergedIntervalSeconds(intervals);
   const clockIn = toValidWorkDate(attendance?.inTime);
   const rawClockOut = toValidWorkDate(attendance?.outTime);
-  const clockOut = rawClockOut || (attendance?.isClockedIn ? new Date() : null);
-  const start = clockIn;
-  const rawWorkEnd = clockOut || range.end;
-  const end = clockIn
-    ? new Date(Math.min(rawWorkEnd.getTime(), range.end.getTime()))
-    : null;
-  let totalSeconds = clockIn && end ? Math.max(0, Math.floor((end - clockIn) / 1000)) : 0;
-  if (totalSeconds === 0 && attendance?.totalTime) {
-    totalSeconds = parseDurationStringToSeconds(attendance.totalTime);
-  }
+  const start = intervals[0]?.start || clockIn;
+  const end = intervals[intervals.length - 1]?.end || rawClockOut;
 
   return {
     start,
     end,
+    intervals,
     attendance,
     summary: {
       hasAttendance: Boolean(attendance),
@@ -2383,8 +2405,6 @@ exports.updateStatus = async (req, res) => {
     if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
 
     const currentUserId = (req.user._id || req.user.id).toString();
-    const userCompanyCode = getRequestCompanyCode(req);
-
     const isCreator = task.createdBy.toString() === currentUserId;
     const isAssigned = task.assignedUsers.some(uid => uid.toString() === currentUserId);
 
@@ -2394,11 +2414,12 @@ exports.updateStatus = async (req, res) => {
     const isGroupAssigned = task.assignedGroups?.some(gid => groupIds.includes(gid.toString()));
 
 
-    const isSameCompany = task.companyCode && userCompanyCode &&
-      task.companyCode.toUpperCase() === userCompanyCode.toUpperCase();
     const allowCompanyAllEdit = await canManageTaskFromCompanyAll(req, task);
 
-    if (!isCreator && !isAssigned && !isGroupAssigned && !isSameCompany && !allowCompanyAllEdit) {
+    // Being in the same company is not, by itself, authority to update a
+    // colleague's task. Company-wide changes require the explicit page
+    // permission verified by canManageTaskFromCompanyAll.
+    if (!isCreator && !isAssigned && !isGroupAssigned && !allowCompanyAllEdit) {
       return res.status(403).json({ success: false, error: 'Not authorized' });
     }
 
@@ -3021,16 +3042,22 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
     ];
   }
 
-  const projectTaskElemMatch = { assignedTo: userId };
+  const projectTaskElemMatch = {
+    $and: [{
+      $or: [{ assignedTo: userId }, { assignedUsers: userId }]
+    }]
+  };
   if (range) {
-    projectTaskElemMatch.$or = [
-      { status: { $in: ['pending', 'in-progress', 'inprogress', 'onhold', 'on-hold', 'reopen'] } },
-      { dueDate: range },
-      { createdAt: range },
-    { updatedAt: range },
-      { completionDate: range },
-      { completedAt: range }
-    ];
+    projectTaskElemMatch.$and.push({
+      $or: [
+        { status: { $in: ['pending', 'in-progress', 'inprogress', 'onhold', 'on-hold', 'reopen'] } },
+        { dueDate: range },
+        { createdAt: range },
+        { updatedAt: range },
+        { completionDate: range },
+        { completedAt: range }
+      ]
+    });
   }
   if (priority) projectTaskElemMatch.priority = new RegExp(`^${priority}$`, 'i');
 
@@ -3147,7 +3174,8 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
     (project.tasks || []).forEach(task => {
       const assignedTo = task.assignedTo?._id || task.assignedTo;
       const targetUserId = userId.toString();
-      const isAssignedToUser = assignedTo?.toString() === targetUserId;
+      const isAssignedToUser = assignedTo?.toString() === targetUserId
+        || (task.assignedUsers || []).some(user => String(user?._id || user) === targetUserId);
       if (!isAssignedToUser) return;
 
       const projectStatus = normalizeProjectTaskStatus(task.status);
@@ -3737,6 +3765,15 @@ exports.getUserAllTasksPaginated = async (req, res) => {
     const paginatedTasks = sortedFiltered.slice(start, start + limit);
     const cleanTasks = paginatedTasks.map(({ __workIntervals, ...task }) => task);
     const enrichedTasks = await enrichTasksWithActivityAndRemarks(cleanTasks);
+    // Keep the filter choices independent of the current page.  This was
+    // previously referenced in the response without being declared, which
+    // threw a ReferenceError and turned otherwise successful requests into 500s.
+    const uniqueSortedValues = values => [...new Set(values.filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b));
+    const filterOptions = {
+      projects: uniqueSortedValues(allTasks.map(getTaskProjectName)),
+      clients: uniqueSortedValues(allTasks.map(getTaskClientName))
+    };
 
     res.json({
       success: true,
@@ -3753,6 +3790,7 @@ exports.getUserAllTasksPaginated = async (req, res) => {
         employeeId: targetUser.employeeId
       } : null,
       tasks: enrichedTasks,
+      filterOptions,
       workSummary: {
         ...workWindow.summary,
         trackedTaskSeconds: dayTrackedTaskSeconds,

@@ -720,13 +720,22 @@ exports.listProjects = async (req, res) => {
 
 
     if (!isProjectAdmin(req.user)) {
+      const userObjId = mongoose.Types.ObjectId.isValid(req.user.id) ? new mongoose.Types.ObjectId(req.user.id) : null;
       query = {
         $and: [
           query,
           {
             $or: [
               { users: req.user.id },
-              { createdBy: req.user.id }
+              { createdBy: req.user.id },
+              { "tasks.assignedTo": req.user.id },
+              { "tasks.assignedUsers": req.user.id },
+              ...(userObjId ? [
+                { users: userObjId },
+                { createdBy: userObjId },
+                { "tasks.assignedTo": userObjId },
+                { "tasks.assignedUsers": userObjId },
+              ] : [])
             ]
           }
         ]

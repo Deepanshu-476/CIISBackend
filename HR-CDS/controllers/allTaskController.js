@@ -205,13 +205,19 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
     ];
   }
 
-  const projectTaskElemMatch = { assignedTo: userId };
+  const projectTaskElemMatch = {
+    $and: [{
+      $or: [{ assignedTo: userId }, { assignedUsers: userId }]
+    }]
+  };
   if (range) {
-    projectTaskElemMatch.$or = [
-      { dueDate: range },
-      { createdAt: range },
-      { completedAt: range }
-    ];
+    projectTaskElemMatch.$and.push({
+      $or: [
+        { dueDate: range },
+        { createdAt: range },
+        { completedAt: range }
+      ]
+    });
   }
   if (priority) projectTaskElemMatch.priority = new RegExp(`^${priority}$`, 'i');
 
@@ -355,7 +361,8 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
   projectTasks.forEach(project => {
     (project.tasks || []).forEach(task => {
       const assignedTo = task.assignedTo?._id || task.assignedTo;
-      const isAssignedToUser = assignedTo?.toString() === targetUserId;
+      const isAssignedToUser = assignedTo?.toString() === targetUserId
+        || (task.assignedUsers || []).some(user => String(user?._id || user) === targetUserId);
       if (!isAssignedToUser) return;
 
       const projectStatus = normalizeProjectTaskStatus(task.status);
@@ -583,7 +590,7 @@ exports.getAllMyTaskViews = async (req, res) => {
       : 'all';
     const list = view === 'all'
       ? (await Promise.all([
-        fetchPersonalTaskList(req),
+        fetchPersonalTaskList(req, { includeCreatedForOthers: true }),
         fetchAssignedToMeTaskList(req),
         fetchAssignedClientTaskList(req),
         fetchAssignedProjectTaskList(req)
@@ -624,7 +631,7 @@ exports.getAllMyTaskStats = async (req, res) => {
       : 'all';
     const list = view === 'all'
       ? (await Promise.all([
-        fetchPersonalTaskList(req),
+        fetchPersonalTaskList(req, { includeCreatedForOthers: true }),
         fetchAssignedToMeTaskList(req),
         fetchAssignedClientTaskList(req),
         fetchAssignedProjectTaskList(req)
