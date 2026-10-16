@@ -20,6 +20,18 @@ const groupSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  avatar: {
+    type: String,
+    default: ''
+  },
+  profileImage: {
+    type: String,
+    default: ''
+  },
+  image: {
+    type: String,
+    default: ''
+  },
   members: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'

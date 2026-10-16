@@ -72,6 +72,62 @@ const mapTaskActivity = task => ({
   status: task.overallStatus || task.status || task.creatorStatus?.status || "pending",
 });
 
+const normalizeDashboardTaskStatus = (task, userId) => {
+  const userStatus = (task.statusByUser || []).find(item => String(item.user) === String(userId));
+  return normalizeProductivityStatus(userStatus?.status || task.overallStatus || task.status || task.creatorStatus?.status || "pending");
+};
+
+const buildDashboardTaskStats = (tasks, userId, todayStart, todayEnd) => {
+  const stats = {total: 0, completed: 0, inProgress: 0, pending: 0, overdue: 0, onHold: 0};
+  const today = {total: 0, completed: 0, inProgress: 0};
+  const now = new Date();
+
+  tasks.forEach(task => {
+    const status = normalizeDashboardTaskStatus(task, userId);
+    if (excludedTaskStatuses.has(status)) return;
+
+    stats.total += 1;
+    if (completedStatuses.has(status)) stats.completed += 1;
+    else if (["in-progress", "inprogress", "reopen"].includes(status)) stats.inProgress += 1;
+    else if (["on-hold", "onhold", "hold"].includes(status)) stats.onHold += 1;
+    else if (status === "overdue" || (task.dueDateTime && new Date(task.dueDateTime) < now && !completedStatuses.has(status))) stats.overdue += 1;
+    else stats.pending += 1;
+
+    const dueDate = task.dueDateTime ? new Date(task.dueDateTime) : null;
+    const updatedAt = task.updatedAt ? new Date(task.updatedAt) : null;
+    const createdAt = task.createdAt ? new Date(task.createdAt) : null;
+    const isDueToday = dueDate && dueDate >= todayStart && dueDate <= todayEnd;
+    const touchedToday = (updatedAt && updatedAt >= todayStart && updatedAt <= todayEnd) || (createdAt && createdAt >= todayStart && createdAt <= todayEnd);
+
+    if (isDueToday) today.total += 1;
+    if ((isDueToday || touchedToday) && completedStatuses.has(status)) today.completed += 1;
+    if ((isDueToday || touchedToday) && ["in-progress", "inprogress", "reopen"].includes(status)) today.inProgress += 1;
+  });
+
+  const focusStats = {
+    dueToday: today.total,
+    inProgress: today.inProgress,
+    completedToday: today.completed,
+    dailyProgress: today.total
+      ? Math.min(100, Math.round(((today.completed + (today.inProgress * 0.5)) / today.total) * 100))
+      : (today.completed > 0 ? 100 : (today.inProgress > 0 ? 50 : 0)),
+  };
+
+  return {taskStats: stats, focusStats};
+};
+
+const buildUpcomingMeetings = (meetings = []) => {
+  const now = new Date();
+  return meetings
+    .map(meeting => ({
+      ...meeting,
+      scheduledAt: new Date(`${meeting.date}T${meeting.time || "00:00"}`),
+    }))
+    .filter(meeting => !Number.isNaN(meeting.scheduledAt.getTime()) && meeting.scheduledAt >= now && String(meeting.status || "").toLowerCase() !== "cancelled")
+    .sort((a, b) => a.scheduledAt - b.scheduledAt)
+    .slice(0, 5);
+};
+
 const getDashboardAttendanceStatus = status => {
   const compact = String(status || "").trim().toUpperCase().replace(/[\s_-]+/g, "");
   const statusMap = {
@@ -233,28 +289,48 @@ const buildProductivityBuckets = (start, end, period) => {
 const getEmployeeProductivity = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
+    const companyId = getScopedCompanyId(req.user);
     const companyCode = String(req.user.companyCode || req.user.company?.companyCode || "").trim();
     const {start, end, period} = getProductivityRange(req.query);
+    const userObjectId = (userId && mongoose.Types.ObjectId.isValid(userId)) ? new mongoose.Types.ObjectId(userId) : null;
+    const companyMatches = [
+      ...(companyCode ? [{companyCode}, {companyCode: companyCode.toUpperCase()}] : []),
+      ...(companyId ? [{company: companyId}] : []),
+    ];
+    const companyScope = companyMatches.length ? {$or: companyMatches} : {};
+
     const [attendance, employeeTasks, projects, leaves, holidays] = await Promise.all([
-      Attendance.find({user: userId, companyCode, date: {$gte: start, $lte: end}}).lean(),
-      EmployeeTask.find({companyCode, isActive: {$ne: false}, createdAt: {$lte: end}, $or: [{assignedUsers: userId}, {"statusByUser.user": userId}]}).select("createdAt updatedAt dueDateTime completionDate overallStatus statusByUser statusHistory").lean(),
-      Project.aggregate([
-        {$match: {tasks: {$elemMatch: {assignedTo: new mongoose.Types.ObjectId(userId), createdAt: {$lte: end}}}}},
+      Attendance.find({user: userId, ...companyScope, date: {$gte: start, $lte: end}}).lean(),
+      EmployeeTask.find({
+        ...companyScope,
+        isActive: {$ne: false},
+        createdAt: {$lte: end},
+        $or: [
+          {assignedUsers: userId},
+          {"statusByUser.user": userId},
+          ...(userObjectId ? [{assignedUsers: userObjectId}, {"statusByUser.user": userObjectId}] : [])
+        ]
+      }).select("createdAt updatedAt dueDateTime completionDate overallStatus statusByUser statusHistory").lean(),
+      userObjectId ? Project.aggregate([
+        {$match: {
+          ...companyScope,
+          tasks: {$elemMatch: {assignedTo: userObjectId, createdAt: {$lte: end}}}
+        }},
         {$project: {
           tasks: {$filter: {
             input: "$tasks",
             as: "task",
             cond: {$and: [
-              {$eq: ["$$task.assignedTo", new mongoose.Types.ObjectId(userId)]},
+              {$eq: ["$$task.assignedTo", userObjectId]},
               {$lte: ["$$task.createdAt", end]},
             ]},
           }},
         }},
-      ]),
+      ]) : Promise.resolve([]),
       Leave.find({user: userId, status: /^approved$/i, startDate: {$lte: end}, endDate: {$gte: start}}).select("startDate endDate").lean(),
-      Holiday.find({companyCode, isActive: true, date: {$gte: start, $lte: end}}).select("date").lean(),
+      Holiday.find({...companyScope, isActive: true, date: {$gte: start, $lte: end}}).select("date").lean(),
     ]);
-    const projectTasks = projects.flatMap(project => (project.tasks || [])
+    const projectTasks = (Array.isArray(projects) ? projects : []).flatMap(project => (project.tasks || [])
       .filter(task => String(task.assignedTo) === String(userId) && new Date(task.createdAt) <= end)
       .map(task => ({
         _id: task._id,
@@ -283,6 +359,7 @@ const getEmployeeProductivity = async (req, res) => {
 const getEmployeeDashboardSummary = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id;
+    const userObjectId = (userId && mongoose.Types.ObjectId.isValid(userId)) ? new mongoose.Types.ObjectId(userId) : null;
     const companyId = getScopedCompanyId(req.user);
     const branchId = getScopedBranchId(req.user);
     const companyCode = String(req.user.companyCode || req.user.company?.companyCode || "").trim();
@@ -308,30 +385,49 @@ const getEmployeeDashboardSummary = async (req, res) => {
       attendance,
       todayAttendance,
       leaves,
-      tasks,
+      recentTasks,
+      dashboardTasks,
+      meetings,
+      projects,
       currentUser,
       branch,
     ] = await Promise.all([
       companyId ? Company.findById(companyId).select("dashboardConfig officeLocation").lean() : null,
       JobRole.find({
         isActive: true,
-        ...(companyId ? {company: companyId} : {companyCode}),
+        $or: [
+          ...(companyId ? [{company: companyId}] : []),
+          ...(companyCode ? [{companyCode}, {companyCode: companyCode.toUpperCase()}] : []),
+        ],
       }).select("_id name roleName roleNumber roleNo code jobRole title shiftSettings shifts department").lean(),
       Holiday.find({
         isActive: true,
         date: {$gte: summaryStart, $lte: summaryEnd},
         $or: [
           {companyCode},
+          ...(companyCode ? [{companyCode: companyCode.toUpperCase()}] : []),
           ...(companyId ? [{company: companyId}] : []),
         ],
       }).select("name title date type description").sort({date: 1}).lean(),
-      Attendance.find({user: userId, companyCode, date: {$gte: summaryStart, $lte: todayEnd}})
+      Attendance.find({
+        user: userId,
+        $or: [
+          {companyCode},
+          ...(companyCode ? [{companyCode: companyCode.toUpperCase()}] : []),
+          ...(companyId ? [{company: companyId}] : []),
+        ],
+        date: {$gte: summaryStart, $lte: todayEnd}
+      })
         .select("user date status inTime outTime isClockedIn totalTime duration hoursWorked shiftName shiftStart shiftEnd shiftWindow createdAt updatedAt")
         .sort({date: -1})
         .lean(),
       Attendance.findOne({
         user: userId,
-        companyCode,
+        $or: [
+          {companyCode},
+          ...(companyCode ? [{companyCode: companyCode.toUpperCase()}] : []),
+          ...(companyId ? [{company: companyId}] : []),
+        ],
         date: {$gte: todayStart, $lte: todayEnd},
       })
         .select("user date status inTime outTime isClockedIn totalTime duration hoursWorked shiftName shiftStart shiftEnd shiftWindow createdAt updatedAt")
@@ -346,7 +442,11 @@ const getEmployeeDashboardSummary = async (req, res) => {
         .limit(60)
         .lean(),
       EmployeeTask.find({
-        companyCode,
+        $or: [
+          {companyCode},
+          ...(companyCode ? [{companyCode: companyCode.toUpperCase()}] : []),
+          ...(companyId ? [{company: companyId}] : []),
+        ],
         isActive: {$ne: false},
         $or: [
           {createdBy: userId},
@@ -357,6 +457,54 @@ const getEmployeeDashboardSummary = async (req, res) => {
         .populate("assignedUsers", "name email")
         .sort({updatedAt: -1, createdAt: -1})
         .limit(8)
+        .lean(),
+      EmployeeTask.find({
+        $or: [
+          {companyCode},
+          ...(companyCode ? [{companyCode: companyCode.toUpperCase()}] : []),
+          ...(companyId ? [{company: companyId}] : []),
+        ],
+        isActive: {$ne: false},
+        $or: [
+          {createdBy: userId},
+          {assignedUsers: userId},
+          {"statusByUser.user": userId},
+        ],
+      })
+        .select("createdAt updatedAt dueDateTime completionDate overallStatus status statusByUser statusHistory creatorStatus")
+        .lean(),
+      Meeting.find({
+        $or: [
+          {companyCode},
+          ...(companyCode ? [{companyCode: companyCode.toUpperCase()}] : []),
+          ...(companyId ? [{company: companyId}] : []),
+        ],
+        attendees: userId,
+      })
+        .sort({date: 1, time: 1})
+        .limit(20)
+        .populate("createdBy", "name email")
+        .select("title subject agenda description date time status mode meetingLink link createdBy createdAt")
+        .lean(),
+      Project.find({
+        $or: [
+          { users: userId },
+          { createdBy: userId },
+          { "tasks.assignedTo": userId },
+          { "tasks.assignedUsers": userId },
+          ...(userObjectId ? [
+            { users: userObjectId },
+            { createdBy: userObjectId },
+            { "tasks.assignedTo": userObjectId },
+            { "tasks.assignedUsers": userObjectId },
+          ] : []),
+          ...(companyCode ? [{companyCode}, {companyCode: companyCode.toUpperCase()}] : []),
+          ...(companyId ? [{company: companyId}] : []),
+        ]
+      })
+        .sort({updatedAt: -1, createdAt: -1})
+        .limit(12)
+        .select("projectName name title tasks updatedAt createdAt users createdBy")
         .lean(),
       User.findById(userId)
         .select("_id name email employeeId jobRole department employeeType shiftId shiftName shiftType")
@@ -468,11 +616,91 @@ const getEmployeeDashboardSummary = async (req, res) => {
       leavesTaken: getLeaveDatesInMonth(leaves, monthReference),
       holidayDays: holidays.filter(holiday => isSameCalendarMonth(holiday.date, monthReference)).length,
     };
+    const {taskStats, focusStats} = buildDashboardTaskStats(dashboardTasks, userId, todayStart, todayEnd);
+    const upcomingMeetings = buildUpcomingMeetings(meetings);
+    const productivityStart = new Date(todayStart.getTime() - (6 * DAY_MS));
+    const excludedDates = new Set(holidays.map(item => dateKey(item.date)));
+    leaves.forEach(leave => {
+      if (String(leave.status || "").trim().toUpperCase() !== "APPROVED") return;
+      for (let cursor = startOfDay(leave.startDate); cursor <= endOfDay(leave.endDate); cursor = new Date(cursor.getTime() + DAY_MS)) {
+        excludedDates.add(dateKey(cursor));
+      }
+    });
+
+    let productivityResult = {
+      period: "weekly",
+      from: dateKey(productivityStart),
+      to: dateKey(todayEnd),
+      granularity: "daily",
+      score: 0,
+      label: "Poor",
+      tone: "danger",
+      hasData: false,
+      limitedData: true,
+      breakdown: { taskCompletion: null, onTimeDelivery: null, attendance: null },
+      counts: { attendanceDays: 0, tasks: 0, completed: 0, onTime: 0, deliveryEligible: 0 },
+      series: [],
+    };
+
+    try {
+      const productivityOverall = calculateProductivityMetrics({
+        start: productivityStart,
+        end: todayEnd,
+        attendance,
+        tasks: dashboardTasks,
+        excludedDates,
+        userId,
+      });
+      const productivityBuckets = buildProductivityBuckets(productivityStart, todayEnd, "weekly");
+      const productivitySeries = productivityBuckets.buckets.map(bucket => ({
+        ...bucket,
+        ...calculateProductivityMetrics({...bucket, attendance, tasks: dashboardTasks, excludedDates, userId}),
+      })).map(item => ({
+        date: item.start,
+        label: item.label,
+        score: item.score,
+        hasData: item.hasData,
+        breakdown: item.breakdown,
+        counts: item.counts,
+      }));
+      const [productivityLabel, productivityTone] = productivityBand(productivityOverall.score);
+      productivityResult = {
+        period: "weekly",
+        from: dateKey(productivityStart),
+        to: dateKey(todayEnd),
+        granularity: productivityBuckets.granularity,
+        score: productivityOverall.score,
+        label: productivityLabel,
+        tone: productivityTone,
+        hasData: productivityOverall.hasData,
+        limitedData: [productivityOverall.breakdown.taskCompletion, productivityOverall.breakdown.onTimeDelivery, productivityOverall.breakdown.attendance].filter(Number.isFinite).length < 3,
+        breakdown: productivityOverall.breakdown,
+        counts: productivityOverall.counts,
+        series: productivitySeries,
+      };
+    } catch (prodCalcErr) {
+      console.warn("Productivity calculation skipped due to error:", prodCalcErr.message);
+    }
+
+    const sortedProjects = (projects || []).sort((a, b) => {
+      const aInvolved = (a.users || []).some(id => String(id) === String(userId)) ||
+        String(a.createdBy) === String(userId) ||
+        (a.tasks || []).some(t => String(t.assignedTo) === String(userId) || (t.assignedUsers || []).some(id => String(id) === String(userId)));
+      const bInvolved = (b.users || []).some(id => String(id) === String(userId)) ||
+        String(b.createdBy) === String(userId) ||
+        (b.tasks || []).some(t => String(t.assignedTo) === String(userId) || (t.assignedUsers || []).some(id => String(id) === String(userId)));
+      if (aInvolved && !bInvolved) return -1;
+      if (!aInvolved && bInvolved) return 1;
+      return new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0);
+    });
 
     return res.status(200).json({
       success: true,
       data: {
         monthlyStats,
+        focusStats,
+        taskStats,
+        productivity: productivityResult,
         dashboardConfig: scopedDashboardConfig,
         jobRoles: jobRoles.map(normalizeRoleForDashboard),
         currentUser: {
@@ -483,8 +711,10 @@ const getEmployeeDashboardSummary = async (req, res) => {
         attendance,
         attendanceStatus,
         leaves,
-        recentTasks: tasks,
-        recentActivity: tasks.map(mapTaskActivity),
+        recentTasks,
+        recentActivity: recentTasks.map(mapTaskActivity),
+        upcomingMeetings,
+        projects: sortedProjects,
       },
     });
   } catch (error) {
