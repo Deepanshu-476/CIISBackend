@@ -26,6 +26,18 @@ const CLIENT_DOCUMENT_ALLOWED_MIME_TYPES = [
   'text/plain',
 ];
 
+const CLIENT_DOCUMENT_ALLOWED_EXTENSIONS = [
+  '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.jpg', '.jpeg', '.png', '.webp', '.txt', '.csv'
+];
+
+const isAllowedDocumentFile = (mimeType, originalName) => {
+  const mime = String(mimeType || '').toLowerCase();
+  if (CLIENT_DOCUMENT_ALLOWED_MIME_TYPES.includes(mime)) return true;
+  if (mime === 'image/jpg' || mime === 'text/csv' || mime === 'application/csv') return true;
+  const ext = path.extname(originalName || '').toLowerCase();
+  return CLIENT_DOCUMENT_ALLOWED_EXTENSIONS.includes(ext);
+};
+
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
@@ -46,7 +58,7 @@ const upload = multer({
   storage,
   limits: { fileSize: CLIENT_DOCUMENT_FILE_LIMIT },
   fileFilter: (_req, file, cb) => {
-    if (!CLIENT_DOCUMENT_ALLOWED_MIME_TYPES.includes(file.mimetype)) {
+    if (!isAllowedDocumentFile(file.mimetype, file.originalname)) {
       return cb(new Error('Unsupported file type. Please upload PDF, Word, Excel, image, or text files only.'));
     }
     return cb(null, true);
@@ -413,7 +425,7 @@ router.post('/chunk/start', protect, async (req, res) => {
       });
     }
 
-    if (!CLIENT_DOCUMENT_ALLOWED_MIME_TYPES.includes(mimeType)) {
+    if (!isAllowedDocumentFile(mimeType, fileName)) {
       return res.status(400).json({
         success: false,
         message: 'Unsupported file type. Please upload PDF, Word, Excel, image, or text files only.',

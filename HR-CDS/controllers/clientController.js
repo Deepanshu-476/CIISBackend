@@ -1247,6 +1247,16 @@ const getClientDashboardOverview = async (req, res) => {
     ]);
 
     const userMatchedClients = clients.filter(client => isClientForLoggedInUser(client, currentUser));
+    userMatchedClients.sort((a, b) => {
+      const targetEmail = String(currentUser.email || '').trim().toLowerCase();
+      const rawDetails = parseAdditionalDetails(currentUser.additionalDetails);
+      const targetClientId = String(rawDetails.clientId || currentUser.clientId || currentUser.employeeType || '');
+      const aEmailMatch = String(a.email || '').trim().toLowerCase() === targetEmail ? 2 : 0;
+      const bEmailMatch = String(b.email || '').trim().toLowerCase() === targetEmail ? 2 : 0;
+      const aIdMatch = targetClientId && String(a._id) === targetClientId ? 1 : 0;
+      const bIdMatch = targetClientId && String(b._id) === targetClientId ? 1 : 0;
+      return (bEmailMatch + bIdMatch) - (aEmailMatch + aIdMatch);
+    });
     const availableClients = userMatchedClients.length > 0
       ? userMatchedClients
       : (isPrivilegedPortalViewer ? clients : []);
@@ -2935,6 +2945,48 @@ const markClientReceiptPaymentDone = async (req, res) => {
   return updateClientReceiptStatus(req, res);
 };
 
+const deleteClientReceipt = async (req, res) => {
+  try {
+    const { id, receiptId } = req.params;
+    const client = await Client.findById(id);
+    if (!client) {
+      return res.status(404).json({ success: false, message: 'Client not found' });
+    }
+
+    const receipt = client.paymentReceipts?.id(receiptId);
+    if (!receipt) {
+      return res.status(404).json({ success: false, message: 'Receipt not found' });
+    }
+
+    if (receipt.dueInvoiceId && client.dueInvoices) {
+      const dueInvoice = client.dueInvoices.id(receipt.dueInvoiceId);
+      if (dueInvoice && dueInvoice.status === 'Pending Verification') {
+        dueInvoice.status = 'Due';
+        dueInvoice.receiptId = null;
+      }
+    }
+
+    if (receipt.receiptUrl) {
+      const filePath = path.join(__dirname, '../uploads/receipts', path.basename(receipt.receiptUrl));
+      if (fs.existsSync(filePath)) {
+        try { fs.unlinkSync(filePath); } catch (e) { /* ignore */ }
+      }
+    }
+
+    client.paymentReceipts.pull({ _id: receiptId });
+    await client.save();
+
+    return res.json({
+      success: true,
+      message: 'Payment proof removed successfully',
+      data: client
+    });
+  } catch (error) {
+    console.error('Error deleting client receipt:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   getWelcomeEmailTemplate,
   getCompanyLoginUrl,
@@ -2962,7 +3014,8 @@ module.exports = {
   addClientDueInvoice,
   uploadClientReceipt,
   updateClientReceiptStatus,
-  markClientReceiptPaymentDone
+  markClientReceiptPaymentDone,
+  deleteClientReceipt
 };
 
 void 0;
