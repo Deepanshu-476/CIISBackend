@@ -578,7 +578,7 @@ const getProjectTaskAssignedBy = (task, project) => {
   return task.createdBy || creationLog?.performedBy || project.createdBy;
 };
 
-const fetchPersonalTaskList = async (req) => {
+const fetchPersonalTaskList = async (req, { includeCreatedForOthers = false } = {}) => {
   const companyCode = req.user.companyCode;
   const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
   const companyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : companyCode;
@@ -586,7 +586,7 @@ const fetchPersonalTaskList = async (req) => {
   const tasks = await Task.find({
     companyCode: companyFilter,
     createdBy: req.user._id,
-    taskFor: 'self',
+    ...(includeCreatedForOthers ? { taskFor: { $in: ['self', 'others'] } } : { taskFor: 'self' }),
     isActive: true
   })
     // Remarks and status history are loaded by their dedicated detail endpoints.
@@ -600,7 +600,17 @@ const fetchPersonalTaskList = async (req) => {
     .lean();
 
   const enriched = await enrichStatusInfo(tasks);
-  return enriched.map(t => ({ ...t, status: normalizeTaskStatus(t.overallStatus), taskSource: 'self', __taskSource: 'self' }));
+  return enriched.map(t => {
+    const isPersonal = t.taskFor === 'self';
+    return {
+      ...t,
+      status: normalizeTaskStatus(t.overallStatus),
+      // Created-for-others tasks use the assigned update path, which permits
+      // their creator to update the shared task status.
+      taskSource: isPersonal ? 'self' : 'assigned',
+      __taskSource: isPersonal ? 'self' : 'assigned'
+    };
+  });
 };
 
 const fetchAssignedToMeTaskList = async (req) => {
@@ -709,7 +719,11 @@ const fetchAssignedProjectTaskList = async (req) => {
           }
         }
       }
-    }
+    },
+    // List cards fetch remarks and activity only when the user opens their
+    // respective dialogs. Keeping those unbounded arrays in the aggregate
+    // makes the task-management page increasingly slow as history grows.
+    { $unset: ['tasks.activityLogs', 'tasks.remarks'] }
   ]);
 
   const userIds = new Set();
@@ -752,12 +766,7 @@ const fetchAssignedProjectTaskList = async (req) => {
         ? task.assignedUsers.map(hydrateUser)
         : [];
       const taskCreatedBy = hydrateUser(task.createdBy);
-      const activityLogs = Array.isArray(task.activityLogs)
-        ? task.activityLogs.map(log => ({
-          ...log,
-          performedBy: hydrateUser(log.performedBy)
-        }))
-        : [];
+      const activityLogs = [];
 
       const status = normalizeProjectTaskStatus(task.status);
       const lastActivityAt = task.updatedAt || task.createdAt || project.updatedAt || project.createdAt;
@@ -805,8 +814,8 @@ const fetchAssignedProjectTaskList = async (req) => {
           originalName: task.pdfFile.filename,
           path: task.pdfFile.path
         }] : [],
-        remarks: task.remarks || [],
-        activityLogs: task.activityLogs || [],
+        remarks: [],
+        activityLogs,
         createdAt: task.createdAt || project.createdAt,
         updatedAt: task.updatedAt || project.updatedAt,
         lastActivityAt,
