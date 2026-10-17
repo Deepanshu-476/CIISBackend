@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { trackHoldClock } = require("../utils/onHoldDeadline");
 const {
   normalizeRepeatPattern,
   normalizeRepeatDays,
@@ -100,6 +101,8 @@ const statusSchema = new mongoose.Schema(
     },
     updatedAt: { type: Date, default: Date.now },
     remarks: String,
+    holdStartedAt: { type: Date, default: null },
+    holdOverdueCheckAt: { type: Date, default: null },
     pendingDueReminderSentAt: Date,
     pendingDueReminderDueAt: Date,
   },
@@ -276,6 +279,8 @@ const taskSchema = new mongoose.Schema(
     overdueReason: String,
     overdueNotified: { type: Boolean, default: false },
     onHoldReleasedAt: { type: Date, default: null },
+    holdStartedAt: { type: Date, default: null },
+    holdOverdueCheckAt: { type: Date, default: null },
     completionDate: Date,
 
     lastActivityAt: { type: Date, default: Date.now },
@@ -615,6 +620,15 @@ taskSchema.statics.getTaskWithUserStatus = async function (taskId, userId) {
 };
 
  
+taskSchema.pre('save', function(next) {
+  const now = new Date();
+  trackHoldClock(this, this.overallStatus, this.isModified('overallStatus'), now);
+  for (const item of this.statusByUser || []) {
+    trackHoldClock(item, item.status, item.isModified('status'), now);
+  }
+  next();
+});
+
 taskSchema.pre("save", function (next) {
   const normalizedRepeatPattern = normalizeRepeatPattern(this.repeatPattern || this.recurringPattern);
   const normalizedRepeatDays = normalizeRepeatDays(this.repeatDays);
@@ -678,4 +692,7 @@ taskSchema.post("save", function (doc) {
 });
 
  
+taskSchema.index({ overallStatus: 1, holdOverdueCheckAt: 1 });
+taskSchema.index({ 'statusByUser.status': 1, 'statusByUser.holdOverdueCheckAt': 1 });
+
 module.exports = mongoose.model("Task", taskSchema);
