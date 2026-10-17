@@ -278,7 +278,7 @@ exports.sendPushToUsers = async ({userIds, title, body, data = {}}) => {
         priority: 'high',
         ...(isCall ? {ttl: 45000} : {notification: {
           sound: 'default',
-          channelId: 'ciis_high_priority',
+          channelId: ['task_due_reminder', 'task_pending_reminder'].includes(data.type) ? 'ciis_task_reminders_v1' : 'ciis_high_priority',
         }}),
       },
       apns: {

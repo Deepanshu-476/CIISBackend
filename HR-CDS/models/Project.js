@@ -1,3 +1,4 @@
+const { trackHoldClock } = require('../utils/onHoldDeadline');
 const mongoose = require("mongoose");
 const { Schema } = mongoose;
 
@@ -86,6 +87,8 @@ const TaskSchema = new Schema(
     dueDate: { type: Date },
     dueDateTime: { type: Date },
     onHoldReleasedAt: { type: Date, default: null },
+    holdStartedAt: { type: Date, default: null },
+    holdOverdueCheckAt: { type: Date, default: null },
     completionDate: { type: Date, default: null },
     priority: { type: String, enum: PRIORITY_LEVELS, default: "medium" },
     status: { type: String, enum: TASK_STATUS, default: "pending" },
@@ -107,6 +110,11 @@ const TaskSchema = new Schema(
 );
 
  
+TaskSchema.pre('save', function(next) {
+  trackHoldClock(this, this.status, this.isModified('status'));
+  next();
+});
+
 const ProjectSchema = new Schema(
   {
     projectName: { type: String, required: true, trim: true },
@@ -214,6 +222,8 @@ TaskSchema.methods.addActivityLog = function(activity) {
 };
 
  
+ProjectSchema.index({ 'tasks.status': 1, 'tasks.holdOverdueCheckAt': 1 });
+
 const Project = mongoose.model("Project", ProjectSchema);
 
 module.exports = {
