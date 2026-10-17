@@ -358,8 +358,14 @@ const sanitizeAdminUserUpdateData = updateData => {
     if (clean[field] !== undefined) clean[field] = String(clean[field] || '').replace(/\D/g, '').slice(0, 10);
   });
   if (clean.pinCode !== undefined) clean.pinCode = String(clean.pinCode || '').replace(/\D/g, '').slice(0, 6);
+  if (clean.zipCode !== undefined) {
+    const cleanZip = String(clean.zipCode || '').replace(/\D/g, '').slice(0, 6);
+    clean.zipCode = cleanZip;
+    if (!clean.pinCode) clean.pinCode = cleanZip;
+  }
+  if (clean.accountNumber !== undefined) clean.accountNumber = String(clean.accountNumber || '').replace(/\D/g, '').slice(0, 20);
 
-  if (clean.ifsc) clean.ifsc = String(clean.ifsc).trim().toUpperCase();
+  if (clean.ifsc) clean.ifsc = String(clean.ifsc).trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 11);
 
   if (clean.salary === '' || clean.salary === null || clean.salary === undefined) {
     delete clean.salary;
@@ -1836,6 +1842,7 @@ exports.updateUser = async (req, res) => {
 
     delete updateData.userId;
     delete updateData.targetUserId;
+    delete updateData.employeeId;
     const sanitizedUpdateData = sanitizeAdminUserUpdateData(updateData);
     Object.keys(updateData).forEach(key => delete updateData[key]);
     Object.assign(updateData, sanitizedUpdateData);

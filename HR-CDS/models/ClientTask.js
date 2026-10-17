@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { trackHoldClock } = require('../utils/onHoldDeadline');
 
 const normalizeClientTaskPriority = value => {
   const priority = String(value || '').trim().toLowerCase();
@@ -124,6 +125,7 @@ const clienttaskSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  holdOverdueCheckAt: { type: Date, default: null },
   totalHoldSeconds: {
     type: Number,
     default: 0
@@ -238,7 +240,10 @@ clienttaskSchema.pre('save', function(next) {
       }
     }
   }
+  trackHoldClock(this, this.status, this.isModified('status'));
   next();
 });
+
+clienttaskSchema.index({ status: 1, holdOverdueCheckAt: 1 });
 
 module.exports = mongoose.model('ClientTask', clienttaskSchema);
