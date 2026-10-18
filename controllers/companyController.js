@@ -1,4 +1,5 @@
 const Company = require("../models/Company");
+const { isPlatformOwner } = require("../middleware/authMiddleware");
 const User = require("../models/User");
 const Branch = require("../models/Branch");
 const Department = require("../models/Department");
@@ -693,6 +694,12 @@ exports.getAllCompanies = async (req, res) => {
   try {
     const { page, limit, skip } = getPaginationOptions(req.query, { limit: 20, maxLimit: 100 });
     const filter = {};
+    // Company owners (jobRole super_admin) only see their own company; the platform owner sees all.
+    if (!isPlatformOwner(req.user)) {
+      const ownCompanyId = getScopedCompanyId(req.user?.company || req.user?.companyId);
+      if (!ownCompanyId) return res.status(403).json({ success: false, message: "Company scope required" });
+      filter._id = ownCompanyId;
+    }
     const search = String(req.query.search || req.query.q || "").trim();
 
     if (search) {
@@ -1939,7 +1946,8 @@ const getScopedCompanyId = (value) => {
 const canManageDashboardConfig = (req, companyId) => {
   const userCompanyId = getScopedCompanyId(req.user?.company || req.user?.companyId);
   const userRole = String(req.user?.role || req.user?.jobRole || req.user?.companyRole || "").toLowerCase();
-  const isPlatformAdmin = Boolean(req.user?.isSuperAdmin) || userRole === "super-admin" || userRole === "super_admin";
+  // jobRole super_admin is every company owner; only the real platform owner may manage other companies.
+  const isPlatformAdmin = isPlatformOwner(req.user);
 
   return isPlatformAdmin || (userCompanyId && userCompanyId === String(companyId));
 };

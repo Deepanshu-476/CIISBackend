@@ -248,7 +248,7 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
       .lean();
   } else {
     personalQueryExec = personalQueryExec
-      .select('title description dueDate dueDateTime priority overallStatus statusByUser statusHistory completionDate assignedUsers assignedGroups createdBy companyCode taskFor onHoldReleasedAt createdAt updatedAt remarks lastEditedBy lastEditedByName lastEditedAt lastEditChanges')
+      .select('title description dueDate dueDateTime priority overallStatus statusByUser statusHistory completionDate assignedUsers assignedGroups createdBy companyCode taskFor onHoldReleasedAt createdAt updatedAt remarks checkpoints lastEditedBy lastEditedByName lastEditedAt lastEditChanges')
       .populate('assignedUsers', TASK_USER_POPULATE_FIELDS)
       .populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS)
       .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
@@ -258,7 +258,7 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
       .lean();
 
     clientQueryExec = clientQueryExec
-      .select('name description dueDate priority status completed clientId service createdAt updatedAt assignee assigneeId activityLogs remarks lastEditedBy lastEditedByName lastEditedAt lastEditChanges')
+      .select('name description dueDate priority status completed clientId service createdAt updatedAt assignee assigneeId activityLogs remarks checkpoints lastEditedBy lastEditedByName lastEditedAt lastEditChanges')
       .populate('clientId', 'client name email company phone companyCode')
       .populate('assigneeId', TASK_USER_POPULATE_FIELDS)
       .populate('activityLogs.user', TASK_USER_POPULATE_FIELDS)
@@ -286,6 +286,7 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
         'tasks.updatedAt',
         'tasks.activityLogs',
         'tasks.remarks',
+        'tasks.checkpoints',
         'tasks.lastEditedBy',
         'tasks.lastEditedByName',
         'tasks.lastEditedAt',
@@ -384,6 +385,7 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
         projectTaskId: task._id,
         activityLogs: Array.isArray(task.activityLogs) ? task.activityLogs : [],
         remarks: Array.isArray(task.remarks) ? task.remarks : [],
+        checkpoints: Array.isArray(task.checkpoints) ? task.checkpoints : [],
         createdAt: task.createdAt || project.createdAt,
         updatedAt: task.updatedAt || project.updatedAt,
         lastActivityAt: task.updatedAt || task.createdAt || project.updatedAt || project.createdAt,
