@@ -42,7 +42,7 @@ const revisionHistorySchema = new mongoose.Schema({
 }, { _id: true });
 
 const employeeSalarySchema = new mongoose.Schema({
-  company: { type: mongoose.Schema.Types.ObjectId, ref: "Company", required: true, index: true },
+  company: { type: mongoose.Schema.Types.ObjectId, ref: "Company", required: true },
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
   salaryStructure: { type: mongoose.Schema.Types.ObjectId, ref: "SalaryStructure", required: true },
   department: { type: String, trim: true, default: "" },

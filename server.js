@@ -1114,7 +1114,10 @@ const AUTH_AFFECTING_WRITE = /^\/(api\/)?(users|auth|company|superAdmin|job-role
 app.use((req, res, next) => {
   if (req.method !== 'GET' && req.method !== 'HEAD' && AUTH_AFFECTING_WRITE.test(req.path)) {
     res.on('finish', () => {
-      if (res.statusCode < 400) invalidateAuthUser();
+      if (res.statusCode < 400) {
+        invalidateAuthUser();
+        require('./HR-CDS/middlewares/auth').invalidateChatAuthUser();
+      }
     });
   }
   next();

@@ -64,13 +64,11 @@ const feedbackQuestionnaireSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Company',
       default: null,
-      index: true,
     },
     branch: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Branch',
       default: null,
-      index: true,
     },
     targetedUsers: [{
       type: mongoose.Schema.Types.ObjectId,
@@ -79,7 +77,6 @@ const feedbackQuestionnaireSchema = new mongoose.Schema(
     recipientIds: [{
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
-      index: true,
     }],
     questions: {
       type: [feedbackQuestionSchema],

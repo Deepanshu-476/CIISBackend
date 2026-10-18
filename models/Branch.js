@@ -23,7 +23,6 @@ const branchSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Company",
       required: [true, "Company is required"],
-      index: true
     },
 
     companyCode: {
@@ -31,7 +30,6 @@ const branchSchema = new mongoose.Schema(
       required: [true, "Company code is required"],
       uppercase: true,
       trim: true,
-      index: true
     },
 
     address: {

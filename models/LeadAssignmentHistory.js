@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const { autoResolveLeadAssignmentHistory } = require("../services/cascadeSyncEngine");
 
 const leadAssignmentHistorySchema = new mongoose.Schema({
-  company: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true },
+  company: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true },
   lead: { type: mongoose.Schema.Types.ObjectId, ref: 'Lead', required: true, index: true },
   leadName: { type: String, index: true, default: '' },
   leadPhone: { type: String, index: true, default: '' },

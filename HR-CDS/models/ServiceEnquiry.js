@@ -64,7 +64,6 @@ const serviceEnquirySchema = new mongoose.Schema({
     type: String,
     trim: true,
     uppercase: true,
-    index: true
   },
   companyIdentifier: {
     type: String,

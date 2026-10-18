@@ -1,0 +1,495 @@
+[
+ {
+  "collection": "alerts",
+  "key": {
+   "company": 1
+  }
+ },
+ {
+  "collection": "alerts",
+  "key": {
+   "companyCode": 1
+  }
+ },
+ {
+  "collection": "assetrequests",
+  "key": {
+   "companyCode": 1
+  }
+ },
+ {
+  "collection": "attendances",
+  "key": {
+   "companyCode": 1
+  }
+ },
+ {
+  "collection": "branches",
+  "key": {
+   "company": 1
+  }
+ },
+ {
+  "collection": "branches",
+  "key": {
+   "companyCode": 1
+  }
+ },
+ {
+  "collection": "calllogs",
+  "key": {
+   "agentEmail": 1
+  }
+ },
+ {
+  "collection": "calllogs",
+  "key": {
+   "agentName": 1
+  }
+ },
+ {
+  "collection": "calllogs",
+  "key": {
+   "company": 1
+  }
+ },
+ {
+  "collection": "calllogs",
+  "key": {
+   "leadName": 1
+  }
+ },
+ {
+  "collection": "calllogs",
+  "key": {
+   "leadPhone": 1
+  }
+ },
+ {
+  "collection": "calllogs",
+  "key": {
+   "leadSourceName": 1
+  }
+ },
+ {
+  "collection": "calllogs",
+  "key": {
+   "leadStatus": 1
+  }
+ },
+ {
+  "collection": "calllogs",
+  "key": {
+   "leadTypeName": 1
+  }
+ },
+ {
+  "collection": "calllogs",
+  "key": {
+   "status": 1
+  }
+ },
+ {
+  "collection": "chatbotlogs",
+  "key": {
+   "companyCode": 1
+  }
+ },
+ {
+  "collection": "chatstatuses",
+  "key": {
+   "companyId": 1
+  }
+ },
+ {
+  "collection": "clientdocuments",
+  "key": {
+   "client": 1
+  }
+ },
+ {
+  "collection": "clientdocuments",
+  "key": {
+   "companyCode": 1
+  }
+ },
+ {
+  "collection": "clientmeetings",
+  "key": {
+   "clientId": 1
+  }
+ },
+ {
+  "collection": "clientmeetings",
+  "key": {
+   "companyCode": 1
+  }
+ },
+ {
+  "collection": "clientmeetingviews",
+  "key": {
+   "meetingId": 1
+  }
+ },
+ {
+  "collection": "clientplans",
+  "key": {
+   "companyCode": 1
+  }
+ },
+ {
+  "collection": "clients",
+  "key": {
+   "parentClientId": 1
+  }
+ },
+ {
+  "collection": "clienttasks",
+  "key": {
+   "assignee": 1
+  }
+ },
+ {
+  "collection": "clienttasks",
+  "key": {
+   "assigneeId": 1
+  }
+ },
+ {
+  "collection": "clienttasks",
+  "key": {
+   "status": 1
+  }
+ },
+ {
+  "collection": "departments",
+  "key": {
+   "company": 1,
+   "branch": 1,
+   "isActive": 1
+  }
+ },
+ {
+  "collection": "employeesalaries",
+  "key": {
+   "company": 1
+  }
+ },
+ {
+  "collection": "feedbackquestionnaires",
+  "key": {
+   "branch": 1
+  }
+ },
+ {
+  "collection": "feedbackquestionnaires",
+  "key": {
+   "company": 1
+  }
+ },
+ {
+  "collection": "feedbackquestionnaires",
+  "key": {
+   "recipientIds": 1
+  }
+ },
+ {
+  "collection": "feedbackresponses",
+  "key": {
+   "questionnaire": 1
+  }
+ },
+ {
+  "collection": "followups",
+  "key": {
+   "agentEmail": 1
+  }
+ },
+ {
+  "collection": "followups",
+  "key": {
+   "agentName": 1
+  }
+ },
+ {
+  "collection": "followups",
+  "key": {
+   "company": 1
+  }
+ },
+ {
+  "collection": "followups",
+  "key": {
+   "leadName": 1
+  }
+ },
+ {
+  "collection": "followups",
+  "key": {
+   "leadPhone": 1
+  }
+ },
+ {
+  "collection": "followups",
+  "key": {
+   "leadSourceName": 1
+  }
+ },
+ {
+  "collection": "followups",
+  "key": {
+   "leadStatus": 1
+  }
+ },
+ {
+  "collection": "followups",
+  "key": {
+   "leadTypeName": 1
+  }
+ },
+ {
+  "collection": "followups",
+  "key": {
+   "priority": 1
+  }
+ },
+ {
+  "collection": "followups",
+  "key": {
+   "status": 1
+  }
+ },
+ {
+  "collection": "groups",
+  "key": {
+   "company": 1
+  }
+ },
+ {
+  "collection": "groups",
+  "key": {
+   "companyCode": 1
+  }
+ },
+ {
+  "collection": "jobroles",
+  "key": {
+   "company": 1,
+   "department": 1,
+   "isActive": 1
+  }
+ },
+ {
+  "collection": "knowledgebasearticles",
+  "key": {
+   "companyCode": 1
+  }
+ },
+ {
+  "collection": "leadassignmenthistories",
+  "key": {
+   "company": 1
+  }
+ },
+ {
+  "collection": "leads",
+  "key": {
+   "assignedToName": 1
+  }
+ },
+ {
+  "collection": "leads",
+  "key": {
+   "company": 1
+  }
+ },
+ {
+  "collection": "leads",
+  "key": {
+   "leadSourceName": 1
+  }
+ },
+ {
+  "collection": "leads",
+  "key": {
+   "leadTypeName": 1
+  }
+ },
+ {
+  "collection": "leads",
+  "key": {
+   "name": 1
+  }
+ },
+ {
+  "collection": "leads",
+  "key": {
+   "phone": 1
+  }
+ },
+ {
+  "collection": "leads",
+  "key": {
+   "source": 1
+  }
+ },
+ {
+  "collection": "leads",
+  "key": {
+   "status": 1
+  }
+ },
+ {
+  "collection": "leadsources",
+  "key": {
+   "company": 1
+  }
+ },
+ {
+  "collection": "leadtypes",
+  "key": {
+   "company": 1
+  }
+ },
+ {
+  "collection": "leavepolicies",
+  "key": {
+   "company": 1
+  }
+ },
+ {
+  "collection": "leaves",
+  "key": {
+   "companyCode": 1
+  }
+ },
+ {
+  "collection": "leaves",
+  "key": {
+   "user": 1
+  }
+ },
+ {
+  "collection": "leavetypes",
+  "key": {
+   "company": 1
+  }
+ },
+ {
+  "collection": "notifications",
+  "key": {
+   "recipient": 1
+  }
+ },
+ {
+  "collection": "overtimerequests",
+  "key": {
+   "companyCode": 1
+  }
+ },
+ {
+  "collection": "overtimerequests",
+  "key": {
+   "user": 1
+  }
+ },
+ {
+  "collection": "pagedatavisibilities",
+  "key": {
+   "company": 1
+  }
+ },
+ {
+  "collection": "pagepermissions",
+  "key": {
+   "company": 1
+  }
+ },
+ {
+  "collection": "payrollruns",
+  "key": {
+   "company": 1
+  }
+ },
+ {
+  "collection": "projects",
+  "key": {
+   "company": 1
+  }
+ },
+ {
+  "collection": "projects",
+  "key": {
+   "companyCode": 1
+  }
+ },
+ {
+  "collection": "salarycomponents",
+  "key": {
+   "company": 1
+  }
+ },
+ {
+  "collection": "salarystructures",
+  "key": {
+   "company": 1
+  }
+ },
+ {
+  "collection": "serviceenquiries",
+  "key": {
+   "companyCode": 1
+  }
+ },
+ {
+  "collection": "supportenquiries",
+  "key": {
+   "companyCode": 1
+  }
+ },
+ {
+  "collection": "supporttickets",
+  "key": {
+   "companyCode": 1
+  }
+ },
+ {
+  "collection": "tasks",
+  "key": {
+   "companyCode": 1
+  }
+ },
+ {
+  "collection": "users",
+  "key": {
+   "company": 1,
+   "department": 1
+  }
+ },
+ {
+  "collection": "users",
+  "key": {
+   "company": 1,
+   "isActive": 1
+  }
+ },
+ {
+  "collection": "users",
+  "key": {
+   "company": 1,
+   "jobRole": 1
+  }
+ },
+ {
+  "collection": "users",
+  "key": {
+   "company": 1
+  }
+ },
+ {
+  "collection": "users",
+  "key": {
+   "companyCode": 1
+  }
+ }
+]
