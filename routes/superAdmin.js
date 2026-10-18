@@ -5,7 +5,7 @@ const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
 const Company = require('../models/Company');
 const User = require('../models/User');
-const { protect, restrictTo } = require('../middleware/authMiddleware');
+const { protect, restrictTo, isPlatformOwner, requirePlatformOwner } = require('../middleware/authMiddleware');
 const { getPaginationOptions } = require('../utils/pagination');
 
 const setPaginationHeaders = (res, { total, page, limit }) => {
@@ -155,22 +155,11 @@ router.post('/login', superAdminLoginLimiter, async (req, res) => {
 router.use(protect, restrictTo('super_admin'));
 
 // Every company owner is created with jobRole "super_admin", so restrictTo('super_admin') alone lets
-// any company owner reach these platform routes. Only the platform owner (same identity used by
-// demoRequestRoutes / appVersionRoutes / emailSettingsRoutes) or an explicit isSuperAdmin flag gets
+// any company owner reach these platform routes. Only the platform owner (isPlatformOwner) gets
 // cross-company access; everyone else is scoped to their own company.
-const PLATFORM_OWNER_EMAIL = 'ashutoshrai130@gmail.com';
-const isPlatformOwner = user => (
-  String(user?.email || '').trim().toLowerCase() === PLATFORM_OWNER_EMAIL ||
-  user?.isSuperAdmin === true ||
-  user?.superAdmin === true
-);
 const ownCompanyId = user => {
   const value = user?.company?._id || user?.company || user?.companyId;
   return value ? String(value) : '';
-};
-const requirePlatformOwner = (req, res, next) => {
-  if (isPlatformOwner(req.user)) return next();
-  return res.status(403).json({ success: false, message: 'Only the platform owner can change company status.' });
 };
 
 
