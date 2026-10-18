@@ -1,10 +1,13 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
 const Company = require('../models/Company');
 const User = require('../models/User');
+const Department = require('../models/Department');
+const JobRole = require('../models/JobRole');
 const { protect, restrictTo, isPlatformOwner, requirePlatformOwner } = require('../middleware/authMiddleware');
 const { getPaginationOptions } = require('../utils/pagination');
 
@@ -251,6 +254,65 @@ router.get('/users', async (req, res) => {
   }
 });
 
+
+// One company's users, paged on the server for All Company > Users (web and app). The old screens
+// pulled /users (capped at 50 rows across every company) and filtered in the browser.
+// Platform owner: any company. Company owner: only their own company.
+const COMPANY_USER_FIELDS = 'name email phone employeeId profileImage department departmentName jobRole jobRoleName companyRole isActive createdAt lastLogin company';
+const ADMIN_ROLE = /^(owner|admin|super[ _-]?admin|company[ _-]?(owner|admin))$/i;
+const escapeRegex = value => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+router.get('/company/:id/users', async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ error: 'Invalid company id' });
+    if (!isPlatformOwner(req.user) && ownCompanyId(req.user) !== id) return res.status(403).json({ error: 'Not allowed for this company' });
+    const companyObjectId = new mongoose.Types.ObjectId(id);
+    const { page, limit, skip } = getPaginationOptions(req.query || {}, { limit: 20, maxLimit: 100 });
+
+    const [departments, jobRoles] = await Promise.all([
+      Department.find({ company: companyObjectId }).select('name').lean(),
+      JobRole.find({ company: companyObjectId }).select('name').lean(),
+    ]);
+    const departmentNames = new Map(departments.map(d => [String(d._id), d.name]));
+    const jobRoleNames = new Map(jobRoles.map(r => [String(r._id), r.name]));
+
+    const base = { company: companyObjectId };
+    const filter = { ...base };
+    if (req.query.status === 'active') filter.isActive = { $ne: false };
+    if (req.query.status === 'inactive') filter.isActive = false;
+    const term = String(req.query.search || '').trim();
+    if (term) {
+      const pattern = new RegExp(escapeRegex(term), 'i');
+      const deptIds = departments.filter(d => pattern.test(d.name || '')).map(d => String(d._id));
+      const roleIds = jobRoles.filter(r => pattern.test(r.name || '')).map(r => String(r._id));
+      filter.$or = [
+        { name: pattern }, { email: pattern }, { phone: pattern }, { employeeId: pattern },
+        { departmentName: pattern }, { jobRoleName: pattern }, { jobRole: pattern }, { companyRole: pattern },
+        ...(deptIds.length ? [{ department: { $in: deptIds } }] : []),
+        ...(roleIds.length ? [{ jobRole: { $in: roleIds } }] : []),
+      ];
+    }
+    const adminFilter = { ...base, $or: [{ jobRole: ADMIN_ROLE }, { jobRoleName: ADMIN_ROLE }, { companyRole: ADMIN_ROLE }] };
+
+    const [users, total, all, active, admins] = await Promise.all([
+      User.find(filter).select(COMPANY_USER_FIELDS).sort({ name: 1, _id: 1 }).collation({ locale: 'en' }).skip(skip).limit(limit).lean(),
+      User.countDocuments(filter),
+      User.countDocuments(base),
+      User.countDocuments({ ...base, isActive: { $ne: false } }),
+      User.countDocuments(adminFilter),
+    ]);
+    const items = users.map(u => ({
+      ...u,
+      departmentName: departmentNames.get(String(u.department)) || u.departmentName || '',
+      jobRoleName: jobRoleNames.get(String(u.jobRole)) || u.jobRoleName || (ADMIN_ROLE.test(u.jobRole || '') ? u.jobRole : ''),
+    }));
+    setPaginationHeaders(res, { total, page, limit });
+    res.json({ items, total, page, limit, pages: Math.max(1, Math.ceil(total / limit)), stats: { total: all, active, inactive: all - active, admins } });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch company users' });
+  }
+});
 
 router.patch('/company/:id/deactivate', requirePlatformOwner, async (req, res) => {
   try {
