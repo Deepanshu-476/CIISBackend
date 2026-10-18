@@ -372,9 +372,14 @@ taskSchema.virtual('daysOverdue').get(function() {
  
 
 
+// assignedUsers / statusByUser.user may be populated user documents (the overdue cron populates
+// assignedUsers). Document.toString() is not the id, so a plain toString() comparison never matched and
+// checkAndMarkOverdue pushed a second statusByUser entry per user while the stale one stayed first.
+const sameTaskUserId = (left, right) => String(left?._id || left) === String(right?._id || right);
+
 taskSchema.methods.updateUserStatus = function (userId, status, remarks = "") {
   const userStatusIndex = this.statusByUser.findIndex(
-    (s) => s.user && s.user.toString() === userId.toString()
+    (s) => s.user && sameTaskUserId(s.user, userId)
   );
 
   const oldStatus = userStatusIndex !== -1 
@@ -421,7 +426,7 @@ taskSchema.methods.checkAndMarkOverdue = function () {
   
   this.assignedUsers.forEach((userId) => {
     const userStatusIndex = this.statusByUser.findIndex(
-      (s) => s.user && s.user.toString() === userId.toString()
+      (s) => s.user && sameTaskUserId(s.user, userId)
     );
     
     if (userStatusIndex !== -1) {
@@ -448,7 +453,7 @@ taskSchema.methods.checkAndMarkOverdue = function () {
   
   const allUsersOverdue = this.assignedUsers.length > 0 && this.assignedUsers.every((assignedUserId) => {
     const userStatus = this.statusByUser.find(
-      s => s.user && s.user.toString() === assignedUserId.toString()
+      s => s.user && sameTaskUserId(s.user, assignedUserId)
     );
     return userStatus && userStatus.status === 'overdue';
   });
@@ -481,7 +486,7 @@ taskSchema.methods.markUserStatusOverdue = function (userId, remarks = '') {
   if (!canMoveToOverdue(this.overallStatus)) return false;
 
   const userStatusIndex = this.statusByUser.findIndex(
-    (s) => s.user && s.user.toString() === userId.toString()
+    (s) => s.user && sameTaskUserId(s.user, userId)
   );
   
   if (userStatusIndex === -1) {
@@ -503,7 +508,7 @@ taskSchema.methods.markUserStatusOverdue = function (userId, remarks = '') {
   
   const allUsersOverdue = this.assignedUsers.every(assignedUserId => {
     const userStatus = this.statusByUser.find(
-      s => s.user && s.user.toString() === assignedUserId.toString()
+      s => s.user && sameTaskUserId(s.user, assignedUserId)
     );
     return userStatus && userStatus.status === 'overdue';
   });
@@ -609,7 +614,7 @@ taskSchema.statics.getTaskWithUserStatus = async function (taskId, userId) {
   if (!task) return null;
   
   const userStatus = task.statusByUser.find(
-    s => s.user && s.user.toString() === userId.toString()
+    s => s.user && sameTaskUserId(s.user, userId)
   );
   
   return {
