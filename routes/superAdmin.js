@@ -213,8 +213,14 @@ router.get('/companies', async (req, res) => {
       Company.countDocuments(filter)
     ]);
     setPaginationHeaders(res, { total, page, limit });
-    
-    res.json(companies);
+
+    // Per-company user counts (the page used to count a /users list that is capped at 50 rows).
+    const counts = await User.aggregate([
+      { $match: { company: { $in: companies.map(company => company._id) } } },
+      { $group: { _id: '$company', n: { $sum: 1 } } }
+    ]);
+    const countByCompany = new Map(counts.map(row => [String(row._id), row.n]));
+    res.json(companies.map(company => ({ ...company, userCount: countByCompany.get(String(company._id)) || 0 })));
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch companies' });
   }
