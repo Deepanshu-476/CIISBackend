@@ -1189,6 +1189,8 @@ app.use('/api/job-roles', require("./routes/jobRoleRoutes.js"));
 app.use('/api/job-role', require("./routes/jobRoleRoutes.js"));
 app.use('/job-roles', require("./routes/jobRoleRoutes.js"));
 app.use('/job-role', require("./routes/jobRoleRoutes.js"));
+// Read-only per-company data for the platform owner (All Company -> View Data).
+app.use('/api/superAdmin/company/:id/view', require('./routes/superAdminCompanyView.js'));
 app.use('/api/superAdmin', require("./routes/superAdmin.js"));
 app.use("/api/meetings", require("./HR-CDS/routes/meetingRoutes.js"));
 app.use('/api/cmeeting', require("./HR-CDS/routes/clientMeetingRoutes.js"));
