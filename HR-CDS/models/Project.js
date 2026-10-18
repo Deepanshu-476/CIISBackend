@@ -119,8 +119,8 @@ const ProjectSchema = new Schema(
   {
     projectName: { type: String, required: true, trim: true },
     description: { type: String, trim: true },
-    company: { type: Schema.Types.ObjectId, ref: "Company", index: true },
-    companyCode: { type: String, trim: true, uppercase: true, index: true },
+    company: { type: Schema.Types.ObjectId, ref: "Company" },
+    companyCode: { type: String, trim: true, uppercase: true },
     branch: { type: Schema.Types.ObjectId, ref: "Branch", index: true },
     users: [{ type: Schema.Types.ObjectId, ref: "User" }],
     status: { type: String, enum: PROJECT_STATUS, default: "active" },

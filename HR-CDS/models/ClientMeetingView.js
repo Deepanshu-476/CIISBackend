@@ -5,7 +5,6 @@ const clientMeetingViewSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'ClientMeeting',
     required: true,
-    index: true
   },
   clientId: {
     type: mongoose.Schema.Types.ObjectId,
