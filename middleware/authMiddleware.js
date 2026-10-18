@@ -359,6 +359,22 @@ const isSuperAdminUserCandidate = (user) => {
 
 exports.isSuperAdminUser = isSuperAdminUserCandidate;
 
+// Company owners are created with jobRole "super_admin", so isSuperAdminUser() is true for every
+// company owner. Cross-company (platform) actions must use this stricter check instead: the platform
+// owner account (same identity as demoRequestRoutes / appVersionRoutes / emailSettingsRoutes) or an
+// explicit isSuperAdmin/superAdmin flag.
+const PLATFORM_OWNER_EMAIL = 'ashutoshrai130@gmail.com';
+const isPlatformOwner = (user) => (
+  String(user?.email || '').trim().toLowerCase() === PLATFORM_OWNER_EMAIL ||
+  user?.isSuperAdmin === true ||
+  user?.superAdmin === true
+);
+exports.isPlatformOwner = isPlatformOwner;
+exports.requirePlatformOwner = (req, res, next) => {
+  if (isPlatformOwner(req.user)) return next();
+  return res.status(403).json({ success: false, message: 'Only the platform owner can perform this action.' });
+};
+
 const normalizeRole = (role) => {
   return String(role || '')
     .trim()
