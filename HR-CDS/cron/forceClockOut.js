@@ -436,6 +436,7 @@ let autoClockOutJob = null;
 
 const scheduleAutoClockOutJob = () => {
   if (autoClockOutJob) return autoClockOutJob;
+  if (!require('../../utils/scheduledJobs').scheduledJobsEnabled()) return null;
 
   schedule.scheduleJob('*/1 * * * *', async () => {
     try {
