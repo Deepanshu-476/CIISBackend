@@ -14,6 +14,7 @@ const {
   formatFollowUpForClient,
   formatAssignmentHistoryForClient
 } = require('../services/cascadeSyncEngine');
+const { isPagedRequest, sendLeadPage, sendCallLogPage, sendFollowUpPage } = require('../services/crmListQuery');
 
 function getDayBounds(date = new Date()) {
   const istOffset = 5.5 * 60 * 60000;
@@ -429,6 +430,7 @@ exports.overview = async (req, res, next) => {
 exports.assignedCalls = async (req, res, next) => {
   try {
     const company = req.crmCompany;
+    if (isPagedRequest(req)) return await sendLeadPage(req, res, { name: 'assigned', base: { company, assignedTo: { $ne: null } }, sort: { assignedAt: -1 } });
     const { assignedTo, source, type, from, to, search } = req.query;
 
     const filter = { company, assignedTo: { $ne: null } };
@@ -480,6 +482,7 @@ exports.todaysCalls = async (req, res, next) => {
 exports.callHistory = async (req, res, next) => {
   try {
     const company = req.crmCompany;
+    if (isPagedRequest(req)) return await sendCallLogPage(req, res, { name: 'history', base: { company } });
     const { agentId, status, from, to, search } = req.query;
 
     const filter = { company };
@@ -521,6 +524,7 @@ exports.callHistory = async (req, res, next) => {
 exports.pendingCalls = async (req, res, next) => {
   try {
     const company = req.crmCompany;
+    if (isPagedRequest(req)) return await sendLeadPage(req, res, { name: 'pending', base: { company, assignedTo: { $ne: null }, status: { $in: ['new', 'follow-up', 'interested'] } }, sort: { assignedAt: -1 } });
     const { assignedTo, source, leadType, search } = req.query;
 
     const filter = {
@@ -553,6 +557,7 @@ exports.pendingCalls = async (req, res, next) => {
 exports.scheduledCalls = async (req, res, next) => {
   try {
     const company = req.crmCompany;
+    if (isPagedRequest(req)) return await sendLeadPage(req, res, { name: 'scheduled', base: { company, nextFollowUp: { $ne: null } }, sort: { nextFollowUp: 1 } });
     const { assignedTo, date, source, leadType } = req.query;
 
     const filter = {
@@ -580,6 +585,7 @@ exports.scheduledCalls = async (req, res, next) => {
 exports.completedCalls = async (req, res, next) => {
   try {
     const company = req.crmCompany;
+    if (isPagedRequest(req)) return await sendLeadPage(req, res, { name: 'completed', base: { company, status: { $in: ['converted', 'closed'] } }, sort: { updatedAt: -1 } });
     const items = await Lead.find({
       company,
       status: { $in: ['converted', 'closed'] }
@@ -595,6 +601,7 @@ exports.completedCalls = async (req, res, next) => {
 exports.convertedCalls = async (req, res, next) => {
   try {
     const company = req.crmCompany;
+    if (isPagedRequest(req)) return await sendLeadPage(req, res, { name: 'converted', base: { company, status: 'converted' }, sort: { updatedAt: -1 } });
     const items = await Lead.find({
       company,
       status: 'converted'
@@ -650,6 +657,7 @@ exports.transferredCalls = async (req, res, next) => {
 exports.followUps = async (req, res, next) => {
   try {
     const company = req.crmCompany;
+    if (isPagedRequest(req)) return await sendFollowUpPage(req, res, { name: 'follow-ups', base: { company } });
     const items = await FollowUp.find({ company })
       .sort({ date: 1 })
       .lean();

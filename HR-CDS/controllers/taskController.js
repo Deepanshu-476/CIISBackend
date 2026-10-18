@@ -1931,17 +1931,30 @@ exports.getAssignedTasks = async (req, res) => {
       taskFilter.$or = orConditions;
     }
 
-    const tasks = await Task.find(taskFilter)
+    // Filters, sorting and stats only need a few fields, so every matching task is loaded light
+    // (no populate, no remarks/files/checkpoints). Full documents are loaded for the returned page only.
+    const lightFields = [
+      'title', 'name', 'clientName', 'service', 'priority', 'overallStatus', 'statusByUser', 'dueDateTime',
+      'dueDate', 'createdAt', 'updatedAt', 'completionDate', 'completedAt', 'onHoldReleasedAt', 'assignedUsers',
+      'createdBy', 'taskFor', 'isActive', 'branch', 'statusHistory.status', 'statusHistory.newValue',
+      'statusHistory.newValues', 'statusHistory.changedAt', 'statusHistory.createdAt', 'statusHistory.updatedAt',
+      ...(req.query?.search ? ['description'] : [])
+    ].join(' ');
+    const lightTasks = await Task.find(taskFilter).select(lightFields).sort({ createdAt: -1 }).lean();
+
+    const mapped = lightTasks.map(t => ({ ...t, status: normalizeTaskStatus(t.overallStatus) }));
+    const filtered = sortTasksNewestFirst(applyCleanListFilters(mapped, req));
+    const paginated = paginateTasks(filtered, req);
+
+    const pageIds = paginated.tasks.map(t => t._id);
+    const fullTasks = pageIds.length ? await Task.find({ _id: { $in: pageIds } })
       .populate('branch', 'name branchCode')
       .populate('assignedUsers', 'name role email department branch assignedBranches')
       .populate('createdBy', 'name email')
-      .sort({ createdAt: -1 })
-      .lean();
-
-    const enriched = await enrichStatusInfo(tasks);
-    const mapped = enriched.map(t => ({ ...t, status: normalizeTaskStatus(t.overallStatus) }));
-    const filtered = sortTasksNewestFirst(applyCleanListFilters(mapped, req));
-    const paginated = paginateTasks(filtered, req);
+      .lean() : [];
+    const enrichedPage = await enrichStatusInfo(fullTasks);
+    const fullById = new Map(enrichedPage.map(t => [String(t._id), { ...t, status: normalizeTaskStatus(t.overallStatus) }]));
+    paginated.tasks = pageIds.map(id => fullById.get(String(id))).filter(Boolean);
 
     const calculateTaskSummary = (taskList = []) => {
       let pending = 0;

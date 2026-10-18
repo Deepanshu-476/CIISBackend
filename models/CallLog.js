@@ -37,6 +37,7 @@ callLogSchema.index(
   { company: 1, agent: 1, clientCallId: 1 },
   { unique: true, partialFilterExpression: { clientCallId: { $type: 'string' } } }
 );
+callLogSchema.index({ company: 1, createdAt: -1 });
 callLogSchema.index({ company: 1, agent: 1, createdAt: -1 });
 callLogSchema.index({ company: 1, lead: 1, createdAt: -1 });
 callLogSchema.index({ company: 1, status: 1, createdAt: -1 });
