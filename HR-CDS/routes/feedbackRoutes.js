@@ -8,6 +8,7 @@ router.use(protect);
 router.get('/assigned', feedbackController.getAssignedQuestionnaires);
 router.post('/questionnaires/:id/respond', feedbackController.submitResponse);
 
+router.get('/recipients', feedbackController.listRecipients);
 router.get('/questionnaires', feedbackController.listQuestionnaires);
 router.get('/questionnaires/:id', feedbackController.getQuestionnaireById);
 router.get('/questionnaires/:id/responses', feedbackController.getResponses);
