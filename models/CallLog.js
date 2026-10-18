@@ -38,6 +38,9 @@ callLogSchema.index(
   { unique: true, partialFilterExpression: { clientCallId: { $type: 'string' } } }
 );
 callLogSchema.index({ company: 1, createdAt: -1 });
+// Telecaller call log list sort (startTime, createdAt) for admins and for one agent.
+callLogSchema.index({ company: 1, startTime: -1, createdAt: -1 });
+callLogSchema.index({ company: 1, agent: 1, startTime: -1, createdAt: -1 });
 callLogSchema.index({ company: 1, agent: 1, createdAt: -1 });
 callLogSchema.index({ company: 1, lead: 1, createdAt: -1 });
 callLogSchema.index({ company: 1, status: 1, createdAt: -1 });

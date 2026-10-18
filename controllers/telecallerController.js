@@ -127,6 +127,20 @@ exports.getOne = async (req, res, next) => {
   } catch (error) { next(error); }
 };
 
+// Call bucket used by the app's Call History (missed / outgoing / incoming / unknown), same rules as the client.
+const CALL_TYPE_LOWER = { $toLower: { $ifNull: ['$callType', ''] } };
+const CALL_BUCKET_EXPR = {
+  $switch: {
+    branches: [
+      { case: { $or: [{ $eq: [CALL_TYPE_LOWER, 'missed'] }, { $in: ['$status', ['missed', 'not reachable']] }] }, then: 'missed' },
+      { case: { $in: [CALL_TYPE_LOWER, ['', 'outgoing', 'outbound']] }, then: 'outgoing' },
+      { case: { $in: [CALL_TYPE_LOWER, ['incoming', 'inbound']] }, then: 'incoming' },
+      { case: { $eq: [CALL_TYPE_LOWER, 'unknown'] }, then: 'unknown' }
+    ],
+    default: 'other'
+  }
+};
+
 exports.callLogs = async (req, res, next) => {
   try {
     const CallLog = require('../models/CallLog');
@@ -139,13 +153,45 @@ exports.callLogs = async (req, res, next) => {
     if (req.query?.status) filter.status = String(req.query.status).toLowerCase();
 
     const limit = Math.min(Math.max(parseInt(req.query?.limit, 10) || 200, 1), 500);
-    const items = await CallLog.find(filter)
-      .populate('lead', 'name phone email source leadSource leadType status address gender remarks')
-      .populate('agent', 'name email role companyRole')
-      .sort({ startTime: -1, createdAt: -1 })
-      .limit(limit)
-      .lean();
-    res.json({ items: (items || []).map(formatCallLogForClient) });
+    // ?page enables paging (older clients asked for one capped list of up to 500 and never saw older calls).
+    const paged = req.query?.page !== undefined;
+    const page = Math.max(1, parseInt(req.query?.page, 10) || 1);
+    if (req.query?.search) {
+      const pattern = new RegExp(String(req.query.search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      filter.$or = [{ leadName: pattern }, { leadPhone: pattern }, { agentName: pattern }, { notes: pattern }];
+    }
+    const baseFilter = { ...filter };
+    if (paged && ['missed', 'outgoing', 'incoming', 'unknown'].includes(String(req.query?.bucket || ''))) {
+      filter.$expr = { $eq: [CALL_BUCKET_EXPR, String(req.query.bucket)] };
+    }
+    const [items, total, buckets] = await Promise.all([
+      CallLog.find(filter)
+        .populate('lead', 'name phone email source leadSource leadType status address gender remarks')
+        .populate('agent', 'name email role companyRole')
+        .sort({ startTime: -1, createdAt: -1 })
+        .skip(paged ? (page - 1) * limit : 0)
+        .limit(limit)
+        .lean(),
+      paged ? CallLog.countDocuments(filter) : Promise.resolve(null),
+      paged
+        ? CallLog.aggregate([
+          { $match: { ...baseFilter, company: new mongoose.Types.ObjectId(String(baseFilter.company)), ...(baseFilter.agent ? { agent: new mongoose.Types.ObjectId(String(baseFilter.agent)) } : {}), ...(baseFilter.lead ? { lead: new mongoose.Types.ObjectId(String(baseFilter.lead)) } : {}) } },
+          { $group: { _id: CALL_BUCKET_EXPR, count: { $sum: 1 }, seconds: { $sum: { $ifNull: ['$duration', 0] } } } }
+        ])
+        : Promise.resolve(null)
+    ]);
+    const body = { items: (items || []).map(formatCallLogForClient) };
+    if (paged) {
+      const summary = { total: 0, totalSeconds: 0 };
+      ['missed', 'outgoing', 'incoming', 'unknown'].forEach(key => { summary[key] = { count: 0, seconds: 0 }; });
+      (buckets || []).forEach(row => {
+        summary.total += row.count;
+        summary.totalSeconds += row.seconds;
+        if (summary[row._id]) summary[row._id] = { count: row.count, seconds: row.seconds };
+      });
+      Object.assign(body, { total, page, limit, pages: Math.max(1, Math.ceil(total / limit)), summary });
+    }
+    res.json(body);
   } catch (error) { next(error); }
 };
 
