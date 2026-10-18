@@ -2012,7 +2012,9 @@ exports.getAssignedTasks = async (req, res) => {
 };
 
 const handleTaskCreation = async (req, res, isSelf) => {
-  const { title, description, dueDateTime, whatsappNumber, priorityDays, priority, assignedUsers, assignedGroups, checkpoints } = req.body;
+  const { title, description, dueDateTime, whatsappNumber, priorityDays, priority, assignedGroups, checkpoints } = req.body;
+  // Some clients (web Company All Task "Assign Task") send `assignedTo`; it was ignored, creating tasks with no assignee.
+  const assignedUsers = req.body.assignedUsers ?? req.body.assignedTo;
   const companyCode = getRequestCompanyCode(req);
   let branchId = getRequestedTaskBranchId(req);
   const failTaskCreation = (status, message) => res.status(status).json({ success: false, error: message, message });
@@ -2102,6 +2104,10 @@ const handleTaskCreation = async (req, res, isSelf) => {
 
   const parsedGroups = !isSelf && assignedGroups && assignedGroups !== 'null' ?
     (typeof assignedGroups === 'string' ? JSON.parse(assignedGroups) : assignedGroups) : [];
+
+  if (!isSelf && parsedUsers.length === 0 && (!Array.isArray(parsedGroups) || parsedGroups.length === 0)) {
+    return failTaskCreation(400, 'Select at least one user or group to assign this task');
+  }
 
   const files = (req.files?.files || []).map(f => ({ filename: f.filename, originalName: f.originalname, path: f.path, uploadedBy: req.user._id }));
   const voiceNote = req.files?.voiceNote?.[0] ? { filename: req.files.voiceNote[0].filename, originalName: req.files.voiceNote[0].originalname, path: req.files.voiceNote[0].path, uploadedBy: req.user._id } : null;
