@@ -285,6 +285,7 @@ const resolveSelectedShiftSettings = async (userObj) => {
 };
 
 let isAutoClockOutSweepRunning = false;
+let lastAutoClockOutSweepAt = 0;
 
 const runAutoClockOutSweep = async () => {
   if (mongoose.connection.readyState !== 1) return { processed: 0, updated: 0 };
@@ -420,7 +421,15 @@ const runAutoClockOutSweep = async () => {
     return { processed: records.length, updated };
   } finally {
     isAutoClockOutSweepRunning = false;
+    lastAutoClockOutSweepAt = Date.now();
   }
+};
+
+// Request handlers (attendance status/list) used to run the full all-company sweep on every call.
+// The cron below already runs it every minute, so requests only trigger it when the last run is stale.
+const runAutoClockOutSweepIfStale = async (maxAgeMs = 60000) => {
+  if (Date.now() - lastAutoClockOutSweepAt < maxAgeMs) return { processed: 0, updated: 0, skipped: true };
+  return runAutoClockOutSweep();
 };
 
 let autoClockOutJob = null;
@@ -444,5 +453,6 @@ scheduleAutoClockOutJob();
 
 module.exports = {
   runAutoClockOutSweep,
+  runAutoClockOutSweepIfStale,
   scheduleAutoClockOutJob
 };

@@ -94,6 +94,17 @@ const assertAlertInCompany = async (alert, user) => {
   return false;
 };
 
+// An employee sees alerts addressed to them, to one of their groups, or broadcast alerts (no users and
+// no groups). The old filter used "no users OR no groups", so an alert sent to specific users (groups
+// empty) or to specific groups (users empty) was shown to every employee in the company.
+const visibleToEmployeeQuery = (userId, userGroupIds) => ({
+  $or: [
+    { assignedUsers: { $in: [userId] } },
+    { assignedGroups: { $in: userGroupIds } },
+    { assignedUsers: { $size: 0 }, assignedGroups: { $size: 0 } },
+  ],
+});
+
 const getAlerts = async (req, res) => {
   try {
     const userId = req.user?._id;
@@ -106,14 +117,7 @@ const getAlerts = async (req, res) => {
       const userGroups = await Group.find({ members: userId }).select('_id');
       const userGroupIds = userGroups.map(group => group._id);
       
-      assignmentQuery = {
-        $or: [
-          { assignedUsers: { $in: [userId] } },
-          { assignedGroups: { $in: userGroupIds } },
-          { assignedUsers: { $size: 0 } }, 
-          { assignedGroups: { $size: 0 } }  
-        ]
-      };
+      assignmentQuery = visibleToEmployeeQuery(userId, userGroupIds);
     }
     
     const alerts = await Alert.find(mergeQueries(companyQuery, assignmentQuery))
@@ -153,12 +157,7 @@ const getUnreadCount = async (req, res) => {
       const userGroups = await Group.find({ members: userId }).select('_id');
       const userGroupIds = userGroups.map(group => group._id);
       
-      query = mergeQueries(query, {$or: [
-        { assignedUsers: { $in: [userId] } },
-        { assignedGroups: { $in: userGroupIds } },
-        { assignedUsers: { $size: 0 } },
-        { assignedGroups: { $size: 0 } }
-      ]});
+      query = mergeQueries(query, visibleToEmployeeQuery(userId, userGroupIds));
     }
     
     const count = await Alert.countDocuments(query);

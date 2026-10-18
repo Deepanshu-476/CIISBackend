@@ -2,32 +2,30 @@ const mongoose = require("mongoose");
 const { autoResolveFollowUp } = require("../services/cascadeSyncEngine");
 
 const followUpSchema = new mongoose.Schema({
-  company: { type: mongoose.Schema.Types.ObjectId, ref: "Company", index: true },
+  company: { type: mongoose.Schema.Types.ObjectId, ref: "Company" },
   lead: { type: mongoose.Schema.Types.ObjectId, ref: "Lead", required: true, index: true },
-  leadName: { type: String, index: true, default: '' },
-  leadPhone: { type: String, index: true, default: '' },
+  leadName: { type: String, default: '' },
+  leadPhone: { type: String, default: '' },
   leadEmail: { type: String, default: '' },
   leadSource: { type: mongoose.Schema.Types.ObjectId, ref: 'LeadSource', index: true },
-  leadSourceName: { type: String, index: true, default: '' },
+  leadSourceName: { type: String, default: '' },
   leadType: { type: mongoose.Schema.Types.ObjectId, ref: 'LeadType', index: true },
-  leadTypeName: { type: String, index: true, default: '' },
-  leadStatus: { type: String, index: true, default: '' },
+  leadTypeName: { type: String, default: '' },
+  leadStatus: { type: String, default: '' },
   agent: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
-  agentName: { type: String, index: true, default: '' },
-  agentEmail: { type: String, index: true, default: '' },
+  agentName: { type: String, default: '' },
+  agentEmail: { type: String, default: '' },
   sourceCallId: { type: String, trim: true },
   date: { type: Date, required: true, index: true },
   status: {
     type: String,
     enum: ["pending", "done"],
     default: "pending",
-    index: true,
   },
   priority: {
     type: String,
     enum: ["low", "medium", "high"],
     default: "medium",
-    index: true,
   },
   note: String
 }, { timestamps: true });

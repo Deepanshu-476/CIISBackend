@@ -403,11 +403,11 @@ const userSchema = new mongoose.Schema({
   
 assets: [{
   type: mongoose.Schema.Types.ObjectId,
-  ref: 'Asset'
+  ref: 'CompanyAsset'
 }],
 currentlyAssignedAssets: [{
   type: mongoose.Schema.Types.ObjectId,
-  ref: 'Asset'
+  ref: 'CompanyAsset'
 }],
   
   reportingManager: {
@@ -627,5 +627,9 @@ userSchema.path('phone').validate(function (phone) {
   if (!phone) return true;
   return /^[0-9]{10}$/.test(phone);
 }, 'Phone number must be 10 digits');
+
+// Skip $or branches on fields User does not have (companyId, branchId, departmentId) so they stop
+// forcing full scans of the users collection.
+userSchema.plugin(require("../utils/dropUnknownOrBranches"));
 
 module.exports = mongoose.model("User", userSchema);
