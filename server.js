@@ -234,7 +234,10 @@ const runDbJobOnce = async (label, job, options) => {
   }
 };
 
+const { scheduledJobsEnabled } = require('./utils/scheduledJobs');
+
 const scheduleDbJob = (cronExpression, label, job, options) => {
+  if (!scheduledJobsEnabled()) return null;
   return schedule.scheduleJob(cronExpression, () => {
     runDbJobOnce(label, job, options);
   });
@@ -948,7 +951,7 @@ scheduleDbJob('* * * * *', 'Pending task reminders', sendConfiguredTaskReminders
 scheduleDbJob('0 18 * * *', 'Holiday reminders', sendTomorrowHolidayReminders);
 
 
-setTimeout(async () => {
+if (scheduledJobsEnabled()) setTimeout(async () => {
   try {
     await dbConnectionPromise;
     void 0;
@@ -1342,7 +1345,7 @@ const startServer = async () => {
   server.listen(PORT, async () => {
 
   // Temporarily enabled for work-anniversary email template testing.
-  try {
+  if (scheduledJobsEnabled()) try {
     const anniversarySummary = await runWorkAnniversaryEmails();
     console.log("Startup work anniversary test completed:", anniversarySummary);
   } catch (err) {
@@ -1357,7 +1360,8 @@ const startServer = async () => {
   }
 
   
-  try {
+  // Re-schedules reminders for every upcoming meeting; only the instance that runs scheduled jobs does this.
+  if (scheduledJobsEnabled()) try {
     const { initMeetingScheduler } = require("./services/meetingSchedulerService");
     initMeetingScheduler();
   } catch (err) {
