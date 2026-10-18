@@ -109,6 +109,7 @@ router.get("/:id/overview", protect, requireCompanyAdminOrSuperAdmin, companyCon
 // Company statistics and users (Company Admin or SuperAdmin)
 router.get("/:id/stats", protect, requireCompanyAdminOrSuperAdmin, companyController.getCompanyStats);
 router.get("/:id/users", protect, requireCompanyAdminOrSuperAdmin, companyController.getCompanyUsers);
+router.get("/:id/admins", protect, requireCompanyAdminOrSuperAdmin, companyController.getCompanyAdmins);
 
 // SuperAdmin platform control
 router.patch("/:id/access", protect, restrictTo("super_admin"), requirePlatformOwner, companyController.updateCompanyAccess);
