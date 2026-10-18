@@ -2,14 +2,15 @@ const express = require("express");
 const router = express.Router();
 const companyController = require("../controllers/companyController");
 const multer = require("multer");
-const { protect, restrictTo, isSuperAdminUser } = require("../middleware/authMiddleware");
+const { protect, restrictTo, isSuperAdminUser, isPlatformOwner, requirePlatformOwner } = require("../middleware/authMiddleware");
 
 // Scoping helpers
 const requireCompanyMember = (req, res, next) => {
   if (!req.user) {
     return res.status(401).json({ success: false, message: "Not authorized" });
   }
-  if (isSuperAdminUser(req.user)) {
+  // Platform owner only: every company owner has jobRole super_admin (see isPlatformOwner).
+  if (isPlatformOwner(req.user)) {
     return next();
   }
   const targetCompanyId = String(req.params.id || req.params.companyId || "");
@@ -28,7 +29,8 @@ const requireCompanyAdminOrSuperAdmin = (req, res, next) => {
   if (!req.user) {
     return res.status(401).json({ success: false, message: "Not authorized" });
   }
-  if (isSuperAdminUser(req.user)) {
+  // Platform owner only: every company owner has jobRole super_admin (see isPlatformOwner).
+  if (isPlatformOwner(req.user)) {
     return next();
   }
   const targetCompanyId = String(req.params.id || req.params.companyId || "");
@@ -109,11 +111,11 @@ router.get("/:id/stats", protect, requireCompanyAdminOrSuperAdmin, companyContro
 router.get("/:id/users", protect, requireCompanyAdminOrSuperAdmin, companyController.getCompanyUsers);
 
 // SuperAdmin platform control
-router.patch("/:id/access", protect, restrictTo("super_admin"), companyController.updateCompanyAccess);
-router.patch("/:id/subscription", protect, restrictTo("super_admin"), companyController.renewCompanySubscription);
-router.patch("/:id/deactivate", protect, restrictTo("super_admin"), companyController.deactivateCompany);
-router.patch("/:id/activate", protect, restrictTo("super_admin"), companyController.activateCompany);
-router.delete("/:id", protect, restrictTo("super_admin"), companyController.deleteCompanyPermanently);
+router.patch("/:id/access", protect, restrictTo("super_admin"), requirePlatformOwner, companyController.updateCompanyAccess);
+router.patch("/:id/subscription", protect, restrictTo("super_admin"), requirePlatformOwner, companyController.renewCompanySubscription);
+router.patch("/:id/deactivate", protect, restrictTo("super_admin"), requirePlatformOwner, companyController.deactivateCompany);
+router.patch("/:id/activate", protect, restrictTo("super_admin"), requirePlatformOwner, companyController.activateCompany);
+router.delete("/:id", protect, restrictTo("super_admin"), requirePlatformOwner, companyController.deleteCompanyPermanently);
 
 router.get('/test', (req, res) => {
   if (process.env.NODE_ENV === 'production') {

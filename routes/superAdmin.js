@@ -154,17 +154,42 @@ router.post('/login', superAdminLoginLimiter, async (req, res) => {
 
 router.use(protect, restrictTo('super_admin'));
 
+// Every company owner is created with jobRole "super_admin", so restrictTo('super_admin') alone lets
+// any company owner reach these platform routes. Only the platform owner (same identity used by
+// demoRequestRoutes / appVersionRoutes / emailSettingsRoutes) or an explicit isSuperAdmin flag gets
+// cross-company access; everyone else is scoped to their own company.
+const PLATFORM_OWNER_EMAIL = 'ashutoshrai130@gmail.com';
+const isPlatformOwner = user => (
+  String(user?.email || '').trim().toLowerCase() === PLATFORM_OWNER_EMAIL ||
+  user?.isSuperAdmin === true ||
+  user?.superAdmin === true
+);
+const ownCompanyId = user => {
+  const value = user?.company?._id || user?.company || user?.companyId;
+  return value ? String(value) : '';
+};
+const requirePlatformOwner = (req, res, next) => {
+  if (isPlatformOwner(req.user)) return next();
+  return res.status(403).json({ success: false, message: 'Only the platform owner can change company status.' });
+};
+
 
 router.get('/stats', async (req, res) => {
   try {
-    const totalCompanies = await Company.countDocuments();
-    const activeCompanies = await Company.countDocuments({ isActive: true });
-    const totalUsers = await User.countDocuments();
+    const platform = isPlatformOwner(req.user);
+    const companyId = ownCompanyId(req.user);
+    if (!platform && !companyId) return res.status(403).json({ error: 'Company scope required' });
+    const companyFilter = platform ? {} : { _id: companyId };
+    const userFilter = platform ? {} : { company: companyId };
+    const totalCompanies = await Company.countDocuments(companyFilter);
+    const activeCompanies = await Company.countDocuments({ ...companyFilter, isActive: true });
+    const totalUsers = await User.countDocuments(userFilter);
     
     
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const todayLogins = await User.countDocuments({
+      ...userFilter,
       lastLogin: { $gte: today }
     });
     
@@ -185,14 +210,18 @@ router.get('/stats', async (req, res) => {
 router.get('/companies', async (req, res) => {
   try {
     const { page, limit, skip } = getPaginationOptions(req.query || {}, { limit: 50, maxLimit: 100 });
+    const platform = isPlatformOwner(req.user);
+    const companyId = ownCompanyId(req.user);
+    if (!platform && !companyId) return res.status(403).json({ error: 'Company scope required' });
+    const filter = platform ? {} : { _id: companyId };
     const [companies, total] = await Promise.all([
-      Company.find()
+      Company.find(filter)
         .populate('selectedPlan', 'name price durationDays features allowedPages')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
         .lean(),
-      Company.countDocuments()
+      Company.countDocuments(filter)
     ]);
     setPaginationHeaders(res, { total, page, limit });
     
@@ -206,14 +235,18 @@ router.get('/companies', async (req, res) => {
 router.get('/users', async (req, res) => {
   try {
     const { page, limit, skip } = getPaginationOptions(req.query || {}, { limit: 50, maxLimit: 100 });
+    const platform = isPlatformOwner(req.user);
+    const companyId = ownCompanyId(req.user);
+    if (!platform && !companyId) return res.status(403).json({ error: 'Company scope required' });
+    const filter = platform ? {} : { company: companyId };
     const [users, total] = await Promise.all([
-      User.find()
+      User.find(filter)
         .populate('company', 'companyName')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
         .lean(),
-      User.countDocuments()
+      User.countDocuments(filter)
     ]);
     setPaginationHeaders(res, { total, page, limit });
     
@@ -224,7 +257,7 @@ router.get('/users', async (req, res) => {
 });
 
 
-router.patch('/company/:id/deactivate', async (req, res) => {
+router.patch('/company/:id/deactivate', requirePlatformOwner, async (req, res) => {
   try {
     await Company.findByIdAndUpdate(req.params.id, { isActive: false });
     res.json({ message: 'Company deactivated' });
@@ -234,7 +267,7 @@ router.patch('/company/:id/deactivate', async (req, res) => {
 });
 
 
-router.patch('/company/:id/activate', async (req, res) => {
+router.patch('/company/:id/activate', requirePlatformOwner, async (req, res) => {
   try {
     await Company.findByIdAndUpdate(req.params.id, { isActive: true });
     res.json({ message: 'Company activated' });
@@ -244,7 +277,7 @@ router.patch('/company/:id/activate', async (req, res) => {
 });
 
 
-router.delete('/company/:id', async (req, res) => {
+router.delete('/company/:id', requirePlatformOwner, async (req, res) => {
   try {
     await Company.findByIdAndDelete(req.params.id);
     res.json({ message: 'Company deleted' });
