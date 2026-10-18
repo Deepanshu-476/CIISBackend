@@ -2665,14 +2665,18 @@ exports.getRemarks = async (req, res) => {
 
 exports.getNotifications = async (req, res) => {
   try {
-    const ownerFilter = { $or: [{ recipient: req.user._id }, { user: req.user._id }] };
+    // Notification has no `user` field, so the old { $or: [recipient, user] } could not use an index and
+    // scanned the whole collection. The list was also unbounded (thousands of rows for active users);
+    // the task pages only show it in a drawer, and unreadCount is computed separately.
+    const ownerFilter = { recipient: req.user._id };
     const filter = { ...ownerFilter };
     if (req.query.unreadOnly === 'true') filter.isRead = false;
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
 
-
-
-    const notifications = await Notification.find(filter).sort({ createdAt: -1 }).lean();
-    const unreadCount = await Notification.countDocuments({ ...ownerFilter, isRead: false });
+    const [notifications, unreadCount] = await Promise.all([
+      Notification.find(filter).sort({ createdAt: -1 }).limit(limit).lean(),
+      Notification.countDocuments({ ...ownerFilter, isRead: false }),
+    ]);
     res.json({ success: true, notifications, unreadCount });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -2682,7 +2686,7 @@ exports.getNotifications = async (req, res) => {
 exports.markNotificationAsRead = async (req, res) => {
   try {
     const notification = await Notification.findOneAndUpdate(
-      { _id: req.params.notificationId, $or: [{ recipient: req.user._id }, { user: req.user._id }] },
+      { _id: req.params.notificationId, recipient: req.user._id },
       { isRead: true, readAt: new Date() },
       { new: true }
     );
@@ -2695,7 +2699,7 @@ exports.markNotificationAsRead = async (req, res) => {
 exports.markAllNotificationsAsRead = async (req, res) => {
   try {
     await Notification.updateMany(
-      { $or: [{ recipient: req.user._id }, { user: req.user._id }], isRead: false },
+      { recipient: req.user._id, isRead: false },
       { isRead: true, readAt: new Date() }
     );
     res.json({ success: true, message: 'All notifications marked as read' });

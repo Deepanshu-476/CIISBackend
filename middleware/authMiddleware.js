@@ -64,6 +64,60 @@ exports.verify = async (req, res) => {
   }
 };
 
+// protect() runs on every API request. It used to load the full User document plus 3 populates and a
+// JobRole lookup (5 queries) each time. Now it loads only the fields req.user needs, lean, and keeps the
+// result for a few seconds per process, so bursts of requests from the same user (dashboards fire 5-15
+// calls at once) cost one lookup. Deactivation / password change still apply within AUTH_USER_CACHE_TTL_MS.
+const AUTH_USER_FIELDS = [
+  'name', 'email', 'companyRole', 'jobRole', 'employeeId', 'phone', 'branch', 'assignedBranches', 'branchCode',
+  'department', 'company', 'companyCode', 'isActive', 'lastLogin', 'createdAt', 'employeeType', 'workLocation',
+  'clientId', 'clientUserId', 'additionalDetails', 'lastPasswordChange', 'passwordChangedAt',
+].join(' ');
+const AUTH_USER_CACHE_TTL_MS = Number(process.env.AUTH_USER_CACHE_TTL_MS ?? 10000);
+const AUTH_USER_CACHE_MAX = 5000;
+const authUserCache = new Map();
+
+const loadAuthUser = async (userId) => {
+  const key = String(userId);
+  const now = Date.now();
+  const hit = authUserCache.get(key);
+  if (hit && hit.expiresAt > now) return hit.value;
+
+  const user = await User.findById(userId)
+    .select(AUTH_USER_FIELDS)
+    .populate('company', 'companyName companyCode logo isActive')
+    .populate('assignedBranches', 'name branchCode')
+    .populate('department', 'name')
+    .lean();
+  if (!user) {
+    authUserCache.delete(key);
+    return null;
+  }
+
+  let jobRoleName = user.jobRole;
+  if (user.jobRole && mongoose.Types.ObjectId.isValid(user.jobRole)) {
+    try {
+      const jrDoc = await JobRole.findById(user.jobRole).select('name').lean();
+      if (jrDoc && jrDoc.name) {
+        jobRoleName = jrDoc.name;
+      }
+    } catch (_) {}
+  }
+
+  const value = { user, jobRoleName };
+  if (AUTH_USER_CACHE_TTL_MS > 0) {
+    if (authUserCache.size >= AUTH_USER_CACHE_MAX) authUserCache.delete(authUserCache.keys().next().value);
+    authUserCache.set(key, { value, expiresAt: now + AUTH_USER_CACHE_TTL_MS });
+  }
+  return value;
+};
+
+// Call after changing a user's role, status, company or password so it applies immediately in this process.
+exports.invalidateAuthUser = (userId) => {
+  if (userId) authUserCache.delete(String(userId));
+  else authUserCache.clear();
+};
+
 exports.protect = async (req, res, next) => {
   try {
     let token;
@@ -105,14 +159,11 @@ exports.protect = async (req, res, next) => {
       }
       
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      
-      const user = await User.findById(userId)
-        .select('+lastPasswordChange +passwordChangedAt')
-        .populate('company', 'companyName companyCode logo isActive')
-        .populate('assignedBranches', 'name branchCode')
-        .populate('department', 'name');
-        
-      
+
+      const cachedAuth = await loadAuthUser(userId);
+      const user = cachedAuth?.user;
+
+
       if (!user) {
         void 0;
         return res.status(401).json({
@@ -155,15 +206,7 @@ exports.protect = async (req, res, next) => {
       }
       
       
-      let jobRoleName = user.jobRole;
-      if (user.jobRole && mongoose.Types.ObjectId.isValid(user.jobRole)) {
-        try {
-          const jrDoc = await JobRole.findById(user.jobRole).select('name').lean();
-          if (jrDoc && jrDoc.name) {
-            jobRoleName = jrDoc.name;
-          }
-        } catch (_) {}
-      }
+      const jobRoleName = cachedAuth.jobRoleName;
 
       req.user = {
         _id: user._id,

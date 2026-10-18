@@ -8,7 +8,7 @@ const schedule = require('node-schedule');
 const http = require('http');
 const socketIo = require('socket.io');
 const mongoose = require('mongoose');
-const { protect, restrictTo } = require("./middleware/authMiddleware");
+const { protect, restrictTo, invalidateAuthUser } = require("./middleware/authMiddleware");
     
 dotenv.config();
 
@@ -1092,6 +1092,18 @@ app.use((req, res, next) => {
   next();
 });
 
+
+// protect() caches the auth user for a few seconds; drop that cache after any successful write that can
+// change a user's role, status, password, branch, department or company.
+const AUTH_AFFECTING_WRITE = /^\/(api\/)?(users|auth|company|superAdmin|job-roles?|branches|departments?)(\/|$)/;
+app.use((req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD' && AUTH_AFFECTING_WRITE.test(req.path)) {
+    res.on('finish', () => {
+      if (res.statusCode < 400) invalidateAuthUser();
+    });
+  }
+  next();
+});
 
 const dashboardRoutes = require('./HR-CDS/routes/dashboardRoutes.js');
 
