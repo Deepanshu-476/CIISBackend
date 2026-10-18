@@ -153,7 +153,9 @@ const getUnreadCount = async (req, res) => {
       readBy: { $ne: userId }
     });
     
-    if (!isManager) {
+    // ?mine=1: only alerts addressed to this user (sidebar badge), even for managers.
+    const mineOnly = ['1', 'true'].includes(String(req.query?.mine || '').toLowerCase());
+    if (!isManager || mineOnly) {
       const userGroups = await Group.find({ members: userId }).select('_id');
       const userGroupIds = userGroups.map(group => group._id);
       

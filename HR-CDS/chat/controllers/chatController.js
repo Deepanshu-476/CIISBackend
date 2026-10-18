@@ -65,15 +65,7 @@ const getConversationMuteState = (conversation, userId) => {
   return {muted: true, mutedUntil: setting.mutedUntil || null};
 };
 
-const getUnreadCount = (conversationId, userId, companyId) => Message.countDocuments({
-  conversationId,
-  companyId,
-  sender: {$ne: userId},
-  seenBy: {$ne: userId},
-  deletedFor: {$ne: userId},
-  deletedForEveryone: false,
-  ...activeMessageFilter(),
-});
+const {getUnreadCount, setReadMark} = require("../utils/unreadCount");
 
 const getLastVisibleMessage = (conversationId, userId, companyId) => Message.findOne({
   conversationId,
@@ -88,11 +80,12 @@ const withConversationMeta = async (conversation, userId, companyId) => {
   const plain = conversation.toObject ? conversation.toObject() : conversation;
   const [lastMessage, unreadCount] = await Promise.all([
     getLastVisibleMessage(plain._id, userId, companyId),
-    getUnreadCount(plain._id, userId, companyId),
+    getUnreadCount(plain._id, userId, companyId, plain.readState || []),
   ]);
 
   return {
     ...plain,
+    readState: undefined,
     notificationSettings: undefined,
     notificationPreference: getConversationMuteState(plain, userId),
     lastMessage,
@@ -105,7 +98,7 @@ const emitUnreadCounts = async (conversation, senderId) => {
 
   await Promise.all((conversation.members || []).map(async member => {
     const memberId = member.toString();
-    const count = await getUnreadCount(conversation._id, memberId, conversation.companyId);
+    const count = await getUnreadCount(conversation._id, memberId, conversation.companyId, conversation.readState || []);
     global.io.to(`user:${memberId}`).emit("chat:unread-update", {
       senderId,
       conversationId: conversation._id,
@@ -593,6 +586,8 @@ exports.getMessages = async (req, res) => {
       })
       .filter(Boolean);
 
+    // Time taken before marking so a message arriving meanwhile stays unread.
+    const readAt = new Date();
     await Message.updateMany(
       {
         conversationId: req.params.id,
@@ -603,6 +598,8 @@ exports.getMessages = async (req, res) => {
       },
       {$addToSet: {seenBy: userId, deliveredTo: userId}}
     );
+    await setReadMark(conversation._id, userId, readAt);
+    conversation.readState = (await Conversation.findById(conversation._id).select("readState").lean())?.readState || [];
 
     await emitUnreadCounts(conversation, userId);
 

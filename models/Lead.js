@@ -76,6 +76,10 @@ leadSchema.index({ company: 1, name: 1, phone: 1 });
 leadSchema.index({ company: 1, assignedToName: 1 });
 leadSchema.index({ company: 1, leadSourceName: 1 });
 leadSchema.index({ company: 1, leadTypeName: 1 });
+// Sort keys of the paged CRM lists (assigned / pending / completed / converted).
+leadSchema.index({ company: 1, assignedAt: -1 });
+leadSchema.index({ company: 1, status: 1, assignedAt: -1 });
+leadSchema.index({ company: 1, status: 1, updatedAt: -1 });
 
 // Pre-save Auto-Resolution
 leadSchema.pre('save', async function(next) {
