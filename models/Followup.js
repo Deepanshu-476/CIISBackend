@@ -35,6 +35,7 @@ followUpSchema.index(
   { unique: true, partialFilterExpression: { sourceCallId: { $type: 'string' } } }
 );
 followUpSchema.index({ company: 1, agent: 1, status: 1, date: 1 });
+followUpSchema.index({ company: 1, date: 1 });
 followUpSchema.index({ company: 1, lead: 1, date: -1 });
 followUpSchema.index({ company: 1, status: 1, date: 1 });
 followUpSchema.index({ company: 1, leadName: 1 });

@@ -1095,6 +1095,18 @@ app.use((req, res, next) => {
 
 // protect() caches the auth user for a few seconds; drop that cache after any successful write that can
 // change a user's role, status, password, branch, department or company.
+// CRM list KPI/option summaries are cached for 30s; any CRM write makes them stale.
+const { invalidateCrmListSummaries } = require('./services/crmListQuery');
+const CRM_WRITE = /^\/(api\/)?(crm|calls|followups)(\/|$)/;
+app.use((req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD' && CRM_WRITE.test(req.path)) {
+    res.on('finish', () => {
+      if (res.statusCode < 400) invalidateCrmListSummaries();
+    });
+  }
+  next();
+});
+
 const AUTH_AFFECTING_WRITE = /^\/(api\/)?(users|auth|company|superAdmin|job-roles?|branches|departments?)(\/|$)/;
 app.use((req, res, next) => {
   if (req.method !== 'GET' && req.method !== 'HEAD' && AUTH_AFFECTING_WRITE.test(req.path)) {

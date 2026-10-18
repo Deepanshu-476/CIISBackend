@@ -3,6 +3,8 @@ const validator = require('validator');
 const Lead = require('../models/Lead');
 const LeadType = require('../models/LeadType');
 const LeadSource = require('../models/LeadSource');
+let crmListQuery = {};
+try { crmListQuery = require('../services/crmListQuery'); } catch (e) {}
 let formatLeadForClient = item => item;
 let cascadeLeadUpdate = async () => {};
 try {
@@ -87,6 +89,9 @@ exports.create = async (req, res, next) => {
 };
 exports.list = async (req, res, next) => {
   try {
+    if (typeof crmListQuery.isPagedRequest === 'function' && crmListQuery.isPagedRequest(req)) {
+      return await crmListQuery.sendLeadPage(req, res, { name: 'all-leads', base: { company: req.crmCompany }, sort: { createdAt: -1 } });
+    }
     const items = await Lead.find({ company: req.crmCompany }).sort({ createdAt: -1, _id: -1 })
       .populate('leadType', 'name').populate('leadSource', 'name').populate('assignedTo', 'name').lean();
     res.json({ items: (items || []).map(formatLeadForClient) });
@@ -99,7 +104,8 @@ exports.team = async (req, res, next) => {
     let clientUserIds = [];
     try {
       const Client = mongoose.models.Client || require('../HR-CDS/models/Client');
-      const clients = await Client.find({ userId: { $exists: true, $ne: null } }).select('userId').lean();
+      const companyCode = req.user?.companyCode || req.user?.company?.companyCode;
+      const clients = await Client.find({ ...(companyCode ? { companyCode } : {}), userId: { $exists: true, $ne: null } }).select('userId').lean();
       clientUserIds = clients.map(c => String(c.userId));
     } catch (e) {
       // Ignore if Client model not available
