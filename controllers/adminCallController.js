@@ -15,6 +15,12 @@ const {
   formatAssignmentHistoryForClient
 } = require('../services/cascadeSyncEngine');
 const { isPagedRequest, sendLeadPage, sendCallLogPage, sendFollowUpPage } = require('../services/crmListQuery');
+const { getOrSetCached } = require('../utils/inMemoryCache');
+
+// Dashboard and call overview run ~100 aggregate queries over every lead/call of the company and are also
+// polled by sidebar badges. Cache per company for 60s; the `crmList|` prefix is cleared on any CRM write.
+const CRM_SUMMARY_TTL_MS = 60 * 1000;
+const cachedCrmSummary = (name, company, build) => getOrSetCached(`crmList|${name}|${company}`, build, CRM_SUMMARY_TTL_MS);
 
 function getDayBounds(date = new Date()) {
   const istOffset = 5.5 * 60 * 60000;
@@ -43,387 +49,393 @@ function displayDateTime(date) {
 // 1. Dashboard Aggregations
 exports.dashboard = async (req, res, next) => {
   try {
-    const company = req.crmCompany;
-    const now = new Date();
-    const { start: todayStart, end: todayEnd } = getDayBounds(now);
-    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60000);
-    const eligibleTelecallers = await telecallerUserIds(company);
+    res.json(await cachedCrmSummary('dashboard', String(req.crmCompany), () => buildDashboard(req.crmCompany)));
+  } catch (error) { next(error); }
+};
 
-    const [
+const buildDashboard = async (company) => {
+  const now = new Date();
+  const { start: todayStart, end: todayEnd } = getDayBounds(now);
+  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60000);
+  const eligibleTelecallers = await telecallerUserIds(company);
+
+  const [
+    totalLeads,
+    totalCalls,
+    todaysCalls,
+    convertedLeads,
+    unassignedLeads,
+    pendingFollowUps,
+    todaysFollowUps,
+    activeUsersList,
+    leadStatusFacet,
+    recentCallsList,
+    todaysScheduleList
+  ] = await Promise.all([
+    Lead.countDocuments({ company }),
+    CallLog.countDocuments({ company }),
+    CallLog.countDocuments({ company, createdAt: { $gte: todayStart, $lt: todayEnd } }),
+    Lead.countDocuments({ company, status: 'converted' }),
+    Lead.countDocuments({ company, assignedTo: null }),
+    FollowUp.countDocuments({ company, status: 'pending' }),
+    FollowUp.countDocuments({ company, status: 'pending', date: { $gte: todayStart, $lt: todayEnd } }),
+    User.find(telecallerFilter(company, eligibleTelecallers)).select('name email role companyRole jobRole').lean(),
+    Lead.aggregate([
+      { $match: { company: new mongoose.Types.ObjectId(String(company)) } },
+      { $group: { _id: { status: '$status', assigned: { $ne: ['$assignedTo', null] } }, count: { $sum: 1 } } }
+    ]),
+    CallLog.find({ company })
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .populate('lead', 'name phone source')
+      .populate('agent', 'name')
+      .lean(),
+    FollowUp.find({ company, status: 'pending', date: { $gte: todayStart, $lt: todayEnd } })
+      .sort({ date: 1 })
+      .limit(10)
+      .populate('lead', 'name phone')
+      .populate('agent', 'name')
+      .lean()
+  ]);
+
+  const activeUsersCount = activeUsersList.length;
+  const conversionRate = totalLeads ? Number(((convertedLeads / totalLeads) * 100).toFixed(1)) : 0;
+
+  // Pipeline Distribution
+  const statusMap = (leadStatusFacet || []).reduce((acc, curr) => {
+    const status = String(curr._id?.status || '').toLowerCase();
+    acc[status] = (acc[status] || 0) + curr.count;
+    acc[`${status}:${curr._id?.assigned ? 'assigned' : 'unassigned'}`] = curr.count;
+    return acc;
+  }, {});
+
+  const pipelineData = [
+    { name: 'New', value: statusMap['new:unassigned'] || 0, color: '#06b6d4' },
+    { name: 'Assigned', value: statusMap['new:assigned'] || 0, color: '#3b82f6' },
+    { name: 'Interested', value: statusMap['interested'] || 0, color: '#10b981' },
+    { name: 'Follow-up', value: statusMap['follow-up'] || 0, color: '#f59e0b' },
+    { name: 'Converted', value: convertedLeads, color: '#8b5cf6' },
+    { name: 'Closed', value: statusMap['closed'] || 0, color: '#ef4444' }
+  ];
+
+  // 30-Day Trend Aggregations for Leads, Calls, and scheduled Follow-Ups
+  const [leadDays, callDays, followUpDays] = await Promise.all([
+    Lead.aggregate([
+      { $match: { company: new mongoose.Types.ObjectId(String(company)), createdAt: { $gte: thirtyDaysAgo } } },
+      { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: '+05:30' } }, count: { $sum: 1 } } }
+    ]),
+    CallLog.aggregate([
+      { $match: { company: new mongoose.Types.ObjectId(String(company)), createdAt: { $gte: thirtyDaysAgo } } },
+      { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: '+05:30' } }, count: { $sum: 1 } } }
+    ]),
+    FollowUp.aggregate([
+      { $match: { company: new mongoose.Types.ObjectId(String(company)), date: { $gte: thirtyDaysAgo } } },
+      { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$date', timezone: '+05:30' } }, count: { $sum: 1 } } }
+    ])
+  ]);
+
+  const leadDayMap = (leadDays || []).reduce((acc, r) => ({ ...acc, [r._id]: r.count }), {});
+  const callDayMap = (callDays || []).reduce((acc, r) => ({ ...acc, [r._id]: r.count }), {});
+  const followUpDayMap = (followUpDays || []).reduce((acc, r) => ({ ...acc, [r._id]: r.count }), {});
+
+  const trendData = [];
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(now.getTime() - i * 24 * 60 * 60000);
+    const key = getIstDateKey(d);
+    const dayStr = new Date(`${key}T00:00:00.000Z`).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', timeZone: 'UTC' });
+    trendData.push({
+      date: dayStr,
+      leads: leadDayMap[key] || 0,
+      calls: callDayMap[key] || 0,
+      followUps: followUpDayMap[key] || 0
+    });
+  }
+
+  // Team Performance Aggregation
+  const [agentCallsFacet, agentLeadsFacet, agentFollowUpsFacet] = await Promise.all([
+    CallLog.aggregate([
+      { $match: { company: new mongoose.Types.ObjectId(String(company)) } },
+      { $group: { _id: '$agent', totalCalls: { $sum: 1 } } }
+    ]),
+    Lead.aggregate([
+      { $match: { company: new mongoose.Types.ObjectId(String(company)), assignedTo: { $ne: null } } },
+      { $group: {
+        _id: '$assignedTo',
+        totalLeads: { $sum: 1 },
+        converted: { $sum: { $cond: [{ $eq: ['$status', 'converted'] }, 1, 0] } }
+      } }
+    ]),
+    FollowUp.aggregate([
+      { $match: { company: new mongoose.Types.ObjectId(String(company)) } },
+      { $group: { _id: '$agent', totalFollowUps: { $sum: 1 } } }
+    ])
+  ]);
+  const agentCallMap = (agentCallsFacet || []).reduce((acc, c) => ({ ...acc, [String(c._id)]: c.totalCalls }), {});
+  const agentLeadMap = (agentLeadsFacet || []).reduce((acc, l) => ({ ...acc, [String(l._id)]: l }), {});
+  const agentFollowUpMap = (agentFollowUpsFacet || []).reduce((acc, f) => ({ ...acc, [String(f._id)]: f.totalFollowUps }), {});
+
+  const jobRoleIds = [...new Set(activeUsersList
+    .map(user => user.jobRole)
+    .filter(value => mongoose.isValidObjectId(String(value)))
+    .map(String))];
+  const jobRoles = jobRoleIds.length
+    ? await JobRole.find({ company, _id: { $in: jobRoleIds } }).select('name').lean()
+    : [];
+  const roleNamesById = new Map(jobRoles.map(role => [String(role._id), role.name]));
+
+  const teamPerformance = activeUsersList.map(user => {
+    const uId = String(user._id);
+    const uCalls = agentCallMap[uId] || 0;
+    const uLeadStats = agentLeadMap[uId] || { totalLeads: 0, converted: 0 };
+    const rawRoles = [user.jobRole, user.companyRole, user.role].filter(Boolean);
+    const resolvedRole = rawRoles.map(value => roleNamesById.get(String(value))).find(Boolean)
+      || rawRoles.find(value => !mongoose.isValidObjectId(String(value)))
+      || 'Telecaller';
+    const uConvRate = uLeadStats.totalLeads
+      ? `${((uLeadStats.converted / uLeadStats.totalLeads) * 100).toFixed(1)}%`
+      : '0%';
+
+    return {
+      id: uId,
+      member: user.name || 'User',
+      role: resolvedRole,
+      roleBadge: /marketing/i.test(resolvedRole) ? 'purple' : 'blue',
+      calls: uCalls,
+      followUps: agentFollowUpMap[uId] || 0,
+      leads: uLeadStats.totalLeads,
+      conversion: uConvRate,
+      conversionHigh: parseFloat(uConvRate) >= 10
+    };
+  });
+
+  const recentActivities = (recentCallsList || []).map((call, idx) => ({
+    id: idx + 1,
+    title: `Call: ${call.lead?.name || 'Lead'}`,
+    role: call.agent?.name || 'Agent',
+    roleType: 'telecaller',
+    action: `Call Logged (${call.status || 'answered'})`,
+    time: displayDateTime(call.createdAt),
+    type: 'call'
+  }));
+
+  const todaysSchedule = (todaysScheduleList || []).map(item => ({
+    id: String(item._id),
+    date: item.date,
+    time: displayDateTime(item.date),
+    lead: item.lead?.name || 'Lead',
+    phone: item.lead?.phone || '',
+    agent: item.agent?.name || 'Unassigned',
+    priority: item.priority || 'medium',
+    note: item.note || ''
+  }));
+
+  return {
+    metrics: {
       totalLeads,
       totalCalls,
       todaysCalls,
-      convertedLeads,
-      unassignedLeads,
-      pendingFollowUps,
       todaysFollowUps,
-      activeUsersList,
-      leadStatusFacet,
-      recentCallsList,
-      todaysScheduleList
-    ] = await Promise.all([
-      Lead.countDocuments({ company }),
-      CallLog.countDocuments({ company }),
-      CallLog.countDocuments({ company, createdAt: { $gte: todayStart, $lt: todayEnd } }),
-      Lead.countDocuments({ company, status: 'converted' }),
-      Lead.countDocuments({ company, assignedTo: null }),
-      FollowUp.countDocuments({ company, status: 'pending' }),
-      FollowUp.countDocuments({ company, status: 'pending', date: { $gte: todayStart, $lt: todayEnd } }),
-      User.find(telecallerFilter(company, eligibleTelecallers)).select('name email role companyRole jobRole').lean(),
-      Lead.aggregate([
-        { $match: { company: new mongoose.Types.ObjectId(String(company)) } },
-        { $group: { _id: { status: '$status', assigned: { $ne: ['$assignedTo', null] } }, count: { $sum: 1 } } }
-      ]),
-      CallLog.find({ company })
-        .sort({ createdAt: -1 })
-        .limit(10)
-        .populate('lead', 'name phone source')
-        .populate('agent', 'name')
-        .lean(),
-      FollowUp.find({ company, status: 'pending', date: { $gte: todayStart, $lt: todayEnd } })
-        .sort({ date: 1 })
-        .limit(10)
-        .populate('lead', 'name phone')
-        .populate('agent', 'name')
-        .lean()
-    ]);
-
-    const activeUsersCount = activeUsersList.length;
-    const conversionRate = totalLeads ? Number(((convertedLeads / totalLeads) * 100).toFixed(1)) : 0;
-
-    // Pipeline Distribution
-    const statusMap = (leadStatusFacet || []).reduce((acc, curr) => {
-      const status = String(curr._id?.status || '').toLowerCase();
-      acc[status] = (acc[status] || 0) + curr.count;
-      acc[`${status}:${curr._id?.assigned ? 'assigned' : 'unassigned'}`] = curr.count;
-      return acc;
-    }, {});
-
-    const pipelineData = [
-      { name: 'New', value: statusMap['new:unassigned'] || 0, color: '#06b6d4' },
-      { name: 'Assigned', value: statusMap['new:assigned'] || 0, color: '#3b82f6' },
-      { name: 'Interested', value: statusMap['interested'] || 0, color: '#10b981' },
-      { name: 'Follow-up', value: statusMap['follow-up'] || 0, color: '#f59e0b' },
-      { name: 'Converted', value: convertedLeads, color: '#8b5cf6' },
-      { name: 'Closed', value: statusMap['closed'] || 0, color: '#ef4444' }
-    ];
-
-    // 30-Day Trend Aggregations for Leads, Calls, and scheduled Follow-Ups
-    const [leadDays, callDays, followUpDays] = await Promise.all([
-      Lead.aggregate([
-        { $match: { company: new mongoose.Types.ObjectId(String(company)), createdAt: { $gte: thirtyDaysAgo } } },
-        { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: '+05:30' } }, count: { $sum: 1 } } }
-      ]),
-      CallLog.aggregate([
-        { $match: { company: new mongoose.Types.ObjectId(String(company)), createdAt: { $gte: thirtyDaysAgo } } },
-        { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: '+05:30' } }, count: { $sum: 1 } } }
-      ]),
-      FollowUp.aggregate([
-        { $match: { company: new mongoose.Types.ObjectId(String(company)), date: { $gte: thirtyDaysAgo } } },
-        { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$date', timezone: '+05:30' } }, count: { $sum: 1 } } }
-      ])
-    ]);
-
-    const leadDayMap = (leadDays || []).reduce((acc, r) => ({ ...acc, [r._id]: r.count }), {});
-    const callDayMap = (callDays || []).reduce((acc, r) => ({ ...acc, [r._id]: r.count }), {});
-    const followUpDayMap = (followUpDays || []).reduce((acc, r) => ({ ...acc, [r._id]: r.count }), {});
-
-    const trendData = [];
-    for (let i = 29; i >= 0; i--) {
-      const d = new Date(now.getTime() - i * 24 * 60 * 60000);
-      const key = getIstDateKey(d);
-      const dayStr = new Date(`${key}T00:00:00.000Z`).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', timeZone: 'UTC' });
-      trendData.push({
-        date: dayStr,
-        leads: leadDayMap[key] || 0,
-        calls: callDayMap[key] || 0,
-        followUps: followUpDayMap[key] || 0
-      });
-    }
-
-    // Team Performance Aggregation
-    const [agentCallsFacet, agentLeadsFacet, agentFollowUpsFacet] = await Promise.all([
-      CallLog.aggregate([
-        { $match: { company: new mongoose.Types.ObjectId(String(company)) } },
-        { $group: { _id: '$agent', totalCalls: { $sum: 1 } } }
-      ]),
-      Lead.aggregate([
-        { $match: { company: new mongoose.Types.ObjectId(String(company)), assignedTo: { $ne: null } } },
-        { $group: {
-          _id: '$assignedTo',
-          totalLeads: { $sum: 1 },
-          converted: { $sum: { $cond: [{ $eq: ['$status', 'converted'] }, 1, 0] } }
-        } }
-      ]),
-      FollowUp.aggregate([
-        { $match: { company: new mongoose.Types.ObjectId(String(company)) } },
-        { $group: { _id: '$agent', totalFollowUps: { $sum: 1 } } }
-      ])
-    ]);
-    const agentCallMap = (agentCallsFacet || []).reduce((acc, c) => ({ ...acc, [String(c._id)]: c.totalCalls }), {});
-    const agentLeadMap = (agentLeadsFacet || []).reduce((acc, l) => ({ ...acc, [String(l._id)]: l }), {});
-    const agentFollowUpMap = (agentFollowUpsFacet || []).reduce((acc, f) => ({ ...acc, [String(f._id)]: f.totalFollowUps }), {});
-
-    const jobRoleIds = [...new Set(activeUsersList
-      .map(user => user.jobRole)
-      .filter(value => mongoose.isValidObjectId(String(value)))
-      .map(String))];
-    const jobRoles = jobRoleIds.length
-      ? await JobRole.find({ company, _id: { $in: jobRoleIds } }).select('name').lean()
-      : [];
-    const roleNamesById = new Map(jobRoles.map(role => [String(role._id), role.name]));
-
-    const teamPerformance = activeUsersList.map(user => {
-      const uId = String(user._id);
-      const uCalls = agentCallMap[uId] || 0;
-      const uLeadStats = agentLeadMap[uId] || { totalLeads: 0, converted: 0 };
-      const rawRoles = [user.jobRole, user.companyRole, user.role].filter(Boolean);
-      const resolvedRole = rawRoles.map(value => roleNamesById.get(String(value))).find(Boolean)
-        || rawRoles.find(value => !mongoose.isValidObjectId(String(value)))
-        || 'Telecaller';
-      const uConvRate = uLeadStats.totalLeads
-        ? `${((uLeadStats.converted / uLeadStats.totalLeads) * 100).toFixed(1)}%`
-        : '0%';
-
-      return {
-        id: uId,
-        member: user.name || 'User',
-        role: resolvedRole,
-        roleBadge: /marketing/i.test(resolvedRole) ? 'purple' : 'blue',
-        calls: uCalls,
-        followUps: agentFollowUpMap[uId] || 0,
-        leads: uLeadStats.totalLeads,
-        conversion: uConvRate,
-        conversionHigh: parseFloat(uConvRate) >= 10
-      };
-    });
-
-    const recentActivities = (recentCallsList || []).map((call, idx) => ({
-      id: idx + 1,
-      title: `Call: ${call.lead?.name || 'Lead'}`,
-      role: call.agent?.name || 'Agent',
-      roleType: 'telecaller',
-      action: `Call Logged (${call.status || 'answered'})`,
-      time: displayDateTime(call.createdAt),
-      type: 'call'
-    }));
-
-    const todaysSchedule = (todaysScheduleList || []).map(item => ({
-      id: String(item._id),
-      date: item.date,
-      time: displayDateTime(item.date),
-      lead: item.lead?.name || 'Lead',
-      phone: item.lead?.phone || '',
-      agent: item.agent?.name || 'Unassigned',
-      priority: item.priority || 'medium',
-      note: item.note || ''
-    }));
-
-    res.json({
-      metrics: {
-        totalLeads,
-        totalCalls,
-        todaysCalls,
-        todaysFollowUps,
-        convertedLeads,
-        conversionRate: `${conversionRate}%`,
-        pendingFollowUps,
-        activeUsers: activeUsersCount,
-        unassignedLeads
-      },
-      trendData,
-      pipelineData,
-      teamPerformance,
-      recentActivities,
-      todaysSchedule
-    });
-  } catch (error) { next(error); }
+      convertedLeads,
+      conversionRate: `${conversionRate}%`,
+      pendingFollowUps,
+      activeUsers: activeUsersCount,
+      unassignedLeads
+    },
+    trendData,
+    pipelineData,
+    teamPerformance,
+    recentActivities,
+    todaysSchedule
+  };
 };
 
 // 2. Call Overview (KPIs, Weekly Trends, Outcome Donut, Recent Calls)
 exports.overview = async (req, res, next) => {
   try {
-    const company = req.crmCompany;
-    const now = new Date();
-    const { start: todayStart, end: todayEnd } = getDayBounds(now);
-    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60000);
-
-    const [
-      assignedLeads,
-      todaysCalls,
-      pendingFollowups,
-      convertedCalls,
-      pendingCalls,
-      scheduledCalls,
-      completedCalls,
-      totalCalls,
-      recentLogs,
-      trendLogs,
-      outcomeLogs,
-      nextFollowUps
-    ] = await Promise.all([
-      Lead.countDocuments({ company, assignedTo: { $ne: null } }),
-      CallLog.countDocuments({ company, createdAt: { $gte: todayStart, $lt: todayEnd } }),
-      FollowUp.countDocuments({ company, status: 'pending' }),
-      Lead.countDocuments({ company, status: 'converted' }),
-      Lead.countDocuments({ company, assignedTo: { $ne: null }, status: { $in: ['new', 'follow-up'] } }),
-      Lead.countDocuments({ company, nextFollowUp: { $gt: now } }),
-      Lead.countDocuments({ company, status: { $in: ['converted', 'closed'] } }),
-      CallLog.countDocuments({ company }),
-      CallLog.find({ company })
-        .sort({ createdAt: -1 })
-        .limit(20)
-        .populate({ path: 'lead', select: 'name phone source leadType leadSource', populate: [{ path: 'leadType', select: 'name' }, { path: 'leadSource', select: 'name' }] })
-        .populate('agent', 'name email')
-        .lean(),
-      CallLog.aggregate([
-        { $match: { company: new mongoose.Types.ObjectId(String(company)), createdAt: { $gte: thirtyDaysAgo } } },
-        { $group: {
-          _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: '+05:30' } },
-          total: { $sum: 1 },
-          connected: { $sum: { $cond: [{ $eq: ['$status', 'answered'] }, 1, 0] } }
-        } }
-      ]),
-      CallLog.aggregate([
-        { $match: { company: new mongoose.Types.ObjectId(String(company)) } },
-        { $group: { _id: '$status', count: { $sum: 1 } } }
-      ]),
-      FollowUp.find({ company, status: 'pending', date: { $gte: todayStart } })
-        .sort({ date: 1 })
-        .limit(10)
-        .populate('lead', 'name phone')
-        .populate('agent', 'name')
-        .lean()
-    ]);
-
-    // Trend Data for 7 days & 30 days
-    const trendMap = (trendLogs || []).reduce((acc, row) => ({ ...acc, [row._id]: row }), {});
-    const daysName = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    
-    // Helper to format date string matching MongoDB's '+05:30' timezone
-    const getISTKey = (date) => {
-      const istDate = new Date(date.getTime() + (5.5 * 60 * 60 * 1000));
-      return istDate.toISOString().slice(0, 10);
-    };
-
-    // 7-day trend
-    const trendData = [];
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date(now.getTime() - i * 24 * 60 * 60000);
-      const key = getISTKey(d);
-      const entry = trendMap[key] || { total: 0, connected: 0 };
-      trendData.push({
-        day: daysName[d.getDay()],
-        date: d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
-        calls: entry.total,
-        connected: entry.connected
-      });
-    }
-
-    // 30-day trend
-    const trendData30d = [];
-    for (let i = 29; i >= 0; i--) {
-      const d = new Date(now.getTime() - i * 24 * 60 * 60000);
-      const key = getISTKey(d);
-      const entry = trendMap[key] || { total: 0, connected: 0 };
-      trendData30d.push({
-        day: d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
-        date: d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
-        calls: entry.total,
-        connected: entry.connected
-      });
-    }
-
-    // Outcome Data
-    const totalOutcomes = outcomeLogs.reduce((sum, item) => sum + item.count, 0) || 1;
-    const colorMap = {
-      answered: '#10b981',
-      missed: '#f59e0b',
-      'not reachable': '#06b6d4',
-      rejected: '#ef4444'
-    };
-    const outcomeData = outcomeLogs.map(item => ({
-      name: (item._id || 'answered').toUpperCase(),
-      value: item.count,
-      percent: `${((item.count / totalOutcomes) * 100).toFixed(1)}% of calls`,
-      color: colorMap[String(item._id).toLowerCase()] || '#6366f1'
-    }));
-
-    // Recent calls formatting
-    const recentCalls = recentLogs.map((log, index) => ({
-      sl: index + 1,
-      id: log._id,
-      lead: `#LD-${String(log.lead?._id || index + 1).slice(-3)}`,
-      name: log.lead?.name || 'Lead',
-      phone: log.lead?.phone || '—',
-      source: log.lead?.leadSource?.name || log.lead?.source || 'Direct',
-      leadType: log.lead?.leadType?.name || 'General',
-      callType: 'Outbound',
-      outcome: log.status ? log.status.charAt(0).toUpperCase() + log.status.slice(1) : 'Answered',
-      remarks: log.notes || '—',
-      callTime: new Date(log.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
-      caller: log.agent?.name || 'Agent',
-      duration: log.duration ? `${Math.floor(log.duration / 60)}m ${log.duration % 60}s` : '0s'
-    }));
-
-    const formatFollowUp = item => ({
-      id: item._id,
-      leadId: item.lead?._id,
-      name: item.lead?.name || 'Lead',
-      phone: item.lead?.phone || '',
-      date: item.date,
-      priority: item.priority || 'medium',
-      note: item.note || '',
-      agent: item.agent?.name || 'Telecaller'
-    });
-    const todayFollowUps = nextFollowUps
-      .filter(item => new Date(item.date) < todayEnd)
-      .map(formatFollowUp);
-    const upcomingFollowUps = nextFollowUps
-      .filter(item => new Date(item.date) >= todayEnd)
-      .slice(0, 5)
-      .map(formatFollowUp);
-
-    const kpis = {
-      assignedLeads,
-      todaysCalls,
-      pendingFollowups,
-      convertedCalls,
-      pendingCalls,
-      scheduledCalls,
-      completedCalls,
-      totalCalls
-    };
-
-    res.json({
-      kpis,
-      statCards: [
-        { title: "Assigned Leads", value: String(assignedLeads), badge: "Active Leads", badgeType: "purple" },
-        { title: "Today's Calls", value: String(todaysCalls), badge: "Completed Today", badgeType: "teal" },
-        { title: "Pending Follow Ups", value: String(pendingFollowups), badge: "Needs Attention", badgeType: "amber" },
-        { title: "Converted Calls", value: String(convertedCalls), badge: "Total Converted", badgeType: "cyan" }
-      ],
-      quickAccessCounts: {
-        assigned: assignedLeads,
-        today: todaysCalls,
-        pending: pendingCalls,
-        scheduled: scheduledCalls,
-        completed: completedCalls,
-        converted: convertedCalls,
-        transferred: 0,
-        history: totalCalls,
-        followUps: pendingFollowups
-      },
-      trendData,
-      trendData30d,
-      outcomeData: outcomeData.length ? outcomeData : [
-        { name: 'Answered', value: 0, percent: '0% of calls', color: '#10b981' }
-      ],
-      recentCalls,
-      todayFollowUps,
-      upcomingFollowUps
-    });
+    res.json(await cachedCrmSummary('overview', String(req.crmCompany), () => buildOverview(req.crmCompany)));
   } catch (error) { next(error); }
+};
+
+const buildOverview = async (company) => {
+  const now = new Date();
+  const { start: todayStart, end: todayEnd } = getDayBounds(now);
+  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60000);
+
+  const [
+    assignedLeads,
+    todaysCalls,
+    pendingFollowups,
+    convertedCalls,
+    pendingCalls,
+    scheduledCalls,
+    completedCalls,
+    totalCalls,
+    recentLogs,
+    trendLogs,
+    outcomeLogs,
+    nextFollowUps
+  ] = await Promise.all([
+    Lead.countDocuments({ company, assignedTo: { $ne: null } }),
+    CallLog.countDocuments({ company, createdAt: { $gte: todayStart, $lt: todayEnd } }),
+    FollowUp.countDocuments({ company, status: 'pending' }),
+    Lead.countDocuments({ company, status: 'converted' }),
+    Lead.countDocuments({ company, assignedTo: { $ne: null }, status: { $in: ['new', 'follow-up'] } }),
+    Lead.countDocuments({ company, nextFollowUp: { $gt: now } }),
+    Lead.countDocuments({ company, status: { $in: ['converted', 'closed'] } }),
+    CallLog.countDocuments({ company }),
+    CallLog.find({ company })
+      .sort({ createdAt: -1 })
+      .limit(20)
+      .populate({ path: 'lead', select: 'name phone source leadType leadSource', populate: [{ path: 'leadType', select: 'name' }, { path: 'leadSource', select: 'name' }] })
+      .populate('agent', 'name email')
+      .lean(),
+    CallLog.aggregate([
+      { $match: { company: new mongoose.Types.ObjectId(String(company)), createdAt: { $gte: thirtyDaysAgo } } },
+      { $group: {
+        _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: '+05:30' } },
+        total: { $sum: 1 },
+        connected: { $sum: { $cond: [{ $eq: ['$status', 'answered'] }, 1, 0] } }
+      } }
+    ]),
+    CallLog.aggregate([
+      { $match: { company: new mongoose.Types.ObjectId(String(company)) } },
+      { $group: { _id: '$status', count: { $sum: 1 } } }
+    ]),
+    FollowUp.find({ company, status: 'pending', date: { $gte: todayStart } })
+      .sort({ date: 1 })
+      .limit(10)
+      .populate('lead', 'name phone')
+      .populate('agent', 'name')
+      .lean()
+  ]);
+
+  // Trend Data for 7 days & 30 days
+  const trendMap = (trendLogs || []).reduce((acc, row) => ({ ...acc, [row._id]: row }), {});
+  const daysName = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  
+  // Helper to format date string matching MongoDB's '+05:30' timezone
+  const getISTKey = (date) => {
+    const istDate = new Date(date.getTime() + (5.5 * 60 * 60 * 1000));
+    return istDate.toISOString().slice(0, 10);
+  };
+
+  // 7-day trend
+  const trendData = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(now.getTime() - i * 24 * 60 * 60000);
+    const key = getISTKey(d);
+    const entry = trendMap[key] || { total: 0, connected: 0 };
+    trendData.push({
+      day: daysName[d.getDay()],
+      date: d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
+      calls: entry.total,
+      connected: entry.connected
+    });
+  }
+
+  // 30-day trend
+  const trendData30d = [];
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(now.getTime() - i * 24 * 60 * 60000);
+    const key = getISTKey(d);
+    const entry = trendMap[key] || { total: 0, connected: 0 };
+    trendData30d.push({
+      day: d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
+      date: d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
+      calls: entry.total,
+      connected: entry.connected
+    });
+  }
+
+  // Outcome Data
+  const totalOutcomes = outcomeLogs.reduce((sum, item) => sum + item.count, 0) || 1;
+  const colorMap = {
+    answered: '#10b981',
+    missed: '#f59e0b',
+    'not reachable': '#06b6d4',
+    rejected: '#ef4444'
+  };
+  const outcomeData = outcomeLogs.map(item => ({
+    name: (item._id || 'answered').toUpperCase(),
+    value: item.count,
+    percent: `${((item.count / totalOutcomes) * 100).toFixed(1)}% of calls`,
+    color: colorMap[String(item._id).toLowerCase()] || '#6366f1'
+  }));
+
+  // Recent calls formatting
+  const recentCalls = recentLogs.map((log, index) => ({
+    sl: index + 1,
+    id: log._id,
+    lead: `#LD-${String(log.lead?._id || index + 1).slice(-3)}`,
+    name: log.lead?.name || 'Lead',
+    phone: log.lead?.phone || '—',
+    source: log.lead?.leadSource?.name || log.lead?.source || 'Direct',
+    leadType: log.lead?.leadType?.name || 'General',
+    callType: 'Outbound',
+    outcome: log.status ? log.status.charAt(0).toUpperCase() + log.status.slice(1) : 'Answered',
+    remarks: log.notes || '—',
+    callTime: new Date(log.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
+    caller: log.agent?.name || 'Agent',
+    duration: log.duration ? `${Math.floor(log.duration / 60)}m ${log.duration % 60}s` : '0s'
+  }));
+
+  const formatFollowUp = item => ({
+    id: item._id,
+    leadId: item.lead?._id,
+    name: item.lead?.name || 'Lead',
+    phone: item.lead?.phone || '',
+    date: item.date,
+    priority: item.priority || 'medium',
+    note: item.note || '',
+    agent: item.agent?.name || 'Telecaller'
+  });
+  const todayFollowUps = nextFollowUps
+    .filter(item => new Date(item.date) < todayEnd)
+    .map(formatFollowUp);
+  const upcomingFollowUps = nextFollowUps
+    .filter(item => new Date(item.date) >= todayEnd)
+    .slice(0, 5)
+    .map(formatFollowUp);
+
+  const kpis = {
+    assignedLeads,
+    todaysCalls,
+    pendingFollowups,
+    convertedCalls,
+    pendingCalls,
+    scheduledCalls,
+    completedCalls,
+    totalCalls
+  };
+
+  return {
+    kpis,
+    statCards: [
+      { title: "Assigned Leads", value: String(assignedLeads), badge: "Active Leads", badgeType: "purple" },
+      { title: "Today's Calls", value: String(todaysCalls), badge: "Completed Today", badgeType: "teal" },
+      { title: "Pending Follow Ups", value: String(pendingFollowups), badge: "Needs Attention", badgeType: "amber" },
+      { title: "Converted Calls", value: String(convertedCalls), badge: "Total Converted", badgeType: "cyan" }
+    ],
+    quickAccessCounts: {
+      assigned: assignedLeads,
+      today: todaysCalls,
+      pending: pendingCalls,
+      scheduled: scheduledCalls,
+      completed: completedCalls,
+      converted: convertedCalls,
+      transferred: 0,
+      history: totalCalls,
+      followUps: pendingFollowups
+    },
+    trendData,
+    trendData30d,
+    outcomeData: outcomeData.length ? outcomeData : [
+      { name: 'Answered', value: 0, percent: '0% of calls', color: '#10b981' }
+    ],
+    recentCalls,
+    todayFollowUps,
+    upcomingFollowUps
+  };
 };
 
 // 3. Assigned Calls List

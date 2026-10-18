@@ -5,14 +5,12 @@ const clientDocumentSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Client',
     required: true,
-    index: true,
   },
   companyCode: {
     type: String,
     required: true,
     uppercase: true,
     trim: true,
-    index: true,
   },
   originalName: {
     type: String,

@@ -144,7 +144,6 @@ const attendanceSchema = new mongoose.Schema({
   companyCode: {
     type: String,
     required: true,
-    index: true,
     default: 'UNKNOWN' 
   }
 }, {

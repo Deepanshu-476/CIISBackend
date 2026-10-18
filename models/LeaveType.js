@@ -7,7 +7,7 @@ const leaveTypeSchema = new mongoose.Schema({
   sortOrder: { type: Number, default: 1, min: 0 },
   status: { type: String, enum: ["Active", "Inactive"], default: "Active" },
   isCustom: { type: Boolean, default: true },
-  company: { type: mongoose.Schema.Types.ObjectId, ref: "Company", required: true, index: true },
+  company: { type: mongoose.Schema.Types.ObjectId, ref: "Company", required: true },
   companyCode: { type: String, trim: true, required: true, index: true },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" }

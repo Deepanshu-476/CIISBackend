@@ -40,13 +40,11 @@ const userSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: "Company",
     required: [true, "Company is required"],
-    index: true
   },
   
   companyCode: {
     type: String, 
     required: [true, "Company code is required"],
-    index: true
   },
 
   
@@ -432,9 +430,6 @@ currentlyAssignedAssets: [{
 userSchema.index({ company: 1, email: 1 }, { unique: true });
 
 
-userSchema.index({ company: 1, jobRole: 1 });
-userSchema.index({ company: 1, department: 1 });
-userSchema.index({ company: 1, isActive: 1 });
 userSchema.index({ company: 1, createdAt: -1 });
 userSchema.index({ company: 1, isActive: 1, createdAt: -1 });
 userSchema.index({ company: 1, department: 1, isActive: 1, createdAt: -1 });

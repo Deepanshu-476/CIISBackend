@@ -16,7 +16,7 @@ const leavePolicySchema = new mongoose.Schema({
   probationApplicable: { type: String, enum: ["Yes", "No"], default: "No" },
   sortOrder: { type: Number, min: 0, default: 1 },
   status: { type: String, enum: ["Active", "Inactive"], default: "Active" },
-  company: { type: mongoose.Schema.Types.ObjectId, ref: "Company", required: true, index: true },
+  company: { type: mongoose.Schema.Types.ObjectId, ref: "Company", required: true },
   companyCode: { type: String, trim: true, required: true, index: true },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" }
