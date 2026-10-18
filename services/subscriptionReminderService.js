@@ -28,7 +28,7 @@ const shouldSendExpiredReminder = (client, now) => {
   return now.getTime() - lastSentAt >= ONE_DAY_MS;
 };
 
-cron.schedule('0 9 * * *', async () => {
+if (require('../utils/scheduledJobs').scheduledJobsEnabled()) cron.schedule('0 9 * * *', async () => {
   try {
     void 0;
 
