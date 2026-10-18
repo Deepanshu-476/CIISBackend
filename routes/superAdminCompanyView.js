@@ -126,7 +126,7 @@ router.get('/users', async (req, res, next) => {
     if (req.query.status === 'active') filter.isActive = { $ne: false };
     if (req.query.status === 'inactive') filter.isActive = false;
     const [items, total] = await Promise.all([
-      User.find(filter).select(USER_FIELDS).populate('branch', 'name').sort({ createdAt: -1 }).skip(p.skip).limit(p.limit).lean(),
+      User.find(filter).select(USER_FIELDS).populate('branch', 'name').sort({ createdAt: -1, _id: -1 }).skip(p.skip).limit(p.limit).lean(),
       User.countDocuments(filter),
     ]);
     send(res, items, total, p);
@@ -144,7 +144,7 @@ router.get('/tasks', async (req, res, next) => {
         .select('title priority overallStatus dueDateTime taskFor createdAt completionDate assignedUsers createdBy')
         .populate('assignedUsers', 'name')
         .populate('createdBy', 'name')
-        .sort({ createdAt: -1 }).skip(p.skip).limit(p.limit).lean(),
+        .sort({ createdAt: -1, _id: -1 }).skip(p.skip).limit(p.limit).lean(),
       Task.countDocuments(filter),
     ]);
     send(res, items, total, p);
@@ -162,7 +162,7 @@ router.get('/attendance', async (req, res, next) => {
       Attendance.find(filter)
         .select('user date inTime outTime status totalTime lateBy shiftName isClockedIn clockOutMode')
         .populate('user', 'name employeeId')
-        .sort({ inTime: 1 }).skip(p.skip).limit(p.limit).lean(),
+        .sort({ inTime: 1, _id: -1 }).skip(p.skip).limit(p.limit).lean(),
       Attendance.countDocuments(filter),
     ]);
     send(res, items, total, p, { date: start });
@@ -178,7 +178,7 @@ router.get('/leaves', async (req, res, next) => {
       Leave.find(filter)
         .select('user type startDate endDate days reason status createdAt')
         .populate('user', 'name employeeId')
-        .sort({ createdAt: -1 }).skip(p.skip).limit(p.limit).lean(),
+        .sort({ createdAt: -1, _id: -1 }).skip(p.skip).limit(p.limit).lean(),
       Leave.countDocuments(filter),
     ]);
     send(res, items, total, p);
@@ -196,7 +196,7 @@ router.get('/clients', async (req, res, next) => {
     const [items, total] = await Promise.all([
       Client.find(filter)
         .select('client company email phone city status services progress projectManager createdAt')
-        .sort({ createdAt: -1 }).skip(p.skip).limit(p.limit).lean(),
+        .sort({ createdAt: -1, _id: -1 }).skip(p.skip).limit(p.limit).lean(),
       Client.countDocuments(filter),
     ]);
     send(res, items, total, p);
@@ -208,10 +208,14 @@ router.get('/calls', async (req, res, next) => {
     const p = page(req);
     const filter = { company: req.viewCompanyId };
     if (req.query.status && req.query.status !== 'all') filter.status = String(req.query.status).toLowerCase();
+    if (req.query.search) {
+      const pattern = new RegExp(escapeRegex(String(req.query.search).trim()), 'i');
+      filter.$or = [{ leadName: pattern }, { leadPhone: pattern }, { agentName: pattern }];
+    }
     const [items, total] = await Promise.all([
       CallLog.find(filter)
         .select('leadName leadPhone agentName callType status duration createdAt notes')
-        .sort({ createdAt: -1 }).skip(p.skip).limit(p.limit).lean(),
+        .sort({ createdAt: -1, _id: -1 }).skip(p.skip).limit(p.limit).lean(),
       CallLog.countDocuments(filter),
     ]);
     send(res, items, total, p);
@@ -233,7 +237,7 @@ const list = (path, Model, { scope, field, select, sort = { createdAt: -1 }, pop
       if (status && req.query.status && req.query.status !== 'all') {
         filter[status] = new RegExp(`^${escapeRegex(String(req.query.status))}$`, 'i');
       }
-      let query = Model.find(filter).select(select).sort(sort).skip(p.skip).limit(p.limit).lean();
+      let query = Model.find(filter).select(select).sort({ ...sort, _id: -1 }).skip(p.skip).limit(p.limit).lean();
       populate.forEach(args => { query = query.populate(...args); });
       const [items, total] = await Promise.all([query, Model.countDocuments(filter)]);
       send(res, map ? items.map(map) : items, total, p);
