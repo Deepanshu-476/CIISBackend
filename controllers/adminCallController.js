@@ -9,7 +9,7 @@ const { telecallerFilter, telecallerUserIds } = require('../utils/telecallerUser
 require('../models/LeadSource');
 require('../models/LeadType');
 const {
-  formatLeadForClient,
+  formatLeadForClient,  
   formatCallLogForClient,
   formatFollowUpForClient,
   formatAssignmentHistoryForClient
