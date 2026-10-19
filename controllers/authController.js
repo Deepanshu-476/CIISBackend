@@ -1891,26 +1891,17 @@ exports.forgotPassword = async (req, res) => {
         `,
         {
           emailModuleKey: "password_reset",
+          requireRealDelivery: true,
           text: `Hello ${recipientName},\n\nYour CIIS password reset OTP is: ${otp}\n\nThis OTP is valid for 5 minutes.\n\nIf you did not request this, please ignore this email.`
         }
       );
 
-      if (!emailResult?.success && process.env.NODE_ENV === 'production') {
-        return res.status(503).json({
-          success: false,
-          message: "Email service is unavailable. Please contact administrator.",
-          errorCode: "EMAIL_SERVICE_UNAVAILABLE"
-        });
-      }
-
-      if (
-        !isRealEmailSent(emailResult)
-      ) {
+      if (!isRealEmailSent(emailResult)) {
         await OTP.deleteMany(otpScope);
         return res.status(503).json({
           success: false,
-          message: "OTP email could not be sent. Please contact administrator.",
-          errorCode: "EMAIL_NOT_SENT"
+          message: emailResult?.message || "OTP email could not be sent. Please contact administrator.",
+          errorCode: emailResult?.errorCode || "EMAIL_NOT_SENT"
         });
       }
     } catch (emailError) {

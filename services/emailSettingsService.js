@@ -316,6 +316,11 @@ const updateEmailSettings = async (payload, updatedBy) => {
     activeProfileId = createProfileId();
   }
 
+  if (shouldSaveSenderProfile && existingProfile && payload.emailUser !== undefined &&
+      String(payload.emailUser).trim().toLowerCase() !== existingProfile.emailUser && !payload.emailPass) {
+    throw new Error("Enter the SMTP password for the new sender email address");
+  }
+
   if (shouldSaveSenderProfile) {
     const nextProfile = normalizeSenderProfile({
       ...(existingProfile || {}),
@@ -448,7 +453,9 @@ const updateEmailModuleEnabled = async (moduleKey, enabled, updatedBy) => {
 const getEmailRuntimeConfig = async () => {
   const settings = await getSettingsDocument({ includeSecret: true });
   const activeProfile = getActiveSenderProfile(settings);
-  const emailPass = decryptSecret(activeProfile.encryptedEmailPass || settings.encryptedEmailPass) || process.env.EMAIL_PASS || "";
+  const matchesLegacySender = activeProfile.emailUser === settings.emailUser;
+  const matchesEnvSender = activeProfile.emailUser === String(process.env.EMAIL_USER || "").trim().toLowerCase();
+  const emailPass = decryptSecret(activeProfile.encryptedEmailPass || (matchesLegacySender ? settings.encryptedEmailPass : "")) || (matchesEnvSender ? process.env.EMAIL_PASS : "") || "";
   const emailUser = activeProfile.emailUser || settings.emailUser || process.env.EMAIL_USER || "";
   const moduleSettings = normalizeModuleSettings(settings.moduleSettings);
   const loginSettings = normalizeLoginSettings(settings.loginSettings);
