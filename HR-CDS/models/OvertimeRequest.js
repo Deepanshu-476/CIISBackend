@@ -5,7 +5,6 @@ const overtimeRequestSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true,
-    index: true
   },
   company: {
     type: mongoose.Schema.Types.ObjectId,
@@ -14,7 +13,6 @@ const overtimeRequestSchema = new mongoose.Schema({
   companyCode: {
     type: String,
     required: true,
-    index: true,
     trim: true
   },
   requestType: {

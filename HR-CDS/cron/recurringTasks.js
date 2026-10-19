@@ -303,7 +303,7 @@ const runRecurringTaskSweep = async (filter = {}) => {
   return { processed, created };
 };
 
-if (process.env.NODE_ENV !== 'test') {
+if (process.env.NODE_ENV !== 'test' && require('../../utils/scheduledJobs').scheduledJobsEnabled()) {
   cron.schedule('*/15 * * * *', async () => {
     try {
       await runRecurringTaskSweep();

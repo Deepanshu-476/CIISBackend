@@ -10,7 +10,6 @@ const clientMeetingSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Client',
     required: [true, 'Client is required'],
-    index: true
   },
   clientName: {
     type: String,
@@ -35,7 +34,6 @@ const clientMeetingSchema = new mongoose.Schema({
     required: [true, 'Company code is required'],
     uppercase: true,
     trim: true,
-    index: true
   },
   meetingType: {
     type: String,

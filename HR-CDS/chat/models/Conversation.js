@@ -39,6 +39,16 @@ const conversationSchema = new mongoose.Schema(
         ref: "User"
     }],
 
+    // Per-member read mark used for cheap unread counts (see chat/utils/unreadCount.js).
+    readState: [{
+        _id: false,
+        user: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User"
+        },
+        lastReadAt: Date
+    }],
+
     notificationSettings: [{
         user: {
             type: mongoose.Schema.Types.ObjectId,

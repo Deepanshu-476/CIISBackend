@@ -13,7 +13,7 @@ const auditSchema = new mongoose.Schema({
 }, { _id: false });
 
 const payrollRunSchema = new mongoose.Schema({
-  company: { type: mongoose.Schema.Types.ObjectId, ref: "Company", required: true, index: true },
+  company: { type: mongoose.Schema.Types.ObjectId, ref: "Company", required: true },
   month: { type: String, required: true, match: /^\d{4}-\d{2}$/ },
   status: {
     type: String,

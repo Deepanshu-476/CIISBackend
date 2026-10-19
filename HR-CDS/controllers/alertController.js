@@ -94,6 +94,38 @@ const assertAlertInCompany = async (alert, user) => {
   return false;
 };
 
+// An employee sees alerts addressed to them, to one of their groups, or broadcast alerts (no users and
+// no groups). The old filter used "no users OR no groups", so an alert sent to specific users (groups
+// empty) or to specific groups (users empty) was shown to every employee in the company.
+const visibleToEmployeeQuery = (userId, userGroupIds) => ({
+  $or: [
+    { assignedUsers: { $in: [userId] } },
+    { assignedGroups: { $in: userGroupIds } },
+    { assignedUsers: { $size: 0 }, assignedGroups: { $size: 0 } },
+  ],
+});
+
+// Same category rules as the web Alerts page (getAlertCategoryMeta), evaluated in MongoDB for paged lists.
+const ALERT_TYPE = { $toLower: { $ifNull: ['$type', ''] } };
+const ALERT_TEXT = { $toLower: { $concat: [{ $ifNull: ['$title', ''] }, ' ', { $ifNull: ['$message', ''] }] } };
+const textHas = words => ({ $regexMatch: { input: ALERT_TEXT, regex: words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') } });
+const typeIs = types => ({ $in: [ALERT_TYPE, types] });
+const ALERT_CATEGORY_EXPR = {
+  $switch: {
+    branches: [
+      { case: { $or: [typeIs(['announcement', 'holiday']), textHas(['holiday', 'remain closed', 'office closed', 'announcement'])] }, then: 'announcement' },
+      { case: { $or: [typeIs(['report']), textHas(['report', 'monthly', 'submit'])] }, then: 'report' },
+      { case: { $or: [typeIs(['policy']), textHas(['policy', 'hr policy', 'guidelines'])] }, then: 'policy' },
+      { case: { $or: [typeIs(['meeting']), textHas(['meeting', 'rescheduled', 'call'])] }, then: 'meeting' },
+      { case: { $or: [typeIs(['maintenance', 'error']), textHas(['maintenance', 'system', 'server'])] }, then: 'maintenance' },
+      { case: textHas(['onboard', 'employee', 'joining', 'welcome']), then: 'onboarding' },
+      { case: { $or: [textHas(['attendance', 'clock', 'late']), typeIs(['attendance'])] }, then: 'attendance' },
+      { case: typeIs(['warning']), then: 'warning' }
+    ],
+    default: 'general'
+  }
+};
+
 const getAlerts = async (req, res) => {
   try {
     const userId = req.user?._id;
@@ -106,17 +138,72 @@ const getAlerts = async (req, res) => {
       const userGroups = await Group.find({ members: userId }).select('_id');
       const userGroupIds = userGroups.map(group => group._id);
       
-      assignmentQuery = {
-        $or: [
-          { assignedUsers: { $in: [userId] } },
-          { assignedGroups: { $in: userGroupIds } },
-          { assignedUsers: { $size: 0 } }, 
-          { assignedGroups: { $size: 0 } }  
-        ]
-      };
+      assignmentQuery = visibleToEmployeeQuery(userId, userGroupIds);
     }
     
-    const alerts = await Alert.find(mergeQueries(companyQuery, assignmentQuery))
+    const visibilityQuery = mergeQueries(companyQuery, assignmentQuery);
+
+    // ?page / ?limit: one page plus whole-list stats (older clients still get the full list below).
+    if (req.query.page !== undefined || req.query.limit !== undefined) {
+      const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+      const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+      const filters = [visibilityQuery];
+      if (['info', 'warning', 'error'].includes(req.query.type)) filters.push({ type: req.query.type });
+      if (req.query.category && req.query.category !== 'all') {
+        const category = String(req.query.category).toLowerCase();
+        filters.push({ $expr: { $or: [{ $eq: [ALERT_CATEGORY_EXPR, category] }, { $eq: [ALERT_TYPE, category] }] } });
+      }
+      if (req.query.search && String(req.query.search).trim()) {
+        const pattern = new RegExp(String(req.query.search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+        filters.push({ $or: [{ title: pattern }, { message: pattern }] });
+      }
+      if (req.query.view === 'unread') filters.push({ readBy: { $ne: userId } });
+      if (req.query.view === 'read') filters.push({ readBy: userId });
+      if (req.query.view === 'mine') {
+        const groupIds = (await Group.find({ members: userId }).select('_id').lean()).map(group => group._id);
+        filters.push(visibleToEmployeeQuery(userId, groupIds));
+      }
+      const pageQuery = mergeQueries(...filters);
+      const [alerts, total, [facet = {}]] = await Promise.all([
+        Alert.find(pageQuery)
+          .populate('assignedUsers', 'name email')
+          .populate('assignedGroups', 'name')
+          .populate('createdBy', 'name email role department departmentName')
+          .populate('company', 'companyName companyCode logo')
+          .sort({ createdAt: req.query.sort === 'oldest' ? 1 : -1 })
+          .skip((page - 1) * limit)
+          .limit(limit),
+        Alert.countDocuments(pageQuery),
+        Alert.aggregate([
+          { $match: Alert.find(visibilityQuery).cast(Alert, visibilityQuery) },
+          { $facet: {
+            byType: [{ $group: { _id: '$type', n: { $sum: 1 } } }],
+            unread: [{ $match: { readBy: { $ne: userId } } }, { $count: 'n' }],
+            thisWeek: [{ $match: { createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } } }, { $count: 'n' }]
+          } }
+        ])
+      ]);
+      const byType = Object.fromEntries((facet.byType || []).map(row => [row._id, row.n]));
+      return res.json({
+        success: true,
+        count: alerts.length,
+        alerts,
+        total,
+        page,
+        limit,
+        pages: Math.max(1, Math.ceil(total / limit)),
+        stats: {
+          total: Object.values(byType).reduce((sum, n) => sum + n, 0),
+          info: byType.info || 0,
+          warning: byType.warning || 0,
+          error: byType.error || 0,
+          unread: facet.unread?.[0]?.n || 0,
+          thisWeek: facet.thisWeek?.[0]?.n || 0
+        }
+      });
+    }
+
+    const alerts = await Alert.find(visibilityQuery)
       .populate('assignedUsers', 'name email')
       .populate('assignedGroups', 'name')
       .populate('createdBy', 'name email role department departmentName')
@@ -149,16 +236,13 @@ const getUnreadCount = async (req, res) => {
       readBy: { $ne: userId }
     });
     
-    if (!isManager) {
+    // ?mine=1: only alerts addressed to this user (sidebar badge), even for managers.
+    const mineOnly = ['1', 'true'].includes(String(req.query?.mine || '').toLowerCase());
+    if (!isManager || mineOnly) {
       const userGroups = await Group.find({ members: userId }).select('_id');
       const userGroupIds = userGroups.map(group => group._id);
       
-      query = mergeQueries(query, {$or: [
-        { assignedUsers: { $in: [userId] } },
-        { assignedGroups: { $in: userGroupIds } },
-        { assignedUsers: { $size: 0 } },
-        { assignedGroups: { $size: 0 } }
-      ]});
+      query = mergeQueries(query, visibleToEmployeeQuery(userId, userGroupIds));
     }
     
     const count = await Alert.countDocuments(query);

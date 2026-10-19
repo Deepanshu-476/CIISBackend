@@ -4,12 +4,10 @@ const alertSchema = new mongoose.Schema({
   company: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Company',
-    index: true
   },
   companyCode: {
     type: String,
     trim: true,
-    index: true 
   },
   title: {
     type: String,

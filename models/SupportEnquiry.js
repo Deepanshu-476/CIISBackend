@@ -9,7 +9,6 @@ const supportEnquirySchema = new mongoose.Schema({
   companyCode: {
     type: String,
     required: true,
-    index: true,
   },
   name: {
     type: String,

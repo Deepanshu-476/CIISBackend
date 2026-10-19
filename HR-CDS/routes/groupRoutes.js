@@ -22,7 +22,7 @@ router.get('/assignable/groups', protect, groupController.getAssignableGroups);
 router.get('/:groupId', protect, groupController.getGroupById);
 router.put('/:groupId', protect, uploadGroupImage, groupController.updateGroup);
 router.delete('/:groupId', protect, groupController.deleteGroup);
-router.post('/:groupId/members',  groupController.addMembersToGroup);
-router.delete('/:groupId/members/:userId', groupController.removeMemberFromGroup);
+router.post('/:groupId/members', protect, groupController.addMembersToGroup);
+router.delete('/:groupId/members/:userId', protect, groupController.removeMemberFromGroup);
 
 module.exports = router;
