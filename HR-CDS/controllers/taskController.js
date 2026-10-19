@@ -1001,29 +1001,32 @@ const sendTaskCreationEmail = async (task, assignedUsers) => {
 
 
 
-const fetchPersonalTaskList = async (req) => {
+const fetchPersonalTaskList = async (req, { lightweight = false } = {}) => {
   const companyCode = req.user.companyCode;
   const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
   const companyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : companyCode;
 
-  const tasks = await Task.find({
+  const taskQuery = Task.find({
     companyCode: companyFilter,
     createdBy: req.user._id,
     taskFor: 'self',
     isActive: true
-  })
-    .select('-remarks -statusHistory')
-    .populate('assignedUsers', TASK_USER_POPULATE_FIELDS)
-    .populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS)
-    .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
-    .sort({ createdAt: -1 })
-    .lean();
-
-  const enriched = await enrichStatusInfo(tasks);
+  }).select(lightweight
+    ? '-remarks -statusHistory -files -checkpoints -activityLogs'
+    : '-remarks -statusHistory');
+  if (!lightweight) {
+    taskQuery.populate('assignedUsers', TASK_USER_POPULATE_FIELDS)
+      .populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS)
+      .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS);
+  }
+  const tasks = await taskQuery.sort({ createdAt: -1 }).lean();
+  // Filtering/sorting needs raw IDs and status, not populated user profiles.
+  // The visible page is hydrated once in hydratePagedTaskItems.
+  const enriched = lightweight ? tasks : await enrichStatusInfo(tasks);
   return enriched.map(t => ({ ...t, status: normalizeTaskStatus(t.overallStatus), taskSource: 'self', __taskSource: 'self' }));
 };
 
-const fetchAssignedToMeTaskList = async (req) => {
+const fetchAssignedToMeTaskList = async (req, { lightweight = false } = {}) => {
   const currentUserId = req.user._id || req.user.id;
   const groups = await Group.find({ members: currentUserId, isActive: true }).select('_id').lean();
   const groupIds = groups.map(g => g._id);
@@ -1032,7 +1035,7 @@ const fetchAssignedToMeTaskList = async (req) => {
   const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
   const companyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : companyCode;
 
-  const tasks = await Task.find({
+  const taskQuery = Task.find({
     companyCode: companyFilter,
     isActive: true,
     taskFor: 'others',
@@ -1041,15 +1044,18 @@ const fetchAssignedToMeTaskList = async (req) => {
       { assignedUsers: currentUserId },
       { assignedGroups: { $in: groupIds } }
     ]
-  })
-    .select('-remarks -statusHistory')
-    .populate('assignedUsers', TASK_USER_POPULATE_FIELDS)
-    .populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS)
-    .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
-    .sort({ createdAt: -1 })
-    .lean();
-
-  const enriched = await enrichStatusInfo(tasks);
+  }).select(lightweight
+    ? '-remarks -statusHistory -files -checkpoints -activityLogs'
+    : '-remarks -statusHistory');
+  if (!lightweight) {
+    taskQuery.populate('assignedUsers', TASK_USER_POPULATE_FIELDS)
+      .populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS)
+      .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS);
+  }
+  const tasks = await taskQuery.sort({ createdAt: -1 }).lean();
+  // Filtering/sorting needs raw IDs and status, not populated user profiles.
+  // The visible page is hydrated once in hydratePagedTaskItems.
+  const enriched = lightweight ? tasks : await enrichStatusInfo(tasks);
   return enriched.map(t => {
     const userEntry = t.statusByUser?.find(s => (s.user?._id || s.user)?.toString() === currentUserId.toString());
     const status = userEntry?.status || t.overallStatus || 'pending';
@@ -1165,16 +1171,17 @@ const getBranchScopedUserIds = async (req) => {
   return users.map(user => user._id);
 };
 
-const fetchAssignedClientTaskList = async (req) => {
+const fetchAssignedClientTaskList = async (req, { lightweight = false } = {}) => {
   const companyCode = getRequestCompanyCode(req);
   const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
   const companyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : companyCode;
 
-  const clients = await Client.find(companyFilter ? { companyCode: companyFilter } : {}).select('_id').lean();
+  const clients = await Client.find(companyFilter ? { companyCode: companyFilter } : {}).select('_id client name').lean();
   const clientIds = clients.map(c => c._id);
+  const clientNames = new Map(clients.map(client => [String(client._id), client.client || client.name || 'Unknown Client']));
   const currentUser = req.user;
 
-  const tasks = await ClientTask.find({
+  const taskQuery = ClientTask.find({
     clientId: { $in: clientIds },
     $or: [
       { assigneeId: currentUser._id },
@@ -1183,11 +1190,9 @@ const fetchAssignedClientTaskList = async (req) => {
       { assignee: currentUser.name },
       { assignee: currentUser.email }
     ].filter(Boolean)
-  })
-    .select('-remarks -activityLogs')
-    .populate('clientId', 'client name email company phone companyCode')
-    .sort({ createdAt: -1 })
-    .lean();
+  }).select(lightweight ? '-remarks -activityLogs -files' : '-remarks -activityLogs');
+  if (!lightweight) taskQuery.populate('clientId', 'client name email company phone companyCode');
+  const tasks = await taskQuery.sort({ createdAt: -1 }).lean();
 
   return tasks.map(t => {
     const status = t.completed ? 'completed' : normalizeTaskStatus(t.status || 'pending');
@@ -1201,7 +1206,7 @@ const fetchAssignedClientTaskList = async (req) => {
       completed: t.completed,
       status,
       priority: (t.priority || 'Medium').toLowerCase(),
-      clientName: t.clientId?.client || t.clientId?.name || 'Unknown Client',
+      clientName: t.clientId?.client || t.clientId?.name || clientNames.get(String(t.clientId)) || 'Unknown Client',
       clientId: t.clientId,
       files: t.files || [],
       remarks: t.remarks || [],
@@ -1658,9 +1663,9 @@ exports.getAllMyTaskViews = async (req, res) => {
       : requestedView;
     const list = view === 'all'
       ? (await Promise.all([
-          fetchPersonalTaskList(req),
-          fetchAssignedToMeTaskList(req),
-          fetchAssignedClientTaskList(req),
+          fetchPersonalTaskList(req, { lightweight: true }),
+          fetchAssignedToMeTaskList(req, { lightweight: true }),
+          fetchAssignedClientTaskList(req, { lightweight: true }),
           fetchAssignedProjectTaskList(req)
         ])).flat()
       : await viewLoaders[view](req);
