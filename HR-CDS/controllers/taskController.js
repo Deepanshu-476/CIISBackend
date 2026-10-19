@@ -1931,17 +1931,30 @@ exports.getAssignedTasks = async (req, res) => {
       taskFilter.$or = orConditions;
     }
 
-    const tasks = await Task.find(taskFilter)
+    // Filters, sorting and stats only need a few fields, so every matching task is loaded light
+    // (no populate, no remarks/files/checkpoints). Full documents are loaded for the returned page only.
+    const lightFields = [
+      'title', 'name', 'clientName', 'service', 'priority', 'overallStatus', 'statusByUser', 'dueDateTime',
+      'dueDate', 'createdAt', 'updatedAt', 'completionDate', 'completedAt', 'onHoldReleasedAt', 'assignedUsers',
+      'createdBy', 'taskFor', 'isActive', 'branch', 'statusHistory.status', 'statusHistory.newValue',
+      'statusHistory.newValues', 'statusHistory.changedAt', 'statusHistory.createdAt', 'statusHistory.updatedAt',
+      ...(req.query?.search ? ['description'] : [])
+    ].join(' ');
+    const lightTasks = await Task.find(taskFilter).select(lightFields).sort({ createdAt: -1 }).lean();
+
+    const mapped = lightTasks.map(t => ({ ...t, status: normalizeTaskStatus(t.overallStatus) }));
+    const filtered = sortTasksNewestFirst(applyCleanListFilters(mapped, req));
+    const paginated = paginateTasks(filtered, req);
+
+    const pageIds = paginated.tasks.map(t => t._id);
+    const fullTasks = pageIds.length ? await Task.find({ _id: { $in: pageIds } })
       .populate('branch', 'name branchCode')
       .populate('assignedUsers', 'name role email department branch assignedBranches')
       .populate('createdBy', 'name email')
-      .sort({ createdAt: -1 })
-      .lean();
-
-    const enriched = await enrichStatusInfo(tasks);
-    const mapped = enriched.map(t => ({ ...t, status: normalizeTaskStatus(t.overallStatus) }));
-    const filtered = sortTasksNewestFirst(applyCleanListFilters(mapped, req));
-    const paginated = paginateTasks(filtered, req);
+      .lean() : [];
+    const enrichedPage = await enrichStatusInfo(fullTasks);
+    const fullById = new Map(enrichedPage.map(t => [String(t._id), { ...t, status: normalizeTaskStatus(t.overallStatus) }]));
+    paginated.tasks = pageIds.map(id => fullById.get(String(id))).filter(Boolean);
 
     const calculateTaskSummary = (taskList = []) => {
       let pending = 0;
@@ -1999,7 +2012,9 @@ exports.getAssignedTasks = async (req, res) => {
 };
 
 const handleTaskCreation = async (req, res, isSelf) => {
-  const { title, description, dueDateTime, whatsappNumber, priorityDays, priority, assignedUsers, assignedGroups, checkpoints } = req.body;
+  const { title, description, dueDateTime, whatsappNumber, priorityDays, priority, assignedGroups, checkpoints } = req.body;
+  // Some clients (web Company All Task "Assign Task") send `assignedTo`; it was ignored, creating tasks with no assignee.
+  const assignedUsers = req.body.assignedUsers ?? req.body.assignedTo;
   const companyCode = getRequestCompanyCode(req);
   let branchId = getRequestedTaskBranchId(req);
   const failTaskCreation = (status, message) => res.status(status).json({ success: false, error: message, message });
@@ -2089,6 +2104,10 @@ const handleTaskCreation = async (req, res, isSelf) => {
 
   const parsedGroups = !isSelf && assignedGroups && assignedGroups !== 'null' ?
     (typeof assignedGroups === 'string' ? JSON.parse(assignedGroups) : assignedGroups) : [];
+
+  if (!isSelf && parsedUsers.length === 0 && (!Array.isArray(parsedGroups) || parsedGroups.length === 0)) {
+    return failTaskCreation(400, 'Select at least one user or group to assign this task');
+  }
 
   const files = (req.files?.files || []).map(f => ({ filename: f.filename, originalName: f.originalname, path: f.path, uploadedBy: req.user._id }));
   const voiceNote = req.files?.voiceNote?.[0] ? { filename: req.files.voiceNote[0].filename, originalName: req.files.voiceNote[0].originalname, path: req.files.voiceNote[0].path, uploadedBy: req.user._id } : null;
@@ -2665,14 +2684,18 @@ exports.getRemarks = async (req, res) => {
 
 exports.getNotifications = async (req, res) => {
   try {
-    const ownerFilter = { $or: [{ recipient: req.user._id }, { user: req.user._id }] };
+    // Notification has no `user` field, so the old { $or: [recipient, user] } could not use an index and
+    // scanned the whole collection. The list was also unbounded (thousands of rows for active users);
+    // the task pages only show it in a drawer, and unreadCount is computed separately.
+    const ownerFilter = { recipient: req.user._id };
     const filter = { ...ownerFilter };
     if (req.query.unreadOnly === 'true') filter.isRead = false;
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
 
-
-
-    const notifications = await Notification.find(filter).sort({ createdAt: -1 }).lean();
-    const unreadCount = await Notification.countDocuments({ ...ownerFilter, isRead: false });
+    const [notifications, unreadCount] = await Promise.all([
+      Notification.find(filter).sort({ createdAt: -1 }).limit(limit).lean(),
+      Notification.countDocuments({ ...ownerFilter, isRead: false }),
+    ]);
     res.json({ success: true, notifications, unreadCount });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -2682,7 +2705,7 @@ exports.getNotifications = async (req, res) => {
 exports.markNotificationAsRead = async (req, res) => {
   try {
     const notification = await Notification.findOneAndUpdate(
-      { _id: req.params.notificationId, $or: [{ recipient: req.user._id }, { user: req.user._id }] },
+      { _id: req.params.notificationId, recipient: req.user._id },
       { isRead: true, readAt: new Date() },
       { new: true }
     );
@@ -2695,7 +2718,7 @@ exports.markNotificationAsRead = async (req, res) => {
 exports.markAllNotificationsAsRead = async (req, res) => {
   try {
     await Notification.updateMany(
-      { $or: [{ recipient: req.user._id }, { user: req.user._id }], isRead: false },
+      { recipient: req.user._id, isRead: false },
       { isRead: true, readAt: new Date() }
     );
     res.json({ success: true, message: 'All notifications marked as read' });

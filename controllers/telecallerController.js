@@ -32,6 +32,12 @@ const parseDate = value => {
   return Number.isFinite(parsed.getTime()) ? parsed : null;
 };
 
+// Only a file from POST /:id/recording or a web link is stored; a phone-local path cannot be played.
+const cleanRecordingUrl = value => {
+  const url = String(value || '').trim();
+  return /^\/uploads\/recordings\/[\w.-]+$/.test(url) || /^https?:\/\/[^\s"'<>]+$/i.test(url) ? url : '';
+};
+
 const syncCallArtifacts = async (req, { id, outcome, notes, nextDate, noteOnly }, leadDoc = null) => {
   if (noteOnly) return;
   const CallLog = require('../models/CallLog');
@@ -68,9 +74,10 @@ const syncCallArtifacts = async (req, { id, outcome, notes, nextDate, noteOnly }
     duration: Number(req.body.duration) || 0,
     status,
     notes: notes.trim(),
-    recordingUrl: req.body.recordingUrl || '',
     callType: req.body.callType || 'Outgoing'
   };
+  // A retry or edit without a recording must not wipe one saved earlier.
+  if (cleanRecordingUrl(req.body.recordingUrl)) values.recordingUrl = cleanRecordingUrl(req.body.recordingUrl);
   if (req.body.callLogId && mongoose.isValidObjectId(req.body.callLogId)) {
     const log = await CallLog.findOneAndUpdate({ _id: req.body.callLogId, agent }, { $set: values }, { new: true });
     if (!log) throw new Error('The active call log could not be finalized.');
@@ -127,6 +134,20 @@ exports.getOne = async (req, res, next) => {
   } catch (error) { next(error); }
 };
 
+// Call bucket used by the app's Call History (missed / outgoing / incoming / unknown), same rules as the client.
+const CALL_TYPE_LOWER = { $toLower: { $ifNull: ['$callType', ''] } };
+const CALL_BUCKET_EXPR = {
+  $switch: {
+    branches: [
+      { case: { $or: [{ $eq: [CALL_TYPE_LOWER, 'missed'] }, { $in: ['$status', ['missed', 'not reachable']] }] }, then: 'missed' },
+      { case: { $in: [CALL_TYPE_LOWER, ['', 'outgoing', 'outbound']] }, then: 'outgoing' },
+      { case: { $in: [CALL_TYPE_LOWER, ['incoming', 'inbound']] }, then: 'incoming' },
+      { case: { $eq: [CALL_TYPE_LOWER, 'unknown'] }, then: 'unknown' }
+    ],
+    default: 'other'
+  }
+};
+
 exports.callLogs = async (req, res, next) => {
   try {
     const CallLog = require('../models/CallLog');
@@ -137,15 +158,62 @@ exports.callLogs = async (req, res, next) => {
     if (req.query?.leadId && mongoose.isValidObjectId(req.query.leadId)) filter.lead = req.query.leadId;
     if (req.query?.type) filter.callType = new RegExp(`^${String(req.query.type).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
     if (req.query?.status) filter.status = String(req.query.status).toLowerCase();
+    // direction: the stored callType is either spelling (Inbound/Incoming, Outbound/Outgoing).
+    if (req.query?.direction === 'inbound') filter.callType = { $in: [/^inbound$/i, /^incoming$/i] };
+    if (req.query?.direction === 'outbound') filter.callType = { $in: [/^outbound$/i, /^outgoing$/i] };
+    // from/to: ISO times bounding startTime (the web page sends the viewer's local day).
+    const from = parseDate(req.query?.from), to = parseDate(req.query?.to);
+    if (from || to) filter.startTime = { ...(from ? { $gte: from } : {}), ...(to ? { $lt: to } : {}) };
 
     const limit = Math.min(Math.max(parseInt(req.query?.limit, 10) || 200, 1), 500);
-    const items = await CallLog.find(filter)
-      .populate('lead', 'name phone email source leadSource leadType status address gender remarks')
-      .populate('agent', 'name email role companyRole')
-      .sort({ startTime: -1, createdAt: -1 })
-      .limit(limit)
-      .lean();
-    res.json({ items: (items || []).map(formatCallLogForClient) });
+    // ?page enables paging (older clients asked for one capped list of up to 500 and never saw older calls).
+    const paged = req.query?.page !== undefined;
+    const page = Math.max(1, parseInt(req.query?.page, 10) || 1);
+    if (req.query?.search) {
+      const pattern = new RegExp(String(req.query.search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      filter.$or = [{ leadName: pattern }, { leadPhone: pattern }, { agentName: pattern }, { notes: pattern }];
+    }
+    const baseFilter = { ...filter };
+    if (paged && ['missed', 'outgoing', 'incoming', 'unknown'].includes(String(req.query?.bucket || ''))) {
+      filter.$expr = { $eq: [CALL_BUCKET_EXPR, String(req.query.bucket)] };
+    }
+    const [items, total, buckets] = await Promise.all([
+      CallLog.find(filter)
+        .populate('lead', 'name phone email source leadSource leadType status address gender remarks')
+        .populate('agent', 'name email role companyRole')
+        .sort({ startTime: -1, createdAt: -1, _id: -1 })
+        .skip(paged ? (page - 1) * limit : 0)
+        .limit(limit)
+        .lean(),
+      paged ? CallLog.countDocuments(filter) : Promise.resolve(null),
+      paged
+        ? CallLog.aggregate([
+          { $match: { ...baseFilter, company: new mongoose.Types.ObjectId(String(baseFilter.company)), ...(baseFilter.agent ? { agent: new mongoose.Types.ObjectId(String(baseFilter.agent)) } : {}), ...(baseFilter.lead ? { lead: new mongoose.Types.ObjectId(String(baseFilter.lead)) } : {}) } },
+          { $group: { _id: CALL_BUCKET_EXPR, count: { $sum: 1 }, seconds: { $sum: { $ifNull: ['$duration', 0] } } } }
+        ])
+        : Promise.resolve(null)
+    ]);
+    const body = { items: (items || []).map(formatCallLogForClient) };
+    if (paged) {
+      const summary = { total: 0, totalSeconds: 0 };
+      ['missed', 'outgoing', 'incoming', 'unknown'].forEach(key => { summary[key] = { count: 0, seconds: 0 }; });
+      (buckets || []).forEach(row => {
+        summary.total += row.count;
+        summary.totalSeconds += row.seconds;
+        if (summary[row._id]) summary[row._id] = { count: row.count, seconds: row.seconds };
+      });
+      Object.assign(body, { total, page, limit, pages: Math.max(1, Math.ceil(total / limit)), summary });
+    }
+    res.json(body);
+  } catch (error) { next(error); }
+};
+
+exports.recordingLead = async (req, res, next) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid lead ID.' });
+    const lead = await Lead.exists({ ...scope(req), _id: req.params.id });
+    if (!lead) return res.status(404).json({ message: 'Assigned lead not found.' });
+    next();
   } catch (error) { next(error); }
 };
 
@@ -166,7 +234,7 @@ exports.save = async (req, res, next) => {
     if (!noteOnly && !terminal.includes(outcome) && ((callbacks.includes(outcome) && !nextDate) || (nextDate && (!Number.isFinite(nextDate.getTime()) || nextDate <= new Date())))) return res.status(400).json({ message: 'Choose a future follow-up date and time.' });
     if (existing.callHistory?.some(call => call.id === id)) {
       const setExistingCall = {};
-      if (req.body.recordingUrl) setExistingCall['callHistory.$.recordingUrl'] = req.body.recordingUrl;
+      if (cleanRecordingUrl(req.body.recordingUrl)) setExistingCall['callHistory.$.recordingUrl'] = cleanRecordingUrl(req.body.recordingUrl);
       if (Number(req.body.duration) >= 0) setExistingCall['callHistory.$.duration'] = Number(req.body.duration) || 0;
       if (notes.trim()) setExistingCall['callHistory.$.notes'] = notes.trim();
       if (callType) setExistingCall['callHistory.$.callType'] = callType;
@@ -180,7 +248,7 @@ exports.save = async (req, res, next) => {
       return res.json({ item: formatLeadForClient(latestExisting) });
     }
     const callDate = parseDate(req.body.startTime) || parseDate(req.body.endTime) || new Date();
-    const call = { id, outcome, callType, notes: notes.trim(), agent: req.user._id || req.user.id, createdByName: req.user.name || 'User', date: callDate, followUp: noteOnly || terminal.includes(outcome) ? null : nextDate, recordingUrl: req.body.recordingUrl || '', duration: Number(req.body.duration) || 0 };
+    const call = { id, outcome, callType, notes: notes.trim(), agent: req.user._id || req.user.id, createdByName: req.user.name || 'User', date: callDate, followUp: noteOnly || terminal.includes(outcome) ? null : nextDate, recordingUrl: cleanRecordingUrl(req.body.recordingUrl), duration: Number(req.body.duration) || 0 };
     const mutation = { $push: { callHistory: call }, $inc: { __v: 1 } };
     if (!noteOnly) {
       const status = outcome === 'Converted' ? 'converted' : outcome === 'Call Closed' ? 'closed' : outcome === 'Interested' ? 'interested' : outcome === 'Not Interested' ? 'not interested' : callbacks.includes(outcome) ? 'follow-up' : existing.status;

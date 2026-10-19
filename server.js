@@ -8,7 +8,7 @@ const schedule = require('node-schedule');
 const http = require('http');
 const socketIo = require('socket.io');
 const mongoose = require('mongoose');
-const { protect, restrictTo } = require("./middleware/authMiddleware");
+const { protect, restrictTo, invalidateAuthUser } = require("./middleware/authMiddleware");
     
 dotenv.config();
 
@@ -234,7 +234,10 @@ const runDbJobOnce = async (label, job, options) => {
   }
 };
 
+const { scheduledJobsEnabled } = require('./utils/scheduledJobs');
+
 const scheduleDbJob = (cronExpression, label, job, options) => {
+  if (!scheduledJobsEnabled()) return null;
   return schedule.scheduleJob(cronExpression, () => {
     runDbJobOnce(label, job, options);
   });
@@ -948,7 +951,7 @@ scheduleDbJob('* * * * *', 'Pending task reminders', sendConfiguredTaskReminders
 scheduleDbJob('0 18 * * *', 'Holiday reminders', sendTomorrowHolidayReminders);
 
 
-setTimeout(async () => {
+if (scheduledJobsEnabled()) setTimeout(async () => {
   try {
     await dbConnectionPromise;
     void 0;
@@ -1093,6 +1096,33 @@ app.use((req, res, next) => {
 });
 
 
+// protect() caches the auth user for a few seconds; drop that cache after any successful write that can
+// change a user's role, status, password, branch, department or company.
+// CRM list KPI/option summaries are cached for 30s; any CRM write makes them stale.
+const { invalidateCrmListSummaries } = require('./services/crmListQuery');
+const CRM_WRITE = /^\/(api\/)?(crm|calls|followups)(\/|$)/;
+app.use((req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD' && CRM_WRITE.test(req.path)) {
+    res.on('finish', () => {
+      if (res.statusCode < 400) invalidateCrmListSummaries();
+    });
+  }
+  next();
+});
+
+const AUTH_AFFECTING_WRITE = /^\/(api\/)?(users|auth|company|superAdmin|job-roles?|branches|departments?)(\/|$)/;
+app.use((req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD' && AUTH_AFFECTING_WRITE.test(req.path)) {
+    res.on('finish', () => {
+      if (res.statusCode < 400) {
+        invalidateAuthUser();
+        require('./HR-CDS/middlewares/auth').invalidateChatAuthUser();
+      }
+    });
+  }
+  next();
+});
+
 const dashboardRoutes = require('./HR-CDS/routes/dashboardRoutes.js');
 
 
@@ -1122,6 +1152,7 @@ app.use("/api/department", require("./routes/Department.routes.js"));
 app.use("/departments", require("./routes/Department.routes.js"));
 app.use("/department", require("./routes/Department.routes.js"));
 app.use("/api/alerts", require("./HR-CDS/routes/alertRoutes.js"));
+app.use("/api/badges", require("./routes/badgeRoutes.js"));
 app.use("/api/notifications", require("./HR-CDS/routes/notificationRoutes.js"));
 app.use("/api/feedback", require("./HR-CDS/routes/feedbackRoutes.js"));
 app.use("/api/groups", require("./HR-CDS/routes/groupRoutes.js"));
@@ -1158,6 +1189,8 @@ app.use('/api/job-roles', require("./routes/jobRoleRoutes.js"));
 app.use('/api/job-role', require("./routes/jobRoleRoutes.js"));
 app.use('/job-roles', require("./routes/jobRoleRoutes.js"));
 app.use('/job-role', require("./routes/jobRoleRoutes.js"));
+// Read-only per-company data for the platform owner (All Company -> View Data).
+app.use('/api/superAdmin/company/:id/view', require('./routes/superAdminCompanyView.js'));
 app.use('/api/superAdmin', require("./routes/superAdmin.js"));
 app.use("/api/meetings", require("./HR-CDS/routes/meetingRoutes.js"));
 app.use('/api/cmeeting', require("./HR-CDS/routes/clientMeetingRoutes.js"));
@@ -1318,7 +1351,7 @@ const startServer = async () => {
   server.listen(PORT, async () => {
 
   // Temporarily enabled for work-anniversary email template testing.
-  try {
+  if (scheduledJobsEnabled()) try {
     const anniversarySummary = await runWorkAnniversaryEmails();
     console.log("Startup work anniversary test completed:", anniversarySummary);
   } catch (err) {
@@ -1333,7 +1366,8 @@ const startServer = async () => {
   }
 
   
-  try {
+  // Re-schedules reminders for every upcoming meeting; only the instance that runs scheduled jobs does this.
+  if (scheduledJobsEnabled()) try {
     const { initMeetingScheduler } = require("./services/meetingSchedulerService");
     initMeetingScheduler();
   } catch (err) {

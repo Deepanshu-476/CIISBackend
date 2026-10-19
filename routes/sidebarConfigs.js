@@ -265,6 +265,23 @@ router.get('/', async (req, res) => {
       .sort({ createdAt: -1 });
     
     const sanitizedConfigs = await Promise.all(configs.map(sanitizeConfigForCompanyAccess));
+    // Role is stored as a string (either a role name or a JobRole ObjectId).
+    // Resolve names here so display does not depend on the job-role management API.
+    const roleIds = [...new Set(sanitizedConfigs.map(config => String(config.role || ''))
+      .filter(value => mongoose.Types.ObjectId.isValid(value)))];
+    if (roleIds.length) {
+      // Copied sidebar templates can retain source-company role IDs.
+      // Resolve only names of roles explicitly referenced by authorized configs.
+      const roles = await JobRole.find({ _id: { $in: roleIds } })
+        .select('_id name').lean();
+      const roleNames = new Map(roles.map(item => [String(item._id), item.name]));
+      sanitizedConfigs.forEach(config => {
+        config.roleName = roleNames.get(String(config.role)) ||
+          (mongoose.Types.ObjectId.isValid(String(config.role || ''))
+            ? 'Role unavailable' : config.role);
+      });
+    }
+
 
     res.json({
       success: true,

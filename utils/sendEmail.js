@@ -1,10 +1,15 @@
 const {notifyEmailRecipients} = require('../HR-CDS/utils/systemNotificationService');
+const {getEmailFailure} = require('./emailFailure');
 const {
   assertEmailAccepted,
-  createEmailTransporter,
   isEmailModuleEnabled,
   resolveEmailModuleKey,
+  sendMailWithRotation,
 } = require('../services/emailSettingsService');
+
+// Pretend failed emails were sent: only for local development, and only when asked for. It used to
+// follow NODE_ENV, and the servers run without NODE_ENV, so real failures were reported as sent.
+const emailMockEnabled = () => process.env.EMAIL_DEV_MOCK === 'true';
 
 const convertHtmlToText = (htmlContent) => {
   if (!htmlContent) return undefined;
@@ -56,7 +61,6 @@ const sendEmail = async (to, subject, html, options = {}) => {
       throw new Error('Missing required email parameters');
     }
 
-    const isDev = process.env.NODE_ENV !== 'production';
     const moduleEnabled = await isEmailModuleEnabled(emailModuleKey);
 
     if (!moduleEnabled) {
@@ -70,46 +74,18 @@ const sendEmail = async (to, subject, html, options = {}) => {
       };
     }
 
-    let emailTransport;
-    try {
-      emailTransport = await createEmailTransporter();
-    } catch (configError) {
-      if (configError.code === 'EMAIL_DISABLED') {
-        console.warn(`Email skipped because service is disabled. To: ${to}, Subject: ${subject}`);
-        return { success: true, skipped: true, disabled: true, message: 'Email service is disabled' };
-      }
-
-      console.error('❌ Email credentials not configured in environment variables');
-      if (isDev) {
-        console.warn('⚠️ [DEV ONLY] Email credentials not configured. Mocking email send:');
-        console.warn(`[DEV ONLY] To: ${to}`);
-        console.warn(`[DEV ONLY] Subject: ${subject}`);
-        const otpMatch = html.match(/(\b\d{6}\b)/);
-        if (otpMatch) {
-          console.warn(`[DEV ONLY] OTP: ${otpMatch[1]}`);
-        }
-        notifyEmailSent({to, subject, options});
-        return { success: true, messageId: `dev-mock-${Date.now()}`, mocked: true };
-      }
-      throw new Error('Email service not configured');
-    }
-
-    const { config, transporter } = emailTransport;
-
-    const mailOptions = {
+    const recipients = Array.isArray(to) ? to.join(', ') : to;
+    const {info, mailOptions} = await sendMailWithRotation(config => ({
       from: `"${config.senderName || 'CIIS NETWORK'}" <${config.emailUser}>`,
-      to: Array.isArray(to) ? to.join(', ') : to,
+      to: recipients,
       subject: subject,
       html: html,
       text: options.text || convertHtmlToText(html),
       replyTo: config.replyTo || config.emailUser,
       priority: options.priority || 'normal'
-    };
-
-    const info = await transporter.sendMail(mailOptions);
+    }));
     const delivery = assertEmailAccepted(info, mailOptions.to, subject);
 
-    void 0;
     notifyEmailSent({to, subject, options});
     return {
       success: true,
@@ -122,22 +98,28 @@ const sendEmail = async (to, subject, html, options = {}) => {
     };
 
   } catch (error) {
-    const isDev = process.env.NODE_ENV !== 'production';
-    console.error('❌ Error sending email:', error.message);
-    
-    if (isDev) {
-      console.error('Email error details:', error);
-      console.warn('⚠️ [DEV ONLY] Real email sending failed. Mocking successful email send for local development context.');
+    if (error.code === 'EMAIL_DISABLED') {
+      console.warn(`Email skipped because service is disabled. To: ${to}, Subject: ${subject}`);
+      return { success: true, skipped: true, disabled: true, message: 'Email service is disabled' };
+    }
+
+    console.error(`❌ Email not sent (${emailModuleKey}) to ${to}: ${error.message}`);
+
+    if (emailMockEnabled() && !options.requireRealDelivery) {
+      console.warn('⚠️ [DEV ONLY] EMAIL_DEV_MOCK is on. Mocking successful email send.');
       console.warn(`[DEV ONLY] To: ${to}`);
       console.warn(`[DEV ONLY] Subject: ${subject}`);
-      const otpMatch = html.match(/(\b\d{6}\b)/);
+      const otpMatch = String(html || '').match(/(\b\d{6}\b)/);
       if (otpMatch) {
         console.warn(`[DEV ONLY] OTP: ${otpMatch[1]}`);
       }
-      return { success: true, messageId: `dev-fallback-${Date.now()}`, mocked: true, moduleKey: emailModuleKey };
+      notifyEmailSent({to, subject, options});
+      return { success: true, messageId: `dev-mock-${Date.now()}`, mocked: true, moduleKey: emailModuleKey };
     }
-    
-    throw new Error(`Failed to send email: ${error.message}`);
+
+    // Callers carry on (a meeting or leave is saved even if its email fails); OTP and other flows
+    // that need the email check `success`.
+    return { success: false, error: error.message, code: error.code, moduleKey: emailModuleKey, ...getEmailFailure(error) };
   }
 };
 

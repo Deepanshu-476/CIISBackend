@@ -10,7 +10,7 @@ const JobRole = require("../../models/JobRole");
 const mongoose = require("mongoose");
 const {notifyPageUsers, getCompanyId} = require("../utils/systemNotificationService");
 const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagination");
-const { runAutoClockOutSweep } = require("../cron/forceClockOut");
+const { runAutoClockOutSweepIfStale } = require("../cron/forceClockOut");
 const { cleanRecurringTasksForAbsentUser } = require("../cron/recurringTasks");
 const { isOvertimeApprovedForUserDate } = require("./overtimeController");
 
@@ -104,7 +104,7 @@ const isWorkFromHomeEmployee = (user = {}) => {
 
 const refreshAutoClockOuts = async () => {
   try {
-    await runAutoClockOutSweep();
+    await runAutoClockOutSweepIfStale();
   } catch (error) {
     console.error("[AutoClockOut] refresh failed:", error.message);
   }

@@ -6,10 +6,20 @@ const { notifyDirectUsers } = require("../utils/systemNotificationService");
 const { scheduleMeetingReminder, cancelMeetingReminder } = require("../../services/meetingSchedulerService");
 const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagination");
 
+const callerCompanyCode = req => req.user?.companyCode || req.user?.company?.companyCode || "";
+const findCompanyMeeting = (req, meetingId) => Meeting.findOne({ _id: meetingId, companyCode: callerCompanyCode(req) });
+const attendeeEmails = async ids => {
+  const users = await User.find({ _id: { $in: ids } }).select("name email").lean();
+  const byId = new Map(users.map(user => [String(user._id), user]));
+  return ids.map(id => byId.get(String(id))).filter(Boolean);
+};
+
  
 const createMeeting = async (req, res) => {
   try {
-    const { title, description, date, dates, time, recurring, attendees, createdBy, companyCode, link } = req.body;
+    const { title, description, date, dates, time, recurring, attendees, link } = req.body;
+    const companyCode = callerCompanyCode(req);
+    const createdBy = req.user._id;
 
     if (!title || (!date && (!Array.isArray(dates) || dates.length === 0)) || !time || !Array.isArray(attendees))
       return res.status(400).json({ error: "Missing required fields" });
@@ -43,9 +53,7 @@ const createMeeting = async (req, res) => {
       scheduleMeetingReminder(meeting);
 
       
-      for (const empId of attendees) {
-        await MeetingView.create({ meetingId: meeting._id, userId: empId });
-      }
+      await MeetingView.insertMany([...new Set(attendees.map(String))].map(empId => ({ meetingId: meeting._id, userId: empId })));
 
       
       await notifyDirectUsers({
@@ -65,8 +73,7 @@ const createMeeting = async (req, res) => {
       });
 
       
-      for (const empId of attendees) {
-        const emp = await User.findById(empId);
+      for (const emp of await attendeeEmails(attendees)) {
         if (emp && emp.email) {
           const joinText = link ? `<p><b>Join Meeting Link:</b> <a href="${link}" target="_blank" rel="noopener noreferrer">${link}</a></p>` : "";
           const html = `
@@ -158,9 +165,9 @@ const createMeeting = async (req, res) => {
 const updateMeeting = async (req, res) => {
   try {
     const { meetingId } = req.params;
-    const { title, description, date, time, recurring, attendees, link, companyCode } = req.body;
+    const { title, description, date, time, recurring, attendees, link } = req.body;
 
-    const meeting = await Meeting.findById(meetingId);
+    const meeting = await findCompanyMeeting(req, meetingId);
     if (!meeting) {
       return res.status(404).json({ error: "Meeting not found" });
     }
@@ -176,7 +183,6 @@ const updateMeeting = async (req, res) => {
     meeting.recurring = recurring || meeting.recurring;
     meeting.attendees = attendees || meeting.attendees;
     meeting.link = link !== undefined ? link : meeting.link;
-    meeting.companyCode = companyCode || meeting.companyCode;
 
     await meeting.save();
 
@@ -187,12 +193,10 @@ const updateMeeting = async (req, res) => {
     const existingViews = await MeetingView.find({ meetingId });
     const existingUserIds = existingViews.map(v => v.userId.toString());
 
-    for (const attendeeId of meeting.attendees) {
-      const attendeeIdStr = attendeeId.toString();
-      if (!existingUserIds.includes(attendeeIdStr)) {
-        await MeetingView.create({ meetingId, userId: attendeeId });
-      }
-    }
+    const newViews = meeting.attendees
+      .filter(attendeeId => !existingUserIds.includes(attendeeId.toString()))
+      .map(attendeeId => ({ meetingId, userId: attendeeId }));
+    if (newViews.length) await MeetingView.insertMany(newViews);
 
     
     await notifyDirectUsers({
@@ -212,8 +216,7 @@ const updateMeeting = async (req, res) => {
     });
 
     
-    for (const empId of meeting.attendees) {
-      const emp = await User.findById(empId);
+    for (const emp of await attendeeEmails(meeting.attendees)) {
       if (emp && emp.email) {
         const joinText = meeting.link ? `<p><b>Join Meeting Link:</b> <a href="${meeting.link}" target="_blank" rel="noopener noreferrer">${meeting.link}</a></p>` : "";
         const html = `
@@ -244,11 +247,10 @@ const updateMeeting = async (req, res) => {
  
 const getUserMeetings = async (req, res) => {
   try {
-    const { companyCode } = req.query;
     const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
     const filter = {
       attendees: req.params.userId,
-      ...(companyCode && { companyCode })
+      companyCode: callerCompanyCode(req)
     };
 
     const [userMeetings, total] = await Promise.all([
@@ -292,8 +294,10 @@ const getUserMeetings = async (req, res) => {
  
 const markAsViewed = async (req, res) => {
   try {
-    const { meetingId, userId } = req.body;
-    if (!meetingId || !userId)
+    const { meetingId } = req.body;
+    // Only the logged-in user can mark their own view.
+    const userId = req.user._id;
+    if (!meetingId)
       return res.status(400).json({ error: "Missing meetingId/userId" });
 
     await MeetingView.updateOne(
@@ -311,6 +315,8 @@ const markAsViewed = async (req, res) => {
  
 const getViewStatus = async (req, res) => {
   try {
+    const meeting = await findCompanyMeeting(req, req.params.meetingId).select("_id").lean();
+    if (!meeting) return res.status(404).json({ error: "Meeting not found" });
     const data = await MeetingView.find({ meetingId: req.params.meetingId }).populate(
       "userId",
       "name email"
@@ -323,9 +329,9 @@ const getViewStatus = async (req, res) => {
 
 const getAllMeetings = async (req, res) => {
   try {
-    const { companyCode } = req.query;
     const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
-    const filter = companyCode ? { companyCode } : {};
+    // Previously no companyCode meant every company's meetings; the client-supplied code is ignored now.
+    const filter = { companyCode: callerCompanyCode(req) };
     const [meetings, total] = await Promise.all([
       Meeting.find(filter)
         .sort({ date: -1 })
@@ -358,6 +364,9 @@ const deleteMeeting = async (req, res) => {
     }
 
     
+    const meeting = await findCompanyMeeting(req, meetingId).select("_id").lean();
+    if (!meeting) return res.status(404).json({ error: "Meeting not found" });
+
     cancelMeetingReminder(meetingId);
 
     await Meeting.findByIdAndDelete(meetingId);
