@@ -5,10 +5,14 @@ const { getCompanyRegistrationEmailTemplate } = require('../utils/emailTemplates
 const {notifyEmailRecipients} = require('../HR-CDS/utils/systemNotificationService');
 const {
   assertEmailAccepted,
-  createEmailTransporter,
   isEmailModuleEnabled,
   resolveEmailModuleKey,
+  sendMailWithRotation,
 } = require('./emailSettingsService');
+
+// Pretend failed emails were sent: only for local development, and only when asked for. It used to
+// follow NODE_ENV, and the servers run without NODE_ENV, so real failures were reported as sent.
+const emailMockEnabled = () => process.env.EMAIL_DEV_MOCK === 'true';
 
 const convertHtmlToText = (htmlContent) => {
   if (!htmlContent) return undefined;
@@ -86,8 +90,8 @@ class EmailService {
         throw new Error('Missing required email parameters');
       }
 
-      const isDev = process.env.NODE_ENV !== 'production';
       const emailModuleKey = resolveEmailModuleKey(subject, options);
+      options = {...options, emailModuleKey};
       const moduleEnabled = await isEmailModuleEnabled(emailModuleKey);
 
       if (!moduleEnabled) {
@@ -101,42 +105,7 @@ class EmailService {
         };
       }
 
-      let emailTransport;
-      try {
-        emailTransport = await createEmailTransporter();
-      } catch (configError) {
-        if (configError.code === 'EMAIL_DISABLED') {
-          console.warn(`Email skipped because service is disabled. To: ${to}, Subject: ${subject}`);
-          return {
-            success: true,
-            skipped: true,
-            disabled: true,
-            message: 'Email service is disabled'
-          };
-        }
-
-        if (isDev) {
-          console.warn('⚠️ [DEV ONLY] Email credentials not configured. Mocking email send:');
-          console.warn(`[DEV ONLY] To: ${to}`);
-          console.warn(`[DEV ONLY] Subject: ${subject}`);
-          const otpMatch = html.match(/(\b\d{6}\b)/);
-          if (otpMatch) {
-            console.warn(`[DEV ONLY] OTP: ${otpMatch[1]}`);
-          }
-          this.notifyEmailSent(to, subject, options);
-          return { 
-            success: true, 
-            messageId: `dev-mock-${Date.now()}`,
-            preview: html.substring(0, 200) + '...',
-            mocked: true
-          };
-        }
-        throw new Error('Email service not configured');
-      }
-
-      const { config, transporter } = emailTransport;
       const plainText = options.text || convertHtmlToText(html);
-
       const headers = {
         'X-Entity-Ref-ID': options.referenceId || `email-${Date.now()}`,
         'X-Mailer': 'CIIS-NETWORK-Email-Service',
@@ -144,7 +113,7 @@ class EmailService {
         ...options.headers
       };
 
-      const mailOptions = {
+      const {info, mailOptions} = await sendMailWithRotation(config => ({
         from: `"${config.senderName || 'CIIS NETWORK'}" <${config.emailUser}>`,
         to: Array.isArray(to) ? to.join(', ') : to,
         subject: subject,
@@ -152,20 +121,13 @@ class EmailService {
         text: plainText,
         replyTo: config.replyTo || config.emailUser,
         priority: options.priority || 'high',
-        headers
-      };
-
-      
-      if (options.attachments && options.attachments.length > 0) {
-        mailOptions.attachments = options.attachments;
-      }
-
-      const info = await transporter.sendMail(mailOptions);
+        headers,
+        ...(options.attachments && options.attachments.length > 0 ? {attachments: options.attachments} : {}),
+      }));
       const delivery = assertEmailAccepted(info, mailOptions.to, subject);
-      
-      void 0;
+
       this.notifyEmailSent(to, subject, options);
-      
+
       return {
         success: true,
         moduleKey: emailModuleKey,
@@ -177,36 +139,41 @@ class EmailService {
       };
 
     } catch (error) {
-      const isDev = process.env.NODE_ENV !== 'production';
-      console.error('❌ Error sending email:', error.message);
-      
-      if (isDev) {
-        console.error('Email error details:', error);
-        console.warn('⚠️ [DEV ONLY] Real email sending failed. Mocking successful email send for local development context.');
+      if (error.code === 'EMAIL_DISABLED') {
+        console.warn(`Email skipped because service is disabled. To: ${to}, Subject: ${subject}`);
+        return {
+          success: true,
+          skipped: true,
+          disabled: true,
+          message: 'Email service is disabled'
+        };
+      }
+
+      console.error(`❌ Email not sent to ${to}: ${error.message}`);
+
+      if (emailMockEnabled()) {
+        console.warn('⚠️ [DEV ONLY] EMAIL_DEV_MOCK is on. Mocking successful email send.');
         console.warn(`[DEV ONLY] To: ${to}`);
         console.warn(`[DEV ONLY] Subject: ${subject}`);
-        const otpMatch = html.match(/(\b\d{6}\b)/);
+        const otpMatch = String(html || '').match(/(\b\d{6}\b)/);
         if (otpMatch) {
           console.warn(`[DEV ONLY] OTP: ${otpMatch[1]}`);
         }
+        this.notifyEmailSent(to, subject, options);
         return {
           success: true,
-          messageId: `dev-fallback-${Date.now()}`,
-          preview: html.substring(0, 200) + '...',
+          messageId: `dev-mock-${Date.now()}`,
+          preview: String(html || '').substring(0, 200) + '...',
           mocked: true
         };
       }
 
-      if (process.env.NODE_ENV === 'production') {
-        console.error('Email sending failed but continuing with response');
-        return {
-          success: false,
-          error: error.message,
-          fallback: true
-        };
-      }
-
-      throw new Error(`Failed to send email: ${error.message}`);
+      return {
+        success: false,
+        error: error.message,
+        code: error.code,
+        fallback: true
+      };
     }
   }
 
