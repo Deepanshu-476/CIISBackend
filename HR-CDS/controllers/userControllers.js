@@ -2460,7 +2460,7 @@ exports.getCompanyUsers = async (req, res) => {
 
     const taskOverviewView = String(req.query.view || '').toLowerCase() === 'task-overview';
     const userProjection = taskOverviewView
-      ? 'name email role companyRole jobRole employeeType employeeId company companyCode department branch assignedBranches isActive status createdAt'
+      ? 'name email phone role companyRole jobRole employeeType employeeId company companyCode department branch assignedBranches isActive status createdAt'
       : '-password -resetToken -resetTokenExpiry';
 
     const users = await User.find(filter)
