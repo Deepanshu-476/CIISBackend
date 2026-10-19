@@ -1,3 +1,4 @@
+const taskStatusRequest = require('../../middleware/taskStatusRequest');
 
 const express = require('express');
 const router = express.Router();
@@ -32,7 +33,7 @@ router.patch('/:taskId/reminder', protect, selfTaskController.updateTaskReminder
 router.put('/:taskId/reminder', protect, selfTaskController.updateTaskReminder);
 router.patch('/:taskId/stop-recurring', protect, selfTaskController.stopRecurringTask);
 router.delete('/:taskId', protect, selfTaskController.deleteTask);
-router.patch('/:taskId/status', protect, selfTaskController.updateStatus);
+router.patch('/:taskId/status', protect, taskStatusRequest, selfTaskController.updateStatus);
 router.patch('/:taskId/checkpoints/:checkpointId', protect, selfTaskController.updateCheckpoint);
 router.post('/:taskId/remarks', protect, uploadRemarkImage, selfTaskController.addRemark);
 router.get('/:taskId/remarks', protect, selfTaskController.getRemarks);
