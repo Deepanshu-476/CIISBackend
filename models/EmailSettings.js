@@ -55,6 +55,14 @@ const senderProfileSchema = new mongoose.Schema(
       lowercase: true,
       default: "",
     },
+    // Recipients this account may send per day before sending moves to the next account.
+    // 0 uses the provider default (see DEFAULT_DAILY_LIMITS in services/emailSettingsService.js).
+    dailyLimit: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 100000,
+    },
   },
   { _id: false, timestamps: true }
 );
