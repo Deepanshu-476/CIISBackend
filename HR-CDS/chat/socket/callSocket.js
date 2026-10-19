@@ -1,5 +1,6 @@
 const User = require("../../../models/User");
 const {sendPushToUsers} = require("../../utils/firebasePushService");
+const callHistory = require("../utils/callHistory");
 
 const activeCalls = new Map();
 const disconnectTimers = new Map();
@@ -150,6 +151,7 @@ const maybeCloseRoom = (callId) => {
         if (room.ringTimeout) {
             clearTimeout(room.ringTimeout);
         }
+        callHistory.recordCallFinished(room);
         activeCalls.delete(callId?.toString());
     }
 };
@@ -160,6 +162,7 @@ const closeCallRoom = (callId) => {
     if (room.ringTimeout) {
         clearTimeout(room.ringTimeout);
     }
+    callHistory.recordCallFinished(room);
     activeCalls.delete(callId?.toString());
 };
 
@@ -229,7 +232,10 @@ const callSocket = (io, socket) => {
         const room = {
             callId,
             callType,
+            companyId: socket.companyId,
             conversationId: data.conversationId,
+            startedAt: Date.now(),
+            answeredAt: null,
             expiresAt: Date.now() + CALL_RING_TIMEOUT_MS,
             hostUserId: socket.userId,
             title: callTitle,
@@ -252,6 +258,7 @@ const callSocket = (io, socket) => {
         });
 
         activeCalls.set(callId, room);
+        callHistory.recordCallStarted(room);
 
         room.ringTimeout = setTimeout(() => {
             const latestRoom = getCallRoom(callId);
@@ -265,6 +272,7 @@ const callSocket = (io, socket) => {
                 fromUserId: latestRoom.hostUserId,
                 reason: "No answer",
             });
+            callHistory.recordCallFinished(latestRoom);
             activeCalls.delete(callId);
         }, CALL_RING_TIMEOUT_MS);
 
@@ -352,6 +360,10 @@ const callSocket = (io, socket) => {
             room.ringTimeout = null;
         }
 
+        // Duration is measured from the first pick-up, like a phone call log.
+        if (!room.answeredAt) room.answeredAt = Date.now();
+        callHistory.recordCallAnswered(callId, socket.userId, new Date());
+
         emitToUser(io, socket.userId, "call:joined", {
             callId,
             callType: room.callType,
@@ -412,6 +424,7 @@ const callSocket = (io, socket) => {
 
         room.isGroupCall = true;
         room.title = callTitle;
+        callHistory.recordParticipantsAdded(callId, targetParticipantIds);
         targetParticipantIds.forEach(userId => {
             room.participants.set(userId, {
                 status: "invited",
