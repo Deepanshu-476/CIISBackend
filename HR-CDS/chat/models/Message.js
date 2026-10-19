@@ -47,6 +47,19 @@ const messageSchema = new mongoose.Schema(
         }
     },
 
+    // Filled for systemEvent.type === "call" so the thread can show call time and duration.
+    call: {
+        callId: { type: String, default: "" },
+        callType: { type: String, default: "" },
+        status: { type: String, default: "" },
+        durationSeconds: { type: Number, default: 0 },
+        caller: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
+            default: null
+        }
+    },
+
     replyTo: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "Message",
@@ -84,6 +97,8 @@ const messageSchema = new mongoose.Schema(
 
     fileName: { type: String, default: "" },
     fileSize: { type: Number, default: 0 },
+    // Voice note length in seconds, sent by the recorder so players can show it before download.
+    duration: { type: Number, default: 0, min: 0 },
 
     deletedFor: [{
         type: mongoose.Schema.Types.ObjectId,
