@@ -196,6 +196,13 @@ const userSchema = new mongoose.Schema({
   
   fatherName: String,
   motherName: String,
+  spouseName: String,
+  children: [{
+    _id: false,
+    name: { type: String, trim: true, maxlength: 120 },
+    age: { type: String, trim: true, maxlength: 10 },
+    dob: String
+  }],
   
   
   emergencyName: String,

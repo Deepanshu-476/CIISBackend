@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 
 function fixture() {
-  const pushes = [], emitted = [], queries = [], timers = [];
+  const pushes = [], emitted = [], queries = [], timers = [], history = [];
   const io = {sockets: {adapter: {rooms: new Map()}, sockets: new Map()}, to: room => ({emit: (event, data) => emitted.push({room, event, data})})};
   const module = {exports: {}};
   vm.runInNewContext(fs.readFileSync(require.resolve('../HR-CDS/chat/socket/callSocket'), 'utf8'), {
@@ -14,6 +14,12 @@ function fixture() {
         return {select: () => ({lean: async () => query.company === 'company' && ['receiver', 'second'].includes(query._id) ? {_id: query._id} : null})};
       }};
       if (name.includes('firebasePushService')) return {sendPushToUsers: async payload => { pushes.push(payload); return {success: true}; }};
+      if (name.includes('callHistory')) return {
+        recordCallStarted: room => history.push(['started', room.callId]),
+        recordParticipantsAdded: (callId, ids) => history.push(['added', callId, ids]),
+        recordCallAnswered: (callId, userId) => history.push(['answered', callId, userId]),
+        recordCallFinished: room => history.push(['finished', room.callId, room.answeredAt ? 'answered' : 'unanswered']),
+      };
       throw new Error(name);
     }, setTimeout: fn => { timers.push(fn); return timers.length; }, clearTimeout() {}, Date, console,
   });
@@ -24,7 +30,7 @@ function fixture() {
     module.exports(io, s);
     return {run: (event, ...args) => handlers.get(event)(...args)};
   }
-  return {socket, pushes, emitted, queries, timers};
+  return {socket, pushes, emitted, queries, timers, history};
 }
 const invite = {callId: 'call-1', callType: 'video', conversationId: 'conversation', participantIds: ['receiver']};
 
@@ -92,4 +98,23 @@ test('group add-participants push uses the existing call type', async () => {
   assert.ok(push);
   assert.equal(push.data.callType, 'video');
   assert.equal(push.data.fromUser._id, 'caller');
+});
+
+test('call history records start, answer and finish', async () => {
+  const f = fixture();
+  const caller = f.socket('caller');
+  const receiver = f.socket('receiver');
+  await caller.run('call:invite', invite);
+  receiver.run('call:accept', {callId: 'call-1'});
+  caller.run('call:end', {callId: 'call-1'});
+  assert.deepEqual(f.history.map(item => item[0]), ['started', 'answered', 'finished']);
+  assert.equal(f.history[2][2], 'answered');
+});
+
+test('unanswered call is recorded as finished when the ring times out', async () => {
+  const f = fixture();
+  await f.socket('caller').run('call:invite', invite);
+  f.timers[0]();
+  assert.deepEqual(f.history.map(item => item[0]), ['started', 'finished']);
+  assert.equal(f.history[1][2], 'unanswered');
 });

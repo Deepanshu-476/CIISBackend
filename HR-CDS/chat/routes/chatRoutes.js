@@ -22,6 +22,7 @@ const {
 } = require("../controllers/chatController");
 
 const authMiddleware = require("../../middlewares/auth");
+const {getCallHistory} = require("../utils/callHistory");
 const upload = require("../middleware/upload");
 const statusUpload = require("../middleware/statusUpload");
 const compressUploadedMedia = require("../middleware/compressMedia");
@@ -117,6 +118,20 @@ router.patch("/message/:messageId/seen", authMiddleware, markMessageSeen);
 router.patch("/conversation/:id/mute", authMiddleware, updateConversationMute);
 router.patch("/conversation/:id/disappearing-messages", authMiddleware, updateDisappearingMessages);
 router.patch("/message/:messageId/reaction", authMiddleware, updateMessageReaction);
+router.get("/calls", authMiddleware, async (req, res) => {
+  try {
+    const calls = await getCallHistory({
+      userId: req.user._id,
+      companyId: req.user.company,
+      limit: req.query.limit,
+      before: req.query.before,
+    });
+    return res.json({success: true, calls});
+  } catch (error) {
+    console.error("Call history fetch failed:", error);
+    return res.status(500).json({success: false, message: "Could not load call history"});
+  }
+});
 router.get("/statuses", authMiddleware, getStatuses);
 router.post("/statuses", authMiddleware, uploadStatusFile, compressUploadedMedia, createStatus);
 router.patch("/statuses/:statusId/view", authMiddleware, markViewed);

@@ -2053,7 +2053,7 @@ exports.updateSelfUser = async (req, res) => {
     const updateData = {};
     
     const blockedUpdateFields = new Set([
-      'password', 'resetToken', 'resetTokenExpiry', '__v', 'spouseName', 'children',
+      'password', 'resetToken', 'resetTokenExpiry', '__v',
       'zipCode', 'workLocation', 'noticePeriod', 'aadhaar', 'aadhar', 'pan',
       'companyRole', 'role', 'jobRole', 'employeeType', 'salary', 'isActive',
       'branch', 'assignedBranches', 'company', 'companyCode', 'workFromHome',
