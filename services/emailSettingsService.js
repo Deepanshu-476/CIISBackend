@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const nodemailer = require("nodemailer");
 const EmailSettings = require("../models/EmailSettings");
+const EmailSenderUsage = require("../models/EmailSenderUsage");
 
 const SETTINGS_KEY = "global";
 let cachedSettings = null; 
@@ -118,6 +119,7 @@ const normalizeSenderProfile = (profile = {}) => ({
   emailPort: Number(profile.emailPort || 465),
   emailSecure: profile.emailSecure !== false,
   replyTo: String(profile.replyTo || profile.emailUser || "").trim().toLowerCase(),
+  dailyLimit: Math.max(0, Math.floor(Number(profile.dailyLimit) || 0)),
 });
 
 const normalizeEmailPassword = (password, profile = {}) => {
@@ -218,7 +220,38 @@ const clearEmailSettingsCache = () => {
   cachedSettings = null;
   cachedAt = 0;
   cachedIncludesSecret = false;
+  closeCachedTransporters();
 };
+
+// One pooled SMTP transporter per sender account, reused for every email. Creating a pooled
+// transporter per email (as before) left its connections open after each send.
+const transporterCache = new Map();
+const transporterKey = (config) => [
+  config.emailUser,
+  config.emailHost,
+  config.emailPort,
+  config.emailService,
+  crypto.createHash("sha256").update(String(config.emailPass || "")).digest("hex"),
+].join("|");
+const getCachedTransporter = (config) => {
+  const key = transporterKey(config);
+  if (!transporterCache.has(key)) transporterCache.set(key, nodemailer.createTransport(buildTransportConfig(config)));
+  return transporterCache.get(key);
+};
+const dropCachedTransporter = (config) => {
+  const key = transporterKey(config);
+  const transporter = transporterCache.get(key);
+  if (transporter) {
+    try { transporter.close(); } catch (_error) {}
+    transporterCache.delete(key);
+  }
+};
+function closeCachedTransporters() {
+  for (const transporter of transporterCache.values()) {
+    try { transporter.close(); } catch (_error) {}
+  }
+  transporterCache.clear();
+}
 
 const normalizeModuleSettings = (value = {}) => {
   const source = value instanceof Map ? Object.fromEntries(value.entries()) : value || {};
@@ -260,6 +293,8 @@ const sanitizeSettings = (settings) => {
         emailPort: profile.emailPort,
         emailSecure: profile.emailSecure,
         replyTo: profile.replyTo,
+        dailyLimit: profile.dailyLimit || 0,
+        effectiveDailyLimit: getDailyLimit(profile),
         active: profile.profileId === activeProfile.profileId,
       };
     }),
@@ -288,7 +323,30 @@ const sanitizeSettings = (settings) => {
 
 const getPublicEmailSettings = async () => {
   const settings = await getSettingsDocument({ includeSecret: true, fresh: true });
-  return sanitizeSettings(settings);
+  return attachSenderUsage(sanitizeSettings(settings));
+};
+
+// Adds today's sent count and any pause to each sender account for the settings screen.
+const attachSenderUsage = async (publicSettings) => {
+  const senders = [...new Set((publicSettings.senderProfiles || []).map(profile => profile.emailUser).filter(Boolean))];
+  if (!senders.length) return publicSettings;
+  const now = new Date();
+  const [todayRows, blockedRows] = await Promise.all([
+    EmailSenderUsage.find({ sender: { $in: senders }, day: usageDay() }).lean(),
+    EmailSenderUsage.find({ sender: { $in: senders }, blockedUntil: { $gt: now } }).lean(),
+  ]);
+  const today = new Map(todayRows.map(row => [row.sender, row]));
+  const blocked = new Map(blockedRows.map(row => [row.sender, row]));
+  return {
+    ...publicSettings,
+    usageDay: usageDay(),
+    senderProfiles: publicSettings.senderProfiles.map(profile => ({
+      ...profile,
+      sentToday: today.get(profile.emailUser)?.count || 0,
+      pausedUntil: blocked.get(profile.emailUser)?.blockedUntil || null,
+      pausedReason: blocked.get(profile.emailUser)?.blockedReason || "",
+    })),
+  };
 };
 
 const updateEmailSettings = async (payload, updatedBy) => {
@@ -309,11 +367,17 @@ const updateEmailSettings = async (payload, updatedBy) => {
       payload.emailHost !== undefined ||
       payload.emailPort !== undefined ||
       payload.emailSecure !== undefined ||
-      payload.replyTo !== undefined)
+      payload.replyTo !== undefined ||
+      payload.dailyLimit !== undefined)
   );
 
   if (payload.createSenderProfile === true || !activeProfileId) {
     activeProfileId = createProfileId();
+  }
+
+  if (shouldSaveSenderProfile && existingProfile && payload.emailUser !== undefined &&
+      String(payload.emailUser).trim().toLowerCase() !== existingProfile.emailUser && !payload.emailPass) {
+    throw new Error("Enter the SMTP password for the new sender email address");
   }
 
   if (shouldSaveSenderProfile) {
@@ -334,6 +398,7 @@ const updateEmailSettings = async (payload, updatedBy) => {
       emailPort: payload.emailPort !== undefined ? payload.emailPort : existingProfile?.emailPort,
       emailSecure: payload.emailSecure !== undefined ? payload.emailSecure : existingProfile?.emailSecure,
       replyTo: payload.replyTo !== undefined ? payload.replyTo : existingProfile?.replyTo,
+      dailyLimit: payload.dailyLimit !== undefined ? payload.dailyLimit : existingProfile?.dailyLimit,
     });
 
     if (existingIndex >= 0) {
@@ -406,7 +471,7 @@ const updateEmailSettings = async (payload, updatedBy) => {
   ).select("+encryptedEmailPass +senderProfiles.encryptedEmailPass");
 
   clearEmailSettingsCache();
-  return sanitizeSettings(settings);
+  return attachSenderUsage(sanitizeSettings(settings));
 };
 
 const updateGlobalEmailEnabled = async (enabled, updatedBy) => {
@@ -421,7 +486,7 @@ const updateGlobalEmailEnabled = async (enabled, updatedBy) => {
   ).select("+encryptedEmailPass +senderProfiles.encryptedEmailPass");
 
   clearEmailSettingsCache();
-  return sanitizeSettings(settings);
+  return attachSenderUsage(sanitizeSettings(settings));
 };
 
 const updateEmailModuleEnabled = async (moduleKey, enabled, updatedBy) => {
@@ -442,13 +507,15 @@ const updateEmailModuleEnabled = async (moduleKey, enabled, updatedBy) => {
   ).select("+encryptedEmailPass +senderProfiles.encryptedEmailPass");
 
   clearEmailSettingsCache();
-  return sanitizeSettings(settings);
+  return attachSenderUsage(sanitizeSettings(settings));
 };
 
 const getEmailRuntimeConfig = async () => {
   const settings = await getSettingsDocument({ includeSecret: true });
   const activeProfile = getActiveSenderProfile(settings);
-  const emailPass = decryptSecret(activeProfile.encryptedEmailPass || settings.encryptedEmailPass) || process.env.EMAIL_PASS || "";
+  const matchesLegacySender = activeProfile.emailUser === settings.emailUser;
+  const matchesEnvSender = activeProfile.emailUser === String(process.env.EMAIL_USER || "").trim().toLowerCase();
+  const emailPass = decryptSecret(activeProfile.encryptedEmailPass || (matchesLegacySender ? settings.encryptedEmailPass : "")) || (matchesEnvSender ? process.env.EMAIL_PASS : "") || "";
   const emailUser = activeProfile.emailUser || settings.emailUser || process.env.EMAIL_USER || "";
   const moduleSettings = normalizeModuleSettings(settings.moduleSettings);
   const loginSettings = normalizeLoginSettings(settings.loginSettings);
@@ -557,8 +624,197 @@ const createEmailTransporter = async () => {
 
   return {
     config,
-    transporter: nodemailer.createTransport(buildTransportConfig(config)),
+    transporter: getCachedTransporter(config),
   };
+};
+
+// ---- Sending with several sender accounts ----
+// Each account sends up to its daily limit (recipients per day); then sending moves to the next
+// account in the list, and after the last one back to the first. If the provider refuses earlier
+// (daily limit, wrong password, connection), that account is paused and the same email is retried
+// with the next one.
+
+// Gmail allows 500 recipients a day for a normal account; the default leaves a margin.
+const DEFAULT_DAILY_LIMITS = { gmail: 450, other: 300 };
+const QUOTA_PAUSE_MS = 24 * 60 * 60 * 1000;
+const AUTH_PAUSE_MS = 30 * 60 * 1000;
+const CONNECTION_PAUSE_MS = 5 * 60 * 1000;
+
+function getDailyLimit(profile = {}) {
+  const configured = Math.floor(Number(profile.dailyLimit) || 0);
+  if (configured > 0) return configured;
+  const isGmail = /gmail/i.test(profile.emailService || "")
+    || /smtp\.gmail\.com/i.test(profile.emailHost || "")
+    || /@gmail\.com$/i.test(profile.emailUser || "");
+  return isGmail ? DEFAULT_DAILY_LIMITS.gmail : DEFAULT_DAILY_LIMITS.other;
+}
+
+// Calendar day in India, so counts reset at local midnight.
+function usageDay(now = Date.now()) {
+  return new Date(now + 330 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+const countRecipients = (mailOptions = {}) => ["to", "cc", "bcc"]
+  .flatMap(field => {
+    const value = mailOptions[field];
+    if (!value) return [];
+    return Array.isArray(value) ? value : String(value).split(",");
+  })
+  .map(item => String(item).trim())
+  .filter(Boolean).length || 1;
+
+const classifySendError = (error = {}) => {
+  const text = `${error.message || ""} ${error.response || ""}`;
+  const code = Number(error.responseCode) || 0;
+  if (/5\.4\.5|sending limit|limit exceeded|quota|too many (messages|recipients|emails)|rate limit|daily limit/i.test(text)
+    || ((code === 421 || code === 450 || code === 451 || code === 454) && /4\.7\.\d|limit|too many/i.test(text))) {
+    return "quota";
+  }
+  if (error.code === "EAUTH" || code === 534 || code === 535 || /authentication|invalid login|username and password/i.test(text)) {
+    return "auth";
+  }
+  if (["ECONNECTION", "ETIMEDOUT", "ESOCKET", "EDNS", "ECONNREFUSED", "ECONNRESET"].includes(error.code)
+    || code === 421) {
+    return "connection";
+  }
+  return "other";
+};
+
+// Atomically takes `count` from today's allowance; fails when the limit would be passed or the
+// account is paused. Shared by all server instances through the database.
+const reserveSenderQuota = async (sender, limit, count) => {
+  const now = new Date();
+  const paused = await EmailSenderUsage.findOne({ sender, blockedUntil: { $gt: now } })
+    .select("blockedUntil blockedReason")
+    .lean();
+  if (paused) return { ok: false, reason: `paused until ${paused.blockedUntil.toISOString()} (${paused.blockedReason})` };
+  try {
+    const usage = await EmailSenderUsage.findOneAndUpdate(
+      { sender, day: usageDay(), count: { $lte: Math.max(0, limit - count) } },
+      { $inc: { count } },
+      { upsert: true, new: true }
+    ).lean();
+    return { ok: true, count: usage.count };
+  } catch (error) {
+    if (error.code === 11000) return { ok: false, reason: `daily limit ${limit} reached` };
+    throw error;
+  }
+};
+
+const releaseSenderQuota = (sender, count) => EmailSenderUsage.updateOne(
+  { sender, day: usageDay(), count: { $gte: count } },
+  { $inc: { count: -count } }
+).catch(() => {});
+
+const pauseSender = (sender, kind, error, limit) => EmailSenderUsage.updateOne(
+  { sender, day: usageDay() },
+  {
+    $set: {
+      blockedUntil: new Date(Date.now() + (kind === "quota" ? QUOTA_PAUSE_MS : kind === "auth" ? AUTH_PAUSE_MS : CONNECTION_PAUSE_MS)),
+      blockedReason: `${kind}: ${String(error?.message || "").slice(0, 200)}`,
+    },
+    ...(kind === "quota" ? { $max: { count: limit } } : {}),
+  },
+  { upsert: true }
+).catch(() => {});
+
+const runtimeConfigForProfile = (settings, profile, emailPass) => ({
+  enabled: settings.enabled !== false,
+  senderName: profile.senderName || settings.senderName || process.env.EMAIL_SENDER_NAME || "CIIS NETWORK",
+  emailUser: profile.emailUser,
+  emailPass,
+  emailService: profile.emailService || "Gmail",
+  emailHost: profile.emailHost || "",
+  emailPort: Number(profile.emailPort || 465),
+  emailSecure: profile.emailSecure !== false,
+  replyTo: profile.replyTo || profile.emailUser,
+  activeSenderProfileId: profile.profileId,
+});
+
+// buildMailOptions(config) returns nodemailer options for the chosen account (its from/replyTo).
+// Resolves {info, config, mailOptions, profileId}; throws EMAIL_DISABLED, EMAIL_NOT_CONFIGURED,
+// EMAIL_SENDERS_EXHAUSTED, or the provider error when the problem is not the sender account
+// (for example a rejected recipient).
+const sendMailWithRotation = async (buildMailOptions) => {
+  const settings = await getSettingsDocument({ includeSecret: true });
+  if (settings.enabled === false) {
+    const error = new Error("Email service is disabled from Email Settings");
+    error.code = "EMAIL_DISABLED";
+    throw error;
+  }
+
+  let profiles = getProfilesFromSettings(settings)
+    .map(profile => ({ ...profile, emailPass: decryptSecret(profile.encryptedEmailPass) }))
+    .filter(profile => profile.emailUser && profile.emailPass);
+  if (!profiles.length && process.env.EMAIL_USER && process.env.EMAIL_PASS) {
+    profiles = [{
+      ...normalizeSenderProfile({
+        profileId: DEFAULT_PROFILE_ID,
+        emailUser: process.env.EMAIL_USER,
+        emailService: process.env.EMAIL_SERVICE || "Gmail",
+        emailHost: process.env.EMAIL_HOST || "",
+        emailPort: process.env.EMAIL_PORT || 465,
+        emailSecure: process.env.EMAIL_SECURE ? process.env.EMAIL_SECURE === "true" : true,
+        senderName: process.env.EMAIL_SENDER_NAME,
+        replyTo: process.env.EMAIL_REPLY_TO,
+      }),
+      emailPass: process.env.EMAIL_PASS,
+    }];
+  }
+  if (!profiles.length) {
+    const error = new Error("Email service not configured");
+    error.code = "EMAIL_NOT_CONFIGURED";
+    throw error;
+  }
+
+  const activeId = settings.activeSenderProfileId;
+  const start = Math.max(0, profiles.findIndex(profile => profile.profileId === activeId));
+  const ordered = [...profiles.slice(start), ...profiles.slice(0, start)];
+  const triedSenders = new Set();
+  const skipped = [];
+  let lastError = null;
+
+  for (const profile of ordered) {
+    // The same address listed twice shares one provider allowance.
+    if (triedSenders.has(profile.emailUser)) continue;
+    triedSenders.add(profile.emailUser);
+
+    const config = runtimeConfigForProfile(settings, profile, profile.emailPass);
+    const mailOptions = buildMailOptions(config);
+    const recipients = countRecipients(mailOptions);
+    const limit = getDailyLimit(profile);
+    const reserved = await reserveSenderQuota(profile.emailUser, limit, recipients);
+    if (!reserved.ok) {
+      skipped.push(`${maskEmail(profile.emailUser)}: ${reserved.reason}`);
+      continue;
+    }
+
+    try {
+      const info = await getCachedTransporter(config).sendMail(mailOptions);
+      if (profile.profileId !== activeId) {
+        console.warn(`Email sending moved to ${maskEmail(profile.emailUser)} (${skipped.join("; ") || "previous account unavailable"})`);
+        await EmailSettings.updateOne({ key: SETTINGS_KEY }, { $set: { activeSenderProfileId: profile.profileId } }).catch(() => {});
+        cachedSettings = null;
+      }
+      return { info, config, mailOptions, profileId: profile.profileId };
+    } catch (error) {
+      lastError = error;
+      const kind = classifySendError(error);
+      if (kind === "other") {
+        await releaseSenderQuota(profile.emailUser, recipients);
+        throw error;
+      }
+      if (kind !== "quota") await releaseSenderQuota(profile.emailUser, recipients);
+      await pauseSender(profile.emailUser, kind, error, limit);
+      dropCachedTransporter(config);
+      skipped.push(`${maskEmail(profile.emailUser)}: ${kind}`);
+      console.warn(`Email sender ${maskEmail(profile.emailUser)} paused (${kind}): ${error.message}`);
+    }
+  }
+
+  const error = new Error(`No email sender account is available (${skipped.join("; ")})${lastError ? `; last error: ${lastError.message}` : ""}`);
+  error.code = "EMAIL_SENDERS_EXHAUSTED";
+  throw error;
 };
 
 const assertEmailAccepted = (info, recipients, context = "Email") => {
@@ -600,11 +856,15 @@ const markEmailTestResult = async ({ success, message }) => {
     { new: true, upsert: true, setDefaultsOnInsert: true }
   ).select("+encryptedEmailPass +senderProfiles.encryptedEmailPass");
   clearEmailSettingsCache();
-  return sanitizeSettings(settings);
+  return attachSenderUsage(sanitizeSettings(settings));
 };
 
 module.exports = {
   EMAIL_MODULES,
+  classifySendError,
+  getDailyLimit,
+  sendMailWithRotation,
+  usageDay,
   assertEmailAccepted,
   createEmailTransporter,
   getEmailRuntimeConfig,

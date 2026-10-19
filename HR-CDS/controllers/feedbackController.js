@@ -103,6 +103,62 @@ const mapQuestionnaire = questionnaire => ({
   recipientCount: Array.isArray(questionnaire.recipientIds) ? questionnaire.recipientIds.length : questionnaire.recipientCount,
 });
 
+const escapeRegex = value => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Who a new questionnaire would reach, for the create form: the user picker (searched and paged on the
+// server) and the "N users will receive this" count. Uses the same company rule and user filter as
+// createQuestionnaire / getTargetUsers, so the preview matches what is sent. Replaces the form's use
+// of /superAdmin/users, which stopped at 50 users.
+exports.listRecipients = async (req, res) => {
+  try {
+    if (!canManageFeedback(req.user)) {
+      return res.status(403).json({ success: false, message: 'You do not have permission to manage feedback questionnaires' });
+    }
+    const loggedCompanyId = getLoggedCompanyId(req.user);
+    const company = isSuperAdmin(req.user)
+      ? (loggedCompanyId || normalizeId(req.query.company))
+      : loggedCompanyId;
+    if (!company || !mongoose.Types.ObjectId.isValid(company)) {
+      return res.status(400).json({ success: false, message: 'Company selection is required' });
+    }
+    const { page, limit, skip } = getPaginationOptions(req.query || {}, { limit: 20, maxLimit: 100 });
+
+    const filter = {
+      company: new mongoose.Types.ObjectId(company),
+      isActive: true,
+      companyRole: { $not: /^client$/i },
+    };
+    const branch = normalizeId(req.query.branch);
+    if (branch && mongoose.Types.ObjectId.isValid(branch)) {
+      const branchId = new mongoose.Types.ObjectId(branch);
+      filter.$and = [{ $or: [{ branch: branchId }, { assignedBranches: branchId }] }];
+    }
+    const total = await User.countDocuments(filter);
+
+    const search = String(req.query.search || '').trim();
+    if (search) {
+      const pattern = new RegExp(escapeRegex(search), 'i');
+      filter.$and = [...(filter.$and || []), { $or: [{ name: pattern }, { email: pattern }, { employeeId: pattern }] }];
+    }
+    const [items, matched] = await Promise.all([
+      User.find(filter).select('name email employeeId branch').sort({ name: 1, _id: 1 }).skip(skip).limit(limit).lean(),
+      search ? User.countDocuments(filter) : Promise.resolve(total),
+    ]);
+    return res.json({
+      success: true,
+      company,
+      total,
+      items: items.map(user => ({ _id: user._id, name: user.name, email: user.email, employeeId: user.employeeId, branch: user.branch })),
+      matched,
+      page,
+      limit,
+      pages: Math.max(1, Math.ceil(matched / limit)),
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Failed to load recipients' });
+  }
+};
+
 exports.createQuestionnaire = async (req, res) => {
   try {
     if (!canManageFeedback(req.user)) {

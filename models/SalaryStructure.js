@@ -6,7 +6,7 @@ const rowSchema = new mongoose.Schema({
   formula: { type: String, trim: true, maxlength: 500, default: "" }, sortOrder: { type: Number, required: true, min: 1 },
 });
 const schema = new mongoose.Schema({
-  company: { type: mongoose.Schema.Types.ObjectId, ref: "Company", required: true, index: true },
+  company: { type: mongoose.Schema.Types.ObjectId, ref: "Company", required: true },
   name: { type: String, required: true, trim: true, maxlength: 120 },
   code: { type: String, required: true, trim: true, uppercase: true, maxlength: 30 },
   salaryType: { type: String, enum: ["monthly", "annual"], default: "monthly" },

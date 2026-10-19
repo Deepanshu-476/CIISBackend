@@ -161,12 +161,23 @@ const getLatestSubscription = client => {
   })[0];
 };
 
+// The no-argument form scans every company's clients and is called from list endpoints on each request.
+// Run that global pass at most once a minute per process; client-specific calls still run immediately.
+const GLOBAL_SUBSCRIPTION_SYNC_INTERVAL_MS = 60000;
+let lastGlobalSubscriptionSyncAt = 0;
+
 const syncExpiredSubscriptionClientTasks = async (clientIds = []) => {
   const normalizedClientIds = [...new Set(
     (Array.isArray(clientIds) ? clientIds : [clientIds])
       .map(id => String(id || '').trim())
       .filter(id => mongoose.Types.ObjectId.isValid(id))
   )];
+  if (!normalizedClientIds.length) {
+    if (Date.now() - lastGlobalSubscriptionSyncAt < GLOBAL_SUBSCRIPTION_SYNC_INTERVAL_MS) {
+      return { matchedCount: 0, modifiedCount: 0, skipped: true };
+    }
+    lastGlobalSubscriptionSyncAt = Date.now();
+  }
   const now = new Date();
   const clientFilter = normalizedClientIds.length ? { _id: { $in: normalizedClientIds } } : {};
   const clients = await Client.find(clientFilter).select('_id subscription').lean();

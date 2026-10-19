@@ -6,7 +6,6 @@ const feedbackResponseSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'FeedbackQuestionnaire',
       required: true,
-      index: true,
     },
     recipient: {
       type: mongoose.Schema.Types.ObjectId,

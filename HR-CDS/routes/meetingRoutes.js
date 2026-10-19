@@ -9,7 +9,13 @@ const {
   deleteMeeting,
 } = require("../controllers/meetingController");
 
+const { protect } = require("../../middleware/authMiddleware");
+
 const router = express.Router();
+
+// These routes were mounted without authentication, so anyone could list, edit or delete any
+// company's meetings. All handlers now require login and are scoped to the caller's company.
+router.use(protect);
 
 
 router.post("/create", createMeeting);

@@ -36,7 +36,6 @@ const supportTicketSchema = new mongoose.Schema({
   companyCode: {
     type: String,
     required: true,
-    index: true,
   },
   requester: {
     type: mongoose.Schema.Types.ObjectId,

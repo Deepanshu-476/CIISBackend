@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const { cascadeLeadTypeUpdate } = require('../services/cascadeSyncEngine');
 
 const schema = new mongoose.Schema({
-  company: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true },
+  company: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true },
   name: { type: String, required: true, trim: true, maxlength: 100 },
   normalizedName: { type: String, required: true },
   status: { type: String, enum: ['Active', 'Inactive'], default: 'Active', index: true },
