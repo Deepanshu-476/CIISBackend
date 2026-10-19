@@ -1,6 +1,7 @@
 
 
 const nodemailer = require('nodemailer');
+const { getEmailFailure } = require('../utils/emailFailure');
 const { getCompanyRegistrationEmailTemplate } = require('../utils/emailTemplates/companyRegistration');
 const {notifyEmailRecipients} = require('../HR-CDS/utils/systemNotificationService');
 const {
@@ -115,7 +116,7 @@ class EmailService {
           };
         }
 
-        if (isDev) {
+        if (isDev && !options.requireRealDelivery) {
           console.warn('⚠️ [DEV ONLY] Email credentials not configured. Mocking email send:');
           console.warn(`[DEV ONLY] To: ${to}`);
           console.warn(`[DEV ONLY] Subject: ${subject}`);
@@ -180,7 +181,7 @@ class EmailService {
       const isDev = process.env.NODE_ENV !== 'production';
       console.error('❌ Error sending email:', error.message);
       
-      if (isDev) {
+      if (isDev && !options.requireRealDelivery) {
         console.error('Email error details:', error);
         console.warn('⚠️ [DEV ONLY] Real email sending failed. Mocking successful email send for local development context.');
         console.warn(`[DEV ONLY] To: ${to}`);
@@ -197,11 +198,12 @@ class EmailService {
         };
       }
 
-      if (process.env.NODE_ENV === 'production') {
+      if (process.env.NODE_ENV === 'production' || options.requireRealDelivery) {
         console.error('Email sending failed but continuing with response');
         return {
           success: false,
           error: error.message,
+          ...getEmailFailure(error),
           fallback: true
         };
       }
