@@ -1,4 +1,5 @@
 const {notifyEmailRecipients} = require('../HR-CDS/utils/systemNotificationService');
+const {getEmailFailure} = require('./emailFailure');
 const {
   assertEmailAccepted,
   isEmailModuleEnabled,
@@ -104,7 +105,7 @@ const sendEmail = async (to, subject, html, options = {}) => {
 
     console.error(`❌ Email not sent (${emailModuleKey}) to ${to}: ${error.message}`);
 
-    if (emailMockEnabled()) {
+    if (emailMockEnabled() && !options.requireRealDelivery) {
       console.warn('⚠️ [DEV ONLY] EMAIL_DEV_MOCK is on. Mocking successful email send.');
       console.warn(`[DEV ONLY] To: ${to}`);
       console.warn(`[DEV ONLY] Subject: ${subject}`);
@@ -118,7 +119,7 @@ const sendEmail = async (to, subject, html, options = {}) => {
 
     // Callers carry on (a meeting or leave is saved even if its email fails); OTP and other flows
     // that need the email check `success`.
-    return { success: false, error: error.message, code: error.code, moduleKey: emailModuleKey };
+    return { success: false, error: error.message, code: error.code, moduleKey: emailModuleKey, ...getEmailFailure(error) };
   }
 };
 

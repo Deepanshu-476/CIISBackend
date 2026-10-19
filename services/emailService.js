@@ -1,6 +1,7 @@
 
 
 const nodemailer = require('nodemailer');
+const { getEmailFailure } = require('../utils/emailFailure');
 const { getCompanyRegistrationEmailTemplate } = require('../utils/emailTemplates/companyRegistration');
 const {notifyEmailRecipients} = require('../HR-CDS/utils/systemNotificationService');
 const {
@@ -151,7 +152,8 @@ class EmailService {
 
       console.error(`❌ Email not sent to ${to}: ${error.message}`);
 
-      if (emailMockEnabled()) {
+      // requireRealDelivery (password reset OTP): never pretend.
+      if (emailMockEnabled() && !options.requireRealDelivery) {
         console.warn('⚠️ [DEV ONLY] EMAIL_DEV_MOCK is on. Mocking successful email send.');
         console.warn(`[DEV ONLY] To: ${to}`);
         console.warn(`[DEV ONLY] Subject: ${subject}`);
@@ -172,6 +174,7 @@ class EmailService {
         success: false,
         error: error.message,
         code: error.code,
+        ...getEmailFailure(error),
         fallback: true
       };
     }
