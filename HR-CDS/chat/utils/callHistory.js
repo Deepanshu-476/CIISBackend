@@ -5,7 +5,12 @@ const Message = require("../models/Message");
 
 const USER_FIELDS = "name email profileImage avatar image photo";
 
-const toObjectId = value => (mongoose.isValidObjectId(value) ? new mongoose.Types.ObjectId(String(value)) : null);
+// Accepts an id string, an ObjectId, or a populated document (req.user.company is populated).
+const toObjectId = value => {
+    const raw = value && typeof value === "object" && value._id ? value._id : value;
+    const id = raw ? String(raw) : "";
+    return /^[a-f0-9]{24}$/i.test(id) ? new mongoose.Types.ObjectId(id) : null;
+};
 
 // History is best-effort: a database hiccup must never break the live call.
 const safely = (label, task) => Promise.resolve().then(task).catch(error => {

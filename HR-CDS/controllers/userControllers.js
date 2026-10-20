@@ -205,6 +205,8 @@ const SENSITIVE_USER_LIST_KEYS = [
   'panNumber',
   'fatherName',
   'motherName',
+  'spouseName',
+  'children',
   'documents',
 ];
 
