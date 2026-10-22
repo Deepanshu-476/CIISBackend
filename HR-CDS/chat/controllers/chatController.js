@@ -22,7 +22,7 @@ const populateMessage = query => query
   .populate("sender", "name email profileImage avatar image photo")
   .populate({
     path: "replyTo",
-    select: "sender text file fileType deletedForEveryone",
+    select: "sender text file fileType deletedForEveryone messageType systemEvent",
     populate: {path: "sender", select: "name email profileImage avatar image photo"},
   })
   .populate("reactions.user", "name profileImage avatar image photo")
@@ -571,7 +571,7 @@ exports.getMessages = async (req, res) => {
       .populate("sender", "name email profileImage avatar image photo")
       .populate({
         path: "replyTo",
-        select: "sender text file fileType deletedForEveryone",
+        select: "sender text file fileType deletedForEveryone messageType systemEvent",
         populate: {path: "sender", select: "name email profileImage avatar image photo"},
       })
       .populate("reactions.user", "name profileImage avatar image photo")
