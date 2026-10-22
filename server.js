@@ -605,6 +605,49 @@ const sendPendingTaskReminders = async () => {
   }
 };
 
+// "Call <lead> now": one push to the agent about 5 minutes before each pending CRM follow-up.
+const CRM_FOLLOW_UP_REMINDER_LEAD_MS = 5 * 60 * 1000;
+const sendCrmFollowUpReminders = async () => {
+  const FollowUp = require('./models/Followup');
+  const now = new Date();
+  const due = await FollowUp.find({
+    status: 'pending',
+    reminderSentAt: null,
+    // Follow-ups that passed more than a minute ago are not reminded (e.g. after downtime or a deploy).
+    date: { $gt: new Date(now.getTime() - 60 * 1000), $lte: new Date(now.getTime() + CRM_FOLLOW_UP_REMINDER_LEAD_MS) }
+  }).select('_id').limit(MAX_CRON_TASK_BATCH_SIZE).lean();
+
+  for (const { _id } of due) {
+    // Claim first so a second server instance does not send the same reminder.
+    const followUp = await FollowUp.findOneAndUpdate(
+      { _id, reminderSentAt: null },
+      { $set: { reminderSentAt: now } },
+      { new: true }
+    ).lean();
+    if (!followUp?.agent) continue;
+    const leadName = followUp.leadName || 'your lead';
+    try {
+      await notifyDirectUsers({
+        userIds: [followUp.agent],
+        company: followUp.company,
+        type: 'crm_followup_reminder',
+        title: `Call ${leadName} now`,
+        message: `Follow-up at ${formatTaskDueDate(followUp.date)}${followUp.note ? ` - ${followUp.note}` : ''}. Tap to open the lead.`,
+        targetPath: `/ciisUser/telecaller/call-workspace/${followUp.lead}`,
+        targetScreen: 'Telecaller Call Workspace',
+        data: {
+          leadId: String(followUp.lead),
+          followUpId: String(followUp._id),
+          leadPhone: followUp.leadPhone || '',
+        },
+        priority: 'high',
+      });
+    } catch (error) {
+      console.error('CRM follow-up reminder failed:', error.message);
+    }
+  }
+};
+
 const sendConfiguredTaskReminders = async () => {
   try {
     const now = new Date();
@@ -947,6 +990,8 @@ scheduleDbJob('0 9 * * *', 'Daily overdue summary', dailyOverdueSummary);
 scheduleDbJob('30 10 * * *', 'Daily absent marking', markDailyAbsent);
 
 scheduleDbJob('* * * * *', 'Pending task reminders', sendConfiguredTaskReminders);
+
+scheduleDbJob('* * * * *', 'CRM follow-up reminders', sendCrmFollowUpReminders);
 
 scheduleDbJob('0 18 * * *', 'Holiday reminders', sendTomorrowHolidayReminders);
 

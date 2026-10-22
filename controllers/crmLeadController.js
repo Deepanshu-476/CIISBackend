@@ -64,8 +64,13 @@ exports.options = async (req, res, next) => {
 exports.create = async (req, res, next) => {
   try {
     const { data, errors } = validate(req.body);
-    if (Object.keys(errors).length) return res.status(400).json({ message: 'Please check the highlighted fields.', errors });
     const company = req.crmCompany;
+    // Custom fields named by the admin are checked against their type (number, date, dropdown, required).
+    const pipeline = require('./crmPipelineController');
+    if (typeof pipeline.loadFieldConfig === 'function') {
+      Object.assign(errors, pipeline.validateCustomValues(await pipeline.loadFieldConfig(company), data, { requireRequired: true }));
+    }
+    if (Object.keys(errors).length) return res.status(400).json({ message: 'Please check the highlighted fields.', errors });
     const [type, source] = await Promise.all([
       LeadType.findOne({ _id: data.leadType, company, status: 'Active' }).lean(),
       LeadSource.findOne({ _id: data.leadSource, company, status: 'Active' }).lean()
