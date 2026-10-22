@@ -9,7 +9,12 @@
     "cleanup:orphan-companies": "node scripts/cleanupOrphanCompanyData.js",
     "cleanup:orphan-companies:apply": "node scripts/cleanupOrphanCompanyData.js --apply",
     "backfill:client-branch": "node scripts/backfillClientBranch.js --apply",
-    "backfill:client-branch:dry": "node scripts/backfillClientBranch.js --dry-run"
+    "backfill:client-branch:dry": "node scripts/backfillClientBranch.js --dry-run",
+    "backfill:project-chats": "node scripts/backfillProjectChats.js --apply",
+    "backfill:project-chats:dry": "node scripts/backfillProjectChats.js --dry-run",
+    "test:project-chat": "node --test tests/projectGroupChat.test.js",
+    "backfill:client-chats": "node scripts/backfillClientChats.js --apply",
+    "backfill:client-chats:dry": "node scripts/backfillClientChats.js --dry-run"
   },
   "keywords": [],
   "author": "",
@@ -47,6 +52,7 @@
     "yauzl": "^3.4.0"
   },
   "devDependencies": {
+    "mongodb-memory-server": "^11.3.0",
     "nodemon": "^3.1.10"
   },
   "repository": {

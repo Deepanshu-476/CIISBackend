@@ -70,6 +70,7 @@ const clienttaskSchema = new mongoose.Schema({
     trim: true,
     maxlength: [200, 'Task name cannot exceed 200 characters']
   },
+  mentions: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
   description: {
     type: String,
     trim: true,
@@ -149,6 +150,7 @@ const clienttaskSchema = new mongoose.Schema({
     default: () => ({ enabled: false, options: [], sentKeys: [] })
   },
   remarks: [{
+    mentions: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
     text: String,
     images: [{
       url: String,
@@ -243,4 +245,5 @@ clienttaskSchema.pre('save', function(next) {
 
 clienttaskSchema.index({ status: 1, holdOverdueCheckAt: 1 });
 
+clienttaskSchema.plugin(require('../utils/clientChatPlugin'), { task: true });
 module.exports = mongoose.model('ClientTask', clienttaskSchema);
