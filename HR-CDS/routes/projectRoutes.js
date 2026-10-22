@@ -1,15 +1,19 @@
 const express = require("express");
 const router = express.Router();
 const projectController = require("../controllers/projectController");
+const projectBulkImportController = require("../controllers/projectBulkImportController");
 const { protect, authorize } = require('../../middleware/authMiddleware');
 const { check } = require("express-validator");
-const { uploadRemarkImage } = require('../middlewares/uploadMiddleware');
+const { uploadRemarkImage, uploadExcel } = require('../middlewares/uploadMiddleware');
 
 
 router.get("/notifications", protect, projectController.getUserNotifications);
 router.patch("/notifications/:notificationId/read", protect, projectController.markNotificationAsRead);
 router.delete("/notifications/clear", protect, projectController.clearAllNotifications);
 
+// Excel Bulk Import Routes (Must be before /:id)
+router.get("/sample-excel", protect, projectBulkImportController.downloadSampleExcel);
+router.post("/bulk-import", protect, uploadExcel.single("file"), projectBulkImportController.bulkImportProjectsAndTasks);
 
 router.get("/", protect, projectController.listProjects);
 router.get("/:id/document", protect, projectController.downloadProjectDocument);

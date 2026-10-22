@@ -3,7 +3,11 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const sharp = require("sharp");
-const { notifyDirectUsers } = require("../utils/systemNotificationService");
+const { notifyDirectUsers: sendDirectUserNotifications } = require("../utils/systemNotificationService");
+const notifyDirectUsers = async options => {
+  try { return await sendDirectUserNotifications(options); }
+  catch (error) { console.error('Project notification delivery failed:', error.message); return []; }
+};
 const { enqueueCompletionJob, enqueueBackgroundJob } = require("../utils/backgroundJobQueue");
 const { sendEmail } = require("../../utils/sendEmail");
 const { normalizeTaskReminderSettings } = require("../utils/taskReminderSettings");
@@ -322,7 +326,8 @@ const hasProjectAccess = (project, userId, userRole, user = {}) => {
     isTaskAssignedToUser(task, userId)
   );
 
-  return Boolean(isUserInProject || isCreator || hasAssignedTask);
+  const isManager = (project.managers || []).some(user => idsEqual(user, userId));
+  return Boolean(isUserInProject || isCreator || isManager || hasAssignedTask);
 };
 
 const sendProjectTaskAssignmentEmail = async ({ user, actorName, taskTitle, projectName, dueDate }) => {
@@ -1300,6 +1305,7 @@ exports.createProject = async (req, res) => {
         companyCode: getUserCompanyCode(req.user),
         branch: branchAccess.branchId,
         users: usersArray,
+        managers: parseMentionIds(req.body.managers).filter(value => allowedUserIds.includes(String(value))),
         startDate,
         endDate,
         priority: priority?.toLowerCase(),
@@ -1381,9 +1387,7 @@ exports.updateProject = async (req, res) => {
       void 0;
 
 
-      const project = await Project.findById(id)
-        .select('projectName users createdBy company companyCode branch')
-        .lean();
+      const project = await Project.findById(id);
       if (!project) {
         return res.status(404).json({
           success: false,
@@ -1433,6 +1437,7 @@ exports.updateProject = async (req, res) => {
       project.description = description || project.description;
       project.branch = branchAccess.branchId || project.branch;
       project.users = usersArray;
+      if (req.body.managers !== undefined) project.managers = parseMentionIds(req.body.managers).filter(value => allowedUserIds.includes(String(value)));
       project.startDate = startDate || project.startDate;
       project.endDate = endDate || project.endDate;
       project.priority = priority?.toLowerCase() || project.priority;
@@ -1733,8 +1738,9 @@ exports.addTask = async (req, res) => {
       const safeTitle = title?.trim() || "Untitled Task";
       const now = new Date();
       const task = {
-        _id: new mongoose.Types.ObjectId(),
+        _id: mutationId(req, `task:${id}`),
         title: safeTitle,
+        mentions: require("../utils/projectChatEvents").ids(parseMentionIds(req.body.mentions)),
         description: description?.trim() || "",
         priority: priority?.toLowerCase(),
         status: status?.toLowerCase() || 'pending',
@@ -1774,7 +1780,7 @@ exports.addTask = async (req, res) => {
 
 
       const updateResult = await Project.updateOne(
-        { _id: id },
+        { _id: id, "tasks._id": { $ne: task._id } },
         {
           $push: { tasks: task },
           $set: { updatedAt: now }
@@ -1782,6 +1788,10 @@ exports.addTask = async (req, res) => {
         { runValidators: true }
       );
 
+      if (!updateResult.modifiedCount && req.headers['idempotency-key']) {
+        const existing = await Project.findOne({ _id: id, 'tasks._id': task._id });
+        if (existing) return res.status(200).json({ success: true, task: existing.tasks.id(task._id), message: 'Task already created' });
+      }
       if (!updateResult.modifiedCount) {
         return res.status(500).json({
           success: false,
@@ -1912,7 +1922,8 @@ exports.updateTask = async (req, res) => {
 
 
     Object.keys(updateData).forEach(key => {
-      if (key === '_id') return;
+      if (['_id', 'createdBy', 'activityLogs'].includes(key)) return;
+      if (key === 'mentions') { task.mentions = require('../utils/projectChatEvents').ids(parseMentionIds(updateData[key])); return; }
 
       if (key === 'assignedTo') {
         task.assignedTo = updateData[key] || undefined;
@@ -2614,7 +2625,8 @@ exports.addRemark = async (req, res) => {
 
     const now = new Date();
     const remark = {
-      _id: new mongoose.Types.ObjectId(),
+      _id: mutationId(req, `remark:${projectId}:${taskId}`),
+      mentions: require("../utils/projectChatEvents").ids(parseMentionIds(req.body.mentions)),
       text: remarkText || (imgPath ? "Image attachment" : ""),
       createdBy: req.user.id,
       image: imgPath || undefined,
@@ -2642,7 +2654,7 @@ exports.addRemark = async (req, res) => {
     };
 
     const updateResult = await Project.updateOne(
-      { _id: projectId, "tasks._id": taskId },
+      { _id: projectId, tasks: { $elemMatch: { _id: taskId, "remarks._id": { $ne: remark._id } } } },
       {
         $push: {
           "tasks.$.remarks": remark,
@@ -2656,6 +2668,11 @@ exports.addRemark = async (req, res) => {
       }
     );
 
+    if (updateResult.matchedCount === 0 && req.headers['idempotency-key']) {
+      const existing = await Project.findOne({ _id: projectId, 'tasks._id': taskId });
+      const saved = existing?.tasks.id(taskId)?.remarks.id(remark._id);
+      if (saved) return res.status(200).json({ success: true, remark: saved });
+    }
     if (updateResult.matchedCount === 0) {
       return res.status(404).json({
         success: false,
@@ -2724,3 +2741,22 @@ exports.updateTaskReminder = async (req, res) => {
     });
   }
 };
+
+// All route aliases use this shared controller and retain the authenticated actor.
+function parseMentionIds(value) {
+  if (Array.isArray(value)) return value;
+  try { const parsed = JSON.parse(value || '[]'); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
+}
+for (const [name, handler] of Object.entries(exports)) {
+  if (typeof handler !== 'function') continue;
+  exports[name] = (req, res, ...rest) => require('../utils/projectChatEvents').context.run(
+    { actor: req.user?.id || req.user?._id }, () => handler(req, res, ...rest)
+  );
+}
+
+function mutationId(req, scope) {
+  const key = req.headers['idempotency-key'];
+  if (!key) return new mongoose.Types.ObjectId();
+  const digest = require('node:crypto').createHash('sha256').update(`${req.user.id}:${scope}:${String(key).slice(0, 200)}`).digest('hex');
+  return new mongoose.Types.ObjectId(digest.slice(0, 24));
+}

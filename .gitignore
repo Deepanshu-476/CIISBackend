@@ -1,5 +1,6 @@
 node_modules/
 logs/
+.DS_Store
 uploads/
 .env/node_modules/
 .env

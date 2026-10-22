@@ -103,22 +103,34 @@ const createCoturnIceServers = () => {
   ];
 };
 
-router.get("/users", authMiddleware, getCompanyUsers);
-router.get("/conversations", authMiddleware, getConversations);
-router.get("/conversation/:id", authMiddleware, getConversation);
-router.post("/conversation", authMiddleware, createConversation);
-router.post("/conversation/group", authMiddleware, createGroupConversation);
-router.get("/groups", authMiddleware, getCompanyGroups);
-router.post("/message", authMiddleware, uploadChatFile, compressUploadedMedia, sendMessage);
-router.get("/messages/:id", authMiddleware, getMessages);
-router.patch("/message/:messageId/delete-for-me", authMiddleware, deleteMessageForMe);
-router.patch("/message/:messageId/delete-for-everyone", authMiddleware, deleteMessageForEveryone);
-router.post("/message/:messageId/forward", authMiddleware, forwardMessage);
-router.patch("/message/:messageId/seen", authMiddleware, markMessageSeen);
-router.patch("/conversation/:id/mute", authMiddleware, updateConversationMute);
-router.patch("/conversation/:id/disappearing-messages", authMiddleware, updateDisappearingMessages);
-router.patch("/message/:messageId/reaction", authMiddleware, updateMessageReaction);
-router.get("/calls", authMiddleware, async (req, res) => {
+router.get("/test", (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ success: false, message: 'Not found' });
+  }
+  res.json({success: true, message: "Chat API Working"});
+});
+
+router.use(authMiddleware, require("../middleware/projectChatGuard"));
+
+router.get('/client-task/:clientId/:taskId', require('../controllers/clientChatController').getTask);
+router.post('/client-task/:clientId/:taskId/remarks', require('../controllers/clientChatController').addRemark);
+router.get("/project-task/:projectId/:taskId", require("../controllers/projectChatController").getTask);
+router.get("/users", getCompanyUsers);
+router.get("/conversations", getConversations);
+router.get("/conversation/:id", getConversation);
+router.post("/conversation", createConversation);
+router.post("/conversation/group", createGroupConversation);
+router.get("/groups", getCompanyGroups);
+router.post("/message", uploadChatFile, compressUploadedMedia, sendMessage);
+router.get("/messages/:id", getMessages);
+router.patch("/message/:messageId/delete-for-me", deleteMessageForMe);
+router.patch("/message/:messageId/delete-for-everyone", deleteMessageForEveryone);
+router.post("/message/:messageId/forward", forwardMessage);
+router.patch("/message/:messageId/seen", markMessageSeen);
+router.patch("/conversation/:id/mute", updateConversationMute);
+router.patch("/conversation/:id/disappearing-messages", updateDisappearingMessages);
+router.patch("/message/:messageId/reaction", updateMessageReaction);
+router.get("/calls", async (req, res) => {
   try {
     const calls = await getCallHistory({
       userId: req.user._id,
@@ -132,12 +144,12 @@ router.get("/calls", authMiddleware, async (req, res) => {
     return res.status(500).json({success: false, message: "Could not load call history"});
   }
 });
-router.get("/statuses", authMiddleware, getStatuses);
-router.post("/statuses", authMiddleware, uploadStatusFile, compressUploadedMedia, createStatus);
-router.patch("/statuses/:statusId/view", authMiddleware, markViewed);
-router.delete("/statuses/:statusId", authMiddleware, deleteStatus);
+router.get("/statuses", getStatuses);
+router.post("/statuses", uploadStatusFile, compressUploadedMedia, createStatus);
+router.patch("/statuses/:statusId/view", markViewed);
+router.delete("/statuses/:statusId", deleteStatus);
 
-router.get("/turn-credentials", authMiddleware, turnCredentialsLimiter, async (_req, res) => {
+router.get("/turn-credentials", turnCredentialsLimiter, async (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
 
   const coturnIceServers = createCoturnIceServers();
@@ -149,13 +161,6 @@ router.get("/turn-credentials", authMiddleware, turnCredentialsLimiter, async (_
   }
 
   return res.json(coturnIceServers);
-});
-
-router.get("/test", (req, res) => {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(404).json({ success: false, message: 'Not found' });
-  }
-  res.json({success: true, message: "Chat API Working"});
 });
 
 module.exports = router;

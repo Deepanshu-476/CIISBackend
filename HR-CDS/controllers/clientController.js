@@ -3019,3 +3019,12 @@ module.exports = {
 };
 
 void 0;
+
+// Preserve authenticated actor across all existing controller aliases and callbacks.
+for (const [key, handler] of Object.entries(module.exports)) {
+  if (typeof handler === 'function') module.exports[key] = (...args) => {
+    const req = args[0];
+    if (!req?.user) return handler(...args);
+    return require('../utils/projectChatEvents').context.run({ actor: req.user.id || req.user._id }, () => handler(...args));
+  };
+}
