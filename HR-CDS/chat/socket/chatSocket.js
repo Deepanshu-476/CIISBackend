@@ -77,6 +77,8 @@ const emitUnreadCounts = async (io, conversation, senderId) => {
 };
 
 const chatSocket = (io, socket) => {
+    socket.data.userId = String(socket.userId);
+    socket.use(require("./projectChatPacketGuard")(socket));
 
     void 0;
 

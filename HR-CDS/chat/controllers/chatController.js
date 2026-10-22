@@ -217,7 +217,18 @@ exports.createConversation = async (req, res) => {
 
 exports.createGroupConversation = async (req, res) => {
   try {
-    const {groupId} = req.body;
+    const {groupId, projectId, clientId} = req.body;
+    if (clientId) {
+      const conversation = await require("../../utils/clientChatService").syncClient(clientId);
+      if (!conversation || String(conversation.companyId) !== String(req.user.company?._id || req.user.company) || !conversation.members.some(member => String(member) === getUserId(req))) return res.status(403).json({ success: false, message: "Client group access denied" });
+      return res.json({ success: true, conversation });
+    }
+    if (projectId) {
+      const existing = await Conversation.findOne({ projectId, companyId: req.user.company });
+      const conversation = existing && await require('../../utils/projectChatService').refreshConversation(existing._id, req.user.company);
+      if (!conversation || !conversation.members.some(member => String(member) === getUserId(req))) return res.status(403).json({ success: false, message: 'Project group access denied' });
+      return res.status(200).json({ success: true, conversation });
+    }
     const group = await Group.findOne({_id: groupId, isActive: true});
 
     if (!group) {
@@ -307,6 +318,7 @@ exports.getConversations = async (req, res) => {
     
     const activeConversations = conversations.filter(conversation => {
       if (conversation.isGroup) {
+        if (conversation.projectId || conversation.clientId) return true;
         if (!conversation.groupId) return false;
         return activeGroupIds.has(conversation.groupId.toString());
       } else {
@@ -387,7 +399,13 @@ exports.getCompanyGroups = async (req, res) => {
       .populate("createdBy", "name email profileImage avatar image photo")
       .populate("members", "name email profileImage avatar image photo companyRole");
 
-    res.status(200).json({success: true, groups});
+    const projectConversations = await Conversation.find({ companyId: req.user.company, members: getUserId(req), $or: [{ projectId: { $exists: true } }, { clientId: { $exists: true } }] }).populate("members", "name email");
+    const projectGroups = await Promise.all(projectConversations.map(async conversation => ({
+      _id: conversation.clientId || conversation.projectId, clientId: conversation.clientId, projectId: conversation.projectId, groupKind: conversation.clientId ? "client" : "project", name: conversation.groupName,
+      members: conversation.members, createdBy: conversation.admins[0],
+      conversation: await withConversationMeta(conversation, getUserId(req), req.user.company),
+    })));
+    res.status(200).json({success: true, groups: [...groups, ...projectGroups]});
   } catch (error) {
     res.status(500).json({success: false, message: error.message});
   }
@@ -396,6 +414,7 @@ exports.getCompanyGroups = async (req, res) => {
 exports.sendMessage = async (req, res) => {
   try {
     const {conversationId, text, replyToMessageId} = req.body;
+    await require("../../utils/projectChatService").refreshConversation(conversationId, req.user.company);
     const senderId = getUserId(req);
     const conversation = await Conversation.findOne({
       _id: conversationId,
@@ -411,6 +430,9 @@ exports.sendMessage = async (req, res) => {
       return res.status(403).json({success: false, message: "You are not a member of this conversation"});
     }
 
+    const mentions = await require('../utils/messageMentions').validateMessageMentions(
+      req.body.mentions, text, conversation, User
+    );
     const file = getPublicChatFileUrl(req);
     const detectedMime = req.file?.mimetype || "";
     const fileType = (detectedMime && detectedMime !== "application/octet-stream")
@@ -446,6 +468,7 @@ exports.sendMessage = async (req, res) => {
       conversationId,
       sender: senderId,
       text,
+      mentions,
       file,
       fileType,
       fileName,
@@ -494,6 +517,7 @@ exports.sendMessage = async (req, res) => {
       data: {
         conversationId,
         messageId: message._id,
+        mentionedUserIds: [...new Set(mentions.map(mention => mention.user))],
         isGroup: conversation.isGroup,
         groupId: conversation.groupId,
       },
@@ -513,7 +537,7 @@ exports.sendMessage = async (req, res) => {
 
     res.status(201).json({success: true, message: populatedMessage});
   } catch (error) {
-    res.status(500).json({success: false, message: error.message});
+    res.status(error.status || 500).json({success: false, message: error.message});
   }
 };
 

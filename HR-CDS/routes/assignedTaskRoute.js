@@ -1,3 +1,4 @@
+const taskStatusRequest = require('../../middleware/taskStatusRequest');
 
 const express = require('express');
 const router = express.Router();
@@ -15,7 +16,7 @@ router.post('/create', protect, uploadFields, assignedTaskController.createTaskF
 router.get('/to-me', protect, assignedTaskController.getAssignedToMeTasks);
 router.get('/by-me', protect, assignedTaskController.getAssignedTasks);
 router.get('/to-me/stats', protect, assignedTaskController.getAssignedToMeTaskStats);
-router.patch('/:taskId/status', protect, assignedTaskController.updateStatus);
+router.patch('/:taskId/status', protect, taskStatusRequest, assignedTaskController.updateStatus);
 router.post('/:taskId/checkpoints', protect, assignedTaskController.addCheckpoint);
 router.delete('/:taskId/checkpoints/:checkpointId', protect, assignedTaskController.deleteCheckpoint);
 router.patch('/:taskId/checkpoints/:checkpointId', protect, assignedTaskController.updateCheckpoint);
