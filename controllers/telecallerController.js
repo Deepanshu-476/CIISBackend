@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 const Lead = require('../models/Lead');
-require('../models/LeadSource');
-require('../models/LeadType');
+const LeadSource = require('../models/LeadSource');
+const LeadType = require('../models/LeadType');
 require('../models/User');
 let formatLeadForClient = item => item;
 let formatCallLogForClient = item => item;
@@ -24,7 +24,26 @@ const scope = req => {
   }
   return { company: req.telecallerCompany, assignedTo: req.user._id || req.user.id };
 };
-const populated = query => query.populate('leadSource', 'name').populate('leadType', 'name').populate('assignedTo', 'name').lean();
+const populated = query => query.populate('leadSource', 'name').populate('leadType', 'name').populate('assignedTo', 'name').populate('campaign', 'name outcomes status').lean();
+const CUSTOM_FIELD_KEYS = ['customField1', 'customField2', 'customField3', 'customField4', 'customField5'];
+
+// Custom field values sent with a call (after-call form); only the five slots, checked against the admin's types.
+const customFieldUpdate = async (req) => {
+  const input = req.body?.customFields;
+  if (!input || typeof input !== 'object') return { values: {} };
+  const values = {};
+  for (const key of CUSTOM_FIELD_KEYS) {
+    if (input[key] === undefined) continue;
+    const value = String(input[key] ?? '').trim();
+    if (value.length > 1000) return { error: 'Custom field values can be at most 1,000 characters.' };
+    values[key] = value;
+  }
+  if (!Object.keys(values).length) return { values };
+  const pipeline = require('./crmPipelineController');
+  const errors = pipeline.validateCustomValues(await pipeline.loadFieldConfig(req.telecallerCompany), values);
+  const first = Object.values(errors)[0];
+  return first ? { error: first } : { values };
+};
 
 const parseDate = value => {
   if (!value) return null;
@@ -122,6 +141,120 @@ exports.list = async (req, res, next) => {
   try {
     const items = await populated(Lead.find(scope(req)).sort({ assignedAt: -1, _id: -1 }));
     res.json({ items: (items || []).map(formatLeadForClient) });
+  } catch (error) { next(error); }
+};
+
+// Caller ID popup: the lead (within the caller's scope) whose phone ends with the same 10 digits, plus its pending follow-ups.
+exports.lookup = async (req, res, next) => {
+  try {
+    const digits = String(req.query?.phone || '').replace(/\D/g, '').slice(-10);
+    if (digits.length < 6) return res.status(400).json({ message: 'Enter a valid phone number.' });
+    const phonePattern = new RegExp(`${digits.split('').join('\\D*')}\\D*$`);
+    const lead = await populated(Lead.findOne({ ...scope(req), phone: phonePattern }).sort({ updatedAt: -1 }));
+    const templates = await require('./messageTemplateController').listForCompany(req.telecallerCompany);
+    const fieldConfig = (await require('./crmPipelineController').loadFieldConfig(req.telecallerCompany))
+      .filter(field => field.label && field.showInCallForm);
+    if (!lead) {
+      // An unknown number: what the popup needs to create the lead.
+      const filter = { company: req.telecallerCompany, status: 'Active' };
+      const [types, sources] = await Promise.all([
+        LeadType.find(filter).select('name').sort({ name: 1 }).lean(),
+        LeadSource.find(filter).select('name').sort({ name: 1 }).lean()
+      ]);
+      return res.json({
+        found: false,
+        phone: digits,
+        leadTypes: types.map(item => ({ id: String(item._id), name: item.name })),
+        leadSources: sources.map(item => ({ id: String(item._id), name: item.name })),
+        outcomes: outcomes.filter(outcome => outcome !== 'Note Added'),
+        templates,
+        fieldConfig
+      });
+    }
+    const FollowUp = require('../models/Followup');
+    const followUps = await FollowUp.find({ company: req.telecallerCompany, lead: lead._id, status: 'pending' })
+      .sort({ date: 1 })
+      .limit(5)
+      .lean();
+    const item = formatLeadForClient(lead);
+    const lastCall = [...(lead.callHistory || [])]
+      .filter(call => call.outcome !== 'Note Added')
+      .sort((a, b) => new Date(b.date) - new Date(a.date))[0];
+    res.json({
+      found: true,
+      lead: {
+        id: String(lead._id),
+        name: lead.name || '',
+        phone: lead.phone || '',
+        email: lead.email || '',
+        status: lead.status || 'new',
+        leadType: item.leadTypeName || '',
+        leadSource: item.leadSourceName || '',
+        assignedTo: item.assignedToName || '',
+        remarks: lead.remarks || '',
+        nextFollowUp: lead.nextFollowUp || null,
+        campaign: lead.campaign?.name || lead.campaignName || '',
+        customFields: Object.fromEntries(CUSTOM_FIELD_KEYS.map(key => [key, lead[key] || ''])),
+        lastCall: lastCall ? { date: lastCall.date, outcome: lastCall.outcome || '', notes: lastCall.notes || '' } : null
+      },
+      followUps: followUps.map(item => ({ id: String(item._id), date: item.date, note: item.note || '' })),
+      // A campaign can limit the outcomes its leads are given.
+      outcomes: (lead.campaign?.outcomes?.length ? lead.campaign.outcomes : outcomes).filter(outcome => outcome !== 'Note Added'),
+      templates,
+      fieldConfig
+    });
+  } catch (error) { next(error); }
+};
+
+// "Create new customer" from the caller ID popup: a lead from an unknown number, assigned to the caller.
+exports.quickLead = async (req, res, next) => {
+  try {
+    const name = String(req.body?.name || '').trim();
+    const phone = String(req.body?.phone || '').replace(/\D/g, '').slice(-10);
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    if (!name || name.length > 100) return res.status(400).json({ message: 'Enter the customer name.' });
+    if (phone.length !== 10) return res.status(400).json({ message: 'Enter a valid 10-digit phone number.' });
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ message: 'Enter a valid email address.' });
+    const company = req.telecallerCompany;
+    const phonePattern = new RegExp(`${phone.split('').join('\\D*')}\\D*$`);
+    if (await Lead.exists({ company, phone: phonePattern })) return res.status(409).json({ message: 'A lead with this phone number already exists.' });
+    const [type, source] = await Promise.all([
+      mongoose.isValidObjectId(req.body?.leadType) ? LeadType.findOne({ _id: req.body.leadType, company, status: 'Active' }).lean() : null,
+      mongoose.isValidObjectId(req.body?.leadSource) ? LeadSource.findOne({ _id: req.body.leadSource, company, status: 'Active' }).lean() : null
+    ]);
+    const userId = req.user._id || req.user.id;
+    const now = new Date();
+    const item = await Lead.create({
+      company,
+      name: name.replace(/(?:^|\s|-|\.)\S/g, char => char.toUpperCase()),
+      phone,
+      email,
+      remarks: String(req.body?.remarks || '').trim().slice(0, 5000),
+      leadDate: now.toISOString().slice(0, 10),
+      leadType: type?._id || undefined,
+      leadTypeName: type?.name || '',
+      leadSource: source?._id || undefined,
+      leadSourceName: source?.name || 'Incoming Call',
+      source: source?.name || 'Incoming Call',
+      status: 'new',
+      assignedTo: userId,
+      assignedToName: req.user.name || '',
+      assignedToEmail: req.user.email || '',
+      assignedToRole: req.user.role || req.user.companyRole || '',
+      assignedAt: now,
+      createdBy: userId,
+      createdByName: req.user.name || '',
+      createdByEmail: req.user.email || ''
+    });
+    res.status(201).json({ item: { id: String(item._id), name: item.name, phone: item.phone } });
+  } catch (error) { next(error); }
+};
+
+// Custom fields shown in the after-call form (names and types set by the admin on Add Lead).
+exports.fieldConfig = async (req, res, next) => {
+  try {
+    const fields = await require('./crmPipelineController').loadFieldConfig(req.telecallerCompany);
+    res.json({ fields: fields.filter(field => field.label) });
   } catch (error) { next(error); }
 };
 
@@ -224,6 +357,8 @@ exports.save = async (req, res, next) => {
     if (!mongoose.isValidObjectId(req.params.id) || typeof id !== 'string' || !/^[a-zA-Z0-9_-]{8,100}$/.test(id)) return res.status(400).json({ message: 'Invalid lead or call ID.' });
     if (!outcomes.includes(outcome) || !allowedCallTypes.includes(callType)) return res.status(400).json({ message: 'Choose a valid call outcome and direction.' });
     if (typeof notes !== 'string' || notes.length > 5000 || (outcome === 'Note Added' && !notes.trim())) return res.status(400).json({ message: 'Enter notes of at most 5,000 characters.' });
+    const custom = await customFieldUpdate(req);
+    if (custom.error) return res.status(400).json({ message: custom.error });
     const filter = { ...scope(req), _id: req.params.id };
     const existing = await Lead.findOne(filter).lean();
     if (!existing) return res.status(404).json({ message: 'Assigned lead not found.' });
@@ -240,8 +375,20 @@ exports.save = async (req, res, next) => {
       if (callType) setExistingCall['callHistory.$.callType'] = callType;
       const callDate = parseDate(req.body.startTime) || parseDate(req.body.endTime);
       if (callDate) setExistingCall['callHistory.$.date'] = callDate;
+      // updateOutcome: the caller ID popup corrects the outcome of a call the call-log sync saved first.
+      if (req.body.updateOutcome === true && !noteOnly) {
+        setExistingCall['callHistory.$.outcome'] = outcome;
+        setExistingCall['callHistory.$.followUp'] = terminal.includes(outcome) ? null : nextDate;
+        setExistingCall.status = outcome === 'Converted' ? 'converted' : outcome === 'Call Closed' ? 'closed' : outcome === 'Interested' ? 'interested' : outcome === 'Not Interested' ? 'not interested' : callbacks.includes(outcome) ? 'follow-up' : existing.status;
+        setExistingCall.nextFollowUp = terminal.includes(outcome) ? null : (nextDate || existing.nextFollowUp || null);
+        setExistingCall.lastMissedCallAt = callType === 'Missed' ? (callDate || existing.lastMissedCallAt || new Date()) : null;
+      }
+      Object.assign(setExistingCall, custom.values);
       if (Object.keys(setExistingCall).length && typeof Lead.updateOne === 'function') {
         await Lead.updateOne({ ...filter, 'callHistory.id': id }, { $set: setExistingCall });
+        if (setExistingCall.status && setExistingCall.status !== existing.status) {
+          cascadeLeadUpdate(req.params.id, { status: setExistingCall.status }).catch(() => {});
+        }
       }
       await syncCallArtifacts(req, { id, outcome, notes, nextDate, noteOnly }, existing);
       const latestExisting = await populated(Lead.findOne(filter));
@@ -251,10 +398,12 @@ exports.save = async (req, res, next) => {
     const call = { id, outcome, callType, notes: notes.trim(), agent: req.user._id || req.user.id, createdByName: req.user.name || 'User', date: callDate, followUp: noteOnly || terminal.includes(outcome) ? null : nextDate, recordingUrl: cleanRecordingUrl(req.body.recordingUrl), duration: Number(req.body.duration) || 0 };
     const mutation = { $push: { callHistory: call }, $inc: { __v: 1 } };
     if (!noteOnly) {
+      mutation.$set = { lastMissedCallAt: callType === 'Missed' ? callDate : null };
       const status = outcome === 'Converted' ? 'converted' : outcome === 'Call Closed' ? 'closed' : outcome === 'Interested' ? 'interested' : outcome === 'Not Interested' ? 'not interested' : callbacks.includes(outcome) ? 'follow-up' : existing.status;
       const nextFollowUp = terminal.includes(outcome) ? null : (nextDate || existing.nextFollowUp || null);
-      mutation.$set = { status, nextFollowUp };
+      Object.assign(mutation.$set, { status, nextFollowUp });
     }
+    if (Object.keys(custom.values).length) mutation.$set = { ...(mutation.$set || {}), ...custom.values };
     // Status and history are persisted together in one atomic document update.
     const item = await populated(Lead.findOneAndUpdate({ ...filter, __v: existing.__v ?? 0, status: existing.status, 'callHistory.id': { $ne: id } }, mutation, { new: true, runValidators: true }));
     if (!item) {

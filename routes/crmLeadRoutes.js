@@ -37,4 +37,16 @@ router.put('/:id/assign', context(['all-leads', 'assignments', 'transferred-call
   '/ciisUser/crm/admin/scheduled-calls'
 ], 'edit'), controller.assign);
 router.get('/', context('all-leads'), requireCrmPagePermission('/ciisUser/crm/admin/all-leads'), controller.list);
+
+// Pipeline board, campaigns and custom fields (All Leads / Add Lead pages).
+const pipeline = require('../controllers/crmPipelineController');
+const allLeads = '/ciisUser/crm/admin/all-leads';
+router.patch('/:id/status', context('all-leads'), requireCrmPagePermission(allLeads, 'edit'), pipeline.updateStatus);
+router.get('/campaigns', context(['all-leads', 'lead-overview', 'add-lead']), requireCrmPagePermission([allLeads, '/ciisUser/crm/admin/lead-overview', '/ciisUser/crm/admin/add-lead']), pipeline.listCampaigns);
+router.post('/campaigns', context('all-leads'), requireCrmPagePermission(allLeads, 'edit'), pipeline.createCampaign);
+router.put('/campaigns/:campaignId', context('all-leads'), requireCrmPagePermission(allLeads, 'edit'), pipeline.updateCampaign);
+router.delete('/campaigns/:campaignId', context('all-leads'), requireCrmPagePermission(allLeads, 'edit'), pipeline.deleteCampaign);
+router.post('/campaigns/:campaignId/leads', context('all-leads'), requireCrmPagePermission(allLeads, 'edit'), pipeline.setCampaignLeads);
+router.get('/field-config', context(['add-lead', 'all-leads']), requireCrmPagePermission(['/ciisUser/crm/admin/add-lead', allLeads]), pipeline.getFieldConfig);
+router.put('/field-config', context('add-lead'), requireCrmPagePermission('/ciisUser/crm/admin/add-lead', 'edit'), pipeline.saveFieldConfig);
 module.exports = router;

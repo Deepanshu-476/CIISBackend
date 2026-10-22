@@ -29,9 +29,11 @@ exports.overview = async (req, res, next) => {
     const assigned = result?.totals[0]?.assigned || 0;
     const statuses = result?.statuses || [];
     const count = status => statuses.find(item => item._id === status)?.count || 0;
-    const known = ['new', 'follow-up', 'interested', 'not interested', 'converted'];
-    const labels = ['New', 'Follow-up', 'Interested', 'Not Interested', 'Converted'];
-    const funnel = known.map((status, index) => ({ name: labels[index], value: count(status) }));
+    const known = ['new', 'contacted', 'follow-up', 'interested', 'negotiation', 'not interested', 'converted'];
+    const labels = ['New', 'Contacted', 'Follow-up', 'Interested', 'Negotiation', 'Not Interested', 'Converted'];
+    // Contacted and Negotiation only appear once leads are moved there on the board.
+    const funnel = known.map((status, index) => ({ name: labels[index], value: count(status) }))
+      .filter(item => item.value || !['Contacted', 'Negotiation'].includes(item.name));
     const other = statuses.filter(item => !known.includes(item._id)).reduce((sum, item) => sum + item.count, 0);
     if (other) funnel.push({ name: 'Other', value: other });
     const trends = Array.from({ length: 6 }, (_, index) => {
