@@ -64,6 +64,10 @@ const messageSchema = new mongoose.Schema(
             default: null
         }
     },
+
+
+
+    
     mentions: [{
         _id: false,
         user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
