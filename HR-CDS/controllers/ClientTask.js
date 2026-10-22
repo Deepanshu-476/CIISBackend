@@ -766,6 +766,7 @@ const addClientRemarkWithImages = async (req, res) => {
     void 0;
 
     const remark = {
+      mentions: parseChatMentionIds(req.body.mentions),
       text: text || '',
       images: images,
       user: currentUser?.id || currentUser?._id,
@@ -777,6 +778,13 @@ const addClientRemarkWithImages = async (req, res) => {
       task.remarks = [];
     }
 
+    const retryRemarkId = clientChatMutationId(req, `remark:${task._id}`);
+    if (retryRemarkId) {
+      const existing = task.remarks.id(retryRemarkId);
+      if (existing) return res.status(200).json({ success: true, remark: existing });
+      remark._id = retryRemarkId;
+    }
+    remark.mentions = parseChatMentionIds(req.body.mentions);
     task.remarks.push(remark);
 
     await task.save();
@@ -918,6 +926,7 @@ const addClientRemark = async (req, res) => {
     void 0;
 
     const remark = {
+      mentions: parseChatMentionIds(req.body.mentions),
       text: text.trim(),
       images: [],
       user: currentUser?.id || currentUser?._id,
@@ -929,6 +938,13 @@ const addClientRemark = async (req, res) => {
       task.remarks = [];
     }
 
+    const retryRemarkId = clientChatMutationId(req, `remark:${task._id}`);
+    if (retryRemarkId) {
+      const existing = task.remarks.id(retryRemarkId);
+      if (existing) return res.status(200).json({ success: true, remark: existing });
+      remark._id = retryRemarkId;
+    }
+    remark.mentions = parseChatMentionIds(req.body.mentions);
     task.remarks.push(remark);
 
     await task.save();
@@ -1470,6 +1486,13 @@ const updateAssignedTaskStatus = async (req, res) => {
         userName: currentUser?.name || currentUser?.username || 'System',
         createdAt: new Date()
       };
+      const retryRemarkId = clientChatMutationId(req, `remark:${task._id}`);
+      if (retryRemarkId) {
+        const existing = task.remarks.id(retryRemarkId);
+        if (existing) return res.status(200).json({ success: true, remark: existing });
+        remark._id = retryRemarkId;
+      }
+      remark.mentions = parseChatMentionIds(req.body.mentions);
       task.remarks.push(remark);
 
       await addClientActivityLogHelper(task, {
@@ -2227,7 +2250,13 @@ const addTask = async (req, res) => {
       : null;
     const normalizedPriority = normalizeClientTaskPriority(priority);
 
+    const retryTaskId = clientChatMutationId(req, `task:${clientId}`);
+    if (retryTaskId) {
+      const existing = await Task.findOne({ _id: retryTaskId, clientId });
+      if (existing) return res.status(200).json({ success: true, task: existing, message: 'Task already created' });
+    }
     const task = new Task({
+      ...(retryTaskId ? { _id: retryTaskId } : {}),
       clientId,
       subscriptionId: selectedSubscription?._id || null,
       subscriptionNo: selectedSubscription?.subscriptionNo || null,
@@ -2235,6 +2264,7 @@ const addTask = async (req, res) => {
       planName: selectedSubscription?.planName || '',
       service: String(matchedService).trim(),
       name: name.trim(),
+      mentions: parseChatMentionIds(req.body.mentions),
       description: description || name.trim(),
       dueDate: effectiveDueDate,
       dueDateSource: parsedDueDate ? 'manual' : 'subscription',
@@ -2326,6 +2356,7 @@ const updateTask = async (req, res) => {
   try {
     const { taskId } = req.params;
     const updates = { ...(req.body || {}) };
+    if (req.body.mentions !== undefined) updates.mentions = parseChatMentionIds(req.body.mentions);
     const currentUser = req.user;
 
     const task = await Task.findById(taskId);
@@ -2414,6 +2445,7 @@ const updateTask = async (req, res) => {
     }
 
 
+    if (updates.mentions !== undefined) task.mentions = updates.mentions;
     for (const key of Object.keys(updates)) {
       if (!allowedKeys.has(key)) continue;
 
@@ -3127,3 +3159,24 @@ module.exports = {
 };
 
 void 0;
+
+// Preserve authenticated actor across all existing controller aliases and callbacks.
+for (const [key, handler] of Object.entries(module.exports)) {
+  if (typeof handler === 'function') module.exports[key] = (...args) => {
+    const req = args[0];
+    if (!req?.user) return handler(...args);
+    return require('../utils/projectChatEvents').context.run({ actor: req.user.id || req.user._id }, () => handler(...args));
+  };
+}
+
+function parseChatMentionIds(raw) {
+  let value = raw || [];
+  if (typeof value === 'string') { try { value = JSON.parse(value); } catch { value = []; } }
+  return require('../utils/projectChatEvents').ids(Array.isArray(value) ? value : []);
+}
+
+function clientChatMutationId(req, scope) {
+  const key = req.headers['idempotency-key'];
+  if (!key) return null;
+  return new mongoose.Types.ObjectId(require('node:crypto').createHash('sha256').update(`${req.user.id || req.user._id}:${scope}:${String(key).slice(0, 200)}`).digest('hex').slice(0, 24));
+}
