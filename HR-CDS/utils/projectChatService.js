@@ -90,9 +90,9 @@ async function deliverEvent(project, conversation, event) {
   const names = new Map(users.map(user => [id(user), user.name || 'User']));
   const actor = names.get(id(event.actor)) || 'System';
   let text;
-  if (event.type === 'task_created') text = `${actor} ne ‘${event.title}’ task create kiya. Assigned to: ${(event.assigned || []).map(user => names.get(id(user))).filter(Boolean).join(', ') || 'Unassigned'}.`;
-  if (event.type === 'task_status_changed') text = `${actor} ne ‘${event.title}’ ka status ${event.from} → ${event.to} kiya.`;
-  if (event.type === 'task_mentioned') text = `${actor} ne ${names.get(id(event.mentioned))} ko ‘${event.title}’ task mein mention kiya.`;
+  if (event.type === 'task_created') text = `${actor} created task ‘${event.title}’. Assigned to: ${(event.assigned || []).map(user => names.get(id(user))).filter(Boolean).join(', ') || 'Unassigned'}.`;
+  if (event.type === 'task_status_changed') text = `${actor} changed the status of ‘${event.title}’ from ${event.from} to ${event.to}.`;
+  if (event.type === 'task_mentioned') text = `${actor} mentioned ${names.get(id(event.mentioned)) || 'a user'} in task ‘${event.title}’.`;
   if (!text) return;
   const message = await Message.findOneAndUpdate({ eventKey: event.key }, { $setOnInsert: {
     eventKey: event.key, companyId: conversation.companyId, conversationId: conversation._id,
