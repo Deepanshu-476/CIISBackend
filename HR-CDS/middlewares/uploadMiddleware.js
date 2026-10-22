@@ -77,8 +77,31 @@ const uploadRemarkImage = (req, res, next) => {
   });
 }; 
 
+const excelStorage = multer.memoryStorage();
+const uploadExcel = multer({
+  storage: excelStorage,
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname || "").toLowerCase();
+    if (ext === ".xlsx" || ext === ".xls" || ext === ".csv") {
+      return cb(null, true);
+    }
+    const mime = (file.mimetype || "").toLowerCase();
+    if (
+      mime.includes("spreadsheet") ||
+      mime.includes("excel") ||
+      mime.includes("csv") ||
+      mime === "application/octet-stream"
+    ) {
+      return cb(null, true);
+    }
+    return cb(new Error("Only Excel files (.xlsx, .xls) are allowed"));
+  },
+  limits: { fileSize: 20 * 1024 * 1024 }, // 20MB
+});
+
 module.exports = {
   uploadPDF,
   uploadTaskImage,
-  uploadRemarkImage 
-};
+  uploadRemarkImage,
+  uploadExcel,
+};

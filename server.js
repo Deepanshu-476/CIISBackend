@@ -660,7 +660,7 @@ const sendConfiguredTaskReminders = async () => {
     })
       .populate('assigneeId', 'name email')
       .populate('createdBy', 'name email')
-      .select('name dueDate assigneeId createdBy reminderSettings status completed')
+      .select('name dueDate assigneeId createdBy reminderSettings status completed clientId __v')
       .sort({ dueDate: 1 })
       .limit(MAX_CRON_TASK_BATCH_SIZE);
 
@@ -690,7 +690,7 @@ const sendConfiguredTaskReminders = async () => {
     })
       .populate('tasks.assignedUsers', 'name email')
       .populate('tasks.assignedTo', 'name email')
-      .select('projectName tasks')
+      .select('projectName tasks __v')
       .limit(MAX_CRON_TASK_BATCH_SIZE);
 
     for (const project of projects) {
@@ -1347,6 +1347,9 @@ const startServer = async () => {
   // port opened first, so initial page-permission requests could time out and
   // make CRM navigation disappear until a full refresh.
   await dbConnectionPromise;
+  // Uniqueness is a prerequisite for safe concurrent group/event delivery.
+  for (const model of [require('./HR-CDS/chat/models/Conversation'), require('./HR-CDS/chat/models/Message'), require('./HR-CDS/models/Notification')]) await model.createIndexes();
+  require('./HR-CDS/utils/projectChatWorker').start();
 
   server.listen(PORT, async () => {
 
