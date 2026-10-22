@@ -27,7 +27,9 @@ const followUpSchema = new mongoose.Schema({
     enum: ["low", "medium", "high"],
     default: "medium",
   },
-  note: String
+  note: String,
+  // When the "call this lead now" push went out, so each follow-up is reminded once.
+  reminderSentAt: { type: Date, default: null }
 }, { timestamps: true });
 
 followUpSchema.index(

@@ -152,6 +152,10 @@ const applyLeadFilters = (req, base) => {
     const statuses = String(q.status).split(',').map(value => value.trim().toLowerCase()).filter(Boolean);
     addClause(filter, { status: { $in: statuses } });
   }
+  if (hasValue(q.campaign)) {
+    if (/^none$/i.test(String(q.campaign))) addClause(filter, { campaign: null });
+    else if (mongoose.isValidObjectId(String(q.campaign))) addClause(filter, { campaign: toObjectId(q.campaign) });
+  }
   if (hasValue(q.schedule)) {
     const range = scheduleRange(q.schedule);
     if (range) addClause(filter, { nextFollowUp: range });

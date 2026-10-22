@@ -22,7 +22,8 @@ const leadSchema = new mongoose.Schema({
   source: { type: String },       
   status: {
     type: String,
-    enum: ["new", "follow-up", "interested", "not interested", "converted", "closed"],
+    // contacted and negotiation are pipeline stages set from the Kanban board.
+    enum: ["new", "contacted", "follow-up", "interested", "negotiation", "not interested", "converted", "closed"],
     default: "new",
   },
   assignedTo: {
@@ -38,6 +39,10 @@ const leadSchema = new mongoose.Schema({
     index: true
   },
   nextFollowUp: { type: Date, index: true },
+  // Set by a missed call from the lead; cleared by the next answered or outgoing call. Lists show these first.
+  lastMissedCallAt: { type: Date, default: null },
+  campaign: { type: mongoose.Schema.Types.ObjectId, ref: 'Campaign', default: null },
+  campaignName: { type: String, default: '' },
   callHistory: [{
     _id: false,
     id: { type: String, required: true },
@@ -76,6 +81,7 @@ leadSchema.index({ company: 1, name: 1, phone: 1 });
 leadSchema.index({ company: 1, assignedToName: 1 });
 leadSchema.index({ company: 1, leadSourceName: 1 });
 leadSchema.index({ company: 1, leadTypeName: 1 });
+leadSchema.index({ company: 1, campaign: 1 });
 // Sort keys of the paged CRM lists (assigned / pending / completed / converted).
 leadSchema.index({ company: 1, assignedAt: -1 });
 leadSchema.index({ company: 1, status: 1, assignedAt: -1 });

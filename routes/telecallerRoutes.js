@@ -32,6 +32,24 @@ const callLogsHandler = typeof controller.callLogs === 'function'
   : (req, res) => res.json({ items: [] });
 router.get('/', requireCrmPagePermission(telecallerPaths), controller.list);
 router.get('/call-logs', requireCrmPagePermission(telecallerPaths), callLogsHandler);
+const lookupHandler = typeof controller.lookup === 'function'
+  ? controller.lookup
+  : (req, res) => res.json({ found: false });
+router.get('/lookup', requireCrmPagePermission(telecallerPaths), lookupHandler);
+const workspaceEnabled = (req, res, next) => (enabled(req.telecallerPages, 'call-workspace')
+  ? next()
+  : res.status(403).json({ message: 'This call update page is not enabled for your company.' }));
+if (typeof controller.quickLead === 'function') {
+  router.post('/quick-lead', workspaceEnabled, requireCrmPagePermission('/ciisUser/telecaller/call-workspace', 'edit'), controller.quickLead);
+}
+if (typeof controller.fieldConfig === 'function') {
+  router.get('/field-config', requireCrmPagePermission(telecallerPaths), controller.fieldConfig);
+}
+const templates = require('../controllers/messageTemplateController');
+router.get('/templates', requireCrmPagePermission(telecallerPaths), templates.list);
+router.post('/templates', templates.requireAdmin, templates.create);
+router.put('/templates/:templateId', templates.requireAdmin, templates.update);
+router.delete('/templates/:templateId', templates.requireAdmin, templates.remove);
 router.get('/:id', requireCrmPagePermission(telecallerPaths), controller.getOne);
 router.post('/:id/calls', (req, res, next) => {
   if (!enabled(req.telecallerPages, 'call-workspace') && !(req.body?.outcome === 'Note Added' && enabled(req.telecallerPages, 'lead-detail'))) {
