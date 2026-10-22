@@ -41,6 +41,7 @@ const ActivityLogSchema = new Schema(
  
 const RemarkSchema = new Schema(
   {
+    mentions: [{ type: Schema.Types.ObjectId, ref: "User" }],
     text: { type: String, required: true },
     createdAt: { type: Date, default: Date.now },
     createdBy: { type: Schema.Types.ObjectId, ref: "User" },
@@ -81,6 +82,7 @@ const ReminderSettingsSchema = new Schema(
 const TaskSchema = new Schema(
   {
     title: { type: String, trim: true, default: "Untitled Task" },
+    mentions: [{ type: Schema.Types.ObjectId, ref: "User" }],
     description: { type: String, trim: true },
     assignedTo: { type: Schema.Types.ObjectId, ref: "User" },
     assignedUsers: [{ type: Schema.Types.ObjectId, ref: "User" }],
@@ -122,6 +124,7 @@ const ProjectSchema = new Schema(
     company: { type: Schema.Types.ObjectId, ref: "Company" },
     companyCode: { type: String, trim: true, uppercase: true },
     branch: { type: Schema.Types.ObjectId, ref: "Branch", index: true },
+    managers: [{ type: Schema.Types.ObjectId, ref: "User" }],
     users: [{ type: Schema.Types.ObjectId, ref: "User" }],
     status: { type: String, enum: PROJECT_STATUS, default: "active" },
     startDate: { type: Date },
@@ -223,6 +226,8 @@ TaskSchema.methods.addActivityLog = function(activity) {
 
  
 ProjectSchema.index({ 'tasks.status': 1, 'tasks.holdOverdueCheckAt': 1 });
+
+ProjectSchema.plugin(require('../utils/projectChatPlugin'));
 
 const Project = mongoose.model("Project", ProjectSchema);
 

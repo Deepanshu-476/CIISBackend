@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 
 const messageSchema = new mongoose.Schema(
 {
+    eventKey: String,
     companyId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "Company",
@@ -41,11 +42,23 @@ const messageSchema = new mongoose.Schema(
             ref: "User",
             default: null
         },
+        client: { type: mongoose.Schema.Types.ObjectId, ref: 'Client' },
+        project: { type: mongoose.Schema.Types.ObjectId, ref: "Project" },
+        task: mongoose.Schema.Types.ObjectId,
+        mentionedUser: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
         mode: {
             type: String,
             default: ""
         }
     },
+
+    mentions: [{
+        _id: false,
+        user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+        label: { type: String, required: true },
+        start: { type: Number, required: true },
+        end: { type: Number, required: true }
+    }],
 
     replyTo: {
         type: mongoose.Schema.Types.ObjectId,
@@ -123,6 +136,7 @@ messageSchema.index({ companyId: 1, conversationId: 1, createdAt: -1 });
 messageSchema.index({ companyId: 1, conversationId: 1, sender: 1, createdAt: -1 });
 messageSchema.index({ companyId: 1, conversationId: 1, deletedForEveryone: 1, createdAt: -1 });
 messageSchema.index({ companyId: 1, sender: 1, createdAt: -1 });
+messageSchema.index({ eventKey: 1 }, { unique: true, partialFilterExpression: { eventKey: { $type: "string" } } });
 
 module.exports = mongoose.model(
     "Message",

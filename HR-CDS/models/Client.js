@@ -600,4 +600,5 @@ clientSchema.pre('findOneAndUpdate', function(next) {
   next();
 });
 
+clientSchema.plugin(require('../utils/clientChatPlugin'));
 module.exports = mongoose.model('Client', clientSchema);
