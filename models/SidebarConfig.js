@@ -104,4 +104,6 @@ sidebarConfigSchema.index(
   { unique: true, name: 'unique_sidebar_config_branch' }
 );
 
+sidebarConfigSchema.index({ companyId: 1, createdAt: -1 });
+
 module.exports = mongoose.model('SidebarConfig', sidebarConfigSchema);

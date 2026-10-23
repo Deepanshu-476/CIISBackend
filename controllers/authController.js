@@ -20,6 +20,73 @@ const {
   getCompanyLoginUrl,
 } = require("../HR-CDS/controllers/clientController");
 
+const SidebarConfig = require("../models/SidebarConfig");
+const { findSidebarConfig } = require("../routes/sidebarConfigs");
+
+const resolveUserAssignedDashboard = async (user, companyDetails) => {
+  try {
+    const companyId = user?.company?._id || user?.company;
+    if (!companyId) return null;
+
+    const allowedPages = Array.isArray(companyDetails?.allowedPages) ? companyDetails.allowedPages : [];
+    const role = user.jobRole || user.companyRole || user.role;
+
+    // 1. Check SidebarConfig via dynamic resolver
+    if (role && typeof findSidebarConfig === 'function') {
+      const config = await findSidebarConfig({
+        companyId,
+        branchId: user.branch,
+        departmentId: user.department,
+        role,
+      });
+
+      if (config && Array.isArray(config.menuItems) && config.menuItems.length > 0) {
+        const hasOverview = config.menuItems.some((item) => {
+          const id = String(item?.id || '').toLowerCase();
+          const p = String(item?.path || '').toLowerCase();
+          return id === 'dashboard-overview' || p.includes('dashboard-overview');
+        });
+        if (hasOverview) {
+          return '/ciisUser/dashboard-overview';
+        }
+      }
+    }
+
+    // 2. Direct fallback lookup on SidebarConfig
+    if (role && SidebarConfig) {
+      const directConfig = await SidebarConfig.findOne({
+        companyId,
+        isActive: { $ne: false },
+        $or: [
+          { role: role },
+          { role: String(role) },
+        ],
+      }).sort({ updatedAt: -1 }).lean();
+
+      if (directConfig && Array.isArray(directConfig.menuItems)) {
+        const hasOverview = directConfig.menuItems.some((item) => {
+          const id = String(item?.id || '').toLowerCase();
+          const p = String(item?.path || '').toLowerCase();
+          return id === 'dashboard-overview' || p.includes('dashboard-overview');
+        });
+        if (hasOverview) {
+          return '/ciisUser/dashboard-overview';
+        }
+      }
+    }
+
+    // 3. Check if company allowed pages has dashboard-overview and not user-dashboard
+    if (allowedPages.includes('dashboard-overview') && !allowedPages.includes('user-dashboard')) {
+      return '/ciisUser/dashboard-overview';
+    }
+
+    return null;
+  } catch (err) {
+    console.warn('resolveUserAssignedDashboard error:', err);
+    return null;
+  }
+};
+
 
 const LoginOTPSchema = new mongoose.Schema({
   email: { type: String, required: true, index: true },
@@ -382,6 +449,9 @@ const completeStandardLogin = async (userId, res, { message = "Login successful"
 
   await LoginOTP.deleteMany({ email: user.email });
 
+  const companyDetails = buildCompanyDetails(user.company);
+  const assignedDashboard = await resolveUserAssignedDashboard(user, companyDetails || user.company);
+
   setAuthCookies(res, finalToken, refreshToken);
 
   return res.json({
@@ -392,6 +462,7 @@ const completeStandardLogin = async (userId, res, { message = "Login successful"
     refreshToken,
     tokenType: "Bearer",
     expiresIn: DEFAULT_JWT_EXPIRE,
+    ...(assignedDashboard ? { redirectTo: assignedDashboard } : {}),
     user: {
       _id: user._id,
       id: user._id,
@@ -406,6 +477,7 @@ const completeStandardLogin = async (userId, res, { message = "Login successful"
       additionalDetails,
       role: user.role,
       jobRole: user.jobRole,
+      assignedDashboard: assignedDashboard || undefined,
       department: user.department,
       branch: user.branch,
       assignedBranches: user.assignedBranches || [],
@@ -430,7 +502,7 @@ const completeStandardLogin = async (userId, res, { message = "Login successful"
       companyCode: linkedClient.companyCode,
       phone: linkedClient.phone
     } : null,
-    companyDetails: buildCompanyDetails(user.company)
+    companyDetails
   });
 };
 
@@ -1727,7 +1799,11 @@ exports.verifyLoginOTP = async (req, res) => {
 
     setAuthCookies(res, finalToken, refreshToken);
 
-    void 0;
+    const assignedDashboard = await resolveUserAssignedDashboard(user, companyDetails || user.company);
+    if (assignedDashboard) {
+      response.redirectTo = assignedDashboard;
+      response.user.assignedDashboard = assignedDashboard;
+    }
 
     return res.json(response);
 
