@@ -7,11 +7,72 @@ const Task = () => require('../models/ClientTask');
 const internal = (user, client) => id(user) !== id(client.userId) &&
   ![user.companyRole, user.role, user.jobRoleName, user.employeeType].some(value => String(value || '').trim().toLowerCase() === 'client');
 
-// Legacy names grant membership only when exactly one internal user matches.
+function normalizePerson(val) {
+  if (!val) return null;
+  if (typeof val === 'object') {
+    return {
+      id: String(val._id || val.id || val.userId || val.employeeId || '').trim(),
+      name: String(val.name || val.fullName || val.employeeName || val.username || '').trim(),
+      email: String(val.email || val.userEmail || val.employeeEmail || '').trim().toLowerCase()
+    };
+  }
+  const s = String(val).trim();
+  if (/^[a-f\d]{24}$/i.test(s)) return { id: s, name: '', email: '' };
+  if (s.includes('@')) return { id: '', name: '', email: s.toLowerCase() };
+  return { id: '', name: s, email: '' };
+}
+
 function resolveMember(value, users) {
-  const key = id(value).trim().toLowerCase();
-  const matches = users.filter(user => [id(user), user.email, user.name].some(item => String(item || '').trim().toLowerCase() === key));
-  return matches.length === 1 ? matches[0]._id : null;
+  const target = normalizePerson(value);
+  if (!target) return null;
+
+  // 1. Direct ID match
+  if (target.id && /^[a-f\d]{24}$/i.test(target.id)) {
+    const found = users.find(u => String(u._id) === target.id);
+    if (found) return found._id;
+  }
+
+  // 2. Direct Email match
+  if (target.email) {
+    const found = users.find(u => String(u.email || '').trim().toLowerCase() === target.email);
+    if (found) return found._id;
+  }
+
+  // 3. Name match
+  if (target.name) {
+    const targetName = target.name.trim().toLowerCase();
+    // 3a. Exact match
+    const exact = users.find(u => String(u.name || '').trim().toLowerCase() === targetName);
+    if (exact) return exact._id;
+
+    // 3b. Clean alphanumeric prefix/substring match (e.g. "Prashant" <-> "Prashant kumar", "Shivani" <-> "Shivani Chandel")
+    const cleanTarget = targetName.replace(/[^a-z0-9]/g, '');
+    if (cleanTarget.length >= 3) {
+      const candidates = users.filter(u => {
+        const cleanUser = String(u.name || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+        return cleanUser.length >= 3 && (cleanUser.startsWith(cleanTarget) || cleanTarget.startsWith(cleanUser));
+      });
+      if (candidates.length === 1) return candidates[0]._id;
+      const startsWith = candidates.filter(u => String(u.name || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '').startsWith(cleanTarget));
+      if (startsWith.length === 1) return startsWith[0]._id;
+    }
+  }
+
+  return null;
+}
+
+function collectClientManagerValues(client) {
+  const list = [];
+  const add = (val) => {
+    if (!val) return;
+    if (Array.isArray(val)) val.forEach(add);
+    else list.push(val);
+  };
+  add(client.projectManager);
+  add(client.projectManagers);
+  add(client.assignedTo);
+  add(client.accountManager);
+  return list;
 }
 
 async function companyFor(client) {
@@ -39,17 +100,29 @@ async function syncClient(clientId) {
   }
   const users = (await User.find({ company: company._id, isActive: { $ne: false } }).select('_id name email companyRole role jobRoleName employeeType')).filter(user => internal(user, client));
   const tasks = await Task().find({ clientId }).select('assigneeId assignee').lean();
-  const managers = ids((client.projectManager || []).map(value => resolveMember(value, users)));
-  const candidates = ids([...managers, ...tasks.map(task => task.assigneeId ? users.find(user => id(user) === id(task.assigneeId))?._id : resolveMember(task.assignee, users))]);
+  const rawManagers = collectClientManagerValues(client);
+  const managers = ids(rawManagers.map(value => resolveMember(value, users)));
+  const taskAssignees = ids(tasks.map(task => task.assigneeId ? users.find(user => id(user) === id(task.assigneeId))?._id : resolveMember(task.assignee, users)));
+  const candidates = ids([...managers, ...taskAssignees]);
   const members = client.status === 'Inactive' ? [] : candidates;
   const query = { companyId: company._id, clientId };
   let conversation;
+  const updatePayload = {
+    $set: {
+      groupName: client.client,
+      isGroup: true,
+      members,
+      admins: managers.filter(member => members.includes(member)),
+      clientSyncedAt: new Date(),
+    },
+    $setOnInsert: { createdAt: new Date(), updatedAt: new Date() },
+  };
   try {
-    conversation = await Conversation.findOneAndUpdate({ ...query, $or: [{ clientSyncedAt: { $lte: startedAt } }, { clientSyncedAt: { $exists: false } }] }, {
-      $set: { groupName: client.client, isGroup: true, members, admins: managers.filter(member => members.includes(member)), clientSyncedAt: startedAt },
-      $setOnInsert: { createdAt: new Date(), updatedAt: new Date() },
-    }, { upsert: true, new: true, timestamps: false, setDefaultsOnInsert: true });
-  } catch (error) { if (error.code !== 11000) throw error; conversation = await Conversation.findOne(query); }
+    conversation = await Conversation.findOneAndUpdate(query, updatePayload, { upsert: true, new: true, timestamps: false, setDefaultsOnInsert: true });
+  } catch (error) {
+    if (error.code !== 11000) throw error;
+    conversation = await Conversation.findOneAndUpdate(query, { $set: updatePayload.$set }, { new: true });
+  }
   if (global.io) for (const socket of await global.io.in(`conversation:${conversation._id}`).fetchSockets()) {
     if (!conversation.members.some(member => id(member) === id(socket.userId || socket.data?.userId))) socket.leave(`conversation:${conversation._id}`);
   }
@@ -102,4 +175,13 @@ async function sweep() {
   }
 }
 
-module.exports = { syncClient, drainTask, syncForUser, sweep, companyFor, resolveMember, internal };
+async function syncAllClients() {
+  for await (const client of Client().find({}).select('_id').lean().cursor()) {
+    try { await syncClient(client._id); }
+    catch (error) { console.error('[client-chat] sync all error', id(client), error.message); }
+  }
+}
+
+module.exports = { syncClient, drainTask, syncForUser, syncAllClients, sweep, companyFor, resolveMember, collectClientManagerValues, internal };
+
+

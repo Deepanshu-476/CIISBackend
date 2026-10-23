@@ -92,8 +92,21 @@ const getRouteAccessKeys = item => {
   return keys;
 };
 
+const companyPlanCache = new Map();
+const getCompanyPlanAccess = async (companyId) => {
+  const key = String(companyId || '').trim();
+  if (!key) return null;
+  const cached = companyPlanCache.get(key);
+  if (cached && (Date.now() - cached.timestamp < 30000)) {
+    return cached.company;
+  }
+  const company = await Company.findById(key).select('allowedPages isActive subscriptionExpiry').lean();
+  companyPlanCache.set(key, { timestamp: Date.now(), company });
+  return company;
+};
+
 const filterMenuItemsByCompanyAccess = async (companyId, menuItems) => {
-  const company = await Company.findById(companyId).select('allowedPages isActive subscriptionExpiry');
+  const company = await getCompanyPlanAccess(companyId);
   const isPlanActive = company && company.isActive && company.subscriptionExpiry && new Date() <= new Date(company.subscriptionExpiry);
   const allowedPages = isPlanActive && Array.isArray(company?.allowedPages) ? company.allowedPages : [];
 
@@ -106,6 +119,13 @@ const filterMenuItemsByCompanyAccess = async (companyId, menuItems) => {
     const itemKeys = [...getRouteAccessKeys(item)].map(key => normalizeKey(key)).filter(Boolean);
     return itemKeys.some(key => allowedSet.has(key));
   });
+};
+
+const sidebarCache = new Map();
+const SIDEBAR_CACHE_TTL = 30000;
+const invalidateSidebarCache = () => {
+  sidebarCache.clear();
+  companyPlanCache.clear();
 };
 
 const sanitizeConfigForCompanyAccess = async (config) => {
@@ -252,6 +272,12 @@ router.get('/', async (req, res) => {
       return res.json({ success: true, count: 0, data: [] });
     }
     
+    const cacheKey = `list_${companyId || ''}_${branchId || ''}_${departmentId || ''}_${role || ''}`;
+    const cached = sidebarCache.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp < SIDEBAR_CACHE_TTL)) {
+      return res.json(cached.payload);
+    }
+
     let query = {};
     if (companyId) query.companyId = companyId;
     if (branchId) query.branchId = branchId;
@@ -282,12 +308,13 @@ router.get('/', async (req, res) => {
       });
     }
 
-
-    res.json({
+    const payload = {
       success: true,
       count: sanitizedConfigs.length,
       data: sanitizedConfigs
-    });
+    };
+    sidebarCache.set(cacheKey, { timestamp: Date.now(), payload });
+    return res.json(payload);
   } catch (error) {
     console.error('Error fetching sidebar configs:', error);
     res.status(500).json({ 
@@ -319,6 +346,12 @@ router.get('/config', async (req, res) => {
         success: false,
         message: 'Company and role are required'
       });
+    }
+
+    const cacheKey = `config_${companyId || ''}_${branchId || ''}_${departmentId || ''}_${role || ''}`;
+    const cached = sidebarCache.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp < SIDEBAR_CACHE_TTL)) {
+      return res.json(cached.payload);
     }
 
     if (companyId && mongoose.Types.ObjectId.isValid(companyId) && departmentId) {
@@ -372,11 +405,13 @@ router.get('/config', async (req, res) => {
 
     const sanitizedConfig = await sanitizeConfigForCompanyAccess(config);
     
-    res.json({
+    const payload = {
       success: true,
       message: 'Configuration found',
       data: sanitizedConfig
-    });
+    };
+    sidebarCache.set(cacheKey, { timestamp: Date.now(), payload });
+    return res.json(payload);
   } catch (error) {
     console.error('Error fetching config:', error);
     res.status(500).json({ 
@@ -477,6 +512,7 @@ router.post('/', requireSidebarManager, async (req, res) => {
       .populate('companyId', 'companyName companyCode')
       .populate('departmentId', 'name');
     
+    invalidateSidebarCache();
     res.status(200).json({
       success: true,
       message: 'Configuration saved successfully',
@@ -565,6 +601,7 @@ router.put('/:id', requireSidebarManager, async (req, res) => {
     ).populate('companyId', 'companyName')
      .populate('departmentId', 'name');
 
+    invalidateSidebarCache();
     res.json({
       success: true,
       message: 'Configuration updated successfully',
@@ -605,6 +642,7 @@ router.delete('/:id', requireSidebarManager, async (req, res) => {
     }
 
     await SidebarConfig.findByIdAndDelete(id);
+    invalidateSidebarCache();
     
     res.json({
       success: true,
@@ -688,5 +726,6 @@ router.get("/test", (req, res) => {
     user: req.user
   });
 });
+router.findSidebarConfig = findSidebarConfig;
 module.exports = router;
-void 0;
+module.exports.findSidebarConfig = findSidebarConfig;

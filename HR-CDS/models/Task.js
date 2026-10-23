@@ -317,7 +317,10 @@ taskSchema.index({ isActive: 1, dueDateTime: 1, overallStatus: 1 });
 taskSchema.index({ isActive: 1, dueDateTime: 1, 'statusByUser.status': 1 });
 taskSchema.index({ createdBy: 1, createdAt: -1 });
 taskSchema.index({ companyCode: 1, createdBy: 1, createdAt: -1 });
+taskSchema.index({ companyCode: 1, createdBy: 1, taskFor: 1, isActive: 1, createdAt: -1 });
 taskSchema.index({ companyCode: 1, assignedUsers: 1, updatedAt: -1 });
+taskSchema.index({ companyCode: 1, assignedUsers: 1, isActive: 1, updatedAt: -1 });
+taskSchema.index({ companyCode: 1, lastActivityAt: -1, updatedAt: -1 });
 taskSchema.index({ companyCode: 1, taskFor: 1, isActive: 1, createdAt: -1 });
 taskSchema.index({ 'statusByUser.user': 1, 'statusByUser.status': 1 });
 taskSchema.index(
@@ -698,5 +701,9 @@ taskSchema.post("save", function (doc) {
  
 taskSchema.index({ overallStatus: 1, holdOverdueCheckAt: 1 });
 taskSchema.index({ 'statusByUser.status': 1, 'statusByUser.holdOverdueCheckAt': 1 });
+taskSchema.index({ companyCode: 1, taskFor: 1, isActive: 1, createdAt: -1 });
+taskSchema.index({ companyCode: 1, assignedUsers: 1, isActive: 1, createdAt: -1 });
+taskSchema.index({ companyCode: 1, createdBy: 1, isActive: 1, createdAt: -1 });
+taskSchema.index({ companyCode: 1, branch: 1, isActive: 1, createdAt: -1 });
 
 module.exports = mongoose.model("Task", taskSchema);
