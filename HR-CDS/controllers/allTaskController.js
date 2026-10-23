@@ -20,6 +20,10 @@ const {
   sendCleanTaskList,
   normalizeProjectTaskStatus,
   getProjectTaskAssignedBy,
+  getTaskCompletionDate,
+  getTaskStatusChangeDate,
+  getTaskReportDate,
+  getTaskSourceAwareDate,
   TASK_USER_POPULATE_FIELDS,
   TASK_GROUP_POPULATE_FIELDS,
   TASK_CREATOR_POPULATE_FIELDS
@@ -169,9 +173,10 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
   const dateOr = range ? [
     { dueDateTime: range },
     { dueDate: range },
-    { createdAt: range },
     { completionDate: range },
-    { completedAt: range }
+    { completedAt: range },
+    { inProgressSince: range },
+    { 'statusHistory.changedAt': range }
   ] : null;
 
   const personalQuery = {
@@ -196,7 +201,21 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
       ...buildAssigneeNameConditions([targetUser?.name, targetUser?.email])
     ].filter(condition => Object.values(condition)[0])
   };
-  if (dateOr) clientQuery.$and = [{ $or: [{ dueDate: range }, { createdAt: range }, { completedAt: range }] }];
+  if (dateOr) {
+    clientQuery.$and = [
+      ...(clientQuery.$and || []),
+      {
+        $or: [
+          { dueDate: range },
+          { dueDateTime: range },
+          { completionDate: range },
+          { completedAt: range },
+          { inProgressSince: range },
+          { 'activityLogs.performedAt': range }
+        ]
+      }
+    ];
+  }
   if (priority) clientQuery.priority = new RegExp(`^${priority}$`, 'i');
   if (hasSearch) {
     clientQuery.$and = [
@@ -214,8 +233,15 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
     projectTaskElemMatch.$and.push({
       $or: [
         { dueDate: range },
-        { createdAt: range },
-        { completedAt: range }
+        { dueDateTime: range },
+        { completionDate: range },
+        { completedAt: range },
+        { inProgressSince: range },
+        { 'activityLogs.performedAt': range },
+        {
+          status: { $in: ['pending', 'in-progress', 'inprogress', 'onhold', 'on-hold', 'reopen'] },
+          $or: [{ dueDate: { $exists: false } }, { dueDate: null }]
+        }
       ]
     });
   }
@@ -238,13 +264,13 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
 
   if (isStatsOnly) {
     personalQueryExec = personalQueryExec
-      .select('overallStatus statusByUser dueDate dueDateTime priority createdAt updatedAt')
+      .select('createdBy assignedUsers overallStatus statusByUser statusHistory dueDate dueDateTime priority inProgressSince completionDate completedAt')
       .lean();
     clientQueryExec = clientQueryExec
-      .select('status completed dueDate priority createdAt updatedAt')
+      .select('assignee assigneeId status completed dueDate priority inProgressSince activityLogs completionDate completedAt')
       .lean();
     projectQueryExec = projectQueryExec
-      .select('tasks._id tasks.assignedTo tasks.status tasks.dueDate tasks.priority tasks.createdAt tasks.updatedAt')
+      .select('tasks._id tasks.assignedTo tasks.assignedUsers tasks.status tasks.dueDate tasks.priority tasks.inProgressSince tasks.activityLogs tasks.completionDate tasks.completedAt')
       .lean();
   } else {
     personalQueryExec = personalQueryExec
@@ -378,6 +404,8 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
         description: task.description || project.description || '',
         dueDate: task.dueDate,
         dueDateTime: task.dueDate,
+        completionDate: task.completionDate || null,
+        completedAt: task.completedAt || task.completionDate || null,
         priority: String(task.priority || 'medium').toLowerCase(),
         status: displayStatus,
         userStatus: projectStatus,
@@ -403,35 +431,8 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
 const getFilterDate = (task, dateField) => {
   const normalizedField = String(dateField || '').toLowerCase();
   if (normalizedField === 'createdat' || normalizedField === 'createddate') return task.createdAt;
-  if (normalizedField === 'updatedat' || normalizedField === 'updateddate') return task.updatedAt || task.createdAt;
-  if (normalizedField === 'completedat' || normalizedField === 'completiondate') return task.completionDate || task.completedAt;
+  if (normalizedField === 'completedat' || normalizedField === 'completiondate') return getTaskCompletionDate(task) || task.completionDate || task.completedAt;
   return getTaskReportDate(task);
-};
-
-const getTaskCompletionDate = task => {
-  const directDate = task?.completionDate || task?.completedAt;
-  if (directDate) return directDate;
-  const statusHistory = Array.isArray(task?.statusHistory) ? task.statusHistory : [];
-  const historyDate = statusHistory
-    .filter(entry => normalizeTaskStatus(entry?.status || entry?.newValue || entry?.newValues?.status) === 'completed')
-    .map(entry => entry.changedAt || entry.createdAt || entry.updatedAt)
-    .filter(Boolean)
-    .sort((a, b) => new Date(b) - new Date(a))[0];
-  if (historyDate) return historyDate;
-  const activityLogs = Array.isArray(task?.activityLogs) ? task.activityLogs : [];
-  return activityLogs
-    .filter(entry => normalizeTaskStatus(entry?.newValue || entry?.newValues?.status || entry?.status) === 'completed')
-    .map(entry => entry.performedAt || entry.changedAt || entry.createdAt || entry.updatedAt)
-    .filter(Boolean)
-    .sort((a, b) => new Date(b) - new Date(a))[0] || null;
-};
-
-const getTaskReportDate = task => {
-  const status = normalizeTaskStatus(task?.userStatus || task?.status || task?.overallStatus);
-  if (status === 'completed') {
-    return getTaskCompletionDate(task) || task?.updatedAt || task?.dueDateTime || task?.dueDate || task?.createdAt;
-  }
-  return task?.dueDateTime || task?.dueDate || task?.createdAt;
 };
 
 const getFilterStatus = (task) => {
@@ -442,7 +443,7 @@ const getFilterStatus = (task) => {
 const filterUserTasks = (tasks, queryParams) => {
   const fromDate = queryParams.fromDate || queryParams.startDate;
   const toDate = queryParams.toDate || queryParams.endDate;
-  const { status, search, period, priority, dateField } = queryParams;
+  const { status, search, period, priority, dateField, taskType } = queryParams;
   const range = getCleanTaskDateRange({ period: fromDate || toDate ? 'all' : period, fromDate, toDate });
   const query = search ? String(search).trim().toLowerCase() : '';
 
@@ -453,6 +454,13 @@ const filterUserTasks = (tasks, queryParams) => {
     }
     if (priority && priority !== 'all' && String(t.priority || '').toLowerCase() !== String(priority).toLowerCase()) {
       return false;
+    }
+    if (taskType && taskType !== 'all') {
+      const requestedType = String(taskType).toLowerCase().trim();
+      const actualType = String(t.source || t.taskSource || t.__taskSource || 'personal').toLowerCase();
+      if (requestedType === 'personal' && !['self', 'personal'].includes(actualType)) return false;
+      if (requestedType === 'project' && actualType !== 'project') return false;
+      if (requestedType === 'client' && actualType !== 'client') return false;
     }
     if (query) {
       const haystack = [t.title, t.description, t.clientName, t.projectName].map(v => String(v || '').toLowerCase()).join(' ');
@@ -489,13 +497,7 @@ const filterUserTasks = (tasks, queryParams) => {
         (!range.$lte || reportDateValue <= range.$lte);
 
       if (!hasMatchingDate) {
-        // If range covers current moment, include actively in-progress tasks
-        const now = new Date();
-        const coversNow = (!range.$gte || now >= range.$gte) && (!range.$lte || now <= range.$lte);
-        const normStatus = normalizeTaskStatus(t.userStatus || t.status || t.overallStatus);
-        if (!coversNow || normStatus !== 'in-progress') {
-          return false;
-        }
+        return false;
       }
     }
     return true;
@@ -531,6 +533,10 @@ const calculateUserStatusCounts = (filtered) => {
     cancelled: 0
   };
 
+  let personalCount = 0;
+  let projectCount = 0;
+  let clientCount = 0;
+
   filtered.forEach(task => {
     let rawStatus = task.userStatus || task.status || task.overallStatus || 'pending';
     let status = normalizeTaskStatus(rawStatus);
@@ -542,6 +548,11 @@ const calculateUserStatusCounts = (filtered) => {
     } else {
       counts.pending += 1;
     }
+
+    const src = String(task.source || task.taskSource || task.__taskSource || '').toLowerCase();
+    if (src === 'project') projectCount += 1;
+    else if (src === 'client') clientCount += 1;
+    else personalCount += 1;
   });
 
   const total = filtered.length;
@@ -560,7 +571,11 @@ const calculateUserStatusCounts = (filtered) => {
     onhold: toStat(counts.onhold),
     onHold: toStat(counts.onhold),
     reopen: toStat(counts.reopen),
-    cancelled: toStat(counts.cancelled)
+    cancelled: toStat(counts.cancelled),
+    personal: toStat(personalCount),
+    project: toStat(projectCount),
+    client: toStat(clientCount),
+    work: toStat(projectCount + clientCount)
   };
 };
 
@@ -972,6 +987,7 @@ exports.getCompanyAllTaskOverview = async (req, res) => {
       toDate: req.query.toDate,
       status: req.query.status || 'all',
       priority: req.query.priority || 'all',
+      taskType: req.query.taskType || 'all',
       search: req.query.search || '',
       branch: req.query.branch,
       branchId: req.query.branchId,
