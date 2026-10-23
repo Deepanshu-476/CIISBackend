@@ -242,57 +242,96 @@ const calculateUnifiedTaskStats = (tasks, userId) => {
   };
 };
 
-const getTaskSourceAwareDate = task => {
-  if (!task) return null;
-  const reportDate = getTaskReportDate(task);
-  if (reportDate) return reportDate;
-  const source = String(task.__taskSource || task.taskSource || task.source || '').toLowerCase();
-  if (source === 'client') {
-    return task.dueDate || task.dueDateTime || task.createdAt;
-  }
-  if (source === 'project') {
-    let statusUpdateDate = null;
-    if (task.activityLogs && task.activityLogs.length > 0) {
-      const statusLogs = task.activityLogs.filter(log => log.type === 'status_change' || log.type === 'status_changed');
-      if (statusLogs.length > 0) {
-        const sortedLogs = [...statusLogs].sort((a, b) => new Date(b.performedAt || b.createdAt || 0) - new Date(a.performedAt || a.createdAt || 0));
-        statusUpdateDate = sortedLogs[0].performedAt || sortedLogs[0].createdAt;
-      }
-    }
-    return statusUpdateDate || task.updatedAt || task.createdAt;
-  }
-  if (source === 'self' || source === 'personal') {
-    return task.createdAt;
-  }
-  return task.dueDateTime || task.dueDate || task.createdAt;
-};
-
 const getTaskCompletionDate = task => {
   const directDate = task?.completionDate || task?.completedAt;
   if (directDate) return directDate;
 
   const statusHistory = Array.isArray(task?.statusHistory) ? task.statusHistory : [];
-  const historyDate = statusHistory
-    .filter(entry => normalizeTaskStatus(entry?.status || entry?.newValue || entry?.newValues?.status) === 'completed')
-    .map(entry => entry.changedAt || entry.createdAt || entry.updatedAt)
+  const compHistory = statusHistory
+    .filter(entry => normalizeTaskStatus(entry?.status || entry?.newValue || entry?.newValues?.status) === 'completed'
+      || String(entry?.remarks || '').toLowerCase().includes('completed'))
+    .map(entry => entry.changedAt || entry.updatedAt)
     .filter(Boolean)
     .sort((a, b) => new Date(b) - new Date(a))[0];
-  if (historyDate) return historyDate;
+  if (compHistory) return compHistory;
 
   const activityLogs = Array.isArray(task?.activityLogs) ? task.activityLogs : [];
-  return activityLogs
-    .filter(entry => normalizeTaskStatus(entry?.newValue || entry?.newValues?.status || entry?.status) === 'completed')
-    .map(entry => entry.performedAt || entry.changedAt || entry.createdAt || entry.updatedAt)
+  const compActivity = activityLogs
+    .filter(entry => {
+      const s = normalizeTaskStatus(entry?.newValue || entry?.newValues?.status || entry?.status);
+      if (s === 'completed') return true;
+      const desc = String(entry?.description || entry?.remarks || '').toLowerCase();
+      return desc.includes('changed to completed') || desc.includes('marked as completed');
+    })
+    .map(entry => entry.performedAt || entry.changedAt)
     .filter(Boolean)
-    .sort((a, b) => new Date(b) - new Date(a))[0] || null;
+    .sort((a, b) => new Date(b) - new Date(a))[0];
+  if (compActivity) return compActivity;
+
+  const sbuComp = (Array.isArray(task?.statusByUser) ? task.statusByUser : [])
+    .find(s => normalizeTaskStatus(s.status) === 'completed');
+  if (sbuComp?.updatedAt) return sbuComp.updatedAt;
+
+  return null;
+};
+
+const getTaskStatusChangeDate = task => {
+  const statusHistory = Array.isArray(task?.statusHistory) ? task.statusHistory : [];
+  if (statusHistory.length > 0) {
+    const last = statusHistory[statusHistory.length - 1];
+    if (last?.changedAt) return last.changedAt;
+  }
+
+  const activityLogs = Array.isArray(task?.activityLogs) ? task.activityLogs : [];
+  const statusLogs = activityLogs.filter(l => l.type === 'status_change' || l.type === 'status_changed' || l.field === 'status' || l.previousStatus || l.newStatus || String(l.description || l.remarks || '').toLowerCase().includes('status'));
+  if (statusLogs.length > 0) {
+    const sorted = [...statusLogs].sort((a, b) => new Date(b.performedAt || b.changedAt || 0) - new Date(a.performedAt || a.changedAt || 0));
+    const last = sorted[0];
+    if (last?.performedAt || last?.changedAt) return last.performedAt || last.changedAt;
+  }
+
+  if (task?.inProgressSince) return task.inProgressSince;
+
+  const sbu = (Array.isArray(task?.statusByUser) ? task.statusByUser : [])
+    .find(s => normalizeTaskStatus(s.status) !== 'pending');
+  if (sbu?.updatedAt) return sbu.updatedAt;
+
+  return null;
 };
 
 const getTaskReportDate = task => {
   const status = normalizeTaskStatus(task?.userStatus || task?.status || task?.overallStatus);
+
   if (status === 'completed') {
-    return getTaskCompletionDate(task) || task?.updatedAt || task?.dueDateTime || task?.dueDate || task?.createdAt;
+    const compDate = getTaskCompletionDate(task);
+    if (compDate) return compDate;
+    // Fallback for completed task without timestamp: due date if exists
+    return task?.dueDateTime || task?.dueDate || null;
   }
-  return task?.dueDateTime || task?.dueDate || task?.createdAt;
+
+  // If status is not untouched pending, show on status change date
+  const statusChangeDate = getTaskStatusChangeDate(task);
+  if (statusChangeDate && status !== 'pending') {
+    return statusChangeDate;
+  }
+
+  // Untouched pending task -> shows on due date
+  if (task?.dueDateTime || task?.dueDate) {
+    return task.dueDateTime || task.dueDate;
+  }
+
+  // Active task without due date (pending, in-progress, onhold, reopen) ->
+  // It is currently active/awaiting action today, so return current date
+  if (['pending', 'in-progress', 'onhold', 'reopen'].includes(status)) {
+    return new Date();
+  }
+
+  return null;
+};
+
+const getTaskSourceAwareDate = task => {
+  if (!task) return null;
+  return getTaskReportDate(task);
 };
 
 const groupTasksByDate = (tasks, dateField = 'createdAt', serialKey = 'serialNo') => {
@@ -871,7 +910,9 @@ module.exports = {
   normalizeProjectTaskStatus,
   getProjectTaskAssignedBy,
   getTaskCompletionDate,
+  getTaskStatusChangeDate,
   getTaskReportDate,
+  getTaskSourceAwareDate,
   fetchPersonalTaskList,
   fetchAssignedToMeTaskList,
   fetchAssignedClientTaskList,
