@@ -5,7 +5,6 @@ const moment = require('moment');
 const {notifyDirectUsers} = require('../utils/systemNotificationService');
 
 
-cron.schedule('*/30 * * * *', async () => {
 if (process.env.NODE_ENV !== 'test') {
   cron.schedule('*/30 * * * *', async () => {
   try {
@@ -63,11 +62,9 @@ if (process.env.NODE_ENV !== 'test') {
     console.error('❌ Error in overdue tasks cron job:', error);
   }
 });
-  });
 }
 
 
-cron.schedule('0 9 * * *', async () => {
 if (process.env.NODE_ENV !== 'test') {
   cron.schedule('0 9 * * *', async () => {
   try {
@@ -95,7 +92,6 @@ if (process.env.NODE_ENV !== 'test') {
     console.error('❌ Error in daily summary cron job:', error);
   }
 });
-  });
 }
 
 module.exports = cron;

@@ -426,15 +426,30 @@ const enrichStatusInfo = async (tasks) => {
   users.forEach(u => { userMap[u._id.toString()] = u; });
 
   return tasks.map(task => {
-    if (!task.statusByUser) return task;
-    const info = task.statusByUser.map(s => {
-      const u = userMap[s.user.toString()];
+    if (!task.statusByUser || !Array.isArray(task.statusByUser)) return task;
+    const seenUserIds = new Set();
+    const latestStatusByUser = [];
+    for (let i = task.statusByUser.length - 1; i >= 0; i--) {
+      const s = task.statusByUser[i];
+      const uid = String(s.user?._id || s.user || '');
+      if (!uid || seenUserIds.has(uid)) continue;
+      seenUserIds.add(uid);
+      latestStatusByUser.unshift(s);
+    }
+
+    const info = latestStatusByUser.map(s => {
+      const uid = String(s.user?._id || s.user || '');
+      const u = userMap[uid];
+      let img = u?.profileImage || u?.avatar || null;
+      if (typeof img === 'string' && img.startsWith('data:') && img.length > 500) {
+        img = null;
+      }
       return {
         userId: s.user,
         name: u?.name || 'Unknown',
         role: u?.role || u?.jobRole || u?.companyRole || 'N/A',
         email: u?.email || 'N/A',
-        profileImage: u?.profileImage || u?.avatar || null,
+        profileImage: img,
         department: u?.department || null,
         branch: u?.branch || null,
         status: s.status,
@@ -442,7 +457,7 @@ const enrichStatusInfo = async (tasks) => {
         ...(s.status === 'rejected' && { rejectedByUser: `${u?.name} (${u?.role || u?.jobRole || 'User'})` })
       };
     });
-    return { ...task, ...normalizeTaskRecurrenceFields(task), statusInfo: info };
+    return { ...task, ...normalizeTaskRecurrenceFields(task), statusInfo: info, statusByUser: latestStatusByUser };
   });
 };
 

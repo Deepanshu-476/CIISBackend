@@ -23,7 +23,16 @@ function simulate(doc, update) {
 function set(object, path, value) { const parts = path.split('.'); const key = parts.pop(); for (const part of parts) object = object[part] ||= {}; object[key] = value; }
 
 async function safeDeliver(model, doc, session) {
-  if (session?.inTransaction()) return;
+  if (session?.inTransaction()) {
+    if (typeof session.once === 'function') {
+      session.once('ended', () => {
+        setImmediate(() => {
+          safeDeliver(model, doc, null).catch(() => {});
+        });
+      });
+    }
+    return;
+  }
   try {
     const service = require('./clientChatService');
     if (model === 'ClientTask') await service.drainTask(doc._id); else await service.syncClient(doc._id);
