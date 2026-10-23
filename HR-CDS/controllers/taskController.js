@@ -949,7 +949,8 @@ const enrichStatusInfo = async (tasks) => {
   const userIds = [];
   tasks.forEach(task => {
     task.statusByUser?.forEach(s => {
-      if (s.user) userIds.push(s.user.toString());
+      const uid = s?.user?._id || s?.user;
+      if (uid) userIds.push(uid.toString());
     });
   });
 
@@ -960,15 +961,31 @@ const enrichStatusInfo = async (tasks) => {
   users.forEach(u => { userMap[u._id.toString()] = u; });
 
   return tasks.map(task => {
-    if (!task.statusByUser) return task;
-    const info = task.statusByUser.map(s => {
-      const u = userMap[s.user.toString()];
+    if (!task.statusByUser || !Array.isArray(task.statusByUser)) return task;
+
+    const seenUserIds = new Set();
+    const latestStatusByUser = [];
+    for (let i = task.statusByUser.length - 1; i >= 0; i--) {
+      const s = task.statusByUser[i];
+      const uid = String(s?.user?._id || s?.user || '');
+      if (!uid || seenUserIds.has(uid)) continue;
+      seenUserIds.add(uid);
+      latestStatusByUser.unshift(s);
+    }
+
+    const info = latestStatusByUser.map(s => {
+      const uid = String(s?.user?._id || s?.user || '');
+      const u = userMap[uid];
+      let img = u?.profileImage || u?.avatar || null;
+      if (typeof img === 'string' && img.startsWith('data:') && img.length > 500) {
+        img = null;
+      }
       return {
         userId: s.user,
         name: u?.name || 'Unknown',
         role: u?.role || u?.jobRole || u?.companyRole || 'N/A',
         email: u?.email || 'N/A',
-        profileImage: u?.profileImage || u?.avatar || null,
+        profileImage: img,
         department: u?.department || null,
         branch: u?.branch || null,
         status: s.status,
@@ -976,7 +993,7 @@ const enrichStatusInfo = async (tasks) => {
         ...(s.status === 'rejected' && { rejectedByUser: `${u?.name} (${u?.role || u?.jobRole || 'User'})` })
       };
     });
-    return { ...task, statusInfo: info };
+    return { ...task, statusByUser: latestStatusByUser, statusInfo: info };
   });
 };
 
@@ -1941,8 +1958,7 @@ exports.getAssignedTasks = async (req, res) => {
     const lightFields = [
       'title', 'name', 'clientName', 'service', 'priority', 'overallStatus', 'statusByUser', 'dueDateTime',
       'dueDate', 'createdAt', 'updatedAt', 'completionDate', 'completedAt', 'onHoldReleasedAt', 'assignedUsers',
-      'createdBy', 'taskFor', 'isActive', 'branch', 'statusHistory.status', 'statusHistory.newValue',
-      'statusHistory.newValues', 'statusHistory.changedAt', 'statusHistory.createdAt', 'statusHistory.updatedAt',
+      'createdBy', 'taskFor', 'isActive', 'branch',
       ...(req.query?.search ? ['description'] : [])
     ].join(' ');
     const lightTasks = await Task.find(taskFilter).select(lightFields).sort({ createdAt: -1 }).lean();
@@ -1953,6 +1969,7 @@ exports.getAssignedTasks = async (req, res) => {
 
     const pageIds = paginated.tasks.map(t => t._id);
     const fullTasks = pageIds.length ? await Task.find({ _id: { $in: pageIds } })
+      .select('-remarks -statusHistory')
       .populate('branch', 'name branchCode')
       .populate('assignedUsers', 'name role email department branch assignedBranches')
       .populate('createdBy', 'name email')

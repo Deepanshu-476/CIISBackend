@@ -788,6 +788,7 @@ exports.listProjects = async (req, res) => {
     }
 
     const projectQuery = Project.find(query)
+      .select('-tasks.activityLogs -tasks.remarks -notifications')
       .populate('users', PROJECT_USER_POPULATE_FIELDS)
       .populate('branch', 'name branchCode')
       .populate('createdBy', PROJECT_USER_POPULATE_FIELDS)
@@ -2160,12 +2161,7 @@ exports.updateTaskStatus = async (req, res) => {
   try {
     const { projectId, taskId } = req.params;
     const { status, remark } = req.body;
-
-    void 0;
-    void 0;
-    void 0;
-    void 0;
-    void 0;
+    console.error(`[STATUS DEBUG 1] projectId: ${projectId}, taskId: ${taskId}, status: ${status}, user: ${req.user?._id || req.user?.id}`);
 
     const nextStatus = normalizeTaskStatus(status);
     const nextProjectStatus = toProjectTaskStatus(status);
@@ -2177,15 +2173,35 @@ exports.updateTaskStatus = async (req, res) => {
       });
     }
 
-    const project = await Project.findById(projectId);
+    const project = await Project.findOne(
+      { _id: projectId, "tasks._id": taskId },
+      {
+        "tasks.$": 1,
+        projectName: 1,
+        createdBy: 1,
+        users: 1,
+        managers: 1,
+        company: 1,
+        companyCode: 1,
+        __v: 1
+      }
+    );
+
     if (!project) {
+      const projectExists = await Project.exists({ _id: projectId });
+      if (!projectExists) {
+        return res.status(404).json({
+          success: false,
+          message: "Project not found"
+        });
+      }
       return res.status(404).json({
         success: false,
-        message: "Project not found"
+        message: "Task not found"
       });
     }
 
-    const task = project.tasks.id(taskId);
+    const task = project.tasks && project.tasks[0];
     if (!task) {
       return res.status(404).json({
         success: false,
@@ -2253,17 +2269,25 @@ exports.updateTaskStatus = async (req, res) => {
 
     if (!["overdue", "onhold", "reopen"].includes(nextStatus) && !isResumedFromHold && !isOverdueTransitionAllowed && isPendingTaskPastDue(task) && !allowCompanyAllEdit) {
       if (isPendingTaskPastDue(task)) {
-        task.status = "overdue";
-        task.updatedAt = new Date();
-        task.activityLogs.push({
-          type: "status_change",
-          description: "Automatically marked overdue after due time passed",
-          oldValue: oldStatus,
-          newValue: "overdue",
-          performedBy: req.user.id,
-          remark: "Automatically marked overdue after due time passed"
-        });
-        await project.save();
+        await Project.updateOne(
+          { _id: projectId, "tasks._id": taskId },
+          {
+            $set: {
+              "tasks.$.status": "overdue",
+              "tasks.$.updatedAt": new Date()
+            },
+            $push: {
+              "tasks.$.activityLogs": {
+                type: "status_change",
+                description: "Automatically marked overdue after due time passed",
+                oldValue: oldStatus,
+                newValue: "overdue",
+                performedBy: req.user.id,
+                remark: "Automatically marked overdue after due time passed"
+              }
+            }
+          }
+        );
       }
       return res.status(400).json({
         success: false,
@@ -2271,44 +2295,60 @@ exports.updateTaskStatus = async (req, res) => {
       });
     }
 
-    task.status = nextProjectStatus;
-    task.updatedAt = new Date();
+    const now = new Date();
+    const updateFields = {
+      "tasks.$.status": nextProjectStatus,
+      "tasks.$.updatedAt": now
+    };
 
     if (isResumedFromHold) {
-      const now = new Date();
-      task.onHoldReleasedAt = now;
-      task.dueDate = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-      task.dueDateTime = task.dueDate;
+      const newDueDate = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+      updateFields["tasks.$.onHoldReleasedAt"] = now;
+      updateFields["tasks.$.dueDate"] = newDueDate;
+      updateFields["tasks.$.dueDateTime"] = newDueDate;
     } else if (nextStatus === "onhold" || nextStatus === "on hold") {
-      task.onHoldReleasedAt = null;
+      updateFields["tasks.$.onHoldReleasedAt"] = null;
     }
 
     if (nextStatus === "completed") {
-      task.completionDate = new Date();
+      updateFields["tasks.$.completionDate"] = now;
     } else if (nextStatus !== "completed" && task.completionDate) {
-      task.completionDate = null;
+      updateFields["tasks.$.completionDate"] = null;
     }
 
-
-    task.activityLogs.push({
+    const activityLog = {
       type: "status_change",
       description: `Status changed from ${oldStatus} to ${nextProjectStatus}`,
       oldValue: oldStatus,
       newValue: nextProjectStatus,
       performedBy: req.user.id,
       remark: remark
-    });
-
-    await project.save();
-
-    const notification = {
-      title: "Task Status Updated",
-      message: `Task "${task.title}" status changed from ${oldStatus} to ${nextProjectStatus}`,
-      type: "status_changed",
-      relatedTo: "task",
-      referenceId: task._id,
-      createdBy: req.user.id
     };
+
+    await Project.updateOne(
+      { _id: projectId, "tasks._id": taskId },
+      {
+        $set: updateFields,
+        $push: { "tasks.$.activityLogs": activityLog }
+      }
+    );
+
+    task.status = nextProjectStatus;
+    task.updatedAt = now;
+    if (isResumedFromHold) {
+      task.onHoldReleasedAt = now;
+      task.dueDate = updateFields["tasks.$.dueDate"];
+      task.dueDateTime = updateFields["tasks.$.dueDateTime"];
+    } else if (nextStatus === "onhold" || nextStatus === "on hold") {
+      task.onHoldReleasedAt = null;
+    }
+    if (nextStatus === "completed") {
+      task.completionDate = now;
+    } else if (nextStatus !== "completed") {
+      task.completionDate = null;
+    }
+    task.activityLogs = task.activityLogs || [];
+    task.activityLogs.push(activityLog);
 
     res.status(200).json({
       success: true,
@@ -2317,51 +2357,79 @@ exports.updateTaskStatus = async (req, res) => {
     });
 
     const runStatusPostProcessing = async () => {
-      await project.addNotification(notification);
+      try {
+        const notification = {
+          title: "Task Status Updated",
+          message: `Task "${task.title}" status changed from ${oldStatus} to ${nextProjectStatus}`,
+          type: "status_changed",
+          relatedTo: "task",
+          referenceId: task._id,
+          createdBy: req.user.id,
+          createdAt: new Date()
+        };
 
-      const statusNotificationUsers = [project.createdBy, ...getTaskAssigneeIds(task)]
-        .filter(userId => userId && !idsEqual(userId, req.user.id));
+        await Project.updateOne(
+          { _id: projectId },
+          { $push: { notifications: notification } }
+        ).catch(err => console.error("Error adding project notification:", err.message));
 
-      await notifyDirectUsers({
-        userIds: statusNotificationUsers,
-        targetPath: '/ciisUser/task-management',
-        type: 'project_task_status_changed',
-        title: 'Project Task Updated',
-        message: `${req.user.name} changed "${task.title}" status from ${oldStatus} to ${nextProjectStatus}${remark ? ': ' + remark : ''}`,
-        actor: req.user.id,
-        data: {
-          projectId: project._id,
-          taskId: task._id,
-          oldStatus,
-          newStatus: nextProjectStatus,
-          remark,
-        },
-        priority: 'medium',
-      });
+        const statusNotificationUsers = [project.createdBy, ...getTaskAssigneeIds(task)]
+          .filter(userId => userId && !idsEqual(userId, req.user.id));
+
+        await notifyDirectUsers({
+          userIds: statusNotificationUsers,
+          targetPath: '/ciisUser/task-management',
+          type: 'project_task_status_changed',
+          title: 'Project Task Updated',
+          message: `${req.user.name} changed "${task.title}" status from ${oldStatus} to ${nextProjectStatus}${remark ? ': ' + remark : ''}`,
+          actor: req.user.id,
+          data: {
+            projectId: project._id,
+            taskId: task._id,
+            oldStatus,
+            newStatus: nextProjectStatus,
+            remark,
+          },
+          priority: 'medium',
+        });
+
+        try {
+          const { label } = require('../utils/projectChatEvents');
+          const { syncProject, deliverEvent } = require('../utils/projectChatService');
+          const { createHash } = require('node:crypto');
+          const event = {
+            key: createHash('sha256').update(`${projectId}:${task._id}:task_status_changed:${oldStatus}:${nextProjectStatus}:${Date.now()}`).digest('hex'),
+            type: 'task_status_changed',
+            actor: req.user.id,
+            task: String(task._id),
+            title: task.title,
+            from: label(oldStatus),
+            to: label(nextProjectStatus)
+          };
+          const conversation = await syncProject(project);
+          if (conversation) {
+            await deliverEvent(project, conversation, event);
+          }
+        } catch (chatErr) {
+          console.error("Error delivering task status chat event:", chatErr.message);
+        }
+      } catch (asyncErr) {
+        console.error('❌ Background project task post-processing failed:', asyncErr);
+      }
     };
 
     if (nextProjectStatus === 'completed') {
-      enqueueCompletionJob(async () => {
-        try {
-          await runStatusPostProcessing();
-        } catch (asyncErr) {
-          console.error('❌ Background project task post-processing failed:', asyncErr);
-        }
-      });
+      enqueueCompletionJob(runStatusPostProcessing);
     } else {
-      void (async () => {
-        try {
-          await runStatusPostProcessing();
-        } catch (asyncErr) {
-          console.error('❌ Background project task post-processing failed:', asyncErr);
-        }
-      })();
+      setImmediate(runStatusPostProcessing);
     }
   } catch (error) {
     console.error("❌ Error updating task status:", error);
     res.status(500).json({
       success: false,
-      message: "Error updating task status"
+      message: "Error updating task status",
+      error: error.message,
+      stack: error.stack
     });
   }
 };

@@ -1,4 +1,3 @@
-const Conversation = require('../models/Conversation');
 const Message = require('../models/Message');
 const service = require('../../utils/projectChatService');
 
@@ -7,10 +6,9 @@ module.exports = async (req, res, next) => {
     const company = req.user.company?._id || req.user.company;
     const user = req.user.id || req.user._id;
     if (['/groups', '/conversations'].includes(req.path)) {
-      await service.syncForUser(company, user);
-      await require('../../utils/clientChatService').syncForUser(company, user);
-      const existing = await Conversation.find({ companyId: company, members: user, $or: [{ projectId: { $exists: true } }, { clientId: { $exists: true } }] }).select('_id');
-      for (const conversation of existing) await service.refreshConversation(conversation._id, company);
+      // Lists are reads. Hooks and the outbox worker maintain conversations;
+      // validate current source membership in batches without rewriting every chat.
+      req.chatEntityAccess = await require('../../utils/chatListAccess')(company, user);
     }
     let conversationId = req.body?.conversationId;
     const match = req.path.match(/^\/(?:messages|conversation)\/([a-f\d]{24})(?:\/|$)/i);
