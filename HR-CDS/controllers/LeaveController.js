@@ -67,6 +67,119 @@ const isTerminalLeaveStatus = (status) => ['Approved', 'Rejected'].includes(stat
 
 const formatLeaveWithApprovals = (leave) => Leave.withApprovalDefaults(leave);
 
+const getLeavePeriodEndInIst = (endDate) => {
+  if (!endDate) return null;
+  const d = new Date(endDate);
+  if (isNaN(d.getTime())) return null;
+  const istDateStr = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(d);
+  return new Date(`${istDateStr}T23:59:59.999+05:30`);
+};
+
+const autoRejectExpiredLeaves = async (scopeFilter = {}) => {
+  try {
+    const now = new Date();
+    const query = {
+      status: 'Pending',
+      ...scopeFilter
+    };
+
+    const pendingLeaves = await Leave.find(query);
+    if (!pendingLeaves || pendingLeaves.length === 0) return 0;
+
+    let rejectedCount = 0;
+    for (const leave of pendingLeaves) {
+      const periodEnd = getLeavePeriodEndInIst(leave.endDate);
+      if (periodEnd && now > periodEnd) {
+        const oldStatus = leave.status;
+        leave.status = 'Rejected';
+        const autoRejectNote = 'Auto rejected: Leave period ended without approval';
+        leave.remarks = leave.remarks
+          ? `${leave.remarks} (${autoRejectNote})`
+          : autoRejectNote;
+
+        if (Array.isArray(leave.approvalSteps)) {
+          leave.approvalSteps.forEach(step => {
+            if (!step.status || step.status === 'Pending') {
+              step.status = 'Rejected';
+              step.remarks = 'Auto rejected: Period ended without approval';
+              step.actionedAt = now;
+            }
+          });
+        }
+
+        if (leave.approvals && typeof leave.approvals === 'object') {
+          ['manager', 'hr', 'owner'].forEach(role => {
+            if (leave.approvals[role] && (!leave.approvals[role].status || leave.approvals[role].status === 'Pending')) {
+              leave.approvals[role].status = 'Rejected';
+              leave.approvals[role].remarks = autoRejectNote;
+              leave.approvals[role].actionedAt = now;
+            }
+          });
+        }
+
+        leave.history = leave.history || [];
+        leave.history.push({
+          action: 'rejected',
+          from: oldStatus,
+          to: 'Rejected',
+          by: leave.user?._id || leave.user,
+          role: 'System',
+          remarks: autoRejectNote,
+          previousLeaveType: leave.type,
+          newLeaveType: leave.type,
+          previousPayType: leave.payType,
+          newPayType: leave.payType,
+          at: now
+        });
+
+        await leave.save();
+        rejectedCount += 1;
+
+        try {
+          const userId = leave.user?._id || leave.user;
+          await notifyDirectUsers({
+            userIds: [userId],
+            targetPath: '/ciisUser/my-leaves',
+            type: 'leave_status_changed',
+            title: 'Leave Auto Rejected',
+            message: `Your ${leave.type || 'leave'} request (${leave.days || 1} day(s)) was auto-rejected as the leave period ended without approval.`,
+            actor: userId,
+            company: leave.companyCode || leave.user?.company,
+            data: {
+              leaveId: leave._id,
+              userId,
+              status: 'Rejected',
+              reason: 'Period ended without approval'
+            },
+            priority: 'medium'
+          });
+        } catch (_) {}
+
+        try {
+          if (global.io && emitLeaveEvents?.leaveStatusChanged) {
+            emitLeaveEvents.leaveStatusChanged(global.io, {
+              leave: leave.toObject ? leave.toObject() : leave,
+              oldStatus,
+              newStatus: 'Rejected',
+              updatedBy: { name: 'System', role: 'System' }
+            });
+          }
+        } catch (_) {}
+      }
+    }
+
+    return rejectedCount;
+  } catch (err) {
+    console.error('Error in autoRejectExpiredLeaves:', err);
+    return 0;
+  }
+};
+
 const writeLeaveDebugLog = (label, data) => {
   try {
     const logPath = path.join(__dirname, '../../leave-debug.log');
@@ -635,6 +748,7 @@ exports.getUserLeaves = async (req, res) => {
 
   try {
     const userId = req.user._id;
+    await autoRejectExpiredLeaves({ user: userId });
     const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 100 });
     const filter = { user: userId };
 
@@ -673,6 +787,11 @@ exports.getAllLeaves = async (req, res) => {
   try {
     void 0;
 
+    const userCompanyId = req.user.company || req.user.companyId;
+    if (userCompanyId) {
+      await autoRejectExpiredLeaves(req.user.companyCode ? { companyCode: req.user.companyCode } : {});
+    }
+
     const { 
       date, 
       status, 
@@ -689,8 +808,6 @@ exports.getAllLeaves = async (req, res) => {
     
     const filter = {};
     
-    
-    const userCompanyId = req.user.company || req.user.companyId;
     if (!userCompanyId) {
       return res.status(400).json({
         success: false,
@@ -1288,6 +1405,15 @@ exports.updateLeaveStatus = async (req, res) => {
       });
     }
 
+    const periodEnd = getLeavePeriodEndInIst(leave.endDate);
+    if (periodEnd && new Date() > periodEnd) {
+      await autoRejectExpiredLeaves({ _id: leave._id });
+      return res.status(409).json({
+        success: false,
+        error: 'Leave period has ended without approval. This request has been automatically rejected.'
+      });
+    }
+
     if (normalizeId(getUserCompanyId(leave.user)) !== normalizeId(getUserCompanyId(currentUser))) {
       return res.status(403).json({ success: false, error: 'You cannot update another company\'s leave request.' });
     }
@@ -1820,6 +1946,7 @@ exports.getLeavesWithStatus = async (req, res) => {
 
   try {
     const userId = req.user._id;
+    await autoRejectExpiredLeaves({ user: userId });
     const { status, type, date, year, month } = req.query;
     const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 100 });
     
@@ -1989,6 +2116,7 @@ exports.getLeaveStats = async (req, res) => {
     const userId = req.user._id;
     const userRole = String(req.user.jobRole || req.user.companyRole || req.user.role || '').toLowerCase();
     const userCompanyId = getUserCompanyId(req.user);
+    await autoRejectExpiredLeaves(userCompanyId && req.user.companyCode ? { companyCode: req.user.companyCode } : { user: userId });
     const pageAccess = await getEmployeeLeavesPageAccess(userCompanyId, userId);
     const isPrivileged = ['admin', 'hr', 'manager', 'owner', 'super_admin', 'superadmin', 'company_owner'].includes(userRole) || pageAccess.hasPageAccess;
     
@@ -2626,4 +2754,5 @@ exports.exportLeaves = async (req, res) => {
   }
 };
 
+exports.autoRejectExpiredLeaves = autoRejectExpiredLeaves;
 void 0;
