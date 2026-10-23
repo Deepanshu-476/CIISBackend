@@ -5,3 +5,5 @@ uploads/
 .env
 firebase.json
 dist/
+scripts/debugExtract.js
+

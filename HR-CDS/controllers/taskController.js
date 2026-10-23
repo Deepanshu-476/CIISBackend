@@ -1724,7 +1724,7 @@ exports.getAssignedTasks = async (req, res) => {
 };
 
 const handleTaskCreation = async (req, res, isSelf) => {
-  const { title, description, dueDateTime, whatsappNumber, priorityDays, priority, assignedUsers, assignedGroups, checkpoints } = req.body;
+  const { title, description, dueDateTime, whatsappNumber, priorityDays, priority, assignedUsers, assignedGroups, checkpoints, status } = req.body;
   const companyCode = getRequestCompanyCode(req);
   let branchId = getRequestedTaskBranchId(req);
   const failTaskCreation = (status, message) => res.status(status).json({ success: false, error: message, message });
@@ -1824,7 +1824,10 @@ const handleTaskCreation = async (req, res, isSelf) => {
     if (isNaN(parsedDue.getTime())) return failTaskCreation(400, 'Invalid due date format');
   }
 
-  const statusByUser = parsedUsers.map(uid => ({ user: uid, status: 'pending' }));
+  const rawStatus = normalizeTaskStatus(status || 'pending');
+  const validStatuses = ['pending', 'in-progress', 'completed', 'approved', 'rejected', 'onhold', 'reopen', 'cancelled', 'overdue'];
+  const safeStatus = validStatuses.includes(rawStatus) ? rawStatus : 'pending';
+  const statusByUser = parsedUsers.map(uid => ({ user: uid, status: safeStatus, updatedAt: new Date() }));
   const parsedCheckpoints = parseTaskCheckpoints(checkpoints);
   const reminderSettings = normalizeTaskReminderSettings(req.body);
   const recurringSettings = isSelf ? parseRecurringSettingsFromBody(req.body) : {
@@ -1845,6 +1848,12 @@ const handleTaskCreation = async (req, res, isSelf) => {
     assignedUsers: parsedUsers,
     assignedGroups: parsedGroups,
     statusByUser,
+    overallStatus: safeStatus,
+    creatorStatus: {
+      status: safeStatus === 'completed' ? 'completed' : 'pending',
+      updatedAt: new Date(),
+    },
+    completionDate: safeStatus === 'completed' ? new Date() : null,
     checkpoints: parsedCheckpoints,
     reminderSettings,
     files,
@@ -1860,12 +1869,31 @@ const handleTaskCreation = async (req, res, isSelf) => {
     nextRecurringDate: recurringSettings.isRecurring && parsedDue
       ? getNextRecurringDate(parsedDue, recurringSettings.repeatPattern, recurringSettings.repeatDays)
       : null,
-    statusHistory: [{ status: 'pending', changedBy: req.user._id, remarks: isSelf ? 'Self task created' : 'Task assigned to others' }]
+    statusHistory: [{ status: safeStatus, changedBy: req.user._id, remarks: isSelf ? `Self task created with status: ${safeStatus}` : `Task assigned to others with status: ${safeStatus}` }]
   });
 
   await task.populate('assignedUsers', TASK_USER_POPULATE_FIELDS);
   await task.populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS);
   await task.populate('createdBy', TASK_CREATOR_POPULATE_FIELDS);
+
+  if (global.io) {
+    if (isSelf) {
+      const creatorId = String(req.user?._id || task.createdBy?._id || task.createdBy);
+      if (creatorId) {
+        global.io.to('user:' + creatorId).emit('task:new', task);
+      }
+    } else {
+      const assignees = task.assignedUsers || [];
+      const recipientIds = new Set();
+      for (const u of assignees) {
+        const uid = String(u?._id || u?.id || u);
+        if (uid) recipientIds.add(uid);
+      }
+      for (const assigneeId of recipientIds) {
+        global.io.to('user:' + assigneeId).emit('task:new', task);
+      }
+    }
+  }
 
   if (isSelf && task.isRecurring) {
     try {
@@ -3703,6 +3731,8 @@ exports.updateTaskReminder = async (req, res) => {
     return res.status(500).json({ success: false, error: err.message });
   }
 };
+
+exports.getAdminTaskPageScope = getAdminTaskPageScope;
 
 module.exports = exports;
 void 0;
