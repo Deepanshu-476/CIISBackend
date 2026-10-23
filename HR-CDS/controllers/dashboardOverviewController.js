@@ -181,11 +181,21 @@ const mapAlertRow = (alert) => {
   };
 };
 
+const overviewCache = new Map();
+const OVERVIEW_TTL = 60000;
+
 exports.getDashboardOverview = async (req, res) => {
   try {
     const user = req.user;
     const companyCode = String(user.companyCode || user.company?.companyCode || '').trim();
     if (!companyCode) return res.status(400).json({ success: false, message: 'Company context is missing' });
+
+    const cacheKey = `${companyCode}_${user._id || user.id}_${req.query.variant || ''}`;
+    const cached = overviewCache.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp < OVERVIEW_TTL)) {
+      return res.json(cached.payload);
+    }
+
     const companyId = user.company?._id || user.company;
     const company = await Company.findById(companyId).select('allowedPages isActive').lean();
     if (!company) return res.status(403).json({ success: false, message: 'Company access is not available' });
@@ -228,14 +238,14 @@ exports.getDashboardOverview = async (req, res) => {
       .map(person => mapAbsentRow(person, attendanceByUserId.get(String(person._id)) || null));
 
     const [pendingLeavesCount, pendingAssetsCount, unseenAlerts, tasks, pendingLeaves, pendingAssets, alertRows] = await Promise.all([
-      Leave.countDocuments({ companyCode, user: { $in: employeeUserIds }, status: { $regex: /^pending$/i } }),
+      Leave.countDocuments({ companyCode, user: { $in: employeeUserIds }, status: { $in: ['pending', 'Pending', 'PENDING'] } }),
       AssetRequest.countDocuments({ companyCode, user: { $in: employeeUserIds }, status: 'pending' }),
       Alert.countDocuments({ companyCode, readBy: { $ne: user._id } }),
       Task.find({ companyCode, isActive: { $ne: false }, assignedUsers: { $in: presentUserIds } })
         .sort({ lastActivityAt: -1, updatedAt: -1 }).limit(300)
         .select('title description assignedUsers statusByUser overallStatus lastActivityAt updatedAt').lean()
         ,
-      Leave.find({ companyCode, user: { $in: employeeUserIds }, status: { $regex: /^pending$/i } })
+      Leave.find({ companyCode, user: { $in: employeeUserIds }, status: { $in: ['pending', 'Pending', 'PENDING'] } })
         .sort({ createdAt: -1 })
         .limit(25)
         .populate({
@@ -283,7 +293,7 @@ exports.getDashboardOverview = async (req, res) => {
     const totalPresent = presentUsers.length;
     const totalAbsent = Math.max(0, totalUsers - totalPresent);
     const attendanceRate = totalUsers > 0 ? Math.round((totalPresent / totalUsers) * 100) : 0;
-    return res.json({ success: true, data: {
+    const payload = { success: true, data: {
       date: start.toISOString(),
       variant: access.variant,
       metrics: {
@@ -307,7 +317,9 @@ exports.getDashboardOverview = async (req, res) => {
       alerts: alertRows.map(mapAlertRow),
       clock: currentAttendance,
       taskManagementAvailable: Array.isArray(company?.allowedPages) ? company.allowedPages.length === 0 || company.allowedPages.some(item => normalize(item).includes('task-management')) : true
-    }});
+    }};
+    overviewCache.set(cacheKey, { timestamp: Date.now(), payload });
+    return res.json(payload);
   } catch (error) {
     console.error('Dashboard overview error:', error);
     return res.status(500).json({ success: false, message: 'Unable to load dashboard overview' });
