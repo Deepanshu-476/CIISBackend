@@ -151,6 +151,10 @@ ProjectSchema.index({ status: 1 });
 ProjectSchema.index({ priority: 1 });
 ProjectSchema.index({ createdBy: 1 });
 ProjectSchema.index({ 'tasks.assignedTo': 1 });
+ProjectSchema.index({ 'tasks.assignedUsers': 1 });
+ProjectSchema.index({ users: 1 });
+ProjectSchema.index({ company: 1, status: 1 });
+ProjectSchema.index({ companyCode: 1, status: 1 });
 
  
 ProjectSchema.pre('save', function(next) {

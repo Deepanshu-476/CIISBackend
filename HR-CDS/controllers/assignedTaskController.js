@@ -57,6 +57,7 @@ const fetchAssignedToMeTaskList = async (req) => {
       { assignedGroups: { $in: groupIds } }
     ]
   })
+    .select('-remarks -statusHistory')
     .populate('assignedUsers', TASK_USER_POPULATE_FIELDS)
     .populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS)
     .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
@@ -361,6 +362,7 @@ exports.getAssignedTasks = async (req, res) => {
       taskFor: 'others',
       isActive: true
     })
+      .select('-remarks -statusHistory')
       .populate('assignedUsers', TASK_USER_POPULATE_FIELDS)
       .populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS)
       .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
