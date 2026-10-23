@@ -217,7 +217,7 @@ const sanitizeUserRecordForList = (userObj = {}, req = {}) => {
   if (requesterId && targetId && requesterId === targetId) {
     return userObj;
   }
-  if (includeSensitive && isPrivilegedPiiViewer(req?.user)) {
+  if (req?.allowSensitiveEmployeeDetails === true || (includeSensitive && isPrivilegedPiiViewer(req?.user))) {
     return userObj;
   }
   const cloned = { ...userObj };
@@ -232,6 +232,27 @@ const sanitizeUserRecordForList = (userObj = {}, req = {}) => {
     cloned.additionalDetails = safeAdditional;
   }
   return cloned;
+};
+
+const canViewSensitiveEmployeeDetails = async (user = {}) => {
+  const companyId = user.company?._id || user.company || user.companyId;
+  const userId = user._id || user.id;
+  if (!companyId || !userId) return false;
+
+  const permission = await PagePermission.findOne({
+    company: companyId,
+    $or: [
+      { path: '/ciisUser/emp-details' },
+      { pageKey: 'emp-details' }
+    ]
+  }).select('viewUsers editUsers').lean();
+
+  if (!permission) return false;
+  const targetId = String(userId);
+  return [
+    ...(permission.viewUsers || []),
+    ...(permission.editUsers || [])
+  ].some(entry => String(entry?.user || entry) === targetId);
 };
 
 const appendAndCondition = (filter, condition) => {
