@@ -151,6 +151,7 @@ const messageSchema = new mongoose.Schema(
 );
 
 messageSchema.index({ companyId: 1, conversationId: 1, createdAt: -1 });
+messageSchema.index({ companyId: 1, conversationId: 1, createdAt: -1, _id: -1 });
 messageSchema.index({ companyId: 1, conversationId: 1, sender: 1, createdAt: -1 });
 messageSchema.index({ companyId: 1, conversationId: 1, deletedForEveryone: 1, createdAt: -1 });
 messageSchema.index({ companyId: 1, sender: 1, createdAt: -1 });
