@@ -67,30 +67,44 @@ const getConversationMuteState = (conversation, userId) => {
 
 const {getUnreadCount, setReadMark} = require("../utils/unreadCount");
 
-const getLastVisibleMessage = (conversationId, userId, companyId) => Message.findOne({
-  conversationId,
-  companyId,
-  deletedFor: {$ne: userId},
-  ...activeMessageFilter(),
-})
-  .populate("sender", "name email profileImage avatar image photo")
-  .sort({createdAt: -1});
-
-const withConversationMeta = async (conversation, userId, companyId) => {
-  const plain = conversation.toObject ? conversation.toObject() : conversation;
-  const [lastMessage, unreadCount] = await Promise.all([
-    getLastVisibleMessage(plain._id, userId, companyId),
-    getUnreadCount(plain._id, userId, companyId, plain.readState || []),
+// One pair of aggregate queries for the whole list, rather than two or more
+// round trips per conversation. Read marks and per-user deletion stay respected.
+const withConversationsMeta = async (conversations, userId, companyId) => {
+  if (!conversations.length) return [];
+  const mongoose = require('mongoose');
+  const cast = value => mongoose.isValidObjectId(value) ? new mongoose.Types.ObjectId(String(value?._id || value)) : value;
+  const user = cast(userId);
+  const company = cast(companyId);
+  const plains = conversations.map(item => item.toObject ? item.toObject() : item);
+  const conversationIds = plains.map(item => cast(item._id));
+  const boundaries = plains.map(item => {
+    const mark = (item.readState || []).find(entry => String(entry.user) === String(userId))?.lastReadAt;
+    return { conversationId: cast(item._id), ...(mark ? { createdAt: { $gt: new Date(mark) } } : {}) };
+  });
+  const [lastRows, unreadRows] = await Promise.all([
+    Message.aggregate([
+      { $match: { companyId: company, conversationId: { $in: conversationIds }, deletedFor: { $ne: user }, ...activeMessageFilter() } },
+      { $sort: { conversationId: 1, createdAt: -1, _id: -1 } },
+      { $group: { _id: '$conversationId', message: { $first: '$$ROOT' } } },
+    ]),
+    Message.aggregate([
+      { $match: { companyId: company, conversationId: { $in: conversationIds },
+        sender: { $ne: user }, seenBy: { $ne: user }, deletedFor: { $ne: user }, deletedForEveryone: false,
+        ...activeMessageFilter(), $and: [{ $or: boundaries }],
+      } },
+      { $group: { _id: '$conversationId', count: { $sum: 1 } } },
+    ]),
   ]);
-
-  return {
-    ...plain,
-    readState: undefined,
-    notificationSettings: undefined,
+  const messages = await Message.populate(lastRows.map(row => row.message), {
+    path: 'sender', select: 'name email profileImage avatar image photo',
+  });
+  const lastById = new Map(messages.map(message => [String(message.conversationId), message]));
+  const unreadById = new Map(unreadRows.map(row => [String(row._id), row.count]));
+  return plains.map(plain => ({ ...plain, readState: undefined, notificationSettings: undefined,
     notificationPreference: getConversationMuteState(plain, userId),
-    lastMessage,
-    unreadCount,
-  };
+    lastMessage: lastById.get(String(plain._id)) || null,
+    unreadCount: unreadById.get(String(plain._id)) || 0,
+  }));
 };
 
 const emitUnreadCounts = async (conversation, senderId) => {
@@ -304,26 +318,37 @@ exports.getConversations = async (req, res) => {
     const query = {
       companyId: req.user.company,
       members: userId,
+      ...(req.chatEntityAccess ? require('../../utils/chatListAccess').filter(req.chatEntityAccess) : {}),
     };
-    if (before) query.updatedAt = {$lt: before};
+    query.$and = [{ $or: [
+      { isGroup: false }, { projectId: { $exists: true } },
+      { clientId: { $exists: true } }, { groupId: { $in: activeUserGroups.map(group => group._id) } },
+    ] }];
+    if (before) {
+      query.$and.push({ $or: [
+        { updatedAt: { $lt: before } },
+        ...(/^[a-f\d]{24}$/i.test(req.query.beforeId || '')
+          ? [{ updatedAt: before, _id: { $lt: req.query.beforeId } }] : []),
+      ] });
+    }
 
     const conversations = await Conversation.find(query)
       .populate("members", "name email profileImage avatar image photo companyRole isActive")
       .populate("admins", "name email profileImage avatar image photo")
-      .sort({updatedAt: -1})
+      .sort({updatedAt: -1, _id: -1})
       .limit(limit + 1);
 
     
     
     
-    const activeConversations = conversations.filter(conversation => {
+    const activeConversations = conversations.slice(0, limit).filter(conversation => {
       if (conversation.isGroup) {
         if (conversation.projectId || conversation.clientId) return true;
         if (!conversation.groupId) return false;
         return activeGroupIds.has(conversation.groupId.toString());
       } else {
         const otherMember = conversation.members.find(
-          m => m._id.toString() !== userId.toString()
+          m => m && m._id.toString() !== userId.toString()
         );
         if (otherMember && otherMember.isActive === false) {
           return false;
@@ -333,9 +358,7 @@ exports.getConversations = async (req, res) => {
     });
 
     const pageConversations = activeConversations.slice(0, limit);
-    const conversationsWithMeta = await Promise.all(
-      pageConversations.map(conversation => withConversationMeta(conversation, userId, req.user.company))
-    );
+    const conversationsWithMeta = await withConversationsMeta(pageConversations, userId, req.user.company);
     conversationsWithMeta.sort((first, second) => {
       const firstTime = new Date(first.lastMessage?.createdAt || first.updatedAt || 0).getTime();
       const secondTime = new Date(second.lastMessage?.createdAt || second.updatedAt || 0).getTime();
@@ -343,8 +366,9 @@ exports.getConversations = async (req, res) => {
       return first._id.toString().localeCompare(second._id.toString());
     });
 
-    const nextCursor = conversationsWithMeta.length
-      ? conversationsWithMeta[conversationsWithMeta.length - 1].updatedAt
+    const lastInPage = conversations[Math.min(limit, conversations.length) - 1];
+    const nextCursor = lastInPage
+      ? lastInPage.updatedAt
       : null;
 
     res.status(200).json({
@@ -352,8 +376,9 @@ exports.getConversations = async (req, res) => {
       conversations: conversationsWithMeta,
       pagination: {
         limit,
-        hasMore: activeConversations.length > limit,
+        hasMore: conversations.length > limit,
         nextCursor,
+        nextId: lastInPage?._id,
       },
     });
   } catch (error) {
@@ -391,20 +416,44 @@ exports.getConversation = async (req, res) => {
 
 exports.getCompanyGroups = async (req, res) => {
   try {
+    const userId = getUserId(req);
+    const companyId = req.user.company?._id || req.user.company;
+
     const groups = await Group.find({
-      members: getUserId(req),
+      members: userId,
       isActive: true,
     })
       .select("name description members createdBy avatar profileImage image")
       .populate("createdBy", "name email profileImage avatar image photo")
       .populate("members", "name email profileImage avatar image photo companyRole");
 
-    const projectConversations = await Conversation.find({ companyId: req.user.company, members: getUserId(req), $or: [{ projectId: { $exists: true } }, { clientId: { $exists: true } }] }).populate("members", "name email");
-    const projectGroups = await Promise.all(projectConversations.map(async conversation => ({
-      _id: conversation.clientId || conversation.projectId, clientId: conversation.clientId, projectId: conversation.projectId, groupKind: conversation.clientId ? "client" : "project", name: conversation.groupName,
-      members: conversation.members, createdBy: conversation.admins[0],
-      conversation: await withConversationMeta(conversation, getUserId(req), req.user.company),
-    })));
+    const access = req.chatEntityAccess || await require('../../utils/chatListAccess')(companyId, userId);
+
+    // Ensure all assigned client conversations are synced and up-to-date
+    const clientChatService = require('../../utils/clientChatService');
+    if (access.clients && access.clients.length > 0) {
+      await Promise.allSettled(access.clients.map(clientId => clientChatService.syncClient(clientId)));
+    }
+
+    const projectConversations = await Conversation.find({
+      companyId: companyId,
+      members: userId,
+      $and: [
+        { $or: [{ projectId: { $exists: true } }, { clientId: { $exists: true } }] },
+        require('../../utils/chatListAccess').filter(access),
+      ],
+    }).populate("members", "name email profileImage avatar image photo");
+    const projectMetadata = await withConversationsMeta(projectConversations, userId, companyId);
+    const projectGroups = projectMetadata.map(conversation => ({
+      _id: conversation.clientId || conversation.projectId,
+      clientId: conversation.clientId,
+      projectId: conversation.projectId,
+      groupKind: conversation.clientId ? "client" : "project",
+      name: conversation.groupName,
+      members: conversation.members,
+      createdBy: conversation.admins[0],
+      conversation,
+    }));
     res.status(200).json({success: true, groups: [...groups, ...projectGroups]});
   } catch (error) {
     res.status(500).json({success: false, message: error.message});

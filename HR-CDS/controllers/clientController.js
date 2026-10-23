@@ -16,6 +16,7 @@ const multer = require('multer');
 const path = require('path');
 const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
 const { isSuperAdminUser } = require('../../middleware/authMiddleware');
+const { syncClient } = require('../utils/clientChatService');
 
 
 const DEFAULT_CLIENT_DEPARTMENT_ID = '69ae555c9a1e47e80a40204c';
@@ -1978,6 +1979,7 @@ const addClient = async (req, res) => {
     );
 
     await session.commitTransaction();
+    syncClient(newClient._id).catch(err => console.error('Error syncing client chat on addClient:', err));
     if (!reusableClientUser && req.body?.sendWelcomeEmail !== false) {
       sendWelcomeEmail(cleanEmail, cleanClientName, cleanCompanyName, autoPassword, cleanCompanyCode)
         .then(result => {
@@ -2290,6 +2292,9 @@ const updateClient = async (req, res) => {
 
     void 0;
     void 0;
+    if (updatedClient?._id) {
+      syncClient(updatedClient._id).catch(err => console.error('Error syncing client chat on updateClient:', err));
+    }
     
     res.json({
       success: true,
@@ -2489,6 +2494,7 @@ const addProjectManager = async (req, res) => {
     }
 
     await client.addProjectManager(managerName);
+    syncClient(client._id).catch(err => console.error('Error syncing client chat on addProjectManager:', err));
 
     res.json({
       success: true,
@@ -2520,6 +2526,7 @@ const removeProjectManager = async (req, res) => {
     }
 
     await client.removeProjectManager(managerName);
+    syncClient(client._id).catch(err => console.error('Error syncing client chat on removeProjectManager:', err));
 
     res.json({
       success: true,

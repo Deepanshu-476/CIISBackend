@@ -14,7 +14,11 @@ async function resolveCompany(project) {
 }
 
 async function syncProject(project) {
-  project = await projects().findById(project._id).lean();
+  if (!project.projectName || !project.tasks) {
+    project = await projects().findById(project._id || project)
+      .select('projectName company companyCode createdBy users managers tasks.assignedTo tasks.assignedUsers __v')
+      .lean();
+  }
   if (!project) return null;
   const companyId = await resolveCompany(project);
   if (!companyId) throw new Error('Project has no resolvable company');
@@ -38,11 +42,18 @@ async function syncProject(project) {
   }
   // Revoke already joined rooms, including sockets connected on another worker.
   if (global.io) {
-    const sockets = await global.io.in(`conversation:${conversation._id}`).fetchSockets();
-    for (const socket of sockets) {
-      if (!conversation.members.some(member => id(member) === id(socket.userId || socket.data?.userId))) {
-        socket.leave(`conversation:${conversation._id}`);
+    try {
+      const sockets = await Promise.race([
+        global.io.in(`conversation:${conversation._id}`).fetchSockets(),
+        new Promise(resolve => setTimeout(() => resolve([]), 2000))
+      ]);
+      for (const socket of sockets) {
+        if (!conversation.members.some(member => id(member) === id(socket.userId || socket.data?.userId))) {
+          socket.leave(`conversation:${conversation._id}`);
+        }
       }
+    } catch (sockErr) {
+      console.warn('[project-chat] fetchSockets error:', sockErr.message);
     }
   }
   if (!previous || previous.groupName !== conversation.groupName || previous.members.map(id).sort().join() !== members.map(id).sort().join()) {
@@ -128,7 +139,10 @@ async function deliverEvent(project, conversation, event) {
 }
 
 async function syncAndDrain(projectId) {
-  const project = await projects().findById(projectId).select('+chatOutbox').lean();
+  const project = await projects().findById(projectId)
+    .select('projectName company companyCode createdBy users managers tasks.assignedTo tasks.assignedUsers chatOutbox __v')
+    .select('+chatOutbox')
+    .lean();
   if (!project) return;
   const conversation = await syncProject(project);
   if (!conversation) return;

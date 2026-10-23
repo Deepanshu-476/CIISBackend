@@ -716,7 +716,7 @@ exports.getAllCompanies = async (req, res) => {
       Company.find(filter)
       .select(
         "_id companyName companyEmail companyAddress companyPhone ownerName logo companyDomain loginToken isActive deactivatedAt subscriptionExpiry createdAt updatedAt companyCode dbIdentifier loginUrl"
-          + " allowedPages allowedSuperAdminPages accessConfiguredAt accessUpdatedBy selectedPlan subscriptionPlan subscriptionAmount subscriptionPaymentStatus subscriptionPayments planDurationDays planFeatures"
+          + " allowedPages allowedSuperAdminPages moduleDashboardConfig accessConfiguredAt accessUpdatedBy selectedPlan subscriptionPlan subscriptionAmount subscriptionPaymentStatus subscriptionPayments planDurationDays planFeatures"
       )
       .populate("selectedPlan", "name price durationDays features allowedPages allowedSuperAdminPages")
         .sort({ createdAt: -1 })
@@ -1299,6 +1299,10 @@ exports.updateCompanyAccess = async (req, res) => {
 
     if (updatedBy && isValidObjectId(updatedBy)) {
       updateData.accessUpdatedBy = updatedBy;
+    }
+
+    if (req.body.moduleDashboardConfig && typeof req.body.moduleDashboardConfig === "object") {
+      updateData.moduleDashboardConfig = req.body.moduleDashboardConfig;
     }
 
     const company = await Company.findByIdAndUpdate(
