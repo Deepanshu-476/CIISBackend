@@ -1227,6 +1227,8 @@ app.use("/api/client-tasks", require("./HR-CDS/routes/clientTask.js"));
 
 
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/dashboard-overview', require("./routes/dashboardOverviewRoutes.js"));
+app.use('/api/company/dashboard-overview', require("./routes/dashboardOverviewRoutes.js"));
 
 app.use('/api/menu-access', require("./routes/menuAccess.js"));
 app.use('/api/menu-items', require("./routes/menuItems.js"));
@@ -1442,3 +1444,5 @@ server.on("error", (err) => {
     console.error("Server error:", err);
   }
 });
+// Dashboard overview system active
+

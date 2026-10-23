@@ -40,12 +40,14 @@ module.exports = function projectChatPlugin(schema) {
       if (events.length) { update.$push ||= {}; update.$push.chatOutbox = { $each: events }; }
       this._chatProjectId = previous._id;
     });
-    schema.post(operation, async function(result) {
+    schema.post(operation, function(result) {
       if (!this._chatProjectId || (result?.matchedCount === 0)) return;
-      await deliver(this._chatProjectId);
+      deliver(this._chatProjectId);
     });
   }
-  schema.post('save', async function(doc) { await deliver(doc._id); });
+  schema.post('save', function(doc) {
+    if (doc?._id) deliver(doc._id);
+  });
   schema.post('deleteOne', { document: true, query: false }, async function() {
     try {
       const service = require('./projectChatService');
