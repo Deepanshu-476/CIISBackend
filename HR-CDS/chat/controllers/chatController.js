@@ -67,8 +67,8 @@ const getConversationMuteState = (conversation, userId) => {
 
 const {getUnreadCount, setReadMark} = require("../utils/unreadCount");
 
-// One pair of aggregate queries for the whole list, rather than two or more
-// round trips per conversation. Read marks and per-user deletion stay respected.
+// Fetch previews with an indexed, limited lookup per conversation instead of
+// sorting the full message history. Count unread messages in one batch.
 const withConversationsMeta = async (conversations, userId, companyId) => {
   if (!conversations.length) return [];
   const mongoose = require('mongoose');
@@ -82,10 +82,21 @@ const withConversationsMeta = async (conversations, userId, companyId) => {
     return { conversationId: cast(item._id), ...(mark ? { createdAt: { $gt: new Date(mark) } } : {}) };
   });
   const [lastRows, unreadRows] = await Promise.all([
-    Message.aggregate([
-      { $match: { companyId: company, conversationId: { $in: conversationIds }, deletedFor: { $ne: user }, ...activeMessageFilter() } },
-      { $sort: { conversationId: 1, createdAt: -1, _id: -1 } },
-      { $group: { _id: '$conversationId', message: { $first: '$$ROOT' } } },
+    Conversation.aggregate([
+      { $match: { _id: { $in: conversationIds }, companyId: company } },
+      { $lookup: {
+        from: Message.collection.name,
+        let: { conversation: '$_id' },
+        pipeline: [
+          { $match: { companyId: company, deletedFor: { $ne: user }, ...activeMessageFilter(),
+            $expr: { $eq: ['$conversationId', '$$conversation'] } } },
+          { $sort: { createdAt: -1, _id: -1 } },
+          { $limit: 1 },
+        ],
+        as: 'message',
+      } },
+      { $unwind: '$message' },
+      { $project: { message: 1 } },
     ]),
     Message.aggregate([
       { $match: { companyId: company, conversationId: { $in: conversationIds },
