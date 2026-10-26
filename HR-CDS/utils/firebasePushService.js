@@ -164,7 +164,7 @@ exports.sendPushToUsers = async ({userIds, title, body, data = {}}) => {
   let devices = await Device.find({
     userId: {$in: ids},
     deviceToken: {$exists: true, $ne: ''},
-  }).select('deviceToken userId');
+  }).select('deviceToken userId platform');
 
   if (!devices.length) {
     const recipientUsers = await User.find({_id: {$in: ids}})
@@ -183,7 +183,7 @@ exports.sendPushToUsers = async ({userIds, title, body, data = {}}) => {
       devices = await Device.find({
         userId: {$in: relatedUserIds},
         deviceToken: {$exists: true, $ne: ''},
-      }).select('deviceToken userId');
+      }).select('deviceToken userId platform');
 
       logPushDebug('devices:fallback-same-email-lookup', {
         requestedUserIds: ids,
@@ -223,6 +223,7 @@ exports.sendPushToUsers = async ({userIds, title, body, data = {}}) => {
   });
 
   const tokens = [...new Set(devices.map(device => device.deviceToken).filter(Boolean))];
+  const platformByToken = new Map(devices.map(device => [device.deviceToken, device.platform]));
   if (!tokens.length) {
     const recentDevices = await Device.find({})
       .sort({updatedAt: -1, createdAt: -1})
@@ -299,6 +300,18 @@ exports.sendPushToUsers = async ({userIds, title, body, data = {}}) => {
         const response = await admin.messaging().sendEachForMulticast(message);
         totalSent += response.successCount || 0;
         totalFailed += response.failureCount || 0;
+
+        // Always record why a delivery failed: iOS-only failures (e.g. messaging/third-party-auth-error when
+        // the APNs key in Firebase is missing or wrong) were otherwise invisible.
+        if (response.failureCount) {
+          const failures = {};
+          (response.responses || []).forEach((result, index) => {
+            if (result.success) return;
+            const key = `${platformByToken.get(batchTokens[index]) || 'unknown'}:${result.error?.code || 'error'}`;
+            failures[key] = (failures[key] || 0) + 1;
+          });
+          console.warn('[FCM] delivery failures', JSON.stringify({ type: data.type || '', failures }));
+        }
 
         logPushDebug('firebase:batch-result', {
           batchIndex: b,
