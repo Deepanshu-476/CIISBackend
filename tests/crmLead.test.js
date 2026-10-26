@@ -7,14 +7,14 @@ const validator = require('validator');
 const company = '507f1f77bcf86cd799439010';
 const id = '507f1f77bcf86cd799439011';
 const body = { fullName:' Test Client ', email:'CLIENT@example.com', phone:'9876543210', gender:'Female', leadDate:'2026-09-15', leadType:id, leadSource:id, customField1:'One', customField2:'Two', customField3:'Three', customField4:'Four', customField5:'Five', remarks:'Notes' };
-function load({ active=true, create=async data=>data }={}) {
+function load({ active=true, create=async data=>data, existing=null }={}) {
   const module={exports:{}};
   vm.runInNewContext(fs.readFileSync(require.resolve('../controllers/crmLeadController'),'utf8'),{
     module, exports:module.exports,
     require(name){
       if(name==='mongoose')return mongoose;
       if(name==='validator')return validator;
-      if(name==='../models/Lead')return {create};
+      if(name==='../models/Lead')return {create, findOne:filter=>({select:()=>({lean:async()=>{assert.equal(filter.company,company);return existing;}})})};
       return {findOne:filter=>{assert.equal(filter.company,company);assert.equal(filter.status,'Active');return {lean:async()=>active?{name:'Website'}:null};}};
     }
   });
@@ -203,4 +203,12 @@ test('assign updates assignedTo and assignedAt or unassigns when userId is empty
   await ctl.exports.assign({ params: { id }, body: { userId: null }, crmCompany: company }, unassignRes, error => { throw error; });
   assert.equal(unassignRes.code, 200);
   assert.ok(unassignRes.body.message.includes('unassigned'));
+});
+
+test('rejects a lead whose phone or email already exists in the company (same rule as Excel import)',async()=>{
+  const res=response();
+  await load({existing:{name:'Old Lead',phone:body.phone,email:'other@example.com'},create:()=>assert.fail('Must not save')})
+    .create({body,crmCompany:company,user:{id}},res,error=>{throw error;});
+  assert.equal(res.code,409);
+  assert.match(res.body.errors.phone,/already used by lead "Old Lead"/);
 });

@@ -78,6 +78,15 @@ exports.create = async (req, res, next) => {
     if (!type) errors.leadType = 'This lead type is unavailable or inactive. Select an active type.';
     if (!source) errors.leadSource = 'This lead source is unavailable or inactive. Select an active source.';
     if (Object.keys(errors).length) return res.status(400).json({ message: 'Please update the lead classification.', errors });
+    // Same rule as the Excel import (leadTransferService): phone or email already used in this company.
+    const existing = await Lead.findOne({ company, $or: [{ phone: data.phone }, { email: data.email }] }).select('name phone email').lean();
+    if (existing) {
+      const field = existing.phone === data.phone ? 'phone' : 'email';
+      return res.status(409).json({
+        message: `A lead with this ${field} already exists (${existing.name || 'existing lead'}).`,
+        errors: { [field]: `This ${field} is already used by lead "${existing.name || 'existing lead'}".` }
+      });
+    }
     const item = await Lead.create({
       ...data,
       company,

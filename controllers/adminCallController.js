@@ -280,7 +280,8 @@ const buildOverview = async (company) => {
     FollowUp.countDocuments({ company, status: 'pending' }),
     Lead.countDocuments({ company, status: 'converted' }),
     Lead.countDocuments({ company, assignedTo: { $ne: null }, status: { $in: ['new', 'follow-up'] } }),
-    Lead.countDocuments({ company, nextFollowUp: { $gt: now } }),
+    // Same filter as the Scheduled Calls list this card opens (overdue callbacks included).
+    Lead.countDocuments({ company, nextFollowUp: { $ne: null } }),
     Lead.countDocuments({ company, status: { $in: ['converted', 'closed'] } }),
     CallLog.countDocuments({ company }),
     CallLog.find({ company })
