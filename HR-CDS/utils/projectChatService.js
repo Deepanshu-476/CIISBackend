@@ -85,6 +85,17 @@ async function refreshConversation(conversationId, companyId) {
   return syncProject(project);
 }
 
+// Date-only due dates arrive as UTC (or IST) midnight; showing "05:30 am" for them would be misleading.
+const formatDue = value => {
+  if (!value) return 'no due date';
+  const date = new Date(value);
+  const dateOnly = /T00:00:00(\.000)?Z$/.test(date.toISOString()) || /T18:30:00(\.000)?Z$/.test(date.toISOString());
+  return date.toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric',
+    ...(dateOnly ? {} : { hour: '2-digit', minute: '2-digit', hour12: true }),
+  });
+};
+
 function emitMembers(conversation, event, payload) {
   if (!global.io || !conversation.members.length) return;
   global.io.to(conversation.members.map(member => `user:${id(member)}`)).emit(event, payload);
@@ -104,6 +115,26 @@ async function deliverEvent(project, conversation, event) {
   if (event.type === 'task_created') text = `${actor} created task ‘${event.title}’. Assigned to: ${(event.assigned || []).map(user => names.get(id(user))).filter(Boolean).join(', ') || 'Unassigned'}.`;
   if (event.type === 'task_status_changed') text = `${actor} changed the status of ‘${event.title}’ from ${event.from} to ${event.to}.`;
   if (event.type === 'task_mentioned') text = `${actor} mentioned ${names.get(id(event.mentioned)) || 'a user'} in task ‘${event.title}’.`;
+  if (event.type === 'task_remark_added') {
+    const images = event.images ? `${event.images} image${event.images === 1 ? '' : 's'}` : '';
+    text = event.remark
+      ? `${actor} added a remark on ‘${event.title}’: “${event.remark}”${images ? ` (+${images})` : ''}`
+      : `${actor} added ${images || 'a remark'} on ‘${event.title}’.`;
+  }
+  if (event.type === 'task_priority_changed') text = `${actor} changed the priority of ‘${event.title}’ from ${event.from} to ${event.to}.`;
+  if (event.type === 'task_due_changed') text = `${actor} changed the due date of ‘${event.title}’ from ${formatDue(event.from)} to ${formatDue(event.to)}.`;
+  if (event.type === 'task_assignee_changed') {
+    const assignees = (event.assigned || []).map(user => names.get(id(user))).filter(Boolean).join(', ') || event.assigneeName || 'Unassigned';
+    text = `${actor} reassigned ‘${event.title}’. Assigned to: ${assignees}.`;
+  }
+  if (event.type === 'task_renamed') text = `${actor} renamed task ‘${event.from}’ to ‘${event.title}’.`;
+  if (event.type === 'task_description_updated') text = `${actor} updated the description of ‘${event.title}’.`;
+  if (event.type === 'task_checkpoint_added') text = `${actor} added checkpoint “${event.checkpoint}” to ‘${event.title}’.`;
+  if (event.type === 'task_checkpoint_completed') text = `${actor} completed checkpoint “${event.checkpoint}” in ‘${event.title}’.`;
+  if (event.type === 'task_checkpoint_reopened') text = `${actor} reopened checkpoint “${event.checkpoint}” in ‘${event.title}’.`;
+  if (event.type === 'task_file_added') text = `${actor} attached “${event.file}” to ‘${event.title}’.`;
+  if (event.type === 'task_file_removed') text = `${actor} removed the attachment “${event.file}” from ‘${event.title}’.`;
+  if (event.type === 'task_deleted') text = `${actor} deleted task ‘${event.title}’.`;
   if (!text) return;
   const message = await Message.findOneAndUpdate({ eventKey: event.key }, { $setOnInsert: {
     eventKey: event.key, companyId: conversation.companyId, conversationId: conversation._id,
