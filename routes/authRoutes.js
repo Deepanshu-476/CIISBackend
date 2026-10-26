@@ -93,6 +93,7 @@ router.get("/verify-email/:token", authController.verifyEmail);
 router.post("/refresh-token", authController.refreshToken);
 router.post("/refresh", authController.refreshToken);
 router.post("/logout", authController.logout); 
+router.post("/delete-account", authAttemptLimiter, require("../middleware/authMiddleware").protect, require("../controllers/accountDeletionController").requestAccountDeletion);
  
  
 router.post("/verify-login-otp", otpLimiter, authController.verifyLoginOTP);         
