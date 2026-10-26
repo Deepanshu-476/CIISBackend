@@ -979,9 +979,12 @@ const { markDailyAbsent } = require('./HR-CDS/controllers/AttendanceController')
 
 
 const { syncOnHoldTaskOverdue } = require('./HR-CDS/utils/onHoldOverdueService');
+const { autoRejectExpiredLeaves } = require('./HR-CDS/controllers/LeaveController');
 scheduleDbJob('* * * * *', 'On hold attendance overdue check', syncOnHoldTaskOverdue);
 
 scheduleDbJob('*/30 * * * *', 'Scheduled overdue tasks check', checkAndMarkOverdueTasks);
+
+scheduleDbJob('0 * * * *', 'Auto reject expired leaves', autoRejectExpiredLeaves);
 
 
 scheduleDbJob('0 9 * * *', 'Daily overdue summary', dailyOverdueSummary);
@@ -1007,6 +1010,7 @@ if (scheduledJobsEnabled()) setTimeout(async () => {
     await runDbJobOnce('Initial on hold attendance overdue check', syncOnHoldTaskOverdue);
     await runDbJobOnce('Initial past absent records check', markPastAbsentRecords);
     await runDbJobOnce('Initial auto clock-out sweep', runAutoClockOutSweep);
+    await runDbJobOnce('Initial auto reject expired leaves', autoRejectExpiredLeaves);
     
     
     try {
