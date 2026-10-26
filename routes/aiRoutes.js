@@ -8,6 +8,7 @@ const aiTaskBudget = require('../middleware/aiTaskBudget');
 const aiTimeGate = require('../middleware/aiTimeGate');
 const aiController = require('../controllers/aiController');
 const insights = require('../controllers/aiInsightsController');
+const aiExecutiveController = require('../controllers/aiExecutiveController');
 
 const aiParseLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -119,7 +120,7 @@ router.post('/transcribe', protect, aiSttLimiter, aiTaskBudget.aiSttBudget, hand
 // Employee wrap-up summary: employees ke liye 5-7 PM IST window, Owner/Admin 24/7 (aiTimeGate khud skip karta hai)
 router.get('/daily-summary', protect, aiInsightsLimiter, aiTimeGate, insights.getDailySummary);
 // CEO / Executive radar: sirf Owner/Admin (employee ko 403)
-router.get('/executive-insights', protect, restrictTo('Owner', 'Admin'), aiInsightsLimiter, insights.getExecutiveInsights);
+router.get('/executive-insights', protect, restrictTo('Owner', 'Admin'), aiExecutiveController.getExecutiveInsights);
 
 module.exports = router;
 router.handleAudioUpload = handleAudioUpload;

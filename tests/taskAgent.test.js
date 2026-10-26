@@ -420,7 +420,11 @@ describe('AI Task Agent Suite', () => {
       assert.equal(res.statusCode, 503);
       assert.equal(res.body.code, 'LLM_NOT_CONFIGURED');
     } finally {
-      process.env.GROQ_API_KEY = origKey;
+      if (origKey !== undefined) {
+        process.env.GROQ_API_KEY = origKey;
+      } else {
+        delete process.env.GROQ_API_KEY;
+      }
     }
   });
 
@@ -823,7 +827,7 @@ describe('AI Task Agent Suite', () => {
     assert.ok(!result.draft.description.toLowerCase().includes('kal'));
   });
 
-  it('21. ERROR 1: LLM schema must contain ONLY extractable fields with NO propertyNames; real Groq call succeeds without 400', async () => {
+  it('21. ERROR 1: LLM schema must contain ONLY extractable fields with NO propertyNames; real Groq call succeeds without 400', async (t) => {
     // 1. JSON Schema validation
     const jsonSchema = toJsonSchema(taskDraftSchema);
     const schemaStr = JSON.stringify(jsonSchema);
@@ -840,14 +844,18 @@ describe('AI Task Agent Suite', () => {
     assert.equal(schemaStr.includes('wantsOthers'), false, 'LLM schema must not contain wantsOthers');
 
     // 2. Real Groq extraction call to prove HTTP 400 is gone
-    if (process.env.GROQ_API_KEY) {
-      const res = await extractTaskDraft({
-        message: 'Task name Voice Assistant',
-        now: fixedNow,
-      });
-      assert.ok(res, 'extractTaskDraft must return non-null result');
-      assert.equal(res.title, 'Voice Assistant');
+    if (!process.env.GROQ_API_KEY || !process.env.GROQ_API_KEY.trim() || process.env.GROQ_API_KEY === 'undefined') {
+      t.skip('Live Groq call skipped: GROQ_API_KEY is not configured in .env');
+      return;
     }
+
+    // When key is configured, fail loudly on invalid/bad key or 400 error
+    const res = await extractTaskDraft({
+      message: 'Task name Voice Assistant',
+      now: fixedNow,
+    });
+    assert.ok(res, 'extractTaskDraft must return non-null result');
+    assert.equal(res.title, 'Voice Assistant');
   });
 
   it('22. ERROR 1: Failed LLM extraction call is logged with error code and falls back cleanly to deterministic parser slots', async () => {
