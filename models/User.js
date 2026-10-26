@@ -247,6 +247,17 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  // Set when the user deletes their own account from the app (App Store guideline 5.1.1(v)).
+  accountDeletionRequestedAt: {
+    type: Date,
+    default: null
+  },
+  accountDeletionReason: {
+    type: String,
+    trim: true,
+    maxlength: 500,
+    default: ""
+  },
   registrationSource: {
     type: String,
     enum: ["admin", "self_register"],

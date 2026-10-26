@@ -209,7 +209,8 @@ test('existing Add Lead creation and assignment still accept normal valid reques
   const saved = { _id: type, company, assignedTo: null, async save() {} };
   const populateQuery = { populate() { return this; }, async lean() { return { ...saved, assignedTo: { _id: user, name: 'Test User' } }; } };
   let created;
-  const Lead = { create: async data => { created = data; return data; }, findOne: async filter => { assert.equal(filter.company, company); return saved; }, findById: () => populateQuery };
+  // findOne is awaited directly by assign and chained (.select().lean()) by the create duplicate check.
+  const Lead = { create: async data => { created = data; return data; }, findOne: filter => { assert.equal(filter.company, company); const result = Promise.resolve(saved); result.select = () => ({ lean: async () => (filter.$or ? null : saved) }); return result; }, findById: () => populateQuery };
   const masters = { findOne: filter => { assert.equal(filter.company, company); assert.equal(filter.status, 'Active'); return { lean: async () => ({ name: 'Website' }) }; } };
   vm.runInNewContext(fs.readFileSync(require.resolve('../controllers/crmLeadController'), 'utf8'), {
     module, exports: module.exports,
