@@ -378,6 +378,14 @@ const getTaskReminderDueOptions = (task, now = new Date()) => {
   return results;
 };
 
+// app1 and app2 both run this cron against the same database. Recording the slot key first, atomically,
+// lets exactly one instance send each reminder. Raw collection writes avoid bumping __v, so a user saving
+// the same task at that moment does not hit a version conflict.
+const claimReminderSlot = async (Model, unsentFilter, keysPath, key) => {
+  const result = await Model.collection.updateOne(unsentFilter, { $addToSet: { [keysPath]: key } });
+  return result.modifiedCount === 1;
+};
+
 const sendReminderForTask = async ({ task, recipients, title, taskTitle, taskType, dueDate, reminder }) => {
   const userIds = [...new Set((recipients || []).map(user => String(user?._id || user?.id || user || '')).filter(Boolean))];
   if (!userIds.length) return 0;
@@ -397,6 +405,7 @@ const sendReminderForTask = async ({ task, recipients, title, taskTitle, taskTyp
       reminderOption: reminder.option,
     },
     priority: 'high',
+    dedupe: false,
   });
 
   return userIds.length;
@@ -681,6 +690,7 @@ const sendConfiguredTaskReminders = async () => {
       const reminderTitle = isPersonal ? 'Personal Task Reminder' : 'Task Reminder';
 
       for (const reminder of dueReminders) {
+        if (!await claimReminderSlot(Task, { _id: task._id, 'reminderSettings.sentKeys': { $ne: reminder.key } }, 'reminderSettings.sentKeys', reminder.key)) continue;
         await sendReminderForTask({
           task,
           recipients,
@@ -690,9 +700,7 @@ const sendConfiguredTaskReminders = async () => {
           dueDate: task.dueDateTime,
           reminder,
         });
-        task.reminderSettings.sentKeys = [...new Set([...(task.reminderSettings.sentKeys || []), reminder.key])];
       }
-      await task.save();
     }
 
     const clientTasks = await ClientTask.find({
@@ -702,17 +710,18 @@ const sendConfiguredTaskReminders = async () => {
       'reminderSettings.enabled': true,
     })
       .populate('assigneeId', 'name email')
-      .populate('createdBy', 'name email')
-      .select('name dueDate assigneeId createdBy reminderSettings status completed clientId __v')
+      .select('name dueDate assigneeId reminderSettings status completed clientId __v')
       .sort({ dueDate: 1 })
       .limit(MAX_CRON_TASK_BATCH_SIZE);
 
     for (const task of clientTasks) {
       const dueReminders = getTaskReminderDueOptions(task, now);
       if (!dueReminders.length) continue;
-      const recipients = task.assigneeId ? [task.assigneeId] : (task.createdBy ? [task.createdBy] : []);
+      // ClientTask has no createdBy; an unassigned client task has nobody to remind.
+      const recipients = task.assigneeId ? [task.assigneeId] : [];
       if (!recipients.length) continue;
       for (const reminder of dueReminders) {
+        if (!await claimReminderSlot(ClientTask, { _id: task._id, 'reminderSettings.sentKeys': { $ne: reminder.key } }, 'reminderSettings.sentKeys', reminder.key)) continue;
         await sendReminderForTask({
           task,
           recipients,
@@ -722,9 +731,7 @@ const sendConfiguredTaskReminders = async () => {
           dueDate: task.dueDate,
           reminder,
         });
-        task.reminderSettings.sentKeys = [...new Set([...(task.reminderSettings.sentKeys || []), reminder.key])];
       }
-      await task.save();
     }
 
     const projects = await Project.find({
@@ -737,7 +744,6 @@ const sendConfiguredTaskReminders = async () => {
       .limit(MAX_CRON_TASK_BATCH_SIZE);
 
     for (const project of projects) {
-      let changed = false;
       for (const task of project.tasks || []) {
         if (!task?.reminderSettings?.enabled || ['completed', 'cancelled', 'overdue', 'on hold'].includes(String(task.status || '').toLowerCase())) continue;
         const dueReminders = getTaskReminderDueOptions(task, now);
@@ -747,6 +753,11 @@ const sendConfiguredTaskReminders = async () => {
           : (task.assignedTo ? [task.assignedTo] : []);
         if (!recipients.length) continue;
         for (const reminder of dueReminders) {
+          const claimed = await claimReminderSlot(Project, {
+            _id: project._id,
+            tasks: { $elemMatch: { _id: task._id, 'reminderSettings.sentKeys': { $ne: reminder.key } } },
+          }, 'tasks.$.reminderSettings.sentKeys', reminder.key);
+          if (!claimed) continue;
           await sendReminderForTask({
             task,
             recipients,
@@ -756,13 +767,7 @@ const sendConfiguredTaskReminders = async () => {
             dueDate: task.dueDate,
             reminder,
           });
-          task.reminderSettings.sentKeys = [...new Set([...(task.reminderSettings.sentKeys || []), reminder.key])];
-          changed = true;
         }
-      }
-      if (changed) {
-        project.markModified('tasks');
-        await project.save();
       }
     }
   } catch (error) {

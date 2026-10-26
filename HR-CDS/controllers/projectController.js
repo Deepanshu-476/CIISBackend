@@ -2406,7 +2406,7 @@ exports.updateTaskStatus = async (req, res) => {
             from: label(oldStatus),
             to: label(nextProjectStatus)
           };
-          const conversation = await syncProject(project);
+          const conversation = event.from !== event.to && await syncProject(project);
           if (conversation) {
             await deliverEvent(project, conversation, event);
           }

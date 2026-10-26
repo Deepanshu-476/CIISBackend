@@ -200,11 +200,12 @@ const calculateUnifiedTaskStats = (tasks, userId) => {
     cancelled: 0,
     overdue: 0
   };
+  const priorities = { high: { count: 0, completed: 0 }, medium: { count: 0, completed: 0 }, low: { count: 0, completed: 0 } };
 
   tasks.forEach(task => {
     let status = 'pending';
     if (userId) {
-      const userStatusEntry = task.statusByUser?.find(s => 
+      const userStatusEntry = task.statusByUser?.find(s =>
         (s.user?._id || s.user)?.toString() === userId.toString()
       );
       status = userStatusEntry?.status || task.status || task.overallStatus || 'pending';
@@ -218,6 +219,12 @@ const calculateUnifiedTaskStats = (tasks, userId) => {
       status = 'overdue';
     }
 
+    const priority = String(task.priority || '').toLowerCase();
+    if (priorities[priority]) {
+      priorities[priority].count++;
+      if (status === 'completed' || status === 'approved') priorities[priority].completed++;
+    }
+
     if (counts[status] !== undefined) {
       counts[status]++;
     } else {
@@ -227,9 +234,13 @@ const calculateUnifiedTaskStats = (tasks, userId) => {
 
   const total = tasks.length;
   const pct = count => total > 0 ? Math.round((count / total) * 100) : 0;
+  const priorityStat = ({ count, completed }) => ({ count, completed, percentage: count > 0 ? Math.round((completed / count) * 100) : 0 });
 
   return {
     total,
+    highPriority: priorityStat(priorities.high),
+    mediumPriority: priorityStat(priorities.medium),
+    lowPriority: priorityStat(priorities.low),
     pending: { count: counts.pending, percentage: pct(counts.pending) },
     inProgress: { count: counts['in-progress'], percentage: pct(counts['in-progress']) },
     completed: { count: counts.completed, percentage: pct(counts.completed) },
@@ -564,8 +575,12 @@ const applyCleanListFilters = (tasks, req) => {
   return tasks.filter(t => {
     if (status && status !== 'all') {
       const requestedStatus = normalizeTaskStatus(status);
+      const requestedPriority = String(status).toLowerCase().replace('-priority', '');
       const taskStatus = getCleanTaskStatus(t);
-      if (requestedStatus === 'overdue') {
+      if (['high', 'medium', 'low'].includes(requestedPriority)) {
+        // Priority stat cards filter by priority, not by task status.
+        if (String(t.priority || '').toLowerCase() !== requestedPriority) return false;
+      } else if (requestedStatus === 'overdue') {
         if (taskStatus !== 'overdue') return false;
       } else if (taskStatus !== requestedStatus) {
         return false;

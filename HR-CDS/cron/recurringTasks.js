@@ -11,7 +11,8 @@ const {
   getIndiaDayRange,
 } = require('../utils/taskRecurrence');
 
-const MAX_CATCH_UP_OCCURRENCES = 20;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const RECURRENCE_HORIZON_DAYS = 7;
 
 const isRecurringTemplate = task => (
   task &&
@@ -199,7 +200,16 @@ const generateRecurringOccurrences = async (templateTask, options = {}) => {
     return { created: 0, skipped: true };
   }
 
-  let nextOccurrence = getNextRecurringDate(baseDueDate, normalized.repeatPattern, normalized.repeatDays);
+  // Only materialise copies a week ahead; the 15-minute sweep keeps extending the window.
+  // Copying a whole series up front filled task lists and "All time" counts with future work.
+  const horizon = getIndiaDayRange((options.now || new Date()).getTime() + RECURRENCE_HORIZON_DAYS * DAY_MS).end;
+  const createUntil = targetEndDate && targetEndDate < horizon ? targetEndDate : horizon;
+
+  // Resume after the newest copy so long series keep going past maxOccurrences.
+  const latest = await Task.findOne({ recurrenceSourceId: templateTask._id })
+    .sort({ dueDateTime: -1 }).select('dueDateTime').lean();
+  const resumeFrom = latest?.dueDateTime && latest.dueDateTime > baseDueDate ? latest.dueDateTime : baseDueDate;
+  let nextOccurrence = getNextRecurringDate(resumeFrom, normalized.repeatPattern, normalized.repeatDays);
   if (!nextOccurrence) {
     return { created: 0, skipped: true };
   }
@@ -209,7 +219,7 @@ const generateRecurringOccurrences = async (templateTask, options = {}) => {
 
   while (
     nextOccurrence &&
-    (!targetEndDate || !isAfterRecurringEndDate(nextOccurrence, targetEndDate)) &&
+    !isAfterRecurringEndDate(nextOccurrence, createUntil) &&
     iterations < maxOccurrences
   ) {
     const result = await createOccurrenceIfMissing(templateTask, nextOccurrence, options);
