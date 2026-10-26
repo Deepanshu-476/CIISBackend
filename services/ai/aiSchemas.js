@@ -104,6 +104,33 @@ const parseRequestSchema = z.object({
   message: 'Either message, action or pick must be provided',
 });
 
+// -------------------------------------------------------------
+// EXECUTIVE RADAR NARRATIVE SCHEMA (Phase 5 CEO Insights)
+// Strict schema: McKinsey-style advisory report
+// -------------------------------------------------------------
+const executiveNarrativeSchema = z.object({
+  headline: z.string().describe('One crisp, high-impact executive headline summarizing workforce velocity and operational health'),
+  keyFindings: z.array(z.object({
+    title: z.string().describe('Concise title for this finding'),
+    insight: z.string().describe('Analytical interpretation of the pattern'),
+    evidenceRef: z.string().describe('Exact raw numbers cited as proof from the input metrics, e.g. "Overdue tasks: 34", "On-time: 93.6%"'),
+  })).max(5).describe('Top 3 to 5 critical operational findings with quantitative proof'),
+  criticalAlerts: z.array(z.object({
+    bottleneckId: z.string().describe('Exact ID matching a bottleneck from input bottlenecks list, e.g. "dept_sla_...", "company_overdue_high"'),
+    severity: z.enum(['critical', 'warning', 'info']).describe('Urgency level'),
+    title: z.string().describe('Alert title'),
+    action: z.string().describe('Immediate leadership intervention or corrective action required'),
+  })).max(5).describe('Urgent bottlenecks requiring executive intervention'),
+  workshopProposals: z.array(z.object({
+    title: z.string().describe('Targeted workshop or training program title'),
+    targetTeam: z.string().describe('Target department or team'),
+    reason: z.string().describe('Quantitative justification based on bottlenecks or SLA lag'),
+    durationHours: z.number().default(2).describe('Proposed duration in hours'),
+    suggestedTopics: z.array(z.string()).default([]).describe('Concrete curriculum bullet points'),
+  })).max(3).describe('1 to 3 targeted capability-building workshops'),
+  next30DaysPlan: z.array(z.string()).max(5).describe('3 to 5 clear tactical milestones for leadership to track over the next 30 days'),
+});
+
 module.exports = {
   taskDraftSchema,
   serverSideDraftSchema,
@@ -111,4 +138,5 @@ module.exports = {
   actionSchema,
   pickInputSchema,
   parseRequestSchema,
+  executiveNarrativeSchema,
 };
