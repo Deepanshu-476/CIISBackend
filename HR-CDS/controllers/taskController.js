@@ -24,6 +24,7 @@ const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagin
 const {
   normalizeTaskRecurrenceFields,
   getNextRecurringDate,
+  validateRecurrenceSettings,
 } = require('../utils/taskRecurrence');
 const { normalizeTaskReminderSettings } = require('../utils/taskReminderSettings');
 const {
@@ -2125,6 +2126,8 @@ const handleTaskCreation = async (req, res, isSelf) => {
     repeatDays: [],
     isRecurring: false,
   };
+  const recurrenceError = validateRecurrenceSettings(recurringSettings, parsedDue);
+  if (recurrenceError) return res.status(400).json({ success: false, error: recurrenceError, message: recurrenceError });
 
   const task = await Task.create({
     title,
@@ -2247,6 +2250,8 @@ exports.updateTask = async (req, res) => {
       .some(field => Object.prototype.hasOwnProperty.call(req.body, field));
     if (hasRecurringUpdate) {
       applyRecurringFields(task, req.body, task.dueDateTime);
+      const recurrenceError = !task.recurrenceSourceId && validateRecurrenceSettings(task, task.dueDateTime);
+      if (recurrenceError) return res.status(400).json({ success: false, error: recurrenceError, message: recurrenceError });
     } else if (
       task.isRecurring &&
       Object.prototype.hasOwnProperty.call(req.body, 'dueDateTime') &&

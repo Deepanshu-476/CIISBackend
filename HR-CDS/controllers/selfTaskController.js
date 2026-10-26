@@ -30,6 +30,7 @@ const { enqueueCompletionJob } = require('../utils/backgroundJobQueue');
 const {
   normalizeTaskRecurrenceFields,
   getNextRecurringDate,
+  validateRecurrenceSettings,
 } = require('../utils/taskRecurrence');
 const {
   resolveShiftScheduleForUser,
@@ -186,6 +187,8 @@ exports.createTaskForSelf = async (req, res) => {
         taskDueDateTime = parsedDue;
       }
     }
+    const recurrenceError = validateRecurrenceSettings(recurringSettings, taskDueDateTime);
+    if (recurrenceError) return res.status(400).json({ success: false, error: recurrenceError, message: recurrenceError });
 
     const cleanPriority = String(priority || 'medium').trim().toLowerCase();
     const validPriorities = ['low', 'medium', 'high'];
@@ -294,6 +297,8 @@ exports.updateTask = async (req, res) => {
       .some(field => Object.prototype.hasOwnProperty.call(req.body, field));
     if (hasRecurringUpdate) {
       applyRecurringFields(task, req.body, task.dueDateTime);
+      const recurrenceError = !task.recurrenceSourceId && validateRecurrenceSettings(task, task.dueDateTime);
+      if (recurrenceError) return res.status(400).json({ success: false, error: recurrenceError, message: recurrenceError });
     } else if (
       task.isRecurring &&
       Object.prototype.hasOwnProperty.call(req.body, 'dueDateTime') &&
