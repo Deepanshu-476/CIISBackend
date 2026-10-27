@@ -1,6 +1,6 @@
-const { taskDraftSchema } = require('./aiSchemas');
+const { taskDraftSchema, getSchemaForIntent } = require('./aiSchemas');
 const { getModel } = require('./llm');
-const { parseHinglishSlots, applyTitleFallback, isSkip, isSkipAll, isInitiationPhrase } = require('./hinglishParser');
+const { parseHinglishSlots, applyTitleFallback, isInvalidOrCommandTitle, isSkip, isSkipAll, isInitiationPhrase } = require('./hinglishParser');
 const { consumeTaskBudget } = require('../../middleware/aiTaskBudget');
 
 const INDIA_OFFSET_MS = 5.5 * 60 * 60 * 1000;
@@ -38,6 +38,7 @@ function mergeDraft(previous = {}, extracted = {}, deterministic = {}, rawMessag
 
   // Title: LLM wins unless empty, else deterministic wins, else title fallback
   let title = null;
+  const candidateAssignee = ext.assigneeName || det.assigneeName || prev.assigneeName || '';
   if (ext.title !== null && ext.title !== undefined && String(ext.title).trim() !== '') {
     title = String(ext.title).trim();
   } else if (det.title !== null && det.title !== undefined && String(det.title).trim() !== '') {
@@ -46,6 +47,10 @@ function mergeDraft(previous = {}, extracted = {}, deterministic = {}, rawMessag
     title = String(prev.title).trim();
   } else {
     title = applyTitleFallback(null, rawMessage);
+  }
+
+  if (title && isInvalidOrCommandTitle(title, rawMessage, candidateAssignee)) {
+    title = null;
   }
 
   // Description: LLM wins unless empty, else deterministic wins, else previous
@@ -111,7 +116,7 @@ function mergeDraft(previous = {}, extracted = {}, deterministic = {}, rawMessag
   const repeatDays = ext.repeatDays || prev.repeatDays || [];
   const recurrenceEndDate = ext.recurrenceEndDate || prev.recurrenceEndDate || null;
 
-  // Assignee
+  // Assignee: never overwrite a resolved assigneeId with null from a subsequent merge/turn
   let assigneeName = prev.assigneeName || null;
   let assigneeId = prev.assigneeId || null;
   let assigneeLabel = prev.assigneeLabel || null;
@@ -122,24 +127,41 @@ function mergeDraft(previous = {}, extracted = {}, deterministic = {}, rawMessag
     const cleanPrevName = prev.assigneeName ? String(prev.assigneeName).trim() : '';
 
     if (cleanExtName && cleanExtName.toLowerCase() !== cleanPrevName.toLowerCase()) {
-      assigneeName = cleanExtName;
-      assigneeId = null;
-      assigneeLabel = null;
+      // If we already have a resolved assigneeId, do NOT drop it unless explicitly reassigning
+      const isExplicitReassign = /\b(?:assign|kisko|kiske\s*liye|ko\s*assign)\b/i.test(rawMessage);
+      if (!prev.assigneeId || isExplicitReassign) {
+        assigneeName = cleanExtName;
+        assigneeId = null;
+        assigneeLabel = null;
+      }
     } else if (cleanExtName) {
       assigneeName = cleanExtName;
     }
   }
 
-  const taskFor = prev.taskFor || 'self';
-  const wantsOthers = Boolean(prev.wantsOthers);
+  let taskFor = prev.taskFor || 'self';
+  let wantsOthers = Boolean(prev.wantsOthers);
+  if (prev.intent === 'task_project' || prev.projectId || prev.taskFor === 'project') {
+    taskFor = 'project';
+  } else if (assigneeName || rawExtAssignee) {
+    taskFor = 'others';
+    wantsOthers = true;
+  }
   const askCounts = typeof prev.askCounts === 'object' && prev.askCounts ? { ...prev.askCounts } : {};
   const skipped = Array.isArray(prev.skipped) ? [...prev.skipped] : [];
   const asked = Array.isArray(prev.asked) ? [...prev.asked] : [];
   const attachmentsCount = typeof prev.attachmentsCount === 'number' ? prev.attachmentsCount : 0;
 
+  const projectName = det.projectName || ext.projectName || prev.projectName || null;
+  const projectId = prev.projectId || null;
+  const dueDate = det.dueDate || ext.dueDate || prev.dueDate || dueDateTime || null;
+
   return {
+    projectName,
+    projectId,
     title,
     description,
+    dueDate,
     dueDateTime,
     priority,
     status,
@@ -307,16 +329,21 @@ function normaliseExtracted(data, message = '') {
   }
 
   let status = null;
-  if (data?.status && ['pending', 'in-progress', 'completed', 'approved', 'rejected', 'onhold', 'reopen', 'cancelled', 'overdue'].includes(data.status)) {
+  if (data?.status && ['pending', 'in-progress', 'completed', 'approved', 'rejected', 'onhold', 'reopen', 'cancelled', 'overdue', 'in progress', 'on hold'].includes(data.status)) {
     status = data.status;
   }
 
+  const projectName = typeof data?.projectName === 'string' && data.projectName.trim() ? data.projectName.trim() : null;
+  const dueDate = data?.dueDate || dueDateTime || null;
+
   return {
+    projectName,
     title,
     description,
     checkpoints,
     priority: data?.priority || null,
     status,
+    dueDate,
     dueDateTime,
     assigneeName,
     reminder,
@@ -359,9 +386,10 @@ function restoreEnglishTechnicalTerms(text) {
   return result;
 }
 
-async function extractTaskDraft({ message, now = new Date(), previousDraft = null, model = null, req = null }) {
+async function extractTaskDraft({ message, now = new Date(), previousDraft = null, model = null, req = null, intent = null, canAssignOthers = false }) {
   const llm = model || getModel({ temperature: 0, maxTokens: 1500 });
-  const structuredLlm = llm.withStructuredOutput(taskDraftSchema, { name: 'task_draft' });
+  const schema = intent && getSchemaForIntent ? getSchemaForIntent(intent, canAssignOthers) : taskDraftSchema;
+  const structuredLlm = llm.withStructuredOutput(schema, { name: 'task_draft' });
   const ref = formatIstReference(now);
   const tomorrowIst = new Date(now.getTime() + INDIA_OFFSET_MS + 24 * 60 * 60 * 1000);
   const pad = n => String(n).padStart(2, '0');
@@ -521,7 +549,7 @@ Output:
     }
   }
 
-  const parsed = taskDraftSchema.safeParse(rawResult);
+  const parsed = (schema || taskDraftSchema).safeParse(rawResult);
   if (!parsed.success) {
     console.error(`[ai] groq error status=none code=LLM_BAD_OUTPUT msg=schema validation failed: ${parsed.error.message.slice(0, 200)}`);
     return null;

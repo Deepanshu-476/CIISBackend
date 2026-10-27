@@ -372,4 +372,41 @@ describe('PART 1 & 2: STT Normalizer & Deterministic Intent Suite', () => {
     });
   });
 
+  describe('6. Conversational Assignee and "baki sabbha" Skip-All Extraction', () => {
+    it('exact user sentence extracts Simran as assignee, skips remaining fields on baki sabbha, and reaches ready for others', async () => {
+      const req = {
+        user: { _id: 'admin_1', company: 'comp_1', companyCode: 'IT-01', role: 'admin' },
+      };
+
+      const sentence = 'Simran core task assigned karo task ka naam CIIS network meeting description taking demo due date kal subah 11 baje, priority high, status in progress reminder every 10 minute, baki sabbha';
+
+      const result = await parseTaskRequest({
+        req,
+        message: sentence,
+      }, {
+        extractFn: async () => ({}),
+        getScopeInfo: async () => ({ hasAccess: true, isOwner: true }),
+        isAssigneeInScope: async () => true,
+        resolveAssignee: async ({ name }) => ({
+          status: 'single',
+          user: { _id: 'usr_simran_123', name: 'Simran Kaur', department: 'QA' },
+        }),
+        now: new Date('2026-10-26T10:00:00+05:30'),
+      });
+
+      assert.strictEqual(result.status, 'ready');
+      assert.strictEqual(result.draft.intent, 'task_assigned_user');
+      assert.strictEqual(result.draft.taskFor, 'others');
+      assert.strictEqual(result.draft.assigneeName, 'Simran Kaur');
+      assert.strictEqual(result.draft.assigneeId, 'usr_simran_123');
+      assert.strictEqual(result.draft.title, 'CIIS network meeting');
+      assert.strictEqual(result.draft.description, 'Taking demo');
+      assert.strictEqual(result.draft.priority, 'high');
+      assert.strictEqual(result.draft.status, 'in-progress');
+      assert.strictEqual(result.draft.reminder, true);
+      assert.strictEqual(result.draft.repeatIntervalMinutes, 10);
+      assert.strictEqual(result.payload?.endpoint, '/task/create-for-others');
+      assert.match(result.reply, /Simran Kaur ko task "CIIS network meeting" assign karne ke liye draft tayar hai/i);
+    });
+  });
 });

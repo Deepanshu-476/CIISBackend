@@ -4,10 +4,39 @@ const { getScopeInfo, isAssigneeInScope } = require('./taskScope');
 const { resolveAssignee, escapeRegex } = require('./assigneeResolver');
 const { getModelName } = require('./llm');
 const { TASK_FIELDS, TASK_FIELD_ORDER } = require('./taskFields');
-const { parseHinglishSlots, isSkip, isSkipAll, isSelfPhrase, isFillerPhrase, extractAssigneeMention } = require('./hinglishParser');
+const { parseHinglishSlots, isSkip, isSkipAll, isSelfPhrase, isFillerPhrase, extractAssigneeMention, isInvalidOrCommandTitle, cleanAssigneeName, isValidAssigneeCandidate } = require('./hinglishParser');
 const { detectUserIntent, normalizeTranscript } = require('./sttNormalizer');
 const User = require('../../models/User');
 const Department = require('../../models/Department');
+const { Project: DefaultProjectModel } = require('../../HR-CDS/models/Project');
+const {
+  resolveProject,
+  resolveProjectAssignee,
+  getAccessibleProjects,
+  buildProjectCandidateChips,
+  buildAccessibleProjectChips,
+  formatCandidateDate,
+  requiresProjectDistinguishing,
+  hasProjectAccess,
+  idsEqual,
+} = require('./projectResolver');
+
+const {
+  FORM_REGISTRY,
+  detectIntent,
+  migrateDraftBetweenIntents,
+  getIntentSlots,
+  checkIntentAccess,
+  formatHumanIstDate,
+  formatAssigneeLabel,
+  getCleanCheckpoints,
+  buildReminderPayload,
+  getReminderPreviewText,
+  formatProjectPriority,
+  formatProjectStatus,
+  PROJECT_STATUS_LABELS,
+  STATUS_LABELS,
+} = require('./formRegistry');
 
 const INDIA_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -16,85 +45,19 @@ function getIstDateShifted(d = new Date()) {
   return new Date(d.getTime() + INDIA_OFFSET_MS);
 }
 
-function formatHumanIstDate(dateString) {
-  if (!dateString) return '—';
-  const d = new Date(dateString);
-  if (isNaN(d.getTime())) return dateString;
-  const shifted = new Date(d.getTime() + INDIA_OFFSET_MS);
-  const day = shifted.getUTCDate();
-  const month = MONTHS[shifted.getUTCMonth()];
-  const year = shifted.getUTCFullYear();
-  let hours = shifted.getUTCHours();
-  const minutes = String(shifted.getUTCMinutes()).padStart(2, '0');
-  const ampm = hours >= 12 ? 'PM' : 'AM';
-  hours = hours % 12 || 12;
-  return `${day} ${month} ${year}, ${hours}:${minutes} ${ampm}`;
-}
-
-function formatAssigneeLabel(user, deptName = '') {
-  const parts = [user.name];
-  if (user.employeeId) parts.push(`(${user.employeeId})`);
-  const extra = [user.jobRole && user.jobRole !== 'user' ? user.jobRole : '', deptName].filter(Boolean).join(' • ');
-  if (extra) parts.push(`— ${extra}`);
-  return parts.join(' ');
-}
-
-function getCleanCheckpoints(checkpoints) {
-  if (!Array.isArray(checkpoints)) return [];
-  return checkpoints
-    .map((c) => {
-      if (typeof c === 'string') return { title: c.trim(), completed: false };
-      if (c && typeof c === 'object' && c.title) return { title: String(c.title).trim(), completed: Boolean(c.completed) };
-      return null;
-    })
-    .filter((c) => c && c.title);
-}
-
-function buildReminderPayload(settings = {}) {
-  const enabled = Boolean(settings.enabled);
-  if (!enabled) {
-    return {
-      enabled: false,
-      options: [],
-      reminderTime: null,
-      customTime: null,
-      repeatIntervalMinutes: null,
-      minutesBeforeDue: null,
-    };
+function hasExplicitFieldEditIntent(text) {
+  if (!text || typeof text !== 'string') return false;
+  const clean = text.toLowerCase();
+  if (/(?:title|naam|नाम|description|विवरण|डिस्क्रिप्शन|priority|प्रायोरिटी|status|स्टेटस|due|baje|बजे|time|samay|समय|date|tarikh|tareekh|तारीख|minute|min|मिनट|hour|ghanta|घंटा|reminder|रिमाइंडर|checkpoints|चेकपॉइंट|assign|project)/iu.test(clean)) {
+    return true;
   }
-
-  const options = Array.isArray(settings.options) ? [...settings.options] : [];
-  if (settings.reminderOption && !options.includes(settings.reminderOption)) {
-    options.push(settings.reminderOption);
+  if (/(?:badlo|badal|change|बदलो|बदल|set\s+karo|rakho|रखो)/iu.test(clean)) {
+    return true;
   }
-
-  const repeatIntervalMinutes = settings.repeatIntervalMinutes ? Number(settings.repeatIntervalMinutes) : null;
-  if (repeatIntervalMinutes && !options.includes('interval')) {
-    options.push('interval');
+  if (/(?<![\p{L}\p{M}])(?:kal|कल|aaj|आज|tomorrow|today)(?![\p{L}\p{M}])/iu.test(clean)) {
+    return true;
   }
-
-  const minutesBeforeDue = settings.minutesBeforeDue ? Number(settings.minutesBeforeDue) : null;
-  if (minutesBeforeDue && !options.includes('beforeDue') && settings.reminderOption !== 'oneHourBefore') {
-    options.push('beforeDue');
-  }
-
-  const customTime = settings.customTime || (settings.reminderTime ? (settings.reminderTime instanceof Date ? settings.reminderTime.toISOString() : String(settings.reminderTime)) : null);
-  if (customTime && !options.includes('custom')) {
-    options.push('custom');
-  }
-
-  if (options.length === 0) {
-    options.push('oneHourBefore');
-  }
-
-  return {
-    enabled: true,
-    options: [...new Set(options)],
-    reminderTime: settings.reminderTime || (customTime ? new Date(customTime) : null),
-    customTime: customTime || null,
-    repeatIntervalMinutes: repeatIntervalMinutes || null,
-    minutesBeforeDue: minutesBeforeDue || null,
-  };
+  return false;
 }
 
 async function parseTaskRequest({
@@ -136,8 +99,14 @@ async function parseTaskRequest({
     assigneeId: draft?.assigneeId ?? null,
     assigneeLabel: draft?.assigneeLabel ?? null,
     branchId: draft?.branchId ?? null,
+    intent: draft?.intent || (draft?.taskFor === 'others' ? 'task_assigned_user' : 'self_task'),
     taskFor: draft?.taskFor || 'self',
     wantsOthers: Boolean(draft?.wantsOthers),
+    projectId: draft?.projectId ?? null,
+    projectName: draft?.projectName ?? null,
+    dueDate: draft?.dueDate ?? draft?.dueDateTime ?? null,
+    file: draft?.file ?? null,
+    pdfFile: draft?.pdfFile ?? null,
     askCounts: typeof draft?.askCounts === 'object' && draft?.askCounts ? { ...draft.askCounts } : {},
     skipped: Array.isArray(draft?.skipped) ? [...draft.skipped] : [],
     asked: Array.isArray(draft?.asked) ? [...draft.asked] : [],
@@ -149,6 +118,8 @@ async function parseTaskRequest({
     title: Boolean(draft?.title && String(draft.title).trim()),
     description: Boolean(draft?.description !== null && draft?.description !== undefined && String(draft.description).trim()),
     dueDateTime: Boolean(draft?.dueDateTime && new Date(draft.dueDateTime).getTime() > now.getTime()),
+    dueDate: Boolean(draft?.dueDate || (draft?.dueDateTime && new Date(draft.dueDateTime).getTime() > now.getTime())),
+    project: Boolean(draft?.projectId || draft?.projectName),
     priority: Boolean(draft?.priority),
     status: Boolean(draft?.status),
     assignee: Boolean(draft?.assigneeId || (draft?.taskFor === 'others' && draft?.assigneeName)),
@@ -162,6 +133,9 @@ async function parseTaskRequest({
     title: draft?.title ?? null,
     description: draft?.description ?? null,
     dueDateTime: draft?.dueDateTime ?? null,
+    dueDate: draft?.dueDate ?? draft?.dueDateTime ?? null,
+    projectId: draft?.projectId ?? null,
+    projectName: draft?.projectName ?? null,
     priority: draft?.priority ?? null,
     status: draft?.status ?? null,
     reminder: draft?.reminder ?? null,
@@ -179,8 +153,11 @@ async function parseTaskRequest({
   const scope = await scopeInfoFn(req, deps);
   const canAssignOthers = Boolean(scope?.hasAccess);
 
-  const companyId = req.user?.company?._id || req.user?.company || req.user?.companyId;
-  const rawCompanyCode = req.user?.companyCode || req.user?.company?.companyCode || '';
+  // Retrieve accessible projects tenant-safely
+  const accessibleProjects = await getAccessibleProjects(req, deps);
+
+  const companyId = req?.user?.company?._id || req?.user?.company || req?.user?.companyId;
+  const rawCompanyCode = req?.user?.companyCode || req?.user?.company?.companyCode || '';
   const baseCode = typeof rawCompanyCode === 'string' ? rawCompanyCode.split('-')[0].trim() : '';
   const companyCodeFilter = baseCode
     ? { $regex: new RegExp('^' + escapeRegex(baseCode) + '(-|$)', 'i') }
@@ -197,22 +174,77 @@ async function parseTaskRequest({
   let actionHandled = false;
   let wantsEditPrompt = false;
 
+  // Direct project pick from pick or action
+  const targetPickedProjectId = (action?.type === 'pickProject' ? (action.projectId || action.value) : null) ||
+    action?.pickProject?.projectId ||
+    pick?.projectId ||
+    pick?.pickProject?.projectId ||
+    (action?.type === 'set' && action?.field === 'projectId' ? action.value : null);
+
+  if (targetPickedProjectId) {
+    actionHandled = true;
+    const matchedProj = accessibleProjects.find((p) => idsEqual(p._id, targetPickedProjectId));
+    if (matchedProj) {
+      if (currentDraft.intent !== 'task_project') {
+        const migration = migrateDraftBetweenIntents(currentDraft.intent, 'task_project', currentDraft);
+        Object.assign(currentDraft, migration.newDraft);
+      }
+      currentDraft.projectId = String(matchedProj._id);
+      currentDraft.projectName = matchedProj.projectName;
+      currentDraft.project = matchedProj.projectName;
+      currentDraft.projectStartDate = matchedProj.startDate;
+      currentDraft.projectIdSuffix = String(matchedProj._id).slice(-6);
+      currentDraft.showDistinguishing = Boolean(
+        currentDraft.showDistinguishing || requiresProjectDistinguishing(matchedProj, accessibleProjects)
+      );
+      currentDraft.intent = 'task_project';
+      currentDraft.taskFor = 'project';
+      if (!currentDraft.asked.includes('project')) currentDraft.asked.push('project');
+      currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'project');
+    } else {
+      notices.push('Selected project aapke access scope mein nahi hai.');
+    }
+  }
+
   if (action && typeof action === 'object') {
     actionHandled = true;
     switch (action.type) {
       case 'set':
         if (action.field === 'taskFor') {
-          currentDraft.taskFor = action.value === 'others' ? 'others' : 'self';
-          if (action.value === 'others') {
-            currentDraft.wantsOthers = true;
-            currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'assignee');
+          if (action.value === 'project') {
+            const migration = migrateDraftBetweenIntents(currentDraft.intent, 'task_project', currentDraft);
+            Object.assign(currentDraft, migration.newDraft);
+            currentDraft.taskFor = 'project';
           } else {
-            currentDraft.wantsOthers = false;
-            currentDraft.assigneeId = null;
-            currentDraft.assigneeName = null;
-            currentDraft.assigneeLabel = null;
-            if (!currentDraft.skipped.includes('assignee')) currentDraft.skipped.push('assignee');
+            const targetIntent = action.value === 'others' ? 'task_assigned_user' : 'self_task';
+            const migration = migrateDraftBetweenIntents(currentDraft.intent, targetIntent, currentDraft);
+            Object.assign(currentDraft, migration.newDraft);
+            currentDraft.taskFor = action.value === 'others' ? 'others' : 'self';
+            if (action.value === 'others') {
+              currentDraft.wantsOthers = true;
+              currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'assignee');
+            } else {
+              currentDraft.wantsOthers = false;
+              currentDraft.assigneeId = null;
+              currentDraft.assigneeName = null;
+              currentDraft.assigneeLabel = null;
+              if (!currentDraft.skipped.includes('assignee')) currentDraft.skipped.push('assignee');
+            }
           }
+        } else if (action.field === 'intent') {
+          const targetIntent = action.value;
+          if (FORM_REGISTRY[targetIntent]) {
+            const migration = migrateDraftBetweenIntents(currentDraft.intent, targetIntent, currentDraft);
+            Object.assign(currentDraft, migration.newDraft);
+          }
+        } else if (action.field === 'assignee') {
+          currentDraft.assigneeName = action.value;
+          if (action.assigneeId) {
+            currentDraft.assigneeId = String(action.assigneeId);
+            currentDraft.assigneeLabel = action.value;
+          }
+          if (!currentDraft.asked.includes('assignee')) currentDraft.asked.push('assignee');
+          currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'assignee');
         } else if (action.field === 'reminder') {
           currentDraft.reminder = Boolean(action.value);
           if (currentDraft.reminder) {
@@ -262,34 +294,58 @@ async function parseTaskRequest({
           currentDraft.skipped = currentDraft.skipped.filter((f) => f !== action.field);
         }
         break;
+      case 'pickProject':
+        // Project selection handled by targetPickedProjectId above
+        break;
       case 'skip': {
         const targetField = action.field || lastAskedField;
         if (targetField) {
           if (!currentDraft.skipped.includes(targetField)) currentDraft.skipped.push(targetField);
           if (targetField === 'description') currentDraft.description = '';
-          if (targetField === 'priority') currentDraft.priority = 'medium';
-          if (targetField === 'status') currentDraft.status = 'pending';
+          if (targetField === 'priority') currentDraft.priority = currentDraft.intent === 'task_project' ? 'Medium' : 'medium';
+          if (targetField === 'status') currentDraft.status = currentDraft.intent === 'task_project' ? 'pending' : 'pending';
           if (targetField === 'reminder') currentDraft.reminder = false;
           if (targetField === 'priorityDays') currentDraft.priorityDays = '1';
           if (targetField === 'repeatPattern') currentDraft.repeatPattern = 'none';
           if (targetField === 'checkpoints') currentDraft.checkpoints = [];
-          if (targetField === 'attachments') currentDraft.attachmentsCount = 0;
+          if (targetField === 'attachments' || targetField === 'file') {
+            currentDraft.attachmentsCount = 0;
+            currentDraft.file = null;
+            currentDraft.pdfFile = null;
+          }
+          if (targetField === 'assignee' && currentDraft.intent === 'task_project' && formatProjectStatus(currentDraft.status) !== 'in progress') {
+            currentDraft.assigneeId = null;
+            currentDraft.assigneeName = null;
+            currentDraft.assigneeLabel = null;
+          }
         }
         break;
       }
       case 'skip_all': {
-        const allOptional = ['description', 'priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'checkpoints', 'attachments'];
+        const allOptional = ['description', 'priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'checkpoints', 'attachments', 'file'];
+        if (currentDraft.intent === 'task_project' && formatProjectStatus(currentDraft.status) !== 'in progress') {
+          allOptional.push('assignee');
+        }
         allOptional.forEach((fieldKey) => {
           if (!currentDraft.skipped.includes(fieldKey)) currentDraft.skipped.push(fieldKey);
           if (currentDraft[fieldKey] === null || currentDraft[fieldKey] === undefined) {
             if (fieldKey === 'description') currentDraft.description = '';
-            if (fieldKey === 'priority') currentDraft.priority = 'medium';
-            if (fieldKey === 'status') currentDraft.status = 'pending';
+            if (fieldKey === 'priority') currentDraft.priority = currentDraft.intent === 'task_project' ? 'Medium' : 'medium';
+            if (fieldKey === 'status') currentDraft.status = currentDraft.intent === 'task_project' ? 'pending' : 'pending';
             if (fieldKey === 'reminder') currentDraft.reminder = false;
             if (fieldKey === 'priorityDays') currentDraft.priorityDays = '1';
             if (fieldKey === 'repeatPattern') currentDraft.repeatPattern = 'none';
             if (fieldKey === 'checkpoints') currentDraft.checkpoints = [];
-            if (fieldKey === 'attachments') currentDraft.attachmentsCount = 0;
+            if (fieldKey === 'attachments' || fieldKey === 'file') {
+              currentDraft.attachmentsCount = 0;
+              currentDraft.file = null;
+              currentDraft.pdfFile = null;
+            }
+            if (fieldKey === 'assignee' && currentDraft.intent === 'task_project' && formatProjectStatus(currentDraft.status) !== 'in progress') {
+              currentDraft.assigneeId = null;
+              currentDraft.assigneeName = null;
+              currentDraft.assigneeLabel = null;
+            }
           }
         });
         break;
@@ -314,7 +370,13 @@ async function parseTaskRequest({
         }
         break;
       case 'edit':
-        if (action.field === 'assignee') {
+        if (action.field === 'project') {
+          currentDraft.projectId = null;
+          currentDraft.projectName = null;
+          currentDraft.project = null;
+          currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'project');
+          currentDraft.asked = currentDraft.asked.filter((f) => f !== 'project');
+        } else if (action.field === 'assignee') {
           currentDraft.wantsOthers = true;
           currentDraft.taskFor = 'others';
           currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'assignee');
@@ -339,6 +401,38 @@ async function parseTaskRequest({
   const trimmedMessage = rawMessage ? normalizeTranscript(rawMessage) : '';
   const detectedIntent = trimmedMessage ? detectUserIntent(trimmedMessage) : null;
 
+  // Form Registry deterministic intent detection
+  const detectedIntentResult = detectIntent({
+    message: trimmedMessage,
+    draft: currentDraft,
+    canAssignOthers,
+    accessibleProjects,
+  });
+
+  if (detectedIntentResult.isAmbiguous) {
+    return {
+      success: true,
+      status: 'needs_input',
+      field: 'intent',
+      reply: detectedIntentResult.question,
+      speech: 'क्या यह टास्क किसी प्रोजेक्ट के अंदर बनाना है या सामान्य टास्क?',
+      draft: currentDraft,
+      missing: ['intent'],
+      chips: detectedIntentResult.chips,
+      candidates: [],
+      notices,
+      progress: { done: 0, total: 10 },
+      canAssignOthers,
+      intent: { type: 'ambiguous_intent' },
+      meta: { model: modelName },
+    };
+  }
+
+  if (detectedIntentResult.isExplicit && detectedIntentResult.isSupported && detectedIntentResult.intent !== currentDraft.intent) {
+    const migration = migrateDraftBetweenIntents(currentDraft.intent, detectedIntentResult.intent, currentDraft);
+    Object.assign(currentDraft, migration.newDraft);
+  }
+
   // -------------------------------------------------------------
   // Cancel Intent: immediately stops creation and returns cancelled status
   // -------------------------------------------------------------
@@ -358,6 +452,49 @@ async function parseTaskRequest({
       intent: { type: 'cancel' },
       meta: { model: modelName },
     };
+  }
+
+  const wasAlreadyReady = (draft?.status === 'ready' || draft?.status === 'confirming');
+  if (wasAlreadyReady && !actionHandled && trimmedMessage) {
+    const isAffirmative = detectedIntent?.type === 'confirm_yes' || detectedIntent?.type === 'create_now';
+    const isNegative = detectedIntent?.type === 'confirm_no';
+    const isFieldEdit = hasExplicitFieldEditIntent(trimmedMessage);
+
+    if (!isAffirmative && !isNegative && !isFieldEdit) {
+      // Unrecognized noise in confirming state - do not mutate draft!
+      const readyConfig = TASK_FIELDS.ready;
+      let payload;
+      let preview;
+      if (currentDraft.intent === 'task_project') {
+        payload = FORM_REGISTRY.task_project.buildPayload(currentDraft);
+        preview = FORM_REGISTRY.task_project.buildPreview(currentDraft);
+      } else if (currentDraft.assigneeId && currentDraft.taskFor === 'others') {
+        payload = FORM_REGISTRY.task_assigned_user.buildPayload(currentDraft);
+        preview = FORM_REGISTRY.task_assigned_user.buildPreview(currentDraft);
+      } else {
+        payload = FORM_REGISTRY.self_task.buildPayload(currentDraft);
+        preview = FORM_REGISTRY.self_task.buildPreview(currentDraft);
+      }
+
+      return {
+        success: true,
+        status: 'ready',
+        field: 'ready',
+        reply: 'Samajh nahi aaya. Create kar doon? Haan ya nahi bolein, ya bataiye kya badalna hai.',
+        speech: 'समझ नहीं आया। क्या बना दूं? हां या नहीं बोलें, या बताइए क्या बदलना है।',
+        draft: currentDraft,
+        missing: [],
+        chips: typeof readyConfig.chips === 'function' ? readyConfig.chips() : [],
+        candidates: [],
+        notices,
+        progress: { done: 10, total: 10 },
+        canAssignOthers,
+        payload,
+        preview,
+        intent: { type: 'unrecognized_noise' },
+        meta: { model: modelName },
+      };
+    }
   }
 
   if (!actionHandled && trimmedMessage) {
@@ -383,9 +520,19 @@ async function parseTaskRequest({
     const mentionedAssignee = extractAssigneeMention(trimmedMessage);
     if (mentionedAssignee && canAssignOthers) {
       currentDraft.assigneeName = mentionedAssignee;
-      currentDraft.wantsOthers = true;
-      currentDraft.taskFor = 'others';
+      if (currentDraft.intent !== 'task_project') {
+        currentDraft.wantsOthers = true;
+        currentDraft.taskFor = 'others';
+        currentDraft.intent = 'task_assigned_user';
+      }
       currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'assignee');
+    } else if (!mentionedAssignee && lastAskedField === 'assignee' && canAssignOthers && !actionHandled) {
+      const cleanCandidate = cleanAssigneeName(trimmedMessage);
+      const isNegative = detectedIntent?.type === 'cancel' || detectedIntent?.type === 'confirm_no';
+      if (cleanCandidate && isValidAssigneeCandidate(cleanCandidate) && !isNegative && !isSkip(trimmedMessage) && !isSkipAll(trimmedMessage)) {
+        currentDraft.assigneeName = cleanCandidate;
+        currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'assignee');
+      }
     }
 
     // 2c. Intent & Extraction Handling
@@ -402,11 +549,11 @@ async function parseTaskRequest({
           cleanMsg.match(/(\d+)\s*(min(?:ute)?s?|ghant[ae]|hour|hours|मिनट|घंटे|घंटा)\s*(?:pehle|before|पहले)/i);
 
         const isAffirmative = Boolean(intervalMatch || beforeDueMatch) ||
-          /^(?:haan|ha|yes|on|kar\s*do|laga\s*do|कर\s*दो|हाँ|हां|haanji|hnji|sure|ok|okay|yep|true)$/i.test(cleanMsg) ||
-          /^(?:haan|ha|yes|on|kar\s*do|laga\s*do|कर\s*दो|हाँ|हां)\b/i.test(cleanMsg) ||
-          /(?:1|one|ek|hour|ghant|baad|pehle|before|half|30|aadha|hourly|har\s*ghant|एक|घंटे|घंटा|बाद|पहले)/i.test(cleanMsg);
-        const isNegative = /^(?:nahi|no|off|band|mat\s*lagao|nahi\s*chahiye|rehne\s*do|नहीं|ना|false)$/i.test(cleanMsg) ||
-          /^(?:nahi|no|off|mat\s*lagao)\b/i.test(cleanMsg);
+          /^(?:haan|ha|yes|on|kar\s*do|laga\s*do|कर\s*दो|हाँ|हां|haanji|hnji|sure|ok|okay|yep|true)$/iu.test(cleanMsg) ||
+          /^(?:haan|ha|yes|on|kar\s*do|laga\s*do|कर\s*दो|हाँ|हां)(?:[\s]|$)/iu.test(cleanMsg) ||
+          /(?:1|one|ek|hour|ghant|baad|pehle|before|half|30|aadha|hourly|har\s*ghant|एक|घंटे|घंटा|बाद|पहले)/iu.test(cleanMsg);
+        const isNegative = /^(?:nahi|no|off|band|mat\s*lagao|nahi\s*chahiye|rehne\s*do|नहीं|ना|false)$/iu.test(cleanMsg) ||
+          /^(?:nahi|no|off|mat\s*lagao)(?:[\s]|$)/iu.test(cleanMsg);
 
         if (isAffirmative) {
           currentDraft.reminder = true;
@@ -580,6 +727,8 @@ async function parseTaskRequest({
               now,
               previousDraft: currentDraft,
               req,
+              intent: currentDraft.intent,
+              canAssignOthers,
             })) || {};
           } catch (llmErr) {
             const errCode = llmErr?.code || llmErr?.cause?.code || 'LLM_ERROR';
@@ -592,6 +741,13 @@ async function parseTaskRequest({
         // Merge extracted slots into draft
         const merged = mergeDraft(currentDraft, extracted, detSlots, trimmedMessage);
         Object.assign(currentDraft, merged);
+
+        // Intent promotion: if assigneeName is extracted and user can assign others, ensure intent is task_assigned_user
+        if (currentDraft.assigneeName && canAssignOthers && currentDraft.intent === 'self_task') {
+          currentDraft.intent = 'task_assigned_user';
+          currentDraft.taskFor = 'others';
+          currentDraft.wantsOthers = true;
+        }
 
         // If a previously skipped field was explicitly updated in this turn, remove it from skipped
         if (detSlots.priority || extracted.priority) currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'priority');
@@ -659,10 +815,18 @@ async function parseTaskRequest({
     }
   }
 
+  // Title sanity guard: reject command sentences/assignee echoes as task titles
+  if (currentDraft.title && isInvalidOrCommandTitle(currentDraft.title, rawMessage, currentDraft.assigneeName)) {
+    currentDraft.title = null;
+  }
+
   // -------------------------------------------------------------
   // STEP 2g: Track newly extracted fields this turn for multi-field acknowledgement
   // -------------------------------------------------------------
   const newlyExtracted = [];
+  if (!initialFilled.project && (currentDraft.projectId || currentDraft.projectName)) {
+    newlyExtracted.push({ key: 'project', label: 'project', display: `"${currentDraft.projectName || currentDraft.project}"` });
+  }
   if (!initialFilled.title && currentDraft.title && String(currentDraft.title).trim()) {
     newlyExtracted.push({ key: 'title', label: 'naam', display: `"${currentDraft.title}"` });
   }
@@ -677,6 +841,9 @@ async function parseTaskRequest({
   }
   if (!initialFilled.dueDateTime && currentDraft.dueDateTime && new Date(currentDraft.dueDateTime).getTime() > now.getTime()) {
     newlyExtracted.push({ key: 'dueDateTime', label: 'due date', display: formatHumanIstDate(currentDraft.dueDateTime) });
+  }
+  if (!initialFilled.dueDate && currentDraft.dueDate && currentDraft.intent === 'task_project') {
+    newlyExtracted.push({ key: 'dueDate', label: 'due date', display: formatHumanIstDate(currentDraft.dueDate) });
   }
   if (!initialFilled.assignee && (currentDraft.assigneeId || (currentDraft.taskFor === 'others' && currentDraft.assigneeName))) {
     newlyExtracted.push({ key: 'assignee', label: 'assignee', display: currentDraft.assigneeLabel || currentDraft.assigneeName });
@@ -707,7 +874,7 @@ async function parseTaskRequest({
   let ackPrefix = '';
   let speechPrefix = '';
   if (newlyExtracted.length >= 2) {
-    const labelOrder = ['naam', 'description', 'priority', 'status', 'due date', 'assignee', 'reminder', 'checkpoints'];
+    const labelOrder = ['project', 'naam', 'description', 'priority', 'status', 'due date', 'assignee', 'reminder', 'checkpoints'];
     newlyExtracted.sort((a, b) => labelOrder.indexOf(a.label) - labelOrder.indexOf(b.label));
 
     const labels = newlyExtracted.map((item) => item.label);
@@ -721,6 +888,7 @@ async function parseTaskRequest({
     ackPrefix = `Samajh gaya: ${joinedLabels} mil gaye.\n${summaryLine}\n\n`;
 
     const hindiLabelMap = {
+      project: 'प्रोजेक्ट',
       naam: 'नाम',
       description: 'डिस्क्रिप्शन',
       priority: 'प्रायोरिटी',
@@ -735,125 +903,327 @@ async function parseTaskRequest({
       ? `${speechLabels[0]} और ${speechLabels[1]}`
       : `${speechLabels.slice(0, -1).join(', ')} और ${speechLabels[speechLabels.length - 1]}`;
     speechPrefix = `समझ गया: ${joinedSpeechLabels} मिल गए। `;
+  } else if (newlyExtracted.length === 1 && newlyExtracted[0].key === 'project') {
+    ackPrefix = `Project "${currentDraft.projectName || currentDraft.project}" select ho gaya hai.\n\n`;
+    speechPrefix = `प्रोजेक्ट "${currentDraft.projectName || currentDraft.project}" चुन लिया गया है। `;
   }
 
   // -------------------------------------------------------------
   // STEP 3: Assignee disambiguation & scope validation
   // -------------------------------------------------------------
-  const wantsAssignee = Boolean(currentDraft.assigneeName || pick?.assigneeId || currentDraft.assigneeId);
+  let currentProject = null;
 
-  if (wantsAssignee) {
-    if (!canAssignOthers) {
-      currentDraft.assigneeName = null;
-      currentDraft.assigneeId = null;
-      currentDraft.assigneeLabel = null;
-      notices.push('Aapko dusron ko task assign karne ki permission nahi hai, isliye ye aapke liye banaunga.');
-    } else if (pick?.assigneeId) {
-      const validObjectId = mongoose.Types.ObjectId.isValid(pick.assigneeId);
-      let foundUser = null;
-      // Fail-closed: companyId ke bina query mat chalao (undefined filter Mongoose mein strip ho jaata hai = tenant leak).
-      if (validObjectId && companyId) {
-        foundUser = await UserModel.findOne({
-          _id: pick.assigneeId,
-          company: companyId,
-          isActive: true,
-          ...(companyCodeFilter ? { companyCode: companyCodeFilter } : {}),
-        }).select('_id name employeeId jobRole department branch').lean();
-      }
-
-      if (foundUser) {
-        const inScope = await isAssigneeInScopeFn(req, scope, foundUser._id, deps);
-        if (!inScope) {
-          notices.push('Selected user aapke branch ya department scope se bahar hain. Kripya kisi aur ko chunein.');
-          currentDraft.assigneeId = null;
-          currentDraft.assigneeLabel = null;
-          currentDraft.assigneeName = null;
-        } else {
-          let deptDisplay = String(foundUser.department || '').trim();
-          if (mongoose.Types.ObjectId.isValid(deptDisplay)) {
-            // TENANT FIX (old line ~574): findById -> findOne with company filter
-            const dDoc = await DeptModel.findOne({ _id: deptDisplay, company: companyId })
-              .select('name departmentName')
-              .lean();
-            if (dDoc) deptDisplay = dDoc.name || dDoc.departmentName || deptDisplay;
-          }
-          currentDraft.assigneeId = String(foundUser._id);
-          currentDraft.assigneeName = foundUser.name;
-          currentDraft.assigneeLabel = formatAssigneeLabel(foundUser, deptDisplay);
-        }
-      }
-    } else if (currentDraft.assigneeName && !currentDraft.assigneeId) {
-      const resolution = await resolveAssigneeFn({
-        name: currentDraft.assigneeName,
-        requester: req.user,
+  if (currentDraft.intent === 'task_project') {
+    // 3a. Resolve Project
+    if (!currentDraft.projectId) {
+      const projRes = await resolveProject({
+        req,
+        message: trimmedMessage,
+        projectNameText: currentDraft.projectName,
+        accessibleProjects,
       }, deps);
 
-      if (resolution.status === 'multiple') {
-        const rawCandidates = resolution.candidates || [];
-        const deptIdsToLookup = rawCandidates
-          .map((c) => String(c.department || ''))
-          .filter((d) => mongoose.Types.ObjectId.isValid(d));
-
-        let deptMap = new Map();
-        if (deptIdsToLookup.length > 0 && companyId) {
-          // TENANT FIX (old line ~596): company filter added
-          const deptDocs = await DeptModel.find({
-            _id: { $in: deptIdsToLookup },
-            company: companyId,
-          }).select('_id name departmentName').lean();
-          (deptDocs || []).forEach((d) => {
-            deptMap.set(String(d._id), d.name || d.departmentName || '');
-          });
-        }
-
-        candidates = rawCandidates.map((c) => {
-          const id = String(c.id || c._id);
-          let dept = String(c.department || '').trim();
-          if (mongoose.Types.ObjectId.isValid(dept) && deptMap.has(dept)) {
-            dept = deptMap.get(dept);
-          }
-          const candObj = {
-            id,
-            _id: id,
-            name: c.name,
-            employeeId: c.employeeId || '',
-            jobRole: c.jobRole && c.jobRole !== 'user' ? c.jobRole : '',
-            department: dept || 'General',
-          };
-          candObj.label = c.label || formatAssigneeLabel(candObj, candObj.department);
-          return candObj;
-        });
-
+      if (projRes.status === 'single') {
+        currentProject = projRes.project;
+        currentDraft.projectId = String(currentProject._id);
+        currentDraft.projectName = currentProject.projectName;
+        currentDraft.project = currentProject.projectName;
+        currentDraft.projectStartDate = currentProject.startDate;
+        currentDraft.projectIdSuffix = String(currentProject._id).slice(-6);
+        currentDraft.showDistinguishing = Boolean(
+          currentDraft.showDistinguishing || requiresProjectDistinguishing(currentProject, accessibleProjects)
+        );
+        if (!currentDraft.asked.includes('project')) currentDraft.asked.push('project');
+        currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'project');
+      } else if (projRes.status === 'multiple') {
+        if (!currentDraft.asked.includes('project')) currentDraft.asked.push('project');
         return {
           success: true,
           status: 'needs_disambiguation',
-          field: 'assignee',
-          reply: `"${currentDraft.assigneeName}" naam ke multiple users mile hain. Kripya list me se sahi user chunein.`,
-          speech: `"${currentDraft.assigneeName}" नाम के कई कर्मचारी मिले हैं। कृपया सही कर्मचारी चुनें।`,
+          field: 'project',
+          reply: projRes.reply,
+          speech: projRes.speech,
           draft: currentDraft,
-          missing: ['assigneeId'],
-          chips: [],
-          candidates,
+          missing: ['projectId'],
+          chips: projRes.chips,
+          candidates: projRes.projects || [],
           notices,
           canAssignOthers,
           progress: { done: 0, total: 10 },
-          intent: detectedIntent ? { type: detectedIntent.type, field: detectedIntent.field } : null,
+          meta: { model: modelName },
+        };
+      } else {
+        if (!currentDraft.asked.includes('project')) currentDraft.asked.push('project');
+        return {
+          success: true,
+          status: 'needs_input',
+          field: 'project',
+          reply: projRes.reply,
+          speech: projRes.speech,
+          draft: currentDraft,
+          missing: ['projectId'],
+          chips: projRes.chips,
+          candidates: [],
+          notices,
+          canAssignOthers,
+          progress: { done: 0, total: 10 },
           meta: { model: modelName },
         };
       }
+    } else {
+      currentProject = accessibleProjects.find((p) => idsEqual(p._id, currentDraft.projectId));
+      if (!currentProject) {
+        currentDraft.projectId = null;
+        currentDraft.projectName = null;
+        currentDraft.project = null;
+        currentDraft.projectStartDate = null;
+        currentDraft.projectIdSuffix = null;
+        currentDraft.showDistinguishing = false;
+        const projRes = await resolveProject({
+          req,
+          message: trimmedMessage,
+          projectNameText: null,
+          accessibleProjects,
+        }, deps);
+        return {
+          success: true,
+          status: 'needs_input',
+          field: 'project',
+          reply: 'Chuna gaya project nahi mila ya aapke paas access nahi hai. Niche se chun lein:',
+          speech: 'चुना गया प्रोजेक्ट नहीं मिला। नीचे से चुन लें।',
+          draft: currentDraft,
+          missing: ['projectId'],
+          chips: projRes.chips,
+          candidates: [],
+          notices,
+          canAssignOthers,
+          progress: { done: 0, total: 10 },
+          meta: { model: modelName },
+        };
+      }
+      currentDraft.projectName = currentProject.projectName;
+      currentDraft.project = currentProject.projectName;
+      currentDraft.projectStartDate = currentProject.startDate;
+      currentDraft.projectIdSuffix = String(currentProject._id).slice(-6);
+      currentDraft.showDistinguishing = Boolean(
+        currentDraft.showDistinguishing || requiresProjectDistinguishing(currentProject, accessibleProjects)
+      );
+    }
 
-      if (resolution.status === 'single') {
-        const candidateUser = resolution.user;
-        const inScope = await isAssigneeInScopeFn(req, scope, candidateUser._id, deps);
-        if (inScope) {
-          currentDraft.assigneeId = String(candidateUser._id);
-          currentDraft.assigneeName = candidateUser.name;
-          currentDraft.assigneeLabel = formatAssigneeLabel(candidateUser, candidateUser.department);
+    // 3b. Resolve Project Assignee against project members
+    const wantsProjectAssignee = Boolean(currentDraft.assigneeName || pick?.assigneeId || currentDraft.assigneeId);
+    if (wantsProjectAssignee && currentProject) {
+      if (currentDraft.assigneeId && !pick?.assigneeId) {
+        const isMember = (currentProject.users || []).some((u) => idsEqual(u._id || u, currentDraft.assigneeId));
+        if (!isMember) {
+          notices.push('Selected user is project ke member nahi hain.');
+          currentDraft.assigneeId = null;
+          currentDraft.assigneeName = null;
+          currentDraft.assigneeLabel = null;
+        }
+      }
+      if (pick?.assigneeId) {
+        const member = (currentProject.users || []).find((u) => idsEqual(u._id || u, pick.assigneeId));
+        if (member) {
+          currentDraft.assigneeId = String(member._id || member);
+          currentDraft.assigneeName = member.name || currentDraft.assigneeName;
+          currentDraft.assigneeLabel = formatAssigneeLabel(member, member.jobRole || member.role || 'Member');
+          if (!currentDraft.asked.includes('assignee')) currentDraft.asked.push('assignee');
+          currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'assignee');
         } else {
-          notices.push(`${candidateUser.name} aapke branch ya department scope se bahar hain.`);
+          notices.push('Selected user is project ke member nahi hain.');
+          currentDraft.assigneeId = null;
+          currentDraft.assigneeName = null;
+          currentDraft.assigneeLabel = null;
+        }
+      } else if (currentDraft.assigneeName && !currentDraft.assigneeId) {
+        const assigneeRes = resolveProjectAssignee({
+          text: currentDraft.assigneeName,
+          project: currentProject,
+          currentUser: req.user,
+          status: currentDraft.status || 'pending',
+        });
+
+        if (assigneeRes.status === 'single') {
+          const u = assigneeRes.user;
+          currentDraft.assigneeId = String(u._id || u);
+          currentDraft.assigneeName = u.name;
+          currentDraft.assigneeLabel = formatAssigneeLabel(u, u.jobRole || u.role || 'Member');
+          if (!currentDraft.asked.includes('assignee')) currentDraft.asked.push('assignee');
+          currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'assignee');
+        } else if (assigneeRes.status === 'ambiguous') {
+          return {
+            success: true,
+            status: 'needs_disambiguation',
+            field: 'assignee',
+            reply: assigneeRes.reply,
+            speech: assigneeRes.speech,
+            draft: currentDraft,
+            missing: ['assigneeId'],
+            chips: assigneeRes.chips,
+            candidates: assigneeRes.candidates || [],
+            notices,
+            canAssignOthers,
+            progress: { done: 0, total: 10 },
+            meta: { model: modelName },
+          };
+        } else if (assigneeRes.status === 'fuzzy_suggestions') {
+          return {
+            success: true,
+            status: 'needs_input',
+            field: 'assignee',
+            reply: assigneeRes.reply,
+            speech: assigneeRes.speech,
+            draft: currentDraft,
+            missing: ['assigneeId'],
+            chips: assigneeRes.chips,
+            candidates: [],
+            notices,
+            canAssignOthers,
+            progress: { done: 0, total: 10 },
+            meta: { model: modelName },
+          };
+        } else { // 'not_member' or 'multiple_requested'
+          currentDraft.assigneeName = null;
           currentDraft.assigneeId = null;
           currentDraft.assigneeLabel = null;
-          currentDraft.assigneeName = null;
+          return {
+            success: true,
+            status: 'needs_input',
+            field: 'assignee',
+            reply: assigneeRes.reply,
+            speech: assigneeRes.speech,
+            draft: currentDraft,
+            missing: ['assigneeId'],
+            chips: assigneeRes.chips,
+            candidates: [],
+            notices,
+            canAssignOthers,
+            progress: { done: 0, total: 10 },
+            meta: { model: modelName },
+          };
+        }
+      }
+    }
+  } else {
+    // 3c. Regular Assignee disambiguation & scope validation (self_task & task_assigned_user)
+    const wantsAssignee = Boolean(currentDraft.assigneeName || pick?.assigneeId || currentDraft.assigneeId);
+
+    if (wantsAssignee) {
+      if (!canAssignOthers) {
+        currentDraft.assigneeName = null;
+        currentDraft.assigneeId = null;
+        currentDraft.assigneeLabel = null;
+        notices.push('Aapko dusron ko task assign karne ki permission nahi hai, isliye ye aapke liye banaunga.');
+      } else if (pick?.assigneeId) {
+        const validObjectId = mongoose.Types.ObjectId.isValid(pick.assigneeId);
+        let foundUser = null;
+        // Fail-closed: companyId ke bina query mat chalao (undefined filter Mongoose mein strip ho jaata hai = tenant leak).
+        if (validObjectId && companyId) {
+          foundUser = await UserModel.findOne({
+            _id: pick.assigneeId,
+            company: companyId,
+            isActive: true,
+            ...(companyCodeFilter ? { companyCode: companyCodeFilter } : {}),
+          }).select('_id name employeeId jobRole department branch').lean();
+        }
+
+        if (foundUser) {
+          const inScope = await isAssigneeInScopeFn(req, scope, foundUser._id, deps);
+          if (!inScope) {
+            notices.push('Selected user aapke branch ya department scope se bahar hain. Kripya kisi aur ko chunein.');
+            currentDraft.assigneeId = null;
+            currentDraft.assigneeLabel = null;
+            currentDraft.assigneeName = null;
+          } else {
+            let deptDisplay = String(foundUser.department || '').trim();
+            if (mongoose.Types.ObjectId.isValid(deptDisplay)) {
+              // TENANT FIX (old line ~574): findById -> findOne with company filter
+              const dDoc = await DeptModel.findOne({ _id: deptDisplay, company: companyId })
+                .select('name departmentName')
+                .lean();
+              if (dDoc) deptDisplay = dDoc.name || dDoc.departmentName || deptDisplay;
+            }
+            currentDraft.assigneeId = String(foundUser._id);
+            currentDraft.assigneeName = foundUser.name;
+            currentDraft.assigneeLabel = formatAssigneeLabel(foundUser, deptDisplay);
+          }
+        }
+      } else if (currentDraft.assigneeName && !currentDraft.assigneeId) {
+        const resolution = await resolveAssigneeFn({
+          name: currentDraft.assigneeName,
+          requester: req.user,
+        }, deps);
+
+        if (resolution.status === 'multiple') {
+          const rawCandidates = resolution.candidates || [];
+          const deptIdsToLookup = rawCandidates
+            .map((c) => String(c.department || ''))
+            .filter((d) => mongoose.Types.ObjectId.isValid(d));
+
+          let deptMap = new Map();
+          if (deptIdsToLookup.length > 0 && companyId) {
+            // TENANT FIX (old line ~596): company filter added
+            const deptDocs = await DeptModel.find({
+              _id: { $in: deptIdsToLookup },
+              company: companyId,
+            }).select('_id name departmentName').lean();
+            (deptDocs || []).forEach((d) => {
+              deptMap.set(String(d._id), d.name || d.departmentName || '');
+            });
+          }
+
+          candidates = rawCandidates.map((c) => {
+            const id = String(c.id || c._id);
+            let dept = String(c.department || '').trim();
+            if (mongoose.Types.ObjectId.isValid(dept) && deptMap.has(dept)) {
+              dept = deptMap.get(dept);
+            }
+            const candObj = {
+              id,
+              _id: id,
+              name: c.name,
+              employeeId: c.employeeId || '',
+              jobRole: c.jobRole && c.jobRole !== 'user' ? c.jobRole : '',
+              department: dept || 'General',
+            };
+            candObj.label = c.label || formatAssigneeLabel(candObj, candObj.department);
+            return candObj;
+          });
+
+          return {
+            success: true,
+            status: 'needs_disambiguation',
+            field: 'assignee',
+            reply: `"${currentDraft.assigneeName}" naam ke multiple users mile hain. Kripya list me se sahi user chunein.`,
+            speech: `"${currentDraft.assigneeName}" नाम के कई कर्मचारी मिले हैं। कृपया सही कर्मचारी चुनें।`,
+            draft: currentDraft,
+            missing: ['assigneeId'],
+            chips: [],
+            candidates,
+            notices,
+            canAssignOthers,
+            progress: { done: 0, total: 10 },
+            intent: detectedIntent ? { type: detectedIntent.type, field: detectedIntent.field } : null,
+            meta: { model: modelName },
+          };
+        }
+
+        if (resolution.status === 'single') {
+          const candidateUser = resolution.user;
+          const inScope = await isAssigneeInScopeFn(req, scope, candidateUser._id, deps);
+          if (inScope) {
+            currentDraft.assigneeId = String(candidateUser._id);
+            currentDraft.assigneeName = candidateUser.name;
+            currentDraft.assigneeLabel = formatAssigneeLabel(candidateUser, candidateUser.department);
+          } else {
+            notices.push(`${candidateUser.name} aapke branch ya department scope se bahar hain.`);
+            currentDraft.assigneeId = null;
+            currentDraft.assigneeLabel = null;
+            currentDraft.assigneeName = null;
+          }
+        } else if (resolution.status === 'none') {
+          notices.push(`"${currentDraft.assigneeName}" naam ka koi employee nahi mila. Kripya sahi naam batayein.`);
         }
       }
     }
@@ -862,33 +1232,23 @@ async function parseTaskRequest({
   // -------------------------------------------------------------
   // STEP 4: Guided Slot-Filling Sequence (Exactly one next question)
   // -------------------------------------------------------------
-  // Default is SELF. Do NOT ask "kiske liye" first. Ask it only if:
-  // (i) the message mentions another person's name, or
-  // (ii) the user tapped chip [Kisi aur ke liye] (currentDraft.wantsOthers === true).
-  const isOthersTask = Boolean(
-    canAssignOthers &&
-    currentDraft.taskFor === 'others' &&
-    (currentDraft.wantsOthers || currentDraft.assigneeName || currentDraft.assigneeId) &&
-    !currentDraft.skipped.includes('assignee')
-  );
+  let activeIntent = currentDraft.intent;
+  if (activeIntent !== 'task_project') {
+    const isOthersTask = Boolean(
+      canAssignOthers &&
+      currentDraft.taskFor === 'others' &&
+      (currentDraft.wantsOthers || currentDraft.assigneeName || currentDraft.assigneeId) &&
+      !currentDraft.skipped.includes('assignee')
+    );
+    activeIntent = isOthersTask ? 'task_assigned_user' : 'self_task';
+    currentDraft.intent = activeIntent;
+  }
+  const activeFields = getIntentSlots(activeIntent, currentDraft);
 
-  const activeFields = [];
-  if (isOthersTask && !currentDraft.assigneeId) {
-    activeFields.push('assignee');
+  // In project task: if status is 'in progress' and no assignee, unskip assignee
+  if (activeIntent === 'task_project' && formatProjectStatus(currentDraft.status) === 'in progress' && !currentDraft.assigneeId) {
+    currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'assignee');
   }
-  activeFields.push('title');
-  activeFields.push('dueDateTime');
-  activeFields.push('description');
-  activeFields.push('priority');
-  activeFields.push('status');
-  activeFields.push('reminder');
-  if (currentDraft.reminder === true) {
-    activeFields.push('reminderOption');
-  }
-  activeFields.push('priorityDays');
-  activeFields.push('repeatPattern');
-  activeFields.push('checkpoints');
-  activeFields.push('attachments');
 
   // Check which field is missing next
   let nextFieldKey = null;
@@ -898,10 +1258,26 @@ async function parseTaskRequest({
       continue;
     }
 
-    if (fieldKey === 'assignee') {
-      if (!currentDraft.assigneeId) {
+    if (fieldKey === 'project') {
+      if (!currentDraft.projectId) {
         nextFieldKey = fieldKey;
         break;
+      }
+    } else if (fieldKey === 'assignee') {
+      if (activeIntent === 'task_project') {
+        if (formatProjectStatus(currentDraft.status) === 'in progress' && !currentDraft.assigneeId) {
+          nextFieldKey = fieldKey;
+          break;
+        }
+        if (!currentDraft.assigneeId && !currentDraft.skipped.includes('assignee') && (currentDraft.asked.includes('assignee') || currentDraft.wantsOthers || currentDraft.assigneeName)) {
+          nextFieldKey = fieldKey;
+          break;
+        }
+      } else {
+        if (!currentDraft.assigneeId) {
+          nextFieldKey = fieldKey;
+          break;
+        }
       }
     } else if (fieldKey === 'title') {
       if (!currentDraft.title || !String(currentDraft.title).trim()) {
@@ -915,6 +1291,12 @@ async function parseTaskRequest({
       }
       const dueMs = new Date(currentDraft.dueDateTime).getTime();
       if (isNaN(dueMs) || dueMs <= now.getTime()) {
+        nextFieldKey = fieldKey;
+        break;
+      }
+    } else if (fieldKey === 'dueDate') {
+      const rawDue = currentDraft.dueDate || currentDraft.dueDateTime;
+      if (!rawDue) {
         nextFieldKey = fieldKey;
         break;
       }
@@ -958,8 +1340,8 @@ async function parseTaskRequest({
         nextFieldKey = fieldKey;
         break;
       }
-    } else if (fieldKey === 'attachments') {
-      if (!currentDraft.asked.includes('attachments') && currentDraft.attachmentsCount === 0) {
+    } else if (fieldKey === 'attachments' || fieldKey === 'file') {
+      if (!currentDraft.asked.includes(fieldKey) && currentDraft.attachmentsCount === 0 && !currentDraft.file && !currentDraft.pdfFile) {
         nextFieldKey = fieldKey;
         break;
       }
@@ -972,11 +1354,15 @@ async function parseTaskRequest({
   for (const f of activeFields) {
     if (currentDraft.skipped.includes(f)) {
       done += 1;
+    } else if (f === 'project' && currentDraft.projectId) {
+      done += 1;
     } else if (f === 'assignee' && currentDraft.assigneeId) {
       done += 1;
     } else if (f === 'title' && currentDraft.title) {
       done += 1;
     } else if (f === 'dueDateTime' && currentDraft.dueDateTime && new Date(currentDraft.dueDateTime).getTime() > now.getTime()) {
+      done += 1;
+    } else if (f === 'dueDate' && (currentDraft.dueDate || currentDraft.dueDateTime)) {
       done += 1;
     } else if (f === 'description' && currentDraft.description !== null) {
       done += 1;
@@ -994,7 +1380,7 @@ async function parseTaskRequest({
       done += 1;
     } else if (f === 'checkpoints' && (currentDraft.asked.includes('checkpoints') || (currentDraft.checkpoints && currentDraft.checkpoints.length > 0))) {
       done += 1;
-    } else if (f === 'attachments' && (currentDraft.asked.includes('attachments') || currentDraft.attachmentsCount > 0)) {
+    } else if ((f === 'attachments' || f === 'file') && (currentDraft.asked.includes(f) || currentDraft.attachmentsCount > 0 || currentDraft.file || currentDraft.pdfFile)) {
       done += 1;
     }
   }
@@ -1003,8 +1389,6 @@ async function parseTaskRequest({
   // STEP 5: Return Question OR Ready status
   // -------------------------------------------------------------
   if (nextFieldKey) {
-    // FIX: jis field ka sawaal abhi pooch rahe hain use hamesha list ke END mein rakho,
-    // taaki agle turn par lastAskedField sahi ho (re-ask par purana order jawab ko galat field mein daal deta tha).
     currentDraft.asked = currentDraft.asked.filter((f) => f !== nextFieldKey);
     currentDraft.asked.push(nextFieldKey);
 
@@ -1016,23 +1400,62 @@ async function parseTaskRequest({
     const fieldConfig = TASK_FIELDS[nextFieldKey] || {};
     const isPastDueTime = nextFieldKey === 'dueDateTime' && currentDraft.dueDateTime && new Date(currentDraft.dueDateTime).getTime() <= now.getTime();
 
+    const hasCommandInMsg = /\b(?:task|assign|banao|bana\s*do|create|kar\s*do|kardo|karo)\b/i.test(rawMessage);
+    const askTitleQuestion = (nextFieldKey === 'title' && !isReAsk && hasCommandInMsg)
+      ? 'Task ka naam kya hoga?'
+      : null;
+    const askTitleSpeech = (nextFieldKey === 'title' && !isReAsk && hasCommandInMsg)
+      ? 'टास्क का नाम क्या होगा?'
+      : null;
+
     let replyText = isPastDueTime
       ? 'Yeh samay beet chuka hai. Kripya naya time batayein ya kal ka samay chunein.'
-      : ((isReAsk && fieldConfig.reAskQuestion?.reply)
+      : (askTitleQuestion || ((isReAsk && fieldConfig.reAskQuestion?.reply)
         ? fieldConfig.reAskQuestion.reply
-        : (fieldConfig.question?.reply || 'Agli detail batayein:'));
+        : (fieldConfig.question?.reply || 'Agli detail batayein:')));
 
     let speechText = isPastDueTime
       ? 'यह समय बीत चुका है। कृपया नया समय बताएं या कल का समय चुनें।'
-      : ((isReAsk && fieldConfig.reAskQuestion?.speech)
+      : (askTitleSpeech || ((isReAsk && fieldConfig.reAskQuestion?.speech)
         ? fieldConfig.reAskQuestion.speech
-        : (fieldConfig.question?.speech || 'अगली डिटेल बताएं:'));
+        : (fieldConfig.question?.speech || 'अगली डिटेल बताएं:')));
 
     // Visual reply has the ackPrefix summary; spoken speech remains concise
     replyText = ackPrefix + replyText;
 
     let chipsList = [];
-    if (isReAsk && typeof fieldConfig.reAskChips === 'function') {
+    if (activeIntent === 'task_project' && nextFieldKey === 'assignee' && currentProject) {
+      chipsList = (currentProject.users || []).slice(0, 8).map((m) => ({
+        label: m.name,
+        action: { type: 'set', field: 'assignee', value: m.name, assigneeId: String(m._id || m) },
+      }));
+      if (formatProjectStatus(currentDraft.status) !== 'in progress') {
+        chipsList.push({ label: 'Bina assignee ke', action: { type: 'skip', field: 'assignee' } });
+      }
+      chipsList.push({ label: 'Cancel', action: { type: 'cancel' } });
+    } else if (activeIntent === 'task_project' && nextFieldKey === 'project') {
+      chipsList = buildAccessibleProjectChips(accessibleProjects, 5);
+    } else if (activeIntent === 'task_project' && nextFieldKey === 'priority') {
+      chipsList = [
+        { label: 'Low', action: { type: 'set', field: 'priority', value: 'Low' } },
+        { label: 'Medium', action: { type: 'set', field: 'priority', value: 'Medium' } },
+        { label: 'High', action: { type: 'set', field: 'priority', value: 'High' } },
+        { label: 'Baaki sab default', action: { type: 'skip_all' } },
+      ];
+    } else if (activeIntent === 'task_project' && nextFieldKey === 'status') {
+      chipsList = [
+        { label: 'Pending', action: { type: 'set', field: 'status', value: 'pending' } },
+        { label: 'In Progress', action: { type: 'set', field: 'status', value: 'in progress' } },
+        { label: 'Completed', action: { type: 'set', field: 'status', value: 'completed' } },
+        { label: 'On Hold', action: { type: 'set', field: 'status', value: 'on hold' } },
+        { label: 'Cancelled', action: { type: 'set', field: 'status', value: 'cancelled' } },
+      ];
+    } else if (activeIntent === 'task_project' && nextFieldKey === 'file') {
+      chipsList = [
+        { label: 'Nahi (Skip)', action: { type: 'skip', field: 'file' } },
+        { label: 'Baaki sab default', action: { type: 'skip_all' } },
+      ];
+    } else if (isReAsk && typeof fieldConfig.reAskChips === 'function') {
       chipsList = fieldConfig.reAskChips(now);
     } else if (typeof fieldConfig.chips === 'function') {
       chipsList = fieldConfig.chips(now);
@@ -1042,6 +1465,8 @@ async function parseTaskRequest({
     chipsList = chipsList.filter((chip) => {
       const field = chip?.action?.field || chip?.field;
       if (field === 'dueDateTime' && currentDraft.dueDateTime && new Date(currentDraft.dueDateTime).getTime() > now.getTime()) return false;
+      if (field === 'dueDate' && currentDraft.dueDate) return false;
+      if (field === 'project' && currentDraft.projectId) return false;
       if (field === 'priority' && currentDraft.priority) return false;
       if (field === 'status' && currentDraft.status) return false;
       if (field === 'description' && currentDraft.description !== null && currentDraft.description !== undefined) return false;
@@ -1049,9 +1474,9 @@ async function parseTaskRequest({
       return true;
     });
 
-    // For Owner/Admin on the first question of a new task, offer [Khud ke liye] [Kisi aur ke liye]
-    const isFirstQuestion = currentDraft.asked.filter((f) => f !== 'assignee').length <= 1;
-    if (canAssignOthers && isFirstQuestion && currentDraft.taskFor !== 'others' && nextFieldKey !== 'assignee') {
+    // For Owner/Admin on the first question of a new normal task, offer [Khud ke liye] [Kisi aur ke liye]
+    const isFirstQuestion = currentDraft.asked.filter((f) => f !== 'assignee' && f !== 'project').length <= 1;
+    if (activeIntent !== 'task_project' && canAssignOthers && isFirstQuestion && currentDraft.taskFor !== 'others' && nextFieldKey !== 'assignee') {
       chipsList = [
         { label: 'Khud ke liye', action: { type: 'set', field: 'taskFor', value: 'self' } },
         { label: 'Kisi aur ke liye', action: { type: 'set', field: 'taskFor', value: 'others' } },
@@ -1077,97 +1502,91 @@ async function parseTaskRequest({
     };
   }
 
+  // Strict Draft Validation via Form Registry before declaring READY
+  const activeFormConfig = FORM_REGISTRY[currentDraft.intent] || FORM_REGISTRY.self_task;
+  const draftValidation = activeFormConfig.validateDraft
+    ? activeFormConfig.validateDraft(currentDraft, currentProject)
+    : { valid: true };
+
+  if (!draftValidation.valid) {
+    const invalidField = draftValidation.field || 'assignee';
+    currentDraft.asked = currentDraft.asked.filter((f) => f !== invalidField);
+
+    let validationChips = [];
+    if (invalidField === 'assignee' && currentProject) {
+      validationChips = (currentProject.users || []).slice(0, 8).map((m) => ({
+        label: m.name,
+        action: { type: 'set', field: 'assignee', value: m.name, assigneeId: String(m._id || m) },
+      }));
+      if (formatProjectStatus(currentDraft.status) !== 'in progress') {
+        validationChips.push({ label: 'Bina assignee ke', action: { type: 'skip', field: 'assignee' } });
+      }
+      validationChips.push({ label: 'Cancel', action: { type: 'cancel' } });
+    }
+
+    const replyMsg = `${draftValidation.reason}. Kripya ${invalidField === 'assignee' ? 'assignee' : invalidField} select karein:`;
+    const speechMsg = invalidField === 'assignee'
+      ? 'कृपया इस प्रोजेक्ट के किसी सदस्य को असाइन करें।'
+      : 'कृपया आवश्यक जानकारी बताएं।';
+
+    return {
+      success: true,
+      status: 'needs_input',
+      field: invalidField,
+      reply: replyMsg,
+      speech: speechMsg,
+      draft: currentDraft,
+      missing: [invalidField],
+      chips: validationChips,
+      candidates: [],
+      notices,
+      progress: { done, total },
+      canAssignOthers,
+      intent: detectedIntent ? { type: detectedIntent.type, field: detectedIntent.field } : null,
+      meta: { model: modelName },
+    };
+  }
+
   // All fields are handled -> Status: READY
   const cleanedCheckpoints = getCleanCheckpoints(currentDraft.checkpoints);
   const isFinalOthers = Boolean(currentDraft.assigneeId && currentDraft.taskFor === 'others');
-  const taskFor = isFinalOthers ? 'others' : 'self';
+  const taskFor = currentDraft.intent === 'task_project' ? 'project' : (isFinalOthers ? 'others' : 'self');
 
-  const reminderPayload = buildReminderPayload({
-    enabled: Boolean(currentDraft.reminder),
-    reminderOption: currentDraft.reminderOption,
-    options: currentDraft.reminder && currentDraft.reminderOption ? [currentDraft.reminderOption] : [],
-    repeatIntervalMinutes: currentDraft.repeatIntervalMinutes,
-    minutesBeforeDue: currentDraft.minutesBeforeDue,
-    customTime: currentDraft.customTime,
-    reminderTime: currentDraft.reminderTime,
-  });
+  let payload;
+  let preview;
 
-  const fields = {
-    title: currentDraft.title || '',
-    description: currentDraft.description || '',
-    dueDateTime: currentDraft.dueDateTime || '',
-    priority: currentDraft.priority || 'medium',
-    status: currentDraft.status || 'pending',
-    priorityDays: String(currentDraft.priorityDays || '1'),
-    repeatPattern: currentDraft.repeatPattern || 'none',
-    repeatDays: JSON.stringify(currentDraft.repeatDays || []),
-    recurrenceEndDate: currentDraft.recurrenceEndDate || '',
-    checkpoints: JSON.stringify(cleanedCheckpoints),
-    reminderSettings: JSON.stringify(reminderPayload),
-    ...(isFinalOthers
-      ? {
-        assignedUsers: JSON.stringify([currentDraft.assigneeId]),
-        assignedGroups: JSON.stringify([]),
-      }
-      : {}),
-  };
-
-  const payload = {
-    endpoint: isFinalOthers ? '/task/create-for-others' : '/tasks/self/create',
-    method: 'POST',
-    multipart: true,
-    fields,
-    body: fields,
-    fileField: 'files',
-  };
-
-  const statusLabels = {
-    pending: 'Pending',
-    'in-progress': 'In Progress',
-    completed: 'Completed',
-    onhold: 'On Hold',
-    rejected: 'Rejected',
-    cancelled: 'Cancelled',
-    reopen: 'Reopen',
-    overdue: 'Overdue',
-    approved: 'Approved',
-  };
-
-  const getReminderPreviewText = (draft) => {
-    if (!draft.reminder) return 'Nahi (No)';
-    if (draft.repeatIntervalMinutes) return `Every ${draft.repeatIntervalMinutes} min`;
-    if (draft.reminderOption === 'oneHourBefore') return '1 hour before';
-    if (draft.minutesBeforeDue) return `${draft.minutesBeforeDue} min before due`;
-    if (draft.customTime) return `One-time: ${formatHumanIstDate(draft.customTime)}`;
-    if (draft.reminderOption === 'halfHourly') return 'Every 30 min';
-    if (draft.reminderOption === 'hourly') return 'Every 1 hour';
-    return '1 hour before';
-  };
-
-  const preview = {
-    title: currentDraft.title || '—',
-    description: currentDraft.description || '—',
-    dueDateTime: currentDraft.dueDateTime || '—',
-    dueLabel: currentDraft.dueDateTime ? formatHumanIstDate(currentDraft.dueDateTime) : '—',
-    priority: currentDraft.priority ? (currentDraft.priority.charAt(0).toUpperCase() + currentDraft.priority.slice(1)) : 'Medium',
-    status: currentDraft.status || 'pending',
-    statusLabel: statusLabels[currentDraft.status] || 'Pending',
-    priorityDays: currentDraft.priorityDays || '1',
-    reminder: getReminderPreviewText(currentDraft),
-    reminderOption: currentDraft.reminder ? (currentDraft.reminderOption || 'oneHourBefore') : null,
-    repeatIntervalMinutes: currentDraft.repeatIntervalMinutes || null,
-    minutesBeforeDue: currentDraft.minutesBeforeDue || null,
-    customTime: currentDraft.customTime || null,
-    repeat: currentDraft.repeatPattern === 'daily' ? 'Repeat Task' : 'No repeat',
-    checkpoints: cleanedCheckpoints.length > 0 ? cleanedCheckpoints.map((c) => c.title) : [],
-    attachmentsCount: currentDraft.attachmentsCount || 0,
-    assignee: isFinalOthers ? { id: currentDraft.assigneeId, label: currentDraft.assigneeLabel } : null,
-    taskFor,
-  };
+  if (currentDraft.intent === 'task_project') {
+    const verifiedProj = accessibleProjects.find((p) => idsEqual(p._id, currentDraft.projectId));
+    if (!verifiedProj) {
+      notices.push('Project access verify nahi ho saka.');
+    }
+    payload = FORM_REGISTRY.task_project.buildPayload(currentDraft);
+    preview = FORM_REGISTRY.task_project.buildPreview(currentDraft);
+  } else if (isFinalOthers) {
+    payload = FORM_REGISTRY.task_assigned_user.buildPayload(currentDraft);
+    preview = FORM_REGISTRY.task_assigned_user.buildPreview(currentDraft);
+  } else {
+    payload = FORM_REGISTRY.self_task.buildPayload(currentDraft);
+    preview = FORM_REGISTRY.self_task.buildPreview(currentDraft);
+  }
 
   const readyConfig = TASK_FIELDS.ready;
 
   if (wantsEditPrompt) {
+    const editChips = currentDraft.intent === 'task_project'
+      ? [
+        { label: 'Priority badlo', action: { type: 'ask', field: 'priority' } },
+        { label: 'Date badlo', action: { type: 'ask', field: 'dueDate' } },
+        { label: 'Reminder badlo', action: { type: 'ask', field: 'reminder' } },
+        { label: 'Haan, create karo', action: { type: 'confirm' } },
+      ]
+      : [
+        { label: 'Priority badlo', action: { type: 'ask', field: 'priority' } },
+        { label: 'Date/Time badlo', action: { type: 'ask', field: 'dueDateTime' } },
+        { label: 'Reminder badlo', action: { type: 'ask', field: 'reminder' } },
+        { label: 'Haan, create karo', action: { type: 'confirm' } },
+      ];
+
     return {
       success: true,
       status: 'ready',
@@ -1176,12 +1595,7 @@ async function parseTaskRequest({
       speech: 'जी बताएं क्या बदलाव करने हैं? मैं कर दूंगी।',
       draft: currentDraft,
       missing: [],
-      chips: [
-        { label: 'Priority badlo', action: { type: 'ask', field: 'priority' } },
-        { label: 'Date/Time badlo', action: { type: 'ask', field: 'dueDateTime' } },
-        { label: 'Reminder badlo', action: { type: 'ask', field: 'reminder' } },
-        { label: 'Haan, create karo', action: { type: 'confirm' } },
-      ],
+      chips: editChips,
       candidates: [],
       notices,
       progress: { done: total, total },
@@ -1197,6 +1611,10 @@ async function parseTaskRequest({
   if (initialValues.dueDateTime && currentDraft.dueDateTime && initialValues.dueDateTime !== currentDraft.dueDateTime) {
     const formattedDue = formatHumanIstDate(currentDraft.dueDateTime);
     modifiedFields.push({ key: 'dueDateTime', labelHinglish: `due time (${formattedDue})`, labelHindi: `ड्यू टाइम (${formattedDue})` });
+  }
+  if (initialValues.dueDate && currentDraft.dueDate && initialValues.dueDate !== currentDraft.dueDate) {
+    const formattedDue = formatHumanIstDate(currentDraft.dueDate);
+    modifiedFields.push({ key: 'dueDate', labelHinglish: `due date (${formattedDue})`, labelHindi: `ड्यू डेट (${formattedDue})` });
   }
   if (initialValues.priority && currentDraft.priority && initialValues.priority !== currentDraft.priority) {
     modifiedFields.push({ key: 'priority', labelHinglish: `priority (${currentDraft.priority})`, labelHindi: `प्रायोरिटी (${currentDraft.priority})` });
@@ -1216,12 +1634,31 @@ async function parseTaskRequest({
   if ((initialValues.assigneeId || initialValues.assigneeName) && (initialValues.assigneeId !== currentDraft.assigneeId || initialValues.assigneeName !== currentDraft.assigneeName)) {
     modifiedFields.push({ key: 'assignee', labelHinglish: 'assignee', labelHindi: 'कर्मचारी' });
   }
+  if (initialValues.projectId && currentDraft.projectId && initialValues.projectId !== currentDraft.projectId) {
+    modifiedFields.push({ key: 'project', labelHinglish: `project ("${currentDraft.projectName}")`, labelHindi: `प्रोजेक्ट ("${currentDraft.projectName}")` });
+  }
 
   let finalReply = ackPrefix + readyConfig.question.reply;
   let readySpeech = speechPrefix
     ? `${speechPrefix}${readyConfig.question.speech}`
     : (currentDraft.title ? `टास्क "${currentDraft.title}" तैयार है। ${readyConfig.question.speech}` : readyConfig.question.speech);
   let finalSpeech = readySpeech;
+
+  if (currentDraft.intent === 'task_project' && currentDraft.projectName) {
+    const last6 = currentDraft.projectId ? String(currentDraft.projectId).slice(-6) : '';
+    const dateStr = currentDraft.projectStartDate ? formatCandidateDate(currentDraft.projectStartDate) : '';
+    const distinguishingSuffix = (currentDraft.showDistinguishing && last6)
+      ? ` (Start: ${dateStr || 'No date'}, #${last6})`
+      : '';
+    const projectDisplayTitle = `${currentDraft.projectName}${distinguishingSuffix}`;
+
+    finalReply = ackPrefix + `Project "${projectDisplayTitle}" ke andar task "${currentDraft.title}" tayar hai. Kya main create kar doon?`;
+    finalSpeech = `प्रोजेक्ट "${currentDraft.projectName}" में टास्क "${currentDraft.title}" तैयार है। क्या मैं बना दूं?`;
+  } else if (currentDraft.intent === 'task_assigned_user' && (currentDraft.assigneeName || currentDraft.assigneeLabel)) {
+    const who = currentDraft.assigneeName || currentDraft.assigneeLabel;
+    finalReply = ackPrefix + `${who} ko task "${currentDraft.title}" assign karne ke liye draft tayar hai. Kya main create kar doon?`;
+    finalSpeech = `${who} को टास्क "${currentDraft.title}" असाइन करने के लिए तैयार है। क्या मैं बना दूं?`;
+  }
 
   if (modifiedFields.length > 0) {
     const labelsHinglish = modifiedFields.map((f) => f.labelHinglish).join(', ');

@@ -243,6 +243,14 @@ const SKIP_ALL_PHRASES = [
   'baki sab default',
   'baaki default',
   'baki default',
+  'baaki sab',
+  'baki sab',
+  'baaki sabhi',
+  'baki sabhi',
+  'baaki sabbha',
+  'baki sabbha',
+  'baaki sabh',
+  'baki sabh',
   'bas itna hi',
   'bas itna',
   'bas',
@@ -254,6 +262,8 @@ const SKIP_ALL_PHRASES = [
   'बस',
   'बाकी सब डिफ़ॉल्ट',
   'बाकी डिफ़ॉल्ट',
+  'बाकी सब',
+  'बाकी सभी',
 ];
 
 const SELF_PHRASES = [
@@ -283,36 +293,71 @@ function isSelfPhrase(text) {
   });
 }
 
+const FORBIDDEN_ASSIGNEE_NAMES = new Set([
+  'me', 'myself', 'self', 'someone', 'anyone', 'mujhe', 'mujhko', 'kisi', 'sab', 'apne', 'khud',
+  'shaam', 'sham', 'subah', 'subha', 'raat', 'dopahar', 'kal', 'aaj', 'parso', 'tarikh', 'tareekh',
+  'din', 'baje', 'time', 'ek', 'do', 'teen', 'chaar', 'paanch', 'chhe', 'saat', 'aath', 'nau', 'das',
+  'new', 'naya', 'naye', 'nayi', 'task', 'priority', 'status', 'project', 'co', 'ko', 'ka',
+  'ki', 'ke', 'me', 'mein', 'mai', 'main', 'hai', 'ho', 'karo', 'banao', 'kar', 'do', 'kardo',
+  'high', 'low', 'medium', 'urgent', 'pending', 'reminder', 'checkpoints', 'description', 'title'
+]);
+
+function isValidAssigneeCandidate(cand) {
+  if (!cand || typeof cand !== 'string') return false;
+  const clean = cand.trim().toLowerCase();
+  if (clean.length < 2) return false;
+  if (FORBIDDEN_ASSIGNEE_NAMES.has(clean)) return false;
+  return true;
+}
+
+function cleanAssigneeName(name) {
+  if (!name || typeof name !== 'string') return null;
+  let clean = name.trim().replace(/^(?:task|assign(?:ed)?|karo|kardo|karna|kar\s*do|dena|de\s*do|bhejo|banao|haan|ha|yes|haanji|hnji)[,\s]+/i, '').trim();
+  clean = clean.replace(/\s+(?:ko|co|koh|kor|ke\s+liye)$/i, '').trim();
+  if (isValidAssigneeCandidate(clean)) {
+    return clean;
+  }
+  return null;
+}
+
 function extractAssigneeMention(text) {
   if (!text || typeof text !== 'string') return null;
   const clean = text.trim();
   if (isSelfPhrase(clean)) return null;
 
   // 1. "assign to <Name>" or "task to <Name>"
-  const assignToMatch = clean.match(/\b(?:assign\s+to|task\s+to)\s+([a-zA-Z\u0900-\u097F]+)/i);
+  const assignToMatch = clean.match(/\b(?:assign(?:ed)?\s+to|task\s+to)\s+([a-zA-Z\u0900-\u097F]+(?:\s+[a-zA-Z\u0900-\u097F]+)?)/i);
   if (assignToMatch && assignToMatch[1]) {
-    const name = assignToMatch[1].trim();
-    if (!/^(me|myself|self|someone|anyone)$/i.test(name)) {
-      return name;
-    }
+    const cleaned = cleanAssigneeName(assignToMatch[1]);
+    if (cleaned) return cleaned;
   }
 
-  // 2. "<Name> ko assign" or "<Name> ko task" or "<Name> ko dena" or "<Name> ko"
-  const koMatch = clean.match(/([a-zA-Z\u0900-\u097F]{2,})\s+ko\b(?:\s+(?:assign|dena|de\s+do|task))?/i);
+  // 2. "<Name> (ko|core|co|koh|kor) task assign(ed) karo" or "<Name> (ko|core|co|koh|kor) assign" or "<Name> ko"
+  const koMatch = clean.match(/([a-zA-Z\u0900-\u097F]{2,}(?:\s+[a-zA-Z\u0900-\u097F]{2,})?)\s+(?:ko|co|koh|kor|के|को)\b(?:\s+(?:ek\s+)?task)?(?:\s+(?:assign(?:ed)?|dena|de\s*do|bhejo|karo|banao))?/i);
   if (koMatch && koMatch[1]) {
-    const candidate = koMatch[1].trim();
-    if (!/^(mujhe|mujhko|kisi|sab|apne|khud)$/i.test(candidate)) {
-      return candidate;
-    }
+    const cleaned = cleanAssigneeName(koMatch[1]);
+    if (cleaned) return cleaned;
   }
 
-  // 3. "<Name> ke liye"
-  const keLiyeMatch = clean.match(/([a-zA-Z\u0900-\u097F]{2,})\s+ke\s+liye\b/i);
+  // 3. "<Name> task assign(ed) karo" (without particle)
+  const taskAssignMatch = clean.match(/([a-zA-Z\u0900-\u097F]{2,})\s+(?:ek\s+)?task\s+assign(?:ed)?(?:\s+(?:karo|kardo|karna|kariye))?/i);
+  if (taskAssignMatch && taskAssignMatch[1]) {
+    const cleaned = cleanAssigneeName(taskAssignMatch[1]);
+    if (cleaned) return cleaned;
+  }
+
+  // 4. "task assign(ed) karo <Name> ko" or "task assign(ed) karo <Name>"
+  const assignKaroMatch = clean.match(/\b(?:task\s+)?assign(?:ed)?\s+(?:karo|kar\s*do|kardo|karna)\s+([a-zA-Z\u0900-\u097F]{2,})(?:\s+(?:ko|co|koh|ke\s+liye))?/i);
+  if (assignKaroMatch && assignKaroMatch[1]) {
+    const cleaned = cleanAssigneeName(assignKaroMatch[1]);
+    if (cleaned) return cleaned;
+  }
+
+  // 5. "<Name> ke liye"
+  const keLiyeMatch = clean.match(/([a-zA-Z\u0900-\u097F]{2,}(?:\s+[a-zA-Z\u0900-\u097F]{2,})?)\s+ke\s+liye\b/i);
   if (keLiyeMatch && keLiyeMatch[1]) {
-    const candidate = keLiyeMatch[1].trim();
-    if (!/^(khud|apne|mere|sab|kisi|unke|uske)$/i.test(candidate)) {
-      return candidate;
-    }
+    const cleaned = cleanAssigneeName(keLiyeMatch[1]);
+    if (cleaned) return cleaned;
   }
 
   return null;
@@ -403,8 +448,8 @@ function parseHinglishDateTime(rawText, now = new Date(), referenceDate = null) 
     targetDate += 1;
     dayOffsetFound = true;
   }
-  // Today / Aaj / Aj / Tonight / आज
-  else if (/(?:^|\P{L})(today|aaj|aj|tonight|आज)(?:\P{L}|$)/iu.test(text)) {
+  // Today / Aaj / Tonight / आज (Strict whole-word match preventing combining marks like 'ी' from matching boundary)
+  else if (/(?<![\p{L}\p{M}])(today|aaj|tonight|आज)(?![\p{L}\p{M}])/iu.test(text)) {
     dayOffsetFound = true;
     if (/(?:^|\P{L})tonight(?:\P{L}|$)/iu.test(text)) {
       isTonight = true;
@@ -638,15 +683,19 @@ function parseHinglishSlots(rawText, now = new Date(), referenceDate = null) {
 
   // 1. Title Extraction:
   // Support: "task name/naam (is|ka naam|:) X", "title (is|:) X", "name it X", "call it X", "task (is|:) X", "naam X"
-  const stopKeywords = '(?=[.,;]?\\s*(?:status|स्टेटस|description|details|vivaran|विवरण|डिस्क्रिप्शन|priority|प्रायोरिटी|due\\s+date|due|deadline|reminder|रिमाइंडर|repeat|checkpoints|aur|and|uska|uski|उसका|उसकी|इसका|इसकी|attach|vah|woh|\\bby\\b|kal|cal|kl|aaj|today|tomorrow|parso)|\\.\\s+|$)';
+  const stopKeywords = '(?=[.,;]?\\s*(?:status|स्टेटस|description|details|vivaran|विवरण|डिस्क्रिप्शन|priority|प्रायोरिटी|due\\s+date|due|deadline|reminder|रिमाइंडर|repeat|checkpoints?|aur|and|uska|uski|उसका|उसकी|इसका|इसकी|attach|vah|woh|\\bby\\b|kal|cal|kl|aaj|today|tomorrow|parso)|\\.\\s+|$)';
   const titleRegexes = [
+    new RegExp(`(?:(?:urgent\\s+)?(?:ek\\s+)?(?:naya\\s+)?task\\s*(?:banao|create\\s+karo|karo|bana\\s*do|banayein|create)\\s*:\\s*)(.+?)${stopKeywords}`, 'i'),
+    new RegExp(`^(.+?)(?:\\s+(?:ka|ke\\s+liye)\\s+(?:ek\\s+)?task\\s+(?:banao|create\\s+karo|karo|bana\\s*do|banayein))${stopKeywords}`, 'i'),
+    new RegExp(`(?:^|\\b)(?:(?:mera|meri|mere|hamara|hamari|hamare|apna|apni|apne)\\s+(?:liye\\s+)?)?(?:ek\\s+)?(?:naya\\s+|nayi\\s+)?\\b(?!(?:ek|naya|nayi|naye|mera|meri|mere|liye|hamara|hamari|hamare|apna|apni|apne|kisi|kripya|please|ka|ke|ki|urgent|quick)\\b)([a-zA-Z\\u0900-\\u097F0-9_-]+(?:\\s+[a-zA-Z\\u0900-\\u097F0-9_-]+)*)\\s+task\\s+(?:banao|create\\s+karo|karo|bana\\s*do|bana\\s*dijiye|banayein|create)${stopKeywords}`, 'i'),
     new RegExp(`(?:(?:task\\s+)?(?:title|naam|नाम)\\s*(?:badlo|badal\\s+kar|change\\s+karo|change\\s+to|change|बदलो)\\s*(?:to|ko|kar)?\\s*)(.+?)${stopKeywords}`, 'i'),
     new RegExp(`(?:(?:and\\s+|aur\\s+)?task\\s+(?:name|naam)\\s*(?:is\\s+|ka\\s+naam\\s+|:\\s*|\\s+as\\s+|\\s+to\\s+be\\s+)?)(.+?)${stopKeywords}`, 'i'),
     new RegExp(`(?:(?:task\\s+)?title\\s*(?:is\\s+|:\\s*|\\s+as\\s+|\\s+to\\s+be\\s+|hai\\s+|hoga\\s+)?)(.+?)${stopKeywords}`, 'i'),
     new RegExp(`(?:name\\s+it\\s+|call\\s+it\\s+)(.+?)${stopKeywords}`, 'i'),
     new RegExp(`(?:task\\s*(?:is\\s+|:\\s*))(.+?)${stopKeywords}`, 'i'),
-    new RegExp(`(?:(?:task\\s+)?(?:ka\\s+)?naam\\s*(?:hai\\s+|:\\s*|is\\s+|hoga\\s+)?)(.+?)${stopKeywords}`, 'i'),
-    new RegExp(`(?:(?:uska|iska|उसका|इसका)?\\s*(?:naam|नाम|title)\\s*(?:rakho|rakhein|rakhna|रखो|रखें|रखना|hai|is|:)?(?:[\\s,:]*))(.+?)${stopKeywords}`, 'i'),
+    new RegExp(`(?:(?:task\\s+)?(?:ka\\s+)?naam\\s*(?:badal\\s*kar|badlo|karo)?\\s*(?:hai\\s+|:\\s*|is\\s+|hoga\\s+)?)(.+?)${stopKeywords}`, 'i'),
+    new RegExp(`(?:(?:uska|iska|उसका|इसका)?\\s*(?:naam|नाम|title)\\s*(?:badal\\s*kar|badlo|rakho|rakhein|rakhna|रखो|रखें|रखना|hai|is|:)?(?:[\\s,:]*))(.+?)${stopKeywords}`, 'i'),
+    new RegExp(`(?:(?:title|naam|नाम)\\s*(?:badlo|badal\\s*kar|badal\\s*do|change\\s*karo|change\\s*kar\\s*do|बदलो)\\s*[,:]?\\s*)(.+?)${stopKeywords}`, 'i'),
     new RegExp(`(?:uska\\s+naam\\s+(?:yah\\s+|yeh\\s+)?)(.+?)${stopKeywords}`, 'i'),
   ];
 
@@ -657,8 +706,9 @@ function parseHinglishSlots(rawText, now = new Date(), referenceDate = null) {
       t = t.replace(/^[.,;:\s]+|[.,;:\s]+$/g, '').trim();
       t = t.replace(/^(yah|yeh|is)\s+/i, '');
       t = t.replace(/\s+(ho|hoga|rakhna|hai|rakhein|karo|kar\s+do|करो|कर\s+दो)$/i, '');
+      t = t.replace(/\s+(ka|ke|ki)$/i, '');
       t = t.replace(/^[.,;:\s]+|[.,;:\s]+$/g, '').trim();
-      if (t.length > 0 && t.length <= 100 && !/^(task|create|banana|hai|is)$/i.test(t)) {
+      if (t.length > 0 && t.length <= 100 && !/^(task|create|banana|hai|is|ek|naya|nayi|naye|mera|meri|mere|liye|hamare|hamara|apne|apna|khud)$/i.test(t)) {
         slots.title = t.charAt(0).toUpperCase() + t.slice(1);
         break;
       }
@@ -833,6 +883,7 @@ function parseHinglishSlots(rawText, now = new Date(), referenceDate = null) {
   if (assigneeMention) {
     slots.assigneeName = assigneeMention;
     slots.wantsOthers = true;
+    slots.taskFor = 'others';
   }
 
   // 8. Date & Time
@@ -880,8 +931,59 @@ function isSelfIntroduction(text) {
  * If title is empty and message is short (<= 80 chars), and not a date/time or chip label,
  * strip leading/trailing title phrases and use it as title.
  */
+/**
+ * Sanity guard for extracted task titles.
+ * Rejects command phrases, whole-sentence echoes, and assignee-directive sentences.
+ */
+function isInvalidOrCommandTitle(title, message = '', assigneeName = '') {
+  if (!title || typeof title !== 'string') return true;
+  const t = title.trim();
+  if (t.length === 0) return true;
+
+  const normTitle = t.toLowerCase().replace(/[\s.,!?;:।]+/gu, ' ').trim();
+  const normMsg = String(message || '').toLowerCase().replace(/[\s.,!?;:।]+/gu, ' ').trim();
+
+  // Initiation, filler, or pure date/time
+  if (isInitiationPhrase(t) || isFillerPhrase(t) || isSelfPhrase(t) || isSkip(t)) {
+    return true;
+  }
+
+  // 1. Bare commands: purely instructions to create/make/assign a task with no actual task subject
+  // e.g. "ek task banao", "task banao", "naya task banao", "task create karo", "create a task", "make a task", "task bana do"
+  const bareCommandRegex = /^(?:(?:hello|hi|hey|namaste|please|plz)?\s*(?:mujhe|mere\s+liye|apne\s+liye)?\s*(?:ek\s+|a\s+|one\s+)?(?:naya\s+|new\s+)?(?:urgent\s+)?(?:task|kaam|काम|टास्क)\s*(?:banao|bana\s*do|banayein|create\s*karo|create\s*kar\s*do|create|kar\s*do|karna\s*hai|likho|daalo|add\s*karo|karo|do|बनाओ|बनाएं|बना\s*दो|करना\s*है|करो|कर\s*दो)?)$/i;
+  if (bareCommandRegex.test(normTitle)) {
+    return true;
+  }
+
+  // 2. Command addressed to a person or assigning to a person without a separate task subject
+  // Reject ONLY when title is (nearly) the whole user sentence AND is addressed to a person
+  const isNearlyWholeSentence = !normMsg || normTitle === normMsg || (normTitle.length >= 0.75 * normMsg.length && normMsg.includes(normTitle));
+
+  if (isNearlyWholeSentence) {
+    const personCommandPatterns = [
+      /\b[a-zA-Z\u0900-\u097F]+\s+ko\s+(?:ek\s+)?(?:naya\s+)?(?:urgent\s+)?task\s+(?:do|banao|assign\s*karo|karo|bana\s*do|de\s*do|बनाओ|दो)\b/i,
+      /\btask\s+(?:assign\s+karo|banao|do|create\s*karo)\s+[a-zA-Z\u0900-\u097F]+\s+ko\b/i,
+      /\b(?:assign\s+karo|assign\s+to|task\s+assign)\s+[a-zA-Z\u0900-\u097F]+(?:\s+ko)?\b/i,
+      /\b[a-zA-Z\u0900-\u097F]+\s+ko\s+(?:assign\s+karo|kar\s*do|bana\s*do)\b/i,
+      /(?:टास्क\s*असाइन\s*करो|टास्क\s*दो|[a-zA-Z\u0900-\u097F]+\s*को\s*टास्क)/u,
+    ];
+    if (personCommandPatterns.some((p) => p.test(normTitle))) {
+      return true;
+    }
+
+    if (assigneeName && String(assigneeName).trim()) {
+      const normAssignee = String(assigneeName).trim().toLowerCase();
+      if (normTitle.includes(normAssignee) && /\b(?:assign|task|ko|karo|do)\b/i.test(normTitle)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 function applyTitleFallback(title, message) {
-  if (title && String(title).trim()) return title;
+  if (title && String(title).trim() && !isInvalidOrCommandTitle(title, message)) return title;
   if (!message || typeof message !== 'string') return null;
 
   const trimmed = message.trim();
@@ -890,19 +992,21 @@ function applyTitleFallback(title, message) {
   // Skip fallback if message is purely a skip word, self phrase, conversational filler, self-introduction, or task initiation command
   if (isSkip(trimmed) || isSkipAll(trimmed) || isSelfPhrase(trimmed) || isFillerPhrase(trimmed) || isSelfIntroduction(trimmed) || isInitiationPhrase(trimmed)) return null;
 
-  // Skip fallback if message is only date/time (e.g. "kal subah 10 baje", "shaam 6 baje tak", "today 5pm", "7 baaj kar 10 min", "कल सुबह 10 बजे")
+  // Skip fallback if message is only date/time
   const dateOnlyTokens = /^(?:aaj|aj|kal|cal|kl|parso|parson|today|tomorrow|somwar|mangalwar|budhwar|guruwar|shukrawar|shaniwar|ravivar|monday|tuesday|wednesday|thursday|friday|saturday|sunday|subah|subha|morning|dopahar|shaam|sham|evening|raat|night|am|pm|baje|baaj|baj|kar|ke|min|minute|o'?clock|saade|sade|dedh|dhai|sawa|paune|tak|tk|तक|by|until|till|before|\d+|कल|आज|सुबह|शाम|दोपहर|रात|बजे|बज|कर|के|मिनट)+$/iu;
   if (dateOnlyTokens.test(trimmed.replace(/[\s:,\.-]+/gu, ''))) {
     return null;
   }
 
-  // Skip fallback if message is only a chip label (e.g. "Low", "Medium", "High", "Haan", "Nahi")
+  // Skip fallback if message is only a chip label
   if (/^(low|medium|high|urgent|haan|nahi|yes|no|none|skip|hourly|halfhourly|onehourbefore)$/i.test(trimmed)) {
     return null;
   }
 
   let cleaned = trimmed;
   const stripPrefixes = [
+    /^(?:urgent\s+)?(?:ek\s+)?(?:naya\s+)?(?:task|टास्क)\s*(?:banao|bana\s*do|create\s*karo|karo|banayein|बनाओ|बना\s*दो)\s*:\s*/i,
+    /^(?:task|टास्क)\s*:\s*/i,
     /^title\s*:\s*/i,
     /^(?:ye|yeh|iska|task\s+ka)\s+title\s+(?:hai|hoga)?\s*/i,
     /^title\s+(?:is|hai)\s*/i,
@@ -921,6 +1025,9 @@ function applyTitleFallback(title, message) {
 
   cleaned = cleaned.trim();
   if (cleaned.length >= 2 && cleaned.length <= 80) {
+    if (isInvalidOrCommandTitle(cleaned, message)) {
+      return null;
+    }
     return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
   }
 
@@ -934,10 +1041,13 @@ module.exports = {
   isFillerPhrase,
   isSelfIntroduction,
   isInitiationPhrase,
+  cleanAssigneeName,
+  isValidAssigneeCandidate,
   extractAssigneeMention,
   parseHinglishDateTime,
   parseHinglishSlots,
   applyTitleFallback,
+  isInvalidOrCommandTitle,
   toIstIsoString,
   HINDI_NUMBER_WORDS,
   WEEKDAY_NAMES,
