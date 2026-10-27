@@ -28,6 +28,36 @@ const taskDraftSchema = z.object({
   recurrenceEndDate: z.string().nullable().default(null),
 });
 
+const selfTaskDraftSchema = taskDraftSchema.omit({ assigneeName: true });
+
+const projectTaskDraftSchema = z.object({
+  projectName: z.string().nullable().default(null).describe('Name of the project if this task is inside a project, or null if not mentioned'),
+  title: z.string().nullable().default(null).describe('Concise title for the task (maximum 80 characters), or null if not mentioned'),
+  description: z.string().nullable().default(null).describe('Detailed description of the task, or null if not mentioned'),
+  checkpoints: z.array(checkpointItemSchema).default([]).describe('Short list of checkpoint items, empty if none'),
+  priority: z.enum(['low', 'medium', 'high', 'Low', 'Medium', 'High']).nullable().default(null).describe('Priority of the task: Low, Medium, High, or null if not specified'),
+  status: z.enum(['pending', 'in progress', 'completed', 'on hold', 'cancelled', 'in-progress', 'onhold']).nullable().default(null).describe('Status of the task (pending, in progress, completed, on hold, cancelled), or null if not specified'),
+  dueDate: z.string().nullable().default(null).describe('Target completion date/time in ISO-8601 format with +05:30 timezone offset, or null if not mentioned'),
+  dueDateTime: z.string().nullable().default(null).describe('Target completion timestamp in ISO-8601 format with +05:30 timezone offset, or null if missing'),
+  assigneeName: z.string().nullable().default(null).describe('Name of project member this task is assigned to if mentioned, or null if unassigned'),
+  reminder: z.boolean().nullable().default(null),
+  reminderOption: z.enum(['hourly', 'halfHourly', 'oneHourBefore', 'interval', 'beforeDue', 'custom']).nullable().default(null),
+  repeatIntervalMinutes: z.number().nullable().default(null).describe('Repeat reminder interval in minutes'),
+  minutesBeforeDue: z.number().nullable().default(null).describe('Minutes before due time to remind'),
+  customTime: z.string().nullable().default(null).describe('Specific one-time reminder ISO datetime'),
+  reminderTime: z.string().nullable().default(null),
+});
+
+const getSchemaForIntent = (intent = 'self_task', canAssignOthers = false) => {
+  if (intent === 'task_project') {
+    return projectTaskDraftSchema;
+  }
+  if (intent === 'self_task' && !canAssignOthers) {
+    return selfTaskDraftSchema;
+  }
+  return taskDraftSchema;
+};
+
 // -------------------------------------------------------------
 // SERVER-SIDE DRAFT SCHEMA (NEVER SENT TO LLM)
 // Contains state tracking fields: askCounts, asked, skipped, attachmentsCount, etc.
@@ -36,9 +66,12 @@ const serverSideDraftSchema = z.object({
   title: z.string().nullable().optional(),
   description: z.string().nullable().optional(),
   checkpoints: z.array(checkpointItemSchema).optional(),
-  priority: z.enum(['low', 'medium', 'high']).nullable().optional(),
+  priority: z.string().nullable().optional(),
   status: z.string().nullable().optional(),
   dueDateTime: z.string().nullable().optional(),
+  dueDate: z.string().nullable().optional(),
+  projectId: z.string().nullable().optional(),
+  projectName: z.string().nullable().optional(),
   assigneeName: z.string().nullable().optional(),
   assigneeId: z.string().nullable().optional(),
   assigneeLabel: z.string().nullable().optional(),
@@ -55,6 +88,9 @@ const serverSideDraftSchema = z.object({
   repeatDays: z.array(z.string()).optional(),
   recurrenceEndDate: z.string().nullable().optional(),
   attachmentsCount: z.number().optional(),
+  file: z.any().optional(),
+  pdfFile: z.any().optional(),
+  intent: z.string().optional(),
   taskFor: z.string().optional(),
   wantsOthers: z.boolean().optional(),
   askCounts: z.record(z.number()).optional(),
@@ -64,11 +100,12 @@ const serverSideDraftSchema = z.object({
 
 const draftInputSchema = serverSideDraftSchema;
 
-const actionSchema = z.discriminatedUnion('type', [
+const typedActionSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('set'),
     field: z.string(),
     value: z.any(),
+    assigneeId: z.string().optional(),
   }),
   z.object({
     type: z.literal('skip'),
@@ -88,10 +125,35 @@ const actionSchema = z.discriminatedUnion('type', [
     type: z.literal('edit'),
     field: z.string().optional(),
   }),
+  z.object({
+    type: z.literal('pickProject'),
+    projectId: z.string().trim().min(1, 'Project ID is required').optional(),
+    value: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal('cancel'),
+  }),
+  z.object({
+    type: z.literal('reset'),
+  }),
 ]);
 
+const objectActionSchema = z.object({
+  pickProject: z.object({
+    projectId: z.string().trim().min(1, 'Project ID is required'),
+  }),
+});
+
+const actionSchema = z.union([typedActionSchema, objectActionSchema]);
+
 const pickInputSchema = z.object({
-  assigneeId: z.string().trim().min(1, 'Assignee ID is required'),
+  assigneeId: z.string().trim().min(1, 'Assignee ID is required').optional(),
+  projectId: z.string().trim().min(1, 'Project ID is required').optional(),
+  pickProject: z.object({
+    projectId: z.string().trim().min(1, 'Project ID is required'),
+  }).optional(),
+}).refine(data => data.assigneeId || data.projectId || data.pickProject, {
+  message: 'Either assigneeId or projectId must be provided in pick',
 });
 
 const parseRequestSchema = z.object({
@@ -133,6 +195,8 @@ const executiveNarrativeSchema = z.object({
 
 module.exports = {
   taskDraftSchema,
+  selfTaskDraftSchema,
+  getSchemaForIntent,
   serverSideDraftSchema,
   draftInputSchema,
   actionSchema,

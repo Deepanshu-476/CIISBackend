@@ -167,6 +167,16 @@ function normalizeTranscript(text) {
   // "उन्हें करना" -> "नहीं करना" when preceded by "नहीं reminder"
   res = res.replace(/(?:^|\s)उन्हें\s+(?=करना|karna)/giu, ' नहीं ');
 
+  // 6b. Speech homophones for assign commands and particles:
+  // "Simran co / koh task assign / assigned karo" -> "Simran ko task assign karo"
+  res = res.replace(/\b([a-zA-Z\u0900-\u097F]{2,})\s+(?:co|koh|kor)\s+(?:ek\s+)?task\s+(?:assign|assigned)\b/gi, '$1 ko task assign');
+  res = res.replace(/\b([a-zA-Z\u0900-\u097F]{2,})\s+(?:co|koh|kor)\b(?=\s*(?:assign|assigned|task|de\s*do|bhejo|$|[.,;!]))/gi, '$1 ko');
+  res = res.replace(/\bassigned\s+(karo|kar\s*do|kardo|karna|kariye)\b/gi, 'assign $1');
+  res = res.replace(/\btask\s+assigned\b/gi, 'task assign');
+
+  // 6c. "baaki sab / baki sabbha / baki sabha / baaki sabhi / baaki sabh" -> "baaki sab default"
+  res = res.replace(/(?:^|\P{L})(?:baaki|baki|baqi)\s+(?:sabbha|sabha|sabh|sab|sabhi|sab\s+kuch)(?:\s+(?:default|bhi|rehne\s+do))?(?:\P{L}|$)/giu, ' baaki sab default ');
+
   // 7. Token-level fuzzy match for key target words (Levenshtein <= 1 for >= 5 chars)
   const tokens = res.split(/\s+/);
   const normalizedTokens = tokens.map((token) => {
@@ -198,33 +208,75 @@ function detectUserIntent(text) {
   if (!text || typeof text !== 'string') return null;
 
   const normalized = normalizeTranscript(text);
-  const clean = normalized.toLowerCase().trim();
+  const clean = normalized.toLowerCase().replace(/[,.!?;:।]/g, ' ').replace(/\s+/g, ' ').trim();
 
   // 1. cancel
   if (
-    /\b(?:cancel|rehne\s+do\s+task|chhod\s+do\s+task|band\s+karo|रद्द\s+करो|टास्क\s+कैंसिल|cancel\s+task)\b/i.test(clean) ||
-    /^(?:cancel|rehne\s+do|chhod\s+do|रद्द\s+करो)$/i.test(clean)
+    /\b(?:cancel|rehne\s+do\s+task|chhod\s+do\s+task|band\s+karo|रद्द\s+करो|टास्क\s+कैंसिल|cancel\s+task)\b/iu.test(clean) ||
+    /^(?:cancel|rehne\s+do|chhod\s+do|रद्द\s+करो)$/iu.test(clean)
   ) {
     return { type: 'cancel' };
   }
 
+const CANONICAL_AFFIRMATIVES = [
+  'haan ji', 'bana do', 'kar do', 'create kar do', 'ok', 'theek hai',
+  'haan ji kardo', 'haan ji banado', 'kardo', 'banado'
+];
+
+function isGenericAffirmative(text) {
+  if (!text || typeof text !== 'string') return false;
+  let clean = text.toLowerCase().replace(/[^a-zA-Z\u0900-\u097F\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  clean = clean.replace(/\b(?:hanji|hnji|haanji|aaji)\b/g, 'haan ji');
+  const words = clean.split(/\s+/).filter(Boolean);
+  if (words.length === 0 || words.length > 6) return false;
+  if (/^(?:nahi|no|ruko|badlo|रुको|नहीं|ना|बदलो|mat|change)/iu.test(clean)) return false;
+
+  // Direct affirmative patterns
+  if (/^(?:(?:haan|ha|yes|हाँ|हां|ji)\s+)?(?:create\s+kar\s+do|create\s+karo|create\s+kardo|bana\s+do|banado|banadu|banao|kar\s+do|kardo|theek\s+hai|thik\s+hai|sahi\s+hai|ok|okay|sure|done|confirm|क्रिएट\s*कर\s*दो|बना\s*दो|बनादो|बनादू|कर\s*दो|ठीक\s*है)$/iu.test(clean)) return true;
+  if (/^(?:haan|ha|yes|sure|ok|okay|theek\s+hai|thik\s+hai|हाँ|हां|हाँ\s+जी|ठीक\s+है)$/iu.test(clean)) return true;
+
+  // Edit distance against canonical list
+  for (const target of CANONICAL_AFFIRMATIVES) {
+    const dist = levenshtein(clean, target);
+    const maxAllowed = target.length >= 10 ? 3 : (target.length >= 6 ? 2 : 1);
+    if (dist <= maxAllowed) return true;
+  }
+
+  // Token-by-token alignment tolerance
+  for (const target of CANONICAL_AFFIRMATIVES) {
+    const targetWords = target.split(' ');
+    if (targetWords.length === words.length) {
+      let totalWordDist = 0;
+      let ok = true;
+      for (let i = 0; i < words.length; i++) {
+        const d = levenshtein(words[i], targetWords[i]);
+        if (d > 2) { ok = false; break; }
+        totalWordDist += d;
+      }
+      if (ok && totalWordDist <= 2) return true;
+    }
+  }
+
+  return false;
+}
+
   // 2. create_now
   // "task create kar do/karo/kardo", "bana do/banao", "create it", "submit", "ho gaya", "kar do", "kardo", "यह टास्क बना दो", "क्रिएट कर दो"
-  const isPureCreateNow = /^(?:(?:haan|ha|yes|हाँ|हां)\s+)?(?:task\s+)?(?:create\s+kar\s+do|create\s+karo|create\s+kardo|bana\s+do|banao|create\s+it|submit|ho\s+gaya|kar\s+do|kardo|यह\s+टास्क\s+बना\s+दो|टास्क\s+बना\s+दो|क्रिएट\s+कर\s+दो)$/i.test(clean);
-  const containsCreateNow = /\b(?:task\s+create\s+kar\s+do|task\s+create\s+kardo|bana\s+do\s+task|create\s+it\s+now|submit\s+task)\b/i.test(clean);
+  const isPureCreateNow = /^(?:(?:haan|ha|yes|हाँ|हां|aaji|आजी)\s+)?(?:task\s+)?(?:create\s+kar\s+do|create\s+karo|create\s+kardo|bana\s+do|banado|banadu|banao|create\s+it|submit|ho\s+gaya|kar\s+do|kardo|यह\s+टास्क\s+बना\s+दो|टास्क\s+बना\s+दो|क्रिएट\s+कर\s+दो|क्रिएट\s+करो|क्रिएट\s+क\s*र्दो|क्रिएट|बना\s*दो|बनादो|बनादू)$/iu.test(clean);
+  const containsCreateNow = /\b(?:task\s+create\s+kar\s+do|task\s+create\s+kardo|bana\s+do\s+task|create\s+it\s+now|submit\s+task)\b/i.test(clean) ||
+    /(?:क्रिएट\s+कर\s+दो|टास्क\s+बना\s+दो|टास्क\s+क्रिएट\s+कर\s+दो|आजी\s*बनादो|आजी\s*बना\s*दो)/u.test(clean);
   if (isPureCreateNow || containsCreateNow) {
     return { type: 'create_now' };
   }
 
   // 3. confirm_yes / confirm_no for ready step
-  const isConfirmYes =
-    /^(?:haan|ha|yes|yep|yeah|sure|ok|okay|theek\s+hai|thik\s+hai|create\s+karo|हाँ|हां|ठीक\s+है|sahi\s+hai|confirm|haanji|hnji)(?:\s+(?:theek\s+hai|kar\s+do|kardo|bana\s+do|banao|create|create\s+karo|create\s+kar\s+do|create\s+kardo))?$/i.test(clean) ||
-    /^(?:(?:haan|ha|yes)\s+)?(?:kardo\s+create|kar\s+do\s+create|create\s+kar\s+do|create\s+kardo|create\s+karo|bana\s+do|bana\s+do\s+create|kardo|kar\s+do|create)$/i.test(clean);
+  const isConfirmYes = isGenericAffirmative(clean);
   if (isConfirmYes) {
     return { type: 'confirm_yes' };
   }
-  const isConfirmNo = /^(?:nahi|no|ruko|badlo|रुको|नहीं|ना|बदलो|abhi\s+nahi|nahi\s+abhi\s+nahi|kuch\s+change|kuch\s+changes|kuch\s+badalna|change\s+karna\s+hai|kuch\s+badalna\s+hai|changes\s+karne\s+hai|nahi\s+kuch\s+change|nahi\s+mujhe\s+kuch\s+changes\s+karne\s+hai)$/i.test(clean) ||
-    /\b(?:kuch\s+changes\s+karne|kuch\s+badalna\s+hai|change\s+karna\s+hai|abhi\s+nahi\s+karna|nahi\s+abhi\s+nahi)\b/i.test(clean);
+  const isConfirmNo = /^(?:nahi|no|ruko|badlo|रुको|नहीं|ना|बदलो|abhi\s+nahi|nahi\s+abhi\s+nahi|kuch\s+change|kuch\s+changes|kuch\s+badalna|change\s+karna\s+hai|kuch\s+badalna\s+hai|changes\s+karne\s+hai|nahi\s+kuch\s+change|nahi\s+mujhe\s+kuch\s+changes\s+karne\s+hai)$/iu.test(clean) ||
+    /\b(?:kuch\s+changes\s+karne|kuch\s+badalna\s+hai|change\s+karna\s+hai|abhi\s+nahi\s+karna|nahi\s+abhi\s+nahi)\b/iu.test(clean) ||
+    /(?:कुछ\s+बदलना\s+है|बदलाव\s+करना\s+है|बदलाव\s+चाहिए)/u.test(clean);
   if (isConfirmNo) {
     return { type: 'confirm_no' };
   }
@@ -232,9 +284,9 @@ function detectUserIntent(text) {
   // 4. skip_all
   // Any of: baaki sab default, baaki default, baaki sab skip, baaki kuch nahi, bas itna hi, aur kuch nahi, "by default",
   // "default rakho/rehne do", sab default hai, rest default, rest skip, that's all, bas, "बाकी सब डिफ़ॉल्ट", "बाकि सब default है",
-  // "और बाखी by default", "baaki by default"
+  // "और बाखी by default", "baaki by default", "baki sabbha"
   const isSkipAll =
-    /\b(?:baaki\s+sab\s+default|baaki\s+default|baaki\s+sab\s+skip|baaki\s+kuch\s+nahi|bas\s+itna\s+hi|bas\s+itna|aur\s+kuch\s+nahi|by\s+default|default\s+rakho|default\s+rehne\s+do|sab\s+default\s+hai|sab\s+default|rest\s+default|rest\s+skip|that'?s\s+all|baaki\s+by\s+default|aur\s+baaki\s+by\s+default|all\s+default|बाकी\s+सब\s+डिफ़ॉल्ट|बाकी\s+सब\s+डिफॉल्ट|बाकी\s+डिफ़ॉल्ट|बाकी\s+डिफॉल्ट|बाकी\s+सब\s+default|बाकी\s+default)\b/i.test(clean) ||
+    /\b(?:baaki\s+sab\s+default|baaki\s+default|baaki\s+sab\s+skip|baaki\s+kuch\s+nahi|bas\s+itna\s+hi|bas\s+itna|aur\s+kuch\s+nahi|by\s+default|default\s+rakho|default\s+rehne\s+do|sab\s+default\s+hai|sab\s+default|rest\s+default|rest\s+skip|that'?s\s+all|baaki\s+by\s+default|aur\s+baaki\s+by\s+default|all\s+default|baaki\s+sab|baki\s+sab|baaki\s+sabhi|baki\s+sabhi|baaki\s+sabbha|baki\s+sabbha|baaki\s+sabh|baki\s+sabh|बाकी\s+सब\s+डिफ़ॉल्ट|बाकी\s+सब\s+डिफॉल्ट|बाकी\s+डिफ़ॉल्ट|बाकी\s+डिफॉल्ट|बाकी\s+सब\s+default|बाकी\s+default|बाकी\s+सब|बाकी\s+सभी)\b/i.test(clean) ||
     clean === 'bas' ||
     clean === 'बस';
 

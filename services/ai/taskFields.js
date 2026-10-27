@@ -66,6 +66,22 @@ const buildDateChips = (refTime = new Date()) => {
 };
 
 const TASK_FIELDS = {
+  project: {
+    key: 'project',
+    required: true,
+    askOrder: 0.5,
+    question: {
+      reply: 'Kis project mein task add karna hai? Project ka naam batayein.',
+      speech: 'किस प्रोजेक्ट में टास्क जोड़ना है? प्रोजेक्ट का नाम बताएं।',
+    },
+    reAskQuestion: {
+      reply: 'Kripya project ka sahi naam batayein ya options se chun lein.',
+      speech: 'कृपया प्रोजेक्ट का सही नाम बताएं।',
+    },
+    chips: () => [],
+    default: null,
+  },
+
   assignee: {
     key: 'assignee',
     required: false, // Asked only if Owner/Admin explicitly requests others or mentions another name
@@ -441,6 +457,56 @@ const TASK_FIELDS = {
     ],
     reAskChips: () => [
       { label: 'Nahi (Skip)', action: { type: 'skip', field: 'attachments' } },
+      { label: 'Baaki sab default', action: { type: 'skip_all' } },
+    ],
+    default: 0,
+    parse: (val) => (typeof val === 'number' ? val : 0),
+    normalise: (val) => Number(val || 0),
+  },
+
+  dueDate: {
+    key: 'dueDate',
+    required: false,
+    askOrder: 4,
+    question: {
+      reply: 'Task ki due date kya rakhni hai? (Jaise Aaj shaam 6 PM, Kal subah 10 AM)',
+      speech: 'टास्क की ड्यू डेट क्या रखनी है?',
+    },
+    reAskQuestion: {
+      reply: 'Kripya due date batayein ya "koi nahi" bolkar skip karein.',
+      speech: 'कृपया ड्यू डेट बताएं या स्किप करें।',
+    },
+    chips: buildDateChips,
+    reAskChips: buildDateChips,
+    default: null,
+    parse: (val) => {
+      if (!val) return null;
+      if (val instanceof Date) return toIstIsoString(val);
+      if (typeof val === 'string' && val.includes('T')) return val;
+      return parseHinglishDateTime(String(val));
+    },
+    normalise: (val) => val,
+  },
+
+  file: {
+    key: 'file',
+    required: false,
+    askOrder: 9.5,
+    question: {
+      reply: "Koi document ya photo attach karni hai? (Ek PDF ya image file, ya 'nahi' bol dein)",
+      speech: 'कोई डॉक्यूमेंट या फोटो अटैच करनी है?',
+    },
+    reAskQuestion: {
+      reply: "File attach nahi karni to 'Nahi' dabayein, task ready ho jayega.",
+      speech: 'फाइल अटैच नहीं करनी तो नहीं दबाएं।',
+    },
+    chips: () => [
+      { label: 'Haan, attach karta hoon', action: { type: 'set', field: 'attachments', value: true } },
+      { label: 'Nahi (Skip)', action: { type: 'skip', field: 'file' } },
+      { label: 'Baaki sab default', action: { type: 'skip_all' } },
+    ],
+    reAskChips: () => [
+      { label: 'Nahi (Skip)', action: { type: 'skip', field: 'file' } },
       { label: 'Baaki sab default', action: { type: 'skip_all' } },
     ],
     default: 0,
