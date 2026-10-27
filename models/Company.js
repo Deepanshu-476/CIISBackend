@@ -244,6 +244,12 @@ const companySchema = new mongoose.Schema(
       ]
     },
 
+    // Bulk Email page: how many emails the whole company may send, set by the platform owner.
+    bulkEmailLimits: {
+      daily: { type: Number, min: 0, default: 100 },
+      monthly: { type: Number, min: 0, default: 2000 },
+    },
+
     moduleDashboardConfig: {
       type: mongoose.Schema.Types.Mixed,
       default: () => ({
