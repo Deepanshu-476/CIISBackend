@@ -1705,17 +1705,25 @@ exports.addTask = async (req, res) => {
       }
 
       const rawAssignedUsers = req.body.assignedUsers;
+      // Multipart forms (web Create Task with an attachment) send assignedUsers as a JSON
+      // string like ["id"]; plain splitting kept the brackets/quotes and dropped the assignee.
+      const parseAssigneeList = value => {
+        if (typeof value === "string" && value.trim().startsWith("[")) {
+          try { return JSON.parse(value); } catch { /* fall through to comma splitting */ }
+        }
+        return [value];
+      };
       const requestedAssigneeIds = (
         Array.isArray(rawAssignedUsers)
           ? rawAssignedUsers
           : rawAssignedUsers
-            ? [rawAssignedUsers]
+            ? parseAssigneeList(rawAssignedUsers)
             : assignedTo
               ? [assignedTo]
               : []
       )
-        .flatMap(value => String(value).split(','))
-        .map(value => value.trim())
+        .flatMap(value => String(value?._id || value).split(','))
+        .map(value => value.trim().replace(/^["']|["']$/g, ''))
         .filter(value => mongoose.isValidObjectId(value));
       const projectUserIds = project.users.map(user => normalizeId(user));
       const assignedUserIds = [...new Set(requestedAssigneeIds)]
