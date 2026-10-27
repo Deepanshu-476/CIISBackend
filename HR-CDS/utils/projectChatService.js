@@ -13,11 +13,13 @@ async function resolveCompany(project) {
   return company?._id;
 }
 
+// Only what group membership needs: a full project (every task's logs, remarks and
+// notifications) can be several MB and this runs on every chat request for the group.
+const SYNC_FIELDS = 'projectName company companyCode createdBy users managers tasks.assignedTo tasks.assignedUsers __v';
+
 async function syncProject(project) {
   if (!project.projectName || !project.tasks) {
-    project = await projects().findById(project._id || project)
-      .select('projectName company companyCode createdBy users managers tasks.assignedTo tasks.assignedUsers __v')
-      .lean();
+    project = await projects().findById(project._id || project).select(SYNC_FIELDS).lean();
   }
   if (!project) return null;
   const companyId = await resolveCompany(project);
@@ -40,8 +42,10 @@ async function syncProject(project) {
     if (error.code !== 11000) throw error;
     conversation = await Conversation.findOne(query);
   }
+  const membersChanged = !previous || previous.members.map(id).sort().join() !== members.map(id).sort().join();
   // Revoke already joined rooms, including sockets connected on another worker.
-  if (global.io) {
+  // Only needed when someone left; asking every worker costs up to 2s per request.
+  if (global.io && membersChanged) {
     try {
       const sockets = await Promise.race([
         global.io.in(`conversation:${conversation._id}`).fetchSockets(),
@@ -56,7 +60,7 @@ async function syncProject(project) {
       console.warn('[project-chat] fetchSockets error:', sockErr.message);
     }
   }
-  if (!previous || previous.groupName !== conversation.groupName || previous.members.map(id).sort().join() !== members.map(id).sort().join()) {
+  if (membersChanged || previous.groupName !== conversation.groupName) {
     const recipients = ids([...(previous?.members || []), ...conversation.members]);
     global.io?.to(recipients.map(member => `user:${member}`)).emit('chat:project-membership-updated', { conversationId: conversation._id });
   }
@@ -76,7 +80,7 @@ async function refreshConversation(conversationId, companyId) {
     return require('./clientChatService').syncClient(client._id);
   }
   if (!conversation?.projectId) return conversation;
-  const project = await projects().findById(conversation.projectId).lean();
+  const project = await projects().findById(conversation.projectId).select(SYNC_FIELDS).lean();
   if (!project || id(await resolveCompany(project)) !== id(companyId)) {
     await Conversation.updateOne({ _id: conversation._id }, { $set: { members: [], admins: [] } });
     global.io?.in(`conversation:${conversation._id}`).socketsLeave(`conversation:${conversation._id}`);
@@ -96,6 +100,17 @@ const formatDue = value => {
   });
 };
 
+// A status change made by a person is posted as that person's own message,
+// e.g. "✅ I have completed ‘Fix login’.\nRemark: …", with the remark image attached.
+const statusMessageText = event => {
+  const lines = [String(event.to).toLowerCase() === 'completed'
+    ? `✅ I have completed ‘${event.title}’.`
+    : `I changed the status of ‘${event.title}’ from ${event.from} to ${event.to}.`];
+  if (event.service) lines.push(`Service: ${event.service}`);
+  if (event.remark) lines.push(`Remark: ${event.remark}`);
+  return lines.join('\n');
+};
+
 function emitMembers(conversation, event, payload) {
   if (!global.io || !conversation.members.length) return;
   global.io.to(conversation.members.map(member => `user:${id(member)}`)).emit(event, payload);
@@ -111,6 +126,7 @@ async function deliverEvent(project, conversation, event) {
   const users = await User.find({ _id: { $in: ids([event.actor, ...(event.assigned || []), event.mentioned]) }, company: conversation.companyId }).select('name');
   const names = new Map(users.map(user => [id(user), user.name || 'User']));
   const actor = names.get(id(event.actor)) || 'System';
+  const isUserStatusMessage = event.type === 'task_status_changed' && names.has(id(event.actor));
   let text;
   if (event.type === 'task_created') text = `${actor} created task ‘${event.title}’. Assigned to: ${(event.assigned || []).map(user => names.get(id(user))).filter(Boolean).join(', ') || 'Unassigned'}.`;
   if (event.type === 'task_status_changed') text = `${actor} changed the status of ‘${event.title}’ from ${event.from} to ${event.to}.`;
@@ -135,10 +151,14 @@ async function deliverEvent(project, conversation, event) {
   if (event.type === 'task_file_added') text = `${actor} attached “${event.file}” to ‘${event.title}’.`;
   if (event.type === 'task_file_removed') text = `${actor} removed the attachment “${event.file}” from ‘${event.title}’.`;
   if (event.type === 'task_deleted') text = `${actor} deleted task ‘${event.title}’.`;
+  if (isUserStatusMessage) text = statusMessageText(event);
   if (!text) return;
+  const image = isUserStatusMessage && event.image
+    ? { file: event.image, fileType: 'image/jpeg', fileName: String(event.image).split('/').pop() }
+    : {};
   const message = await Message.findOneAndUpdate({ eventKey: event.key }, { $setOnInsert: {
     eventKey: event.key, companyId: conversation.companyId, conversationId: conversation._id,
-    sender: event.actor, text, messageType: 'system', seenBy: [event.actor],
+    sender: event.actor, text, messageType: isUserStatusMessage ? 'message' : 'system', seenBy: [event.actor], ...image,
     systemEvent: { type: event.type, actor: event.actor, ...reference, task: event.task, mentionedUser: event.mentioned },
   } }, { upsert: true, new: true, setDefaultsOnInsert: true });
   await Conversation.updateOne({ _id: conversation._id }, { $max: { updatedAt: message.createdAt } }, { timestamps: false });
@@ -158,7 +178,7 @@ async function deliverEvent(project, conversation, event) {
     const notification = await Notification.findOneAndUpdate({ eventKey: event.key, recipient }, { $setOnInsert: {
       eventKey: event.key, recipient, company: conversation.companyId, actor: event.actor,
       type: isMention ? (isClient ? 'client_task_mention' : 'project_task_mention') : 'group_chat_message', title: isMention ? 'Task mention' : `Update in ${conversation.groupName}`,
-      message: text, targetPath: '/ciisUser/chat',
+      message: isUserStatusMessage ? `${actor}: ${text}` : text, targetPath: '/ciisUser/chat',
       data: { conversationId: conversation._id, ...navigation, taskId: event.task, messageId: message._id },
     } }, { upsert: true, new: true, setDefaultsOnInsert: true });
     global.io?.to(`user:${id(recipient)}`).emit('notification:new', notification);
