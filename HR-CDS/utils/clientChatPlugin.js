@@ -1,9 +1,10 @@
+const { createHash } = require('node:crypto');
 const { context, diffEvents, id } = require('./projectChatEvents');
 const SYSTEM = '000000000000000000000001';
 const clone = value => JSON.parse(JSON.stringify(value));
 
 function taskEvents(before, after) {
-  const adapt = task => task && ({ ...task, title: task.name, assignedTo: task.assigneeId,
+  const adapt = task => task && ({ ...task, title: task.name, assignedTo: task.assigneeId, assigneeName: task.assignee,
     status: task.completed ? 'completed' : task.status,
     activityLogs: (task.activityLogs || []).map(log => ({ ...log, performedBy: log.user })),
   });
@@ -109,11 +110,20 @@ module.exports = function clientChatPlugin(schema, { task = false } = {}) {
     } catch (error) { next(error); }
   });
   for (const operation of ['findOneAndDelete', 'deleteOne', 'deleteMany']) {
-    schema.pre(operation, { query: true, document: false }, async function() { this._chatDocs = await this.model.find(this.getFilter()).select('_id clientId').lean(); });
+    schema.pre(operation, { query: true, document: false }, async function() { this._chatDocs = await this.model.find(this.getFilter()).select('_id clientId name').lean(); });
     schema.post(operation, { query: true, document: false }, async function() {
       if (this.getOptions().session?.inTransaction()) return;
+      const actor = context.getStore()?.actor;
       for (const doc of this._chatDocs || []) {
-        try { await require('./clientChatService').syncClient(task ? doc.clientId : doc._id); }
+        try {
+          const conversation = await require('./clientChatService').syncClient(task ? doc.clientId : doc._id);
+          if (task && actor && conversation?.members.length) {
+            await require('./projectChatService').deliverEvent({ _id: doc.clientId, chatEntity: 'client' }, conversation, {
+              key: createHash('sha256').update(`${id(doc.clientId)}:${id(doc)}:task_deleted`).digest('hex'),
+              type: 'task_deleted', actor: id(actor), task: id(doc), title: doc.name,
+            });
+          }
+        }
         catch (error) { console.error('[client-chat] delete sync pending', error.message); }
       }
     });
