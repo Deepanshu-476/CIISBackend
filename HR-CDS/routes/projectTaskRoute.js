@@ -18,7 +18,7 @@ router.patch('/:id/tasks/:taskId', protect, uploadFields, projectTaskController.
 router.patch('/:id/tasks/:taskId/reminder', protect, projectTaskController.updateTaskReminder);
 router.put('/:id/tasks/:taskId/reminder', protect, projectTaskController.updateTaskReminder);
 router.delete('/:id/tasks/:taskId', protect, projectTaskController.deleteTask);
-router.patch('/:projectId/tasks/:taskId/status', protect, taskStatusRequest, projectTaskController.updateTaskStatus);
+router.patch('/:projectId/tasks/:taskId/status', protect, uploadRemarkImage, taskStatusRequest, projectTaskController.updateTaskStatus);
 router.patch('/:projectId/tasks/:taskId/checkpoints/:checkpointId', protect, projectTaskController.updateTaskCheckpoint);
 router.get('/:projectId/tasks/:taskId/activity', protect, projectTaskController.getTaskActivityLogs);
 router.get('/:projectId/tasks/:taskId/remarks', protect, projectTaskController.getTaskRemarks);

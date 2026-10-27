@@ -22,6 +22,17 @@ const dueOf = task => {
 const assigneesOf = task => ids([task?.assignedTo, ...(task?.assignedUsers || [])]);
 const fileName = file => file?.originalName || file?.filename || String(file?.path || '').split(/[\\/]/).pop() || 'a file';
 const filesOf = task => [...(task?.files || []), ...(task?.pdfFile?.path ? [{ _id: task.pdfFile.path, ...task.pdfFile }] : [])];
+// Project remarks keep `image` as "remarks/<file>"; client remarks keep `images[].url` as "/uploads/...".
+const remarkImage = remark => {
+  const raw = remark?.image || remark?.images?.[0]?.url || '';
+  if (!raw) return '';
+  const path = String(raw).replace(/\\/g, '/').replace(/^\/+/, '');
+  return `/${path.startsWith('uploads/') ? path : `uploads/${path}`}`;
+};
+const remarkText = remark => {
+  const text = clip(plain(remark?.text), 500);
+  return text === 'Image attachment' ? '' : text;
+};
 
 // Field-level changes on an existing task; each becomes its own chat card.
 function changeEvents(old, task, add) {
@@ -53,7 +64,8 @@ function changeEvents(old, task, add) {
   for (const file of filesOf(old)) if (!fileIds.has(id(file))) add('task_file_removed', { file: fileName(file) }, id(file));
   const oldRemarks = new Set((old.remarks || []).map(id));
   for (const remark of task.remarks || []) {
-    if (oldRemarks.has(id(remark))) continue;
+    // A remark given with a status change is part of that status message.
+    if (oldRemarks.has(id(remark)) || remark.statusChange) continue;
     const author = id(remark.createdBy || remark.user);
     add('task_remark_added', {
       remark: clip(plain(remark.text)), images: (remark.images || []).length + (remark.image ? 1 : 0),
@@ -76,7 +88,14 @@ function diffEvents(before, after, actor) {
     if (!old) add('task_created', '', { assigned: ids([task.assignedTo, ...(task.assignedUsers || [])]) });
     const revision = old ? `${before.__v ?? before.updatedAt ?? ''}:${id(task.activityLogs?.at(-1))}` : '';
     if (old && status(old.status) !== status(task.status)) {
-      add('task_status_changed', `${revision}:${status(old.status)}:${status(task.status)}`, { from: label(old.status), to: label(task.status) });
+      const oldRemarkIds = new Set((old.remarks || []).map(id));
+      const statusRemark = (task.remarks || []).find(remark => remark.statusChange && !oldRemarkIds.has(id(remark)));
+      add('task_status_changed', `${revision}:${status(old.status)}:${status(task.status)}`, {
+        from: label(old.status), to: label(task.status),
+        ...(task.service ? { service: task.service } : {}),
+        ...(remarkText(statusRemark) ? { remark: remarkText(statusRemark) } : {}),
+        ...(remarkImage(statusRemark) ? { image: remarkImage(statusRemark) } : {}),
+      });
     }
     if (old) changeEvents(old, task, (type, extra = {}, part = '') => add(type, `${revision}:${part}`, extra));
     const sources = [{ key: 'description', source: task }, ...(task.remarks || []).map(remark => ({ key: id(remark), source: remark })), ...(task.activityLogs || []).filter(log => log.remark).map(log => ({ key: `activity:${id(log)}`, source: { text: log.remark } }))];
@@ -96,4 +115,4 @@ function diffEvents(before, after, actor) {
   return events;
 }
 
-module.exports = { context, id, ids, status, label, diffEvents, sourceMentions };
+module.exports = { context, id, ids, status, label, diffEvents, sourceMentions, remarkImage };

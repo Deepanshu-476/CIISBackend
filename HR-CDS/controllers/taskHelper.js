@@ -287,6 +287,9 @@ const getTaskCompletionDate = task => {
 };
 
 const getTaskStatusChangeDate = task => {
+  // Set by the status endpoints (and list fetchers for older tasks) when a user changes the status.
+  if (task?.statusChangedAt) return task.statusChangedAt;
+
   const statusHistory = Array.isArray(task?.statusHistory) ? task.statusHistory : [];
   if (statusHistory.length > 0) {
     const last = statusHistory[statusHistory.length - 1];
@@ -294,11 +297,11 @@ const getTaskStatusChangeDate = task => {
   }
 
   const activityLogs = Array.isArray(task?.activityLogs) ? task.activityLogs : [];
-  const statusLogs = activityLogs.filter(l => l.type === 'status_change' || l.type === 'status_changed' || l.field === 'status' || l.previousStatus || l.newStatus || String(l.description || l.remarks || '').toLowerCase().includes('status'));
+  const statusLogs = activityLogs.filter(l => l.type === 'status_change' || l.type === 'status_changed' || l.action === 'status_updated' || l.field === 'status' || l.previousStatus || l.newStatus || String(l.description || l.remarks || '').toLowerCase().includes('status'));
+  const logDate = log => log?.performedAt || log?.changedAt || log?.createdAt;
   if (statusLogs.length > 0) {
-    const sorted = [...statusLogs].sort((a, b) => new Date(b.performedAt || b.changedAt || 0) - new Date(a.performedAt || a.changedAt || 0));
-    const last = sorted[0];
-    if (last?.performedAt || last?.changedAt) return last.performedAt || last.changedAt;
+    const sorted = [...statusLogs].sort((a, b) => new Date(logDate(b) || 0) - new Date(logDate(a) || 0));
+    if (logDate(sorted[0])) return logDate(sorted[0]);
   }
 
   if (task?.inProgressSince) return task.inProgressSince;
@@ -310,34 +313,76 @@ const getTaskStatusChangeDate = task => {
   return null;
 };
 
+// The date a task is listed under: the day its status was last changed by a user,
+// otherwise its due date. A task created today and due on the 4th shows on the 4th
+// until someone changes its status.
 const getTaskReportDate = task => {
   const status = normalizeTaskStatus(task?.userStatus || task?.status || task?.overallStatus);
 
   if (status === 'completed') {
-    const compDate = getTaskCompletionDate(task);
+    const compDate = getTaskCompletionDate(task) || task?.statusChangedAt;
     if (compDate) return compDate;
-    // Fallback for completed task without timestamp: due date if exists
     return task?.dueDateTime || task?.dueDate || null;
   }
 
-  // If status is not untouched pending, show on status change date
-  const statusChangeDate = getTaskStatusChangeDate(task);
-  if (statusChangeDate && status !== 'pending') {
-    return statusChangeDate;
-  }
+  // statusChangedAt is only recorded for real changes, so it also covers a task moved back to pending.
+  const statusChangeDate = task?.statusChangedAt || (status !== 'pending' ? getTaskStatusChangeDate(task) : null);
+  if (statusChangeDate) return statusChangeDate;
 
-  // Untouched pending task -> shows on due date
   if (task?.dueDateTime || task?.dueDate) {
     return task.dueDateTime || task.dueDate;
   }
 
-  // Active task without due date (pending, in-progress, onhold, reopen) ->
-  // It is currently active/awaiting action today, so return current date
+  // Active task without due date is awaiting action today.
   if (['pending', 'in-progress', 'onhold', 'reopen'].includes(status)) {
     return new Date();
   }
 
   return null;
+};
+
+// When this user last changed the status. Entries saved since statusChangedAt
+// existed carry it; for older ones an updatedAt later than creation counts.
+const getUserStatusChangedAt = (task, userId) => {
+  const entry = (Array.isArray(task?.statusByUser) ? task.statusByUser : [])
+    .find(s => String(s?.user?._id || s?.user || '') === String(userId));
+  if (entry?.statusChangedAt) return new Date(entry.statusChangedAt);
+  // Older entries have no statusChangedAt: fall back to updatedAt.
+  const changedAt = entry?.updatedAt ? new Date(entry.updatedAt) : null;
+  const createdAt = task?.createdAt ? new Date(task.createdAt) : null;
+  if (!changedAt || Number.isNaN(changedAt.getTime())) return null;
+  if (createdAt && changedAt.getTime() - createdAt.getTime() < 60 * 1000) return null;
+  return changedAt;
+};
+
+const STATUS_LOG_TYPES = ['status_change', 'status_changed'];
+const CLIENT_STATUS_LOG_ACTIONS = ['status_updated', 'completed', 'reopened'];
+
+// Latest status-change time per project task, for tasks saved before statusChangedAt existed.
+const getProjectStatusChangeDates = async projectIds => {
+  if (!projectIds.length) return new Map();
+  const rows = await Project.aggregate([
+    { $match: { _id: { $in: projectIds } } },
+    { $unwind: '$tasks' },
+    { $project: { taskId: '$tasks._id', at: { $max: { $map: {
+      input: { $filter: { input: { $ifNull: ['$tasks.activityLogs', []] }, as: 'log', cond: { $in: ['$$log.type', STATUS_LOG_TYPES] } } },
+      as: 'log', in: '$$log.performedAt'
+    } } } } }
+  ]);
+  return new Map(rows.filter(row => row.at).map(row => [String(row.taskId), row.at]));
+};
+
+// Latest status-change time per client task, for tasks saved before statusChangedAt existed.
+const getClientStatusChangeDates = async taskIds => {
+  if (!taskIds.length) return new Map();
+  const rows = await ClientTask.aggregate([
+    { $match: { _id: { $in: taskIds } } },
+    { $project: { at: { $max: { $map: {
+      input: { $filter: { input: { $ifNull: ['$activityLogs', []] }, as: 'log', cond: { $in: ['$$log.action', CLIENT_STATUS_LOG_ACTIONS] } } },
+      as: 'log', in: '$$log.createdAt'
+    } } } } }
+  ]);
+  return new Map(rows.filter(row => row.at).map(row => [String(row._id), row.at]));
 };
 
 const getTaskSourceAwareDate = task => {
@@ -612,7 +657,9 @@ const sendCleanTaskList = (res, tasks, view, dateField = 'createdAt', req = null
   const sortedTasks = sortTasksNewestFirst(tasks);
   const shouldPaginate = req && !['true', '1', 'yes'].includes(String(req.query?.all || req.query?.noPagination || '').toLowerCase());
   const pagination = shouldPaginate ? paginateTasks(sortedTasks, req) : null;
-  const responseTasks = pagination ? pagination.tasks : sortedTasks;
+  // reportDate is the day the task is listed under, so clients group by the same date the filters use.
+  const responseTasks = (pagination ? pagination.tasks : sortedTasks)
+    .map(task => ({ ...task, reportDate: getTaskReportDate(task) }));
 
   return res.json({
     success: true,
@@ -671,8 +718,16 @@ const fetchPersonalTaskList = async (req, { includeCreatedForOthers = false } = 
   const enriched = await enrichStatusInfo(tasks);
   return enriched.map(t => {
     const isPersonal = t.taskFor === 'self';
+    // A task created for others is listed by the latest change any assignee made.
+    const statusChangedAt = isPersonal
+      ? getUserStatusChangedAt(t, req.user._id)
+      : (t.statusByUser || [])
+        .map(entry => getUserStatusChangedAt(t, entry?.user?._id || entry?.user))
+        .filter(Boolean)
+        .sort((a, b) => b - a)[0] || null;
     return {
       ...t,
+      statusChangedAt,
       status: normalizeTaskStatus(t.overallStatus),
       // Created-for-others tasks use the assigned update path, which permits
       // their creator to update the shared task status.
@@ -712,7 +767,13 @@ const fetchAssignedToMeTaskList = async (req) => {
   return enriched.map(t => {
     const userEntry = t.statusByUser?.find(s => (s.user?._id || s.user)?.toString() === currentUserId.toString());
     const status = userEntry?.status || t.overallStatus || 'pending';
-    return { ...t, status: normalizeTaskStatus(status), taskSource: 'assigned', __taskSource: 'assigned' };
+    return {
+      ...t,
+      statusChangedAt: getUserStatusChangedAt(t, currentUserId),
+      status: normalizeTaskStatus(status),
+      taskSource: 'assigned',
+      __taskSource: 'assigned'
+    };
   });
 };
 
@@ -739,6 +800,7 @@ const fetchAssignedClientTaskList = async (req) => {
     .populate('clientId', 'client name email company phone companyCode')
     .sort({ createdAt: -1 })
     .lean();
+  const loggedChangeDates = await getClientStatusChangeDates(tasks.filter(t => !t.statusChangedAt).map(t => t._id));
 
   return tasks.map(t => {
     const status = t.completed ? 'completed' : normalizeTaskStatus(t.status || 'pending');
@@ -747,6 +809,10 @@ const fetchAssignedClientTaskList = async (req) => {
       title: t.name,
       name: t.name,
       description: t.description || t.name,
+      service: t.service || '',
+      completedAt: t.completedAt || null,
+      inProgressSince: t.inProgressSince || null,
+      statusChangedAt: t.statusChangedAt || loggedChangeDates.get(String(t._id)) || null,
       dueDate: t.dueDate,
       dueDateTime: t.dueDate,
       completed: t.completed,
@@ -792,6 +858,12 @@ const fetchAssignedProjectTaskList = async (req) => {
     // List cards fetch remarks and activity only when the user opens their
     // respective dialogs. Keeping those unbounded arrays in the aggregate
     // makes the task-management page increasingly slow as history grows.
+    { $addFields: { tasks: { $map: { input: '$tasks', as: 'task', in: { $mergeObjects: ['$$task', {
+      loggedStatusChangedAt: { $max: { $map: {
+        input: { $filter: { input: { $ifNull: ['$$task.activityLogs', []] }, as: 'log', cond: { $in: ['$$log.type', STATUS_LOG_TYPES] } } },
+        as: 'log', in: '$$log.performedAt'
+      } } }
+    }] } } } } },
     { $unset: ['tasks.activityLogs', 'tasks.remarks'] }
   ]);
 
@@ -890,7 +962,9 @@ const fetchAssignedProjectTaskList = async (req) => {
         lastActivityAt,
         assignedAt,
         statusUpdatedAt,
-        completedAt,
+        completedAt: task.completionDate || completedAt,
+        completionDate: task.completionDate || null,
+        statusChangedAt: task.statusChangedAt || task.loggedStatusChangedAt || null,
         source: 'project',
         taskSource: 'project',
         __taskSource: 'project',
@@ -943,6 +1017,10 @@ module.exports = {
   getTaskStatusChangeDate,
   getTaskReportDate,
   getTaskSourceAwareDate,
+  getUserStatusChangedAt,
+  getClientStatusChangeDates,
+  getProjectStatusChangeDates,
+  STATUS_LOG_TYPES,
   fetchPersonalTaskList,
   fetchAssignedToMeTaskList,
   fetchAssignedClientTaskList,

@@ -158,7 +158,7 @@ router.get('/assigned-to-me/stats', authMiddleware, taskController.getAssignedTo
 
 router.get('/user/:userId/assigned-tasks', authMiddleware, taskController.getAssignedTasksByUserId);
 
-router.patch('/assigned/:taskId/status', authMiddleware, taskStatusRequest, taskController.updateAssignedTaskStatus);
+router.patch('/assigned/:taskId/status', authMiddleware, safeClientRemarkUpload, taskStatusRequest, taskController.updateAssignedTaskStatus);
 
 
 router.post('/:taskId/client-remarks', authMiddleware, taskController.addClientRemark);

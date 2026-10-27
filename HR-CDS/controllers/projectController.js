@@ -2157,11 +2157,31 @@ exports.deleteTask = async (req, res) => {
 
 
 
+// Saves an uploaded remark image under uploads/remarks and returns its stored path.
+const saveRemarkImage = async (req) => {
+  if (!req.file) return null;
+  const uploadDir = path.join(__dirname, '../../uploads/remarks');
+  if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+  const filename = `remark_${Date.now()}_${req.user.id}.jpg`;
+  const savePath = path.join(uploadDir, filename);
+  try {
+    await sharp(req.file.buffer)
+      .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 80 })
+      .toFile(savePath);
+  } catch (sharpErr) {
+    console.warn('Sharp compression failed for remark image, saving raw buffer:', sharpErr.message);
+    fs.writeFileSync(savePath, req.file.buffer);
+  }
+  return `remarks/${filename}`;
+};
+
 exports.updateTaskStatus = async (req, res) => {
   try {
     const { projectId, taskId } = req.params;
     const { status, remark } = req.body;
-    console.error(`[STATUS DEBUG 1] projectId: ${projectId}, taskId: ${taskId}, status: ${status}, user: ${req.user?._id || req.user?.id}`);
+    // Typed by the user in the status remark dialog (optionally with an image).
+    const statusRemark = String(req.body.statusRemark || '').trim();
 
     const nextStatus = normalizeTaskStatus(status);
     const nextProjectStatus = toProjectTaskStatus(status);
@@ -2298,7 +2318,8 @@ exports.updateTaskStatus = async (req, res) => {
     const now = new Date();
     const updateFields = {
       "tasks.$.status": nextProjectStatus,
-      "tasks.$.updatedAt": now
+      "tasks.$.updatedAt": now,
+      "tasks.$.statusChangedAt": now
     };
 
     if (isResumedFromHold) {
@@ -2322,14 +2343,28 @@ exports.updateTaskStatus = async (req, res) => {
       oldValue: oldStatus,
       newValue: nextProjectStatus,
       performedBy: req.user.id,
-      remark: remark
+      remark: statusRemark || remark
     };
+
+    const imagePath = await saveRemarkImage(req);
+    const statusRemarkDoc = statusRemark || imagePath ? {
+      _id: new mongoose.Types.ObjectId(),
+      mentions: [],
+      text: statusRemark || "Image attachment",
+      createdBy: req.user.id,
+      image: imagePath || undefined,
+      ...(oldStatus !== nextProjectStatus ? { statusChange: nextProjectStatus } : {}),
+      createdAt: now
+    } : null;
 
     await Project.updateOne(
       { _id: projectId, "tasks._id": taskId },
       {
         $set: updateFields,
-        $push: { "tasks.$.activityLogs": activityLog }
+        $push: {
+          "tasks.$.activityLogs": activityLog,
+          ...(statusRemarkDoc ? { "tasks.$.remarks": statusRemarkDoc } : {})
+        }
       }
     );
 
@@ -2347,8 +2382,13 @@ exports.updateTaskStatus = async (req, res) => {
     } else if (nextStatus !== "completed") {
       task.completionDate = null;
     }
+    task.statusChangedAt = now;
     task.activityLogs = task.activityLogs || [];
     task.activityLogs.push(activityLog);
+    if (statusRemarkDoc) {
+      task.remarks = task.remarks || [];
+      task.remarks.push(statusRemarkDoc);
+    }
 
     res.status(200).json({
       success: true,
@@ -2404,9 +2444,13 @@ exports.updateTaskStatus = async (req, res) => {
             task: String(task._id),
             title: task.title,
             from: label(oldStatus),
-            to: label(nextProjectStatus)
+            to: label(nextProjectStatus),
+            ...(statusRemark ? { remark: statusRemark } : {}),
+            ...(imagePath ? { image: `/uploads/${imagePath}` } : {})
           };
-          const conversation = event.from !== event.to && await syncProject(project);
+          // Pass only the id so the group syncs against the current project version
+          // (the status write above already bumped it).
+          const conversation = event.from !== event.to && await syncProject(project._id);
           if (conversation) {
             await deliverEvent(project, conversation, event);
           }
@@ -2671,24 +2715,7 @@ exports.addRemark = async (req, res) => {
       });
     }
 
-    let imgPath = null;
-    if (req.file) {
-      const uploadDir = path.join(__dirname, '../../uploads/remarks');
-      if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-      const filename = `remark_${Date.now()}_${req.user.id}.jpg`;
-      const savePath = path.join(uploadDir, filename);
-      imgPath = `remarks/${filename}`;
-
-      try {
-        await sharp(req.file.buffer)
-          .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
-          .jpeg({ quality: 80 })
-          .toFile(savePath);
-      } catch (sharpErr) {
-        console.warn('Sharp compression failed in projectController.addRemark, saving raw buffer:', sharpErr.message);
-        fs.writeFileSync(savePath, req.file.buffer);
-      }
-    }
+    const imgPath = await saveRemarkImage(req);
 
 
     const now = new Date();

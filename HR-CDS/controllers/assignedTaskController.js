@@ -26,7 +26,8 @@ const {
   sharp,
   TASK_USER_POPULATE_FIELDS,
   TASK_GROUP_POPULATE_FIELDS,
-  TASK_CREATOR_POPULATE_FIELDS
+  TASK_CREATOR_POPULATE_FIELDS,
+  getUserStatusChangedAt
 } = require('./taskHelper');
 const { enqueueCompletionJob, enqueueBackgroundJob } = require('../utils/backgroundJobQueue');
 const mongoose = require('mongoose');
@@ -68,7 +69,13 @@ const fetchAssignedToMeTaskList = async (req) => {
   return enriched.map(t => {
     const userEntry = t.statusByUser?.find(s => (s.user?._id || s.user)?.toString() === currentUserId.toString());
     const status = userEntry?.status || t.overallStatus || 'pending';
-    return { ...t, status: normalizeTaskStatus(status), taskSource: 'assigned', __taskSource: 'assigned' };
+    return {
+      ...t,
+      statusChangedAt: getUserStatusChangedAt(t, currentUserId),
+      status: normalizeTaskStatus(status),
+      taskSource: 'assigned',
+      __taskSource: 'assigned'
+    };
   });
 };
 

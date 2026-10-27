@@ -70,3 +70,27 @@ test('client tasks map name, assignee, files and checkpoint reopen into chat eve
   assert.equal(events.find(event => event.type === 'task_assignee_changed').assigneeName, 'Bob');
   assert.equal(events.find(event => event.type === 'task_file_removed').file, 'old.pdf');
 });
+
+test('a remark given with a status change is part of the status event, not a separate card', () => {
+  const remark = { _id: oid(40), text: 'Waiting for client documents', createdBy: actor, image: 'remarks/r1.jpg', statusChange: 'on hold' };
+  const events = diffEvents(project([base]), project([{ ...base, status: 'on hold', remarks: [remark] }]), actor);
+  assert.deepEqual(types(events), ['task_status_changed']);
+  assert.equal(events[0].remark, 'Waiting for client documents');
+  assert.equal(events[0].image, '/uploads/remarks/r1.jpg');
+  assert.equal(events[0].to, 'On Hold');
+});
+
+test('project status remark pushed on its own (status set in the same write) adds no remark card', () => {
+  const remark = { _id: oid(41), text: 'Image attachment', createdBy: actor, image: 'remarks/r2.jpg', statusChange: 'completed' };
+  assert.deepEqual(diffEvents(project([base]), project([{ ...base, remarks: [remark] }]), actor), []);
+});
+
+test('client status change carries service, remark and remark image', () => {
+  const before = { _id: oid(50), clientId: oid(51), name: 'GST return', service: 'GST Filing', status: 'pending', completed: false, remarks: [], activityLogs: [], __v: 2 };
+  const after = { ...before, status: 'completed', completed: true, remarks: [{ _id: oid(52), text: 'Filed today', images: [{ url: '/uploads/client-remarks/x.jpg' }], user: actor, statusChange: 'completed' }] };
+  const events = taskEvents(before, after);
+  assert.deepEqual(types(events), ['task_status_changed']);
+  assert.equal(events[0].service, 'GST Filing');
+  assert.equal(events[0].remark, 'Filed today');
+  assert.equal(events[0].image, '/uploads/client-remarks/x.jpg');
+});
