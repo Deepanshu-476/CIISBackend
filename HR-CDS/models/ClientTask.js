@@ -122,6 +122,11 @@ const clienttaskSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  // When a user last changed the status; the task list shows the task on this day.
+  statusChangedAt: {
+    type: Date,
+    default: null
+  },
   holdStartedAt: {
     type: Date,
     default: null
@@ -163,6 +168,8 @@ const clienttaskSchema = new mongoose.Schema({
     }],
     user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     userName: String,
+    // Set when the remark was given with a status change; chat shows both in one message.
+    statusChange: String,
     createdAt: { type: Date, default: Date.now }
   }],
   activityLogs: [{
@@ -240,6 +247,10 @@ clienttaskSchema.pre('save', function(next) {
     }
   }
   trackHoldClock(this, this.status, this.isModified('status'));
+  // Automatic overdue marking is not a user change; the task keeps its listed date.
+  if (!this.isNew && (this.isModified('status') || this.isModified('completed')) && this.status !== 'overdue') {
+    this.statusChangedAt = new Date();
+  }
   next();
 });
 

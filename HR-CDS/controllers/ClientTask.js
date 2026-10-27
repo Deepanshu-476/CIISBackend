@@ -675,6 +675,37 @@ const deleteImageFiles = (images) => {
 };
 
 
+// Compresses uploaded remark images into uploads/client-remarks and returns remark image entries.
+const saveClientRemarkImages = async (files, currentUser) => {
+  const images = [];
+  if (!Array.isArray(files) || files.length === 0) return images;
+  const uploadDir = path.join(__dirname, '../uploads/client-remarks');
+  if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+
+  for (const file of files) {
+    try {
+      const randomStr = Math.random().toString(36).substring(2, 8);
+      const filename = `remark_${Date.now()}_${randomStr}_${currentUser?._id || 'user'}.jpg`;
+      await sharp(file.buffer)
+        .resize(1200, 1200, { fit: "inside", withoutEnlargement: true })
+        .jpeg({ quality: 80, progressive: true })
+        .toFile(path.join(uploadDir, filename));
+      images.push({
+        url: `/uploads/client-remarks/${filename}`,
+        filename,
+        originalName: file.originalname,
+        size: file.size,
+        mimeType: file.mimetype,
+        uploadedBy: currentUser?.id || currentUser?._id,
+        uploadedAt: new Date()
+      });
+    } catch (imgError) {
+      console.error(`❌ Error processing image ${file.originalname}:`, imgError);
+    }
+  }
+  return images;
+};
+
 const addClientRemarkWithImages = async (req, res) => {
   try {
     void 0;
@@ -707,63 +738,7 @@ const addClientRemarkWithImages = async (req, res) => {
     void 0;
 
 
-    const images = [];
-
-    if (req.files && req.files.length > 0) {
-      const uploadDir = path.join(__dirname, '../uploads/client-remarks');
-
-
-      if (!fs.existsSync(uploadDir)) {
-        fs.mkdirSync(uploadDir, { recursive: true });
-        void 0;
-      }
-
-      for (const file of req.files) {
-        try {
-
-          const timestamp = Date.now();
-          const randomStr = Math.random().toString(36).substring(2, 8);
-          const filename = `remark_${timestamp}_${randomStr}_${currentUser?._id || 'user'}.jpg`;
-
-
-          const savePath = path.join(uploadDir, filename);
-
-          void 0;
-
-
-          await sharp(file.buffer)
-            .resize(1200, 1200, {
-              fit: "inside",
-              withoutEnlargement: true
-            })
-            .jpeg({
-              quality: 80,
-              progressive: true
-            })
-            .toFile(savePath);
-
-
-          const imageUrl = `/uploads/client-remarks/${filename}`;
-
-          void 0;
-
-          images.push({
-            url: imageUrl,
-            filename: filename,
-            originalName: file.originalname,
-            size: file.size,
-            mimeType: file.mimetype,
-            uploadedBy: currentUser?.id || currentUser?._id,
-            uploadedAt: new Date()
-          });
-
-        } catch (imgError) {
-          console.error(`❌ Error processing image ${file.originalname}:`, imgError);
-        }
-      }
-    }
-
-    void 0;
+    const images = await saveClientRemarkImages(req.files, currentUser);
 
     const remark = {
       mentions: parseChatMentionIds(req.body.mentions),
@@ -1326,10 +1301,14 @@ const getClientTaskActivityLogs = async (req, res) => {
 };
 
 
+const { getTaskReportDate } = require('./taskHelper');
+
 const updateAssignedTaskStatus = async (req, res) => {
   try {
     const { taskId } = req.params;
     const { status, completed, remarks } = req.body;
+    // Typed by the user in the status remark dialog (optionally with images).
+    const statusRemark = String(req.body.statusRemark || '').trim();
     const currentUser = req.user;
 
     void 0;
@@ -1367,7 +1346,7 @@ const updateAssignedTaskStatus = async (req, res) => {
 
 
     let targetStatus = status;
-    if (completed === true) {
+    if (completed === true || completed === 'true') {
       targetStatus = 'completed';
     } else if (!status && previousStatus === 'overdue' && !completed) {
       targetStatus = 'in-progress';
@@ -1477,11 +1456,14 @@ const updateAssignedTaskStatus = async (req, res) => {
     }
 
 
-    if (remarks && remarks.trim()) {
+    const statusImages = await saveClientRemarkImages(req.files, currentUser);
+    const remarkText = statusRemark || (typeof remarks === 'string' ? remarks.trim() : '');
+    if (remarkText || statusImages.length) {
       task.remarks = task.remarks || [];
       const remark = {
-        text: remarks.trim(),
-        images: [],
+        text: remarkText || 'Image attachment',
+        images: statusImages,
+        ...((statusRemark || statusImages.length) && previousStatus !== task.status ? { statusChange: task.status } : {}),
         user: currentUser?.id || currentUser?._id,
         userName: currentUser?.name || currentUser?.username || 'System',
         createdAt: new Date()
@@ -1497,7 +1479,7 @@ const updateAssignedTaskStatus = async (req, res) => {
 
       await addClientActivityLogHelper(task, {
         action: 'remark_added',
-        description: `Added remark: ${remarks.substring(0, 100)}${remarks.length > 100 ? '...' : ''}`,
+        description: `Added remark: ${remarkText.substring(0, 100)}${remarkText.length > 100 ? '...' : ''}`,
         user: currentUser?.id || currentUser?._id,
         userName: currentUser?.name || currentUser?.username || 'System'
       }, req);
@@ -1525,7 +1507,7 @@ const updateAssignedTaskStatus = async (req, res) => {
         await notifyClientTaskCompleted({ task, actor: currentUser, req });
       }
 
-      if (previousStatus !== task.status || previousCompleted !== task.completed || (remarks && remarks.trim())) {
+      if (previousStatus !== task.status || previousCompleted !== task.completed || remarkText) {
         const statusMessage = previousStatus !== task.status
           ? `${currentUser?.name || 'User'} changed task "${task.name}" status to ${task.status}`
           : `${currentUser?.name || 'User'} updated task "${task.name}"`;
@@ -1673,8 +1655,9 @@ const getAssignedToMeTasks = async (req, res) => {
         overdueCount++;
       }
 
-      const groupDate = task.dueDate || task.createdAt;
-      const dateKey = new Date(groupDate).toLocaleDateString('en-IN', {
+      // Same listing date as /tasks/all: status-change day, otherwise the due date.
+      const reportDate = getTaskReportDate({ ...task, status: taskStatus }) || task.createdAt;
+      const dateKey = new Date(reportDate).toLocaleDateString('en-IN', {
         timeZone: 'Asia/Kolkata',
         weekday: 'short',
         year: 'numeric',
@@ -1705,6 +1688,9 @@ const getAssignedToMeTasks = async (req, res) => {
         remarks: task.remarks || [],
         activityLogs: task.activityLogs || [],
         createdAt: task.createdAt,
+        completedAt: task.completedAt || null,
+        statusChangedAt: task.statusChangedAt || null,
+        reportDate,
         service: task.service,
         assignee: task.assignee,
         isOverdue: taskStatus === 'overdue'
