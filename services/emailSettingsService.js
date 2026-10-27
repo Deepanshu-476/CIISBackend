@@ -27,6 +27,7 @@ const EMAIL_MODULES = [
   { key: "service_enquiries", label: "Service Enquiries", area: "Services", description: "Service enquiry and marketplace related emails." },
   { key: "subscription_reminders", label: "Subscription Reminders", area: "Billing", description: "Subscription expiry reminder emails." },
   { key: "support_notifications", label: "Support Notifications", area: "Support", description: "Support ticket and enquiry emails." },
+  { key: "bulk_email", label: "Bulk Email", area: "Marketing", description: "Emails companies compose and send from the Bulk Email page (/ciisUser/bulk-email)." },
   { key: "test_email", label: "Test Email", area: "System", description: "SMTP test email from this settings page." },
   { key: "general", label: "General / Unmapped Emails", area: "System", description: "Fallback for any email that does not match a known module." },
 ];

@@ -24,7 +24,8 @@ const {
   sharp,
   TASK_USER_POPULATE_FIELDS,
   TASK_GROUP_POPULATE_FIELDS,
-  TASK_CREATOR_POPULATE_FIELDS
+  TASK_CREATOR_POPULATE_FIELDS,
+  getUserStatusChangedAt
 } = require('./taskHelper');
 const { enqueueCompletionJob } = require('../utils/backgroundJobQueue');
 const {
@@ -102,7 +103,13 @@ const fetchPersonalTaskList = async (req) => {
   }
 
   const enriched = await enrichStatusInfo(filteredTasks);
-  return enriched.map(t => ({ ...t, status: normalizeTaskStatus(t.overallStatus), taskSource: 'self', __taskSource: 'self' }));
+  return enriched.map(t => ({
+    ...t,
+    statusChangedAt: getUserStatusChangedAt(t, req.user._id),
+    status: normalizeTaskStatus(t.overallStatus),
+    taskSource: 'self',
+    __taskSource: 'self'
+  }));
 };
 
 const normalizeCodeBase = (code) => {

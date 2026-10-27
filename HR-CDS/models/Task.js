@@ -100,6 +100,8 @@ const statusSchema = new mongoose.Schema(
       default: "pending",
     },
     updatedAt: { type: Date, default: Date.now },
+    // When this user last changed the status (set on save); the task list shows the task on this day.
+    statusChangedAt: { type: Date, default: null },
     remarks: String,
     holdStartedAt: { type: Date, default: null },
     holdOverdueCheckAt: { type: Date, default: null },
@@ -378,6 +380,17 @@ taskSchema.virtual('daysOverdue').get(function() {
 // assignedUsers). Document.toString() is not the id, so a plain toString() comparison never matched and
 // checkAndMarkOverdue pushed a second statusByUser entry per user while the stale one stayed first.
 const sameTaskUserId = (left, right) => String(left?._id || left) === String(right?._id || right);
+
+// Automatic overdue marking is not a user change; the task keeps its listed date.
+taskSchema.pre('save', function (next) {
+  if (!this.isNew) {
+    const now = new Date();
+    (this.statusByUser || []).forEach(entry => {
+      if ((entry.isNew || entry.isModified('status')) && entry.status !== 'overdue') entry.statusChangedAt = now;
+    });
+  }
+  next();
+});
 
 taskSchema.methods.updateUserStatus = function (userId, status, remarks = "") {
   const userStatusIndex = this.statusByUser.findIndex(

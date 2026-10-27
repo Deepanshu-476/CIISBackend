@@ -10,7 +10,7 @@ module.exports = (req, res, next) => {
     if (entry.finished && now - entry.createdAt > TTL) requests.delete(key);
   }
   const key = `${actor}:${req.originalUrl}:${id}`;
-  const fingerprint = JSON.stringify([req.body.status, req.body.completed, req.body.remarks, req.body.remark]);
+  const fingerprint = JSON.stringify([req.body.status, req.body.completed, req.body.remarks, req.body.remark, req.body.statusRemark]);
   const existing = requests.get(key);
   if (existing) {
     if (existing.fingerprint !== fingerprint) {
