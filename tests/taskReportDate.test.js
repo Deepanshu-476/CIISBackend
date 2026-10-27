@@ -60,3 +60,12 @@ test('a date filter on the due date day finds the untouched task; created day do
   assert.deepEqual(on('2026-11-04'), ['a']);
   assert.deepEqual(on('2026-10-27'), []);
 });
+
+test('old records with empty log/status entries do not break the Today filter', () => {
+  const tasks = [
+    { _id: 'bad', status: 'completed', activityLogs: [null], statusByUser: [null], statusHistory: [] },
+    { _id: 'ok', status: 'in-progress', statusChangedAt: new Date().toISOString() },
+  ];
+  const ids = applyCleanListFilters(tasks, { query: { period: 'today' } }).map(task => task._id);
+  assert.deepEqual(ids, ['ok']);
+});
