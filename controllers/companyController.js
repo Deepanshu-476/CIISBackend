@@ -716,7 +716,7 @@ exports.getAllCompanies = async (req, res) => {
       Company.find(filter)
       .select(
         "_id companyName companyEmail companyAddress companyPhone ownerName logo companyDomain loginToken isActive deactivatedAt subscriptionExpiry createdAt updatedAt companyCode dbIdentifier loginUrl"
-          + " allowedPages allowedSuperAdminPages moduleDashboardConfig accessConfiguredAt accessUpdatedBy selectedPlan subscriptionPlan subscriptionAmount subscriptionPaymentStatus subscriptionPayments planDurationDays planFeatures"
+          + " allowedPages allowedSuperAdminPages moduleDashboardConfig bulkEmailLimits accessConfiguredAt accessUpdatedBy selectedPlan subscriptionPlan subscriptionAmount subscriptionPaymentStatus subscriptionPayments planDurationDays planFeatures"
       )
       .populate("selectedPlan", "name price durationDays features allowedPages allowedSuperAdminPages")
         .sort({ createdAt: -1 })
@@ -1303,6 +1303,18 @@ exports.updateCompanyAccess = async (req, res) => {
 
     if (req.body.moduleDashboardConfig && typeof req.body.moduleDashboardConfig === "object") {
       updateData.moduleDashboardConfig = req.body.moduleDashboardConfig;
+    }
+
+    if (req.body.bulkEmailLimits && typeof req.body.bulkEmailLimits === "object") {
+      const daily = Number(req.body.bulkEmailLimits.daily);
+      const monthly = Number(req.body.bulkEmailLimits.monthly);
+      if (!Number.isInteger(daily) || !Number.isInteger(monthly) || daily < 0 || monthly < 0) {
+        return res.status(400).json({ success: false, message: "Email limits must be whole numbers of 0 or more" });
+      }
+      if (daily > monthly) {
+        return res.status(400).json({ success: false, message: "Daily email limit cannot be more than the monthly limit" });
+      }
+      updateData.bulkEmailLimits = { daily, monthly };
     }
 
     const company = await Company.findByIdAndUpdate(

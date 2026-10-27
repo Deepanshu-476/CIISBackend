@@ -34,6 +34,10 @@ const {
   getTaskCompletionDate,
   getTaskStatusChangeDate,
   getTaskReportDate,
+  getUserStatusChangedAt,
+  getClientStatusChangeDates,
+  getProjectStatusChangeDates,
+  STATUS_LOG_TYPES,
   getTaskSourceAwareDate
 } = require('./taskHelper');
 
@@ -1263,6 +1267,7 @@ const fetchAssignedProjectTaskList = async (req) => {
     .populate('tasks.assignedTo', 'name email')
     .populate('tasks.createdBy', 'name email')
     .lean();
+  const loggedChangeDates = await getProjectStatusChangeDates(projects.map(project => project._id));
 
   const tasks = [];
 
@@ -1303,6 +1308,8 @@ const fetchAssignedProjectTaskList = async (req) => {
         }] : [],
         remarks: task.remarks || [],
         activityLogs: task.activityLogs || [],
+        completionDate: task.completionDate || null,
+        statusChangedAt: task.statusChangedAt || loggedChangeDates.get(String(task._id)) || null,
         createdAt: task.createdAt || project.createdAt,
         updatedAt: task.updatedAt || project.updatedAt,
         lastActivityAt,
@@ -1328,10 +1335,16 @@ const fetchPersonalTaskStatsList = async (req) => {
     taskFor: 'self',
     isActive: true
   })
-    .select('title description priority dueDate dueDateTime createdAt updatedAt overallStatus statusByUser')
+    .select('title description priority dueDate dueDateTime createdAt updatedAt overallStatus statusByUser completedAt completionDate')
     .lean();
 
-  return tasks.map(t => ({ ...t, status: normalizeTaskStatus(t.overallStatus), taskSource: 'self', __taskSource: 'self' }));
+  return tasks.map(t => ({
+    ...t,
+    statusChangedAt: getUserStatusChangedAt(t, req.user._id),
+    status: normalizeTaskStatus(t.overallStatus),
+    taskSource: 'self',
+    __taskSource: 'self'
+  }));
 };
 
 const fetchAssignedToMeTaskStatsList = async (req) => {
@@ -1352,13 +1365,19 @@ const fetchAssignedToMeTaskStatsList = async (req) => {
       { assignedGroups: { $in: groupIds } }
     ]
   })
-    .select('title description priority dueDate dueDateTime createdAt updatedAt overallStatus statusByUser')
+    .select('title description priority dueDate dueDateTime createdAt updatedAt overallStatus statusByUser completedAt completionDate')
     .lean();
 
   return tasks.map(t => {
     const userEntry = t.statusByUser?.find(s => (s.user?._id || s.user)?.toString() === currentUserId.toString());
     const status = userEntry?.status || t.overallStatus || 'pending';
-    return { ...t, status: normalizeTaskStatus(status), taskSource: 'assigned', __taskSource: 'assigned' };
+    return {
+      ...t,
+      statusChangedAt: getUserStatusChangedAt(t, currentUserId),
+      status: normalizeTaskStatus(status),
+      taskSource: 'assigned',
+      __taskSource: 'assigned'
+    };
   });
 };
 
@@ -1381,8 +1400,9 @@ const fetchAssignedClientTaskStatsList = async (req) => {
       { assignee: currentUser.email }
     ].filter(Boolean)
   })
-    .select('clientId name description service priority status completed dueDate createdAt updatedAt')
+    .select('clientId name description service priority status completed dueDate createdAt updatedAt completedAt inProgressSince statusChangedAt')
     .lean();
+  const loggedChangeDates = await getClientStatusChangeDates(tasks.filter(t => !t.statusChangedAt).map(t => t._id));
 
   return tasks.map(t => {
     const status = t.completed ? 'completed' : normalizeTaskStatus(t.status || 'pending');
@@ -1398,6 +1418,9 @@ const fetchAssignedClientTaskStatsList = async (req) => {
       status,
       priority: (t.priority || 'Medium').toLowerCase(),
       clientName: clientNameById.get(String(t.clientId)) || 'Unknown Client',
+      completedAt: t.completedAt || null,
+      inProgressSince: t.inProgressSince || null,
+      statusChangedAt: t.statusChangedAt || loggedChangeDates.get(String(t._id)) || null,
       createdAt: t.createdAt,
       updatedAt: t.updatedAt,
       taskSource: 'client',
@@ -1409,7 +1432,7 @@ const fetchAssignedClientTaskStatsList = async (req) => {
 const fetchAssignedProjectTaskStatsList = async (req) => {
   const currentUserId = (req.user._id || req.user.id).toString();
   const projects = await Project.find({ 'tasks.assignedTo': currentUserId })
-    .select('title description createdAt updatedAt tasks._id tasks.title tasks.description tasks.assignedTo tasks.dueDate tasks.priority tasks.status tasks.createdAt tasks.updatedAt')
+    .select('title description createdAt updatedAt tasks._id tasks.title tasks.description tasks.assignedTo tasks.dueDate tasks.priority tasks.status tasks.createdAt tasks.updatedAt tasks.completionDate tasks.statusChangedAt tasks.activityLogs.type tasks.activityLogs.performedAt')
     .lean();
   const tasks = [];
 
@@ -1429,6 +1452,11 @@ const fetchAssignedProjectTaskStatsList = async (req) => {
         priority: String(task.priority || 'medium').toLowerCase(),
         status,
         userStatus: status,
+        completionDate: task.completionDate || null,
+        statusChangedAt: task.statusChangedAt || (task.activityLogs || [])
+          .filter(log => STATUS_LOG_TYPES.includes(log.type) && log.performedAt)
+          .map(log => log.performedAt)
+          .sort((a, b) => new Date(b) - new Date(a))[0] || null,
         createdAt: task.createdAt || project.createdAt,
         updatedAt: task.updatedAt || project.updatedAt,
         taskSource: 'project',
@@ -1584,7 +1612,9 @@ const sendCleanTaskList = (res, tasks, view, dateField = 'createdAt', req = null
   const sortedTasks = sortTasksNewestFirst(tasks);
   const shouldPaginate = req && !['true', '1', 'yes'].includes(String(req.query?.all || req.query?.noPagination || '').toLowerCase());
   const pagination = shouldPaginate ? paginateTasks(sortedTasks, req) : null;
-  const responseTasks = pagination ? pagination.tasks : sortedTasks;
+  // reportDate is the day the task is listed under, so clients group by the same date the filters use.
+  const responseTasks = (pagination ? pagination.tasks : sortedTasks)
+    .map(task => ({ ...task, reportDate: getTaskReportDate(task) }));
 
   return res.json({
     success: true,

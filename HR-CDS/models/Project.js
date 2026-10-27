@@ -45,7 +45,9 @@ const RemarkSchema = new Schema(
     text: { type: String, required: true },
     createdAt: { type: Date, default: Date.now },
     createdBy: { type: Schema.Types.ObjectId, ref: "User" },
-    image: { type: String }
+    image: { type: String },
+    // Set when the remark was given with a status change; chat shows both in one message.
+    statusChange: { type: String }
   },
   { _id: true }
 );
@@ -92,6 +94,8 @@ const TaskSchema = new Schema(
     holdStartedAt: { type: Date, default: null },
     holdOverdueCheckAt: { type: Date, default: null },
     completionDate: { type: Date, default: null },
+    // When a user last changed the status; the task list shows the task on this day.
+    statusChangedAt: { type: Date, default: null },
     priority: { type: String, enum: PRIORITY_LEVELS, default: "medium" },
     status: { type: String, enum: TASK_STATUS, default: "pending" },
     pdfFile: {
