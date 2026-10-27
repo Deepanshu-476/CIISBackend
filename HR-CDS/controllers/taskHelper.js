@@ -280,7 +280,7 @@ const getTaskCompletionDate = task => {
   if (compActivity) return compActivity;
 
   const sbuComp = (Array.isArray(task?.statusByUser) ? task.statusByUser : [])
-    .find(s => normalizeTaskStatus(s.status) === 'completed');
+    .find(s => s && normalizeTaskStatus(s.status) === 'completed');
   if (sbuComp?.updatedAt) return sbuComp.updatedAt;
 
   return null;
@@ -297,7 +297,7 @@ const getTaskStatusChangeDate = task => {
   }
 
   const activityLogs = Array.isArray(task?.activityLogs) ? task.activityLogs : [];
-  const statusLogs = activityLogs.filter(l => l.type === 'status_change' || l.type === 'status_changed' || l.action === 'status_updated' || l.field === 'status' || l.previousStatus || l.newStatus || String(l.description || l.remarks || '').toLowerCase().includes('status'));
+  const statusLogs = activityLogs.filter(l => l && (l.type === 'status_change' || l.type === 'status_changed' || l.action === 'status_updated' || l.field === 'status' || l.previousStatus || l.newStatus || String(l.description || l.remarks || '').toLowerCase().includes('status')));
   const logDate = log => log?.performedAt || log?.changedAt || log?.createdAt;
   if (statusLogs.length > 0) {
     const sorted = [...statusLogs].sort((a, b) => new Date(logDate(b) || 0) - new Date(logDate(a) || 0));
@@ -307,7 +307,7 @@ const getTaskStatusChangeDate = task => {
   if (task?.inProgressSince) return task.inProgressSince;
 
   const sbu = (Array.isArray(task?.statusByUser) ? task.statusByUser : [])
-    .find(s => normalizeTaskStatus(s.status) !== 'pending');
+    .find(s => s && normalizeTaskStatus(s.status) !== 'pending');
   if (sbu?.updatedAt) return sbu.updatedAt;
 
   return null;
@@ -643,7 +643,14 @@ const applyCleanListFilters = (tasks, req) => {
       if (!searchHaystack.includes(query)) return false;
     }
     if (range) {
-      const sourceDate = getCleanFilterDate(t, dateField);
+      let sourceDate;
+      try {
+        sourceDate = getCleanFilterDate(t, dateField);
+      } catch (error) {
+        // A malformed old record is left out of date filters instead of failing the list.
+        console.error('[tasks] date filter skipped task', String(t?._id || ''), error.message);
+        return false;
+      }
       const dateVal = new Date(sourceDate);
       if (isNaN(dateVal.getTime())) return false;
       if (range.$gte && dateVal < range.$gte) return false;
@@ -658,8 +665,11 @@ const sendCleanTaskList = (res, tasks, view, dateField = 'createdAt', req = null
   const shouldPaginate = req && !['true', '1', 'yes'].includes(String(req.query?.all || req.query?.noPagination || '').toLowerCase());
   const pagination = shouldPaginate ? paginateTasks(sortedTasks, req) : null;
   // reportDate is the day the task is listed under, so clients group by the same date the filters use.
+  const safeReportDate = task => {
+    try { return getTaskReportDate(task); } catch { return null; }
+  };
   const responseTasks = (pagination ? pagination.tasks : sortedTasks)
-    .map(task => ({ ...task, reportDate: getTaskReportDate(task) }));
+    .map(task => ({ ...task, reportDate: safeReportDate(task) }));
 
   return res.json({
     success: true,

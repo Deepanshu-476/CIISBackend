@@ -1598,7 +1598,14 @@ const applyCleanListFilters = (tasks, req) => {
       if (!searchHaystack.includes(query)) return false;
     }
     if (range) {
-      const sourceDate = getCleanFilterDate(t, dateField);
+      let sourceDate;
+      try {
+        sourceDate = getCleanFilterDate(t, dateField);
+      } catch (error) {
+        // A malformed old record is left out of date filters instead of failing the list.
+        console.error('[tasks] date filter skipped task', String(t?._id || ''), error.message);
+        return false;
+      }
       const dateVal = new Date(sourceDate);
       if (isNaN(dateVal.getTime())) return false;
       if (range.$gte && dateVal < range.$gte) return false;
@@ -1613,8 +1620,11 @@ const sendCleanTaskList = (res, tasks, view, dateField = 'createdAt', req = null
   const shouldPaginate = req && !['true', '1', 'yes'].includes(String(req.query?.all || req.query?.noPagination || '').toLowerCase());
   const pagination = shouldPaginate ? paginateTasks(sortedTasks, req) : null;
   // reportDate is the day the task is listed under, so clients group by the same date the filters use.
+  const safeReportDate = task => {
+    try { return getTaskReportDate(task); } catch { return null; }
+  };
   const responseTasks = (pagination ? pagination.tasks : sortedTasks)
-    .map(task => ({ ...task, reportDate: getTaskReportDate(task) }));
+    .map(task => ({ ...task, reportDate: safeReportDate(task) }));
 
   return res.json({
     success: true,
