@@ -165,13 +165,23 @@ const getLatestSubscription = client => {
 // Run that global pass at most once a minute per process; client-specific calls still run immediately.
 const GLOBAL_SUBSCRIPTION_SYNC_INTERVAL_MS = 60000;
 let lastGlobalSubscriptionSyncAt = 0;
+// List pages ask for summaries of up to 100 clients on every load; expired
+// clients stay expired, so recheck each one at most once a minute there.
+const clientSubscriptionSyncedAt = new Map();
 
-const syncExpiredSubscriptionClientTasks = async (clientIds = []) => {
-  const normalizedClientIds = [...new Set(
+const syncExpiredSubscriptionClientTasks = async (clientIds = [], { throttle = false } = {}) => {
+  let normalizedClientIds = [...new Set(
     (Array.isArray(clientIds) ? clientIds : [clientIds])
       .map(id => String(id || '').trim())
       .filter(id => mongoose.Types.ObjectId.isValid(id))
   )];
+  if (throttle && normalizedClientIds.length) {
+    const cutoff = Date.now() - GLOBAL_SUBSCRIPTION_SYNC_INTERVAL_MS;
+    normalizedClientIds = normalizedClientIds.filter(id => !(clientSubscriptionSyncedAt.get(id) > cutoff));
+    if (!normalizedClientIds.length) return { matchedCount: 0, modifiedCount: 0, skipped: true };
+    if (clientSubscriptionSyncedAt.size > 10000) clientSubscriptionSyncedAt.clear();
+    normalizedClientIds.forEach(id => clientSubscriptionSyncedAt.set(id, Date.now()));
+  }
   if (!normalizedClientIds.length) {
     if (Date.now() - lastGlobalSubscriptionSyncAt < GLOBAL_SUBSCRIPTION_SYNC_INTERVAL_MS) {
       return { matchedCount: 0, modifiedCount: 0, skipped: true };
@@ -180,7 +190,8 @@ const syncExpiredSubscriptionClientTasks = async (clientIds = []) => {
   }
   const now = new Date();
   const clientFilter = normalizedClientIds.length ? { _id: { $in: normalizedClientIds } } : {};
-  const clients = await Client.find(clientFilter).select('_id subscription').lean();
+  // Only the latest subscription's number and end date are needed, not the history.
+  const clients = await Client.find(clientFilter).select('_id subscription._id subscription.subscriptionNo subscription.endDate').lean();
   const bulkOps = [];
 
   clients.forEach(client => {
@@ -2120,28 +2131,39 @@ const getClientTaskSummaries = async (req, res) => {
       return res.status(400).json({ success: false, message: 'A maximum of 100 client IDs is allowed' });
     }
 
-    await syncExpiredSubscriptionClientTasks(clientIds);
+    await syncExpiredSubscriptionClientTasks(clientIds, { throttle: true });
 
-    const tasks = await Task.find({ clientId: { $in: clientIds } })
-      .select('clientId name title taskName completed status dueDate')
-      .lean();
     const summaries = Object.fromEntries(clientIds.map(id => [
       id,
       { total: 0, completed: 0, pending: 0, overdue: 0, overdueTaskNames: [] }
     ]));
 
-    tasks.forEach(task => {
-      const summary = summaries[String(task.clientId)];
-      if (!summary) return;
-      summary.total += 1;
-      if (task.completed) summary.completed += 1;
-      if (isClientTaskOverdue(task)) {
-        summary.overdue += 1;
-        const name = task.name || task.title || task.taskName;
-        if (name) summary.overdueTaskNames.push(name);
-      } else if (isClientTaskOpen(task) && task.status !== 'in-progress') {
-        summary.pending += 1;
-      }
+    // Counted in the database: sending every task here only to count it moved
+    // ~1 MB per page load. Same rules as isClientTaskOverdue / isClientTaskOpen.
+    const falsy = value => ({ $in: [value, [null, '', false, 0]] });
+    const rows = await Task.aggregate([
+      { $match: { clientId: { $in: clientIds.map(id => new mongoose.Types.ObjectId(id)) } } },
+      { $project: {
+        clientId: 1,
+        rawStatus: '$status',
+        done: { $not: [falsy('$completed')] },
+        status: { $toLower: { $trim: { input: { $toString: { $cond: [falsy('$status'), 'pending', '$status'] } } } } },
+        due: { $convert: { input: '$dueDate', to: 'date', onError: null, onNull: null } },
+        name: { $cond: [falsy('$name'), { $cond: [falsy('$title'), '$taskName', '$title'] }, '$name'] },
+      } },
+      { $addFields: { open: { $and: [{ $not: ['$done'] }, { $not: [{ $in: ['$status', CLIENT_TASK_OVERDUE_EXCLUDED_STATUSES] }] }] } } },
+      { $addFields: { late: { $and: ['$open', { $ne: ['$due', null] }, { $lt: ['$due', new Date()] }] } } },
+      { $group: {
+        _id: '$clientId',
+        total: { $sum: 1 },
+        completed: { $sum: { $cond: ['$done', 1, 0] } },
+        overdue: { $sum: { $cond: ['$late', 1, 0] } },
+        pending: { $sum: { $cond: [{ $and: [{ $not: ['$late'] }, '$open', { $ne: ['$rawStatus', 'in-progress'] }] }, 1, 0] } },
+        overdueTaskNames: { $push: { $cond: [{ $and: ['$late', { $not: [falsy('$name')] }] }, '$name', '$$REMOVE'] } },
+      } },
+    ]);
+    rows.forEach(({ _id, ...summary }) => {
+      if (summaries[String(_id)]) summaries[String(_id)] = summary;
     });
 
     return res.json({ success: true, data: summaries });
