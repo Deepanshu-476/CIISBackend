@@ -358,31 +358,13 @@ const getUserStatusChangedAt = (task, userId) => {
 const STATUS_LOG_TYPES = ['status_change', 'status_changed'];
 const CLIENT_STATUS_LOG_ACTIONS = ['status_updated', 'completed', 'reopened'];
 
-// Latest status-change time per project task, for tasks saved before statusChangedAt existed.
-const getProjectStatusChangeDates = async projectIds => {
-  if (!projectIds.length) return new Map();
-  const rows = await Project.aggregate([
-    { $match: { _id: { $in: projectIds } } },
-    { $unwind: '$tasks' },
-    { $project: { taskId: '$tasks._id', at: { $max: { $map: {
-      input: { $filter: { input: { $ifNull: ['$tasks.activityLogs', []] }, as: 'log', cond: { $in: ['$$log.type', STATUS_LOG_TYPES] } } },
-      as: 'log', in: '$$log.performedAt'
-    } } } } }
-  ]);
-  return new Map(rows.filter(row => row.at).map(row => [String(row.taskId), row.at]));
-};
-
-// Latest status-change time per client task, for tasks saved before statusChangedAt existed.
-const getClientStatusChangeDates = async taskIds => {
-  if (!taskIds.length) return new Map();
-  const rows = await ClientTask.aggregate([
-    { $match: { _id: { $in: taskIds } } },
-    { $project: { at: { $max: { $map: {
-      input: { $filter: { input: { $ifNull: ['$activityLogs', []] }, as: 'log', cond: { $in: ['$$log.action', CLIENT_STATUS_LOG_ACTIONS] } } },
-      as: 'log', in: '$$log.createdAt'
-    } } } } }
-  ]);
-  return new Map(rows.filter(row => row.at).map(row => [String(row._id), row.at]));
+// Change time for client tasks saved before statusChangedAt existed, from fields the
+// task already carries (no extra query; reading activity logs doubled list time).
+const getClientLegacyStatusChangedAt = (task, status) => {
+  if (status === 'completed') return task.completedAt || null;
+  if (status === 'in-progress') return task.inProgressSince || null;
+  if (status === 'onhold') return task.holdStartedAt || null;
+  return null;
 };
 
 const getTaskSourceAwareDate = task => {
@@ -422,8 +404,11 @@ const groupTasksByDate = (tasks, dateField = 'createdAt', serialKey = 'serialNo'
   return sortedGrouped;
 };
 
+// Newest-first by the date a task is listed under, so pages follow the date groups.
 const getTaskSortDate = task => {
-  const dateValue = task?.createdAt || task?.createdDate || task?.updatedAt || getTaskSourceAwareDate(task);
+  let reportDate = null;
+  try { reportDate = getTaskReportDate(task); } catch { reportDate = null; }
+  const dateValue = reportDate || task?.createdAt || task?.createdDate || task?.updatedAt;
   const date = new Date(dateValue || 0);
   return Number.isNaN(date.getTime()) ? 0 : date.getTime();
 };
@@ -661,15 +646,22 @@ const applyCleanListFilters = (tasks, req) => {
 };
 
 const sendCleanTaskList = (res, tasks, view, dateField = 'createdAt', req = null) => {
-  const sortedTasks = sortTasksNewestFirst(tasks);
-  const shouldPaginate = req && !['true', '1', 'yes'].includes(String(req.query?.all || req.query?.noPagination || '').toLowerCase());
-  const pagination = shouldPaginate ? paginateTasks(sortedTasks, req) : null;
-  // reportDate is the day the task is listed under, so clients group by the same date the filters use.
   const safeReportDate = task => {
     try { return getTaskReportDate(task); } catch { return null; }
   };
-  const responseTasks = (pagination ? pagination.tasks : sortedTasks)
-    .map(task => ({ ...task, reportDate: safeReportDate(task) }));
+  const timeOf = value => {
+    const time = new Date(value || 0).getTime();
+    return Number.isNaN(time) ? 0 : time;
+  };
+  // Pages follow the date the list is grouped by (status-change day, otherwise due
+  // date). Sorting by createdAt put re-imported old tasks first, so page 1 jumped
+  // from today straight to July while Aug-Oct tasks sat on later pages.
+  const sortedTasks = tasks
+    .map(task => ({ ...task, reportDate: safeReportDate(task) }))
+    .sort((a, b) => (timeOf(b.reportDate) - timeOf(a.reportDate)) || (timeOf(b.createdAt) - timeOf(a.createdAt)));
+  const shouldPaginate = req && !['true', '1', 'yes'].includes(String(req.query?.all || req.query?.noPagination || '').toLowerCase());
+  const pagination = shouldPaginate ? paginateTasks(sortedTasks, req) : null;
+  const responseTasks = pagination ? pagination.tasks : sortedTasks;
 
   return res.json({
     success: true,
@@ -810,8 +802,6 @@ const fetchAssignedClientTaskList = async (req) => {
     .populate('clientId', 'client name email company phone companyCode')
     .sort({ createdAt: -1 })
     .lean();
-  const loggedChangeDates = await getClientStatusChangeDates(tasks.filter(t => !t.statusChangedAt).map(t => t._id));
-
   return tasks.map(t => {
     const status = t.completed ? 'completed' : normalizeTaskStatus(t.status || 'pending');
     return {
@@ -822,7 +812,7 @@ const fetchAssignedClientTaskList = async (req) => {
       service: t.service || '',
       completedAt: t.completedAt || null,
       inProgressSince: t.inProgressSince || null,
-      statusChangedAt: t.statusChangedAt || loggedChangeDates.get(String(t._id)) || null,
+      statusChangedAt: t.statusChangedAt || getClientLegacyStatusChangedAt(t, status),
       dueDate: t.dueDate,
       dueDateTime: t.dueDate,
       completed: t.completed,
@@ -868,12 +858,6 @@ const fetchAssignedProjectTaskList = async (req) => {
     // List cards fetch remarks and activity only when the user opens their
     // respective dialogs. Keeping those unbounded arrays in the aggregate
     // makes the task-management page increasingly slow as history grows.
-    { $addFields: { tasks: { $map: { input: '$tasks', as: 'task', in: { $mergeObjects: ['$$task', {
-      loggedStatusChangedAt: { $max: { $map: {
-        input: { $filter: { input: { $ifNull: ['$$task.activityLogs', []] }, as: 'log', cond: { $in: ['$$log.type', STATUS_LOG_TYPES] } } },
-        as: 'log', in: '$$log.performedAt'
-      } } }
-    }] } } } } },
     { $unset: ['tasks.activityLogs', 'tasks.remarks'] }
   ]);
 
@@ -974,7 +958,9 @@ const fetchAssignedProjectTaskList = async (req) => {
         statusUpdatedAt,
         completedAt: task.completionDate || completedAt,
         completionDate: task.completionDate || null,
-        statusChangedAt: task.statusChangedAt || task.loggedStatusChangedAt || null,
+        // Older tasks get statusChangedAt from scripts/backfillStatusChangedAt.js;
+        // scanning activity logs on every request doubled the list time.
+        statusChangedAt: task.statusChangedAt || null,
         source: 'project',
         taskSource: 'project',
         __taskSource: 'project',
@@ -1028,8 +1014,7 @@ module.exports = {
   getTaskReportDate,
   getTaskSourceAwareDate,
   getUserStatusChangedAt,
-  getClientStatusChangeDates,
-  getProjectStatusChangeDates,
+  getClientLegacyStatusChangedAt,
   STATUS_LOG_TYPES,
   fetchPersonalTaskList,
   fetchAssignedToMeTaskList,

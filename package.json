@@ -14,7 +14,9 @@
     "backfill:project-chats:dry": "node scripts/backfillProjectChats.js --dry-run",
     "test:project-chat": "node --test tests/projectGroupChat.test.js",
     "backfill:client-chats": "node scripts/backfillClientChats.js --apply",
-    "backfill:client-chats:dry": "node scripts/backfillClientChats.js --dry-run"
+    "backfill:client-chats:dry": "node scripts/backfillClientChats.js --dry-run",
+    "backfill:status-changed-at": "node scripts/backfillStatusChangedAt.js --apply",
+    "backfill:status-changed-at:dry": "node scripts/backfillStatusChangedAt.js --dry-run"
   },
   "keywords": [],
   "author": "",
