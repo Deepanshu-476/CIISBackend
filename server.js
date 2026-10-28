@@ -1062,6 +1062,7 @@ app.use(cookieParser());
 const requestBodyLimit = process.env.REQUEST_BODY_LIMIT || "15mb";
 app.use(express.json({ limit: requestBodyLimit }));
 app.use(express.urlencoded({ extended: true, limit: requestBodyLimit }));
+app.use(require("./utils/profileImageFile").profileImageBodyToFile);
 const uploadStaticDirs = [
   path.join(__dirname, "..", "uploads"),
   path.join(__dirname, "uploads"),

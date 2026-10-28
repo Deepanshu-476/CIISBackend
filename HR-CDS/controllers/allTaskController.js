@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 
 const {
   Task,
@@ -136,6 +137,10 @@ const buildAssigneeNameConditions = names => {
 };
 
 
+// Log fields read by getTaskStatusChangeDate / getTaskCompletionDate.
+const STATS_LOG_FIELDS = ['type', 'action', 'field', 'previousStatus', 'newStatus', 'status', 'newValue', 'newValues.status',
+  'description', 'remarks', 'performedAt', 'changedAt', 'createdAt'];
+
 const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, companyId = null) => {
   const targetUserId = userId.toString();
   const isStatsOnly = Boolean(queryOptions.onlyStats);
@@ -263,14 +268,35 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
   let projectQueryExec = Project.find(projectQuery);
 
   if (isStatsOnly) {
+    // Logs only decide a task's report date for a date range (getTaskReportDate);
+    // fetch just the fields those helpers read, and none without a range.
+    // Full logs made a 20-user stats request move megabytes per user.
+    const filterFrom = queryOptions.fromDate || queryOptions.startDate;
+    const filterTo = queryOptions.toDate || queryOptions.endDate;
+    const filterRange = getCleanTaskDateRange({ period: filterFrom || filterTo ? 'all' : queryOptions.period, fromDate: filterFrom, toDate: filterTo });
+    const logFields = prefix => filterRange
+      ? STATS_LOG_FIELDS.map(field => `${prefix}.${field}`).join(' ')
+      : '';
+    // Without a range only this user's status is read, and the first entry is
+    // the one used (statusByUser.find below). Some tasks carry thousands of
+    // repeated status entries, so the full arrays are fetched only for ranges.
+    const userIdValues = mongoose.Types.ObjectId.isValid(targetUserId)
+      ? [new mongoose.Types.ObjectId(targetUserId), targetUserId]
+      : [targetUserId];
     personalQueryExec = personalQueryExec
-      .select('createdBy assignedUsers overallStatus statusByUser statusHistory dueDate dueDateTime priority inProgressSince completionDate completedAt')
+      .select(filterRange
+        ? 'createdBy assignedUsers overallStatus statusByUser statusHistory dueDate dueDateTime priority inProgressSince completionDate completedAt'
+        : {
+          createdBy: 1, assignedUsers: 1, overallStatus: 1, dueDate: 1, dueDateTime: 1, priority: 1,
+          inProgressSince: 1, completionDate: 1, completedAt: 1,
+          statusByUser: { $elemMatch: { user: { $in: userIdValues } } },
+        })
       .lean();
     clientQueryExec = clientQueryExec
-      .select('assignee assigneeId status completed dueDate priority inProgressSince activityLogs completionDate completedAt')
+      .select(`assignee assigneeId status completed dueDate priority inProgressSince completionDate completedAt ${logFields('activityLogs')}`)
       .lean();
     projectQueryExec = projectQueryExec
-      .select('tasks._id tasks.assignedTo tasks.assignedUsers tasks.status tasks.dueDate tasks.priority tasks.inProgressSince tasks.activityLogs tasks.completionDate tasks.completedAt')
+      .select(`tasks._id tasks.assignedTo tasks.assignedUsers tasks.status tasks.dueDate tasks.priority tasks.inProgressSince tasks.completionDate tasks.completedAt ${logFields('tasks.activityLogs')}`)
       .lean();
   } else {
     personalQueryExec = personalQueryExec

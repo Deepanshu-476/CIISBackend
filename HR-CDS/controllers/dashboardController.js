@@ -504,7 +504,9 @@ const getEmployeeDashboardSummary = async (req, res) => {
       })
         .sort({updatedAt: -1, createdAt: -1})
         .limit(12)
-        .select("projectName name title tasks updatedAt createdAt users createdBy")
+        // The dashboard only counts each project's tasks and reads their status;
+        // full tasks carry logs and remarks and made this response ~1 MB.
+        .select("projectName name title updatedAt createdAt users createdBy tasks._id tasks.title tasks.status tasks.userStatus tasks.overallStatus tasks.assignedTo tasks.assignedUsers tasks.dueDate")
         .lean(),
       User.findById(userId)
         .select("_id name email employeeId jobRole department employeeType shiftId shiftName shiftType")
