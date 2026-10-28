@@ -2,6 +2,7 @@ const { taskDraftSchema, getSchemaForIntent } = require('./aiSchemas');
 const { getModel } = require('./llm');
 const { parseHinglishSlots, applyTitleFallback, isInvalidOrCommandTitle, isSkip, isSkipAll, isInitiationPhrase } = require('./hinglishParser');
 const { consumeTaskBudget } = require('../../middleware/aiTaskBudget');
+const { mergeIntoLedger, syncAssigneeLedgerDerivedFields } = require('./assigneeLedger');
 
 const INDIA_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -139,11 +140,15 @@ function mergeDraft(previous = {}, extracted = {}, deterministic = {}, rawMessag
     }
   }
 
+  let assigneeLedger = Array.isArray(prev.assigneeLedger)
+    ? prev.assigneeLedger.map((e) => ({ ...e }))
+    : [];
+
   let taskFor = prev.taskFor || 'self';
   let wantsOthers = Boolean(prev.wantsOthers);
-  if (prev.intent === 'task_project' || prev.projectId || prev.taskFor === 'project') {
+  if (prev.intent === 'task_project' || prev.projectId || prev.taskFor === 'project' || det.projectName || ext.projectName) {
     taskFor = 'project';
-  } else if (assigneeName || rawExtAssignee) {
+  } else if (assigneeName || rawExtAssignee || (assigneeLedger && assigneeLedger.length > 0)) {
     taskFor = 'others';
     wantsOthers = true;
   }
@@ -156,7 +161,15 @@ function mergeDraft(previous = {}, extracted = {}, deterministic = {}, rawMessag
   const projectId = prev.projectId || null;
   const dueDate = det.dueDate || ext.dueDate || prev.dueDate || dueDateTime || null;
 
-  return {
+  const newExtractedNames = Array.isArray(det.pendingAssigneeNames) && det.pendingAssigneeNames.length > 0
+    ? det.pendingAssigneeNames
+    : (ext.assigneeName ? [ext.assigneeName] : (det.assigneeName ? [det.assigneeName] : []));
+
+  if (newExtractedNames.length > 0) {
+    assigneeLedger = mergeIntoLedger(assigneeLedger, newExtractedNames);
+  }
+
+  const mergedDraft = {
     projectName,
     projectId,
     title,
@@ -179,6 +192,12 @@ function mergeDraft(previous = {}, extracted = {}, deterministic = {}, rawMessag
     assigneeName,
     assigneeId,
     assigneeLabel,
+    assignees: Array.isArray(prev.assignees) ? [...prev.assignees] : [],
+    assignedUsers: Array.isArray(prev.assignedUsers) ? [...prev.assignedUsers] : [],
+    pendingAssigneeNames: Array.isArray(prev.pendingAssigneeNames) ? [...prev.pendingAssigneeNames] : [],
+    allMentionedAssignees: Array.isArray(prev.allMentionedAssignees) ? [...prev.allMentionedAssignees] : [],
+    removedAssignees: Array.isArray(prev.removedAssignees) ? [...prev.removedAssignees] : [],
+    assigneeLedger,
     branchId: prev.branchId || null,
     taskFor,
     wantsOthers,
@@ -187,6 +206,9 @@ function mergeDraft(previous = {}, extracted = {}, deterministic = {}, rawMessag
     asked,
     attachmentsCount,
   };
+
+  syncAssigneeLedgerDerivedFields(mergedDraft);
+  return mergedDraft;
 }
 
 /**

@@ -15,9 +15,9 @@ async function resolveAssignee({ name, requester }, deps = {}) {
     return { status: 'none', candidates: [] };
   }
 
-  const companyId = requester?.company?._id || requester?.company || requester?.companyId;
+  const companyId = requester?.company?._id || requester?.company || requester?.companyId || requester?.companyCode;
   // Fail-closed: company ke bina kabhi search nahi.
-  if (!companyId) {
+  if (!companyId && !Array.isArray(deps.companyUsers)) {
     return { status: 'none', candidates: [] };
   }
 
@@ -27,8 +27,23 @@ async function resolveAssignee({ name, requester }, deps = {}) {
     ? { $regex: new RegExp('^' + escapeRegex(baseCode) + '(-|$)', 'i') }
     : (rawCompanyCode || undefined);
 
+  const DEVANAGARI_NAME_MAP = {
+    '\u0935\u0902\u0936': 'vansh',
+    '\u0915\u093e\u0935\u094d\u092f\u093e': 'kavya',
+    '\u0930\u093e\u0939\u0941\u0932': 'rahul',
+    '\u0938\u093f\u092e\u0930\u0928': 'simran',
+    '\u0917\u094c\u0930\u0935': 'gaurav',
+    '\u0906\u0930\u0935': 'aarav',
+    '\u0926\u093f\u0935\u094d\u092f\u093e': 'divya',
+    '\u092a\u094d\u0930\u093f\u092f\u093e': 'priya',
+    '\u0905\u092e\u0928': 'aman',
+    '\u0930\u094b\u0939\u093f\u0924': 'rohit',
+  };
+
+  const latinName = DEVANAGARI_NAME_MAP[rawName] || rawName;
   const escapedName = escapeRegex(rawName);
-  const nameRegex = new RegExp('(?:^|\\s)' + escapedName, 'i');
+  const escapedLatin = escapeRegex(latinName);
+  const nameRegex = new RegExp('(?:^|\\s)(?:' + escapedName + '|' + escapedLatin + ')', 'i');
 
   const filter = {
     isActive: true,
@@ -37,10 +52,15 @@ async function resolveAssignee({ name, requester }, deps = {}) {
     ...(companyCodeFilter ? { companyCode: companyCodeFilter } : {}),
   };
 
-  const users = await UserModel.find(filter)
-    .select('_id name employeeId jobRole department branch')
-    .limit(5)
-    .lean();
+  let users;
+  if (Array.isArray(deps.companyUsers)) {
+    users = deps.companyUsers.filter((u) => nameRegex.test(u.name));
+  } else {
+    users = await UserModel.find(filter)
+      .select('_id name employeeId jobRole department branch')
+      .limit(5)
+      .lean();
+  }
 
   if (!users || users.length === 0) {
     return { status: 'none', candidates: [] };

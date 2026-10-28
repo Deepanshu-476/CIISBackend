@@ -313,6 +313,7 @@ function isValidAssigneeCandidate(cand) {
 function cleanAssigneeName(name) {
   if (!name || typeof name !== 'string') return null;
   let clean = name.trim().replace(/^(?:task|assign(?:ed)?|karo|kardo|karna|kar\s*do|dena|de\s*do|bhejo|banao|haan|ha|yes|haanji|hnji)[,\s]+/i, '').trim();
+  clean = clean.replace(/^(?:team\s+members?|team\s+member|members?|users?|teammates?)[,\s]+/i, '').trim();
   clean = clean.replace(/\s+(?:ko|co|koh|kor|ke\s+liye)$/i, '').trim();
   if (isValidAssigneeCandidate(clean)) {
     return clean;
@@ -320,10 +321,16 @@ function cleanAssigneeName(name) {
   return null;
 }
 
+// Separators for multiple assignees: aur, or, and, &, comma, plus, +, Devanagari और, तथा, tatha
+const MULTI_NAME_SEP_REGEX = /(?:,\s*|\s+(?:and|aur|or|plus|tatha|और|तथा)\s+|\s*[&+]\s*)/iu;
+
 function extractAssigneeMention(text) {
   if (!text || typeof text !== 'string') return null;
   const clean = text.trim();
   if (isSelfPhrase(clean)) return null;
+
+  // If text contains multiple names/separators, single assignee extractor must not match
+  if (MULTI_NAME_SEP_REGEX.test(clean)) return null;
 
   // 1. "assign to <Name>" or "task to <Name>"
   const assignToMatch = clean.match(/\b(?:assign(?:ed)?\s+to|task\s+to)\s+([a-zA-Z\u0900-\u097F]+(?:\s+[a-zA-Z\u0900-\u097F]+)?)/i);
@@ -361,6 +368,98 @@ function extractAssigneeMention(text) {
   }
 
   return null;
+}
+
+/**
+ * Deterministically extracts multiple assignee names or edit intents (add/remove) from text.
+ * Splits on 'aur', 'or', 'and', ',', '&', 'plus', '+', 'और', 'tatha', 'तथा'.
+ * Deduplicates names and avoids LLM hallucination.
+ */
+function extractMultipleAssignees(text) {
+  if (!text || typeof text !== 'string') return { names: [], editAction: null };
+  const clean = text.trim();
+  if (isSelfPhrase(clean)) return { names: [], editAction: null };
+
+  // 1. Edit Action - Removal: "Rahul ko hata do", "Rahul ko remove karo", "Divya ko chhod do"
+  const removeMatch = clean.match(/(?:^|\b)([a-zA-Z\u0900-\u097F]{2,}(?:\s+(?!ko\b)[a-zA-Z\u0900-\u097F]{2,})?)\s+(?:ko\s+)?(?:hata\s*do|remove\s*karo|hatao|nikaal\s*do|mat\s*assign\s*karo|mat\s*rakho|nahi\s*chahiye|chhod\s*do|chhod\s*dein|chhor\s*do|drop\s*karo|drop|rehne\s*do|rehnde\s*do)\b/i);
+  if (removeMatch && removeMatch[1]) {
+    const cleaned = cleanAssigneeName(removeMatch[1]);
+    if (cleaned) {
+      return { names: [], editAction: { type: 'remove', name: cleaned } };
+    }
+  }
+
+  // 2. Edit Action - Addition: "Simran ko bhi add karo", "Simran ko add karo", "Simran ko bhi assign karo"
+  const addMatch = clean.match(/(?:^|\b)([a-zA-Z\u0900-\u097F]{2,}(?:\s+[a-zA-Z\u0900-\u097F]{2,})?)\s+(?:ko\s+)?(?:(?:bhi\s+(?:add|assign|jodo|daal|include)\s*(?:karo|do)?)|(?:add\s*karo|jodo|include\s*karo))\b/i);
+  if (addMatch && addMatch[1] && !clean.includes('hata')) {
+    const cleaned = cleanAssigneeName(addMatch[1]);
+    if (cleaned) {
+      return { names: [cleaned], editAction: { type: 'add', name: cleaned } };
+    }
+  }
+
+  // 3. Multi-name extraction from sentence
+  let candidateSegment = null;
+
+  const assignToMatch = clean.match(/\b(?:assign(?:ed)?\s+to|task\s+to)\s+([a-zA-Z\u0900-\u097F\s,&+]+?)(?=\s+(?:due|kal|aaj|priority|status|description|checkpoints|$))/i);
+  if (assignToMatch && assignToMatch[1]) {
+    candidateSegment = assignToMatch[1];
+  } else {
+    const koMatch = clean.match(/(?:^|\s)([a-zA-Z\u0900-\u097F\s,&+]+?)\s+(?:ko|co|koh|kor|core|cor|के|को)\b/i);
+    if (koMatch && koMatch[1]) {
+      candidateSegment = koMatch[1];
+    } else {
+      const keLiyeMatch = clean.match(/(?:^|\s)([a-zA-Z\u0900-\u097F\s,&+]+?)\s+ke\s+liye\b/i);
+      if (keLiyeMatch && keLiyeMatch[1]) {
+        candidateSegment = keLiyeMatch[1];
+      } else if (!/(?:task\s+ka\s+naam|title|description|due\s+date|priority|status|reminder)/i.test(clean) && (clean.includes(',') || clean.includes('&') || clean.includes('+') || clean.includes('और') || clean.includes('तथा') || /\b(?:and|aur|or|plus|tatha)\b/i.test(clean))) {
+        candidateSegment = clean;
+      }
+    }
+  }
+
+  if (candidateSegment) {
+    candidateSegment = candidateSegment
+      .replace(/.*?\b(?:team\s+members?|members?)\s*(?:honge|mein|me|ko|hain)?\s*/iu, '')
+      .replace(/.*?\b(?:project|प्रोजेक्ट)?\s*\b(?:mein|me|mai|main|में|ke\s+andar|के\s+अंदर)\b\s*[,:\s]*/iu, '')
+      .replace(/^(?:task\s+)?(?:assign(?:ed)?\s+(?:karo|kar\s*do|kardo)?|ek\s+task\s+assign\s+karo)\s*/iu, '');
+
+    const tokens = candidateSegment.split(MULTI_NAME_SEP_REGEX);
+    const seen = new Set();
+    const resultNames = [];
+
+    const nonNames = new Set([
+      'task', 'assign', 'assigned', 'karo', 'kardo', 'banao', 'create', 'ek',
+      'mera', 'meri', 'self', 'apne', 'apna', 'ko', 'to', 'do', 'de', 'dena',
+      'project', 'mein', 'me', 'mai', 'main', 'में', 'प्रोजेक्ट', 'demo',
+      'andar', 'ka', 'ki', 'ke', 'in', 'inside', 'hai', 'hain',
+      'team', 'member', 'members',
+      'or', 'aur', 'and', 'plus', 'tatha', 'और', 'तथा'
+    ]);
+
+    for (const rawToken of tokens) {
+      const cleaned = cleanAssigneeName(rawToken.replace(/^(?:to|ko|mai|mein|me)\s+/i, ''));
+      if (cleaned && cleaned.length >= 2 && !nonNames.has(cleaned.toLowerCase()) && !isSelfPhrase(cleaned)) {
+        const lower = cleaned.toLowerCase();
+        if (!seen.has(lower)) {
+          seen.add(lower);
+          resultNames.push(cleaned);
+        }
+      }
+    }
+
+    if (resultNames.length > 0) {
+      return { names: resultNames, editAction: null };
+    }
+  }
+
+  // Fallback to single assignee extractor
+  const singleMention = extractAssigneeMention(clean);
+  if (singleMention) {
+    return { names: [singleMention], editAction: null };
+  }
+
+  return { names: [], editAction: null };
 }
 
 function isSkip(text) {
@@ -879,11 +978,20 @@ function parseHinglishSlots(rawText, now = new Date(), referenceDate = null) {
   if (isSelfPhrase(normalized)) {
     slots.isSelf = true;
   }
-  const assigneeMention = extractAssigneeMention(normalized);
-  if (assigneeMention) {
-    slots.assigneeName = assigneeMention;
+  const multiAssignee = extractMultipleAssignees(normalized);
+  if (multiAssignee.names && multiAssignee.names.length > 0) {
+    slots.assigneeName = multiAssignee.names.length > 1 ? multiAssignee.names.join(', ') : multiAssignee.names[0];
+    slots.pendingAssigneeNames = [...multiAssignee.names];
     slots.wantsOthers = true;
     slots.taskFor = 'others';
+  } else {
+    const assigneeMention = extractAssigneeMention(normalized);
+    if (assigneeMention) {
+      slots.assigneeName = assigneeMention;
+      slots.pendingAssigneeNames = [assigneeMention];
+      slots.wantsOthers = true;
+      slots.taskFor = 'others';
+    }
   }
 
   // 8. Date & Time
@@ -931,9 +1039,59 @@ function isSelfIntroduction(text) {
  * If title is empty and message is short (<= 80 chars), and not a date/time or chip label,
  * strip leading/trailing title phrases and use it as title.
  */
+const TITLE_GUARD_FILLERS = new Set([
+  'hlo', 'hello', 'hi', 'hey', 'helo', 'namaste', 'namashkar', 'namaskar', 'pranam',
+  'salam', 'salaam', 'yo', 'ya', 'yes', 'yep', 'yeah', 'ok', 'okay', 'okk',
+  'ko', 'co', 'haan', 'ha', 'haanji', 'hnji', 'hn', 'hnn', 'nahi', 'nahin', 'no', 'nope', 'na',
+  'theek hai', 'thik hai', 'theek', 'thik', 'accha', 'acha', 'achha', 'kuch nahi', 'koi nahi',
+  'kuch nhi', 'koi nhi', 'skip', 'kardo', 'kar do', 'banao', 'bana do', 'do', 'done',
+  'sure', 'true', 'false', 'blank', 'none', 'नहीं', 'हाँ', 'हां', 'नमस्ते', 'हेलो', 'हाय'
+]);
+
+function detectPersonInActionTitle(text) {
+  if (!text || typeof text !== 'string') return null;
+  const clean = text.trim();
+
+  // If text already has explicit assignment markers ('ko assign', 'ke liye', 'for', 'assign to', etc.), it's handled by extractAssigneeMention
+  if (/\b(?:ko|ke\s+liye|for|assign\s+to|assign)\b/i.test(clean)) {
+    return null;
+  }
+
+  const nonPersonTokens = new Set([
+    'team', 'client', 'doctor', 'office', 'bank', 'customer', 'vendor',
+    'support', 'hr', 'it', 'meeting', 'demo', 'interview', 'report',
+    'invoice', 'bill', 'call', 'task', 'project', 'system', 'server',
+    'code', 'bug', 'feature', 'data', 'pipeline', 'me', 'us', 'him', 'her', 'them',
+    'statements', 'statement', 'accounts', 'account', 'documents', 'files', 'file',
+    'today', 'tomorrow', 'kal', 'parso', 'urgent', 'asap', 'fast', 'high', 'low', 'medium'
+  ]);
+
+  // 1. Action verbs targeting a person with or without prepositions:
+  // "Call Priya", "Meet Rahul", "Follow up with Rahul", "Talk to Simran", "Discuss with Aman", "Check with Rohit"
+  const prepMatch = clean.match(/\b(?:call|meet|talk\s+to|speak\s+(?:to|with)|follow\s+up\s+with|follow\s+up|discuss\s+with|check\s+with|message|email|contact|milna|baat\s+karo)\s+([a-zA-Z\u0900-\u097F]{2,})\b/i);
+  if (prepMatch && prepMatch[1]) {
+    const candidate = cleanAssigneeName(prepMatch[1]);
+    if (candidate && isValidAssigneeCandidate(candidate) && !nonPersonTokens.has(candidate.toLowerCase())) {
+      return candidate.charAt(0).toUpperCase() + candidate.slice(1);
+    }
+  }
+
+  // 2. Action verbs followed by a subject and trailing person name:
+  // "Send report Priya", "verify bank statements Priya", "audit accounts Rahul", "review PR Aman"
+  const trailingMatch = clean.match(/\b(?:send|share|verify|check|audit|review|forward|submit)\b.*?\s+([a-zA-Z\u0900-\u097F]{2,})$/i);
+  if (trailingMatch && trailingMatch[1]) {
+    const candidate = cleanAssigneeName(trailingMatch[1]);
+    if (candidate && isValidAssigneeCandidate(candidate) && !nonPersonTokens.has(candidate.toLowerCase())) {
+      return candidate.charAt(0).toUpperCase() + candidate.slice(1);
+    }
+  }
+
+  return null;
+}
+
 /**
  * Sanity guard for extracted task titles.
- * Rejects command phrases, whole-sentence echoes, and assignee-directive sentences.
+ * Rejects command phrases, whole-sentence echoes, assignee-directive sentences, and bare fillers.
  */
 function isInvalidOrCommandTitle(title, message = '', assigneeName = '') {
   if (!title || typeof title !== 'string') return true;
@@ -942,6 +1100,12 @@ function isInvalidOrCommandTitle(title, message = '', assigneeName = '') {
 
   const normTitle = t.toLowerCase().replace(/[\s.,!?;:।]+/gu, ' ').trim();
   const normMsg = String(message || '').toLowerCase().replace(/[\s.,!?;:।]+/gu, ' ').trim();
+
+  // Strip punctuation and check bare fillers ("hlo", "hello", "hi", "hey", "ya", "yes", "ok", "ko", "haan", "nahi", etc.)
+  const cleanBare = normTitle.replace(/^[#@$%&*+=~`<>{}()[\]\\/|'"]+|[#@$%&*+=~`<>{}()[\]\\/|'"]+$/g, '').trim();
+  if (TITLE_GUARD_FILLERS.has(cleanBare) || cleanBare.length < 2) {
+    return true;
+  }
 
   // Initiation, filler, or pure date/time
   if (isInitiationPhrase(t) || isFillerPhrase(t) || isSelfPhrase(t) || isSkip(t)) {
@@ -989,6 +1153,12 @@ function applyTitleFallback(title, message) {
   const trimmed = message.trim();
   if (trimmed.length === 0 || trimmed.length > 80) return null;
 
+  // Title guard check on trimmed message directly
+  const normMsg = trimmed.toLowerCase().replace(/[\s.,!?;:।]+/gu, ' ').trim();
+  if (TITLE_GUARD_FILLERS.has(normMsg)) {
+    return null;
+  }
+
   // Skip fallback if message is purely a skip word, self phrase, conversational filler, self-introduction, or task initiation command
   if (isSkip(trimmed) || isSkipAll(trimmed) || isSelfPhrase(trimmed) || isFillerPhrase(trimmed) || isSelfIntroduction(trimmed) || isInitiationPhrase(trimmed)) return null;
 
@@ -1023,6 +1193,11 @@ function applyTitleFallback(title, message) {
     cleaned = cleaned.replace(suffix, '');
   }
 
+  // Strip trailing date/time expressions from title (e.g. "Call Priya about invoice kal 5 baje" -> "Call Priya about invoice")
+  cleaned = cleaned.replace(/\s+(?:kal|cal|kl|aaj|aj|parso|tomorrow|today|yesterday)\s+(?:\d{1,2}|subah|shaam|dopahar|raat|[a-z]+)\s*(?:baje|baaj|baj|am|pm|o'?clock)?.*$/i, '');
+  cleaned = cleaned.replace(/\s+(?:at|by|till|tak)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm|baje)?.*$/i, '');
+  cleaned = cleaned.replace(/\s+\d{1,2}\s*(?:baje|baaj|baj|बजे).*$/i, '');
+
   cleaned = cleaned.trim();
   if (cleaned.length >= 2 && cleaned.length <= 80) {
     if (isInvalidOrCommandTitle(cleaned, message)) {
@@ -1034,7 +1209,142 @@ function applyTitleFallback(title, message) {
   return null;
 }
 
+const MONTH_MAP = {
+  jan: 0, january: 0, 'जनवरी': 0, 'जन': 0,
+  feb: 1, february: 1, 'फरवरी': 1, 'फ़रवरी': 1,
+  mar: 2, march: 2, 'मार्च': 2,
+  apr: 3, april: 3, 'अप्रैल': 3,
+  may: 4, 'मई': 4,
+  jun: 5, june: 5, 'जून': 5,
+  jul: 6, july: 6, 'जुलाई': 6,
+  aug: 7, august: 7, 'अगस्त': 7,
+  sep: 8, sept: 8, september: 8, 'सितंबर': 8, 'सितम्बर': 8,
+  oct: 9, october: 9, 'अक्टूबर': 9, 'अक्टुबर': 9,
+  nov: 10, november: 10, 'नवंबर': 10, 'नवम्बर': 10,
+  dec: 11, december: 11, 'दिसंबर': 11, 'दिसम्बर': 11,
+};
+
+function formatYyyyMmDd(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function parseProjectDate(raw, now = new Date()) {
+  if (!raw || typeof raw !== 'string') return null;
+  const clean = normalizeDigits(raw.trim().toLowerCase());
+
+  // "15 Dec" or "15 December" or "1 November"
+  const mMatch = clean.match(/(\d{1,2})\s*(?:st|nd|rd|th)?\s+([a-zA-Z\u0900-\u097F]+)/);
+  if (mMatch) {
+    const day = parseInt(mMatch[1], 10);
+    const mStr = mMatch[2].toLowerCase();
+    const month = MONTH_MAP[mStr];
+    if (month !== undefined && day >= 1 && day <= 31) {
+      const year = now.getFullYear();
+      const candidate = new Date(year, month, day);
+      return formatYyyyMmDd(candidate);
+    }
+  }
+
+  if (/\b(?:kal|tomorrow)\b/i.test(clean)) {
+    const d = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+    return formatYyyyMmDd(d);
+  }
+  if (/\b(?:aaj|today)\b/i.test(clean)) {
+    return formatYyyyMmDd(now);
+  }
+  return null;
+}
+
+function parseProjectDateRange(raw, now = new Date()) {
+  if (!raw || typeof raw !== 'string') return null;
+  const clean = normalizeDigits(raw.trim().toLowerCase());
+
+  // 1. "1 November se 30 November tak" or "1 Nov to 30 Nov"
+  const rangeRegex = /(\d{1,2})\s*(?:st|nd|rd|th)?\s+([a-zA-Z\u0900-\u097F]+)\s*(?:se|to|-|\bse\s+lekar\b)\s*(\d{1,2})\s*(?:st|nd|rd|th)?\s+([a-zA-Z\u0900-\u097F]+)(?:\s*tak)?/i;
+  const rMatch = clean.match(rangeRegex);
+  if (rMatch) {
+    const day1 = parseInt(rMatch[1], 10);
+    const mStr1 = rMatch[2].toLowerCase();
+    const day2 = parseInt(rMatch[3], 10);
+    const mStr2 = rMatch[4].toLowerCase();
+
+    const m1 = MONTH_MAP[mStr1];
+    const m2 = MONTH_MAP[mStr2];
+
+    if (m1 !== undefined && m2 !== undefined && day1 >= 1 && day1 <= 31 && day2 >= 1 && day2 <= 31) {
+      const year = now.getFullYear();
+      const d1 = new Date(year, m1, day1);
+      const d2 = new Date(year, m2, day2);
+
+      if (d2.getTime() < d1.getTime()) {
+        return { error: 'end_before_start' };
+      }
+      return {
+        startDate: formatYyyyMmDd(d1),
+        endDate: formatYyyyMmDd(d2),
+        error: null,
+      };
+    }
+  }
+
+  // 2. "kal se 2 hafte" or "kal se do hafte" or "kal se 14 din"
+  const kalSeWeeks = clean.match(/(?:kal|tomorrow)\s*(?:se|to|-)\s*(\d+|ek|do|teen|chaar|paanch|chhe|saat|aath|nau|das)?\s*(hafte|week|weeks|din|days|mahine|months?)(?:\s*tak)?/i);
+  if (kalSeWeeks) {
+    const rawNum = kalSeWeeks[1] ? (HINDI_NUMBER_WORDS[kalSeWeeks[1]] || parseInt(kalSeWeeks[1], 10) || 1) : 1;
+    const unit = kalSeWeeks[2].toLowerCase();
+    const start = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+    let end = new Date(start.getTime());
+    if (unit.startsWith('haft') || unit.startsWith('week')) {
+      end.setDate(end.getDate() + rawNum * 7);
+    } else if (unit.startsWith('din') || unit.startsWith('day')) {
+      end.setDate(end.getDate() + rawNum);
+    } else if (unit.startsWith('mahin') || unit.startsWith('month')) {
+      end.setMonth(end.getMonth() + rawNum);
+    }
+    return {
+      startDate: formatYyyyMmDd(start),
+      endDate: formatYyyyMmDd(end),
+      error: null,
+    };
+  }
+
+  // 3. "agle mahine ke end tak" / "next month end tak"
+  if (/(?:agle\s+mahine|next\s+month)(?:\s+ke)?\s+end(?:\s*tak)?/i.test(clean)) {
+    const start = new Date(now.getTime());
+    const end = new Date(now.getFullYear(), now.getMonth() + 2, 0);
+    return {
+      startDate: formatYyyyMmDd(start),
+      endDate: formatYyyyMmDd(end),
+      error: null,
+    };
+  }
+
+  return null;
+}
+
+function parseProjectStatusHinglish(text) {
+  if (!text || typeof text !== 'string') return null;
+  const clean = text.trim().toLowerCase();
+  if (/\b(?:planning|plan|abhi\s+plan\s+mein|plan\s+mein|tayyari|प्लानिंग|प्लान)\b/i.test(clean)) return 'planning';
+  if (/\b(?:on\s*hold|onhold|ruka\s+hua|rok\s+do|hold\s+par|hold|होल्ड)\b/i.test(clean)) return 'on hold';
+  if (/\b(?:completed|complete|khatam|poora|done|हो\s*गया|पूरा)\b/i.test(clean)) return 'completed';
+  if (/\b(?:cancelled|canceled|cancel|band|drop|रद्द)\b/i.test(clean)) return 'cancelled';
+  if (/\b(?:active|chalu|shuru|in\s*progress|chal\s+raha\s+hai|एक्टिव|चालू)\b/i.test(clean)) return 'active';
+  return null;
+}
+
+function parseProjectPriorityHinglish(text) {
+  if (!text || typeof text !== 'string') return null;
+  const clean = text.trim().toLowerCase();
+  if (/\b(?:high|urgent|zaroori|tez|top|हाई|अर्जेंट)\b/i.test(clean)) return 'high';
+  if (/\b(?:low|kam|chhota|dheema|लो|कम)\b/i.test(clean)) return 'low';
+  if (/\b(?:medium|darmiyan|normal|beech\s+ka|मीडियम)\b/i.test(clean)) return 'medium';
+  return null;
+}
+
 module.exports = {
+  MULTI_NAME_SEP_REGEX,
   isSkip,
   isSkipAll,
   isSelfPhrase,
@@ -1044,6 +1354,7 @@ module.exports = {
   cleanAssigneeName,
   isValidAssigneeCandidate,
   extractAssigneeMention,
+  extractMultipleAssignees,
   parseHinglishDateTime,
   parseHinglishSlots,
   applyTitleFallback,
@@ -1051,5 +1362,12 @@ module.exports = {
   toIstIsoString,
   HINDI_NUMBER_WORDS,
   WEEKDAY_NAMES,
+  TITLE_GUARD_FILLERS,
+  detectPersonInActionTitle,
+  parseProjectDateRange,
+  parseProjectDate,
+  parseProjectStatusHinglish,
+  parseProjectPriorityHinglish,
 };
+
 

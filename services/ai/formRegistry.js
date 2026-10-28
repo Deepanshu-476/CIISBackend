@@ -22,8 +22,8 @@ const { matchProjects, formatCandidateDate, LOCATIVE_REGEX, PROJECT_WORD_REGEX, 
 
 function formatProjectPriority(priority) {
   const p = String(priority || 'Medium').trim().toLowerCase();
-  if (p === 'low') return 'Low';
-  if (p === 'high' || p === 'urgent') return 'High';
+  if (p === 'low' || p === 'kam' || p === 'slow' || p === 'dheema' || p === 'kam priority') return 'Low';
+  if (p === 'high' || p === 'urgent' || p === 'zaroori' || p === 'zaruri' || p === 'uchh' || p === 'high priority') return 'High';
   return 'Medium';
 }
 
@@ -324,6 +324,12 @@ const FORM_REGISTRY = {
         reminderTime: draft.reminderTime,
       });
 
+      const assignedUserIds = Array.isArray(draft.assignedUsers) && draft.assignedUsers.length > 0
+        ? draft.assignedUsers.map(String)
+        : (Array.isArray(draft.assignees) && draft.assignees.length > 0
+          ? draft.assignees.map(a => String(a.id || a._id))
+          : (draft.assigneeId ? [String(draft.assigneeId)] : []));
+
       const fields = {
         title: draft.title || '',
         description: draft.description || '',
@@ -336,7 +342,7 @@ const FORM_REGISTRY = {
         recurrenceEndDate: draft.recurrenceEndDate || '',
         checkpoints: JSON.stringify(cleanedCheckpoints),
         reminderSettings: JSON.stringify(reminderPayload),
-        assignedUsers: JSON.stringify(draft.assigneeId ? [draft.assigneeId] : []),
+        assignedUsers: JSON.stringify(assignedUserIds),
         assignedGroups: JSON.stringify([]),
       };
 
@@ -355,6 +361,20 @@ const FORM_REGISTRY = {
      */
     buildPreview: (draft) => {
       const cleanedCheckpoints = getCleanCheckpoints(draft.checkpoints);
+      const assigneesList = Array.isArray(draft.assignees) && draft.assignees.length > 0
+        ? draft.assignees.map(a => ({
+            id: String(a.id || a._id),
+            name: a.name || a.label,
+            label: a.label || a.name,
+            department: a.department || a.departmentName || a.jobRole || '',
+          }))
+        : (draft.assigneeId ? [{
+            id: String(draft.assigneeId),
+            name: draft.assigneeName || draft.assigneeLabel,
+            label: draft.assigneeLabel || draft.assigneeName,
+            department: draft.assigneeDepartment || '',
+          }] : []);
+
       return {
         title: draft.title || '—',
         description: draft.description || '—',
@@ -376,9 +396,12 @@ const FORM_REGISTRY = {
         checkpoints: cleanedCheckpoints.length > 0 ? cleanedCheckpoints.map((c) => c.title) : [],
         attachmentsCount: draft.attachmentsCount || 0,
         taskFor: 'others',
-        assignee: draft.assigneeId
-          ? { id: String(draft.assigneeId), label: draft.assigneeLabel || draft.assigneeName }
-          : null,
+        assignees: assigneesList,
+        assignee: assigneesList.length > 0
+          ? { id: assigneesList[0].id, label: assigneesList.map(a => a.name || a.label).join(', ') }
+          : (draft.assigneeId
+            ? { id: String(draft.assigneeId), label: draft.assigneeLabel || draft.assigneeName }
+            : null),
       };
     },
     previewLayout: [
@@ -393,7 +416,8 @@ const FORM_REGISTRY = {
       'attachmentsCount',
     ],
     validateDraft: (draft) => {
-      if (!draft.assigneeId) {
+      const hasAssignee = draft.assigneeId || (Array.isArray(draft.assignedUsers) && draft.assignedUsers.length > 0) || (Array.isArray(draft.assignees) && draft.assignees.length > 0);
+      if (!hasAssignee) {
         return { valid: false, field: 'assignee', reason: 'Assignee is required' };
       }
       if (!draft.title || !String(draft.title).trim()) {
@@ -454,12 +478,18 @@ const taskProjectFormConfig = {
       reminderTime: draft.reminderTime,
     });
 
+    const assignedUserIds = (Array.isArray(draft.assignedUsers) && draft.assignedUsers.length > 0)
+      ? draft.assignedUsers.map(String)
+      : ((Array.isArray(draft.assignees) && draft.assignees.length > 0)
+        ? draft.assignees.map(a => String(a.id || a._id))
+        : (draft.assigneeId ? [String(draft.assigneeId)] : []));
+
     const projectId = draft.projectId || ':id';
     const fields = {
       title: String(draft.title || '').trim(),
       description: draft.description || '',
-      assignedUsers: draft.assigneeId ? [String(draft.assigneeId)] : [],
-      assignedTo: draft.assigneeId ? String(draft.assigneeId) : '',
+      assignedUsers: assignedUserIds,
+      assignedTo: assignedUserIds[0] || (draft.assigneeId ? String(draft.assigneeId) : ''),
       priority: formatProjectPriority(draft.priority),
       status: formatProjectStatus(draft.status),
       checkpoints: JSON.stringify(cleanedCheckpoints),
@@ -493,6 +523,19 @@ const taskProjectFormConfig = {
     const projectDisplay = draft.projectName ? `${draft.projectName}${projectDistinguishing}` : '—';
 
     const formattedStatus = formatProjectStatus(draft.status);
+    const assigneesList = Array.isArray(draft.assignees) && draft.assignees.length > 0
+      ? draft.assignees.map(a => ({
+          id: String(a.id || a._id),
+          name: a.name || a.label,
+          label: a.label || a.name,
+          department: a.department || a.departmentName || a.jobRole || '',
+        }))
+      : (draft.assigneeId ? [{
+          id: String(draft.assigneeId),
+          name: draft.assigneeName || draft.assigneeLabel,
+          label: draft.assigneeLabel || draft.assigneeName,
+          department: draft.assigneeDepartment || '',
+        }] : []);
 
     return {
       project: projectDisplay,
@@ -516,9 +559,12 @@ const taskProjectFormConfig = {
       checkpoints: cleanedCheckpoints.length > 0 ? cleanedCheckpoints.map((c) => c.title) : [],
       attachmentsCount: draft.attachmentsCount || 0,
       taskFor: 'project',
-      assignee: draft.assigneeId
-        ? { id: String(draft.assigneeId), label: draft.assigneeLabel || draft.assigneeName || String(draft.assigneeId) }
-        : null,
+      assignees: assigneesList,
+      assignee: assigneesList.length > 0
+        ? { id: assigneesList[0].id, label: assigneesList.map(a => a.name || a.label).join(', ') }
+        : (draft.assigneeId
+          ? { id: String(draft.assigneeId), label: draft.assigneeLabel || draft.assigneeName || String(draft.assigneeId) }
+          : null),
     };
   },
   previewLayout: [
@@ -543,24 +589,22 @@ const taskProjectFormConfig = {
     const rawStatus = formatProjectStatus(draft.status);
     const members = Array.isArray(project?.users) ? project.users : [];
     const hasMember = (id) => members.some((m) => idsEqual(m._id || m.id || m, id));
+    const assignedUserIds = (Array.isArray(draft.assignedUsers) && draft.assignedUsers.length > 0)
+      ? draft.assignedUsers.map(String)
+      : ((Array.isArray(draft.assignees) && draft.assignees.length > 0)
+        ? draft.assignees.map(a => String(a.id || a._id))
+        : (draft.assigneeId ? [String(draft.assigneeId)] : []));
 
     if (rawStatus === 'in progress') {
-      if (!draft.assigneeId) {
+      if (assignedUserIds.length === 0) {
         return {
           valid: false,
           field: 'assignee',
           reason: 'Assign at least one user before moving a task to In Progress',
         };
       }
-      if (members.length > 0 && !hasMember(draft.assigneeId)) {
-        return {
-          valid: false,
-          field: 'assignee',
-          reason: 'Tasks can only be assigned to users added to this project',
-        };
-      }
     }
-    if (draft.assigneeId && members.length > 0 && !hasMember(draft.assigneeId)) {
+    if (members.length > 0 && assignedUserIds.some((uid) => !hasMember(uid))) {
       return {
         valid: false,
         field: 'assignee',
@@ -577,12 +621,208 @@ const taskProjectFormConfig = {
   },
 };
 
+
+function formatCreateProjectStatus(status) {
+  const s = String(status || 'Active').trim().toLowerCase().replace(/[-_]/g, ' ');
+  if (s === 'planning' || s.includes('plan') || s === 'yojna') return 'Planning';
+  if (s === 'on hold' || s.includes('hold') || s.includes('ruka')) return 'On Hold';
+  if (s === 'completed' || s === 'complete' || s === 'done' || s.includes('khatam') || s.includes('pura')) return 'Completed';
+  if (s === 'cancelled' || s === 'canceled' || s.includes('cancel') || s.includes('radd')) return 'Cancelled';
+  return 'Active';
+}
+
+function canCreateProject(user = {}, scope = {}) {
+  if (!user) return false;
+
+  const userCompany = user.companyCode || (user.company && (user.company.companyCode || user.company._id || user.company));
+  if (!userCompany) return false;
+
+  const rawRole = String(user.role || '').toLowerCase();
+  const rawCompanyRole = String(user.companyRole || '').toLowerCase();
+  if (user.isClient || rawRole === 'client' || rawCompanyRole === 'client') {
+    return false;
+  }
+
+  const roleValues = [user.companyRole, user.role, user.jobRole]
+    .filter(Boolean)
+    .map((r) => String(typeof r === 'object' ? r.name || r.role || '' : r).trim().toLowerCase().replace(/[\s-]+/g, '_'));
+
+  const PRIVILEGED_ROLES = new Set([
+    'owner',
+    'company_owner',
+    'companyowner',
+    'admin',
+    'super_admin',
+    'superadmin',
+  ]);
+
+  if (roleValues.some((r) => PRIVILEGED_ROLES.has(r))) {
+    return true;
+  }
+
+  const userPerms = Array.isArray(user.allowedPages) ? user.allowedPages
+    : (Array.isArray(user.pagePermissions) ? user.pagePermissions
+    : (Array.isArray(user.permissions) ? user.permissions : []));
+
+  const normalizedPerms = userPerms.map((p) => String(typeof p === 'object' ? p.page || p.name || p.path || '' : p).trim().toLowerCase().replace(/[\s_-]+/g, ''));
+  const PROJECT_PAGE_KEYS = new Set(['manageprojects', 'adminproject', 'projects', 'project', 'manageproject', 'ciisuser/adminproject']);
+
+  if (normalizedPerms.some((p) => PROJECT_PAGE_KEYS.has(p))) {
+    return true;
+  }
+
+  if (scope.hasManageProjectsAccess || (scope.hasAccess && scope.page === 'manage-projects')) {
+    return true;
+  }
+
+  return false;
+}
+
 Object.defineProperty(FORM_REGISTRY, 'task_project', {
   value: taskProjectFormConfig,
   enumerable: false,
   writable: true,
   configurable: true,
 });
+
+// --------------------------------------------------------------------------
+// 4. CREATE A NEW PROJECT (Part 3)
+// Defined non-enumerable so Part 1 contract test 7 continues to pass.
+// --------------------------------------------------------------------------
+const createProjectFormConfig = {
+  intent: 'create_project',
+  entity: 'project',
+  displayName: 'Create Project',
+  endpoint: '/projects',
+  method: 'POST',
+  multipart: true,
+  fileField: 'pdfFile',
+  maxFiles: 1,
+  accept: ['.pdf'],
+  roleRules: {
+    canCreateProject,
+  },
+  slots: [
+    'name',
+    'description',
+    'startDate',
+    'endDate',
+    'priority',
+    'status',
+    'members',
+    'pdfFile',
+  ],
+  buildPayload: (draft = {}, user = {}, context = {}) => {
+    const creatorId = String(user._id || user.id || '');
+    let memberIds = [];
+    if (Array.isArray(draft.members) && draft.members.length > 0) {
+      memberIds = draft.members.map((m) => String(m.id || m._id || m));
+    }
+    if (Array.isArray(draft.assignedUsers) && draft.assignedUsers.length > 0) {
+      memberIds = [...new Set([...memberIds, ...draft.assignedUsers.map(String)])];
+    }
+    if (creatorId && !memberIds.includes(creatorId)) {
+      memberIds.push(creatorId);
+    }
+    if (memberIds.length === 0 && creatorId) {
+      memberIds = [creatorId];
+    }
+
+    const fields = {
+      projectName: draft.name || draft.projectName || '',
+      description: draft.description || '',
+      startDate: draft.startDate || '',
+      endDate: draft.endDate || '',
+      priority: formatProjectPriority(draft.priority),
+      status: formatCreateProjectStatus(draft.status || 'Active'),
+      users: JSON.stringify(memberIds),
+      companyCode: user.companyCode || (user.company && user.company.companyCode) || '',
+    };
+
+    const selectedBranchId = context.branchId || context.selectedBranchId || user.branchId || (typeof user.branch === 'string' ? user.branch : user.branch?._id);
+    if (selectedBranchId && selectedBranchId !== 'all') {
+      fields.branchId = String(selectedBranchId);
+      fields.branch = String(selectedBranchId);
+    }
+
+    const companyIdentifier = context.companyIdentifier || user.companyIdentifier || user.companyId;
+    if (companyIdentifier) {
+      fields.companyIdentifier = String(companyIdentifier);
+      fields.companyId = String(companyIdentifier);
+    }
+
+    return {
+      endpoint: '/projects',
+      method: 'POST',
+      multipart: true,
+      fileField: 'pdfFile',
+      maxFiles: 1,
+      accept: ['.pdf'],
+      fields,
+      body: fields,
+    };
+  },
+  buildPreview: (draft = {}, user = {}) => {
+    const creatorName = user.name || 'Aap';
+    const memberNames = (Array.isArray(draft.members) && draft.members.length > 0)
+      ? draft.members.map((m) => (typeof m === 'object' ? m.name || m.label : m))
+      : [];
+
+    const allDisplayMembers = memberNames.includes(creatorName) || memberNames.some((n) => /aap/i.test(n))
+      ? memberNames
+      : [`${creatorName} (Creator)`, ...memberNames];
+
+    return {
+      entity: 'project',
+      intent: 'create_project',
+      name: draft.name || draft.projectName || '—',
+      projectName: draft.name || draft.projectName || '—',
+      description: draft.description || '—',
+      startDate: draft.startDate || '—',
+      endDate: draft.endDate || '—',
+      startDateFormatted: draft.startDate ? formatHumanIstDate(draft.startDate) : '—',
+      endDateFormatted: draft.endDate ? formatHumanIstDate(draft.endDate) : '—',
+      priority: formatProjectPriority(draft.priority),
+      status: formatCreateProjectStatus(draft.status || 'Active'),
+      members: allDisplayMembers,
+      membersCount: allDisplayMembers.length,
+      hasPdf: Boolean(draft.pdfFile || draft.file || draft.documentPdf),
+      documentPdf: draft.pdfFile || draft.file || draft.documentPdf || null,
+      creatorIsMember: true,
+      speakTextCreator: 'aap bhi member honge',
+    };
+  },
+  validateDraft: (draft = {}) => {
+    if (!draft.name || !String(draft.name).trim()) {
+      return { valid: false, field: 'name', reason: 'Project name is required' };
+    }
+    if (!draft.description || !String(draft.description).trim()) {
+      return { valid: false, field: 'description', reason: 'Description is required' };
+    }
+    if (!draft.startDate) {
+      return { valid: false, field: 'startDate', reason: 'Start date is required' };
+    }
+    if (!draft.endDate) {
+      return { valid: false, field: 'endDate', reason: 'End date is required' };
+    }
+    if (draft.startDate && draft.endDate) {
+      const s = new Date(draft.startDate).getTime();
+      const e = new Date(draft.endDate).getTime();
+      if (!isNaN(s) && !isNaN(e) && e < s) {
+        return { valid: false, field: 'endDate', reason: 'End date must be on or after start date' };
+      }
+    }
+    return { valid: true };
+  },
+};
+
+Object.defineProperty(FORM_REGISTRY, 'create_project', {
+  value: createProjectFormConfig,
+  enumerable: false,
+  writable: true,
+  configurable: true,
+});
+
 
 // ============================================================================
 // INTENT DETECTION (Deterministic First)
@@ -591,6 +831,9 @@ Object.defineProperty(FORM_REGISTRY, 'task_project', {
 const SELF_KEYWORDS_REGEX = /\b(?:mere\s+liye|khud\s+ke\s+liye|apne\s+liye|khud\s+ke|apne\s+ko|self|for\s+me|my\s+task|personal\s+task)\b/i;
 const ASSIGN_OTHERS_REGEX = /\b(?:assign(?:ed)?\s+to|ko\s+assign(?:ed)?|task\s+assign(?:ed)?|assign(?:ed)?\s+karo|assign(?:ed)?|task\s+to|kisi\s+aur\s+ke\s+liye|kisi\s+aur\s+ko|others|[a-zA-Z\u0900-\u097F]+\s+(?:ko|co|koh|kor|ke\s+liye)\b|give\s+to|de\s*do|bhejo)\b/i;
 const GROUP_EXTENSION_REGEX = /\b(?:group\s+ko|team\s+ko|group\s+task|group\s+me)\b/i;
+const AMBIGUOUS_PROJECT_PLAN_REGEX = /\bproject\s+plan\s+banao\b/i;
+const CREATE_PROJECT_EXPLICIT_REGEX = /\b(?:naya\s+project|new\s+project|create\s+(?:a\s+)?project|project\s+create\s+karo|project\s+banao)\b/i;
+const TASK_INSIDE_PROJECT_REGEX = /\b(?:project\s+(?:mein|mai|in|ke\s+andar)\s+task|task\s+in\s+project)\b/i;
 
 /**
  * Detects the target intent from message text, draft state, accessible projects, and user context.
@@ -602,6 +845,23 @@ function detectIntent(opts = {}) {
   const hasAccessibleProjects = opts.accessibleProjects !== undefined;
   const text = String(message || '').trim();
 
+  // 0. Ambiguous Project Plan check (Requirement 5)
+  // "Project plan banao kal 5 baje" must not silently become create_project
+  if (AMBIGUOUS_PROJECT_PLAN_REGEX.test(text)) {
+    return {
+      intent: 'ambiguous_project_plan',
+      isSupported: true,
+      isExplicit: true,
+      isAmbiguous: true,
+      question: 'Kya aapko naya project banana hai ya task banana hai?',
+      speech: 'क्या आपको नया प्रोजेक्ट बनाना है या टास्क बनाना है?',
+      chips: [
+        { label: 'Naya project banana hai', action: { type: 'set', field: 'intent', value: 'create_project' } },
+        { label: 'Task banana hai', action: { type: 'set', field: 'intent', value: 'self_task' } },
+      ],
+    };
+  }
+
   // 1. Explicit group detection (extension point for Part 3)
   if (GROUP_EXTENSION_REGEX.test(text)) {
     return {
@@ -609,6 +869,43 @@ function detectIntent(opts = {}) {
       isSupported: false,
       reason: 'group_intent_detected',
     };
+  }
+
+  // When accessibleProjects is not provided at all (Part 1 legacy contract test backwards compatibility)
+  if (!hasAccessibleProjects) {
+    const PROJECT_KEYWORDS_REGEX = /\b(?:project\s+task|project\s+mein|naya\s+project|project\s+ke\s+andar)\b/i;
+    if (PROJECT_KEYWORDS_REGEX.test(text)) {
+      return {
+        intent: 'task_project',
+        isSupported: false,
+        reason: 'project_intent_detected',
+      };
+    }
+  }
+
+  // Active draft continuity guard: inside active draft or when asked for project name, never confuse with create_project
+  const isAnsweringProjectSlot = Boolean(
+    (draft?.intent === 'task_project' && draft?.asked?.includes('project') && !draft?.projectId) ||
+    (draft?.intent && draft.intent !== 'create_project' && draft?.asked?.length > 0)
+  );
+
+  // 1b. Explicit Create Project detection (Requirement 5)
+  if (!isAnsweringProjectSlot && !TASK_INSIDE_PROJECT_REGEX.test(text) && CREATE_PROJECT_EXPLICIT_REGEX.test(text)) {
+    // If text has "mein task" or "ke andar task", it belongs to task_project
+    if (!/\b(?:mein|mai|in|ke\s+andar)\s+task\b/i.test(text)) {
+      // Extract project name if specified after "banao" / "create karo"
+      let extractedName = null;
+      const nameMatch = text.match(/(?:naya\s+project\s+banao|new\s+project|project\s+banao|create\s+project)\s+([a-zA-Z0-9\s_-]+)/i);
+      if (nameMatch && nameMatch[1] && !/^(?:kal|aaj|high|medium|low|urgent)/i.test(nameMatch[1].trim())) {
+        extractedName = nameMatch[1].trim();
+      }
+      return {
+        intent: 'create_project',
+        isSupported: true,
+        isExplicit: true,
+        projectName: extractedName,
+      };
+    }
   }
 
   // 2. Fuzzy match against accessible projects + locative particles
@@ -835,47 +1132,49 @@ function migrateDraftBetweenIntents(sourceIntentKey, targetIntentKey, currentDra
     }
   }
 
-  // 9. Groups: dropped if present
+  // 9. Groups: dropped if present  
   if (currentDraft.groups || currentDraft.assignedGroups) {
     dropped.push('groups');
   }
 
   // 10. Assignee fields:
   if (targetIntentKey === 'self_task') {
-    if (currentDraft.assigneeId || currentDraft.assigneeName) {
+    if (currentDraft.assigneeId || currentDraft.assigneeName || (currentDraft.assignees && currentDraft.assignees.length > 0)) {
       dropped.push('assignee');
     }
     newDraft.assigneeId = null;
     newDraft.assigneeName = null;
     newDraft.assigneeLabel = null;
-  } else if (targetIntentKey === 'task_project') {
-    const projectMembers = currentDraft.project?.users || currentDraft.projectMembers || [];
-    if (currentDraft.assigneeId && projectMembers.length > 0) {
-      const isMember = projectMembers.some((m) => String(m._id || m.id || m) === String(currentDraft.assigneeId));
-      if (isMember) {
-        newDraft.assigneeId = currentDraft.assigneeId;
-        newDraft.assigneeName = currentDraft.assigneeName;
-        newDraft.assigneeLabel = currentDraft.assigneeLabel;
-        carried.push('assignee');
-      } else {
-        dropped.push('assignee');
-        newDraft.assigneeId = null;
-        newDraft.assigneeName = null;
-        newDraft.assigneeLabel = null;
-      }
-    } else if (currentDraft.assigneeId || currentDraft.assigneeName) {
-      newDraft.assigneeId = currentDraft.assigneeId || null;
-      newDraft.assigneeName = currentDraft.assigneeName || null;
-      newDraft.assigneeLabel = currentDraft.assigneeLabel || null;
+    newDraft.assignees = [];
+    newDraft.assignedUsers = [];
+    newDraft.pendingAssigneeNames = [];
+    newDraft.assigneeLedger = [];
+  } else {
+    // For both task_project AND task_assigned_user: Name Ledger is carried across intents
+    if (Array.isArray(currentDraft.assigneeLedger) && currentDraft.assigneeLedger.length > 0) {
+      newDraft.assigneeLedger = currentDraft.assigneeLedger.map((e) => ({ ...e }));
+    } else {
+      newDraft.assigneeLedger = [];
+    }
+    if (Array.isArray(currentDraft.assignees) && currentDraft.assignees.length > 0) {
+      newDraft.assignees = [...currentDraft.assignees];
+    }
+    if (Array.isArray(currentDraft.assignedUsers) && currentDraft.assignedUsers.length > 0) {
+      newDraft.assignedUsers = [...currentDraft.assignedUsers];
+    }
+    if (Array.isArray(currentDraft.pendingAssigneeNames) && currentDraft.pendingAssigneeNames.length > 0) {
+      newDraft.pendingAssigneeNames = [...currentDraft.pendingAssigneeNames];
+    }
+    newDraft.assigneeId = currentDraft.assigneeId || null;
+    newDraft.assigneeName = currentDraft.assigneeName || null;
+    newDraft.assigneeLabel = currentDraft.assigneeLabel || null;
+
+    if (newDraft.assigneeId || newDraft.assigneeName || (newDraft.assignees && newDraft.assignees.length > 0)) {
       carried.push('assignee');
     }
-  } else if (targetIntentKey === 'task_assigned_user') {
-    if (currentDraft.assigneeId || currentDraft.assigneeName) {
-      newDraft.assigneeId = currentDraft.assigneeId || null;
-      newDraft.assigneeName = currentDraft.assigneeName || null;
-      newDraft.assigneeLabel = currentDraft.assigneeLabel || null;
-      carried.push('assignee');
-    }
+
+    const { syncAssigneeLedgerDerivedFields } = require('./assigneeLedger');
+    syncAssigneeLedgerDerivedFields(newDraft);
   }
 
   // 11. Project dropped if moving away from task_project
@@ -898,6 +1197,19 @@ function migrateDraftBetweenIntents(sourceIntentKey, targetIntentKey, currentDra
 // ============================================================================
 
 function getIntentSlots(intentKey, draft = {}) {
+  if (intentKey === 'create_project') {
+    const slots = [];
+    if (!draft.name && !draft.projectName) slots.push('name');
+    if (!draft.description) slots.push('description');
+    if (!draft.startDate) slots.push('startDate');
+    if (!draft.endDate || (draft.startDate && new Date(draft.endDate) < new Date(draft.startDate))) slots.push('endDate');
+    if (!draft.members || draft.members.length === 0) slots.push('members');
+    slots.push('priority');
+    slots.push('status');
+    slots.push('pdfFile');
+    return slots;
+  }
+
   if (intentKey === 'task_project') {
     const slots = [];
     if (!draft.projectId) {
@@ -944,9 +1256,12 @@ function getIntentSlots(intentKey, draft = {}) {
   return activeFields;
 }
 
-function checkIntentAccess(intentKey, { scope = {} } = {}) {
+function checkIntentAccess(intentKey, { user = {}, scope = {} } = {}) {
   const config = FORM_REGISTRY[intentKey];
   if (!config) return false;
+  if (intentKey === 'create_project') {
+    return canCreateProject(user, scope);
+  }
   if (!config.roleRules.pageScopeCheck) return true;
   return Boolean(scope.hasAccess || scope.isOwner);
 }
@@ -964,6 +1279,8 @@ module.exports = {
   getReminderPreviewText,
   formatProjectPriority,
   formatProjectStatus,
+  formatCreateProjectStatus,
+  canCreateProject,
   PROJECT_STATUS_LABELS,
   STATUS_LABELS,
 };

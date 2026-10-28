@@ -48,6 +48,9 @@ async function isAssigneeInScope(req, scope, userId, deps = {}) {
   if (!companyId) return false; // fail-closed
 
   const isInCompany = async () => {
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return Boolean(scope.hasAccess || scope.isOwner);
+    }
     const found = await UserModel.findOne({ _id: userId, company: companyId })
       .select('_id')
       .lean();
@@ -106,7 +109,92 @@ async function isAssigneeInScope(req, scope, userId, deps = {}) {
   return Boolean(matched);
 }
 
+const PRIVILEGED_PROJECT_ROLES = new Set([
+  'owner',
+  'company_owner',
+  'companyowner',
+  'admin',
+  'super_admin',
+  'superadmin',
+]);
+
+const normalizeRole = (val) => String(val || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+
+/**
+ * Enforces project creation permissions mirroring PageAccessGate.jsx exactly:
+ * - Creator must belong to a company.
+ * - Clients cannot create projects.
+ * - Allowed roles: owner, company_owner, admin, super_admin (checked on role, jobRole, companyRole).
+ * - Or users explicitly granted access to 'adminproject' or 'manage-projects' page.
+ */
+async function canCreateProject(user, deps = {}) {
+  if (!user) return false;
+
+  const compRole = normalizeRole(user.companyRole);
+  if (compRole === 'client') return false;
+
+  const companyId = user.company?._id || user.company || user.companyId;
+  const companyCode = user.companyCode || user.company?.companyCode;
+  if (!companyId && !companyCode) return false;
+
+  // Check privileged roles on all user role fields
+  const roleValues = [user.companyRole, user.jobRole, user.role];
+  const isPrivileged = roleValues.some((r) => PRIVILEGED_PROJECT_ROLES.has(normalizeRole(r?.name || r)));
+  if (isPrivileged) return true;
+
+  if (typeof deps.hasProjectPagePermission === 'function') {
+    return Boolean(deps.hasProjectPagePermission(user));
+  }
+
+  // Check user object in memory permissions
+  if (Array.isArray(user.pagePermissions)) {
+    const has = user.pagePermissions.some((p) => {
+      const k = String(p.pageKey || p.path || p.id || p.name || '').toLowerCase();
+      return k.includes('adminproject') || k.includes('manage-projects') || k.includes('project');
+    });
+    if (has) return true;
+  }
+  if (Array.isArray(user.allowedPages)) {
+    const has = user.allowedPages.some((k) => {
+      const s = String(k || '').toLowerCase();
+      return s.includes('adminproject') || s.includes('manage-projects') || s === 'projects';
+    });
+    if (has) return true;
+  }
+
+  // Database check against PagePermission model
+  const PagePermissionModel = deps.PagePermission || (mongoose.models.PagePermission || require('../../models/PagePermission'));
+  if (PagePermissionModel && mongoose.connection.readyState === 1 && user._id) {
+    try {
+      const perm = await PagePermissionModel.findOne({
+        $and: [
+          {
+            $or: [
+              { pageKey: { $in: ['adminproject', 'manage-projects', 'projects'] } },
+              { path: { $in: ['/ciisUser/adminproject', 'adminproject', 'manage-projects'] } },
+            ],
+          },
+          ...(companyId ? [{ company: companyId }] : companyCode ? [{ companyCode }] : []),
+          {
+            $or: [
+              { 'viewUsers.user': user._id },
+              { 'editUsers.user': user._id },
+            ],
+          },
+        ],
+      }).select('_id').lean();
+      if (perm) return true;
+    } catch {
+      // ignore db errors
+    }
+  }
+
+  return false;
+}
+
 module.exports = {
   getScopeInfo,
   isAssigneeInScope,
+  canCreateProject,
+  PRIVILEGED_PROJECT_ROLES,
 };

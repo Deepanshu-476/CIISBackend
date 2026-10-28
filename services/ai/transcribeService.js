@@ -18,9 +18,9 @@ const GROQ_AUDIO_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
 const DEFAULT_MODEL = 'whisper-large-v3-turbo';
 
 // Context prompts conditioned on selected language to prevent Whisper hallucination loops
-const HINDI_PROMPT = 'Mera task create karo, priority high, kal subah 10 baje tak complete karna hai.';
-const ENGLISH_PROMPT = 'Create a new task, set priority to high, due tomorrow at 10 AM.';
-const BILINGUAL_PROMPT = 'Create a new task, mera task create karo, priority high, due tomorrow at 10 AM.';
+const HINDI_PROMPT = 'CIIS AI task management, deadline, status, high priority, kal, aaj, baje, tarikh.';
+const ENGLISH_PROMPT = 'CIIS AI task management, deadline, status, high priority, tomorrow, today, review.';
+const BILINGUAL_PROMPT = 'CIIS AI task management, deadline, status, high priority, kal, today.';
 const DEFAULT_PROMPT = HINDI_PROMPT;
 
 /**
@@ -103,8 +103,16 @@ function sanitizeTranscript(rawText) {
     throw err;
   }
 
-  // 2. Remove or strip prompt leakage words (e.g. "Vocabulary:", "Vocabulary")
+  // 2. Remove or strip prompt leakage words (e.g. "Vocabulary:", "Vocabulary", or exact prompt echoes)
   text = text.replace(/\bvocabulary\b[:\s-]*/gi, '').trim();
+  if (text.toLowerCase() === HINDI_PROMPT.toLowerCase().trim() ||
+      text.toLowerCase() === ENGLISH_PROMPT.toLowerCase().trim() ||
+      text.toLowerCase() === BILINGUAL_PROMPT.toLowerCase().trim()) {
+    const err = new Error('Awaaz saaf nahi aayi, dobara bolein');
+    err.code = 'STT_NO_SPEECH';
+    err.status = 400;
+    throw err;
+  }
 
   // 3. Collapse tokens repeated > 4 times in a row to 1 occurrence
   const hadLongRepetition = /\b([a-zA-Z0-9_\u0900-\u097F]+)(?:\s+\1){4,}\b/i.test(text);
@@ -338,7 +346,8 @@ async function transcribeAudio(audioBuffer, options = {}, deps = {}) {
 
         // Skip degenerate repetitive loops or purely silent chunks
         if (compressionRatio > 2.8) return false;
-        if (noSpeechProb > 0.85 && avgLogprob < -1.5) return false;
+        const hasRealWords = /[a-zA-Z0-9\u0900-\u097F]{2,}/.test(segText);
+        if (!hasRealWords && noSpeechProb > 0.85 && avgLogprob < -1.5) return false;
         return true;
       });
 

@@ -18,6 +18,11 @@
 
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const nodeModulesPath = path.resolve(__dirname, '../../node_modules');
+if (!process.env.NODE_PATH || !process.env.NODE_PATH.includes('CIISBackend')) {
+  process.env.NODE_PATH = nodeModulesPath + (process.env.NODE_PATH ? path.delimiter + process.env.NODE_PATH : '');
+  require('node:module').Module._initPaths();
+}
 const mongoose = require('mongoose');
 
 // Prevent OverwriteModelError when requiring models across multiple trees

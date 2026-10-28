@@ -676,6 +676,84 @@ describe('AI Form Registry Suite (Part 1B)', () => {
       assert.equal(result.candidates[1].name, 'Kumar Gaurav');
       assert.ok(result.reply.includes('multiple users mile hain'));
     });
+
+    it('Title Guard: fillers ("hlo", "hello", "hi", "hey", "ya", "yes", "ok", "ko", "haan", "nahi") are rejected as titles and agent asks for title again', async () => {
+      const fillers = ['hlo', 'hello', 'hi', 'hey', 'ya', 'yes', 'ok', 'ko', 'haan', 'nahi'];
+      for (const filler of fillers) {
+        assert.equal(isInvalidOrCommandTitle(filler), true, `Filler "${filler}" must be rejected as invalid title`);
+
+        const result = await parseTaskRequest({
+          req: mockAdminReq,
+          message: filler,
+        }, {
+          ...mockAdminDeps,
+          extractFn: async () => ({ title: filler }),
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.status, 'needs_input');
+        assert.equal(result.field, 'title', `Expected to ask title again when filler "${filler}" is provided`);
+        assert.equal(result.draft.title, null, `Title must be null for filler "${filler}"`);
+        assert.ok(
+          result.reply.includes('Task ka naam kya rakhna hai?') || result.reply.includes('Task ka naam kya hoga?'),
+          `Expected reply to ask for task title, got "${result.reply}"`
+        );
+      }
+    });
+
+    it('"Call Priya about invoice kal 5 baje" stays a self task and asks ONE chip question "Priya ko assign karna hai?" [Haan, assign karo] [Nahi, title mein hi hai]', async () => {
+      // Turn 1: user initiates with action title targeting Priya
+      const turn1 = await parseTaskRequest({
+        req: mockAdminReq,
+        message: 'Call Priya about invoice kal 5 baje',
+      }, {
+        ...mockAdminDeps,
+        extractFn: async () => ({}),
+      });
+
+      assert.equal(turn1.success, true);
+      assert.equal(turn1.status, 'needs_input');
+      assert.equal(turn1.field, 'assigneeConfirmation');
+      assert.equal(turn1.draft.taskFor, 'self', 'Must stay a self task initially');
+      assert.equal(turn1.draft.intent, 'self_task', 'Intent must stay self_task initially');
+      assert.ok(turn1.reply.includes('Priya ko assign karna hai?'), `Expected "Priya ko assign karna hai?", got: "${turn1.reply}"`);
+      assert.equal(turn1.speakText, 'Priya ko assign karna hai?');
+      assert.equal(turn1.chips.length, 2);
+      assert.equal(turn1.chips[0].label, 'Haan, assign karo');
+      assert.equal(turn1.chips[1].label, 'Nahi, title mein hi hai');
+
+      // Turn 2a: user chooses "Nahi, title mein hi hai" -> stays self_task and proceeds to description
+      const turn2No = await parseTaskRequest({
+        req: mockAdminReq,
+        draft: turn1.draft,
+        action: turn1.chips[1].action, // { type: 'keep_title_person', name: 'Priya' }
+      }, {
+        ...mockAdminDeps,
+        extractFn: async () => ({}),
+      });
+
+      assert.equal(turn2No.success, true);
+      assert.equal(turn2No.status, 'needs_input');
+      assert.equal(turn2No.field, 'description', 'Must proceed to description question after person confirmation dismissal');
+      assert.equal(turn2No.draft.taskFor, 'self');
+      assert.equal(turn2No.draft.intent, 'self_task');
+      assert.equal(turn2No.draft.title, 'Call Priya about invoice');
+
+      // Turn 2b: user chooses "Haan, assign karo" -> converts to task_assigned_user
+      const turn2Yes = await parseTaskRequest({
+        req: mockAdminReq,
+        draft: turn1.draft,
+        action: turn1.chips[0].action, // { type: 'set', field: 'assignee', value: 'Priya' }
+      }, {
+        ...mockAdminDeps,
+        extractFn: async () => ({}),
+      });
+
+      assert.equal(turn2Yes.success, true);
+      assert.equal(turn2Yes.draft.taskFor, 'others');
+      assert.equal(turn2Yes.draft.intent, 'task_assigned_user');
+      assert.equal(turn2Yes.draft.assigneeName, 'Priya');
+    });
   });
 
   // ==========================================================================
@@ -882,4 +960,1022 @@ describe('AI Form Registry Suite (Part 1B)', () => {
       assert.ok(dataWrong.error.includes('Unexpected field'), 'Expected Multer error to report "Unexpected field"');
     });
   });
+
+  // ==========================================================================
+  // PART 3A: MULTI-ASSIGNEE TASK SUITE
+  // ==========================================================================
+  describe('Part 3A: Multi-Assignee Task Suite', () => {
+    const { parseTaskRequest } = require('../services/ai/taskAgentService');
+    const adminUser = {
+      _id: '507f1f77bcf86cd799439011',
+      name: 'Test Admin',
+      role: 'admin',
+      company: '507f1f77bcf86cd799439010',
+    };
+    const mockAdminReq = { user: adminUser };
+
+    const usersDb = {
+      rohit: { _id: '507f191e810c19729de860ea', name: 'Rohit Sharma', department: 'DevOps' },
+      rahul: { _id: '507f191e810c19729de860eb', name: 'Rahul Verma', department: 'Backend' },
+      simran: { _id: '507f191e810c19729de860ec', name: 'Simran Kaur', department: 'QA' },
+      kumarGaurav: { _id: '507f191e810c19729de860ed', name: 'Kumar Gaurav', department: 'Frontend' },
+      kumarSanu: { _id: '507f191e810c19729de860ee', name: 'Kumar Sanu', department: 'Design' },
+      outOfScopeUser: { _id: '507f191e810c19729de860ef', name: 'Neeraj OutOfScope', department: 'Finance' },
+    };
+
+    const multiAssigneeDeps = {
+      getScopeInfo: async () => ({ hasAccess: true, isOwner: true }),
+      isAssigneeInScope: async (req, scope, targetUserId) => {
+        return String(targetUserId) !== String(usersDb.outOfScopeUser._id);
+      },
+      resolveAssignee: async ({ name }) => {
+        const clean = String(name || '').toLowerCase().trim();
+        if (clean.includes('kumar')) {
+          return {
+            status: 'multiple',
+            candidates: [usersDb.kumarGaurav, usersDb.kumarSanu],
+          };
+        }
+        if (clean.includes('rohit')) return { status: 'single', user: usersDb.rohit };
+        if (clean.includes('rahul')) return { status: 'single', user: usersDb.rahul };
+        if (clean.includes('simran')) return { status: 'single', user: usersDb.simran };
+        if (clean.includes('neeraj')) return { status: 'single', user: usersDb.outOfScopeUser };
+        return { status: 'none', candidates: [] };
+      },
+      extractFn: async () => ({}),
+    };
+
+    it('1. all-resolved: "Rohit aur Rahul ko task do" resolves both assignees and formats speakText', async () => {
+      const res = await parseTaskRequest({
+        req: mockAdminReq,
+        message: 'Rohit aur Rahul ko task do, title API deployment, kal 5 baje, baaki default',
+      }, multiAssigneeDeps);
+
+      assert.equal(res.success, true);
+      assert.equal(res.draft.intent, 'task_assigned_user');
+      assert.equal(res.draft.taskFor, 'others');
+      assert.equal(res.draft.assignees.length, 2);
+      assert.equal(res.draft.assignees[0].name, 'Rohit Sharma');
+      assert.equal(res.draft.assignees[1].name, 'Rahul Verma');
+      assert.deepEqual(res.draft.assignedUsers, [String(usersDb.rohit._id), String(usersDb.rahul._id)]);
+
+      // Spoken text says the names
+      assert.ok(
+        res.speakText.includes('Rohit Sharma aur Rahul Verma') || res.speakText.includes('Rohit aur Rahul'),
+        `Expected speakText to mention assignees, got: "${res.speakText}"`
+      );
+    });
+
+    it('2. one ambiguous: "Rohit aur Kumar ko task do" pauses on Kumar and returns needs_disambiguation', async () => {
+      const res = await parseTaskRequest({
+        req: mockAdminReq,
+        message: 'Rohit aur Kumar ko task do',
+      }, multiAssigneeDeps);
+
+      assert.equal(res.success, true);
+      assert.equal(res.status, 'needs_disambiguation');
+      assert.equal(res.field, 'assignee');
+      assert.ok(res.reply.includes('Kumar') && res.reply.includes('multiple users mile hain'));
+      assert.equal(res.candidates.length, 2);
+      assert.equal(res.candidates[0].name, 'Kumar Gaurav');
+      assert.equal(res.candidates[1].name, 'Kumar Sanu');
+
+      // User disambiguates Kumar by picking Kumar Sanu
+      const resTurn2 = await parseTaskRequest({
+        req: mockAdminReq,
+        draft: res.draft,
+        action: {
+          type: 'set',
+          field: 'assignee',
+          value: 'Kumar Sanu',
+          assigneeId: String(usersDb.kumarSanu._id),
+        },
+      }, multiAssigneeDeps);
+
+      assert.equal(resTurn2.success, true);
+      assert.equal(resTurn2.draft.assignees.length, 2);
+      assert.equal(resTurn2.draft.assignees[0].name, 'Rohit Sharma');
+      assert.equal(resTurn2.draft.assignees[1].name, 'Kumar Sanu');
+      assert.deepEqual(resTurn2.draft.assignedUsers, [String(usersDb.rohit._id), String(usersDb.kumarSanu._id)]);
+    });
+
+    it('3. one unknown / misheard: "Rohit aur UnknownPerson ko task do" preserves Rohit and warns for unknown', async () => {
+      const res = await parseTaskRequest({
+        req: mockAdminReq,
+        message: 'Rohit aur UnknownPerson ko task do',
+      }, multiAssigneeDeps);
+
+      assert.equal(res.success, true);
+      assert.ok(res.notices.some(n => n.includes('UnknownPerson') && n.includes('koi employee nahi mila')));
+      assert.equal(res.draft.assignees.length, 1);
+      assert.equal(res.draft.assignees[0].name, 'Rohit Sharma');
+      assert.deepEqual(res.draft.assignedUsers, [String(usersDb.rohit._id)]);
+    });
+
+    it('4. duplicates: "Rohit aur Rohit ko task do" deduplicates by ID to 1 user', async () => {
+      const res = await parseTaskRequest({
+        req: mockAdminReq,
+        message: 'Rohit aur Rohit ko task do',
+      }, multiAssigneeDeps);
+
+      assert.equal(res.success, true);
+      assert.equal(res.draft.assignees.length, 1);
+      assert.equal(res.draft.assignees[0].name, 'Rohit Sharma');
+      assert.deepEqual(res.draft.assignedUsers, [String(usersDb.rohit._id)]);
+    });
+
+    it('5. scope rules: out of scope user is never added, and employee without others permission cannot assign', async () => {
+      // 5a. Out of scope user
+      const resOutOfScope = await parseTaskRequest({
+        req: mockAdminReq,
+        message: 'Rohit aur Neeraj ko task do',
+      }, multiAssigneeDeps);
+
+      assert.equal(resOutOfScope.success, true);
+      assert.ok(resOutOfScope.notices.some(n => n.includes('Neeraj') && n.includes('scope se bahar')));
+      assert.equal(resOutOfScope.draft.assignees.length, 1);
+      assert.equal(resOutOfScope.draft.assignees[0].name, 'Rohit Sharma');
+
+      // 5b. Employee cannot assign to others
+      const empReq = {
+        user: {
+          _id: '507f1f77bcf86cd799439099',
+          name: 'Regular Employee',
+          role: 'user',
+          company: '507f1f77bcf86cd799439010',
+        },
+      };
+      const empDeps = {
+        ...multiAssigneeDeps,
+        getScopeInfo: async () => ({ hasAccess: false, isOwner: false, isAdmin: false }),
+      };
+
+      const resEmp = await parseTaskRequest({
+        req: empReq,
+        message: 'Rohit aur Rahul ko task do',
+      }, empDeps);
+
+      assert.equal(resEmp.success, true);
+      assert.equal(resEmp.draft.taskFor, 'self');
+    });
+
+    it('6. remove / add during edit: "Rahul ko hata do" and "Simran ko bhi add karo"', async () => {
+      // Start with Rohit and Rahul
+      const turn1 = await parseTaskRequest({
+        req: mockAdminReq,
+        message: 'Rohit aur Rahul ko task do, title Database Audit, kal 4 baje',
+      }, multiAssigneeDeps);
+
+      assert.equal(turn1.draft.assignees.length, 2);
+
+      // Edit 1: "Rahul ko hata do"
+      const turn2 = await parseTaskRequest({
+        req: mockAdminReq,
+        draft: turn1.draft,
+        message: 'Rahul ko hata do',
+      }, multiAssigneeDeps);
+
+      assert.equal(turn2.draft.assignees.length, 1);
+      assert.equal(turn2.draft.assignees[0].name, 'Rohit Sharma');
+      assert.deepEqual(turn2.draft.assignedUsers, [String(usersDb.rohit._id)]);
+      assert.ok(turn2.notices.some(n => n.includes('Rahul') && n.includes('hata diya')));
+
+      // Edit 2: "Simran ko bhi add karo"
+      const turn3 = await parseTaskRequest({
+        req: mockAdminReq,
+        draft: turn2.draft,
+        message: 'Simran ko bhi add karo',
+      }, multiAssigneeDeps);
+
+      assert.equal(turn3.draft.assignees.length, 2);
+      assert.equal(turn3.draft.assignees[0].name, 'Rohit Sharma');
+      assert.equal(turn3.draft.assignees[1].name, 'Simran Kaur');
+      assert.deepEqual(turn3.draft.assignedUsers, [String(usersDb.rohit._id), String(usersDb.simran._id)]);
+    });
+
+    it('7. payload contract vs AdminTaskCreate: assignedUsers serialized as JSON string of user IDs', () => {
+      const sampleDraft = {
+        intent: 'task_assigned_user',
+        title: 'Security Compliance Audit',
+        description: 'Verify SOC2 checklist',
+        dueDateTime: '2026-10-31T18:00:00.000Z',
+        priority: 'high',
+        status: 'pending',
+        priorityDays: '1',
+        assignees: [usersDb.rohit, usersDb.rahul],
+        assignedUsers: [String(usersDb.rohit._id), String(usersDb.rahul._id)],
+        checkpoints: [{ title: 'Check firewall rules', completed: false }],
+        reminder: true,
+        reminderOption: 'oneHourBefore',
+      };
+
+      const payload = FORM_REGISTRY.task_assigned_user.buildPayload(sampleDraft);
+      assert.equal(payload.endpoint, '/task/create-for-others');
+      assert.equal(payload.method, 'POST');
+      assert.equal(payload.multipart, true);
+
+      // Byte-for-byte contract parity with AdminTaskCreate.jsx: formData.append('assignedUsers', JSON.stringify(newTask.assignedUsers))
+      assert.equal(typeof payload.fields.assignedUsers, 'string');
+      const parsedIds = JSON.parse(payload.fields.assignedUsers);
+      assert.deepEqual(parsedIds, [String(usersDb.rohit._id), String(usersDb.rahul._id)]);
+      assert.equal(payload.fields.title, 'Security Compliance Audit');
+      assert.equal(payload.fields.priority, 'high');
+
+      // Preview card contains assignees array with departments
+      const preview = FORM_REGISTRY.task_assigned_user.buildPreview(sampleDraft);
+      assert.equal(preview.assignees.length, 2);
+      assert.equal(preview.assignees[0].name, 'Rohit Sharma');
+      assert.equal(preview.assignees[0].department, 'DevOps');
+      assert.equal(preview.assignees[1].name, 'Rahul Verma');
+      assert.equal(preview.assignees[1].department, 'Backend');
+    });
+
+    it('8. single-name backward compatibility: "Rahul ko assign karo client proposal review" behaves identically', async () => {
+      const res = await parseTaskRequest({
+        req: mockAdminReq,
+        message: 'Rahul ko assign karo client proposal review',
+      }, multiAssigneeDeps);
+
+      assert.equal(res.success, true);
+      assert.equal(res.draft.intent, 'task_assigned_user');
+      assert.equal(res.draft.assigneeName, 'Rahul Verma');
+      assert.equal(res.draft.assigneeId, String(usersDb.rahul._id));
+      assert.equal(res.draft.assignees.length, 1);
+      assert.deepEqual(res.draft.assignedUsers, [String(usersDb.rahul._id)]);
+    });
+
+    const demo1Users = {
+      aarav: {
+        _id: '507f191e810c19729de860f1',
+        name: 'Aarav Sharma',
+        role: 'user',
+        jobRole: 'Developer',
+        company: '507f1f77bcf86cd799439010',
+      },
+      divya: {
+        _id: '507f191e810c19729de860f2',
+        name: 'Divya Patel',
+        role: 'user',
+        jobRole: 'QA Engineer',
+        company: '507f1f77bcf86cd799439010',
+      },
+    };
+
+    const demo1ProjectWithBoth = {
+      _id: '607f191e810c19729de860a1',
+      projectName: 'Demo 1',
+      company: '507f1f77bcf86cd799439010',
+      users: [demo1Users.aarav, demo1Users.divya],
+    };
+
+    const demo1ProjectWithAaravOnly = {
+      _id: '607f191e810c19729de860a1',
+      projectName: 'Demo 1',
+      company: '507f1f77bcf86cd799439010',
+      users: [demo1Users.aarav], // Divya is NOT a member
+    };
+
+    it('9. Replay Test A (both members): exact utterance resolves Divya and Aarav, default chip preserves both', async () => {
+      const depsWithDemo1 = {
+        ...multiAssigneeDeps,
+        accessibleProjects: [demo1ProjectWithBoth],
+      };
+
+      const manualUtterance = 'Demo 1 project mein, Divya and Arav ko task assign karo, task ka naam Doing API testing, due date kal 5 baje';
+
+      // Turn 1: Utterance
+      const turn1 = await parseTaskRequest({
+        req: mockAdminReq,
+        message: manualUtterance,
+      }, depsWithDemo1);
+
+      assert.equal(turn1.success, true);
+      assert.equal(turn1.draft.intent, 'task_project');
+      assert.equal(turn1.draft.projectName, 'Demo 1');
+      assert.equal(turn1.draft.title, 'Doing API testing');
+      // Divya was resolved immediately, Arav triggered fuzzy suggestion for Aarav Sharma
+      assert.equal(turn1.draft.assignees.length, 1);
+      assert.equal(turn1.draft.assignees[0].name, 'Divya Patel');
+      assert.equal(turn1.status, 'needs_input');
+      assert.ok(turn1.reply.includes('Aarav Sharma'));
+      assert.equal(turn1.preview, null, 'Preview card must not be shown while a name is still open');
+
+      // Turn 2: Pick "Haan, Aarav Sharma"
+      const turn2 = await parseTaskRequest({
+        req: mockAdminReq,
+        draft: turn1.draft,
+        action: {
+          type: 'set',
+          field: 'assignee',
+          value: 'Aarav Sharma',
+          assigneeId: String(demo1Users.aarav._id),
+        },
+      }, depsWithDemo1);
+
+      assert.equal(turn2.success, true);
+      assert.equal(turn2.draft.assignees.length, 2);
+      assert.equal(turn2.draft.assignees[0].name, 'Divya Patel');
+      assert.equal(turn2.draft.assignees[1].name, 'Aarav Sharma');
+      assert.deepEqual(turn2.draft.assignedUsers, [String(demo1Users.divya._id), String(demo1Users.aarav._id)]);
+
+      // Turn 3: Tap "Baaki sab default" (skip_all)
+      const turn3 = await parseTaskRequest({
+        req: mockAdminReq,
+        draft: turn2.draft,
+        action: { type: 'skip_all' },
+      }, depsWithDemo1);
+
+      assert.equal(turn3.success, true);
+      assert.equal(turn3.status, 'ready');
+      // Must NOT say assignee change kar diya hai
+      assert.ok(
+        !turn3.reply.includes('assignee change kar diya hai'),
+        `Expected reply to NOT contain assignee change notice, got: "${turn3.reply}"`
+      );
+      // Assignees remain set
+      assert.equal(turn3.draft.assignees.length, 2);
+      assert.deepEqual(turn3.draft.assignedUsers, [String(demo1Users.divya._id), String(demo1Users.aarav._id)]);
+
+      // Preview card contains both assignees
+      assert.ok(turn3.preview);
+      assert.equal(turn3.preview.assignees.length, 2);
+      assert.ok(turn3.preview.assignee.label.includes('Divya') && turn3.preview.assignee.label.includes('Aarav'));
+
+      // speakText names both assignees
+      assert.ok(
+        turn3.speakText.includes('Divya') && turn3.speakText.includes('Aarav'),
+        `Expected speakText to name both assignees, got: "${turn3.speakText}"`
+      );
+
+      // Payload contract: assignedUsers is an Array of user IDs (repeated FormData entries)
+      assert.ok(Array.isArray(turn3.payload.fields.assignedUsers));
+      assert.deepEqual(turn3.payload.fields.assignedUsers, [String(demo1Users.divya._id), String(demo1Users.aarav._id)]);
+    });
+
+    it('10. Replay Test B (Divya non-member): manual utterance warns Divya not member, chhod do, resolves Aarav, default chip preserves Aarav', async () => {
+      const depsAaravOnly = {
+        ...multiAssigneeDeps,
+        accessibleProjects: [demo1ProjectWithAaravOnly],
+      };
+
+      const manualUtterance = 'Demo 1 project mein, Divya and Arav ko task assign karo, task ka naam Doing API testing, due date kal 5 baje';
+
+      // Turn 1: Utterance
+      const turn1 = await parseTaskRequest({
+        req: mockAdminReq,
+        message: manualUtterance,
+      }, depsAaravOnly);
+
+      assert.equal(turn1.success, true);
+      assert.equal(turn1.status, 'needs_input');
+      // Warns Divya is not a member of Demo 1
+      assert.ok(
+        turn1.reply.includes('Divya is project ke member nahi hain') || turn1.reply.includes('member nahi hain'),
+        `Expected reply to state Divya is not member, got: "${turn1.reply}"`
+      );
+      // Has chip "Divya ko chhod do"
+      assert.ok(
+        turn1.chips.some(c => c.label.includes('Divya ko chhod do')),
+        'Expected chip "Divya ko chhod do"'
+      );
+      assert.equal(turn1.preview, null, 'Preview card must not be shown while a name is still open');
+
+      // Turn 2: User says "Divya ko chhod do"
+      const turn2 = await parseTaskRequest({
+        req: mockAdminReq,
+        draft: turn1.draft,
+        message: 'Divya ko chhod do',
+      }, depsAaravOnly);
+
+      assert.equal(turn2.success, true);
+      assert.equal(turn2.status, 'needs_input');
+      // Moves to next pending name "Arav" and suggests "Aarav Sharma"
+      assert.ok(
+        turn2.reply.includes('Aarav Sharma'),
+        `Expected reply to suggest Aarav Sharma, got: "${turn2.reply}"`
+      );
+      assert.ok(
+        turn2.chips.some(c => c.label.includes('Haan, Aarav Sharma')),
+        'Expected chip "Haan, Aarav Sharma"'
+      );
+      assert.equal(turn2.preview, null, 'Preview card must not be shown while a name is still open');
+
+      // Turn 3: User picks "Haan, Aarav Sharma"
+      const turn3 = await parseTaskRequest({
+        req: mockAdminReq,
+        draft: turn2.draft,
+        action: {
+          type: 'set',
+          field: 'assignee',
+          value: 'Aarav Sharma',
+          assigneeId: String(demo1Users.aarav._id),
+        },
+      }, depsAaravOnly);
+
+      assert.equal(turn3.success, true);
+      assert.equal(turn3.draft.assigneeId, String(demo1Users.aarav._id));
+      assert.equal(turn3.draft.assignees.length, 1);
+      assert.equal(turn3.draft.assignees[0].name, 'Aarav Sharma');
+
+      // Turn 4: User taps "Baaki sab default" (skip_all)
+      const turn4 = await parseTaskRequest({
+        req: mockAdminReq,
+        draft: turn3.draft,
+        action: { type: 'skip_all' },
+      }, depsAaravOnly);
+
+      assert.equal(turn4.success, true);
+      assert.equal(turn4.status, 'ready');
+      // Bug (b) verification: Agent MUST NOT say "Ji aapka assignee change kar diya hai"
+      assert.ok(
+        !turn4.reply.includes('assignee change kar diya hai'),
+        `Expected reply to NOT contain assignee change notice, got: "${turn4.reply}"`
+      );
+      // Resolved assignee is NOT lost
+      assert.equal(turn4.draft.assigneeId, String(demo1Users.aarav._id));
+      assert.equal(turn4.draft.assignees.length, 1);
+
+      // Preview card shows Aarav Sharma (NOT "Bina assignee ke")
+      assert.ok(turn4.preview);
+      assert.ok(turn4.preview.assignee);
+      assert.ok(
+        turn4.preview.assignee.label.includes('Aarav Sharma'),
+        `Expected preview assignee label to have Aarav Sharma, got: "${turn4.preview.assignee.label}"`
+      );
+      assert.notEqual(turn4.preview.assignee.label, 'Bina assignee ke');
+
+      // speakText names Aarav Sharma
+      assert.ok(
+        turn4.speakText.includes('Aarav Sharma') || turn4.speakText.includes('Aarav'),
+        `Expected speakText to name Aarav Sharma, got: "${turn4.speakText}"`
+      );
+
+      // Payload: assignedUsers is array with [aaravId]
+      assert.ok(Array.isArray(turn4.payload.fields.assignedUsers));
+      assert.deepEqual(turn4.payload.fields.assignedUsers, [String(demo1Users.aarav._id)]);
+    });
+
+    it('11. Replay Test C: "Baaki sab default" keeps assignee in task_assigned_user flow', async () => {
+      // Turn 1: User says: "Rahul ko task assign karo, task ka naam review client report, due date kal 5 baje"
+      const turn1 = await parseTaskRequest({
+        req: mockAdminReq,
+        message: 'Rahul ko task assign karo, task ka naam review client report, due date kal 5 baje',
+      }, multiAssigneeDeps);
+
+      assert.equal(turn1.success, true);
+      assert.equal(turn1.draft.assigneeId, String(usersDb.rahul._id));
+      assert.equal(turn1.draft.assignees.length, 1);
+
+      // Turn 2: User taps "Baaki sab default" (skip_all)
+      const turn2 = await parseTaskRequest({
+        req: mockAdminReq,
+        draft: turn1.draft,
+        action: { type: 'skip_all' },
+      }, multiAssigneeDeps);
+
+      assert.equal(turn2.success, true);
+      assert.equal(turn2.status, 'ready');
+      assert.ok(
+        !turn2.reply.includes('assignee change kar diya hai'),
+        `Expected reply to NOT contain assignee change notice, got: "${turn2.reply}"`
+      );
+      assert.equal(turn2.draft.assigneeId, String(usersDb.rahul._id));
+      assert.ok(turn2.preview.assignee.label.includes('Rahul Verma'));
+      // Payload contract: JSON string of user IDs for task_assigned_user
+      assert.equal(typeof turn2.payload.fields.assignedUsers, 'string');
+      assert.deepEqual(JSON.parse(turn2.payload.fields.assignedUsers), [String(usersDb.rahul._id)]);
+    });
+
+    it('12. Contract Tests: POST /projects/:id/tasks (repeated) vs POST /task/create-for-others (single JSON string)', () => {
+      // 1. task_project payload: assignedUsers is Array
+      const projectDraft = {
+        intent: 'task_project',
+        projectId: '607f191e810c19729de860a1',
+        projectName: 'Demo 1',
+        title: 'Doing API testing',
+        dueDate: '2026-10-28T17:00:00+05:30',
+        assignedUsers: [String(demo1Users.divya._id), String(demo1Users.aarav._id)],
+        assignees: [demo1Users.divya, demo1Users.aarav],
+      };
+      const projectPayload = FORM_REGISTRY.task_project.buildPayload(projectDraft);
+      assert.equal(projectPayload.endpoint, '/projects/607f191e810c19729de860a1/tasks');
+      assert.ok(Array.isArray(projectPayload.fields.assignedUsers));
+      assert.deepEqual(projectPayload.fields.assignedUsers, [String(demo1Users.divya._id), String(demo1Users.aarav._id)]);
+
+      // Simulate FormData appending as in ProjectDetailsPage.jsx lines 724-727
+      const projectFormDataEntries = [];
+      Object.entries(projectPayload.fields).forEach(([k, v]) => {
+        if (k === 'assignedUsers') {
+          v.forEach(id => projectFormDataEntries.push(['assignedUsers', String(id)]));
+        } else {
+          projectFormDataEntries.push([k, v]);
+        }
+      });
+      const repeatedEntries = projectFormDataEntries.filter(([k]) => k === 'assignedUsers');
+      assert.equal(repeatedEntries.length, 2);
+      assert.deepEqual(repeatedEntries, [
+        ['assignedUsers', String(demo1Users.divya._id)],
+        ['assignedUsers', String(demo1Users.aarav._id)],
+      ]);
+
+      // 2. task_assigned_user payload: assignedUsers is single JSON string
+      const assignedDraft = {
+        intent: 'task_assigned_user',
+        title: 'Security Audit',
+        dueDateTime: '2026-10-28T17:00:00+05:30',
+        assignedUsers: [String(usersDb.rohit._id), String(usersDb.rahul._id)],
+        assignees: [usersDb.rohit, usersDb.rahul],
+      };
+      const assignedPayload = FORM_REGISTRY.task_assigned_user.buildPayload(assignedDraft);
+      assert.equal(assignedPayload.endpoint, '/task/create-for-others');
+      assert.equal(typeof assignedPayload.fields.assignedUsers, 'string');
+      assert.deepEqual(JSON.parse(assignedPayload.fields.assignedUsers), [String(usersDb.rohit._id), String(usersDb.rahul._id)]);
+
+      // Simulate FormData appending as in AdminTaskCreate.jsx line 1337
+      const assignedFormDataEntries = [];
+      Object.entries(assignedPayload.fields).forEach(([k, v]) => {
+        assignedFormDataEntries.push([k, v]);
+      });
+      const singleEntries = assignedFormDataEntries.filter(([k]) => k === 'assignedUsers');
+      assert.equal(singleEntries.length, 1);
+      assert.equal(singleEntries[0][1], JSON.stringify([String(usersDb.rohit._id), String(usersDb.rahul._id)]));
+    });
+
+    // ========================================================================
+    // ROUND 3 TESTS: SEPARATORS, PARTIAL MATCH PREVENTION & FULL REPLAY
+    // ========================================================================
+    describe('Round 3: Separators & Safety Check Suite', () => {
+      const demo1UsersR3 = {
+        vansh: { _id: '607f191e810c19729de860c1', name: 'Vansh Test', department: 'QA', role: 'Member' },
+        aarav: { _id: '607f191e810c19729de860c2', name: 'Aarav Sharma', department: 'Dev', role: 'Member' },
+      };
+
+      const demo1ProjectR3 = {
+        _id: '607f191e810c19729de860c0',
+        projectName: 'Demo 1',
+        users: [demo1UsersR3.vansh, demo1UsersR3.aarav],
+      };
+
+      const makeR3Deps = () => ({
+        getScopeInfo: async () => ({ hasAccess: true, isOwner: true }),
+        isAssigneeInScope: async () => true,
+        getAccessibleProjects: async () => [demo1ProjectR3],
+        resolveAssignee: async ({ name }) => {
+          const clean = String(name || '').toLowerCase().trim();
+          if (clean.includes('vansh') || clean.includes('वंश')) return { status: 'single', user: demo1UsersR3.vansh };
+          if (clean.includes('arav') || clean.includes('aarav') || clean.includes('आरव')) return { status: 'single', user: demo1UsersR3.aarav };
+          return { status: 'none', candidates: [] };
+        },
+        extractFn: async () => ({}),
+      });
+
+      // 1. Separators tests in task_assigned_user (others)
+      const separatorUtterances = [
+        'vansh or arav',
+        'vansh aur arav',
+        'Vansh, Arav',
+        'vansh and arav',
+        'वंश और आरव',
+        'vansh + arav',
+      ];
+
+      for (const sepUtterance of separatorUtterances) {
+        it(`1. Separator support (task for others): "${sepUtterance}" resolves both assignees`, async () => {
+          const res = await parseTaskRequest({
+            req: mockAdminReq,
+            message: `${sepUtterance} ko task assign karo, title Testing separators, kal 5 baje, baaki default`,
+          }, makeR3Deps());
+
+          assert.equal(res.success, true);
+          assert.equal(res.draft.taskFor, 'others');
+          assert.equal(res.draft.assignees.length, 2, `Expected 2 assignees for "${sepUtterance}", got ${res.draft.assignees?.length}`);
+          const names = res.draft.assignees.map(a => a.name);
+          assert.ok(names.includes('Vansh Test'), `Missing Vansh Test for "${sepUtterance}"`);
+          assert.ok(names.includes('Aarav Sharma'), `Missing Aarav Sharma for "${sepUtterance}"`);
+          assert.deepEqual(res.draft.assignedUsers, [String(demo1UsersR3.vansh._id), String(demo1UsersR3.aarav._id)]);
+        });
+
+        it(`1. Separator support (project task): "Demo 1 mein ${sepUtterance} ko task do" extracts both names`, async () => {
+          const res = await parseTaskRequest({
+            req: mockAdminReq,
+            message: `Demo 1 project mein, ${sepUtterance} ko task assign karo`,
+          }, makeR3Deps());
+
+          assert.equal(res.success, true);
+          assert.equal(res.draft.intent, 'task_project');
+          // If arav required fuzzy disambiguation, vansh is resolved and arav is in disambiguation or pending
+          const resolvedOrPending = [
+            ...(res.draft.assignees || []).map(a => a.name),
+            ...(res.draft.pendingAssigneeNames || [])
+          ];
+          assert.ok(resolvedOrPending.length >= 2, `Expected at least 2 names resolved or pending for "${sepUtterance}"`);
+        });
+      }
+
+      // 2. Never accept a partial match for the whole string & safety check before ready
+      it('2. Partial match prevention: "vansh or arav" does NOT auto-resolve to Vansh only', async () => {
+        const res = await parseTaskRequest({
+          req: mockAdminReq,
+          message: 'Demo 1 project mai vansh or arav ko task assign karo',
+        }, makeR3Deps());
+
+        assert.equal(res.success, true);
+        assert.equal(res.draft.intent, 'task_project');
+        // Vansh Test was resolved
+        assert.ok(res.draft.assignees.some(a => a.name === 'Vansh Test'));
+        // "arav" was NOT dropped! It is either in pending or currently asked
+        assert.equal(res.status, 'needs_input');
+        assert.equal(res.field, 'assignee');
+        assert.ok(
+          res.reply.includes('Aarav Sharma') || (res.chips && res.chips.some(c => c.label.includes('Aarav Sharma'))),
+          `Expected "Did you mean Aarav Sharma" question/chips, got reply: "${res.reply}"`
+        );
+      });
+
+      // 3. Replay the exact transcript from user manual test with fake users
+      it('3. Replay exact transcript: Demo 1 with Vansh Test and Aarav Sharma, chips Skip, Kal subah 10 AM, High, In Progress, Baaki sab default', async () => {
+        const trace = [];
+
+        // Turn 1: User says: "Demo 1 project mai vansh or arav ko task assign karo"
+        const turn1 = await parseTaskRequest({
+          req: mockAdminReq,
+          message: 'Demo 1 project mai vansh or arav ko task assign karo',
+        }, makeR3Deps());
+
+        trace.push({
+          turn: 1,
+          input: 'Demo 1 project mai vansh or arav ko task assign karo',
+          status: turn1.status,
+          field: turn1.field,
+          assignees: (turn1.draft.assignees || []).map(a => a.name),
+          pending: turn1.draft.pendingAssigneeNames || [],
+          reply: turn1.reply,
+        });
+
+        assert.equal(turn1.status, 'needs_input');
+        assert.equal(turn1.field, 'assignee');
+        assert.ok(turn1.draft.assignees.some(a => a.name === 'Vansh Test'));
+        const haanAaravChip = turn1.chips.find(c => c.label.includes('Aarav Sharma'));
+        assert.ok(haanAaravChip, 'Must show "Haan, Aarav Sharma" chip');
+
+        // Turn 2: User taps chip "Haan, Aarav Sharma"
+        const turn2 = await parseTaskRequest({
+          req: mockAdminReq,
+          draft: turn1.draft,
+          action: haanAaravChip.action,
+        }, makeR3Deps());
+
+        trace.push({
+          turn: 2,
+          input: haanAaravChip.label,
+          status: turn2.status,
+          field: turn2.field,
+          assignees: (turn2.draft.assignees || []).map(a => a.name),
+          pending: turn2.draft.pendingAssigneeNames || [],
+          reply: turn2.reply,
+        });
+
+        assert.equal(turn2.draft.assignees.length, 2);
+        assert.deepEqual(
+          turn2.draft.assignees.map(a => a.name),
+          ['Vansh Test', 'Aarav Sharma']
+        );
+        assert.deepEqual(
+          turn2.draft.assignedUsers,
+          [String(demo1UsersR3.vansh._id), String(demo1UsersR3.aarav._id)]
+        );
+
+        // Turn 3: Title asked -> User taps chip "Skip"
+        const turn3 = await parseTaskRequest({
+          req: mockAdminReq,
+          draft: turn2.draft,
+          message: 'Skip',
+        }, makeR3Deps());
+
+        trace.push({
+          turn: 3,
+          input: 'Skip',
+          status: turn3.status,
+          field: turn3.field,
+          assignees: (turn3.draft.assignees || []).map(a => a.name),
+          reply: turn3.reply,
+        });
+
+        // Turn 4: Due date -> User taps chip "Kal subah 10 AM" (or sends it)
+        const turn4 = await parseTaskRequest({
+          req: mockAdminReq,
+          draft: turn3.draft,
+          message: 'Kal subah 10 AM',
+        }, makeR3Deps());
+
+        trace.push({
+          turn: 4,
+          input: 'Kal subah 10 AM',
+          status: turn4.status,
+          field: turn4.field,
+          assignees: (turn4.draft.assignees || []).map(a => a.name),
+          reply: turn4.reply,
+        });
+
+        // Turn 5: Priority -> User taps chip "High"
+        const turn5 = await parseTaskRequest({
+          req: mockAdminReq,
+          draft: turn4.draft,
+          action: { type: 'set', field: 'priority', value: 'High' },
+        }, makeR3Deps());
+
+        trace.push({
+          turn: 5,
+          input: 'High',
+          status: turn5.status,
+          field: turn5.field,
+          assignees: (turn5.draft.assignees || []).map(a => a.name),
+          reply: turn5.reply,
+        });
+
+        // Turn 6: Status -> User taps chip "In Progress"
+        const turn6 = await parseTaskRequest({
+          req: mockAdminReq,
+          draft: turn5.draft,
+          action: { type: 'set', field: 'status', value: 'in progress' },
+        }, makeR3Deps());
+
+        trace.push({
+          turn: 6,
+          input: 'In Progress',
+          status: turn6.status,
+          field: turn6.field,
+          assignees: (turn6.draft.assignees || []).map(a => a.name),
+          reply: turn6.reply,
+        });
+
+        // Turn 7: User taps chip "Baaki sab default"
+        const turn7 = await parseTaskRequest({
+          req: mockAdminReq,
+          draft: turn6.draft,
+          message: 'Baaki sab default',
+        }, makeR3Deps());
+
+        trace.push({
+          turn: 7,
+          input: 'Baaki sab default',
+          status: turn7.status,
+          field: turn7.field,
+          assignees: (turn7.draft.assignees || []).map(a => a.name),
+          reply: turn7.reply,
+          payload: turn7.payload,
+          preview: turn7.preview,
+        });
+
+        // Log turn-by-turn trace for report
+        console.log('\n--- Round 3 Turn-by-Turn Replay Trace ---');
+        trace.forEach(t => {
+          console.log(`[Turn ${t.turn}] input="${t.input}" -> status=${t.status} field=${t.field} assignees=[${t.assignees.join(', ')}]`);
+        });
+
+        // Verify final state
+        assert.equal(turn7.status, 'ready');
+        assert.equal(turn7.draft.assignees.length, 2);
+        assert.deepEqual(
+          turn7.draft.assignees.map(a => a.name),
+          ['Vansh Test', 'Aarav Sharma']
+        );
+        assert.deepEqual(
+          turn7.draft.assignedUsers,
+          [String(demo1UsersR3.vansh._id), String(demo1UsersR3.aarav._id)]
+        );
+
+        // Verify preview card shows both assignees
+        assert.ok(turn7.preview);
+        assert.equal(turn7.preview.assignees.length, 2);
+        assert.equal(turn7.preview.assignees[0].name, 'Vansh Test');
+        assert.equal(turn7.preview.assignees[1].name, 'Aarav Sharma');
+
+        // Verify payload contract: Repeated assignedUsers FormData entries (ProjectDetailsPage contract)
+        assert.equal(turn7.payload.endpoint, `/projects/${demo1ProjectR3._id}/tasks`);
+        assert.equal(turn7.payload.method, 'POST');
+        assert.equal(turn7.payload.multipart, true);
+        assert.ok(Array.isArray(turn7.payload.fields.assignedUsers));
+        assert.deepEqual(
+          turn7.payload.fields.assignedUsers,
+          [String(demo1UsersR3.vansh._id), String(demo1UsersR3.aarav._id)]
+        );
+
+        // Simulate FormData append as in ProjectDetailsPage line 724-727
+        const formData = [];
+        Object.entries(turn7.payload.fields).forEach(([k, v]) => {
+          if (k === 'assignedUsers') {
+            v.forEach(id => formData.push(['assignedUsers', String(id)]));
+          } else {
+            formData.push([k, v]);
+          }
+        });
+        const repeatedEntries = formData.filter(([k]) => k === 'assignedUsers');
+        assert.equal(repeatedEntries.length, 2);
+        assert.deepEqual(repeatedEntries, [
+          ['assignedUsers', String(demo1UsersR3.vansh._id)],
+          ['assignedUsers', String(demo1UsersR3.aarav._id)],
+        ]);
+        console.log('Final Payload assignedUsers repeated FormData entries:', repeatedEntries);
+      });
+    });
+  });
+
+  // ==========================================================================
+  // 17. ROUND 3 FOLLOW-UP SUITE
+  // ==========================================================================
+
+  describe('17. Round 3 Follow-up Suite: Title Mandatory, Timezone Offset, and Action Title Detection', () => {
+    const { parseHinglishSlots, detectPersonInActionTitle, extractAssigneeMention } = require('../services/ai/hinglishParser');
+    const { parseTaskRequest } = require('../services/ai/taskAgentService');
+
+    it('17.1 Title is strictly required: "Skip", "koi nahi" re-ask title and agent NEVER invents a title for task_project', async () => {
+      const mockProj = {
+        _id: '60d5ec49f1b2c8b1f8e4e1a1',
+        projectName: 'Demo 1',
+        name: 'Demo 1',
+        users: [{ _id: '60d5ec49f1b2c8b1f8e4e1a2', name: 'Vansh Test' }],
+      };
+
+      const draftAskingTitle = {
+        intent: 'task_project',
+        projectId: String(mockProj._id),
+        projectName: 'Demo 1',
+        project: 'Demo 1',
+        title: null,
+        description: 'Test description',
+        assigneeId: String(mockProj.users[0]._id),
+        assigneeName: 'Vansh Test',
+        assignedUsers: [String(mockProj.users[0]._id)],
+        dueDateTime: '2026-10-29T10:00:00+05:30',
+        priority: 'high',
+        status: 'pending',
+        asked: ['project', 'assignee', 'title'],
+        skipped: [],
+      };
+
+      // Turn: User says "Skip" to title question
+      const resSkip = await parseTaskRequest({
+        req: { user: { _id: 'admin1', name: 'Admin', role: 'admin' } },
+        message: 'Skip',
+        draft: draftAskingTitle,
+        language: 'hinglish',
+      }, {
+        accessibleProjects: [mockProj],
+        ProjectModel: { find: () => ({ select: () => ({ populate: () => Promise.resolve([mockProj]) }) }) },
+        extractFn: async () => ({}),
+      });
+
+      assert.equal(resSkip.status, 'needs_input');
+      assert.equal(resSkip.field, 'title');
+      assert.match(resSkip.reply, /Task ka naam zaroori hai/i);
+      assert.equal(resSkip.draft.title, null);
+      assert.ok(!resSkip.draft.skipped.includes('title'));
+      assert.equal(resSkip.payload, null);
+
+      // Turn: User says "koi nahi" to title question
+      const resKoiNahi = await parseTaskRequest({
+        req: { user: { _id: 'admin1', name: 'Admin', role: 'admin' } },
+        message: 'koi nahi',
+        draft: draftAskingTitle,
+        language: 'hinglish',
+      }, {
+        accessibleProjects: [mockProj],
+        ProjectModel: { find: () => ({ select: () => ({ populate: () => Promise.resolve([mockProj]) }) }) },
+        extractFn: async () => ({}),
+      });
+
+      assert.equal(resKoiNahi.status, 'needs_input');
+      assert.equal(resKoiNahi.field, 'title');
+      assert.match(resKoiNahi.reply, /Task ka naam zaroori hai/i);
+      assert.equal(resKoiNahi.draft.title, null);
+      assert.ok(!resKoiNahi.draft.skipped.includes('title'));
+      assert.equal(resKoiNahi.payload, null);
+    });
+
+    it('17.2 Title is strictly required: "Skip", "koi nahi" re-ask title and agent NEVER invents a title for task_assigned_user', async () => {
+      const draftAskingTitleOthers = {
+        intent: 'task_assigned_user',
+        title: null,
+        description: '',
+        assigneeId: '60d5ec49f1b2c8b1f8e4e1a2',
+        assigneeName: 'Priya Sharma',
+        dueDateTime: '2026-10-29T10:00:00+05:30',
+        priority: 'high',
+        status: 'pending',
+        asked: ['assignee', 'title'],
+        skipped: [],
+      };
+
+      const resSkipOthers = await parseTaskRequest({
+        req: { user: { _id: 'admin1', name: 'Admin', role: 'admin' } },
+        message: 'Skip',
+        draft: draftAskingTitleOthers,
+        language: 'hinglish',
+      }, {
+        extractFn: async () => ({}),
+      });
+
+      assert.equal(resSkipOthers.status, 'needs_input');
+      assert.equal(resSkipOthers.field, 'title');
+      assert.match(resSkipOthers.reply, /Task ka naam zaroori hai/i);
+      assert.equal(resSkipOthers.draft.title, null);
+      assert.ok(!resSkipOthers.draft.skipped.includes('title'));
+      assert.equal(resSkipOthers.payload, null);
+    });
+
+    it('17.3 Timezone extraction & payload parity in IST (+05:30)', () => {
+      const fixedNow = new Date('2026-10-28T09:33:32+05:30');
+
+      // 1. "kal subah 10 baje" extractor output
+      const extMorning = parseHinglishSlots('kal subah 10 baje', fixedNow);
+      assert.equal(extMorning.dueDateTime, '2026-10-29T10:00:00+05:30');
+
+      // 2. "kal shaam 6 baje" extractor output
+      const extEvening = parseHinglishSlots('kal shaam 6 baje', fixedNow);
+      assert.equal(extEvening.dueDateTime, '2026-10-29T18:00:00+05:30');
+
+      // 3. Exact payload value sent in payload.fields.dueDate
+      const draftProjMorning = {
+        intent: 'task_project',
+        projectId: '60d5ec49f1b2c8b1f8e4e1a1',
+        title: 'Project Audit',
+        dueDateTime: extMorning.dueDateTime,
+        priority: 'high',
+        status: 'pending',
+        assignedUsers: ['60d5ec49f1b2c8b1f8e4e1a2'],
+      };
+      const payloadMorning = FORM_REGISTRY.task_project.buildPayload(draftProjMorning);
+      assert.equal(payloadMorning.fields.dueDate, '2026-10-29T10:00:00+05:30');
+
+      const draftProjEvening = {
+        intent: 'task_project',
+        projectId: '60d5ec49f1b2c8b1f8e4e1a1',
+        title: 'Project Audit',
+        dueDateTime: extEvening.dueDateTime,
+        priority: 'high',
+        status: 'pending',
+        assignedUsers: ['60d5ec49f1b2c8b1f8e4e1a2'],
+      };
+      const payloadEvening = FORM_REGISTRY.task_project.buildPayload(draftProjEvening);
+      assert.equal(payloadEvening.fields.dueDate, '2026-10-29T18:00:00+05:30');
+    });
+
+    it('17.4 Action title person detection: Follow up with Rahul, Send report Priya, verify bank statements Priya (ask), and Priya ko assign karo (assigns)', async () => {
+      const userA = { _id: 'u1', name: 'Admin User', role: 'admin' };
+
+      // Case A: "Follow up with Rahul" -> asks chip question
+      assert.equal(detectPersonInActionTitle('Follow up with Rahul'), 'Rahul');
+      const resA = await parseTaskRequest({
+        req: { user: userA },
+        message: 'Follow up with Rahul',
+        draft: null,
+        language: 'hinglish',
+      }, { extractFn: async () => ({}) });
+      assert.equal(resA.draft.intent, 'self_task');
+      assert.equal(resA.field, 'assigneeConfirmation');
+      assert.match(resA.reply, /Rahul ko assign karna hai\?/i);
+      assert.ok(resA.chips.some(c => c.label.includes('assign karo')));
+
+      // Case B: "Send report Priya" -> asks chip question
+      assert.equal(detectPersonInActionTitle('Send report Priya'), 'Priya');
+      const resB = await parseTaskRequest({
+        req: { user: userA },
+        message: 'Send report Priya',
+        draft: null,
+        language: 'hinglish',
+      }, { extractFn: async () => ({}) });
+      assert.equal(resB.draft.intent, 'self_task');
+      assert.equal(resB.field, 'assigneeConfirmation');
+      assert.match(resB.reply, /Priya ko assign karna hai\?/i);
+      assert.ok(resB.chips.some(c => c.label.includes('assign karo')));
+
+      // Case C: "verify bank statements Priya" -> asks chip question
+      assert.equal(detectPersonInActionTitle('verify bank statements Priya'), 'Priya');
+      const resC = await parseTaskRequest({
+        req: { user: userA },
+        message: 'verify bank statements Priya',
+        draft: null,
+        language: 'hinglish',
+      }, { extractFn: async () => ({}) });
+      assert.equal(resC.draft.intent, 'self_task');
+      assert.equal(resC.field, 'assigneeConfirmation');
+      assert.match(resC.reply, /Priya ko assign karna hai\?/i);
+      assert.ok(resC.chips.some(c => c.label.includes('assign karo')));
+
+      // Case D: "Priya ko assign karo bank statements verify" -> assigns Priya directly
+      assert.equal(detectPersonInActionTitle('Priya ko assign karo bank statements verify'), null);
+      assert.equal(extractAssigneeMention('Priya ko assign karo bank statements verify'), 'Priya');
+      const resD = await parseTaskRequest({
+        req: { user: userA },
+        message: 'Priya ko assign karo bank statements verify',
+        draft: null,
+        language: 'hinglish',
+      }, { extractFn: async () => ({}) });
+      assert.equal(resD.draft.intent, 'task_assigned_user');
+      assert.equal(resD.draft.assigneeName, 'Priya');
+    });
+  });
 });
+
+
