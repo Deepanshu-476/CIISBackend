@@ -80,6 +80,9 @@ async function companyFor(client) {
   return require('../../models/Company').findOne({ companyCode: client.companyCode }).select('_id companyCode');
 }
 
+const RESYNC_AFTER_MS = 10 * 60 * 1000;
+const notSyncedSince = (ms = RESYNC_AFTER_MS) => ({ clientSyncedAt: { $not: { $gte: new Date(Date.now() - ms) } } });
+
 async function syncClient(clientId) {
   const startedAt = new Date();
   const client = await Client().findById(clientId).lean();
@@ -170,7 +173,9 @@ async function sweep() {
     try { await drainTask(task._id); } catch (error) { console.error('[client-chat] delivery pending', id(task), error.message); }
   }
   // Also clean deleted clients whose previously joined sockets still exist.
-  for await (const conversation of Conversation.find({ clientId: { $exists: true }, 'members.0': { $exists: true } }).select('clientId').lean().cursor()) {
+  // Client and task saves sync right away, so this pass only needs to catch
+  // what they miss (deleted clients, deactivated users) and skips recent ones.
+  for await (const conversation of Conversation.find({ clientId: { $exists: true }, 'members.0': { $exists: true }, ...notSyncedSince() }).select('clientId').lean().cursor()) {
     try { await syncClient(conversation.clientId); } catch (error) { console.error('[client-chat] refresh pending', error.message); }
   }
 }
@@ -182,6 +187,6 @@ async function syncAllClients() {
   }
 }
 
-module.exports = { syncClient, drainTask, syncForUser, syncAllClients, sweep, companyFor, resolveMember, collectClientManagerValues, internal };
+module.exports = { syncClient, RESYNC_AFTER_MS, drainTask, syncForUser, syncAllClients, sweep, companyFor, resolveMember, collectClientManagerValues, internal };
 
 

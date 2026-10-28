@@ -513,13 +513,22 @@ router.get('/pages', async (req, res) => {
     };
 
     if (String(req.query?.includeAccess || '').toLowerCase() === 'true') {
-      const configs = await PagePermission.find({ company: companyId })
-        .select('company companyCode pageKey name path approvers viewUsers editUsers deleteUsers generateUsers lockUsers unlockUsers userAccessScopes updatedAt')
-        .lean();
-      const [pageSummaries, accessPages] = await Promise.all([
-        decoratePageSummaries(companyId, configs),
-        decoratePages(companyId, configs)
-      ]);
+      // Every page load asks for this; it grows with the company's users, so it
+      // is cached like the summary list and cleared when a permission is saved.
+      const { pageSummaries, accessPages } = await getOrSetCached(
+        getCacheKey(PAGE_PERMISSION_CACHE_PREFIX, { scope: 'pages-with-access', companyId }),
+        async () => {
+          const configs = await PagePermission.find({ company: companyId })
+            .select('company companyCode pageKey name path approvers viewUsers editUsers deleteUsers generateUsers lockUsers unlockUsers userAccessScopes updatedAt')
+            .lean();
+          const [pageSummaries, accessPages] = await Promise.all([
+            decoratePageSummaries(companyId, configs),
+            decoratePages(companyId, configs)
+          ]);
+          return { pageSummaries, accessPages };
+        },
+        PAGE_PERMISSION_TTL_MS
+      );
       return res.json({ success: true, pages: pageSummaries.filter(isEnabled), accessPages });
     }
 
