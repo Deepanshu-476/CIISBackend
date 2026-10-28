@@ -9,7 +9,7 @@ The Hostinger VPS already runs Coturn in Docker as `rtc-coturn-1`.
 - VPS IP: `147.93.106.84`
 - TURN DNS: `turn.ciisnetwork.in`
 - Frontend: `ciisnetwork.com`
-- Backend PM2 process: `backendruno`
+- Web backend (backendcds.ciisnetwork.in): systemd service `backendr` in `/var/www/CIISWEBBACKEND`
 - TURN listening ports: `3478` UDP/TCP and `5349` TLS
 - Active relay range: `49160-49200`
 - Docker restart policy: `unless-stopped`
@@ -108,9 +108,9 @@ On the current VPS, `ufw` was inactive during verification, so Hostinger firewal
 After setting environment variables:
 
 ```bash
-cd /var/www/backendruno
+cd /var/www/CIISWEBBACKEND
 npm install
-pm2 restart backendruno --update-env
+systemctl restart backendr
 pm2 save
 ```
 
@@ -138,7 +138,7 @@ localStorage.setItem("ciis_webrtc_debug", "true")
 5. Optional server-side smoke test:
 
 ```bash
-SECRET=$(awk -F= '/^COTURN_STATIC_AUTH_SECRET=/{print $2}' /var/www/backendruno/.env)
+SECRET=$(awk -F= '/^COTURN_STATIC_AUTH_SECRET=/{print $2}' /var/www/CIISWEBBACKEND/.env)
 turnutils_uclient -y -n 1 -W "$SECRET" turn.ciisnetwork.in
 turnutils_uclient -t -y -n 1 -W "$SECRET" turn.ciisnetwork.in
 unset SECRET

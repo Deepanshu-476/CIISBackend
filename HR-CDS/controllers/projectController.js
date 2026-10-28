@@ -422,6 +422,8 @@ const resolveProjectFilePath = (rawPath, filename) => {
     cleanName ? path.resolve("/var/www/app1/uploads/projects", cleanName) : null,
     cleanName ? path.resolve("/var/www/app2/HR-CDS/uploads/projects", cleanName) : null,
     cleanName ? path.resolve("/var/www/app1/HR-CDS/uploads/projects", cleanName) : null,
+    cleanName ? path.resolve("/var/www/CIISWEBBACKEND/uploads/projects", cleanName) : null,
+    cleanName ? path.resolve("/var/www/CIISWEBBACKEND/HR-CDS/uploads/projects", cleanName) : null,
     cleanName ? path.resolve("/var/www/backendruno/uploads/projects", cleanName) : null,
     cleanName ? path.resolve("/var/www/backendruno/HR-CDS/uploads/projects", cleanName) : null,
     cleanName ? path.resolve("/var/www/backendruno_backup_20261007/uploads/projects", cleanName) : null,
