@@ -1,11 +1,14 @@
 const fs = require('fs');
 const path = require('path');
 
-// Receipts have been stored under each of the upload roots served by server.js and peer backend processes (app1 / backendruno).
+// Receipts have been stored under each of the upload roots served by server.js and peer backend processes
+// (app1 / the web backend, CIISWEBBACKEND, formerly /var/www/backendruno).
 const receiptDirectories = [
   path.resolve(__dirname, '../uploads/receipts'),
   path.resolve(__dirname, '../../uploads/receipts'),
   path.resolve(__dirname, '../../../uploads/receipts'),
+  path.resolve('/var/www/CIISWEBBACKEND/HR-CDS/uploads/receipts'),
+  path.resolve('/var/www/CIISWEBBACKEND/uploads/receipts'),
   path.resolve('/var/www/backendruno/HR-CDS/uploads/receipts'),
   path.resolve('/var/www/backendruno/uploads/receipts'),
   path.resolve('/var/www/app1/HR-CDS/uploads/receipts'),
