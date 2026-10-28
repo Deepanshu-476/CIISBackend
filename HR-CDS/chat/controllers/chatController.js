@@ -443,7 +443,11 @@ exports.getCompanyGroups = async (req, res) => {
     // Ensure all assigned client conversations are synced and up-to-date
     const clientChatService = require('../../utils/clientChatService');
     if (access.clients && access.clients.length > 0) {
-      await Promise.allSettled(access.clients.map(clientId => clientChatService.syncClient(clientId)));
+      // Syncing loads the company's users per client; only redo stale ones.
+      const fresh = new Set((await Conversation.find({ companyId, clientId: { $in: access.clients }, clientSyncedAt: { $gte: new Date(Date.now() - clientChatService.RESYNC_AFTER_MS) } })
+        .distinct("clientId")).map(String));
+      const stale = access.clients.filter(clientId => !fresh.has(String(clientId)));
+      await Promise.allSettled(stale.map(clientId => clientChatService.syncClient(clientId)));
     }
 
     const projectConversations = await Conversation.find({
