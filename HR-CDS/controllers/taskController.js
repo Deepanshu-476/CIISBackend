@@ -35,9 +35,7 @@ const {
   getTaskStatusChangeDate,
   getTaskReportDate,
   getUserStatusChangedAt,
-  getClientStatusChangeDates,
-  getProjectStatusChangeDates,
-  STATUS_LOG_TYPES,
+  getClientLegacyStatusChangedAt,
   getTaskSourceAwareDate
 } = require('./taskHelper');
 
@@ -1267,7 +1265,6 @@ const fetchAssignedProjectTaskList = async (req) => {
     .populate('tasks.assignedTo', 'name email')
     .populate('tasks.createdBy', 'name email')
     .lean();
-  const loggedChangeDates = await getProjectStatusChangeDates(projects.map(project => project._id));
 
   const tasks = [];
 
@@ -1309,7 +1306,7 @@ const fetchAssignedProjectTaskList = async (req) => {
         remarks: task.remarks || [],
         activityLogs: task.activityLogs || [],
         completionDate: task.completionDate || null,
-        statusChangedAt: task.statusChangedAt || loggedChangeDates.get(String(task._id)) || null,
+        statusChangedAt: task.statusChangedAt || null,
         createdAt: task.createdAt || project.createdAt,
         updatedAt: task.updatedAt || project.updatedAt,
         lastActivityAt,
@@ -1400,9 +1397,8 @@ const fetchAssignedClientTaskStatsList = async (req) => {
       { assignee: currentUser.email }
     ].filter(Boolean)
   })
-    .select('clientId name description service priority status completed dueDate createdAt updatedAt completedAt inProgressSince statusChangedAt')
+    .select('clientId name description service priority status completed dueDate createdAt updatedAt completedAt inProgressSince holdStartedAt statusChangedAt')
     .lean();
-  const loggedChangeDates = await getClientStatusChangeDates(tasks.filter(t => !t.statusChangedAt).map(t => t._id));
 
   return tasks.map(t => {
     const status = t.completed ? 'completed' : normalizeTaskStatus(t.status || 'pending');
@@ -1420,7 +1416,7 @@ const fetchAssignedClientTaskStatsList = async (req) => {
       clientName: clientNameById.get(String(t.clientId)) || 'Unknown Client',
       completedAt: t.completedAt || null,
       inProgressSince: t.inProgressSince || null,
-      statusChangedAt: t.statusChangedAt || loggedChangeDates.get(String(t._id)) || null,
+      statusChangedAt: t.statusChangedAt || getClientLegacyStatusChangedAt(t, status),
       createdAt: t.createdAt,
       updatedAt: t.updatedAt,
       taskSource: 'client',
@@ -1431,15 +1427,27 @@ const fetchAssignedClientTaskStatsList = async (req) => {
 
 const fetchAssignedProjectTaskStatsList = async (req) => {
   const currentUserId = (req.user._id || req.user.id).toString();
-  const projects = await Project.find({ 'tasks.assignedTo': currentUserId })
-    .select('title description createdAt updatedAt tasks._id tasks.title tasks.description tasks.assignedTo tasks.dueDate tasks.priority tasks.status tasks.createdAt tasks.updatedAt tasks.completionDate tasks.statusChangedAt tasks.activityLogs.type tasks.activityLogs.performedAt')
-    .lean();
+  const userObjectId = mongoose.Types.ObjectId.isValid(currentUserId) ? new mongoose.Types.ObjectId(currentUserId) : currentUserId;
+  // Only this user's tasks and only the fields counting needs.
+  const projects = await Project.aggregate([
+    { $match: { 'tasks.assignedTo': userObjectId } },
+    { $project: {
+      description: 1, createdAt: 1, updatedAt: 1,
+      tasks: { $map: {
+        input: { $filter: { input: '$tasks', as: 'task', cond: { $eq: ['$$task.assignedTo', userObjectId] } } },
+        as: 'task',
+        in: {
+          _id: '$$task._id', title: '$$task.title', description: '$$task.description', dueDate: '$$task.dueDate',
+          priority: '$$task.priority', status: '$$task.status', createdAt: '$$task.createdAt', updatedAt: '$$task.updatedAt',
+          completionDate: '$$task.completionDate', statusChangedAt: '$$task.statusChangedAt'
+        }
+      } }
+    } }
+  ]);
   const tasks = [];
 
   projects.forEach(project => {
     (project.tasks || []).forEach(task => {
-      const assignedTo = task.assignedTo?._id || task.assignedTo;
-      if (assignedTo?.toString() !== currentUserId) return;
       const status = normalizeProjectTaskStatus(task.status);
       tasks.push({
         _id: task._id,
@@ -1453,10 +1461,7 @@ const fetchAssignedProjectTaskStatsList = async (req) => {
         status,
         userStatus: status,
         completionDate: task.completionDate || null,
-        statusChangedAt: task.statusChangedAt || (task.activityLogs || [])
-          .filter(log => STATUS_LOG_TYPES.includes(log.type) && log.performedAt)
-          .map(log => log.performedAt)
-          .sort((a, b) => new Date(b) - new Date(a))[0] || null,
+        statusChangedAt: task.statusChangedAt || null,
         createdAt: task.createdAt || project.createdAt,
         updatedAt: task.updatedAt || project.updatedAt,
         taskSource: 'project',
@@ -1616,15 +1621,22 @@ const applyCleanListFilters = (tasks, req) => {
 };
 
 const sendCleanTaskList = (res, tasks, view, dateField = 'createdAt', req = null) => {
-  const sortedTasks = sortTasksNewestFirst(tasks);
-  const shouldPaginate = req && !['true', '1', 'yes'].includes(String(req.query?.all || req.query?.noPagination || '').toLowerCase());
-  const pagination = shouldPaginate ? paginateTasks(sortedTasks, req) : null;
-  // reportDate is the day the task is listed under, so clients group by the same date the filters use.
   const safeReportDate = task => {
     try { return getTaskReportDate(task); } catch { return null; }
   };
-  const responseTasks = (pagination ? pagination.tasks : sortedTasks)
-    .map(task => ({ ...task, reportDate: safeReportDate(task) }));
+  const timeOf = value => {
+    const time = new Date(value || 0).getTime();
+    return Number.isNaN(time) ? 0 : time;
+  };
+  // Pages follow the date the list is grouped by (status-change day, otherwise due
+  // date). Sorting by createdAt put re-imported old tasks first, so page 1 jumped
+  // from today straight to July while Aug-Oct tasks sat on later pages.
+  const sortedTasks = tasks
+    .map(task => ({ ...task, reportDate: safeReportDate(task) }))
+    .sort((a, b) => (timeOf(b.reportDate) - timeOf(a.reportDate)) || (timeOf(b.createdAt) - timeOf(a.createdAt)));
+  const shouldPaginate = req && !['true', '1', 'yes'].includes(String(req.query?.all || req.query?.noPagination || '').toLowerCase());
+  const pagination = shouldPaginate ? paginateTasks(sortedTasks, req) : null;
+  const responseTasks = pagination ? pagination.tasks : sortedTasks;
 
   return res.json({
     success: true,
