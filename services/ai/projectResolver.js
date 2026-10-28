@@ -9,6 +9,7 @@
 const mongoose = require('mongoose');
 const { Project: DefaultProjectModel } = require('../../HR-CDS/models/Project');
 const User = require('../../models/User');
+const { extractMultipleAssignees } = require('./hinglishParser');
 
 const normalizeRole = (value = "") => value.toString().trim().toLowerCase().replace(/[_\s]+/g, "-");
 
@@ -525,39 +526,74 @@ function resolveProjectAssignee(firstArg = {}, maybeProject = {}, maybeUser = {}
     };
   }
 
-  // Check if user named multiple people
-  const andSplit = cleanText.split(/\b(?:aur|and|,)\b/).map((s) => s.trim()).filter(Boolean);
-  if (andSplit.length > 1) {
-    const matchedMembers = members.filter((m) => {
-      const mName = String(m.name || '').trim().toLowerCase();
-      const firstTok = mName.split(/\s+/)[0];
-      return andSplit.some((part) => (
-        mName.includes(part) ||
-        part.includes(mName) ||
-        (firstTok && firstTok.length >= 3 && part.includes(firstTok))
-      ));
-    });
-    if (matchedMembers.length > 1) {
-      return {
-        status: 'multiple_requested',
-        reply: 'Filhal ek baar mein ek hi member ko task assign kar sakte hain. Kripya kisi ek member ko chunein:',
-        speech: 'फ़िलहाल एक बार में एक ही मेंबर को टास्क असाइन कर सकते हैं। कृपया किसी एक मेंबर को चुनें।',
-        chips: matchedMembers.map((m) => ({
-          label: m.name,
-          action: { type: 'set', field: 'assignee', value: m.name, assigneeId: String(m._id) },
-        })),
-      };
+
+
+  // Multi-name separator pattern: aur, or, and, &, comma, plus, +, Devanagari और, तथा, tatha
+  const MULTI_NAME_SEP_REGEX = /(?:,\s*|\s+(?:and|aur|or|plus|tatha|और|तथा)\s+|\s*[&+]\s*)/iu;
+
+  const STOP_WORDS = new Set([
+    'ko', 'ke', 'liye', 'to', 'for', 'project', 'mai', 'mein', 'me', 'main', 'में',
+    'task', 'assign', 'assigned', 'ek', 'aur', 'or', 'and', 'bhi', 'tatha', 'plus', 'और', 'तथा',
+    'banao', 'karo', 'kardo', 'kar', 'do', 'dena', 'de', 'bhejo', 'demo',
+    'haan', 'ha', 'han', 'yes', 'yep', 'yeah', 'theek', 'thik', 'sahi', 'ji', 'ok', 'okay', 'hha', 'sure'
+  ]);
+
+  const cleanWords = cleanText.split(/\s+/).filter(w => w && w.length >= 2 && !STOP_WORDS.has(w));
+  const hasSeparators = MULTI_NAME_SEP_REGEX.test(cleanText);
+
+  // Deduplicate members by ID to prevent duplicate populate/roles creating false ambiguous matches
+  const uniqueMembers = [];
+  const seenMemberIds = new Set();
+  for (const m of members) {
+    const id = String(m._id || m.id || m);
+    if (!seenMemberIds.has(id)) {
+      seenMemberIds.add(id);
+      uniqueMembers.push(m);
     }
   }
 
-  // Name matching against members
-  const matched = members.filter((m) => {
+  // Name matching against members (whole word or email)
+  const matched = uniqueMembers.filter((m) => {
     const mName = String(m.name || '').trim().toLowerCase();
     const mEmail = String(m.email || '').trim().toLowerCase();
-    return cleanText.includes(mName) || mName.includes(cleanText) || (mEmail && cleanText.includes(mEmail));
+    const mWords = mName.split(/\s+/).filter(Boolean);
+    const isWordMatch = mWords.some((w) => cleanWords.includes(w)) || cleanWords.some((w) => mWords.includes(w));
+    return isWordMatch || (mEmail && cleanText.includes(mEmail));
   });
 
+  // Multiple assignees requested explicitly with separators (e.g. "Amit aur Neha", "vansh or arav")
+  if (hasSeparators) {
+    const multiExt = extractMultipleAssignees(cleanText);
+    const tokens = (multiExt.names && multiExt.names.length > 0)
+      ? multiExt.names
+      : cleanText.split(MULTI_NAME_SEP_REGEX)
+          .map(t => t.replace(/.*?\b(?:project|प्रोजेक्ट)?\s*(?:mein|me|mai|main|में|ke\s+andar|के\s+अंदर)\s*[,:\s]*/iu, '').replace(/^(?:task\s+)?(?:assign(?:ed)?\s+(?:karo|kar\s*do|kardo)?|ek\s+task\s+assign\s+karo)\s*/iu, '').replace(/\s+(?:ko|co|koh|kor|के|को)$/iu, '').trim())
+          .filter(t => t.length >= 2 && !STOP_WORDS.has(t.toLowerCase()));
+    return {
+      status: 'multiple_requested',
+      matched,
+      names: tokens.length > 0 ? tokens : [cleanText],
+      reply: `Aapne multiple members ke naam bole hain: "${text}".`,
+      speech: 'आपने एक से ज्यादा मेंबर्स के नाम बोले हैं।',
+    };
+  }
+
   if (matched.length === 1) {
+    // Safety check: Never accept a partial match for the whole string!
+    // Check if there are unaccounted significant words in cleanWords
+    const mWords = String(matched[0].name || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const unaccountedWords = cleanWords.filter(w => !mWords.includes(w) && !mWords.some(mw => mw.includes(w) || w.includes(mw)));
+    if (unaccountedWords.length > 0) {
+      const tokens = [matched[0].name, ...unaccountedWords];
+      return {
+        status: 'multiple_requested',
+        matched,
+        names: tokens,
+        reply: `Aapne multiple members ke naam bole hain: "${text}".`,
+        speech: 'आपने एक से ज्यादा मेंबर्स के नाम बोले हैं।',
+      };
+    }
+
     return {
       status: 'single',
       user: matched[0],
@@ -568,16 +604,16 @@ function resolveProjectAssignee(firstArg = {}, maybeProject = {}, maybeUser = {}
     return {
       status: 'ambiguous',
       candidates: matched.map((m) => ({
-        id: String(m._id),
+        id: String(m._id || m.id || m),
         name: m.name,
         email: m.email,
         jobRole: m.jobRole || m.role,
       })),
       chips: matched.map((m) => ({
         label: `${m.name} (${m.jobRole || m.role || 'Member'})`,
-        action: { type: 'set', field: 'assignee', value: m.name, assigneeId: String(m._id) },
+        action: { type: 'set', field: 'assignee', value: m.name, assigneeId: String(m._id || m.id || m) },
       })),
-      reply: `Multiple members mile: "${text}". Kripya sahi member chun lein:`,
+      reply: `"${text}" ke multiple members mile hain. Kripya sahi member chun lein:`,
       speech: 'कई सदस्य मिले। कृपया सही सदस्य चुन लें।',
     };
   }

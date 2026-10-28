@@ -238,7 +238,7 @@ describe('Voice Hallucination Control & VAD Suite', () => {
 
   describe('4. Prompt & Language Configuration', () => {
     it('uses short DEFAULT_PROMPT without word lists or the word Vocabulary', () => {
-      assert.ok(DEFAULT_PROMPT.includes('Mera task create karo'));
+      assert.ok(DEFAULT_PROMPT.includes('CIIS AI'));
       assert.ok(!DEFAULT_PROMPT.toLowerCase().includes('vocabulary'));
       assert.ok(DEFAULT_PROMPT.length < 120);
     });

@@ -332,4 +332,38 @@ describe('Groq Whisper Transcription Suite', () => {
       );
     }
   });
+
+  it('11. Whisper Prompt Leakage Guard: passes valid phrases ("kal subah 10 baje", "task assign karo", "project") and drops exact prompt match as STT_NO_SPEECH', async () => {
+    const HINDI_PROMPT = 'CIIS AI task management, deadline, status, high priority, kal, aaj, baje, tarikh.';
+
+    const mockFetchWithText = (textToReturn) => async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ text: textToReturn, segments: [{ text: textToReturn, no_speech_prob: 0.1, avg_logprob: -0.2, compression_ratio: 1.0 }] }),
+    });
+
+    // 1. "kal subah 10 baje" must pass through
+    const res1 = await transcribeAudio(sampleWav, {}, { apiKey: 'gsk_test', fetchFn: mockFetchWithText('kal subah 10 baje') });
+    assert.equal(res1.text, 'kal subah 10 baje');
+
+    // 2. "task assign karo" must pass through
+    const res2 = await transcribeAudio(sampleWav, {}, { apiKey: 'gsk_test', fetchFn: mockFetchWithText('task assign karo') });
+    assert.equal(res2.text, 'task assign karo');
+
+    // 3. "project" must pass through
+    const res3 = await transcribeAudio(sampleWav, {}, { apiKey: 'gsk_test', fetchFn: mockFetchWithText('project') });
+    assert.equal(res3.text, 'project');
+
+    // 4. Exact prompt text must be dropped with STT_NO_SPEECH
+    await assert.rejects(
+      async () => {
+        await transcribeAudio(sampleWav, {}, { apiKey: 'gsk_test', fetchFn: mockFetchWithText(HINDI_PROMPT) });
+      },
+      (err) => {
+        assert.equal(err.code, 'STT_NO_SPEECH');
+        assert.match(err.message, /Awaaz saaf nahi aayi/);
+        return true;
+      }
+    );
+  });
 });

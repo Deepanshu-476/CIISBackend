@@ -30,7 +30,7 @@ async function fixture(t) {
   t.after(() => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }));
   const request = (path = '', outcome, authenticated = true) => fetch(`http://127.0.0.1:${server.address().port}/telecaller${path}`, {
     method: outcome ? 'POST' : 'GET',
-    headers: { ...(authenticated ? { authorization: 'fixture' } : {}), 'content-type': 'application/json' },
+    headers: { ...(authenticated ? { authorization: 'fixture' } : {}), 'content-type': 'application/json', connection: 'close' },
     ...(outcome ? { body: JSON.stringify({ outcome }) } : {}),
   });
   return { state, request };

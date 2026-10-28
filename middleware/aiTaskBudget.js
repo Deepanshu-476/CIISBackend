@@ -1,4 +1,5 @@
 const AiUsage = require('../models/AiUsage');
+const mongoose = require('mongoose');
 
 const getTodayIstDate = (d = new Date()) => {
   const formatter = new Intl.DateTimeFormat('en-US', {
@@ -112,6 +113,7 @@ const aiTaskBudget = async (req, res, next) => {
  * an actual LLM call is made.
  */
 const consumeTaskBudget = async (req) => {
+  if (mongoose.connection.readyState !== 1 && !req?._deps?.AiUsage) return null;
   if (!req?.user || !req.user.company) return null;
   const userId = req.user._id || req.user.id;
   if (!userId) return null;

@@ -17,6 +17,7 @@ exports.parseTask = async (req, res, deps = {}) => {
 
     const validation = parseRequestSchema.safeParse(req.body);
     if (!validation.success) {
+      console.warn('[aiController.parseTask] Validation failed:', JSON.stringify(validation.error.issues, null, 2));
       return res.status(400).json({
         success: false,
         error: 'Validation failed',

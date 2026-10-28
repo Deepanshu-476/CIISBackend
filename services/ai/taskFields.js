@@ -530,7 +530,25 @@ const TASK_FIELDS = {
   },
 };
 
+const validateAttachmentFile = (file, currentCount = 0, maxFiles = 1, maxSizeBytes = 10 * 1024 * 1024, allowedExts = new Set(['pdf'])) => {
+  if (!file || !file.name) {
+    return { valid: false, error: 'File invalid hai.' };
+  }
+  const ext = (file.name.split('.').pop() || '').toLowerCase();
+  if (!allowedExts.has(ext)) {
+    return { valid: false, error: `Only PDF files allowed. File type .${ext} is not allowed.` };
+  }
+  if (file.size > maxSizeBytes) {
+    return { valid: false, error: `File "${file.name}" exceeds 10MB size limit.` };
+  }
+  if (currentCount >= maxFiles) {
+    return { valid: false, error: `Maximum ${maxFiles} file allowed.` };
+  }
+  return { valid: true };
+};
+
 module.exports = {
   TASK_FIELD_ORDER,
   TASK_FIELDS,
+  validateAttachmentFile,
 };
