@@ -69,7 +69,11 @@ function formatHumanIstDate(dateString) {
 function formatAssigneeLabel(user, deptName = '') {
   const parts = [user.name];
   if (user.employeeId) parts.push(`(${user.employeeId})`);
-  const extra = [user.jobRole && user.jobRole !== 'user' ? user.jobRole : '', deptName].filter(Boolean).join(' • ');
+  let cleanDept = deptName;
+  if (typeof cleanDept === 'string' && /^[0-9a-fA-F]{24}$/.test(cleanDept.trim())) {
+    cleanDept = '';
+  }
+  const extra = [user.jobRole && user.jobRole !== 'user' ? user.jobRole : '', cleanDept].filter(Boolean).join(' • ');
   if (extra) parts.push(`— ${extra}`);
   return parts.join(' ');
 }

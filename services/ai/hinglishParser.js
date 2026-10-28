@@ -816,7 +816,7 @@ function parseHinglishSlots(rawText, now = new Date(), referenceDate = null) {
 
   // 2. Description Extraction:
   // Support: "description (is|:|,)? Y", "details Y", "uska description Y"
-  const descStopKeywords = '(?=[.,;]?\\s*(?:status|स्टेटस|priority|प्रायोरिटी|due\\s+date|due|deadline|reminder|रिमाइंडर|repeat|checkpoints|aur|and|cal|kal|today|tomorrow|complete|khatam|attach|\\bby\\b|uska|uski|उसका|उसकी|इसका|इसकी)|\\.\\s*(?:status|priority|due|deadline|reminder|repeat|kal|aaj|today|tomorrow)|\\.\\s+|$)';
+  const descStopKeywords = '(?=[.,;]?\\s*(?:status|स्टेटस|priority|प्रायोरिटी|due\\s+date|due|deadline|reminder|रिमाइंडर|repeat|checkpoints|aur|and|cal|kal|today|tomorrow|start\\s+date|end\\s+date|shuru|khatam|complete|members?|team\\s+members?|\\b\\d{1,2}\\s+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\b|attach|\\bby\\b|uska|uski|उसका|उसकी|इसका|इसकी)|\\.\\s*(?:status|priority|due|deadline|reminder|repeat|kal|aaj|today|tomorrow)|\\.\\s+|$)';
   const descRegexes = [
     new RegExp(`(?:(?:uska|iska|उसका|इसका)?\\s*(?:description|विवरण|डिस्क्रिप्शन)\\s*(?:rakho|rakhein|रखो|रखें|rakhna|is|:\\s*|\\s*,\\s*|as\\s+|to\\s+be\\s+|hai\\s+|hoga\\s+|\\s+yah\\s+|\\s+yeh\\s+)?(?:[\\s,:]*))(.+?)${descStopKeywords}`, 'i'),
     new RegExp(`(?:(?:uska\\s+)?details\\s*(?:is\\s+|:\\s*|\\s*,\\s*|as\\s+|to\\s+be\\s+|hai\\s+|hoga\\s+)?)(.+?)${descStopKeywords}`, 'i'),

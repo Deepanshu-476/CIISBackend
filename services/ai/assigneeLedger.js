@@ -35,7 +35,13 @@ function fuzzyTokenMatch(token = '', target = '') {
 
 function formatAssigneeLabel(user, role) {
   const name = user?.name || 'User';
-  const job = role || user?.jobRole || user?.role || user?.department || 'Member';
+  let job = role || user?.jobRole || user?.role || user?.department;
+  if (job && typeof job === 'object') {
+    job = job.name || job.title || job.roleName || null;
+  }
+  if (!job || (typeof job === 'string' && /^[0-9a-fA-F]{24}$/.test(job.trim()))) {
+    job = 'Member';
+  }
   return `${name} — ${job}`;
 }
 

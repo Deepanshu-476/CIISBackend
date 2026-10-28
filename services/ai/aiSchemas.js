@@ -130,7 +130,7 @@ const serverSideDraftSchema = z.object({
   documentPdf: z.any().nullish(),
   duplicateHandled: z.boolean().nullish(),
   chainedTaskId: z.string().nullish(),
-});
+}).passthrough();
 
 const draftInputSchema = serverSideDraftSchema;
 
