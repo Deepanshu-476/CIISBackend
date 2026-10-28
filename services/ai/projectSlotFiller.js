@@ -78,6 +78,32 @@ function parseProjectDate(text, refDate = new Date()) {
     return `${ymd[1]}-${ymd[2].padStart(2, '0')}-${ymd[3].padStart(2, '0')}`;
   }
 
+  // Named month match: e.g. "1 November", "30 November", "15 Dec 2026"
+  const MONTH_MAP = {
+    jan: 1, january: 1,
+    feb: 2, february: 2,
+    mar: 3, march: 3,
+    apr: 4, april: 4,
+    may: 5,
+    jun: 6, june: 6,
+    jul: 7, july: 7,
+    aug: 8, august: 8,
+    sep: 9, sept: 9, september: 9,
+    oct: 10, october: 10,
+    nov: 11, november: 11,
+    dec: 12, december: 12,
+  };
+  const namedMatch = clean.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+([a-zA-Z]+)(?:\s+(\d{4}))?\b/i);
+  if (namedMatch) {
+    const day = parseInt(namedMatch[1], 10);
+    const mStr = namedMatch[2].toLowerCase();
+    const month = MONTH_MAP[mStr];
+    if (month && day >= 1 && day <= 31) {
+      const year = namedMatch[3] ? parseInt(namedMatch[3], 10) : now.getUTCFullYear();
+      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+  }
+
   return null;
 }
 
@@ -91,6 +117,16 @@ function parseProjectDateRange(text, refDate = new Date()) {
     startObj.setUTCDate(startObj.getUTCDate() + 1 + (numHafte * 7));
     const endDate = formatIstDate(startObj);
     return { startDate, endDate };
+  }
+
+  // Explicit range: e.g. "1 November se 30 November", "2026-11-01 se 2026-11-30"
+  const explicitRange = clean.match(/\b(\d{1,2}(?:st|nd|rd|th)?\s+[a-zA-Z]+(?:\s+\d{4})?|\d{4}-\d{2}-\d{2})\s+se\s+(\d{1,2}(?:st|nd|rd|th)?\s+[a-zA-Z]+(?:\s+\d{4})?|\d{4}-\d{2}-\d{2})(?:\s+tak)?\b/i);
+  if (explicitRange) {
+    const s = parseProjectDate(explicitRange[1], refDate);
+    const e = parseProjectDate(explicitRange[2], refDate);
+    if (s && e) {
+      return { startDate: s, endDate: e };
+    }
   }
   return null;
 }
@@ -161,6 +197,15 @@ function extractCreateProjectSlotsFromMessage(text, now = new Date()) {
     const rawMembers = membersMatch[1].trim();
     if (!/^(?:kal|aaj|high|medium|low|planning|active|yes|no)/i.test(rawMembers)) {
       extracted.membersText = rawMembers;
+    }
+  }
+
+  // 6. Description extraction
+  const descMatch = clean.match(/(?:description|objective|details)\s*(?:hai|is|:)?\s*([^\n\r,]+)/i);
+  if (descMatch && descMatch[1]) {
+    const rawDesc = descMatch[1].trim();
+    if (!/^(?:kal|aaj|high|medium|low|planning|active|yes|no)/i.test(rawDesc)) {
+      extracted.description = rawDesc;
     }
   }
 

@@ -2086,12 +2086,6 @@ async function parseTaskRequest({
         ? fieldConfig.reAskQuestion.speech
         : (fieldConfig.question?.speech || 'अगली डिटेल बताएं:')));
 
-    // Visual reply has the ackPrefix summary; spoken speech remains concise
-    replyText = ackPrefix + replyText;
-    if (notices.length > 0 && !replyText.includes(notices[0])) {
-      replyText = notices.join(' ') + '\n\n' + replyText;
-    }
-
     let chipsList = [];
     if (activeIntent === 'task_project' && nextFieldKey === 'assignee' && currentProject) {
       chipsList = (currentProject.users || []).slice(0, 8).map((m) => ({
@@ -2104,39 +2098,60 @@ async function parseTaskRequest({
       chipsList.push({ label: 'Cancel', action: { type: 'cancel' } });
     } else if (activeIntent === 'create_project') {
       if (nextFieldKey === 'name') {
-        fieldReply = 'Naye project ka naam kya hoga?';
-        fieldSpeech = 'नए प्रोजेक्ट का नाम क्या होगा?';
+        replyText = ackPrefix + 'Naye project ka naam kya hoga?';
+        speechText = 'नए प्रोजेक्ट का नाम क्या होगा?';
+        chipsList = [{ label: 'Cancel', action: { type: 'cancel' } }];
       } else if (nextFieldKey === 'description') {
-        fieldReply = 'Project ka description ya objective batayein:';
-        fieldSpeech = 'प्रोजेक्ट का विवरण बताइए।';
+        replyText = ackPrefix + 'Project ka description batayein (zaroori hai):';
+        speechText = 'प्रोजेक्ट का विवरण बताइए (जरूरी है)।';
+        chipsList = [{ label: 'Cancel', action: { type: 'cancel' } }];
       } else if (nextFieldKey === 'startDate') {
         const todayStr = formatIstDate(now);
         const tomorrowDate = new Date(now);
         tomorrowDate.setUTCDate(tomorrowDate.getUTCDate() + 1);
         const tomorrowStr = formatIstDate(tomorrowDate);
-        fieldReply = 'Project kis date se shuru hoga? (Start Date batayein)';
-        fieldSpeech = 'प्रोजेक्ट किस तारीख से शुरू होगा?';
-        fieldChips = [
+        replyText = ackPrefix + 'Project kis date se shuru hoga? (Start Date batayein)';
+        speechText = 'प्रोजेक्ट किस तारीख से शुरू होगा?';
+        chipsList = [
           { label: 'Aaj se', action: { type: 'set', field: 'startDate', value: todayStr } },
           { label: 'Kal se', action: { type: 'set', field: 'startDate', value: tomorrowStr } },
+          { label: 'Cancel', action: { type: 'cancel' } },
         ];
       } else if (nextFieldKey === 'endDate') {
         const oneMonthDate = new Date(now);
-        oneMonthDate.setUTCMonth(oneMonthDate.getUTCMonth() + 1);
-        const threeMonthsDate = new Date(now);
-        threeMonthsDate.setUTCMonth(threeMonthsDate.getUTCMonth() + 3);
-        fieldReply = 'Project kab tak complete hona chahiye? (End Date batayein)';
-        fieldSpeech = 'प्रोजेक्ट कब तक पूरा होना चाहिए?';
-        fieldChips = [
-          { label: '1 mahine baad', action: { type: 'set', field: 'endDate', value: formatIstDate(oneMonthDate) } },
-          { label: '3 mahine baad', action: { type: 'set', field: 'endDate', value: formatIstDate(threeMonthsDate) } },
+        oneMonthDate.setUTCDate(oneMonthDate.getUTCDate() + 30);
+        const nextMonthDate = new Date(now);
+        nextMonthDate.setUTCMonth(nextMonthDate.getUTCMonth() + 1);
+        replyText = ackPrefix + 'Project kab tak complete hona chahiye? (End Date batayein)';
+        speechText = 'प्रोजेक्ट कब तक पूरा होना चाहिए?';
+        chipsList = [
+          { label: 'Aaj se 30 din', action: { type: 'set', field: 'endDate', value: formatIstDate(oneMonthDate) } },
+          { label: 'Agle mahine tak', action: { type: 'set', field: 'endDate', value: formatIstDate(nextMonthDate) } },
+          { label: 'Cancel', action: { type: 'cancel' } },
+        ];
+      } else if (nextFieldKey === 'priority') {
+        replyText = ackPrefix + 'Project ki priority kya rakhein?';
+        speechText = 'प्रोजेक्ट की प्राथमिकता क्या रखें?';
+        chipsList = [
+          { label: 'Medium', action: { type: 'set', field: 'priority', value: 'Medium' } },
+          { label: 'High', action: { type: 'set', field: 'priority', value: 'High' } },
+          { label: 'Low', action: { type: 'set', field: 'priority', value: 'Low' } },
+        ];
+      } else if (nextFieldKey === 'status') {
+        replyText = ackPrefix + 'Project ka status kya rakhein?';
+        speechText = 'प्रोजेक्ट का स्टेटस क्या रखें?';
+        chipsList = [
+          { label: 'Active', action: { type: 'set', field: 'status', value: 'Active' } },
+          { label: 'Planning', action: { type: 'set', field: 'status', value: 'Planning' } },
+          { label: 'On Hold', action: { type: 'set', field: 'status', value: 'On Hold' } },
         ];
       } else if (nextFieldKey === 'members') {
-        fieldReply = 'Is project mein kaun kaun se team members honge? (Aap auto-added honge)';
-        fieldSpeech = 'इस प्रोजेक्ट में कौन-कौन से सदस्य होंगे? आप भी सदस्य होंगे।';
-        fieldChips = [
+        replyText = ackPrefix + 'Is project mein kaun kaun se team members honge? (Aap auto-added honge)';
+        speechText = 'इस प्रोजेक्ट में कौन-कौन से सदस्य होंगे? आप भी सदस्य होंगे।';
+        chipsList = [
           { label: 'Main akela hoon', action: { type: 'set', field: 'members', value: 'creator_only' } },
           { label: 'Baad mein add karenge', action: { type: 'skip', field: 'members' } },
+          { label: 'Cancel', action: { type: 'cancel' } },
         ];
       }
     } else if (activeIntent === 'task_project' && nextFieldKey === 'project') {
@@ -2188,6 +2203,13 @@ async function parseTaskRequest({
         { label: 'Kisi aur ke liye', action: { type: 'set', field: 'taskFor', value: 'others' } },
         ...chipsList,
       ];
+    }
+
+    if (ackPrefix && !replyText.startsWith(ackPrefix)) {
+      replyText = ackPrefix + replyText;
+    }
+    if (notices.length > 0 && !replyText.includes(notices[0])) {
+      replyText = notices.join(' ') + '\n\n' + replyText;
     }
 
     return {
