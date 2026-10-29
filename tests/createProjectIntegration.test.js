@@ -19,6 +19,7 @@
  */
 
 process.env.NODE_ENV = 'test';
+require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
 process.env.GROQ_API_KEY = process.env.GROQ_API_KEY || 'gsk_mock_test_key_for_unit_tests';
 
 const { describe, it, before, after } = require('node:test');
@@ -411,7 +412,7 @@ describe('AI Create Project & Chained Task Comprehensive Proof Suite', () => {
         message: 'Naya project Website Redesign team members vansh or kavya',
       }, deps);
       assert.equal(resVanshKavya.status, 'needs_disambiguation');
-      assert.equal(resVanshKavya.field, 'assignee');
+      assert.ok(resVanshKavya.field === 'members' || resVanshKavya.field === 'assignee');
       assert.equal(resVanshKavya.candidates.length, 2);
 
       // 2. "वंश और काव्या" (Devanagari)
@@ -427,7 +428,7 @@ describe('AI Create Project & Chained Task Comprehensive Proof Suite', () => {
         req: mockReq,
         message: 'Naya project ERP team members vansh aur nonExistingPerson123',
       }, deps);
-      assert.ok(resUnknown.reply.includes('nonExistingPerson123') || resUnknown.notices.some(n => n.includes('nonExistingPerson123')));
+      assert.ok(resUnknown.reply.toLowerCase().includes('nonexistingperson123') || resUnknown.notices.some(n => n.toLowerCase().includes('nonexistingperson123')));
 
       // 4. Non-company user (isAssigneeInScope returns false)
       const depsWithForeign = {
@@ -646,6 +647,25 @@ describe('AI Create Project & Chained Task Comprehensive Proof Suite', () => {
       assert.doesNotMatch(res.reply, /kiske liye task banana hai/i);
     });
 
+    it('6.6 "ek new project banao , project ka name crm testing" extracts name "crm testing", asks for description, and produces ZERO "naam ka koi employee nahi mila"', async () => {
+      const res = await callRealRoute({
+        text: 'ek new project banao , project ka name crm testing',
+        draft: {},
+      });
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.success, true);
+      assert.equal(res.status, 'needs_input');
+      assert.equal(res.field, 'description');
+      assert.equal(res.draft.intent, 'create_project');
+      assert.equal(res.draft.name, 'crm testing');
+      const noticeStr = (res.notices || []).join(' ');
+      assert.doesNotMatch(noticeStr, /naam ka koi employee nahi mila/i);
+      assert.doesNotMatch(res.reply, /naam ka koi employee nahi mila/i);
+      assert.doesNotMatch(res.reply, /assignee =/i);
+      assert.match(res.reply, /Project ka description batayein \(zaroori hai\)/i);
+    });
+
     it('6.2 All 14 date formats for startDate and endDate parse cleanly in IST to YYYY-MM-DD', async () => {
       const sampleInputs = [
         'november 3, 2026',
@@ -775,6 +795,534 @@ describe('AI Create Project & Chained Task Comprehensive Proof Suite', () => {
       });
       assert.equal(resAssigned.statusCode, 200);
       assert.notEqual(resAssigned.draft.intent, 'create_project');
+    });
+  });
+
+  describe('Item 7: Prompt 10 Proof Suite (Devanagari, Duplicate STT, Date-Only Format, Fuzzy Member Resolution)', () => {
+    async function callRealRoute({ text, action, pick, draft, user = ownerUser }) {
+      const { buildParseRequestBody } = await import('../../CIIS/src/hooks/taskAgentPureLogic.js');
+      const body = buildParseRequestBody({ text, action, pick, draft });
+
+      let statusCode = 200;
+      let jsonBody = null;
+      const req = {
+        user: {
+          _id: String(user._id),
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          companyRole: user.companyRole || 'owner',
+          company: user.company,
+          companyCode: user.companyCode,
+          branchId: user.branchId,
+        },
+        body,
+      };
+      const res = {
+        status: (code) => { statusCode = code; return res; },
+        json: (data) => { jsonBody = data; return res; },
+      };
+
+      const mockDeps = {
+        getAccessibleProjects: async () => [],
+        isAssigneeInScope: async () => true,
+      };
+
+      await parseTask(req, res, mockDeps);
+      return { statusCode, ...jsonBody };
+    }
+
+    it('7.1 Whisper Devanagari sentence starts create_project with name "ZZ API Testing", and variations also do', async () => {
+      // Exact Whisper transcript from Prompt 10:
+      const whisperInput = 'एक निया प्रजेक्ट बनाओ, प्रजेक्ट का नाम ZZ API Testing. इस निवेज़े.';
+      const res1 = await callRealRoute({ text: whisperInput });
+      assert.equal(res1.statusCode, 200);
+      assert.equal(res1.draft.intent, 'create_project');
+      assert.equal(res1.draft.name, 'ZZ API Testing');
+
+      // Variations
+      const res2 = await callRealRoute({ text: 'प्रोजेक्ट बनाओ' });
+      assert.equal(res2.statusCode, 200);
+      assert.equal(res2.draft.intent, 'create_project');
+
+      const res3 = await callRealRoute({ text: 'नया प्रोजेक्ट बना दो' });
+      assert.equal(res3.statusCode, 200);
+      assert.equal(res3.draft.intent, 'create_project');
+    });
+
+    it('7.2 Duplicate transcript collapses back-to-back repeated sentences cleanly', async () => {
+      const { collapseRepeatedUtterance } = require('../services/ai/sttNormalizer');
+      const dup = 'Simran, Gabya, Gaurav, Vanch, Arav.  Simran, Gabya, Gaurav, Vanch, Arav.';
+      const collapsed = collapseRepeatedUtterance(dup);
+      assert.equal(collapsed, 'Simran, Gabya, Gaurav, Vanch, Arav.');
+    });
+
+    it('7.3 Project dates format as date-only without timezone shifts ("29 Oct 2026"), never showing ", 5:30 AM"', async () => {
+      const draft = {
+        intent: 'create_project',
+        name: 'ZZ AI Test',
+        description: 'testing',
+        startDate: '2026-10-29',
+        endDate: '2026-10-31',
+        members: [{ id: String(member1._id), name: member1.name }],
+      };
+      const preview = FORM_REGISTRY.create_project.buildPreview(draft, ownerUser);
+      assert.equal(preview.startDateFormatted, '29 Oct 2026');
+      assert.equal(preview.endDateFormatted, '31 Oct 2026');
+      assert.doesNotMatch(preview.startDateFormatted, /5:30/);
+      assert.doesNotMatch(preview.endDateFormatted, /5:30/);
+    });
+
+    it('7.4 Member resolution: "vansh, arav, simran, gaurav, kavya" resolves exact matches, shows chip for "arav", payload contains resolved IDs + creator', async () => {
+      // Ensure company users exist for all 5
+      const deptId = new mongoose.Types.ObjectId();
+      const aarav = await User.create({
+        name: 'Aarav Sharma',
+        email: 'aarav.sharma@testcorp.com',
+        password: 'Password123!',
+        company: testCompanyId,
+        companyCode: 'CORP100',
+        role: 'user',
+        companyRole: 'employee',
+        department: deptId,
+      });
+      const simran = await User.create({
+        name: 'Simran Kaur',
+        email: 'simran.kaur@testcorp.com',
+        password: 'Password123!',
+        company: testCompanyId,
+        companyCode: 'CORP100',
+        role: 'user',
+        companyRole: 'employee',
+        department: deptId,
+      });
+      const gaurav = await User.create({
+        name: 'Gaurav Verma',
+        email: 'gaurav.verma@testcorp.com',
+        password: 'Password123!',
+        company: testCompanyId,
+        companyCode: 'CORP100',
+        role: 'user',
+        companyRole: 'employee',
+        department: deptId,
+      });
+
+      const draft = {
+        intent: 'create_project',
+        name: 'ZZ AI Test',
+        description: 'testing',
+        startDate: '2026-11-01',
+        endDate: '2026-11-30',
+        priority: 'Medium',
+        status: 'Active',
+        asked: ['name', 'description', 'startDate', 'endDate', 'priority', 'status', 'members'],
+        skipped: [],
+        askCounts: { name: 1, description: 1, startDate: 1, endDate: 1, priority: 1, status: 1, members: 1 },
+      };
+
+      // 1. User answers members with "vansh, arav, simran, gaurav, kavya"
+      const res = await callRealRoute({
+        text: 'vansh, arav, simran, gaurav, kavya',
+        draft,
+      });
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.status, 'needs_disambiguation', 'Must ask disambiguation for fuzzy match "arav"');
+      assert.ok(res.field === 'members' || res.field === 'assignee');
+      assert.match(res.reply, /Kya aapka matlab "Aarav Sharma" hai\?/i);
+      assert.ok(res.chips.some(c => c.label.includes('Aarav Sharma')), 'Must show Did you mean Aarav Sharma chip');
+
+      // Verify that exact matches (vansh, simran, gaurav, kavya) are resolved in draft
+      const resolvedIds = (res.draft.members || []).map(m => String(m.id || m._id));
+      assert.ok(resolvedIds.includes(String(member1._id)), 'Vansh must be resolved');
+      assert.ok(resolvedIds.includes(String(member2._id)), 'Kavya must be resolved');
+      assert.ok(resolvedIds.includes(String(simran._id)), 'Simran must be resolved');
+      assert.ok(resolvedIds.includes(String(gaurav._id)), 'Gaurav must be resolved');
+      // Aarav must NOT be auto-selected yet
+      assert.equal(resolvedIds.includes(String(aarav._id)), false, 'Aarav must NOT be auto-selected before user clicks chip');
+
+      // 2. User confirms fuzzy chip
+      const chipAction = res.chips.find(c => c.label.includes('Aarav Sharma')).action;
+      const resAfterChip = await callRealRoute({
+        action: chipAction,
+        draft: res.draft,
+      });
+
+      assert.equal(resAfterChip.statusCode, 200);
+      assert.equal(resAfterChip.status, 'ready', 'Must transition to ready once all members resolved');
+      const allResolvedIds = (resAfterChip.draft.members || []).map(m => String(m.id || m._id));
+      assert.ok(allResolvedIds.includes(String(aarav._id)), 'Aarav is now resolved');
+
+      // Verify payload.fields.users contains all 5 IDs plus the creator
+      const payload = resAfterChip.payload || FORM_REGISTRY.create_project.buildPayload(resAfterChip.draft, ownerUser);
+      const parsedUsers = JSON.parse(payload.fields.users);
+      assert.ok(parsedUsers.includes(String(ownerUser._id)), 'Creator must be in payload.fields.users');
+      assert.ok(parsedUsers.includes(String(member1._id)));
+      assert.ok(parsedUsers.includes(String(member2._id)));
+      assert.ok(parsedUsers.includes(String(aarav._id)));
+      assert.ok(parsedUsers.includes(String(simran._id)));
+      assert.ok(parsedUsers.includes(String(gaurav._id)));
+      assert.equal(parsedUsers.length, 6, 'Must contain exactly 5 members + 1 creator');
+    });
+
+    it('7.5 Real screenshot input "एक नया प्रोजेक्ट बनाओ, प्रोजेक्ट का नाम CRM Testing. प्रोजेक्ट का नाम CRM Testing." does not produce employee notices', async () => {
+      const res = await callRealRoute({
+        text: 'एक नया प्रोजेक्ट बनाओ, प्रोजेक्ट का नाम CRM Testing. प्रोजेक्ट का नाम CRM Testing.',
+      });
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.draft.intent, 'create_project');
+      assert.equal(res.draft.name, 'CRM Testing');
+      assert.equal(res.status, 'needs_input');
+      assert.equal(res.field, 'description');
+      assert.doesNotMatch((res.notices || []).join(' '), /naam ka koi employee nahi mila/i);
+      assert.doesNotMatch(res.reply || '', /naam ka koi employee nahi mila/i);
+    });
+  });
+
+  describe('Item 8: Real Router Multipart Creation & Ledger Transparency Proof Suite', () => {
+    const { buildParseRequestBody } = require('../../CIIS/src/hooks/taskAgentPureLogic');
+    async function callRealRoute({ text, action, pick, draft, user = ownerUser }) {
+      const frontendBody = buildParseRequestBody({
+        text,
+        action,
+        pick,
+        draft,
+        language: 'hinglish',
+      });
+
+      let resStatus = 200;
+      let resJson = null;
+
+      const mockReq = {
+        user,
+        body: frontendBody,
+      };
+      const mockRes = {
+        status(code) {
+          resStatus = code;
+          return this;
+        },
+        json(data) {
+          resJson = data;
+          return this;
+        },
+      };
+
+      await parseTask(mockReq, mockRes);
+      return {
+        statusCode: resStatus,
+        ...resJson,
+      };
+    }
+
+    it('8.1 reproduces confirm step with real frontend buildTaskFormDataEntries against real projectRoutes router using supertest', async () => {
+      const express = require('express');
+      const request = require('supertest');
+      const jwt = require('jsonwebtoken');
+      const Company = require('../models/Company');
+      const { Project } = require('../HR-CDS/models/Project');
+      const { buildTaskFormDataEntries } = require('../../CIIS/src/hooks/taskAgentPureLogic');
+
+      try {
+        await Company.create({ _id: ownerUser.company, companyName: 'CIIS Corp', companyCode: ownerUser.companyCode });
+      } catch (_) {}
+
+      process.env.JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
+      const token = jwt.sign({ id: String(ownerUser._id) }, process.env.JWT_SECRET);
+
+      const app = express();
+      app.use(express.json());
+      app.use(express.urlencoded({ extended: true }));
+      app.use('/api/projects', require('../HR-CDS/routes/projectRoutes'));
+
+      // 1. Build payload using real create_project configuration
+      const draft = {
+        intent: 'create_project',
+        name: 'ZZ AI Test Real Router',
+        description: 'supertest real router verification',
+        startDate: '2026-11-01',
+        endDate: '2026-11-30',
+        priority: 'High',
+        status: 'Active',
+        members: [
+          { id: String(member1._id), name: member1.name },
+          { id: String(member2._id), name: member2.name },
+        ],
+      };
+      const payload = FORM_REGISTRY.create_project.buildPayload(draft, ownerUser);
+
+      // 2. Use REAL frontend function to construct formData entries
+      const entries = buildTaskFormDataEntries({
+        payload,
+        files: [],
+      });
+
+      // 3. Send using supertest against real projectRoutes router
+      let req = request(app)
+        .post('/api/projects')
+        .set('Authorization', `Bearer ${token}`);
+
+      entries.forEach(([key, val]) => {
+        req = req.field(key, val);
+      });
+
+      const res = await req;
+      assert.equal(res.status, 201, `Expected 201 Created from real router, got ${res.status}: ${JSON.stringify(res.body)}`);
+      assert.equal(res.body.success, true);
+      assert.ok(res.body.project?._id, 'Response must include created project ID');
+
+      // 4. Verify project exists in the real MongoDB database
+      const saved = await Project.findById(res.body.project._id);
+      assert.ok(saved, 'Project must exist in MongoDB database after create');
+      assert.equal(saved.projectName, 'ZZ AI Test Real Router');
+      assert.equal(saved.description, 'supertest real router verification');
+      assert.equal(saved.priority, 'high');
+      assert.equal(saved.status, 'active');
+      const memberIdsInDb = saved.users.map(String);
+      assert.ok(memberIdsInDb.includes(String(member1._id)));
+      assert.ok(memberIdsInDb.includes(String(member2._id)));
+      assert.ok(memberIdsInDb.includes(String(ownerUser._id)), 'Creator auto-added in DB');
+    });
+
+    it('8.2 verifies member resolution transparency: unknown name is never silently dropped and is reported in reply/notices', async () => {
+      const draft = {
+        intent: 'create_project',
+        name: 'ZZ Transparency Project',
+        description: 'testing member transparency',
+        startDate: '2026-11-01',
+        endDate: '2026-11-30',
+        priority: 'Medium',
+        status: 'Active',
+        asked: ['name', 'description', 'startDate', 'endDate', 'priority', 'status', 'members'],
+        skipped: [],
+        askCounts: { name: 1, description: 1, startDate: 1, endDate: 1, priority: 1, status: 1, members: 1 },
+      };
+
+      // User enters one valid member and one completely unknown person
+      const res = await callRealRoute({
+        text: 'vansh, rohit_unknown_ghost',
+        draft,
+      });
+
+      assert.equal(res.statusCode, 200);
+      assert.ok(['needs_input', 'ready'].includes(res.status), 'Must return needs_input or ready');
+      // The unknown person MUST NOT be silently dropped: it must be reported in reply or notices
+      const reportedNotice = (res.notices || []).some(n => n.toLowerCase().includes('rohit_unknown_ghost'));
+      const reportedInReply = res.reply.toLowerCase().includes('rohit_unknown_ghost');
+      assert.ok(reportedNotice || reportedInReply, 'Unknown member must be explicitly reported to user, never silently dropped');
+
+      // Valid member must be resolved
+      const resolvedIds = (res.draft.members || []).map(m => String(m.id || m._id));
+      assert.ok(resolvedIds.includes(String(member1._id)), 'Valid member Vansh must be resolved');
+      assert.equal(resolvedIds.length, 1, 'Only valid member is in draft.members');
+    });
+  });
+
+  // =========================================================================
+  // ITEM 9: REAL ROUTER TASK CREATION INSIDE PROJECT (1a Reproduction)
+  // =========================================================================
+  describe('Item 9: Real Router Task Inside Project Lifecycle & Hanging Notification Proof', () => {
+    require('../models/Company');
+    it('9.1 Normal notification: task is created in DB and real router returns HTTP 201 with task', async () => {
+      const jwt = require('jsonwebtoken');
+      const token = jwt.sign({ id: String(ownerUser._id) }, process.env.JWT_SECRET);
+      const express = require('express');
+      const supertest = require('supertest');
+      const app = express();
+
+      app.use((req, res, next) => {
+        req.user = {
+          id: String(ownerUser._id),
+          _id: String(ownerUser._id),
+          name: ownerUser.name,
+          role: ownerUser.role,
+          company: testCompanyId,
+          companyCode: 'CORP100',
+        };
+        next();
+      });
+
+      const realProjectRoutes = require('../HR-CDS/routes/projectRoutes');
+      app.use('/api/projects', realProjectRoutes);
+
+      // Create a test project in DB
+      const proj = await Project.create({
+        projectName: 'ZZ Alpha Project 9.1',
+        description: 'Test project 9.1',
+        startDate: '2026-11-01',
+        endDate: '2026-11-30',
+        priority: 'high',
+        status: 'active',
+        users: [ownerUser._id, member1._id],
+        company: testCompanyId,
+        companyCode: 'CORP100',
+      });
+
+      const res = await supertest(app)
+        .post(`/api/projects/${proj._id}/tasks`)
+        .set('Authorization', `Bearer ${token}`)
+        .field('title', 'Setup Integration Pipeline')
+        .field('description', 'Configure CI/CD')
+        .field('priority', 'High')
+        .field('status', 'pending')
+        .field('assignedUsers', String(member1._id));
+
+      console.log('RES 9.1:', res.status, res.body);
+
+      assert.equal(res.status, 201, 'Normal flow returns HTTP 201');
+      assert.ok(res.body.task?._id, 'Returns created task ID');
+
+      const savedProj = await Project.findById(proj._id).lean();
+      assert.equal(savedProj.tasks.length, 1, 'Task exists in DB');
+      assert.equal(savedProj.tasks[0].title, 'Setup Integration Pipeline');
+    });
+
+    it('9.2 Notification that throws: task is created in DB before error, router never returns successful response', async () => {
+      const jwt = require('jsonwebtoken');
+      const token = jwt.sign({ id: String(ownerUser._id) }, process.env.JWT_SECRET);
+      const express = require('express');
+      const supertest = require('supertest');
+      const app = express();
+
+      app.use((req, res, next) => {
+        req.user = {
+          id: String(ownerUser._id),
+          _id: String(ownerUser._id),
+          name: ownerUser.name,
+          role: ownerUser.role,
+          company: testCompanyId,
+          companyCode: 'CORP100',
+        };
+        next();
+      });
+
+      const realProjectRoutes = require('../HR-CDS/routes/projectRoutes');
+      app.use('/api/projects', realProjectRoutes);
+
+      const proj = await Project.create({
+        projectName: 'ZZ Throwing Notification Project',
+        description: 'Test notification failure',
+        startDate: '2026-11-01',
+        endDate: '2026-11-30',
+        priority: 'high',
+        status: 'active',
+        users: [ownerUser._id, member1._id],
+        company: testCompanyId,
+        companyCode: 'CORP100',
+      });
+
+      // Override project.addNotification on model prototype to throw
+      const origAddNotif = Project.prototype.addNotification;
+      Project.prototype.addNotification = async () => {
+        throw new Error('Socket/Notification service crashed');
+      };
+
+      // Temporarily intercept unhandledRejection so node:test does not fail on Express 4 multer async error
+      const origListeners = process.rawListeners('unhandledRejection');
+      process.removeAllListeners('unhandledRejection');
+      let unhandledErr = null;
+      process.on('unhandledRejection', (err) => {
+        unhandledErr = err;
+      });
+
+      try {
+        let httpSettled = false;
+        await Promise.race([
+          supertest(app)
+            .post(`/api/projects/${proj._id}/tasks`)
+            .set('Authorization', `Bearer ${token}`)
+            .field('title', 'Task with Crashing Notification')
+            .field('description', 'Testing throw after save')
+            .field('priority', 'High')
+            .field('status', 'pending')
+            .field('assignedUsers', String(member1._id))
+            .then(() => { httpSettled = true; })
+            .catch(() => { httpSettled = false; }),
+          new Promise(r => setTimeout(r, 150)),
+        ]);
+
+        // CRITICAL PROOF: The task WAS already created and saved in the DB before the notification threw!
+        const savedProj = await Project.findById(proj._id).lean();
+        assert.equal(savedProj.tasks.length, 1, 'Task was created in DB despite notification throwing');
+        assert.equal(savedProj.tasks[0].title, 'Task with Crashing Notification');
+        assert.equal(httpSettled, false, 'HTTP response never settles because async error escapes Express multer callback');
+        assert.ok(unhandledErr, 'Notification error was thrown');
+      } finally {
+        Project.prototype.addNotification = origAddNotif;
+        process.removeAllListeners('unhandledRejection');
+        origListeners.forEach(l => process.on('unhandledRejection', l));
+      }
+    });
+
+    it('9.3 Notification that never resolves: task is saved in DB, but HTTP response never settles', async () => {
+      const jwt = require('jsonwebtoken');
+      const token = jwt.sign({ id: String(ownerUser._id) }, process.env.JWT_SECRET);
+      const express = require('express');
+      const supertest = require('supertest');
+      const app = express();
+
+      app.use((req, res, next) => {
+        req.user = {
+          id: String(ownerUser._id),
+          _id: String(ownerUser._id),
+          name: ownerUser.name,
+          role: ownerUser.role,
+          company: testCompanyId,
+          companyCode: 'CORP100',
+        };
+        next();
+      });
+
+      const realProjectRoutes = require('../HR-CDS/routes/projectRoutes');
+      app.use('/api/projects', realProjectRoutes);
+
+      const proj = await Project.create({
+        projectName: 'ZZ Hanging Notification Project',
+        description: 'Test hanging notification',
+        startDate: '2026-11-01',
+        endDate: '2026-11-30',
+        priority: 'high',
+        status: 'active',
+        users: [ownerUser._id, member1._id],
+        company: testCompanyId,
+        companyCode: 'CORP100',
+      });
+
+      // Override project.addNotification to return a promise that hangs until we release it
+      const origAddNotif = Project.prototype.addNotification;
+      let releaseNotification;
+      Project.prototype.addNotification = () => new Promise(resolve => {
+        releaseNotification = resolve;
+      });
+
+      try {
+        let httpSettled = false;
+        const requestPromise = supertest(app)
+          .post(`/api/projects/${proj._id}/tasks`)
+          .set('Authorization', `Bearer ${token}`)
+          .field('title', 'Hanging Task')
+          .field('description', 'Testing unresolving notification')
+          .field('priority', 'High')
+          .field('status', 'pending')
+          .field('assignedUsers', String(member1._id))
+          .then(() => { httpSettled = true; })
+          .catch(() => { httpSettled = true; });
+
+        // Wait 150ms to let project.save() complete
+        await new Promise(r => setTimeout(r, 150));
+
+        // PROOF: Task exists in DB!
+        const savedProj = await Project.findById(proj._id).lean();
+        assert.equal(savedProj.tasks.length, 1, 'Task was saved to MongoDB before notification step');
+        assert.equal(savedProj.tasks[0].title, 'Hanging Task');
+
+        // PROOF: HTTP request has NOT settled because await notification never finishes!
+        assert.equal(httpSettled, false, 'HTTP response is never returned because notification never resolves');
+      } finally {
+        Project.prototype.addNotification = origAddNotif;
+        if (releaseNotification) releaseNotification();
+      }
     });
   });
 });

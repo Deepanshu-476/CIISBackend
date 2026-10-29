@@ -255,9 +255,14 @@ function extractCreateProjectSlotsFromMessage(text, now = new Date()) {
   const clean = String(text || '').trim();
 
   // 1. Name extraction
-  const nameMatch = clean.match(/(?:naya\s+project\s+banao|new\s+project|project\s+banao|create\s+project)\s+([a-zA-Z0-9\s_-]+?)(?:,\s*|start\s+date|shuru|description|priority|status|$)/i);
-  if (nameMatch && nameMatch[1] && !/^(?:kal|aaj|high|medium|low|urgent)/i.test(nameMatch[1].trim())) {
-    extracted.name = nameMatch[1].trim();
+  const nameExplicit = clean.match(/(?:(?:प्रोजेक्ट|प्रजेक्ट|प्रोज़ेक्ट|प्रोजैक्ट|project)\s+(?:का\s+नाम|ka\s+(?:naam|name)|kaa\s+(?:naam|name)|ke\s+(?:naam|name)|naam|name)|(?:project\s+)?name\s*(?:is|hai|:))\s*[:=]?\s*([a-zA-Z0-9\s_-]+?)(?=[.,;]|description|विवरण|start|shuru|end|khatam|members|$)/iu);
+  if (nameExplicit && nameExplicit[1] && !/^(?:kal|aaj|high|medium|low|urgent|kya|banao|karo)/i.test(nameExplicit[1].trim())) {
+    extracted.name = nameExplicit[1].trim();
+  } else {
+    const nameMatch = clean.match(/(?:(?:naya\s+project\s+banao|new\s+project\s+banao|new\s+project|project\s+banao|create\s+project|(?:(?:नया|निया|नयी|नई)\s*)?(?:प्रोजेक्ट|प्रजेक्ट|प्रोज़ेक्ट|प्रोजैक्ट)\s*(?:बनाओ|बना\s*दो|बनाइए|बनाइये|क्रिएट)))\s+([a-zA-Z0-9\s_-]+?)(?:,\s*|start\s+date|shuru|description|विवरण|priority|status|$)/iu);
+    if (nameMatch && nameMatch[1] && !/^(?:kal|aaj|high|medium|low|urgent|banao|karo)/i.test(nameMatch[1].trim())) {
+      extracted.name = nameMatch[1].trim();
+    }
   }
 
   // 2. Priority extraction
@@ -298,7 +303,7 @@ function extractCreateProjectSlotsFromMessage(text, now = new Date()) {
   }
 
   // 5. Members extraction
-  const membersMatch = clean.match(/(?:team\s+members?|members?|users?)\s*(?:honge|mein|me|ko|hain)?\s*([^\n\r,]+)/i);
+  const membersMatch = clean.match(/(?:team\s+members?|members?|users?|मेंबर्स|सदस्य)\s*(?:honge|mein|me|ko|hain|होंगे|में|को|:)?\s*([^\n\r]+?)(?=\s*(?:description|start|shuru|end|khatam|priority|status|$))/iu);
   if (membersMatch && membersMatch[1]) {
     const rawMembers = membersMatch[1].trim();
     if (!/^(?:kal|aaj|high|medium|low|planning|active|yes|no)/i.test(rawMembers)) {
@@ -307,7 +312,7 @@ function extractCreateProjectSlotsFromMessage(text, now = new Date()) {
   }
 
   // 6. Description extraction
-  const descMatch = clean.match(/(?:description|objective|details)\s*(?:hai|is|:)?\s*([^\n\r,]+)/i);
+  const descMatch = clean.match(/(?:description|objective|details|विवरण|डिस्क्रिप्शन)\s*(?:hai|is|:)?\s*([^\n\r,]+)/iu);
   if (descMatch && descMatch[1]) {
     const rawDesc = descMatch[1].trim();
     if (!/^(?:kal|aaj|high|medium|low|planning|active|yes|no)/i.test(rawDesc)) {

@@ -8,6 +8,47 @@
 
 const LEVENSHTEIN_THRESHOLD_LEN = 5;
 
+/**
+ * Collapses duplicate repeated sentences or utterances back-to-back:
+ * e.g. "Simran, Gabya, Gaurav, Vanch, Arav.  Simran, Gabya, Gaurav, Vanch, Arav." -> "Simran, Gabya, Gaurav, Vanch, Arav."
+ */
+function collapseRepeatedUtterance(text) {
+  if (!text || typeof text !== 'string') return text;
+  const trimmed = text.trim();
+  if (!trimmed) return trimmed;
+
+  // 1. Direct split by sentence delimiters like ". ", ".\n", "? ", "! "
+  const sentenceSplit = trimmed.split(/(?<=[.!?])\s+/);
+  if (sentenceSplit.length >= 2) {
+    const first = sentenceSplit[0].trim().replace(/[.!?]+$/, '').toLowerCase();
+    const allIdentical = sentenceSplit.every(s => s.trim().replace(/[.!?]+$/, '').toLowerCase() === first);
+    if (allIdentical) {
+      return sentenceSplit[0].trim();
+    }
+  }
+
+  // 2. Exact repeated halves: "X X" or "X, X" or "X. X"
+  const halfLen = Math.floor(trimmed.length / 2);
+  for (let offset = -5; offset <= 5; offset += 1) {
+    const mid = halfLen + offset;
+    if (mid > 3 && mid < trimmed.length - 3) {
+      const part1 = trimmed.slice(0, mid).trim().replace(/[,;.!?]+$/, '').trim();
+      const part2 = trimmed.slice(mid).trim().replace(/^[,;.!?]+/, '').trim().replace(/[,;.!?]+$/, '').trim();
+      if (part1 && part1.toLowerCase() === part2.toLowerCase()) {
+        return part1;
+      }
+    }
+  }
+
+  // 3. Repeated clauses separated by comma or semicolon
+  const clauses = trimmed.split(/\s*[,;]\s*/);
+  if (clauses.length === 2 && clauses[0].trim().toLowerCase() === clauses[1].trim().toLowerCase()) {
+    return clauses[0].trim();
+  }
+
+  return trimmed;
+}
+
 function levenshtein(a, b) {
   if (a === b) return 0;
   const la = a.length;
@@ -80,11 +121,12 @@ const FUZZY_TARGETS = [
 function normalizeTranscript(text) {
   if (!text || typeof text !== 'string') return '';
 
-  let res = text.trim();
+  let res = collapseRepeatedUtterance(text.trim());
 
-  // 1. STT noise tokens ("studio", "रोचे", "ok", "so") when filler
+  // 1. STT noise tokens ("studio", "रोचे", "ok", "so", "इस निवेज़े") when filler
   res = res.replace(/(?:^|\s)studio\s*(?:rakho|rakhein|रखो|रखें)?/giu, ' ');
   res = res.replace(/(?:^|\s)रोचे(?:\s|[.,;]|$)/giu, ' ');
+  res = res.replace(/(?:^|\s)इस\s*निवे[ज़ज]े(?:\s|[.,;]|$)/giu, ' ');
   res = res.replace(/(?:^|\s)(?:ok|so)(?=\s|$)/gi, ' ');
 
   // 2. Whisper number word homophones right before "baje" / "बजे" / "वजे"
@@ -322,6 +364,7 @@ function isGenericAffirmative(text) {
 }
 
 module.exports = {
+  collapseRepeatedUtterance,
   normalizeTranscript,
   detectUserIntent,
   levenshtein,

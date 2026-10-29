@@ -208,6 +208,20 @@ const typedActionSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('finish_chain'),
   }),
+  z.object({
+    type: z.literal('set_project_member'),
+    field: z.string().optional(),
+    value: z.string().optional(),
+    assigneeId: z.string().optional(),
+    department: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal('set_team_member'),
+    field: z.string().optional(),
+    value: z.string().optional(),
+    assigneeId: z.string().optional(),
+    department: z.string().optional(),
+  }),
 ]);
 
 const objectActionSchema = z.object({

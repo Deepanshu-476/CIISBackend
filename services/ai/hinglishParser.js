@@ -338,14 +338,22 @@ function isValidAssigneeCandidate(cand) {
   if (clean.length < 2) return false;
   if (FORBIDDEN_ASSIGNEE_NAMES.has(clean)) return false;
   if (isDateLikeToken(clean)) return false;
+  // Never treat command verbs, project keywords, or system roles as an assignee name (English or Devanagari)
+  if (/\b(?:project|task|banao|bana\s*do|create|karo|kardo|naam|name|testing|crm|admin|user|प्रोजेक्ट|प्रजेक्ट|प्रोज़ेक्ट|प्रोजैक्ट|टास्क|बनाओ|बना\s*दो|बनाइए|बनाइये|क्रिएट|नया|नई|नयी|नाम)\b/iu.test(clean)) {
+    return false;
+  }
+  // Also check without word boundary for Devanagari substrings
+  if (/(?:प्रोजेक्ट|प्रजेक्ट|प्रोज़ेक्ट|प्रोजैक्ट|टास्क|बनाओ|बना\s*दो|बनाइए|बनाइये|क्रिएट|नया|नई|नयी|नाम)/u.test(clean)) {
+    return false;
+  }
   return true;
 }
 
 function cleanAssigneeName(name) {
   if (!name || typeof name !== 'string') return null;
-  let clean = name.trim().replace(/^(?:task|assign(?:ed)?|karo|kardo|karna|kar\s*do|dena|de\s*do|bhejo|banao|haan|ha|yes|haanji|hnji)[,\s]+/i, '').trim();
-  clean = clean.replace(/^(?:team\s+members?|team\s+member|members?|users?|teammates?)[,\s]+/i, '').trim();
-  clean = clean.replace(/\s+(?:ko|co|koh|kor|ke\s+liye)$/i, '').trim();
+  let clean = name.trim().replace(/^(?:task|assign(?:ed)?|karo|kardo|karna|kar\s*do|dena|de\s*do|bhejo|banao|haan|ha|yes|haanji|hnji|टास्क|बनाओ|बना\s*दो|नया|नयी|नई)[,\s]+/iu, '').trim();
+  clean = clean.replace(/^(?:team\s+members?|team\s+member|members?|users?|teammates?)[,\s]+/iu, '').trim();
+  clean = clean.replace(/\s+(?:ko|co|koh|kor|ke\s+liye|को|के\s+लिए)$/iu, '').trim();
   if (isDateLikeToken(clean)) return null;
   if (isValidAssigneeCandidate(clean)) {
     return clean;
@@ -444,7 +452,7 @@ function extractMultipleAssignees(text) {
       const keLiyeMatch = clean.match(/(?:^|\s)([a-zA-Z\u0900-\u097F\s,&+]+?)\s+ke\s+liye\b/i);
       if (keLiyeMatch && keLiyeMatch[1]) {
         candidateSegment = keLiyeMatch[1];
-      } else if (!/(?:task\s+ka\s+naam|title|description|due\s+date|priority|status|reminder)/i.test(clean) && (clean.includes(',') || clean.includes('&') || clean.includes('+') || clean.includes('और') || clean.includes('तथा') || /\b(?:and|aur|or|plus|tatha)\b/i.test(clean))) {
+      } else if (!/(?:project|task|task\s+ka\s+naam|title|description|due\s+date|priority|status|reminder|banao|create|प्रोजेक्ट|प्रजेक्ट|प्रोज़ेक्ट|प्रोजैक्ट|टास्क|बनाओ|बना\s*दो|बनाइए|बनाइये|क्रिएट|नया|नई|नयी|नाम)/iu.test(clean) && (clean.includes(',') || clean.includes('&') || clean.includes('+') || clean.includes('और') || clean.includes('तथा') || /\b(?:and|aur|or|plus|tatha)\b/i.test(clean))) {
         candidateSegment = clean;
       }
     }
@@ -1148,6 +1156,12 @@ function isInvalidOrCommandTitle(title, message = '', assigneeName = '') {
   // e.g. "ek task banao", "task banao", "naya task banao", "task create karo", "create a task", "make a task", "task bana do"
   const bareCommandRegex = /^(?:(?:hello|hi|hey|namaste|please|plz)?\s*(?:mujhe|mere\s+liye|apne\s+liye)?\s*(?:ek\s+|a\s+|one\s+)?(?:naya\s+|new\s+)?(?:urgent\s+)?(?:task|kaam|काम|टास्क)\s*(?:banao|bana\s*do|banayein|create\s*karo|create\s*kar\s*do|create|kar\s*do|karna\s*hai|likho|daalo|add\s*karo|karo|do|बनाओ|बनाएं|बना\s*दो|करना\s*है|करो|कर\s*दो)?)$/i;
   if (bareCommandRegex.test(normTitle)) {
+    return true;
+  }
+
+  // 1b. Project / Client creation commands must NEVER become task titles
+  const projectOrClientCommandRegex = /(?:\b(?:naya\s+project|new\s+project|project\s+banao|project\s+create|ek\s+new\s+project|ek\s+naya\s+project|naya\s+client|new\s+client|client\s+banao|client\s+add|client\s+create)\b|(?:(?:नया|एक\s+नया|नई)\s*(?:प्रोजेक्ट|प्रजेक्ट|प्रोज़ेक्ट|क्लाइंट|क्लाइन्ट)))/iu;
+  if (projectOrClientCommandRegex.test(normTitle)) {
     return true;
   }
 

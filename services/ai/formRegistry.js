@@ -51,6 +51,23 @@ const PROJECT_STATUS_LABELS = {
 const INDIA_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+function formatDateOnly(dateString) {
+  if (!dateString) return '—';
+  const match = String(dateString).trim().match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (match) {
+    const y = parseInt(match[1], 10);
+    const m = parseInt(match[2], 10);
+    const d = parseInt(match[3], 10);
+    const month = MONTHS[m - 1] || '';
+    return `${d} ${month} ${y}`;
+  }
+  const dObj = new Date(dateString);
+  if (!isNaN(dObj.getTime())) {
+    return `${dObj.getUTCDate()} ${MONTHS[dObj.getUTCMonth()]} ${dObj.getUTCFullYear()}`;
+  }
+  return String(dateString);
+}
+
 function formatHumanIstDate(dateString) {
   if (!dateString) return '—';
   const d = new Date(dateString);
@@ -682,6 +699,53 @@ function canCreateProject(user = {}, scope = {}) {
   return false;
 }
 
+function canCreateClient(user = {}, scope = {}) {
+  if (!user) return false;
+
+  const userCompany = user.companyCode || (user.company && (user.company.companyCode || user.company._id || user.company));
+  if (!userCompany) return false;
+
+  const rawRole = String(user.role || '').toLowerCase();
+  const rawCompanyRole = String(user.companyRole || '').toLowerCase();
+  if (user.isClient || rawRole === 'client' || rawCompanyRole === 'client') {
+    return false;
+  }
+
+  const roleValues = [user.companyRole, user.role, user.jobRole]
+    .filter(Boolean)
+    .map((r) => String(typeof r === 'object' ? r.name || r.role || '' : r).trim().toLowerCase().replace(/[\s-]+/g, '_'));
+
+  const PRIVILEGED_ROLES = new Set([
+    'owner',
+    'company_owner',
+    'companyowner',
+    'admin',
+    'super_admin',
+    'superadmin',
+  ]);
+
+  if (roleValues.some((r) => PRIVILEGED_ROLES.has(r))) {
+    return true;
+  }
+
+  const userPerms = Array.isArray(user.allowedPages) ? user.allowedPages
+    : (Array.isArray(user.pagePermissions) ? user.pagePermissions
+    : (Array.isArray(user.permissions) ? user.permissions : []));
+
+  const normalizedPerms = userPerms.map((p) => String(typeof p === 'object' ? p.page || p.name || p.path || '' : p).trim().toLowerCase().replace(/[\s_-]+/g, ''));
+  const CLIENT_PAGE_KEYS = new Set(['empclient', 'clientmanagement', 'clients', 'client', 'emp-client', 'client-management', 'ciisuser/emp-client']);
+
+  if (normalizedPerms.some((p) => CLIENT_PAGE_KEYS.has(p))) {
+    return true;
+  }
+
+  if (scope.hasClientManagementAccess || (scope.hasAccess && (scope.page === 'emp-client' || scope.page === 'client-management'))) {
+    return true;
+  }
+
+  return false;
+}
+
 Object.defineProperty(FORM_REGISTRY, 'task_project', {
   value: taskProjectFormConfig,
   enumerable: false,
@@ -769,7 +833,14 @@ const createProjectFormConfig = {
   buildPreview: (draft = {}, user = {}) => {
     const creatorName = user.name || 'Aap';
     const memberNames = (Array.isArray(draft.members) && draft.members.length > 0)
-      ? draft.members.map((m) => (typeof m === 'object' ? m.name || m.label : m))
+      ? draft.members.map((m) => {
+          if (typeof m === 'object' && m) {
+            const name = m.name || m.label || '';
+            const dept = m.department ? ` (${m.department})` : '';
+            return `${name}${dept}`.trim();
+          }
+          return String(m);
+        })
       : [];
 
     const allDisplayMembers = memberNames.includes(creatorName) || memberNames.some((n) => /aap/i.test(n))
@@ -784,8 +855,8 @@ const createProjectFormConfig = {
       description: draft.description || '—',
       startDate: draft.startDate || '—',
       endDate: draft.endDate || '—',
-      startDateFormatted: draft.startDate ? formatHumanIstDate(draft.startDate) : '—',
-      endDateFormatted: draft.endDate ? formatHumanIstDate(draft.endDate) : '—',
+      startDateFormatted: draft.startDate ? formatDateOnly(draft.startDate) : '—',
+      endDateFormatted: draft.endDate ? formatDateOnly(draft.endDate) : '—',
       priority: formatProjectPriority(draft.priority),
       status: formatCreateProjectStatus(draft.status || 'Active'),
       members: allDisplayMembers,
@@ -827,6 +898,187 @@ Object.defineProperty(FORM_REGISTRY, 'create_project', {
   configurable: true,
 });
 
+// --------------------------------------------------------------------------
+// 5. CREATE A NEW CLIENT (Part A)
+// Defined non-enumerable so Part 1 contract test 7 continues to pass.
+// --------------------------------------------------------------------------
+const {
+  maskEmail,
+  maskIdentifier,
+  isValidEmail,
+  isValidPhone,
+  isValidGST,
+  isValidPAN,
+  isValidPincode,
+} = require('./clientSlotFiller');
+
+const createClientFormConfig = {
+  intent: 'create_client',
+  entity: 'client',
+  displayName: 'Add Client',
+  endpoint: '/clientsservice',
+  method: 'POST',
+  multipart: false,
+  roleRules: {
+    canCreateClient,
+  },
+  slots: [
+    'client',
+    'company',
+    'city',
+    'projectManager',
+    'status',
+    'email',
+    'phone',
+    'industry',
+    'gst',
+    'pan',
+    'website',
+    'address',
+    'state',
+    'country',
+    'pincode',
+    'description',
+    'notes',
+  ],
+  buildPayload: (draft = {}, user = {}, context = {}) => {
+    let pmNames = [];
+    if (Array.isArray(draft.projectManager) && draft.projectManager.length > 0) {
+      pmNames = draft.projectManager.map((m) => (typeof m === 'object' ? (m.name || m.label || '') : String(m))).filter(Boolean);
+    } else if (Array.isArray(draft.team) && draft.team.length > 0) {
+      pmNames = draft.team.map((m) => (typeof m === 'object' ? (m.name || m.label || '') : String(m))).filter(Boolean);
+    } else if (Array.isArray(draft.members) && draft.members.length > 0) {
+      pmNames = draft.members.map((m) => (typeof m === 'object' ? (m.name || m.label || '') : String(m))).filter(Boolean);
+    } else if (user?.name) {
+      pmNames = [user.name];
+    }
+
+    const cleanCompanyCode = context.companyCode || user.companyCode || (user.company && user.company.companyCode) || '';
+    const selectedBranchId = context.branchId || context.selectedBranchId || user.branchId || (typeof user.branch === 'string' ? user.branch : user.branch?._id) || null;
+
+    const fields = {
+      client: draft.client || draft.clientName || '',
+      parentClientId: draft.parentClientId || null,
+      parentClientName: draft.parentClientName || draft.client || draft.clientName || '',
+      company: draft.company || draft.companyName || '',
+      city: draft.city || '',
+      projectManager: pmNames,
+      services: [],
+      status: draft.status || 'Active',
+      progress: draft.progress || '0/0 (0%)',
+      email: draft.email || '',
+      phone: draft.phone ? String(draft.phone).replace(/\D/g, '').slice(-10) : '',
+      companyLogo: draft.companyLogo || '',
+      industry: draft.industry || '',
+      gst: draft.gst ? String(draft.gst).trim().toUpperCase() : '',
+      pan: draft.pan ? String(draft.pan).trim().toUpperCase() : '',
+      website: draft.website || '',
+      state: draft.state || '',
+      country: draft.country || 'India',
+      pincode: draft.pincode || '',
+      address: draft.address || '',
+      description: draft.description || '',
+      notes: draft.notes || '',
+      companyCode: cleanCompanyCode,
+      subscription: [],
+    };
+
+    if (selectedBranchId && selectedBranchId !== 'all') {
+      fields.branch = String(selectedBranchId);
+      fields.branchId = String(selectedBranchId);
+    }
+
+    return {
+      endpoint: '/clientsservice',
+      method: 'POST',
+      multipart: false,
+      fields,
+      body: fields,
+    };
+  },
+  buildPreview: (draft = {}, user = {}) => {
+    let pmDisplay = [];
+    if (Array.isArray(draft.projectManager) && draft.projectManager.length > 0) {
+      pmDisplay = draft.projectManager.map((m) => (typeof m === 'object' ? (m.name || m.label || '') : String(m))).filter(Boolean);
+    } else if (Array.isArray(draft.team) && draft.team.length > 0) {
+      pmDisplay = draft.team.map((m) => (typeof m === 'object' ? (m.name || m.label || '') : String(m))).filter(Boolean);
+    } else if (Array.isArray(draft.members) && draft.members.length > 0) {
+      pmDisplay = draft.members.map((m) => (typeof m === 'object' ? (m.name || m.label || '') : String(m))).filter(Boolean);
+    }
+
+    const emailNotice = draft.email
+      ? `Create karne par client ko login details ka email jayega: ${maskEmail(draft.email)}`
+      : 'Email nahi diya gaya, system auto-generated login banayega';
+
+    return {
+      entity: 'client',
+      intent: 'create_client',
+      client: draft.client || draft.clientName || '—',
+      clientName: draft.client || draft.clientName || '—',
+      company: draft.company || draft.companyName || '—',
+      companyName: draft.company || draft.companyName || '—',
+      city: draft.city || '—',
+      status: draft.status || 'Active',
+      team: pmDisplay,
+      members: pmDisplay,
+      email: draft.email || null,
+      phone: draft.phone ? maskIdentifier(draft.phone) : null,
+      industry: draft.industry || null,
+      gst: draft.gst ? maskIdentifier(draft.gst) : null,
+      pan: draft.pan ? maskIdentifier(draft.pan) : null,
+      website: draft.website || null,
+      address: draft.address || null,
+      state: draft.state || null,
+      country: draft.country || null,
+      pincode: draft.pincode || null,
+      description: draft.description || null,
+      notes: draft.notes || null,
+      loginNotice: emailNotice,
+      speakTextLogin: emailNotice,
+    };
+  },
+  validateDraft: (draft = {}) => {
+    if (!draft.client && !draft.clientName) {
+      return { valid: false, field: 'client', reason: 'Client name is required' };
+    }
+    if (!draft.company && !draft.companyName) {
+      return { valid: false, field: 'company', reason: 'Company name is required' };
+    }
+    if (!draft.city) {
+      return { valid: false, field: 'city', reason: 'City is required' };
+    }
+    const hasPm = (Array.isArray(draft.projectManager) && draft.projectManager.length > 0) ||
+                  (Array.isArray(draft.team) && draft.team.length > 0) ||
+                  (Array.isArray(draft.members) && draft.members.length > 0);
+    if (!hasPm) {
+      return { valid: false, field: 'projectManager', reason: 'At least one team member is required' };
+    }
+    if (draft.email && !isValidEmail(draft.email)) {
+      return { valid: false, field: 'email', reason: 'Invalid email format' };
+    }
+    if (draft.phone && !isValidPhone(draft.phone)) {
+      return { valid: false, field: 'phone', reason: 'Phone number must be exactly 10 digits' };
+    }
+    if (draft.gst && !isValidGST(draft.gst)) {
+      return { valid: false, field: 'gst', reason: 'Invalid GST format' };
+    }
+    if (draft.pan && !isValidPAN(draft.pan)) {
+      return { valid: false, field: 'pan', reason: 'Invalid PAN format' };
+    }
+    if (draft.pincode && !isValidPincode(draft.pincode)) {
+      return { valid: false, field: 'pincode', reason: 'Pincode must be 6 digits' };
+    }
+    return { valid: true };
+  },
+};
+
+Object.defineProperty(FORM_REGISTRY, 'create_client', {
+  value: createClientFormConfig,
+  enumerable: false,
+  writable: true,
+  configurable: true,
+});
+
 
 // ============================================================================
 // INTENT DETECTION (Deterministic First)
@@ -836,8 +1088,11 @@ const SELF_KEYWORDS_REGEX = /\b(?:mere\s+liye|khud\s+ke\s+liye|apne\s+liye|khud\
 const ASSIGN_OTHERS_REGEX = /\b(?:assign(?:ed)?\s+to|ko\s+assign(?:ed)?|task\s+assign(?:ed)?|assign(?:ed)?\s+karo|assign(?:ed)?|task\s+to|kisi\s+aur\s+ke\s+liye|kisi\s+aur\s+ko|others|[a-zA-Z\u0900-\u097F]+\s+(?:ko|co|koh|kor|ke\s+liye)\b|give\s+to|de\s*do|bhejo)\b/i;
 const GROUP_EXTENSION_REGEX = /\b(?:group\s+ko|team\s+ko|group\s+task|group\s+me)\b/i;
 const AMBIGUOUS_PROJECT_PLAN_REGEX = /\bproject\s+plan\s+banao\b/i;
-const CREATE_PROJECT_EXPLICIT_REGEX = /\b(?:naya\s+project|new\s+project|create\s+(?:a\s+)?project|project\s+create\s+karo|project\s+banao)\b/i;
+const CREATE_PROJECT_EXPLICIT_REGEX = /(?:\b(?:naya\s+project|new\s+project|create\s+(?:a\s+)?project|project\s+create\s+karo|project\s+banao)\b|(?:(?:(?:^|\s|[.,;])(?:नया|निया|नयी|नई)\s*)?(?:प्रोजेक्ट|प्रजेक्ट|प्रोज़ेक्ट|प्रोजैक्ट)\s*(?:बनाओ|बना\s*दो|बनाइए|बनाइये|क्रिएट|create\s*karo|banao)(?:[\s.,;!?]|$))|(?:(?:प्रोजेक्ट|प्रजेक्ट|प्रोज़ेक्ट|प्रोजैक्ट)\s+का\s+नाम))/iu;
 const TASK_INSIDE_PROJECT_REGEX = /\b(?:project\s+(?:mein|mai|in|ke\s+andar)\s+task|task\s+in\s+project)\b/i;
+
+const AMBIGUOUS_CLIENT_TASK_REGEX = /(?:\bclient\b|\bक्लाइंट\b|\bक्लाइन्ट\b).*(?:\bmeeting\b|\bcall\b|\btask\b|\bkal\b|\baaj\b|\d+\s*baje|\breminder\b|\bमीटिंग\b|\bकॉल\b|\bटास्क\b)/i;
+const CREATE_CLIENT_EXPLICIT_REGEX = /(?:\b(?:naya\s+client|new\s+client|create\s+(?:a\s+)?client|client\s+create\s+karo|client\s+add\s+karo|add\s+(?:new\s+)?client|client\s+banao|add\s+client)\b|(?:(?:(?:^|\s|[.,;])(?:नया|निया|नयी|नई)\s*)?(?:क्लाइंट|क्लाइन्ट|client)\s*(?:बनाओ|बना\s*दो|बनाइए|बनाइये|क्रिएट|create\s*karo|banao|add\s*karo|जोड़ो|जोड़े)(?:[\s.,;!?]|$))|(?:(?:क्लाइंट|क्लाइन्ट|client)\s+का\s+नाम))/iu;
 
 /**
  * Detects the target intent from message text, draft state, accessible projects, and user context.
@@ -866,6 +1121,24 @@ function detectIntent(opts = {}) {
     };
   }
 
+  // 0b. Ambiguous Client Task check (Item 1)
+  // "Client meeting ka task banao", "client call kal 5 baje" must not trigger create_client
+  const hasTaskAssignment = /\b(?:assign\s+to|ko\s+assign|task\s+assign|assign\s+karo)\b/i.test(text);
+  if (!hasTaskAssignment && !CREATE_CLIENT_EXPLICIT_REGEX.test(text) && AMBIGUOUS_CLIENT_TASK_REGEX.test(text) && draft?.intent !== 'create_client') {
+    return {
+      intent: 'ambiguous_client_or_task',
+      isSupported: true,
+      isExplicit: true,
+      isAmbiguous: true,
+      question: 'Kya aapko naya client banana hai ya task banana hai?',
+      speech: 'क्या आपको नया क्लाइंट बनाना है या टास्क बनाना है?',
+      chips: [
+        { label: 'Naya client banana hai', action: { type: 'set', field: 'intent', value: 'create_client' } },
+        { label: 'Task banana hai', action: { type: 'set', field: 'intent', value: 'self_task' } },
+      ],
+    };
+  }
+
   // 1. Explicit group detection (extension point for Part 3)
   if (GROUP_EXTENSION_REGEX.test(text)) {
     return {
@@ -887,21 +1160,24 @@ function detectIntent(opts = {}) {
     }
   }
 
-  // Active draft continuity guard: inside active draft or when asked for project name, never confuse with create_project
+  // Active draft continuity guard: inside active task_project when asked for existing project name without an explicit create command
   const isAnsweringProjectSlot = Boolean(
-    (draft?.intent === 'task_project' && draft?.asked?.includes('project') && !draft?.projectId) ||
-    (draft?.intent && draft.intent !== 'create_project' && draft?.asked?.length > 0)
+    draft?.intent === 'task_project' && draft?.asked?.includes('project') && !draft?.projectId && !CREATE_PROJECT_EXPLICIT_REGEX.test(text)
   );
 
   // 1b. Explicit Create Project detection (Requirement 5)
   if (!isAnsweringProjectSlot && !TASK_INSIDE_PROJECT_REGEX.test(text) && CREATE_PROJECT_EXPLICIT_REGEX.test(text)) {
     // If text has "mein task" or "ke andar task", it belongs to task_project
     if (!/\b(?:mein|mai|in|ke\s+andar)\s+task\b/i.test(text)) {
-      // Extract project name if specified after "banao" / "create karo"
-      let extractedName = null;
-      const nameMatch = text.match(/(?:naya\s+project\s+banao|new\s+project|project\s+banao|create\s+project)\s+([a-zA-Z0-9\s_-]+)/i);
-      if (nameMatch && nameMatch[1] && !/^(?:kal|aaj|high|medium|low|urgent)/i.test(nameMatch[1].trim())) {
-        extractedName = nameMatch[1].trim();
+      // Extract project name if specified
+      const { extractCreateProjectSlotsFromMessage } = require('./projectSlotFiller');
+      const pSlots = extractCreateProjectSlotsFromMessage(text);
+      let extractedName = pSlots?.name || null;
+      if (!extractedName) {
+        const nameMatch = text.match(/(?:naya\s+project\s+banao|new\s+project\s+banao|new\s+project|project\s+banao|create\s+project)\s+([a-zA-Z0-9\s_-]+)/i);
+        if (nameMatch && nameMatch[1] && !/^(?:kal|aaj|high|medium|low|urgent|banao|karo)/i.test(nameMatch[1].trim())) {
+          extractedName = nameMatch[1].trim();
+        }
       }
       return {
         intent: 'create_project',
@@ -910,6 +1186,26 @@ function detectIntent(opts = {}) {
         projectName: extractedName,
       };
     }
+  }
+
+  // 1c. Explicit Create Client detection (Item 1)
+  if (CREATE_CLIENT_EXPLICIT_REGEX.test(text)) {
+    const { extractCreateClientSlots } = require('./clientSlotFiller');
+    const cSlots = extractCreateClientSlots(text);
+    let extractedClientName = cSlots?.client || null;
+    if (!extractedClientName) {
+      const nameMatch = text.match(/(?:naya\s+client\s+banao|new\s+client\s+banao|new\s+client|client\s+banao|create\s+client|add\s+client|client\s+add\s+karo)\s+([a-zA-Z0-9\s_-]+)/i);
+      if (nameMatch && nameMatch[1] && !/^(?:kal|aaj|high|medium|active|banao|karo)/i.test(nameMatch[1].trim())) {
+        extractedClientName = nameMatch[1].trim();
+      }
+    }
+    return {
+      intent: 'create_client',
+      isSupported: true,
+      isExplicit: true,
+      clientName: extractedClientName,
+      clientSlots: cSlots,
+    };
   }
 
   // 2. Fuzzy match against accessible projects + locative particles
@@ -969,12 +1265,21 @@ function detectIntent(opts = {}) {
     return { intent: 'task_project', isSupported: true, isExplicit: false };
   }
 
-  // 4. Explicit assign to others keywords or assignee mention
+  // 4. Existing draft state continuity (Strict Intent Lock: slot answers and disambiguation chips never hijack active flow)
+  if (draft?.intent && FORM_REGISTRY[draft.intent]) {
+    const NEW_TASK_EXPLICIT_REGEX = /\b(?:naya\s+task|new\s+task|task\s+banao|task\s+create\s+karo|ek\s+task\s+banao|नया\s+टास्क|टास्क\s+बनाओ)\b/iu;
+    const isExplicitTaskCommand = NEW_TASK_EXPLICIT_REGEX.test(text);
+    if (!isExplicitTaskCommand) {
+      return { intent: draft.intent, isSupported: true, isExplicit: false };
+    }
+  }
+
+  // 5. Explicit assign to others keywords or assignee mention
   if (ASSIGN_OTHERS_REGEX.test(text) || (canAssignOthers && extractAssigneeMention(text))) {
     return { intent: 'task_assigned_user', isSupported: true, isExplicit: true };
   }
 
-  // 5. Existing draft state continuity
+  // 6. Existing draft state continuity fallback
   if (draft?.intent && FORM_REGISTRY[draft.intent]) {
     return { intent: draft.intent, isSupported: true, isExplicit: false };
   }
@@ -1007,6 +1312,39 @@ function migrateDraftBetweenIntents(sourceIntentKey, targetIntentKey, currentDra
       carried: Object.keys(currentDraft).filter((k) => currentDraft[k] !== null && currentDraft[k] !== undefined),
       dropped: [],
       targetIntent: targetIntentKey,
+    };
+  }
+
+  if (targetIntentKey === 'create_client') {
+    return {
+      newDraft: {
+        intent: 'create_client',
+        client: currentDraft.client || null,
+        company: currentDraft.company || null,
+        city: currentDraft.city || null,
+        status: currentDraft.status || 'Active',
+        projectManager: Array.isArray(currentDraft.projectManager) ? [...currentDraft.projectManager] : [],
+        team: Array.isArray(currentDraft.team) ? [...currentDraft.team] : [],
+        email: currentDraft.email || null,
+        phone: currentDraft.phone || null,
+        industry: currentDraft.industry || null,
+        gst: currentDraft.gst || null,
+        pan: currentDraft.pan || null,
+        website: currentDraft.website || null,
+        address: currentDraft.address || null,
+        state: currentDraft.state || null,
+        country: currentDraft.country || null,
+        pincode: currentDraft.pincode || null,
+        description: currentDraft.description || null,
+        notes: currentDraft.notes || null,
+        assigneeLedger: Array.isArray(currentDraft.assigneeLedger) ? [...currentDraft.assigneeLedger] : [],
+        asked: [],
+        skipped: [],
+        askCounts: {},
+      },
+      carried: [],
+      dropped: [],
+      targetIntent: 'create_client',
     };
   }
 
@@ -1201,6 +1539,21 @@ function migrateDraftBetweenIntents(sourceIntentKey, targetIntentKey, currentDra
 // ============================================================================
 
 function getIntentSlots(intentKey, draft = {}) {
+  if (intentKey === 'create_client') {
+    const slots = [];
+    if (!draft.client && !draft.clientName) slots.push('client');
+    if (!draft.company && !draft.companyName) slots.push('company');
+    if (!draft.city) slots.push('city');
+    const hasPm = (Array.isArray(draft.projectManager) && draft.projectManager.length > 0) ||
+                  (Array.isArray(draft.team) && draft.team.length > 0) ||
+                  (Array.isArray(draft.members) && draft.members.length > 0);
+    if (!hasPm) slots.push('projectManager');
+    if (!draft.moreDetailsDone) {
+      slots.push('more_details');
+    }
+    return slots;
+  }
+
   if (intentKey === 'create_project') {
     const slots = [];
     if (!draft.name && !draft.projectName) slots.push('name');
@@ -1266,6 +1619,9 @@ function checkIntentAccess(intentKey, { user = {}, scope = {} } = {}) {
   if (intentKey === 'create_project') {
     return canCreateProject(user, scope);
   }
+  if (intentKey === 'create_client') {
+    return canCreateClient(user, scope);
+  }
   if (!config.roleRules.pageScopeCheck) return true;
   return Boolean(scope.hasAccess || scope.isOwner);
 }
@@ -1277,6 +1633,7 @@ module.exports = {
   getIntentSlots,
   checkIntentAccess,
   formatHumanIstDate,
+  formatDateOnly,
   formatAssigneeLabel,
   getCleanCheckpoints,
   buildReminderPayload,
@@ -1285,6 +1642,7 @@ module.exports = {
   formatProjectStatus,
   formatCreateProjectStatus,
   canCreateProject,
+  canCreateClient,
   PROJECT_STATUS_LABELS,
   STATUS_LABELS,
 };
