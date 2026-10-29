@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const User = require('../../models/User');
 const Department = require('../../models/Department');
+const { levenshtein } = require('./sttNormalizer');
 
 function escapeRegex(str) {
   return String(str || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -62,6 +63,35 @@ async function resolveAssignee({ name, requester }, deps = {}) {
       .lean();
   }
 
+  let isFuzzy = false;
+  if (!users || users.length === 0) {
+    let pool = [];
+    if (Array.isArray(deps.companyUsers)) {
+      pool = deps.companyUsers;
+    } else {
+      pool = await UserModel.find({
+        isActive: true,
+        company: companyId,
+        ...(companyCodeFilter ? { companyCode: companyCodeFilter } : {}),
+      })
+        .select('_id name employeeId jobRole department branch')
+        .limit(25)
+        .lean();
+    }
+
+    const target = (latinName || rawName).trim().toLowerCase();
+    const fuzzyCandidates = (pool || []).filter((u) => {
+      const first = (u.name || '').trim().split(/\s+/)[0].toLowerCase();
+      const dist = levenshtein(target, first);
+      return dist <= 1 || (target.length >= 4 && dist <= 2);
+    });
+
+    if (fuzzyCandidates.length > 0) {
+      users = fuzzyCandidates;
+      isFuzzy = true;
+    }
+  }
+
   if (!users || users.length === 0) {
     return { status: 'none', candidates: [] };
   }
@@ -104,6 +134,16 @@ async function resolveAssignee({ name, requester }, deps = {}) {
     cand.label = meta.length > 0 ? `${cand.name} (${meta.join(', ')})` : cand.name;
     return cand;
   });
+
+  if (isFuzzy) {
+    return {
+      status: 'fuzzy',
+      isFuzzy: true,
+      suggestedName: candidates[0].name,
+      user: candidates[0],
+      candidates,
+    };
+  }
 
   if (candidates.length > 1) {
     return { status: 'multiple', candidates };

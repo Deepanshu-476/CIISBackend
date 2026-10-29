@@ -133,11 +133,11 @@ const TASK_FIELDS = {
     askOrder: 3,
     question: {
       reply: "Description kya likhna hai? Agar nahi hai to 'koi nahi' bol dein.",
-      speech: 'डिस्क्रिप्शन क्या लिखना है? अगर नहीं है तो कोई नहीं बोल दें।',
+      speech: 'Description क्या लिखना है? अगर नहीं है तो कोई नहीं बोल दें।',
     },
     reAskQuestion: {
       reply: "Description optional hai. Kuch nahi likhna to 'Skip' dabayein.",
-      speech: 'डिस्क्रिप्शन जरूरी नहीं है। कुछ नहीं लिखना तो स्किप दबाएं।',
+      speech: 'Description जरूरी नहीं है। कुछ नहीं लिखना तो स्किप दबाएं।',
     },
     chips: () => [
       { label: 'Koi nahi / Skip', action: { type: 'skip', field: 'description' } },
@@ -182,11 +182,11 @@ const TASK_FIELDS = {
     askOrder: 5,
     question: {
       reply: 'Priority kya rakhein? Low, Medium ya High?',
-      speech: 'प्राथमिकता क्या रखें? लो, मीडियम या हाई?',
+      speech: 'Priority क्या रखें? Low, Medium ya High?',
     },
     reAskQuestion: {
       reply: 'Kripya inme se ek priority chun lein: Low, Medium ya High.',
-      speech: 'कृपया इनमें से एक प्राथमिकता चुनें: लो, मीडियम या हाई।',
+      speech: 'कृपया इनमें से एक Priority चुनें: Low, Medium ya High।',
     },
     chips: () => [
       { label: 'Low', action: { type: 'set', field: 'priority', value: 'low' } },

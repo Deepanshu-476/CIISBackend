@@ -1,3 +1,5 @@
+const path = require('path');
+const dotenv = require('dotenv');
 const { ChatGroq } = require('@langchain/groq');
 
 const DEFAULT_MODEL = 'openai/gpt-oss-20b';
@@ -6,7 +8,13 @@ const getModelName = () => {
   return (process.env.GROQ_MODEL && process.env.GROQ_MODEL.trim()) || DEFAULT_MODEL;
 };
 
+let envAttempted = false;
+
 const hasLLM = () => {
+  if (!envAttempted && (!process.env.GROQ_API_KEY || !process.env.GROQ_API_KEY.trim())) {
+    envAttempted = true;
+    dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+  }
   const key = process.env.GROQ_API_KEY;
   if (!key || !key.trim()) {
     const error = new Error('Groq API key is not configured.');
