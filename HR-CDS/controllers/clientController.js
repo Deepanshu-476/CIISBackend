@@ -211,7 +211,7 @@ const toCompanyCard = (client, taskSummary = {}) => {
     _id: client._id,
     parentClientId: client.parentClientId || client._id,
     parentClientName: client.parentClientName || client.client,
-    companyLogo: client.companyLogo || '',
+    companyLogo: client.companyLogo || client.logo || '',
     companyName: client.company || client.businessName || client.client,
     company: client.company || client.businessName || client.client,
     clientCode: client.clientCode || client.code || `CL-${String(client._id).slice(-4).toUpperCase()}`,
@@ -2216,7 +2216,7 @@ const updateClient = async (req, res) => {
     if (company !== undefined) updateData.company = company.trim();
     if (parentClientId !== undefined) updateData.parentClientId = parentClientId || null;
     if (parentClientName !== undefined) updateData.parentClientName = parentClientName.trim();
-    if (companyLogo !== undefined) updateData.companyLogo = companyLogo.trim();
+    if (companyLogo !== undefined) updateData.companyLogo = typeof companyLogo === 'string' ? companyLogo.trim() : '';
     if (industry !== undefined) updateData.industry = industry.trim();
     if (gst !== undefined) updateData.gst = gst.trim().toUpperCase();
     if (pan !== undefined) updateData.pan = pan.trim().toUpperCase();
