@@ -302,11 +302,42 @@ const FORBIDDEN_ASSIGNEE_NAMES = new Set([
   'high', 'low', 'medium', 'urgent', 'pending', 'reminder', 'checkpoints', 'description', 'title'
 ]);
 
+const DATE_WORDS_SET = new Set([
+  'jan', 'january', 'feb', 'february', 'mar', 'march', 'apr', 'april', 'may',
+  'jun', 'june', 'jul', 'july', 'aug', 'august', 'sep', 'sept', 'september',
+  'oct', 'october', 'nov', 'november', 'dec', 'december',
+  'जनवरी', 'जन', 'फरवरी', 'फ़रवरी', 'फ़र', 'फर', 'मार्च', 'अप्रैल', 'अप्रेल',
+  'मई', 'जून', 'जुलाई', 'अगस्त', 'सितंबर', 'सितम्बर', 'अक्टूबर', 'अक्टुबर', 'अक्टू',
+  'नवंबर', 'नवम्बर', 'नव', 'दिसंबर', 'दिसम्बर', 'दिस',
+  'today', 'tomorrow', 'yesterday', 'aaj', 'kal', 'parso', 'parson',
+  'somwar', 'mangalwar', 'budhwar', 'guruwar', 'shukrawar', 'shaniwar', 'raviwar',
+  'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
+  'tarikh', 'tareekh', 'date', 'dates', 'day', 'days', 'din', 'mahina', 'mahine',
+  'month', 'months', 'year', 'years', 'saal', 'sal', 'hafta', 'hafte', 'week', 'weeks',
+  'subah', 'sham', 'shaam', 'dopahar', 'raat', 'baje', 'time', 'am', 'pm'
+]);
+
+function isDateLikeToken(cand) {
+  if (!cand || typeof cand !== 'string') return false;
+  const clean = cand.trim().toLowerCase();
+  // 1. Only digits and punctuation/whitespace: e.g. "2026", "3", "3/11/2026", "03-11-2026"
+  if (/^[\d\s,.\/\-_:;]+$/.test(clean)) return true;
+  // 2. Exact match in DATE_WORDS_SET
+  if (DATE_WORDS_SET.has(clean)) return true;
+  // 3. Every word is either a digit, ordinal (1st, 2nd, etc.), or a date word (e.g. "november 3", "3 november", "november 2026")
+  const words = clean.split(/[\s,.\/\-_]+/).filter(Boolean);
+  if (words.length > 0 && words.every(w => /^\d+(?:st|nd|rd|th)?$/i.test(w) || DATE_WORDS_SET.has(w))) {
+    return true;
+  }
+  return false;
+}
+
 function isValidAssigneeCandidate(cand) {
   if (!cand || typeof cand !== 'string') return false;
   const clean = cand.trim().toLowerCase();
   if (clean.length < 2) return false;
   if (FORBIDDEN_ASSIGNEE_NAMES.has(clean)) return false;
+  if (isDateLikeToken(clean)) return false;
   return true;
 }
 
@@ -315,6 +346,7 @@ function cleanAssigneeName(name) {
   let clean = name.trim().replace(/^(?:task|assign(?:ed)?|karo|kardo|karna|kar\s*do|dena|de\s*do|bhejo|banao|haan|ha|yes|haanji|hnji)[,\s]+/i, '').trim();
   clean = clean.replace(/^(?:team\s+members?|team\s+member|members?|users?|teammates?)[,\s]+/i, '').trim();
   clean = clean.replace(/\s+(?:ko|co|koh|kor|ke\s+liye)$/i, '').trim();
+  if (isDateLikeToken(clean)) return null;
   if (isValidAssigneeCandidate(clean)) {
     return clean;
   }
@@ -1353,6 +1385,8 @@ module.exports = {
   isInitiationPhrase,
   cleanAssigneeName,
   isValidAssigneeCandidate,
+  isDateLikeToken,
+  DATE_WORDS_SET,
   extractAssigneeMention,
   extractMultipleAssignees,
   parseHinglishDateTime,
