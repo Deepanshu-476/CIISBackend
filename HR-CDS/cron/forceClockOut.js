@@ -229,10 +229,14 @@ const calculateAttendanceByShift = ({ inTime, outTime, shiftSettings, currentSta
 
   const totalMs = outTime - inTime;
   let finalStatus = status;
-
+  // Half day needs at least half of the assigned shift hours worked.
+  // Anything shorter (for example a 2 minute punch) is not a half day.
   // Keep LATE determined from clock-in from being overwritten when the
   // auto-clock-out sweep recalculates the record.
-  if (finalStatus === 'PRESENT') {
+  const halfShiftMs = Math.max(schedule.shiftEnd - schedule.shiftStart, 0) / 2;
+  if (totalMs < halfShiftMs) {
+    finalStatus = 'ABSENT';
+  } else if (finalStatus === 'PRESENT') {
     if (outTime < schedule.halfDayEarlyLimit) {
       finalStatus = 'HALF DAY';
     } else if (outTime < schedule.shortLeaveEarlyLimit) {
