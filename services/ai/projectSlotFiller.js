@@ -17,6 +17,57 @@ const { idsEqual } = require('./projectResolver');
 
 const INDIA_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
+function getIstDateObj(refDate = new Date()) {
+  const d = refDate instanceof Date ? refDate : new Date(refDate);
+  const shifted = new Date(d.getTime() + INDIA_OFFSET_MS);
+  return {
+    year: shifted.getUTCFullYear(),
+    month: shifted.getUTCMonth() + 1,
+    day: shifted.getUTCDate(),
+  };
+}
+
+function formatIstYmd(year, month, day) {
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function resolveNextSuchYear(targetMonth, targetDay, curYear, curMonth, curDay) {
+  if (targetMonth < curMonth || (targetMonth === curMonth && targetDay < curDay)) {
+    return curYear + 1;
+  }
+  return curYear;
+}
+
+const MONTH_MAP = {
+  // English full & short
+  jan: 1, january: 1,
+  feb: 2, february: 2,
+  mar: 3, march: 3,
+  apr: 4, april: 4,
+  may: 5,
+  jun: 6, june: 6,
+  jul: 7, july: 7,
+  aug: 8, august: 8,
+  sep: 9, sept: 9, september: 9,
+  oct: 10, october: 10,
+  nov: 11, november: 11,
+  dec: 12, december: 12,
+
+  // Hindi / Devanagari
+  'जनवरी': 1, 'जन': 1,
+  'फरवरी': 2, 'फ़रवरी': 2, 'फ़र': 2, 'फर': 2,
+  'मार्च': 3,
+  'अप्रैल': 4, 'अप्रेल': 4,
+  'मई': 5,
+  'जून': 6,
+  'जुलाई': 7,
+  'अगस्त': 8,
+  'सितंबर': 9, 'सितम्बर': 9,
+  'अक्टूबर': 10, 'अक्टुबर': 10, 'अक्टू': 10,
+  'नवंबर': 11, 'नवम्बर': 11, 'नव': 11,
+  'दिसंबर': 12, 'दिसम्बर': 12, 'दिस': 12,
+};
+
 function formatIstDate(dateInput) {
   if (!dateInput) return null;
   const d = dateInput instanceof Date ? dateInput : new Date(dateInput);
@@ -31,76 +82,131 @@ function formatIstDate(dateInput) {
 function parseProjectDate(text, refDate = new Date()) {
   const clean = String(text || '').trim().toLowerCase();
   if (!clean) return null;
-  const now = new Date(refDate);
+  const ist = getIstDateObj(refDate);
 
-  if (/^(?:aaj|today|aaj\s+se)$/i.test(clean)) {
-    return formatIstDate(now);
+  // 1. "aaj", "today"
+  if (/^(?:aaj|today|आज)(?:\s+se)?$/i.test(clean)) {
+    return formatIstYmd(ist.year, ist.month, ist.day);
   }
-  if (/^(?:kal|tomorrow|kal\s+se)$/i.test(clean)) {
-    now.setUTCDate(now.getUTCDate() + 1);
-    return formatIstDate(now);
+
+  // 2. "kal", "tomorrow"
+  if (/^(?:kal|tomorrow|कल)(?:\s+se)?$/i.test(clean)) {
+    const d = new Date(refDate.getTime() + 24 * 60 * 60 * 1000);
+    const nextIst = getIstDateObj(d);
+    return formatIstYmd(nextIst.year, nextIst.month, nextIst.day);
   }
-  if (/^(?:agle\s+hafte|next\s+week|1\s+hafta|ek\s+hafta|agle\s+monday)$/i.test(clean)) {
-    now.setUTCDate(now.getUTCDate() + 7);
-    return formatIstDate(now);
+
+  // 3. "parso", "day after tomorrow"
+  if (/^(?:parso|parson|day\s+after\s+tomorrow|परसों)(?:\s+se)?$/i.test(clean)) {
+    const d = new Date(refDate.getTime() + 48 * 60 * 60 * 1000);
+    const nextIst = getIstDateObj(d);
+    return formatIstYmd(nextIst.year, nextIst.month, nextIst.day);
   }
+
+  // 4. "30 din baad", "(\d+) din baad", "(\d+) days later"
+  const daysMatch = clean.match(/^(\d+)\s+(?:din|days?)(?:\s+baad|\s+later|\s+after)?$/i);
+  if (daysMatch) {
+    const numDays = parseInt(daysMatch[1], 10);
+    const d = new Date(refDate.getTime() + numDays * 24 * 60 * 60 * 1000);
+    const nextIst = getIstDateObj(d);
+    return formatIstYmd(nextIst.year, nextIst.month, nextIst.day);
+  }
+
+  // 5. "agle hafte", "next week", "1 hafta baad"
+  if (/^(?:agle\s+hafte|next\s+week|1\s+hafta|ek\s+hafta|agle\s+monday|अगले\s+हफ्ते)(?:\s+tak|\s+se|\s+baad)?$/i.test(clean)) {
+    const d = new Date(refDate.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const nextIst = getIstDateObj(d);
+    return formatIstYmd(nextIst.year, nextIst.month, nextIst.day);
+  }
+
+  // 6. "is mahine ke end tak", "end of this month", "month end"
+  if (/^(?:is\s+mahine\s+ke\s+end\s+tak|is\s+mahine\s+ke\s+aakhir\s+tak|end\s+of\s+(?:this\s+)?month|month\s+end|is\s+mahine\s+tak)$/i.test(clean)) {
+    const lastDay = new Date(Date.UTC(ist.year, ist.month, 0)).getUTCDate();
+    return formatIstYmd(ist.year, ist.month, lastDay);
+  }
+
   if (/^(?:kal\s+se\s+)?(?:2\s+hafte|do\s+hafte|2\s+weeks?)(?:\s*(?:baad|tak))?$/i.test(clean)) {
     const isFromKal = clean.includes('kal');
-    now.setUTCDate(now.getUTCDate() + (isFromKal ? 15 : 14));
-    return formatIstDate(now);
+    const d = new Date(refDate.getTime() + (isFromKal ? 15 : 14) * 24 * 60 * 60 * 1000);
+    const nextIst = getIstDateObj(d);
+    return formatIstYmd(nextIst.year, nextIst.month, nextIst.day);
   }
   if (/^(?:kal\s+se\s+)?(?:3\s+hafte|teen\s+hafte|3\s+weeks?)(?:\s*(?:baad|tak))?$/i.test(clean)) {
     const isFromKal = clean.includes('kal');
-    now.setUTCDate(now.getUTCDate() + (isFromKal ? 22 : 21));
-    return formatIstDate(now);
+    const d = new Date(refDate.getTime() + (isFromKal ? 22 : 21) * 24 * 60 * 60 * 1000);
+    const nextIst = getIstDateObj(d);
+    return formatIstYmd(nextIst.year, nextIst.month, nextIst.day);
   }
   if (/^(?:kal\s+se\s+)?(?:4\s+hafte|char\s+hafte|4\s+weeks?)(?:\s*(?:baad|tak))?$/i.test(clean)) {
     const isFromKal = clean.includes('kal');
-    now.setUTCDate(now.getUTCDate() + (isFromKal ? 29 : 28));
-    return formatIstDate(now);
+    const d = new Date(refDate.getTime() + (isFromKal ? 29 : 28) * 24 * 60 * 60 * 1000);
+    const nextIst = getIstDateObj(d);
+    return formatIstYmd(nextIst.year, nextIst.month, nextIst.day);
   }
   if (/^(?:1\s+mahine|1\s+month|ek\s+mahina|1\s+mahine\s+baad)$/i.test(clean)) {
+    const now = new Date(refDate);
     now.setUTCMonth(now.getUTCMonth() + 1);
     return formatIstDate(now);
   }
   if (/^(?:3\s+mahine|3\s+months|teen\s+mahine|3\s+mahine\s+baad)$/i.test(clean)) {
+    const now = new Date(refDate);
     now.setUTCMonth(now.getUTCMonth() + 3);
     return formatIstDate(now);
   }
   if (/^(?:6\s+mahine|6\s+months|che\s+mahine|6\s+mahine\s+baad)$/i.test(clean)) {
+    const now = new Date(refDate);
     now.setUTCMonth(now.getUTCMonth() + 6);
     return formatIstDate(now);
   }
 
-  // Exact YYYY-MM-DD match
-  const ymd = clean.match(/\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b/);
+  // 7. Exact ISO YYYY-MM-DD match
+  const ymd = clean.match(/\b(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})\b/);
   if (ymd) {
-    return `${ymd[1]}-${ymd[2].padStart(2, '0')}-${ymd[3].padStart(2, '0')}`;
+    const y = parseInt(ymd[1], 10);
+    const m = parseInt(ymd[2], 10);
+    const d = parseInt(ymd[3], 10);
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      return formatIstYmd(y, m, d);
+    }
   }
 
-  // Named month match: e.g. "1 November", "30 November", "15 Dec 2026"
-  const MONTH_MAP = {
-    jan: 1, january: 1,
-    feb: 2, february: 2,
-    mar: 3, march: 3,
-    apr: 4, april: 4,
-    may: 5,
-    jun: 6, june: 6,
-    jul: 7, july: 7,
-    aug: 8, august: 8,
-    sep: 9, sept: 9, september: 9,
-    oct: 10, october: 10,
-    nov: 11, november: 11,
-    dec: 12, december: 12,
-  };
-  const namedMatch = clean.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+([a-zA-Z]+)(?:\s+(\d{4}))?\b/i);
-  if (namedMatch) {
-    const day = parseInt(namedMatch[1], 10);
-    const mStr = namedMatch[2].toLowerCase();
+  // 8. Day-first numeric: DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY (Indian style: e.g. "3/11/2026", "03-11-2026")
+  const dmyMatch = clean.match(/\b(\d{1,2})[-/.](\d{1,2})[-/.](20\d{2}|\d{2})\b/);
+  if (dmyMatch) {
+    const d = parseInt(dmyMatch[1], 10);
+    const m = parseInt(dmyMatch[2], 10);
+    let y = parseInt(dmyMatch[3], 10);
+    if (y < 100) y += 2000;
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      return formatIstYmd(y, m, d);
+    }
+  }
+
+  // 9. Month first with name: "november 3, 2026", "november 3 , 2026", "november 3", "nov 3"
+  const monthFirstMatch = clean.match(/(?:^|[\s,])([a-zA-Z\u0900-\u097F]+)\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,\s*|\s+)?(\d{4})?(?:$|[\s,])/iu);
+  if (monthFirstMatch) {
+    const mStr = monthFirstMatch[1].toLowerCase();
+    const month = MONTH_MAP[mStr];
+    const day = parseInt(monthFirstMatch[2], 10);
+    if (month && day >= 1 && day <= 31) {
+      const year = monthFirstMatch[3]
+        ? parseInt(monthFirstMatch[3], 10)
+        : resolveNextSuchYear(month, day, ist.year, ist.month, ist.day);
+      return formatIstYmd(year, month, day);
+    }
+  }
+
+  // 10. Day first with name: "3 november", "3 nov 2026", "3 नवंबर", "03-nov-2026", "3 november 2026"
+  const dayFirstMatch = clean.match(/(?:^|[\s,])(\d{1,2})(?:st|nd|rd|th)?(?:[\s-]+)([a-zA-Z\u0900-\u097F]+)(?:[\s,]+(\d{4}))?(?:$|[\s,])/iu);
+  if (dayFirstMatch) {
+    const day = parseInt(dayFirstMatch[1], 10);
+    const mStr = dayFirstMatch[2].toLowerCase();
     const month = MONTH_MAP[mStr];
     if (month && day >= 1 && day <= 31) {
-      const year = namedMatch[3] ? parseInt(namedMatch[3], 10) : now.getUTCFullYear();
-      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      const year = dayFirstMatch[3]
+        ? parseInt(dayFirstMatch[3], 10)
+        : resolveNextSuchYear(month, day, ist.year, ist.month, ist.day);
+      return formatIstYmd(year, month, day);
     }
   }
 

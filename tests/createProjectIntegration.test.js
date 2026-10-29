@@ -19,6 +19,7 @@
  */
 
 process.env.NODE_ENV = 'test';
+process.env.GROQ_API_KEY = process.env.GROQ_API_KEY || 'gsk_mock_test_key_for_unit_tests';
 
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
@@ -31,6 +32,7 @@ const sendEmailModule = require('../utils/sendEmail');
 sendEmailModule.sendEmail = async () => true;
 
 const { parseTaskRequest } = require('../services/ai/taskAgentService');
+const { parseTask } = require('../controllers/aiController');
 const { FORM_REGISTRY, canCreateProject } = require('../services/ai/formRegistry');
 const { parseRequestSchema } = require('../services/ai/aiSchemas');
 const { parseProjectDateRange, parseProjectDate } = require('../services/ai/projectSlotFiller');
@@ -576,6 +578,203 @@ describe('AI Create Project & Chained Task Comprehensive Proof Suite', () => {
       assert.notEqual(ledgerEntry.status, 'resolved', 'Tampered entry must NOT be resolved');
       assert.equal(ledgerEntry.userId, null, 'Tampered foreign userId must be wiped');
       assert.equal(result.draft.assignees.length, 0, 'No foreign assignees allowed');
+    });
+  });
+
+  describe('Item 6: Real-Route Real-Request Proof Suite (Bug 1, Bug 2, Bug 3)', () => {
+    async function callRealRoute({ text, action, pick, draft, user = ownerUser }) {
+      const { buildParseRequestBody } = await import('../../CIIS/src/hooks/taskAgentPureLogic.js');
+      const body = buildParseRequestBody({ text, action, pick, draft });
+
+      let statusCode = 200;
+      let jsonBody = null;
+      const req = {
+        user: {
+          _id: String(user._id),
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          companyRole: user.companyRole || 'owner',
+          company: user.company,
+          companyCode: user.companyCode,
+          branchId: user.branchId,
+        },
+        body,
+      };
+      const res = {
+        status: (code) => { statusCode = code; return res; },
+        json: (data) => { jsonBody = data; return res; },
+      };
+
+      const mockDeps = {
+        getAccessibleProjects: async () => [],
+        isAssigneeInScope: async () => true,
+      };
+
+      await parseTask(req, res, mockDeps);
+      return { statusCode, ...jsonBody };
+    }
+
+    it('6.1 Real conversation bug fix: answering "november 3 , 2026" to endDate reaches member question without any "naam nahi mila"', async () => {
+      const draft = {
+        intent: 'create_project',
+        name: 'ZZ AI Test',
+        description: 'testing project',
+        startDate: '2026-10-29',
+        asked: ['name', 'description', 'startDate', 'endDate'],
+        skipped: [],
+        askCounts: { name: 1, description: 1, startDate: 1, endDate: 1 },
+      };
+
+      const res = await callRealRoute({
+        text: 'november 3 , 2026',
+        draft,
+      });
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.success, true);
+      assert.equal(res.status, 'needs_input');
+      assert.equal(res.field, 'members');
+      assert.match(res.reply, /Project mein kaun kaun members honge\? Naam batayein \(aap khud shamil honge\)/i);
+      assert.ok(res.chips.some(c => c.label === 'Sirf main'));
+      assert.equal(res.draft.endDate, '2026-11-03');
+      assert.equal(res.draft.intent, 'create_project');
+
+      // Crucial: Must NEVER contain employee notices or task phrasing
+      const noticeStr = (res.notices || []).join(' ');
+      assert.doesNotMatch(noticeStr, /naam ka koi employee nahi mila/i);
+      assert.doesNotMatch(res.reply, /kiske liye task banana hai/i);
+    });
+
+    it('6.2 All 14 date formats for startDate and endDate parse cleanly in IST to YYYY-MM-DD', async () => {
+      const sampleInputs = [
+        'november 3, 2026',
+        'november 3 , 2026',
+        '3 november',
+        '3 nov 2026',
+        'november 3',
+        '3/11/2026',
+        '03-11-2026',
+        '2026-11-03',
+        '3 नवंबर',
+        'aaj',
+        'kal',
+        'parso',
+        '30 din baad',
+        'agle hafte',
+        'is mahine ke end tak',
+      ];
+
+      for (const input of sampleInputs) {
+        const draft = {
+          intent: 'create_project',
+          name: 'ZZ AI Test',
+          description: 'testing',
+          asked: ['name', 'description', 'startDate'],
+          skipped: [],
+          askCounts: { name: 1, description: 1, startDate: 1 },
+        };
+
+        const res = await callRealRoute({
+          text: input,
+          draft,
+        });
+
+        assert.equal(res.statusCode, 200);
+        assert.equal(res.success, true);
+        assert.ok(res.draft.startDate, `startDate must be set for input: "${input}"`);
+        assert.match(res.draft.startDate, /^\d{4}-\d{2}-\d{2}$/, `Date must be YYYY-MM-DD for input: "${input}"`);
+      }
+    });
+
+    it('6.3 End date before start date is refused with friendly notice and re-asks endDate', async () => {
+      const draft = {
+        intent: 'create_project',
+        name: 'ZZ AI Test',
+        description: 'testing',
+        startDate: '2026-11-15',
+        asked: ['name', 'description', 'startDate', 'endDate'],
+        skipped: [],
+        askCounts: { name: 1, description: 1, startDate: 1, endDate: 1 },
+      };
+
+      const res = await callRealRoute({
+        text: '2026-11-01', // Before Nov 15
+        draft,
+      });
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.status, 'needs_input');
+      assert.equal(res.field, 'endDate');
+      assert.match(res.reply, /End date start date se pehle nahi ho sakti/i);
+      assert.equal(res.draft.endDate, null);
+    });
+
+    it('6.4 Invalid date input re-asks the same question with two example formats and chips, rejecting date tokens as names', async () => {
+      const draft = {
+        intent: 'create_project',
+        name: 'ZZ AI Test',
+        description: 'testing',
+        startDate: '2026-11-01',
+        asked: ['name', 'description', 'startDate', 'endDate'],
+        skipped: [],
+        askCounts: { name: 1, description: 1, startDate: 1, endDate: 1 },
+      };
+
+      const res = await callRealRoute({
+        text: 'gibberish non-date text',
+        draft,
+      });
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.status, 'needs_input');
+      assert.equal(res.field, 'endDate');
+      assert.match(res.reply, /Project kab tak complete hona chahiye\? Kripya date batayein/i);
+      assert.ok(res.chips.length >= 2, 'Must provide example format chips');
+      assert.doesNotMatch((res.notices || []).join(' '), /naam ka koi employee nahi mila/i);
+    });
+
+    it('6.5 "Sirf main" reaches ready state with creator only as resolved member', async () => {
+      const draft = {
+        intent: 'create_project',
+        name: 'ZZ AI Test',
+        description: 'testing',
+        startDate: '2026-11-01',
+        endDate: '2026-11-30',
+        priority: 'Medium',
+        status: 'Active',
+        asked: ['name', 'description', 'startDate', 'endDate', 'priority', 'status', 'members'],
+        skipped: [],
+        askCounts: { name: 1, description: 1, startDate: 1, endDate: 1, priority: 1, status: 1, members: 1 },
+      };
+
+      const res = await callRealRoute({
+        text: 'Sirf main',
+        draft,
+      });
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.success, true);
+      assert.equal(res.status, 'ready');
+      assert.ok(res.draft.members.length === 1);
+      assert.equal(res.draft.members[0].id, String(ownerUser._id));
+      assert.match(res.reply, /aap bhi member honge|Aap member honge/i);
+    });
+
+    it('6.6 Existing task flows remain untouched and functional', async () => {
+      // 1. self_task
+      const resSelf = await callRealRoute({
+        text: 'kal subah 10 baje team meeting',
+      });
+      assert.equal(resSelf.statusCode, 200);
+      assert.notEqual(resSelf.draft.intent, 'create_project');
+
+      // 2. task_assigned_user
+      const resAssigned = await callRealRoute({
+        text: 'Vansh ko task assign karo kal 5 baje',
+      });
+      assert.equal(resAssigned.statusCode, 200);
+      assert.notEqual(resAssigned.draft.intent, 'create_project');
     });
   });
 });

@@ -371,6 +371,17 @@ async function parseTaskRequest({
           if (action.value && !action.assigneeId && !pick?.assigneeId) {
             currentDraft.assigneeLedger = mergeIntoLedger(currentDraft.assigneeLedger, [action.value]);
             syncAssigneeLedgerDerivedFields(currentDraft);
+
+        if (currentDraft.intent === 'create_project' && Array.isArray(currentDraft.assigneeLedger)) {
+          const resolvedEntries = currentDraft.assigneeLedger.filter(e => e.status === 'resolved' && e.userId);
+          if (resolvedEntries.length > 0) {
+            currentDraft.members = resolvedEntries.map(e => ({
+              id: e.userId,
+              name: e.displayName || e.rawName,
+              label: e.displayName || e.rawName,
+            }));
+          }
+        }
           }
           if (!currentDraft.asked.includes('assignee')) currentDraft.asked.push('assignee');
           currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'assignee');
@@ -417,6 +428,21 @@ async function parseTaskRequest({
           if (!currentDraft.asked.includes('reminder')) currentDraft.asked.push('reminder');
           if (!currentDraft.asked.includes('reminderOption')) currentDraft.asked.push('reminderOption');
           currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'reminder' && f !== 'reminderOption');
+        } else if (action.field === 'members') {
+          if (action.value === 'creator_only' || action.value === 'Sirf main' || action.value === 'main') {
+            const creatorName = req?.user?.name || 'Aap';
+            const creatorId = String(req?.user?._id || req?.user?.id || 'creator');
+            currentDraft.members = [{ id: creatorId, name: creatorName, label: creatorName }];
+          } else if (Array.isArray(action.value)) {
+            currentDraft.members = action.value;
+          } else if (typeof action.value === 'string') {
+            const mNames = extractMultipleAssignees(action.value).names;
+            if (mNames && mNames.length > 0) {
+              currentDraft.members = mNames.map(n => ({ name: n, label: n }));
+            }
+          }
+          if (!currentDraft.asked.includes('members')) currentDraft.asked.push('members');
+          currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'members');
         } else if (action.field) {
           currentDraft[action.field] = action.value;
           if (!currentDraft.asked.includes(action.field)) currentDraft.asked.push(action.field);
@@ -459,7 +485,7 @@ async function parseTaskRequest({
               description: 'Project ka description zaroori hai, isko skip nahi kar sakte. Kripya description batayein:',
               startDate: 'Project ki start date zaroori hai, isko skip nahi kar sakte. Kripya start date batayein:',
               endDate: 'Project ki end date zaroori hai, isko skip nahi kar sakte. Kripya end date batayein:',
-              members: 'Kam se kam ek team member zaroori hai, isko skip nahi kar sakte. Kripya member batayein ya "Main akela hoon" chunein:',
+              members: 'Kam se kam ek team member zaroori hai, isko skip nahi kar sakte. Project mein kaun kaun members honge? Naam batayein (aap khud shamil honge)',
             };
             return {
               success: true,
@@ -470,7 +496,7 @@ async function parseTaskRequest({
               speakText: msgMap[targetField] || `${targetField} zaroori hai.`,
               draft: currentDraft,
               missing: [targetField],
-              chips: targetField === 'members' ? [{ label: 'Main akela hoon', action: { type: 'set', field: 'members', value: 'creator_only' } }] : [],
+              chips: targetField === 'members' ? [{ label: 'Sirf main', action: { type: 'set', field: 'members', value: 'creator_only' } }] : [],
               candidates: [],
               notices,
               canAssignOthers,
@@ -781,11 +807,134 @@ async function parseTaskRequest({
       }
     }
 
+    // 2a-3. Date Question Isolation: Answering a date question is parsed ONLY as a date.
+    // Never pass it to the member/assignee parser!
+    if (!actionHandled && (lastAskedField === 'startDate' || lastAskedField === 'endDate')) {
+      const isDateSkip = isSkip(trimmedMessage) || isSkipAll(trimmedMessage);
+      const isStart = lastAskedField === 'startDate';
+
+      if (isDateSkip) {
+        // Date is required in create_project, so skip is refused
+        return {
+          success: true,
+          status: 'needs_input',
+          field: lastAskedField,
+          reply: isStart
+            ? 'Project ki start date zaroori hai, isko skip nahi kar sakte. Kripya start date batayein (jaise: "03-11-2026" ya "kal se"):'
+            : 'Project ki end date zaroori hai, isko skip nahi kar sakte. Kripya end date batayein (jaise: "30-11-2026" ya "1 mahine baad"):',
+          speech: isStart
+            ? 'प्रोजेक्ट की स्टार्ट डेट ज़रूरी है। कृपया स्टार्ट डेट बताएं।'
+            : 'प्रोजेक्ट की एंड डेट ज़रूरी है। कृपया एंड डेट बताएं।',
+          speakText: isStart
+            ? 'Project ki start date zaroori hai. Kripya start date batayein.'
+            : 'Project ki end date zaroori hai. Kripya end date batayein.',
+          draft: currentDraft,
+          missing: [lastAskedField],
+          chips: isStart
+            ? [
+                { label: 'Aaj se', action: { type: 'set', field: 'startDate', value: formatIstDate(now) } },
+                { label: 'Kal se', action: { type: 'set', field: 'startDate', value: formatIstDate(new Date(now.getTime() + 86400000)) } },
+                { label: 'Cancel', action: { type: 'cancel' } },
+              ]
+            : [
+                { label: '30 din baad', action: { type: 'set', field: 'endDate', value: parseProjectDate('30 din baad', now) } },
+                { label: '1 mahine baad', action: { type: 'set', field: 'endDate', value: parseProjectDate('1 mahine', now) } },
+                { label: 'Cancel', action: { type: 'cancel' } },
+              ],
+          candidates: [],
+          notices,
+          canAssignOthers,
+          progress: { done: isStart ? 2 : 3, total: 6 },
+          payload: null,
+          preview: null,
+          intent: null,
+          meta: { model: modelName },
+        };
+      }
+
+      const parsedDate = parseProjectDate(trimmedMessage, now);
+      if (parsedDate) {
+        if (isStart) {
+          currentDraft.startDate = parsedDate;
+          actionHandled = true;
+        } else {
+          // endDate
+          if (currentDraft.startDate && parsedDate < currentDraft.startDate) {
+            notices.push('End date start date se pehle nahi ho sakti. Kripya valid end date batayein.');
+            currentDraft.endDate = null;
+            return {
+              success: true,
+              status: 'needs_input',
+              field: 'endDate',
+              reply: 'End date start date se pehle nahi ho sakti. Kripya valid end date batayein (jaise: "30-11-2026" ya "1 mahine baad"):',
+              speech: 'एंड डेट स्टार्ट डेट से पहले नहीं हो सकती। कृपया सही एंड डेट बताएं।',
+              speakText: 'End date start date se pehle nahi ho sakti. Kripya valid end date batayein.',
+              draft: currentDraft,
+              missing: ['endDate'],
+              chips: [
+                { label: '30 din baad', action: { type: 'set', field: 'endDate', value: parseProjectDate('30 din baad', now) } },
+                { label: '1 mahine baad', action: { type: 'set', field: 'endDate', value: parseProjectDate('1 mahine', now) } },
+                { label: 'Cancel', action: { type: 'cancel' } },
+              ],
+              candidates: [],
+              notices,
+              canAssignOthers,
+              progress: { done: 3, total: 6 },
+              payload: null,
+              preview: null,
+              intent: null,
+              meta: { model: modelName },
+            };
+          } else {
+            currentDraft.endDate = parsedDate;
+            actionHandled = true;
+          }
+        }
+      } else {
+        // Date could not be parsed: re-ask the same question with two example formats and chips
+        return {
+          success: true,
+          status: 'needs_input',
+          field: lastAskedField,
+          reply: isStart
+            ? 'Project kis date se shuru hoga? Kripya date batayein (jaise: "03-11-2026" ya "kal se"):'
+            : 'Project kab tak complete hona chahiye? Kripya date batayein (jaise: "30-11-2026" ya "1 mahine baad"):',
+          speech: isStart
+            ? 'प्रोजेक्ट किस तारीख से शुरू होगा? कृपया तारीख बताएं जैसे 03-11-2026 या कल से।'
+            : 'प्रोजेक्ट कब तक पूरा होना चाहिए? कृपया तारीख बताएं जैसे 30-11-2026 या एक महीने बाद।',
+          speakText: isStart
+            ? 'Project kis date se shuru hoga? Kripya date batayein jaise 03-11-2026 ya kal se.'
+            : 'Project kab tak complete hona chahiye? Kripya date batayein jaise 30-11-2026 ya ek mahine baad.',
+          draft: currentDraft,
+          missing: [lastAskedField],
+          chips: isStart
+            ? [
+                { label: 'Aaj se', action: { type: 'set', field: 'startDate', value: formatIstDate(now) } },
+                { label: 'Kal se', action: { type: 'set', field: 'startDate', value: formatIstDate(new Date(now.getTime() + 86400000)) } },
+                { label: 'Cancel', action: { type: 'cancel' } },
+              ]
+            : [
+                { label: '30 din baad', action: { type: 'set', field: 'endDate', value: parseProjectDate('30 din baad', now) } },
+                { label: '1 mahine baad', action: { type: 'set', field: 'endDate', value: parseProjectDate('1 mahine', now) } },
+                { label: 'Cancel', action: { type: 'cancel' } },
+              ],
+          candidates: [],
+          notices,
+          canAssignOthers,
+          progress: { done: isStart ? 2 : 3, total: 6 },
+          payload: null,
+          preview: null,
+          intent: null,
+          meta: { model: modelName },
+        };
+      }
+    }
+
     // 2b. Check if message mentions assignee(s) or contains edit commands (add/remove)
     const multiAssigneeResult = extractMultipleAssignees(trimmedMessage);
     const { names: mentionedNames, editAction } = multiAssigneeResult;
 
-    if (editAction && canAssignOthers) {
+    if (editAction && canAssignOthers && currentDraft.intent !== 'create_project') {
       if (editAction.type === 'remove') {
         removeLedgerEntry(currentDraft, { name: editAction.name });
         notices.push(`"${editAction.name}" ko task se hata diya gaya hai.`);
@@ -793,6 +942,17 @@ async function parseTaskRequest({
       } else if (editAction.type === 'add') {
         currentDraft.assigneeLedger = mergeIntoLedger(currentDraft.assigneeLedger, [editAction.name]);
         syncAssigneeLedgerDerivedFields(currentDraft);
+
+        if (currentDraft.intent === 'create_project' && Array.isArray(currentDraft.assigneeLedger)) {
+          const resolvedEntries = currentDraft.assigneeLedger.filter(e => e.status === 'resolved' && e.userId);
+          if (resolvedEntries.length > 0) {
+            currentDraft.members = resolvedEntries.map(e => ({
+              id: e.userId,
+              name: e.displayName || e.rawName,
+              label: e.displayName || e.rawName,
+            }));
+          }
+        }
         if (currentDraft.intent !== 'task_project') {
           currentDraft.wantsOthers = true;
           currentDraft.taskFor = 'others';
@@ -801,7 +961,7 @@ async function parseTaskRequest({
         currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'assignee');
         actionHandled = true;
       }
-    } else if (mentionedNames && mentionedNames.length > 0 && canAssignOthers) {
+    } else if (mentionedNames && mentionedNames.length > 0 && canAssignOthers && currentDraft.intent !== 'create_project') {
       currentDraft.assigneeLedger = mergeIntoLedger(currentDraft.assigneeLedger, mentionedNames);
       syncAssigneeLedgerDerivedFields(currentDraft);
       if (currentDraft.intent !== 'task_project') {
@@ -810,12 +970,23 @@ async function parseTaskRequest({
         currentDraft.intent = 'task_assigned_user';
       }
       currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'assignee');
-    } else if (!mentionedNames?.length && lastAskedField === 'assignee' && canAssignOthers && !actionHandled) {
+    } else if (!mentionedNames?.length && lastAskedField === 'assignee' && canAssignOthers && currentDraft.intent !== 'create_project' && !actionHandled) {
       const cleanCandidate = cleanAssigneeName(trimmedMessage);
       const isNegative = detectedIntent?.type === 'cancel' || detectedIntent?.type === 'confirm_no';
       if (cleanCandidate && isValidAssigneeCandidate(cleanCandidate) && !isNegative && !isSkip(trimmedMessage) && !isSkipAll(trimmedMessage)) {
         currentDraft.assigneeLedger = mergeIntoLedger(currentDraft.assigneeLedger, [cleanCandidate]);
         syncAssigneeLedgerDerivedFields(currentDraft);
+
+        if (currentDraft.intent === 'create_project' && Array.isArray(currentDraft.assigneeLedger)) {
+          const resolvedEntries = currentDraft.assigneeLedger.filter(e => e.status === 'resolved' && e.userId);
+          if (resolvedEntries.length > 0) {
+            currentDraft.members = resolvedEntries.map(e => ({
+              id: e.userId,
+              name: e.displayName || e.rawName,
+              label: e.displayName || e.rawName,
+            }));
+          }
+        }
         if (currentDraft.intent !== 'task_project') {
           currentDraft.wantsOthers = true;
           currentDraft.taskFor = 'others';
@@ -843,11 +1014,34 @@ async function parseTaskRequest({
         currentDraft.endDate = parsed || trimmedMessage;
         actionHandled = true;
       } else if (lastAskedField === 'members' && trimmedMessage) {
-        if (/^(?:mains+akela|akela|self|kois+nahi|baads+mein|skip)/i.test(trimmedMessage)) {
+        if (/^(?:sirf\s+main|sirf\s+mai|main|mai|main\s+akela|akela|self|creator_only)/i.test(trimmedMessage)) {
           const creatorName = req?.user?.name || 'Aap';
           const creatorId = String(req?.user?._id || req?.user?.id || 'creator');
           currentDraft.members = [{ id: creatorId, name: creatorName, label: creatorName }];
           actionHandled = true;
+        } else if (isSkip(trimmedMessage) || isSkipAll(trimmedMessage)) {
+          return {
+            success: true,
+            status: 'needs_input',
+            field: 'members',
+            reply: 'Kam se kam ek team member zaroori hai, isko skip nahi kar sakte. Project mein kaun kaun members honge? Naam batayein (aap khud shamil honge)',
+            speech: 'कम से कम एक टीम सदस्य जरूरी है। कृपया सदस्य बताएं या सिर्फ मैं चुनें।',
+            speakText: 'Kam se kam ek team member zaroori hai. Project mein kaun kaun members honge?',
+            draft: currentDraft,
+            missing: ['members'],
+            chips: [
+              { label: 'Sirf main', action: { type: 'set', field: 'members', value: 'creator_only' } },
+              { label: 'Cancel', action: { type: 'cancel' } },
+            ],
+            candidates: [],
+            notices,
+            canAssignOthers,
+            progress: { done: 4, total: 6 },
+            payload: null,
+            preview: null,
+            intent: null,
+            meta: { model: modelName },
+          };
         } else {
           const mNames = extractMultipleAssignees(trimmedMessage).names;
           if (mNames && mNames.length > 0) {
@@ -1563,7 +1757,7 @@ async function parseTaskRequest({
     );
 
     if (wantsAssignee) {
-      if (!canAssignOthers) {
+      if (!canAssignOthers && currentDraft.intent !== 'create_project') {
         currentDraft.taskFor = 'self';
         currentDraft.wantsOthers = false;
         currentDraft.intent = 'self_task';
@@ -1754,6 +1948,17 @@ async function parseTaskRequest({
         }
 
         syncAssigneeLedgerDerivedFields(currentDraft);
+
+        if (currentDraft.intent === 'create_project' && Array.isArray(currentDraft.assigneeLedger)) {
+          const resolvedEntries = currentDraft.assigneeLedger.filter(e => e.status === 'resolved' && e.userId);
+          if (resolvedEntries.length > 0) {
+            currentDraft.members = resolvedEntries.map(e => ({
+              id: e.userId,
+              name: e.displayName || e.rawName,
+              label: e.displayName || e.rawName,
+            }));
+          }
+        }
 
         const unresolved = getFirstUnresolvedLedgerEntry(currentDraft);
         if (unresolved) {
@@ -2146,11 +2351,10 @@ async function parseTaskRequest({
           { label: 'On Hold', action: { type: 'set', field: 'status', value: 'On Hold' } },
         ];
       } else if (nextFieldKey === 'members') {
-        replyText = ackPrefix + 'Is project mein kaun kaun se team members honge? (Aap auto-added honge)';
-        speechText = 'इस प्रोजेक्ट में कौन-कौन से सदस्य होंगे? आप भी सदस्य होंगे।';
+        replyText = ackPrefix + 'Project mein kaun kaun members honge? Naam batayein (aap khud shamil honge)';
+        speechText = 'प्रोजेक्ट में कौन-कौन सदस्य होंगे? नाम बताएं, आप खुद शामिल होंगे।';
         chipsList = [
-          { label: 'Main akela hoon', action: { type: 'set', field: 'members', value: 'creator_only' } },
-          { label: 'Baad mein add karenge', action: { type: 'skip', field: 'members' } },
+          { label: 'Sirf main', action: { type: 'set', field: 'members', value: 'creator_only' } },
           { label: 'Cancel', action: { type: 'cancel' } },
         ];
       }
