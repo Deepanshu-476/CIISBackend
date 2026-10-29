@@ -156,9 +156,12 @@ const getDepartmentEmployees = async (req, department) => {
   const departmentTerms = [...new Set([departmentId, departmentName].filter(Boolean))];
   const users = await User.find({
     ...getUserCompanyQuery(req),
-    department: { $in: departmentTerms },
+    $or: [
+      { department: { $in: departmentTerms } },
+      { departmentName: { $in: departmentTerms } },
+    ],
   })
-    .select("name email jobRole companyRole employeeId department")
+    .select("name email jobRole companyRole employeeId department departmentName")
     .sort({ name: 1 })
     .lean();
 
@@ -170,6 +173,7 @@ const getDepartmentEmployees = async (req, department) => {
     companyRole: user.companyRole,
     employeeId: user.employeeId,
     department: user.department,
+    departmentName: user.departmentName,
   }));
 };
 
@@ -940,21 +944,13 @@ exports.assignDepartmentHead = async (req, res) => {
       _id: employeeId,
       companyCode: req.user.companyCode,
       isActive: true,
-    }).select("name email jobRole companyRole department");
+    }).select("name email jobRole companyRole department departmentName");
 
     if (!employee) {
       return res.status(404).json({ success: false, message: "Employee not found" });
     }
 
     const departmentName = getDepartmentName(department);
-    const employeeDepartment = String(employee.department || "");
-    const isSameDepartment =
-      employeeDepartment === String(department._id) ||
-      employeeDepartment.toLowerCase() === departmentName.toLowerCase();
-
-    if (!isSameDepartment) {
-      return res.status(400).json({ success: false, message: "Employee must belong to the selected department" });
-    }
 
     department.supportHead = employee._id;
     department.supportHeadName = employee.name;
