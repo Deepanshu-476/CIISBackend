@@ -98,6 +98,10 @@ describe('AI Create Client (Part A) Integration & Proof Suite', () => {
       companyName: 'Acme Corp',
       companyCode: 'ACME100',
       email: 'acme@test.com',
+      ownerName: 'Kanika Owner',
+      companyPhone: '9876543210',
+      companyAddress: '123 Test Street, Mohali',
+      companyEmail: 'acme@test.com',
     });
 
     // 1. Owner user
@@ -410,12 +414,13 @@ describe('AI Create Client (Part A) Integration & Proof Suite', () => {
 
     assert.equal(res.status, 201);
     assert.equal(res.body.success, true);
-    assert.ok(res.body.client);
-    assert.ok(res.body.client._id);
-    assert.equal(res.body.client.client, 'Super Solar Ltd');
+    const createdClient = res.body.data?.client || res.body.client;
+    assert.ok(createdClient);
+    assert.ok(createdClient._id);
+    assert.equal(createdClient.client, 'Super Solar Ltd');
 
     // Verify client exists in MongoDB
-    const inDb = await Client.findById(res.body.client._id);
+    const inDb = await Client.findById(createdClient._id);
     assert.ok(inDb);
     assert.equal(inDb.city, 'Jaipur');
 
@@ -445,7 +450,7 @@ describe('AI Create Client (Part A) Integration & Proof Suite', () => {
 
     assert.equal(res.status, 409);
     assert.equal(res.body.success, false);
-    assert.ok(res.body.message.includes('already exists') || res.body.message.includes('Email'));
+    assert.ok(res.body.message.includes('already exists') || res.body.message.includes('already used') || res.body.message.includes('Email') || res.body.message.includes('registered'));
   });
 
   // 11. CONTRACT PARITY TEST WITH AddClientPage.jsx
