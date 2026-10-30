@@ -84,26 +84,40 @@ const parseCheckpoints = (raw) => {
  */
 exports.downloadSampleExcel = async (req, res) => {
   try {
+    const mode = String(req.query.mode || req.query.type || "").trim().toLowerCase();
+    const isTaskOnly = mode === "existing" || mode === "tasks" || mode === "task";
+
     const workbook = new ExcelJS.Workbook();
     workbook.creator = "CIIS Network";
     workbook.created = new Date();
 
-    const sheet = workbook.addWorksheet("Projects and Tasks", {
+    const sheet = workbook.addWorksheet(isTaskOnly ? "Tasks" : "Projects and Tasks", {
       views: [{ showGridLines: true }],
     });
 
-    sheet.columns = [
-      { header: "Project Name", key: "projectName", width: 26 },
-      { header: "Project Description", key: "projectDescription", width: 34 },
-      { header: "Project Priority", key: "projectPriority", width: 16 },
-      { header: "Project End Date (YYYY-MM-DD)", key: "projectEndDate", width: 28 },
-      { header: "Task Title*", key: "taskTitle", width: 32 },
-      { header: "Task Description", key: "taskDescription", width: 38 },
-      { header: "Assigned Employee Email or Phone*", key: "assignedTo", width: 34 },
-      { header: "Task Priority", key: "taskPriority", width: 16 },
-      { header: "Task Due Date (YYYY-MM-DD)*", key: "taskDueDate", width: 28 },
-      { header: "Checkpoints (Comma separated)", key: "checkpoints", width: 36 },
-    ];
+    if (isTaskOnly) {
+      sheet.columns = [
+        { header: "Task Title*", key: "taskTitle", width: 32 },
+        { header: "Task Description", key: "taskDescription", width: 38 },
+        { header: "Assigned Employee Email or Phone*", key: "assignedTo", width: 34 },
+        { header: "Task Priority", key: "taskPriority", width: 16 },
+        { header: "Task Due Date (YYYY-MM-DD)*", key: "taskDueDate", width: 28 },
+        { header: "Checkpoints (Comma separated)", key: "checkpoints", width: 36 },
+      ];
+    } else {
+      sheet.columns = [
+        { header: "Project Name*", key: "projectName", width: 26 },
+        { header: "Project Description", key: "projectDescription", width: 34 },
+        { header: "Project Priority", key: "projectPriority", width: 16 },
+        { header: "Project End Date (YYYY-MM-DD)", key: "projectEndDate", width: 28 },
+        { header: "Task Title*", key: "taskTitle", width: 32 },
+        { header: "Task Description", key: "taskDescription", width: 38 },
+        { header: "Assigned Employee Email or Phone*", key: "assignedTo", width: 34 },
+        { header: "Task Priority", key: "taskPriority", width: 16 },
+        { header: "Task Due Date (YYYY-MM-DD)*", key: "taskDueDate", width: 28 },
+        { header: "Checkpoints (Comma separated)", key: "checkpoints", width: 36 },
+      ];
+    }
 
     // Style the header row
     const headerRow = sheet.getRow(1);
@@ -116,45 +130,75 @@ exports.downloadSampleExcel = async (req, res) => {
     headerRow.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
     headerRow.height = 28;
 
-    // Add sample rows for guidance
-    sheet.addRow({
-      projectName: "ERP System Revamp",
-      projectDescription: "Upgrading core portal modules and client dashboards",
-      projectPriority: "High",
-      projectEndDate: "2026-12-31",
-      taskTitle: "Design Database Architecture",
-      taskDescription: "Create optimized schemas for tasks, projects and chat integration",
-      assignedTo: req.user?.email || "developer@example.com",
-      taskPriority: "High",
-      taskDueDate: "2026-11-15",
-      checkpoints: "Draft Schema, Review with Team, Finalize Indexing",
-    });
+    const sampleEmail = req.user?.email || "developer@example.com";
 
-    sheet.addRow({
-      projectName: "ERP System Revamp",
-      projectDescription: "Upgrading core portal modules and client dashboards",
-      projectPriority: "High",
-      projectEndDate: "2026-12-31",
-      taskTitle: "Implement API Endpoints",
-      taskDescription: "Build CRUD and bulk import endpoints with validation",
-      assignedTo: req.user?.email || "developer@example.com",
-      taskPriority: "Medium",
-      taskDueDate: "2026-11-20",
-      checkpoints: "Unit Testing, Integration Verification",
-    });
+    if (isTaskOnly) {
+      sheet.addRow({
+        taskTitle: "Design Database Architecture",
+        taskDescription: "Create optimized schemas for tasks, projects and chat integration",
+        assignedTo: sampleEmail,
+        taskPriority: "High",
+        taskDueDate: "2026-11-15",
+        checkpoints: "Draft Schema, Review with Team, Finalize Indexing",
+      });
 
-    sheet.addRow({
-      projectName: "ERP System Revamp",
-      projectDescription: "Upgrading core portal modules and client dashboards",
-      projectPriority: "High",
-      projectEndDate: "2026-12-31",
-      taskTitle: "Frontend UI Components",
-      taskDescription: "Build interactive bulk upload modal with preview and validation",
-      assignedTo: req.user?.email || "developer@example.com",
-      taskPriority: "Medium",
-      taskDueDate: "2026-11-25",
-      checkpoints: "Mobile responsiveness, Error state previews",
-    });
+      sheet.addRow({
+        taskTitle: "Implement API Endpoints",
+        taskDescription: "Build CRUD and bulk import endpoints with validation",
+        assignedTo: sampleEmail,
+        taskPriority: "Medium",
+        taskDueDate: "2026-11-20",
+        checkpoints: "Unit Testing, Integration Verification",
+      });
+
+      sheet.addRow({
+        taskTitle: "Frontend UI Components",
+        taskDescription: "Build interactive bulk upload modal with preview and validation",
+        assignedTo: sampleEmail,
+        taskPriority: "Medium",
+        taskDueDate: "2026-11-25",
+        checkpoints: "Mobile responsiveness, Error state previews",
+      });
+    } else {
+      sheet.addRow({
+        projectName: "ERP System Revamp",
+        projectDescription: "Upgrading core portal modules and client dashboards",
+        projectPriority: "High",
+        projectEndDate: "2026-12-31",
+        taskTitle: "Design Database Architecture",
+        taskDescription: "Create optimized schemas for tasks, projects and chat integration",
+        assignedTo: sampleEmail,
+        taskPriority: "High",
+        taskDueDate: "2026-11-15",
+        checkpoints: "Draft Schema, Review with Team, Finalize Indexing",
+      });
+
+      sheet.addRow({
+        projectName: "ERP System Revamp",
+        projectDescription: "Upgrading core portal modules and client dashboards",
+        projectPriority: "High",
+        projectEndDate: "2026-12-31",
+        taskTitle: "Implement API Endpoints",
+        taskDescription: "Build CRUD and bulk import endpoints with validation",
+        assignedTo: sampleEmail,
+        taskPriority: "Medium",
+        taskDueDate: "2026-11-20",
+        checkpoints: "Unit Testing, Integration Verification",
+      });
+
+      sheet.addRow({
+        projectName: "ERP System Revamp",
+        projectDescription: "Upgrading core portal modules and client dashboards",
+        projectPriority: "High",
+        projectEndDate: "2026-12-31",
+        taskTitle: "Frontend UI Components",
+        taskDescription: "Build interactive bulk upload modal with preview and validation",
+        assignedTo: sampleEmail,
+        taskPriority: "Medium",
+        taskDueDate: "2026-11-25",
+        checkpoints: "Mobile responsiveness, Error state previews",
+      });
+    }
 
     // Style data rows
     sheet.eachRow((row, rowNumber) => {
@@ -164,13 +208,17 @@ exports.downloadSampleExcel = async (req, res) => {
       }
     });
 
+    const filename = isTaskOnly
+      ? "CIIS_Task_Import_Template.xlsx"
+      : "CIIS_Project_Tasks_Template.xlsx";
+
     res.setHeader(
       "Content-Type",
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     );
     res.setHeader(
       "Content-Disposition",
-      'attachment; filename="CIIS_Project_Tasks_Template.xlsx"'
+      `attachment; filename="${filename}"`
     );
 
     await workbook.xlsx.write(res);
@@ -297,9 +345,10 @@ exports.bulkImportProjectsAndTasks = async (req, res) => {
     });
 
     // Fallbacks if user altered header names slightly
-    if (!colIndex.taskTitle) colIndex.taskTitle = 5;
-    if (!colIndex.assignedTo) colIndex.assignedTo = 7;
-    if (!colIndex.taskDueDate) colIndex.taskDueDate = 9;
+    const hasProjectCol = Boolean(colIndex.projectName);
+    if (!colIndex.taskTitle) colIndex.taskTitle = hasProjectCol ? 5 : 1;
+    if (!colIndex.assignedTo) colIndex.assignedTo = hasProjectCol ? 7 : 3;
+    if (!colIndex.taskDueDate) colIndex.taskDueDate = hasProjectCol ? 9 : 5;
 
     const rowErrors = [];
     const parsedRows = [];
