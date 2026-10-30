@@ -163,8 +163,9 @@ const normalizeTaskRecurrenceFields = (task = {}) => {
   const repeatDays = normalizeRepeatDays(task.repeatDays);
   const isRecurring = toBoolean(task.isRecurring) || repeatPattern !== 'none';
   const nextRecurringDate = task.nextRecurringDate ? toValidDate(task.nextRecurringDate) : null;
+  // The end date is a calendar day: occurrences anywhere on that IST day are included.
   const recurrenceEndDate = task.recurrenceEndDate || task.repeatEndDate || task.endDate
-    ? toValidDate(task.recurrenceEndDate || task.repeatEndDate || task.endDate)
+    ? getIndiaDayRange(task.recurrenceEndDate || task.repeatEndDate || task.endDate)?.end || null
     : null;
   const recurrenceSourceId = task.recurrenceSourceId || null;
   const recurrenceOccurrenceKey = task.recurrenceOccurrenceKey || null;
@@ -274,8 +275,24 @@ const getIndiaDayRange = (value = new Date()) => {
   return { start, end };
 };
 
+const MAX_RECURRENCE_DAYS = 365;
+
+// Same rules as the web and app forms. Returns an error message, or null when valid.
+const validateRecurrenceSettings = (settings, dueDateTime) => {
+  if (!settings?.isRecurring) return null;
+  const endDate = toValidDate(settings.recurrenceEndDate);
+  if (!endDate) return 'Please select repeat end date.';
+  const due = toValidDate(dueDateTime);
+  if (!due) return 'Please select due date.';
+  if (endDate < getIndiaDayRange(due).start) return 'Repeat end date cannot be before due date.';
+  if (endDate > getIndiaDayRange(due.getTime() + MAX_RECURRENCE_DAYS * DAY_MS).end) return 'Repeat end date can be at most 1 year after due date.';
+  return null;
+};
+
 module.exports = {
   INDIA_OFFSET_MS,
+  MAX_RECURRENCE_DAYS,
+  validateRecurrenceSettings,
   normalizeRepeatPattern,
   normalizeRepeatDays,
   toBoolean,

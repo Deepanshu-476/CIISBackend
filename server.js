@@ -8,8 +8,7 @@ const schedule = require('node-schedule');
 const http = require('http');
 const socketIo = require('socket.io');
 const mongoose = require('mongoose');
-const { protect, restrictTo } = require("./middleware/authMiddleware");
-
+const { protect, restrictTo, invalidateAuthUser } = require("./middleware/authMiddleware");
 dotenv.config();
 
 const requiredEnvVars = ["JWT_SECRET"];
@@ -234,7 +233,10 @@ const runDbJobOnce = async (label, job, options) => {
   }
 };
 
+const { scheduledJobsEnabled } = require('./utils/scheduledJobs');
+
 const scheduleDbJob = (cronExpression, label, job, options) => {
+  if (!scheduledJobsEnabled()) return null;
   return schedule.scheduleJob(cronExpression, () => {
     runDbJobOnce(label, job, options);
   });
@@ -375,6 +377,14 @@ const getTaskReminderDueOptions = (task, now = new Date()) => {
   return results;
 };
 
+// app1 and app2 both run this cron against the same database. Recording the slot key first, atomically,
+// lets exactly one instance send each reminder. Raw collection writes avoid bumping __v, so a user saving
+// the same task at that moment does not hit a version conflict.
+const claimReminderSlot = async (Model, unsentFilter, keysPath, key) => {
+  const result = await Model.collection.updateOne(unsentFilter, { $addToSet: { [keysPath]: key } });
+  return result.modifiedCount === 1;
+};
+
 const sendReminderForTask = async ({ task, recipients, title, taskTitle, taskType, dueDate, reminder }) => {
   const userIds = [...new Set((recipients || []).map(user => String(user?._id || user?.id || user || '')).filter(Boolean))];
   if (!userIds.length) return 0;
@@ -394,6 +404,7 @@ const sendReminderForTask = async ({ task, recipients, title, taskTitle, taskTyp
       reminderOption: reminder.option,
     },
     priority: 'high',
+    dedupe: false,
   });
 
   return userIds.length;
@@ -602,6 +613,49 @@ const sendPendingTaskReminders = async () => {
   }
 };
 
+// "Call <lead> now": one push to the agent about 5 minutes before each pending CRM follow-up.
+const CRM_FOLLOW_UP_REMINDER_LEAD_MS = 5 * 60 * 1000;
+const sendCrmFollowUpReminders = async () => {
+  const FollowUp = require('./models/Followup');
+  const now = new Date();
+  const due = await FollowUp.find({
+    status: 'pending',
+    reminderSentAt: null,
+    // Follow-ups that passed more than a minute ago are not reminded (e.g. after downtime or a deploy).
+    date: { $gt: new Date(now.getTime() - 60 * 1000), $lte: new Date(now.getTime() + CRM_FOLLOW_UP_REMINDER_LEAD_MS) }
+  }).select('_id').limit(MAX_CRON_TASK_BATCH_SIZE).lean();
+
+  for (const { _id } of due) {
+    // Claim first so a second server instance does not send the same reminder.
+    const followUp = await FollowUp.findOneAndUpdate(
+      { _id, reminderSentAt: null },
+      { $set: { reminderSentAt: now } },
+      { new: true }
+    ).lean();
+    if (!followUp?.agent) continue;
+    const leadName = followUp.leadName || 'your lead';
+    try {
+      await notifyDirectUsers({
+        userIds: [followUp.agent],
+        company: followUp.company,
+        type: 'crm_followup_reminder',
+        title: `Call ${leadName} now`,
+        message: `Follow-up at ${formatTaskDueDate(followUp.date)}${followUp.note ? ` - ${followUp.note}` : ''}. Tap to open the lead.`,
+        targetPath: `/ciisUser/telecaller/call-workspace/${followUp.lead}`,
+        targetScreen: 'Telecaller Call Workspace',
+        data: {
+          leadId: String(followUp.lead),
+          followUpId: String(followUp._id),
+          leadPhone: followUp.leadPhone || '',
+        },
+        priority: 'high',
+      });
+    } catch (error) {
+      console.error('CRM follow-up reminder failed:', error.message);
+    }
+  }
+};
+
 const sendConfiguredTaskReminders = async () => {
   try {
     const now = new Date();
@@ -635,6 +689,7 @@ const sendConfiguredTaskReminders = async () => {
       const reminderTitle = isPersonal ? 'Personal Task Reminder' : 'Task Reminder';
 
       for (const reminder of dueReminders) {
+        if (!await claimReminderSlot(Task, { _id: task._id, 'reminderSettings.sentKeys': { $ne: reminder.key } }, 'reminderSettings.sentKeys', reminder.key)) continue;
         await sendReminderForTask({
           task,
           recipients,
@@ -644,9 +699,7 @@ const sendConfiguredTaskReminders = async () => {
           dueDate: task.dueDateTime,
           reminder,
         });
-        task.reminderSettings.sentKeys = [...new Set([...(task.reminderSettings.sentKeys || []), reminder.key])];
       }
-      await task.save();
     }
 
     const clientTasks = await ClientTask.find({
@@ -656,17 +709,18 @@ const sendConfiguredTaskReminders = async () => {
       'reminderSettings.enabled': true,
     })
       .populate('assigneeId', 'name email')
-      .populate('createdBy', 'name email')
-      .select('name dueDate assigneeId createdBy reminderSettings status completed')
+      .select('name dueDate assigneeId reminderSettings status completed clientId __v')
       .sort({ dueDate: 1 })
       .limit(MAX_CRON_TASK_BATCH_SIZE);
 
     for (const task of clientTasks) {
       const dueReminders = getTaskReminderDueOptions(task, now);
       if (!dueReminders.length) continue;
-      const recipients = task.assigneeId ? [task.assigneeId] : (task.createdBy ? [task.createdBy] : []);
+      // ClientTask has no createdBy; an unassigned client task has nobody to remind.
+      const recipients = task.assigneeId ? [task.assigneeId] : [];
       if (!recipients.length) continue;
       for (const reminder of dueReminders) {
+        if (!await claimReminderSlot(ClientTask, { _id: task._id, 'reminderSettings.sentKeys': { $ne: reminder.key } }, 'reminderSettings.sentKeys', reminder.key)) continue;
         await sendReminderForTask({
           task,
           recipients,
@@ -676,9 +730,7 @@ const sendConfiguredTaskReminders = async () => {
           dueDate: task.dueDate,
           reminder,
         });
-        task.reminderSettings.sentKeys = [...new Set([...(task.reminderSettings.sentKeys || []), reminder.key])];
       }
-      await task.save();
     }
 
     const projects = await Project.find({
@@ -687,11 +739,10 @@ const sendConfiguredTaskReminders = async () => {
     })
       .populate('tasks.assignedUsers', 'name email')
       .populate('tasks.assignedTo', 'name email')
-      .select('projectName tasks')
+      .select('projectName tasks __v')
       .limit(MAX_CRON_TASK_BATCH_SIZE);
 
     for (const project of projects) {
-      let changed = false;
       for (const task of project.tasks || []) {
         if (!task?.reminderSettings?.enabled || ['completed', 'cancelled', 'overdue', 'on hold'].includes(String(task.status || '').toLowerCase())) continue;
         const dueReminders = getTaskReminderDueOptions(task, now);
@@ -701,6 +752,11 @@ const sendConfiguredTaskReminders = async () => {
           : (task.assignedTo ? [task.assignedTo] : []);
         if (!recipients.length) continue;
         for (const reminder of dueReminders) {
+          const claimed = await claimReminderSlot(Project, {
+            _id: project._id,
+            tasks: { $elemMatch: { _id: task._id, 'reminderSettings.sentKeys': { $ne: reminder.key } } },
+          }, 'tasks.$.reminderSettings.sentKeys', reminder.key);
+          if (!claimed) continue;
           await sendReminderForTask({
             task,
             recipients,
@@ -710,13 +766,7 @@ const sendConfiguredTaskReminders = async () => {
             dueDate: task.dueDate,
             reminder,
           });
-          task.reminderSettings.sentKeys = [...new Set([...(task.reminderSettings.sentKeys || []), reminder.key])];
-          changed = true;
         }
-      }
-      if (changed) {
-        project.markModified('tasks');
-        await project.save();
       }
     }
   } catch (error) {
@@ -932,7 +982,13 @@ const { markDailyAbsent } = require('./HR-CDS/controllers/AttendanceController')
 
 
 
+const { syncOnHoldTaskOverdue } = require('./HR-CDS/utils/onHoldOverdueService');
+const { autoRejectExpiredLeaves } = require('./HR-CDS/controllers/LeaveController');
+scheduleDbJob('* * * * *', 'On hold attendance overdue check', syncOnHoldTaskOverdue);
+
 scheduleDbJob('*/30 * * * *', 'Scheduled overdue tasks check', checkAndMarkOverdueTasks);
+
+scheduleDbJob('0 * * * *', 'Auto reject expired leaves', autoRejectExpiredLeaves);
 
 
 scheduleDbJob('0 9 * * *', 'Daily overdue summary', dailyOverdueSummary);
@@ -942,10 +998,12 @@ scheduleDbJob('30 10 * * *', 'Daily absent marking', markDailyAbsent);
 
 scheduleDbJob('* * * * *', 'Pending task reminders', sendConfiguredTaskReminders);
 
+scheduleDbJob('* * * * *', 'CRM follow-up reminders', sendCrmFollowUpReminders);
+
 scheduleDbJob('0 18 * * *', 'Holiday reminders', sendTomorrowHolidayReminders);
 
 
-setTimeout(async () => {
+if (scheduledJobsEnabled()) setTimeout(async () => {
   try {
     await dbConnectionPromise;
     void 0;
@@ -953,10 +1011,10 @@ setTimeout(async () => {
       retries: 4,
       delayMs: 5000,
     });
+    await runDbJobOnce('Initial on hold attendance overdue check', syncOnHoldTaskOverdue);
     await runDbJobOnce('Initial past absent records check', markPastAbsentRecords);
     await runDbJobOnce('Initial auto clock-out sweep', runAutoClockOutSweep);
-
-
+    await runDbJobOnce('Initial auto reject expired leaves', autoRejectExpiredLeaves);
     try {
       const backfillBranchSupport = require("./scripts/backfillBranchSupport");
       await runDbJobOnce('Multi-branch database backfill migration', backfillBranchSupport);
@@ -980,7 +1038,7 @@ const corsOptions = {
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Permanent-Delete", "x-company-code", "companyCode", "X-Company-Code"]
+  allowedHeaders: ["Content-Type", "Authorization", "Cache-Control", "X-Permanent-Delete", "x-company-code", "companyCode", "X-Company-Code"]
 };
 
 app.use(cors(corsOptions));
@@ -1001,6 +1059,7 @@ app.use(cookieParser());
 const requestBodyLimit = process.env.REQUEST_BODY_LIMIT || "15mb";
 app.use(express.json({ limit: requestBodyLimit }));
 app.use(express.urlencoded({ extended: true, limit: requestBodyLimit }));
+app.use(require("./utils/profileImageFile").profileImageBodyToFile);
 const uploadStaticDirs = [
   path.join(__dirname, "..", "uploads"),
   path.join(__dirname, "uploads"),
@@ -1089,6 +1148,33 @@ app.use((req, res, next) => {
 });
 
 
+// protect() caches the auth user for a few seconds; drop that cache after any successful write that can
+// change a user's role, status, password, branch, department or company.
+// CRM list KPI/option summaries are cached for 30s; any CRM write makes them stale.
+const { invalidateCrmListSummaries } = require('./services/crmListQuery');
+const CRM_WRITE = /^\/(api\/)?(crm|calls|followups)(\/|$)/;
+app.use((req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD' && CRM_WRITE.test(req.path)) {
+    res.on('finish', () => {
+      if (res.statusCode < 400) invalidateCrmListSummaries();
+    });
+  }
+  next();
+});
+
+const AUTH_AFFECTING_WRITE = /^\/(api\/)?(users|auth|company|superAdmin|job-roles?|branches|departments?)(\/|$)/;
+app.use((req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD' && AUTH_AFFECTING_WRITE.test(req.path)) {
+    res.on('finish', () => {
+      if (res.statusCode < 400) {
+        invalidateAuthUser();
+        require('./HR-CDS/middlewares/auth').invalidateChatAuthUser();
+      }
+    });
+  }
+  next();
+});
+
 const dashboardRoutes = require('./HR-CDS/routes/dashboardRoutes.js');
 
 
@@ -1111,13 +1197,14 @@ app.use("/api/leaves", require("./HR-CDS/routes/LeaveRoutes.js"));
 app.use("/api/asset-requests", require("./HR-CDS/routes/assetRequestRoutes.js"));
 app.use("/api/task", require("./HR-CDS/routes/taskRoute.js"));
 app.use("/task", require("./HR-CDS/routes/taskRoute.js"));
+app.use("/api/users/profile", require("./HR-CDS/routes/profileRoute.js"));
 app.use("/api/users", require("./HR-CDS/routes/userRoutes.js"));
 app.use("/api/departments", require("./routes/Department.routes.js"));
 app.use("/api/department", require("./routes/Department.routes.js"));
 app.use("/departments", require("./routes/Department.routes.js"));
 app.use("/department", require("./routes/Department.routes.js"));
-app.use("/api/users/profile", require("./HR-CDS/routes/profileRoute.js"));
 app.use("/api/alerts", require("./HR-CDS/routes/alertRoutes.js"));
+app.use("/api/badges", require("./routes/badgeRoutes.js"));
 app.use("/api/notifications", require("./HR-CDS/routes/notificationRoutes.js"));
 app.use("/api/feedback", require("./HR-CDS/routes/feedbackRoutes.js"));
 app.use("/api/groups", require("./HR-CDS/routes/groupRoutes.js"));
@@ -1149,6 +1236,8 @@ app.use("/api/client-tasks", require("./HR-CDS/routes/clientTask.js"));
 
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/ai', require('./routes/aiRoutes.js'));
+app.use('/api/dashboard-overview', require("./routes/dashboardOverviewRoutes.js"));
+app.use('/api/company/dashboard-overview', require("./routes/dashboardOverviewRoutes.js"));
 
 app.use('/api/menu-access', require("./routes/menuAccess.js"));
 app.use('/api/menu-items', require("./routes/menuItems.js"));
@@ -1160,6 +1249,8 @@ app.use('/api/job-roles', require("./routes/jobRoleRoutes.js"));
 app.use('/api/job-role', require("./routes/jobRoleRoutes.js"));
 app.use('/job-roles', require("./routes/jobRoleRoutes.js"));
 app.use('/job-role', require("./routes/jobRoleRoutes.js"));
+// Read-only per-company data for the platform owner (All Company -> View Data).
+app.use('/api/superAdmin/company/:id/view', require('./routes/superAdminCompanyView.js'));
 app.use('/api/superAdmin', require("./routes/superAdmin.js"));
 app.use("/api/meetings", require("./HR-CDS/routes/meetingRoutes.js"));
 app.use('/api/cmeeting', require("./HR-CDS/routes/clientMeetingRoutes.js"));
@@ -1167,6 +1258,7 @@ app.use('/api/sidebar', require("./routes/sidebarConfigs.js"));
 app.use('/api/company-assets', require('./routes/companyAssetRoutes'));
 app.use("/api/holidays", require("./HR-CDS/routes/Holiday.js"));
 app.use("/api/client-documents", require("./HR-CDS/routes/clientDocumentRoutes.js"));
+app.use("/api/bulk-email", require("./HR-CDS/routes/bulkEmailRoutes.js"));
 app.use('/api/branches', require('./routes/branchRoutes.js'));
 app.use('/api/support', require('./routes/supportRoutes.js'));
 app.use('/api/email-settings', require('./routes/emailSettingsRoutes.js'));
@@ -1316,16 +1408,19 @@ const startServer = async () => {
   // port opened first, so initial page-permission requests could time out and
   // make CRM navigation disappear until a full refresh.
   await dbConnectionPromise;
+  // Uniqueness is a prerequisite for safe concurrent group/event delivery.
+  for (const model of [require('./HR-CDS/chat/models/Conversation'), require('./HR-CDS/chat/models/Message'), require('./HR-CDS/models/Notification')]) await model.createIndexes();
+  require('./HR-CDS/utils/projectChatWorker').start();
 
   server.listen(PORT, async () => {
 
-    // Temporarily enabled for work-anniversary email template testing.
-    try {
-      const anniversarySummary = await runWorkAnniversaryEmails();
-      console.log("Startup work anniversary test completed:", anniversarySummary);
-    } catch (err) {
-      console.error("Startup work anniversary test failed:", err);
-    }
+  // Temporarily enabled for work-anniversary email template testing.
+  if (scheduledJobsEnabled()) try {
+    const anniversarySummary = await runWorkAnniversaryEmails();
+    console.log("Startup work anniversary test completed:", anniversarySummary);
+  } catch (err) {
+    console.error("Startup work anniversary test failed:", err);
+  }
 
     try {
       const migrateTenantIndexes = require("./utils/tenantIndexMigration");
@@ -1334,13 +1429,13 @@ const startServer = async () => {
       console.error("Failed to migrate tenant indexes:", err);
     }
 
-
-    try {
-      const { initMeetingScheduler } = require("./services/meetingSchedulerService");
-      initMeetingScheduler();
-    } catch (err) {
-      console.error("Failed to initialize meeting scheduler:", err);
-    }
+  // Re-schedules reminders for every upcoming meeting; only the instance that runs scheduled jobs does this.
+  if (scheduledJobsEnabled()) try {
+    const { initMeetingScheduler } = require("./services/meetingSchedulerService");
+    initMeetingScheduler();
+  } catch (err) {
+    console.error("Failed to initialize meeting scheduler:", err);
+  }
 
     void 0;
   });
@@ -1358,3 +1453,5 @@ server.on("error", (err) => {
     console.error("Server error:", err);
   }
 });
+// Dashboard overview system active
+

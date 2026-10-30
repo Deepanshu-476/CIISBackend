@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { trackHoldClock } = require('../utils/onHoldDeadline');
 
 const normalizeClientTaskPriority = value => {
   const priority = String(value || '').trim().toLowerCase();
@@ -69,6 +70,7 @@ const clienttaskSchema = new mongoose.Schema({
     trim: true,
     maxlength: [200, 'Task name cannot exceed 200 characters']
   },
+  mentions: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
   description: {
     type: String,
     trim: true,
@@ -101,7 +103,7 @@ const clienttaskSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'in-progress', 'completed', 'overdue', 'onhold'],
+    enum: ['pending', 'in-progress', 'completed', 'overdue', 'onhold', 'reopen'],
     default: 'pending'
   },
   completed: {
@@ -120,10 +122,16 @@ const clienttaskSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  // When a user last changed the status; the task list shows the task on this day.
+  statusChangedAt: {
+    type: Date,
+    default: null
+  },
   holdStartedAt: {
     type: Date,
     default: null
   },
+  holdOverdueCheckAt: { type: Date, default: null },
   totalHoldSeconds: {
     type: Number,
     default: 0
@@ -147,6 +155,7 @@ const clienttaskSchema = new mongoose.Schema({
     default: () => ({ enabled: false, options: [], sentKeys: [] })
   },
   remarks: [{
+    mentions: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
     text: String,
     images: [{
       url: String,
@@ -159,6 +168,8 @@ const clienttaskSchema = new mongoose.Schema({
     }],
     user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     userName: String,
+    // Set when the remark was given with a status change; chat shows both in one message.
+    statusChange: String,
     createdAt: { type: Date, default: Date.now }
   }],
   activityLogs: [{
@@ -204,11 +215,8 @@ clienttaskSchema.index({ clientId: 1, completed: 1 });
 clienttaskSchema.index({ clientId: 1, status: 1, dueDate: 1 });
 clienttaskSchema.index({ clientId: 1, status: 1, updatedAt: -1 });
 clienttaskSchema.index({ dueDate: 1 });
-clienttaskSchema.index({ assignee: 1 });
-clienttaskSchema.index({ assigneeId: 1 });
 clienttaskSchema.index({ assigneeId: 1, createdAt: -1 });
 clienttaskSchema.index({ assignee: 1, createdAt: -1 });
-clienttaskSchema.index({ status: 1 });
 clienttaskSchema.index({ status: 1, dueDate: 1 });
 clienttaskSchema.index({ priority: 1 });
 clienttaskSchema.index({ createdAt: -1 });
@@ -238,7 +246,15 @@ clienttaskSchema.pre('save', function(next) {
       }
     }
   }
+  trackHoldClock(this, this.status, this.isModified('status'));
+  // Automatic overdue marking is not a user change; the task keeps its listed date.
+  if (!this.isNew && (this.isModified('status') || this.isModified('completed')) && this.status !== 'overdue') {
+    this.statusChangedAt = new Date();
+  }
   next();
 });
 
+clienttaskSchema.index({ status: 1, holdOverdueCheckAt: 1 });
+
+clienttaskSchema.plugin(require('../utils/clientChatPlugin'), { task: true });
 module.exports = mongoose.model('ClientTask', clienttaskSchema);

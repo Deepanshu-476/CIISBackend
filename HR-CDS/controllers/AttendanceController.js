@@ -10,7 +10,7 @@ const JobRole = require("../../models/JobRole");
 const mongoose = require("mongoose");
 const {notifyPageUsers, getCompanyId} = require("../utils/systemNotificationService");
 const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagination");
-const { runAutoClockOutSweep } = require("../cron/forceClockOut");
+const { runAutoClockOutSweepIfStale } = require("../cron/forceClockOut");
 const { cleanRecurringTasksForAbsentUser } = require("../cron/recurringTasks");
 const { isOvertimeApprovedForUserDate } = require("./overtimeController");
 
@@ -104,7 +104,7 @@ const isWorkFromHomeEmployee = (user = {}) => {
 
 const refreshAutoClockOuts = async () => {
   try {
-    await runAutoClockOutSweep();
+    await runAutoClockOutSweepIfStale();
   } catch (error) {
     console.error("[AutoClockOut] refresh failed:", error.message);
   }
@@ -437,12 +437,16 @@ const calculateAttendanceByShift = ({ inTime, outTime, shiftSettings, currentSta
 
   const totalMs = outTime - inTime;
   let finalStatus = status;
-
+  // Half day needs at least half of the assigned shift hours worked.
+  // Anything shorter (for example a 2 minute punch) is not a half day.
   // Preserve a late clock-in classification during clock-out recalculation.
   // Early clock-out rules apply only to employees who clocked in on time;
   // otherwise a valid LATE record (for example, 10:00 for a 09:00 shift)
   // was incorrectly overwritten as HALF DAY.
-  if (finalStatus === "PRESENT") {
+  const halfShiftMs = Math.max(schedule.shiftEnd - schedule.shiftStart, 0) / 2;
+  if (totalMs < halfShiftMs) {
+    finalStatus = "ABSENT";
+  } else if (finalStatus === "PRESENT") {
     if (outTime < schedule.halfDayEarlyLimit) {
       finalStatus = "HALF DAY";
     } else if (outTime < schedule.shortLeaveEarlyLimit) {
@@ -1584,6 +1588,9 @@ const getAttendanceList = async (req, res) => {
         } else if (isWeekendDay && hasPunch && ['HALF DAY', 'SHORT LEAVE', 'LATE'].includes(String(resolvedStatus).toUpperCase())) {
           // Do not penalize weekend extra work as Half Day / Late (ATT-03)
           resolvedStatus = 'PRESENT';
+        } else if (isWeekendDay && hasPunch && String(resolvedStatus).toUpperCase() === 'ABSENT') {
+          // A too-short punch on a weekly off stays a weekly off, not absent
+          resolvedStatus = 'WEEKEND';
         }
 
         return {
@@ -2361,6 +2368,8 @@ const getAttendanceByUser = async (req, res) => {
           finalStatus = 'WEEKEND';
         } else if (isWknd && hasPunch && ['HALF DAY', 'SHORT LEAVE', 'LATE'].includes(String(finalStatus).toUpperCase())) {
           finalStatus = 'PRESENT';
+        } else if (isWknd && hasPunch && String(finalStatus).toUpperCase() === 'ABSENT') {
+          finalStatus = 'WEEKEND';
         }
         return {
           ...record,

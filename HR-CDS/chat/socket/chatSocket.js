@@ -60,21 +60,14 @@ const getCompanyOnlineUsers = (io, companyId) => {
     return Array.from(userIds);
 };
 
-const getUnreadCount = (conversationId, userId, companyId) => Message.countDocuments({
-    conversationId,
-    companyId,
-    sender: {$ne: userId},
-    seenBy: {$ne: userId},
-    deletedFor: {$ne: userId},
-    deletedForEveryone: false,
-});
+const {getUnreadCount} = require("../utils/unreadCount");
 
 const emitUnreadCounts = async (io, conversation, senderId) => {
     if (!conversation) return;
 
     await Promise.all((conversation.members || []).map(async member => {
         const memberId = member.toString();
-        const count = await getUnreadCount(conversation._id, memberId, conversation.companyId);
+        const count = await getUnreadCount(conversation._id, memberId, conversation.companyId, conversation.readState || []);
         io.to(`user:${memberId}`).emit("chat:unread-update", {
             senderId,
             conversationId: conversation._id,
@@ -84,6 +77,8 @@ const emitUnreadCounts = async (io, conversation, senderId) => {
 };
 
 const chatSocket = (io, socket) => {
+    socket.data.userId = String(socket.userId);
+    socket.use(require("./projectChatPacketGuard")(socket));
 
     void 0;
 

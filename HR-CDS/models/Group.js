@@ -4,12 +4,10 @@ const groupSchema = new mongoose.Schema({
   company: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Company',
-    index: true
   },
   companyCode: {
     type: String,
     trim: true,
-    index: true
   },
   name: {
     type: String,
@@ -17,6 +15,18 @@ const groupSchema = new mongoose.Schema({
     trim: true
   },
   description: {
+    type: String,
+    default: ''
+  },
+  avatar: {
+    type: String,
+    default: ''
+  },
+  profileImage: {
+    type: String,
+    default: ''
+  },
+  image: {
     type: String,
     default: ''
   },

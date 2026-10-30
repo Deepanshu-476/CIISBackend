@@ -24,12 +24,14 @@ const {
   sharp,
   TASK_USER_POPULATE_FIELDS,
   TASK_GROUP_POPULATE_FIELDS,
-  TASK_CREATOR_POPULATE_FIELDS
+  TASK_CREATOR_POPULATE_FIELDS,
+  getUserStatusChangedAt
 } = require('./taskHelper');
 const { enqueueCompletionJob } = require('../utils/backgroundJobQueue');
 const {
   normalizeTaskRecurrenceFields,
   getNextRecurringDate,
+  validateRecurrenceSettings,
 } = require('../utils/taskRecurrence');
 const {
   resolveShiftScheduleForUser,
@@ -101,7 +103,13 @@ const fetchPersonalTaskList = async (req) => {
   }
 
   const enriched = await enrichStatusInfo(filteredTasks);
-  return enriched.map(t => ({ ...t, status: normalizeTaskStatus(t.overallStatus), taskSource: 'self', __taskSource: 'self' }));
+  return enriched.map(t => ({
+    ...t,
+    statusChangedAt: getUserStatusChangedAt(t, req.user._id),
+    status: normalizeTaskStatus(t.overallStatus),
+    taskSource: 'self',
+    __taskSource: 'self'
+  }));
 };
 
 const normalizeCodeBase = (code) => {
@@ -189,6 +197,8 @@ exports.createTaskForSelf = async (req, res) => {
         taskDueDateTime = parsedDue;
       }
     }
+    const recurrenceError = validateRecurrenceSettings(recurringSettings, taskDueDateTime);
+    if (recurrenceError) return res.status(400).json({ success: false, error: recurrenceError, message: recurrenceError });
 
     const cleanPriority = String(priority || 'medium').trim().toLowerCase();
     const validPriorities = ['low', 'medium', 'high'];
@@ -310,6 +320,8 @@ exports.updateTask = async (req, res) => {
       .some(field => Object.prototype.hasOwnProperty.call(req.body, field));
     if (hasRecurringUpdate) {
       applyRecurringFields(task, req.body, task.dueDateTime);
+      const recurrenceError = !task.recurrenceSourceId && validateRecurrenceSettings(task, task.dueDateTime);
+      if (recurrenceError) return res.status(400).json({ success: false, error: recurrenceError, message: recurrenceError });
     } else if (
       task.isRecurring &&
       Object.prototype.hasOwnProperty.call(req.body, 'dueDateTime') &&

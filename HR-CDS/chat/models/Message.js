@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 
 const messageSchema = new mongoose.Schema(
 {
+    eventKey: String,
     companyId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "Company",
@@ -41,11 +42,39 @@ const messageSchema = new mongoose.Schema(
             ref: "User",
             default: null
         },
+        client: { type: mongoose.Schema.Types.ObjectId, ref: 'Client' },
+        project: { type: mongoose.Schema.Types.ObjectId, ref: "Project" },
+        task: mongoose.Schema.Types.ObjectId,
+        mentionedUser: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
         mode: {
             type: String,
             default: ""
         }
     },
+
+    // Filled for systemEvent.type === "call" so the thread can show call time and duration.
+    call: {
+        callId: { type: String, default: "" },
+        callType: { type: String, default: "" },
+        status: { type: String, default: "" },
+        durationSeconds: { type: Number, default: 0 },
+        caller: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
+            default: null
+        }
+    },
+
+
+
+    
+    mentions: [{
+        _id: false,
+        user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+        label: { type: String, required: true },
+        start: { type: Number, required: true },
+        end: { type: Number, required: true }
+    }],
 
     replyTo: {
         type: mongoose.Schema.Types.ObjectId,
@@ -84,6 +113,8 @@ const messageSchema = new mongoose.Schema(
 
     fileName: { type: String, default: "" },
     fileSize: { type: Number, default: 0 },
+    // Voice note length in seconds, sent by the recorder so players can show it before download.
+    duration: { type: Number, default: 0, min: 0 },
 
     deletedFor: [{
         type: mongoose.Schema.Types.ObjectId,
@@ -120,9 +151,11 @@ const messageSchema = new mongoose.Schema(
 );
 
 messageSchema.index({ companyId: 1, conversationId: 1, createdAt: -1 });
+messageSchema.index({ companyId: 1, conversationId: 1, createdAt: -1, _id: -1 });
 messageSchema.index({ companyId: 1, conversationId: 1, sender: 1, createdAt: -1 });
 messageSchema.index({ companyId: 1, conversationId: 1, deletedForEveryone: 1, createdAt: -1 });
 messageSchema.index({ companyId: 1, sender: 1, createdAt: -1 });
+messageSchema.index({ eventKey: 1 }, { unique: true, partialFilterExpression: { eventKey: { $type: "string" } } });
 
 module.exports = mongoose.model(
     "Message",

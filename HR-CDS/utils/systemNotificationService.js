@@ -148,6 +148,8 @@ exports.sendSystemNotification = async ({
   data = {},
   priority = 'medium',
   push = true,
+  // Callers with their own delivery keys (task reminders) opt out, or a 1-minute repeat drops every other send.
+  dedupe = true,
 }) => {
   const recipientIds = [...new Set(recipients.map(getId).filter(Boolean))];
   logNotificationDebug('sendSystemNotification:start', {
@@ -171,7 +173,7 @@ exports.sendSystemNotification = async ({
 
   // Deduplicate identical notifications created within the last 60 seconds (N-01)
   const dedupeSince = new Date(Date.now() - 60 * 1000);
-  const recentExisting = await Notification.find({
+  const recentExisting = !dedupe ? [] : await Notification.find({
     recipient: { $in: recipientIds },
     type,
     title,

@@ -22,7 +22,7 @@ const populateMessage = query => query
   .populate("sender", "name email profileImage avatar image photo")
   .populate({
     path: "replyTo",
-    select: "sender text file fileType deletedForEveryone",
+    select: "sender text file fileType fileName deletedForEveryone messageType systemEvent",
     populate: {path: "sender", select: "name email profileImage avatar image photo"},
   })
   .populate("reactions.user", "name profileImage avatar image photo")
@@ -65,39 +65,57 @@ const getConversationMuteState = (conversation, userId) => {
   return {muted: true, mutedUntil: setting.mutedUntil || null};
 };
 
-const getUnreadCount = (conversationId, userId, companyId) => Message.countDocuments({
-  conversationId,
-  companyId,
-  sender: {$ne: userId},
-  seenBy: {$ne: userId},
-  deletedFor: {$ne: userId},
-  deletedForEveryone: false,
-  ...activeMessageFilter(),
-});
+const {getUnreadCount, setReadMark} = require("../utils/unreadCount");
 
-const getLastVisibleMessage = (conversationId, userId, companyId) => Message.findOne({
-  conversationId,
-  companyId,
-  deletedFor: {$ne: userId},
-  ...activeMessageFilter(),
-})
-  .populate("sender", "name email profileImage avatar image photo")
-  .sort({createdAt: -1});
-
-const withConversationMeta = async (conversation, userId, companyId) => {
-  const plain = conversation.toObject ? conversation.toObject() : conversation;
-  const [lastMessage, unreadCount] = await Promise.all([
-    getLastVisibleMessage(plain._id, userId, companyId),
-    getUnreadCount(plain._id, userId, companyId),
+// Fetch previews with an indexed, limited lookup per conversation instead of
+// sorting the full message history. Count unread messages in one batch.
+const withConversationsMeta = async (conversations, userId, companyId) => {
+  if (!conversations.length) return [];
+  const mongoose = require('mongoose');
+  const cast = value => mongoose.isValidObjectId(value) ? new mongoose.Types.ObjectId(String(value?._id || value)) : value;
+  const user = cast(userId);
+  const company = cast(companyId);
+  const plains = conversations.map(item => item.toObject ? item.toObject() : item);
+  const conversationIds = plains.map(item => cast(item._id));
+  const boundaries = plains.map(item => {
+    const mark = (item.readState || []).find(entry => String(entry.user) === String(userId))?.lastReadAt;
+    return { conversationId: cast(item._id), ...(mark ? { createdAt: { $gt: new Date(mark) } } : {}) };
+  });
+  const [lastRows, unreadRows] = await Promise.all([
+    Conversation.aggregate([
+      { $match: { _id: { $in: conversationIds }, companyId: company } },
+      { $lookup: {
+        from: Message.collection.name,
+        let: { conversation: '$_id' },
+        pipeline: [
+          { $match: { companyId: company, deletedFor: { $ne: user }, ...activeMessageFilter(),
+            $expr: { $eq: ['$conversationId', '$$conversation'] } } },
+          { $sort: { createdAt: -1, _id: -1 } },
+          { $limit: 1 },
+        ],
+        as: 'message',
+      } },
+      { $unwind: '$message' },
+      { $project: { message: 1 } },
+    ]),
+    Message.aggregate([
+      { $match: { companyId: company, conversationId: { $in: conversationIds },
+        sender: { $ne: user }, seenBy: { $ne: user }, deletedFor: { $ne: user }, deletedForEveryone: false,
+        ...activeMessageFilter(), $and: [{ $or: boundaries }],
+      } },
+      { $group: { _id: '$conversationId', count: { $sum: 1 } } },
+    ]),
   ]);
-
-  return {
-    ...plain,
-    notificationSettings: undefined,
+  const messages = await Message.populate(lastRows.map(row => row.message), {
+    path: 'sender', select: 'name email profileImage avatar image photo',
+  });
+  const lastById = new Map(messages.map(message => [String(message.conversationId), message]));
+  const unreadById = new Map(unreadRows.map(row => [String(row._id), row.count]));
+  return plains.map(plain => ({ ...plain, readState: undefined, notificationSettings: undefined,
     notificationPreference: getConversationMuteState(plain, userId),
-    lastMessage,
-    unreadCount,
-  };
+    lastMessage: lastById.get(String(plain._id)) || null,
+    unreadCount: unreadById.get(String(plain._id)) || 0,
+  }));
 };
 
 const emitUnreadCounts = async (conversation, senderId) => {
@@ -105,7 +123,7 @@ const emitUnreadCounts = async (conversation, senderId) => {
 
   await Promise.all((conversation.members || []).map(async member => {
     const memberId = member.toString();
-    const count = await getUnreadCount(conversation._id, memberId, conversation.companyId);
+    const count = await getUnreadCount(conversation._id, memberId, conversation.companyId, conversation.readState || []);
     global.io.to(`user:${memberId}`).emit("chat:unread-update", {
       senderId,
       conversationId: conversation._id,
@@ -157,6 +175,17 @@ const emitMessageDelivered = (message, conversation, deliveredTo) => {
     conversationId: conversation._id,
     deliveredTo,
   });
+};
+
+const emitMessageToConversationMembers = (conversation, eventName, payload) => {
+  if (!global.io || !conversation?._id) return;
+
+  let target = global.io.to(`conversation:${conversation._id}`);
+  (conversation.members || []).forEach(member => {
+    const memberId = member.toString();
+    if (memberId) target = target.to(`user:${memberId}`);
+  });
+  target.emit(eventName, payload);
 };
 
 const isRecentlyOnlineInDb = (user) => {
@@ -213,7 +242,18 @@ exports.createConversation = async (req, res) => {
 
 exports.createGroupConversation = async (req, res) => {
   try {
-    const {groupId} = req.body;
+    const {groupId, projectId, clientId} = req.body;
+    if (clientId) {
+      const conversation = await require("../../utils/clientChatService").syncClient(clientId);
+      if (!conversation || String(conversation.companyId) !== String(req.user.company?._id || req.user.company) || !conversation.members.some(member => String(member) === getUserId(req))) return res.status(403).json({ success: false, message: "Client group access denied" });
+      return res.json({ success: true, conversation });
+    }
+    if (projectId) {
+      const existing = await Conversation.findOne({ projectId, companyId: req.user.company });
+      const conversation = existing && await require('../../utils/projectChatService').refreshConversation(existing._id, req.user.company);
+      if (!conversation || !conversation.members.some(member => String(member) === getUserId(req))) return res.status(403).json({ success: false, message: 'Project group access denied' });
+      return res.status(200).json({ success: true, conversation });
+    }
     const group = await Group.findOne({_id: groupId, isActive: true});
 
     if (!group) {
@@ -245,12 +285,14 @@ exports.createGroupConversation = async (req, res) => {
         members,
         isGroup: true,
         groupId,
-        groupName: group.name,
+      groupName: group.name,
+      groupImage: group.profileImage || group.avatar || group.image || "",
         admins: [group.createdBy],
       });
     } else {
       conversation.members = members;
       conversation.groupName = group.name;
+      conversation.groupImage = group.profileImage || group.avatar || group.image || conversation.groupImage || "";
       if (!conversation.admins || !conversation.admins.length) {
         conversation.admins = [group.createdBy];
       }
@@ -287,25 +329,37 @@ exports.getConversations = async (req, res) => {
     const query = {
       companyId: req.user.company,
       members: userId,
+      ...(req.chatEntityAccess ? require('../../utils/chatListAccess').filter(req.chatEntityAccess) : {}),
     };
-    if (before) query.updatedAt = {$lt: before};
+    query.$and = [{ $or: [
+      { isGroup: false }, { projectId: { $exists: true } },
+      { clientId: { $exists: true } }, { groupId: { $in: activeUserGroups.map(group => group._id) } },
+    ] }];
+    if (before) {
+      query.$and.push({ $or: [
+        { updatedAt: { $lt: before } },
+        ...(/^[a-f\d]{24}$/i.test(req.query.beforeId || '')
+          ? [{ updatedAt: before, _id: { $lt: req.query.beforeId } }] : []),
+      ] });
+    }
 
     const conversations = await Conversation.find(query)
       .populate("members", "name email profileImage avatar image photo companyRole isActive")
       .populate("admins", "name email profileImage avatar image photo")
-      .sort({updatedAt: -1})
+      .sort({updatedAt: -1, _id: -1})
       .limit(limit + 1);
 
     
     
     
-    const activeConversations = conversations.filter(conversation => {
+    const activeConversations = conversations.slice(0, limit).filter(conversation => {
       if (conversation.isGroup) {
+        if (conversation.projectId || conversation.clientId) return true;
         if (!conversation.groupId) return false;
         return activeGroupIds.has(conversation.groupId.toString());
       } else {
         const otherMember = conversation.members.find(
-          m => m._id.toString() !== userId.toString()
+          m => m && m._id.toString() !== userId.toString()
         );
         if (otherMember && otherMember.isActive === false) {
           return false;
@@ -315,12 +369,17 @@ exports.getConversations = async (req, res) => {
     });
 
     const pageConversations = activeConversations.slice(0, limit);
-    const conversationsWithMeta = await Promise.all(
-      pageConversations.map(conversation => withConversationMeta(conversation, userId, req.user.company))
-    );
+    const conversationsWithMeta = await withConversationsMeta(pageConversations, userId, req.user.company);
+    conversationsWithMeta.sort((first, second) => {
+      const firstTime = new Date(first.lastMessage?.createdAt || first.updatedAt || 0).getTime();
+      const secondTime = new Date(second.lastMessage?.createdAt || second.updatedAt || 0).getTime();
+      if (secondTime !== firstTime) return secondTime - firstTime;
+      return first._id.toString().localeCompare(second._id.toString());
+    });
 
-    const nextCursor = conversationsWithMeta.length
-      ? conversationsWithMeta[conversationsWithMeta.length - 1].updatedAt
+    const lastInPage = conversations[Math.min(limit, conversations.length) - 1];
+    const nextCursor = lastInPage
+      ? lastInPage.updatedAt
       : null;
 
     res.status(200).json({
@@ -328,8 +387,9 @@ exports.getConversations = async (req, res) => {
       conversations: conversationsWithMeta,
       pagination: {
         limit,
-        hasMore: activeConversations.length > limit,
+        hasMore: conversations.length > limit,
         nextCursor,
+        nextId: lastInPage?._id,
       },
     });
   } catch (error) {
@@ -367,15 +427,49 @@ exports.getConversation = async (req, res) => {
 
 exports.getCompanyGroups = async (req, res) => {
   try {
+    const userId = getUserId(req);
+    const companyId = req.user.company?._id || req.user.company;
+
     const groups = await Group.find({
-      members: getUserId(req),
+      members: userId,
       isActive: true,
     })
-      .select("name description members createdBy")
+      .select("name description members createdBy avatar profileImage image")
       .populate("createdBy", "name email profileImage avatar image photo")
       .populate("members", "name email profileImage avatar image photo companyRole");
 
-    res.status(200).json({success: true, groups});
+    const access = req.chatEntityAccess || await require('../../utils/chatListAccess')(companyId, userId);
+
+    // Ensure all assigned client conversations are synced and up-to-date
+    const clientChatService = require('../../utils/clientChatService');
+    if (access.clients && access.clients.length > 0) {
+      // Syncing loads the company's users per client; only redo stale ones.
+      const fresh = new Set((await Conversation.find({ companyId, clientId: { $in: access.clients }, clientSyncedAt: { $gte: new Date(Date.now() - clientChatService.RESYNC_AFTER_MS) } })
+        .distinct("clientId")).map(String));
+      const stale = access.clients.filter(clientId => !fresh.has(String(clientId)));
+      await Promise.allSettled(stale.map(clientId => clientChatService.syncClient(clientId)));
+    }
+
+    const projectConversations = await Conversation.find({
+      companyId: companyId,
+      members: userId,
+      $and: [
+        { $or: [{ projectId: { $exists: true } }, { clientId: { $exists: true } }] },
+        require('../../utils/chatListAccess').filter(access),
+      ],
+    }).populate("members", "name email profileImage avatar image photo");
+    const projectMetadata = await withConversationsMeta(projectConversations, userId, companyId);
+    const projectGroups = projectMetadata.map(conversation => ({
+      _id: conversation.clientId || conversation.projectId,
+      clientId: conversation.clientId,
+      projectId: conversation.projectId,
+      groupKind: conversation.clientId ? "client" : "project",
+      name: conversation.groupName,
+      members: conversation.members,
+      createdBy: conversation.admins[0],
+      conversation,
+    }));
+    res.status(200).json({success: true, groups: [...groups, ...projectGroups]});
   } catch (error) {
     res.status(500).json({success: false, message: error.message});
   }
@@ -384,6 +478,7 @@ exports.getCompanyGroups = async (req, res) => {
 exports.sendMessage = async (req, res) => {
   try {
     const {conversationId, text, replyToMessageId} = req.body;
+    await require("../../utils/projectChatService").refreshConversation(conversationId, req.user.company);
     const senderId = getUserId(req);
     const conversation = await Conversation.findOne({
       _id: conversationId,
@@ -399,6 +494,9 @@ exports.sendMessage = async (req, res) => {
       return res.status(403).json({success: false, message: "You are not a member of this conversation"});
     }
 
+    const mentions = await require('../utils/messageMentions').validateMessageMentions(
+      req.body.mentions, text, conversation, User
+    );
     const file = getPublicChatFileUrl(req);
     const detectedMime = req.file?.mimetype || "";
     const fileType = (detectedMime && detectedMime !== "application/octet-stream")
@@ -406,6 +504,9 @@ exports.sendMessage = async (req, res) => {
       : (req.body?.fileType || detectedMime);
     const fileName = req.body?.fileName || (req.file ? (req.file.originalname || req.file.filename) : "");
     const fileSize = req.file ? req.file.size : 0;
+    // Voice notes carry their recorded length; cap it so a bad client value can't show nonsense.
+    const rawDuration = Number(req.body.duration);
+    const voiceDuration = req.file && Number.isFinite(rawDuration) && rawDuration > 0 ? Math.min(Math.round(rawDuration), 6 * 60 * 60) : 0;
     let replyTo = null;
 
     if (replyToMessageId) {
@@ -431,10 +532,12 @@ exports.sendMessage = async (req, res) => {
       conversationId,
       sender: senderId,
       text,
+      mentions,
       file,
       fileType,
       fileName,
       fileSize,
+      duration: voiceDuration,
       replyTo: replyTo?._id || null,
       expiresAt,
       seenBy: [senderId],
@@ -443,9 +546,18 @@ exports.sendMessage = async (req, res) => {
 
     const populatedMessage = await populateMessage(Message.findById(message._id));
 
+    conversation.updatedAt = message.createdAt || new Date();
+    await conversation.save();
+
     if (global.io) {
-      const room = `conversation:${conversationId}`;
-      global.io.to(room).emit("chat:receive-message", populatedMessage);
+      emitMessageToConversationMembers(conversation, "chat:receive-message", populatedMessage);
+      emitMessageToConversationMembers(conversation, "chat:conversation-updated", {
+        conversationId: conversation._id,
+        lastMessage: populatedMessage,
+        updatedAt: conversation.updatedAt,
+        isGroup: conversation.isGroup,
+        groupId: conversation.groupId,
+      });
       emitMessageDelivered(message, conversation, deliveredTo);
     }
 
@@ -469,6 +581,7 @@ exports.sendMessage = async (req, res) => {
       data: {
         conversationId,
         messageId: message._id,
+        mentionedUserIds: [...new Set(mentions.map(mention => mention.user))],
         isGroup: conversation.isGroup,
         groupId: conversation.groupId,
       },
@@ -488,7 +601,7 @@ exports.sendMessage = async (req, res) => {
 
     res.status(201).json({success: true, message: populatedMessage});
   } catch (error) {
-    res.status(500).json({success: false, message: error.message});
+    res.status(error.status || 500).json({success: false, message: error.message});
   }
 };
 
@@ -526,7 +639,7 @@ exports.getMessages = async (req, res) => {
       .populate("sender", "name email profileImage avatar image photo")
       .populate({
         path: "replyTo",
-        select: "sender text file fileType deletedForEveryone",
+        select: "sender text file fileType fileName deletedForEveryone messageType systemEvent",
         populate: {path: "sender", select: "name email profileImage avatar image photo"},
       })
       .populate("reactions.user", "name profileImage avatar image photo")
@@ -565,6 +678,8 @@ exports.getMessages = async (req, res) => {
       })
       .filter(Boolean);
 
+    // Time taken before marking so a message arriving meanwhile stays unread.
+    const readAt = new Date();
     await Message.updateMany(
       {
         conversationId: req.params.id,
@@ -575,6 +690,8 @@ exports.getMessages = async (req, res) => {
       },
       {$addToSet: {seenBy: userId, deliveredTo: userId}}
     );
+    await setReadMark(conversation._id, userId, readAt);
+    conversation.readState = (await Conversation.findById(conversation._id).select("readState").lean())?.readState || [];
 
     await emitUnreadCounts(conversation, userId);
 
@@ -936,6 +1053,7 @@ exports.forwardMessage = async (req, res) => {
         fileType: original.fileType,
         fileName: original.fileName || "",
         fileSize: original.fileSize || 0,
+        duration: original.duration || 0,
         seenBy: [userId],
         deliveredTo,
         isForwarded: true,

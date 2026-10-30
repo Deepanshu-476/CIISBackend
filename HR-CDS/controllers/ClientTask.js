@@ -161,15 +161,37 @@ const getLatestSubscription = client => {
   })[0];
 };
 
-const syncExpiredSubscriptionClientTasks = async (clientIds = []) => {
-  const normalizedClientIds = [...new Set(
+// The no-argument form scans every company's clients and is called from list endpoints on each request.
+// Run that global pass at most once a minute per process; client-specific calls still run immediately.
+const GLOBAL_SUBSCRIPTION_SYNC_INTERVAL_MS = 60000;
+let lastGlobalSubscriptionSyncAt = 0;
+// List pages ask for summaries of up to 100 clients on every load; expired
+// clients stay expired, so recheck each one at most once a minute there.
+const clientSubscriptionSyncedAt = new Map();
+
+const syncExpiredSubscriptionClientTasks = async (clientIds = [], { throttle = false } = {}) => {
+  let normalizedClientIds = [...new Set(
     (Array.isArray(clientIds) ? clientIds : [clientIds])
       .map(id => String(id || '').trim())
       .filter(id => mongoose.Types.ObjectId.isValid(id))
   )];
+  if (throttle && normalizedClientIds.length) {
+    const cutoff = Date.now() - GLOBAL_SUBSCRIPTION_SYNC_INTERVAL_MS;
+    normalizedClientIds = normalizedClientIds.filter(id => !(clientSubscriptionSyncedAt.get(id) > cutoff));
+    if (!normalizedClientIds.length) return { matchedCount: 0, modifiedCount: 0, skipped: true };
+    if (clientSubscriptionSyncedAt.size > 10000) clientSubscriptionSyncedAt.clear();
+    normalizedClientIds.forEach(id => clientSubscriptionSyncedAt.set(id, Date.now()));
+  }
+  if (!normalizedClientIds.length) {
+    if (Date.now() - lastGlobalSubscriptionSyncAt < GLOBAL_SUBSCRIPTION_SYNC_INTERVAL_MS) {
+      return { matchedCount: 0, modifiedCount: 0, skipped: true };
+    }
+    lastGlobalSubscriptionSyncAt = Date.now();
+  }
   const now = new Date();
   const clientFilter = normalizedClientIds.length ? { _id: { $in: normalizedClientIds } } : {};
-  const clients = await Client.find(clientFilter).select('_id subscription').lean();
+  // Only the latest subscription's number and end date are needed, not the history.
+  const clients = await Client.find(clientFilter).select('_id subscription._id subscription.subscriptionNo subscription.endDate').lean();
   const bulkOps = [];
 
   clients.forEach(client => {
@@ -664,6 +686,37 @@ const deleteImageFiles = (images) => {
 };
 
 
+// Compresses uploaded remark images into uploads/client-remarks and returns remark image entries.
+const saveClientRemarkImages = async (files, currentUser) => {
+  const images = [];
+  if (!Array.isArray(files) || files.length === 0) return images;
+  const uploadDir = path.join(__dirname, '../uploads/client-remarks');
+  if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+
+  for (const file of files) {
+    try {
+      const randomStr = Math.random().toString(36).substring(2, 8);
+      const filename = `remark_${Date.now()}_${randomStr}_${currentUser?._id || 'user'}.jpg`;
+      await sharp(file.buffer)
+        .resize(1200, 1200, { fit: "inside", withoutEnlargement: true })
+        .jpeg({ quality: 80, progressive: true })
+        .toFile(path.join(uploadDir, filename));
+      images.push({
+        url: `/uploads/client-remarks/${filename}`,
+        filename,
+        originalName: file.originalname,
+        size: file.size,
+        mimeType: file.mimetype,
+        uploadedBy: currentUser?.id || currentUser?._id,
+        uploadedAt: new Date()
+      });
+    } catch (imgError) {
+      console.error(`❌ Error processing image ${file.originalname}:`, imgError);
+    }
+  }
+  return images;
+};
+
 const addClientRemarkWithImages = async (req, res) => {
   try {
     void 0;
@@ -696,65 +749,10 @@ const addClientRemarkWithImages = async (req, res) => {
     void 0;
 
 
-    const images = [];
-
-    if (req.files && req.files.length > 0) {
-      const uploadDir = path.join(__dirname, '../uploads/client-remarks');
-
-
-      if (!fs.existsSync(uploadDir)) {
-        fs.mkdirSync(uploadDir, { recursive: true });
-        void 0;
-      }
-
-      for (const file of req.files) {
-        try {
-
-          const timestamp = Date.now();
-          const randomStr = Math.random().toString(36).substring(2, 8);
-          const filename = `remark_${timestamp}_${randomStr}_${currentUser?._id || 'user'}.jpg`;
-
-
-          const savePath = path.join(uploadDir, filename);
-
-          void 0;
-
-
-          await sharp(file.buffer)
-            .resize(1200, 1200, {
-              fit: "inside",
-              withoutEnlargement: true
-            })
-            .jpeg({
-              quality: 80,
-              progressive: true
-            })
-            .toFile(savePath);
-
-
-          const imageUrl = `/uploads/client-remarks/${filename}`;
-
-          void 0;
-
-          images.push({
-            url: imageUrl,
-            filename: filename,
-            originalName: file.originalname,
-            size: file.size,
-            mimeType: file.mimetype,
-            uploadedBy: currentUser?.id || currentUser?._id,
-            uploadedAt: new Date()
-          });
-
-        } catch (imgError) {
-          console.error(`❌ Error processing image ${file.originalname}:`, imgError);
-        }
-      }
-    }
-
-    void 0;
+    const images = await saveClientRemarkImages(req.files, currentUser);
 
     const remark = {
+      mentions: parseChatMentionIds(req.body.mentions),
       text: text || '',
       images: images,
       user: currentUser?.id || currentUser?._id,
@@ -766,6 +764,13 @@ const addClientRemarkWithImages = async (req, res) => {
       task.remarks = [];
     }
 
+    const retryRemarkId = clientChatMutationId(req, `remark:${task._id}`);
+    if (retryRemarkId) {
+      const existing = task.remarks.id(retryRemarkId);
+      if (existing) return res.status(200).json({ success: true, remark: existing });
+      remark._id = retryRemarkId;
+    }
+    remark.mentions = parseChatMentionIds(req.body.mentions);
     task.remarks.push(remark);
 
     await task.save();
@@ -907,6 +912,7 @@ const addClientRemark = async (req, res) => {
     void 0;
 
     const remark = {
+      mentions: parseChatMentionIds(req.body.mentions),
       text: text.trim(),
       images: [],
       user: currentUser?.id || currentUser?._id,
@@ -918,6 +924,13 @@ const addClientRemark = async (req, res) => {
       task.remarks = [];
     }
 
+    const retryRemarkId = clientChatMutationId(req, `remark:${task._id}`);
+    if (retryRemarkId) {
+      const existing = task.remarks.id(retryRemarkId);
+      if (existing) return res.status(200).json({ success: true, remark: existing });
+      remark._id = retryRemarkId;
+    }
+    remark.mentions = parseChatMentionIds(req.body.mentions);
     task.remarks.push(remark);
 
     await task.save();
@@ -1299,10 +1312,14 @@ const getClientTaskActivityLogs = async (req, res) => {
 };
 
 
+const { getTaskReportDate } = require('./taskHelper');
+
 const updateAssignedTaskStatus = async (req, res) => {
   try {
     const { taskId } = req.params;
     const { status, completed, remarks } = req.body;
+    // Typed by the user in the status remark dialog (optionally with images).
+    const statusRemark = String(req.body.statusRemark || '').trim();
     const currentUser = req.user;
 
     void 0;
@@ -1340,7 +1357,7 @@ const updateAssignedTaskStatus = async (req, res) => {
 
 
     let targetStatus = status;
-    if (completed === true) {
+    if (completed === true || completed === 'true') {
       targetStatus = 'completed';
     } else if (!status && previousStatus === 'overdue' && !completed) {
       targetStatus = 'in-progress';
@@ -1348,7 +1365,8 @@ const updateAssignedTaskStatus = async (req, res) => {
 
     if (
       targetStatus !== 'overdue' &&
-      (previousStatus === 'overdue' || isClientTaskOverdue(task)) &&
+      targetStatus !== 'reopen' &&
+      (previousStatus === 'overdue' || (previousStatus !== 'completed' && isClientTaskOverdue(task))) &&
       !isCompanyAllTaskEdit(req)
     ) {
       if (previousStatus !== 'overdue' && isClientTaskOverdue(task)) {
@@ -1386,6 +1404,11 @@ const updateAssignedTaskStatus = async (req, res) => {
       task.completed = true;
       task.completedAt = now;
       task.status = 'completed';
+      void 0;
+    } else if (targetStatus === 'reopen') {
+      task.completed = false;
+      task.completedAt = null;
+      task.status = 'reopen';
       void 0;
     } else if (targetStatus === 'in-progress') {
       task.completed = false;
@@ -1444,20 +1467,30 @@ const updateAssignedTaskStatus = async (req, res) => {
     }
 
 
-    if (remarks && remarks.trim()) {
+    const statusImages = await saveClientRemarkImages(req.files, currentUser);
+    const remarkText = statusRemark || (typeof remarks === 'string' ? remarks.trim() : '');
+    if (remarkText || statusImages.length) {
       task.remarks = task.remarks || [];
       const remark = {
-        text: remarks.trim(),
-        images: [],
+        text: remarkText || 'Image attachment',
+        images: statusImages,
+        ...((statusRemark || statusImages.length) && previousStatus !== task.status ? { statusChange: task.status } : {}),
         user: currentUser?.id || currentUser?._id,
         userName: currentUser?.name || currentUser?.username || 'System',
         createdAt: new Date()
       };
+      const retryRemarkId = clientChatMutationId(req, `remark:${task._id}`);
+      if (retryRemarkId) {
+        const existing = task.remarks.id(retryRemarkId);
+        if (existing) return res.status(200).json({ success: true, remark: existing });
+        remark._id = retryRemarkId;
+      }
+      remark.mentions = parseChatMentionIds(req.body.mentions);
       task.remarks.push(remark);
 
       await addClientActivityLogHelper(task, {
         action: 'remark_added',
-        description: `Added remark: ${remarks.substring(0, 100)}${remarks.length > 100 ? '...' : ''}`,
+        description: `Added remark: ${remarkText.substring(0, 100)}${remarkText.length > 100 ? '...' : ''}`,
         user: currentUser?.id || currentUser?._id,
         userName: currentUser?.name || currentUser?.username || 'System'
       }, req);
@@ -1485,7 +1518,7 @@ const updateAssignedTaskStatus = async (req, res) => {
         await notifyClientTaskCompleted({ task, actor: currentUser, req });
       }
 
-      if (previousStatus !== task.status || previousCompleted !== task.completed || (remarks && remarks.trim())) {
+      if (previousStatus !== task.status || previousCompleted !== task.completed || remarkText) {
         const statusMessage = previousStatus !== task.status
           ? `${currentUser?.name || 'User'} changed task "${task.name}" status to ${task.status}`
           : `${currentUser?.name || 'User'} updated task "${task.name}"`;
@@ -1633,8 +1666,9 @@ const getAssignedToMeTasks = async (req, res) => {
         overdueCount++;
       }
 
-      const groupDate = task.dueDate || task.createdAt;
-      const dateKey = new Date(groupDate).toLocaleDateString('en-IN', {
+      // Same listing date as /tasks/all: status-change day, otherwise the due date.
+      const reportDate = getTaskReportDate({ ...task, status: taskStatus }) || task.createdAt;
+      const dateKey = new Date(reportDate).toLocaleDateString('en-IN', {
         timeZone: 'Asia/Kolkata',
         weekday: 'short',
         year: 'numeric',
@@ -1665,6 +1699,9 @@ const getAssignedToMeTasks = async (req, res) => {
         remarks: task.remarks || [],
         activityLogs: task.activityLogs || [],
         createdAt: task.createdAt,
+        completedAt: task.completedAt || null,
+        statusChangedAt: task.statusChangedAt || null,
+        reportDate,
         service: task.service,
         assignee: task.assignee,
         isOverdue: taskStatus === 'overdue'
@@ -1915,10 +1952,17 @@ const getTasksByClientService = async (req, res) => {
       };
     }
 
-    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 300 });
+    const isFetchAll = req.query.limit === 'all' || req.query.all === 'true' || Number(req.query.limit) >= 1000;
+    const { page, limit, skip } = isFetchAll
+      ? { page: 1, limit: 2000, skip: 0 }
+      : getPaginationOptions(req.query, { limit: 50, maxLimit: 2000 });
     const sortObj = filter.completed
       ? { completedAt: -1, updatedAt: -1, dueDate: -1, createdAt: -1 }
-      : (statusQuery === 'overdue' ? { dueDate: 1, createdAt: -1 } : { completed: 1, dueDate: 1, createdAt: -1 });
+      : (statusQuery === 'overdue'
+          ? { dueDate: 1, createdAt: -1 }
+          : (isFetchAll || limit >= 500
+              ? { updatedAt: -1, createdAt: -1 }
+              : { completed: 1, dueDate: 1, createdAt: -1 }));
 
     const [tasks, total] = await Promise.all([
       Task.find(filter)
@@ -1999,18 +2043,26 @@ const getClientTasks = async (req, res) => {
       };
     }
 
-    const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 300 });
+    const isFetchAll = req.query.limit === 'all' || req.query.all === 'true' || Number(req.query.limit) >= 1000;
+    const { page, limit, skip } = isFetchAll
+      ? { page: 1, limit: 2000, skip: 0 }
+      : getPaginationOptions(req.query, { limit: 50, maxLimit: 2000 });
     const sortObj = filter.completed
       ? { completedAt: -1, updatedAt: -1, dueDate: -1, createdAt: -1 }
-      : (statusQuery === 'overdue' ? { dueDate: 1, createdAt: -1 } : { completed: 1, dueDate: 1, createdAt: -1 });
+      : (statusQuery === 'overdue'
+          ? { dueDate: 1, createdAt: -1 }
+          : (isFetchAll || limit >= 500
+              ? { updatedAt: -1, createdAt: -1 }
+              : { completed: 1, dueDate: 1, createdAt: -1 }));
 
+    const taskQuery = Task.find(filter);
+    if (req.query.compact === 'true') {
+      taskQuery.select('-remarks -activityLogs');
+    } else {
+      taskQuery.populate('remarks.user', 'name email');
+    }
     const [tasks, total] = await Promise.all([
-      Task.find(filter)
-        .populate('remarks.user', 'name email')
-        .sort(sortObj)
-        .skip(skip)
-        .limit(limit)
-        .lean(),
+      taskQuery.sort(sortObj).skip(skip).limit(limit).lean(),
       Task.countDocuments(filter)
     ]);
 
@@ -2079,28 +2131,39 @@ const getClientTaskSummaries = async (req, res) => {
       return res.status(400).json({ success: false, message: 'A maximum of 100 client IDs is allowed' });
     }
 
-    await syncExpiredSubscriptionClientTasks(clientIds);
+    await syncExpiredSubscriptionClientTasks(clientIds, { throttle: true });
 
-    const tasks = await Task.find({ clientId: { $in: clientIds } })
-      .select('clientId name title taskName completed status dueDate')
-      .lean();
     const summaries = Object.fromEntries(clientIds.map(id => [
       id,
       { total: 0, completed: 0, pending: 0, overdue: 0, overdueTaskNames: [] }
     ]));
 
-    tasks.forEach(task => {
-      const summary = summaries[String(task.clientId)];
-      if (!summary) return;
-      summary.total += 1;
-      if (task.completed) summary.completed += 1;
-      if (isClientTaskOverdue(task)) {
-        summary.overdue += 1;
-        const name = task.name || task.title || task.taskName;
-        if (name) summary.overdueTaskNames.push(name);
-      } else if (isClientTaskOpen(task) && task.status !== 'in-progress') {
-        summary.pending += 1;
-      }
+    // Counted in the database: sending every task here only to count it moved
+    // ~1 MB per page load. Same rules as isClientTaskOverdue / isClientTaskOpen.
+    const falsy = value => ({ $in: [value, [null, '', false, 0]] });
+    const rows = await Task.aggregate([
+      { $match: { clientId: { $in: clientIds.map(id => new mongoose.Types.ObjectId(id)) } } },
+      { $project: {
+        clientId: 1,
+        rawStatus: '$status',
+        done: { $not: [falsy('$completed')] },
+        status: { $toLower: { $trim: { input: { $toString: { $cond: [falsy('$status'), 'pending', '$status'] } } } } },
+        due: { $convert: { input: '$dueDate', to: 'date', onError: null, onNull: null } },
+        name: { $cond: [falsy('$name'), { $cond: [falsy('$title'), '$taskName', '$title'] }, '$name'] },
+      } },
+      { $addFields: { open: { $and: [{ $not: ['$done'] }, { $not: [{ $in: ['$status', CLIENT_TASK_OVERDUE_EXCLUDED_STATUSES] }] }] } } },
+      { $addFields: { late: { $and: ['$open', { $ne: ['$due', null] }, { $lt: ['$due', new Date()] }] } } },
+      { $group: {
+        _id: '$clientId',
+        total: { $sum: 1 },
+        completed: { $sum: { $cond: ['$done', 1, 0] } },
+        overdue: { $sum: { $cond: ['$late', 1, 0] } },
+        pending: { $sum: { $cond: [{ $and: [{ $not: ['$late'] }, '$open', { $ne: ['$rawStatus', 'in-progress'] }] }, 1, 0] } },
+        overdueTaskNames: { $push: { $cond: [{ $and: ['$late', { $not: [falsy('$name')] }] }, '$name', '$$REMOVE'] } },
+      } },
+    ]);
+    rows.forEach(({ _id, ...summary }) => {
+      if (summaries[String(_id)]) summaries[String(_id)] = summary;
     });
 
     return res.json({ success: true, data: summaries });
@@ -2195,7 +2258,13 @@ const addTask = async (req, res) => {
       : null;
     const normalizedPriority = normalizeClientTaskPriority(priority);
 
+    const retryTaskId = clientChatMutationId(req, `task:${clientId}`);
+    if (retryTaskId) {
+      const existing = await Task.findOne({ _id: retryTaskId, clientId });
+      if (existing) return res.status(200).json({ success: true, task: existing, message: 'Task already created' });
+    }
     const task = new Task({
+      ...(retryTaskId ? { _id: retryTaskId } : {}),
       clientId,
       subscriptionId: selectedSubscription?._id || null,
       subscriptionNo: selectedSubscription?.subscriptionNo || null,
@@ -2203,6 +2272,7 @@ const addTask = async (req, res) => {
       planName: selectedSubscription?.planName || '',
       service: String(matchedService).trim(),
       name: name.trim(),
+      mentions: parseChatMentionIds(req.body.mentions),
       description: description || name.trim(),
       dueDate: effectiveDueDate,
       dueDateSource: parsedDueDate ? 'manual' : 'subscription',
@@ -2213,73 +2283,66 @@ const addTask = async (req, res) => {
       completed: false,
       checkpoints: parseTaskCheckpoints(checkpoints),
       reminderSettings: normalizeTaskReminderSettings(req.body),
-      activityLogs: [],
+      activityLogs: [{
+        action: 'created',
+        description: `Task "${name.trim()}" created`,
+        user: currentUser?.id || currentUser?._id,
+        userName: currentUser?.name || currentUser?.username || 'System',
+        createdAt: new Date()
+      }],
       remarks: []
     });
 
     await task.save();
 
-    await addClientActivityLogHelper(task, {
-      action: 'created',
-      description: `Task "${task.name}" created`,
-      user: currentUser?.id || currentUser?._id,
-      userName: currentUser?.name || currentUser?.username || 'System'
-    }, req);
+    enqueueBackgroundJob(async () => {
+      const backgroundTasks = [
+        notifyPageUsers({
+          companyId: getNotificationCompanyId(client, req.user),
+          targetPath: '/ciisUser/company-all-task',
+          type: 'task_assigned',
+          title: 'New Client Task Created',
+          message: `${currentUser?.name || 'User'} created task "${task.name}" for client ${client.client || client.name}`,
+          data: { taskId: task._id },
+          priority: 'medium'
+        }),
+        notifyAssignedClientTaskUser({
+          task,
+          actor: currentUser,
+          title: 'New Client Task Assigned',
+          message: `You have been assigned client task "${task.name}" for ${getClientDisplayName(client)}`,
+          priority: 'high',
+        }),
+        notifyClientPortalUsers({
+          client,
+          task,
+          actor: currentUser,
+          title: 'New Task Created',
+          message: `New task created: ${task.name}`,
+          priority: 'high',
+        })
+      ];
 
-    await task.save();
-
-
-    try {
-      await notifyPageUsers({
-        companyId: getNotificationCompanyId(client, req.user),
-        targetPath: '/ciisUser/company-all-task',
-        type: 'task_assigned',
-        title: 'New Client Task Created',
-        message: `${currentUser?.name || 'User'} created task "${task.name}" for client ${client.client || client.name}`,
-        data: { taskId: task._id },
-        priority: 'medium'
-      });
-    } catch (notifyErr) {
-      console.error('Error notifying page users for client task create:', notifyErr);
-    }
-
-    try {
-      await notifyAssignedClientTaskUser({
-        task,
-        actor: currentUser,
-        title: 'New Client Task Assigned',
-        message: `You have been assigned client task "${task.name}" for ${getClientDisplayName(client)}`,
-        priority: 'high',
-      });
-      await notifyClientPortalUsers({
-        client,
-        task,
-        actor: currentUser,
-        title: 'New Task Created',
-        message: `New task created: ${task.name}`,
-        priority: 'high',
-      });
-    } catch (notifyErr) {
-      console.error('Error notifying client/assignee for client task create:', notifyErr);
-    }
-
-
-    try {
       if (client && client.email) {
         const subject = `New Task Created: ${task.name}`;
         const html = `<p>Hello ${client.client || client.name || 'Client'},</p><p>A new task "${task.name}" has been created for your project/service.</p><p>Details: ${task.description || ''}</p>`;
-        await sendEmail(client.email, subject, html, {
+        backgroundTasks.push(sendEmail(client.email, subject, html, {
           skipNotification: true,
           notificationType: 'task_client',
           notificationTargetPath: '/ciisUser/ClientDashboard',
           notificationMessage: `New task created: ${task.name}`,
           notificationData: { taskId: task._id, source: 'client_task' },
           notificationPriority: 'high',
-        });
+        }));
       }
-    } catch (emailErr) {
-      console.error('Error sending client email for new task:', emailErr);
-    }
+
+      const results = await Promise.allSettled(backgroundTasks);
+      results.forEach(result => {
+        if (result.status === 'rejected') {
+          console.error('Client task create background notification failed:', result.reason);
+        }
+      });
+    });
 
     res.status(201).json({
       success: true,
@@ -2301,6 +2364,7 @@ const updateTask = async (req, res) => {
   try {
     const { taskId } = req.params;
     const updates = { ...(req.body || {}) };
+    if (req.body.mentions !== undefined) updates.mentions = parseChatMentionIds(req.body.mentions);
     const currentUser = req.user;
 
     const task = await Task.findById(taskId);
@@ -2389,6 +2453,7 @@ const updateTask = async (req, res) => {
     }
 
 
+    if (updates.mentions !== undefined) task.mentions = updates.mentions;
     for (const key of Object.keys(updates)) {
       if (!allowedKeys.has(key)) continue;
 
@@ -2866,7 +2931,7 @@ const getTaskStats = async (req, res) => {
     ];
     const notOverdueExpression = { $not: [{ $and: overdueExpression }] };
 
-    const stats = await Task.aggregate([
+    const stats = req.query.summaryOnly === 'true' ? [] : await Task.aggregate([
       { $match: { clientId: new mongoose.Types.ObjectId(clientId) } },
       {
         $group: {
@@ -3102,3 +3167,24 @@ module.exports = {
 };
 
 void 0;
+
+// Preserve authenticated actor across all existing controller aliases and callbacks.
+for (const [key, handler] of Object.entries(module.exports)) {
+  if (typeof handler === 'function') module.exports[key] = (...args) => {
+    const req = args[0];
+    if (!req?.user) return handler(...args);
+    return require('../utils/projectChatEvents').context.run({ actor: req.user.id || req.user._id }, () => handler(...args));
+  };
+}
+
+function parseChatMentionIds(raw) {
+  let value = raw || [];
+  if (typeof value === 'string') { try { value = JSON.parse(value); } catch { value = []; } }
+  return require('../utils/projectChatEvents').ids(Array.isArray(value) ? value : []);
+}
+
+function clientChatMutationId(req, scope) {
+  const key = req.headers['idempotency-key'];
+  if (!key) return null;
+  return new mongoose.Types.ObjectId(require('node:crypto').createHash('sha256').update(`${req.user.id || req.user._id}:${scope}:${String(key).slice(0, 200)}`).digest('hex').slice(0, 24));
+}

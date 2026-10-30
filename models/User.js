@@ -40,13 +40,11 @@ const userSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: "Company",
     required: [true, "Company is required"],
-    index: true
   },
   
   companyCode: {
     type: String, 
     required: [true, "Company code is required"],
-    index: true
   },
 
   
@@ -198,6 +196,13 @@ const userSchema = new mongoose.Schema({
   
   fatherName: String,
   motherName: String,
+  spouseName: String,
+  children: [{
+    _id: false,
+    name: { type: String, trim: true, maxlength: 120 },
+    age: { type: String, trim: true, maxlength: 10 },
+    dob: String
+  }],
   
   
   emergencyName: String,
@@ -241,6 +246,17 @@ const userSchema = new mongoose.Schema({
   isActive: {
     type: Boolean,
     default: true
+  },
+  // Set when the user deletes their own account from the app (App Store guideline 5.1.1(v)).
+  accountDeletionRequestedAt: {
+    type: Date,
+    default: null
+  },
+  accountDeletionReason: {
+    type: String,
+    trim: true,
+    maxlength: 500,
+    default: ""
   },
   registrationSource: {
     type: String,
@@ -403,11 +419,11 @@ const userSchema = new mongoose.Schema({
   
 assets: [{
   type: mongoose.Schema.Types.ObjectId,
-  ref: 'Asset'
+  ref: 'CompanyAsset'
 }],
 currentlyAssignedAssets: [{
   type: mongoose.Schema.Types.ObjectId,
-  ref: 'Asset'
+  ref: 'CompanyAsset'
 }],
   
   reportingManager: {
@@ -432,9 +448,6 @@ currentlyAssignedAssets: [{
 userSchema.index({ company: 1, email: 1 }, { unique: true });
 
 
-userSchema.index({ company: 1, jobRole: 1 });
-userSchema.index({ company: 1, department: 1 });
-userSchema.index({ company: 1, isActive: 1 });
 userSchema.index({ company: 1, createdAt: -1 });
 userSchema.index({ company: 1, isActive: 1, createdAt: -1 });
 userSchema.index({ company: 1, department: 1, isActive: 1, createdAt: -1 });
@@ -627,5 +640,9 @@ userSchema.path('phone').validate(function (phone) {
   if (!phone) return true;
   return /^[0-9]{10}$/.test(phone);
 }, 'Phone number must be 10 digits');
+
+// Skip $or branches on fields User does not have (companyId, branchId, departmentId) so they stop
+// forcing full scans of the users collection.
+userSchema.plugin(require("../utils/dropUnknownOrBranches"));
 
 module.exports = mongoose.model("User", userSchema);

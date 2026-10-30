@@ -5,6 +5,7 @@ const ChatbotLog = require("../models/ChatbotLog");
 const KnowledgeBaseArticle = require("../models/KnowledgeBaseArticle");
 const User = require("../models/User");
 const Department = require("../models/Department");
+const Company = require("../models/Company");
 const { notifyDirectUsers, notifyPageUsers } = require("../HR-CDS/utils/systemNotificationService");
 const { getPaginationOptions, buildPaginationMeta } = require("../utils/pagination");
 
@@ -15,10 +16,53 @@ const getId = value => {
 };
 
 const getCompanyFilter = req => ({
-  companyCode: req.user.companyCode,
+  companyCode: req.user?.companyCode || req.user?.company?.companyCode || "CIIS",
 });
 
-const getCompanyId = req => getId(req.user.company) || getId(req.user.companyDetails);
+const getCompanyId = req => getId(req.user?.company) || getId(req.user?.companyDetails);
+
+const resolveCompanyInfo = async req => {
+  let companyId = getCompanyId(req);
+  let companyCode =
+    req.user?.companyCode ||
+    req.user?.company?.companyCode ||
+    req.user?.companyDetails?.companyCode ||
+    req.body?.companyCode ||
+    req.headers["x-company-code"] ||
+    "";
+
+  if (!companyCode && companyId) {
+    try {
+      const comp = await Company.findById(companyId).select("companyCode");
+      if (comp?.companyCode) companyCode = comp.companyCode;
+    } catch {
+      // ignore
+    }
+  } else if (!companyId && companyCode) {
+    try {
+      const comp = await Company.findOne({ companyCode }).select("_id");
+      if (comp?._id) companyId = comp._id;
+    } catch {
+      // ignore
+    }
+  }
+
+  if ((!companyCode || !companyId) && req.user?._id) {
+    try {
+      const ClientModel = mongoose.models.Client || require("../HR-CDS/models/Client");
+      const clientDoc = await ClientModel.findOne({
+        $or: [{ userId: req.user._id }, { email: req.user.email }],
+      }).select("companyCode company");
+      if (clientDoc) {
+        if (!companyCode && clientDoc.companyCode) companyCode = clientDoc.companyCode;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return { companyId, companyCode: companyCode || "CIIS" };
+};
 
 const isSupportAdmin = user => {
   const role = String(user?.role || user?.jobRole || user?.companyRole || "").toLowerCase();
@@ -112,9 +156,12 @@ const getDepartmentEmployees = async (req, department) => {
   const departmentTerms = [...new Set([departmentId, departmentName].filter(Boolean))];
   const users = await User.find({
     ...getUserCompanyQuery(req),
-    department: { $in: departmentTerms },
+    $or: [
+      { department: { $in: departmentTerms } },
+      { departmentName: { $in: departmentTerms } },
+    ],
   })
-    .select("name email jobRole companyRole employeeId department")
+    .select("name email jobRole companyRole employeeId department departmentName")
     .sort({ name: 1 })
     .lean();
 
@@ -126,6 +173,7 @@ const getDepartmentEmployees = async (req, department) => {
     companyRole: user.companyRole,
     employeeId: user.employeeId,
     department: user.department,
+    departmentName: user.departmentName,
   }));
 };
 
@@ -254,9 +302,11 @@ exports.createTicket = async (req, res) => {
       }).populate("supportHead", "name email");
     }
 
+    const { companyId, companyCode } = await resolveCompanyInfo(req);
+
     const ticket = await SupportTicket.create({
-      company: getCompanyId(req),
-      companyCode: req.user.companyCode,
+      company: companyId || undefined,
+      companyCode,
       requester: req.user._id,
       requesterName: req.user.name,
       requesterEmail: req.user.email,
@@ -323,10 +373,13 @@ exports.getMyTickets = async (req, res) => {
   try {
     const { status, category, q } = req.query;
     const { page, limit, skip } = getPaginationOptions(req.query, { limit: 50, maxLimit: 100 });
+    const { companyCode } = await resolveCompanyInfo(req);
     const filter = {
-      ...getCompanyFilter(req),
       requester: req.user._id,
     };
+    if (companyCode && companyCode !== "CIIS") {
+      filter.companyCode = companyCode;
+    }
     if (status && status !== "All") filter.status = status;
     if (category && category !== "All") filter.category = category;
     if (q) filter.$or = [
@@ -891,21 +944,13 @@ exports.assignDepartmentHead = async (req, res) => {
       _id: employeeId,
       companyCode: req.user.companyCode,
       isActive: true,
-    }).select("name email jobRole companyRole department");
+    }).select("name email jobRole companyRole department departmentName");
 
     if (!employee) {
       return res.status(404).json({ success: false, message: "Employee not found" });
     }
 
     const departmentName = getDepartmentName(department);
-    const employeeDepartment = String(employee.department || "");
-    const isSameDepartment =
-      employeeDepartment === String(department._id) ||
-      employeeDepartment.toLowerCase() === departmentName.toLowerCase();
-
-    if (!isSameDepartment) {
-      return res.status(400).json({ success: false, message: "Employee must belong to the selected department" });
-    }
 
     department.supportHead = employee._id;
     department.supportHeadName = employee.name;

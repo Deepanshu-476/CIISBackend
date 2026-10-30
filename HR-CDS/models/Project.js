@@ -1,8 +1,9 @@
+const { trackHoldClock } = require('../utils/onHoldDeadline');
 const mongoose = require("mongoose");
 const { Schema } = mongoose;
 
  
-const TASK_STATUS = ["pending", "in progress", "completed", "cancelled", "on hold", "overdue"];
+const TASK_STATUS = ["pending", "in progress", "completed", "cancelled", "on hold", "overdue", "reopen"];
 const PROJECT_STATUS = ["active", "on hold", "completed", "planning", "cancelled"];
 const PRIORITY_LEVELS = ["low", "medium", "high"];
 const ACTIVITY_TYPES = ["assignment", "remark", "creation", "update", "status_change"];
@@ -40,10 +41,13 @@ const ActivityLogSchema = new Schema(
  
 const RemarkSchema = new Schema(
   {
+    mentions: [{ type: Schema.Types.ObjectId, ref: "User" }],
     text: { type: String, required: true },
     createdAt: { type: Date, default: Date.now },
     createdBy: { type: Schema.Types.ObjectId, ref: "User" },
-    image: { type: String }
+    image: { type: String },
+    // Set when the remark was given with a status change; chat shows both in one message.
+    statusChange: { type: String }
   },
   { _id: true }
 );
@@ -80,13 +84,18 @@ const ReminderSettingsSchema = new Schema(
 const TaskSchema = new Schema(
   {
     title: { type: String, trim: true, default: "Untitled Task" },
+    mentions: [{ type: Schema.Types.ObjectId, ref: "User" }],
     description: { type: String, trim: true },
     assignedTo: { type: Schema.Types.ObjectId, ref: "User" },
     assignedUsers: [{ type: Schema.Types.ObjectId, ref: "User" }],
     dueDate: { type: Date },
     dueDateTime: { type: Date },
     onHoldReleasedAt: { type: Date, default: null },
+    holdStartedAt: { type: Date, default: null },
+    holdOverdueCheckAt: { type: Date, default: null },
     completionDate: { type: Date, default: null },
+    // When a user last changed the status; the task list shows the task on this day.
+    statusChangedAt: { type: Date, default: null },
     priority: { type: String, enum: PRIORITY_LEVELS, default: "medium" },
     status: { type: String, enum: TASK_STATUS, default: "pending" },
     pdfFile: {
@@ -107,13 +116,19 @@ const TaskSchema = new Schema(
 );
 
  
+TaskSchema.pre('save', function(next) {
+  trackHoldClock(this, this.status, this.isModified('status'));
+  next();
+});
+
 const ProjectSchema = new Schema(
   {
     projectName: { type: String, required: true, trim: true },
     description: { type: String, trim: true },
-    company: { type: Schema.Types.ObjectId, ref: "Company", index: true },
-    companyCode: { type: String, trim: true, uppercase: true, index: true },
+    company: { type: Schema.Types.ObjectId, ref: "Company" },
+    companyCode: { type: String, trim: true, uppercase: true },
     branch: { type: Schema.Types.ObjectId, ref: "Branch", index: true },
+    managers: [{ type: Schema.Types.ObjectId, ref: "User" }],
     users: [{ type: Schema.Types.ObjectId, ref: "User" }],
     status: { type: String, enum: PROJECT_STATUS, default: "active" },
     startDate: { type: Date },
@@ -140,6 +155,10 @@ ProjectSchema.index({ status: 1 });
 ProjectSchema.index({ priority: 1 });
 ProjectSchema.index({ createdBy: 1 });
 ProjectSchema.index({ 'tasks.assignedTo': 1 });
+ProjectSchema.index({ 'tasks.assignedUsers': 1 });
+ProjectSchema.index({ users: 1 });
+ProjectSchema.index({ company: 1, status: 1 });
+ProjectSchema.index({ companyCode: 1, status: 1 });
 
  
 ProjectSchema.pre('save', function(next) {
@@ -214,6 +233,10 @@ TaskSchema.methods.addActivityLog = function(activity) {
 };
 
  
+ProjectSchema.index({ 'tasks.status': 1, 'tasks.holdOverdueCheckAt': 1 });
+
+ProjectSchema.plugin(require('../utils/projectChatPlugin'));
+
 const Project = mongoose.model("Project", ProjectSchema);
 
 module.exports = {

@@ -18,6 +18,11 @@ const conversationSchema = new mongoose.Schema(
         default: false
     },
 
+    clientId: { type: mongoose.Schema.Types.ObjectId, ref: 'Client' },
+    clientSyncedAt: Date,
+    projectVersion: { type: Number, default: -1 },
+    projectId: { type: mongoose.Schema.Types.ObjectId, ref: "Project" },
+
     groupId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "Group",
@@ -37,6 +42,16 @@ const conversationSchema = new mongoose.Schema(
     admins: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: "User"
+    }],
+
+    // Per-member read mark used for cheap unread counts (see chat/utils/unreadCount.js).
+    readState: [{
+        _id: false,
+        user: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User"
+        },
+        lastReadAt: Date
     }],
 
     notificationSettings: [{
@@ -77,7 +92,10 @@ const conversationSchema = new mongoose.Schema(
 
 conversationSchema.index({ companyId: 1, members: 1, updatedAt: -1 });
 conversationSchema.index({ companyId: 1, groupId: 1 });
+conversationSchema.index({ companyId: 1, projectId: 1 }, { unique: true, partialFilterExpression: { projectId: { $type: "objectId" } } });
 conversationSchema.index({ companyId: 1, isGroup: 1, updatedAt: -1 });
+
+conversationSchema.index({ companyId: 1, clientId: 1 }, { unique: true, partialFilterExpression: { clientId: { $type: 'objectId' } } });
 
 module.exports = mongoose.model(
     "Conversation",

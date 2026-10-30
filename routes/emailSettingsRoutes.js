@@ -157,7 +157,7 @@ router.post("/test", async (req, res) => {
   } catch (error) {
     const rawMessage = error.message || "";
     const friendlyMessage = rawMessage.includes("535") || rawMessage.includes("BadCredentials")
-      ? "Gmail ne SMTP login reject kiya. Sender Email aur 16-character Gmail App Password check karein. Normal Gmail password use nahi hoga."
+      ? "Gmail rejected the SMTP login. Please check the Sender Email and the 16-character Gmail App Password. Your normal Gmail password will not work."
       : rawMessage;
     const settings = await markEmailTestResult({
       success: false,

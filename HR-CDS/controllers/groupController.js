@@ -82,7 +82,10 @@ const buildDuplicateGroupQuery = async (user, name, excludeGroupId = null) => {
 
 exports.createGroup = async (req, res) => {
   try {
-    const { name, description, members } = req.body;
+    const { name, description } = req.body;
+    const rawMembers = req.body.members || req.body['members[]'];
+    const members = Array.isArray(rawMembers) ? rawMembers : (rawMembers ? [rawMembers] : []);
+    const groupImage = req.file ? `/api/uploads/chat/${encodeURIComponent(req.file.filename)}` : (req.body.avatar || req.body.profileImage || req.body.image || "");
 
     const trimmedName = typeof name === 'string' ? name.trim() : '';
 
@@ -131,13 +134,16 @@ exports.createGroup = async (req, res) => {
     const group = await Group.create({
       name: trimmedName,
       description,
+      avatar: groupImage,
+      profileImage: groupImage,
+      image: groupImage,
       members: uniqueMembers,
       createdBy: req.user._id,
       company: getCompanyId(req.user),
       companyCode: getCompanyCode(req.user),
     });
 
-    await group.populate('members', 'name role email');
+    await group.populate('members', 'name role email profileImage avatar image photo');
 
     notifyDirectUsers({
       userIds: uniqueMembers.filter(memberId => memberId !== req.user._id.toString()),
@@ -183,7 +189,7 @@ exports.getGroups = async (req, res) => {
     });
     const [groups, total] = await Promise.all([
       Group.find(filter)
-        .populate('members', 'name role email')
+        .populate('members', 'name role email profileImage avatar image photo')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -228,7 +234,7 @@ exports.getUserGroups = async (req, res) => {
     });
 
     const groups = await Group.find(filter)
-      .populate('members', 'name role email')
+      .populate('members', 'name role email profileImage avatar image photo')
       .sort({ createdAt: -1 })
       .lean();
 
@@ -255,7 +261,7 @@ exports.getGroupById = async (req, res) => {
         { createdBy: req.user._id },
         { members: req.user._id }
       ]
-    }).populate('members', 'name role email');
+    }).populate('members', 'name role email profileImage avatar image photo');
 
     if (!group) {
       return res.status(404).json({ error: 'Group not found' });
@@ -276,7 +282,10 @@ exports.getGroupById = async (req, res) => {
 exports.updateGroup = async (req, res) => {
   try {
     const { groupId } = req.params;
-    const { name, description, members } = req.body;
+    const { name, description } = req.body;
+    const rawMembers = req.body.members || req.body['members[]'];
+    const members = Array.isArray(rawMembers) ? rawMembers : (rawMembers ? [rawMembers] : undefined);
+    const groupImage = req.file ? `/api/uploads/chat/${encodeURIComponent(req.file.filename)}` : (req.body.avatar || req.body.profileImage || req.body.image);
 
     const group = await Group.findOne({
       _id: groupId,
@@ -334,9 +343,14 @@ exports.updateGroup = async (req, res) => {
     if (trimmedName !== undefined) group.name = trimmedName;
     if (description !== undefined) group.description = description;
     if (members !== undefined) group.members = members;
+    if (groupImage !== undefined) {
+      group.avatar = groupImage || '';
+      group.profileImage = groupImage || '';
+      group.image = groupImage || '';
+    }
 
     await group.save();
-    await group.populate('members', 'name role email');
+    await group.populate('members', 'name role email profileImage avatar image photo');
 
     const currentMembers = (group.members || []).map(member => member._id?.toString() || member.toString());
     const addedMembers = currentMembers.filter(memberId => !previousMembers.includes(memberId) && memberId !== req.user._id.toString());

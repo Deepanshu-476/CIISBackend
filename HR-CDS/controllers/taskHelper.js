@@ -7,6 +7,7 @@ const User = require('../../models/User');
 const Group = require('../models/Group');
 const Notification = require('../models/Notification');
 const ActivityLog = require('../models/ActivityLog');
+const mongoose = require('mongoose');
 const moment = require('moment');
 const { sendEmail } = require('../../utils/sendEmail');
 const fs = require('fs');
@@ -199,11 +200,12 @@ const calculateUnifiedTaskStats = (tasks, userId) => {
     cancelled: 0,
     overdue: 0
   };
+  const priorities = { high: { count: 0, completed: 0 }, medium: { count: 0, completed: 0 }, low: { count: 0, completed: 0 } };
 
   tasks.forEach(task => {
     let status = 'pending';
     if (userId) {
-      const userStatusEntry = task.statusByUser?.find(s => 
+      const userStatusEntry = task.statusByUser?.find(s =>
         (s.user?._id || s.user)?.toString() === userId.toString()
       );
       status = userStatusEntry?.status || task.status || task.overallStatus || 'pending';
@@ -217,6 +219,12 @@ const calculateUnifiedTaskStats = (tasks, userId) => {
       status = 'overdue';
     }
 
+    const priority = String(task.priority || '').toLowerCase();
+    if (priorities[priority]) {
+      priorities[priority].count++;
+      if (status === 'completed' || status === 'approved') priorities[priority].completed++;
+    }
+
     if (counts[status] !== undefined) {
       counts[status]++;
     } else {
@@ -226,9 +234,13 @@ const calculateUnifiedTaskStats = (tasks, userId) => {
 
   const total = tasks.length;
   const pct = count => total > 0 ? Math.round((count / total) * 100) : 0;
+  const priorityStat = ({ count, completed }) => ({ count, completed, percentage: count > 0 ? Math.round((completed / count) * 100) : 0 });
 
   return {
     total,
+    highPriority: priorityStat(priorities.high),
+    mediumPriority: priorityStat(priorities.medium),
+    lowPriority: priorityStat(priorities.low),
     pending: { count: counts.pending, percentage: pct(counts.pending) },
     inProgress: { count: counts['in-progress'], percentage: pct(counts['in-progress']) },
     completed: { count: counts.completed, percentage: pct(counts.completed) },
@@ -241,57 +253,123 @@ const calculateUnifiedTaskStats = (tasks, userId) => {
   };
 };
 
-const getTaskSourceAwareDate = task => {
-  if (!task) return null;
-  const reportDate = getTaskReportDate(task);
-  if (reportDate) return reportDate;
-  const source = String(task.__taskSource || task.taskSource || task.source || '').toLowerCase();
-  if (source === 'client') {
-    return task.dueDate || task.dueDateTime || task.createdAt;
-  }
-  if (source === 'project') {
-    let statusUpdateDate = null;
-    if (task.activityLogs && task.activityLogs.length > 0) {
-      const statusLogs = task.activityLogs.filter(log => log.type === 'status_change' || log.type === 'status_changed');
-      if (statusLogs.length > 0) {
-        const sortedLogs = [...statusLogs].sort((a, b) => new Date(b.performedAt || b.createdAt || 0) - new Date(a.performedAt || a.createdAt || 0));
-        statusUpdateDate = sortedLogs[0].performedAt || sortedLogs[0].createdAt;
-      }
-    }
-    return statusUpdateDate || task.updatedAt || task.createdAt;
-  }
-  if (source === 'self' || source === 'personal') {
-    return task.createdAt;
-  }
-  return task.dueDateTime || task.dueDate || task.createdAt;
-};
-
 const getTaskCompletionDate = task => {
   const directDate = task?.completionDate || task?.completedAt;
   if (directDate) return directDate;
 
   const statusHistory = Array.isArray(task?.statusHistory) ? task.statusHistory : [];
-  const historyDate = statusHistory
-    .filter(entry => normalizeTaskStatus(entry?.status || entry?.newValue || entry?.newValues?.status) === 'completed')
-    .map(entry => entry.changedAt || entry.createdAt || entry.updatedAt)
+  const compHistory = statusHistory
+    .filter(entry => normalizeTaskStatus(entry?.status || entry?.newValue || entry?.newValues?.status) === 'completed'
+      || String(entry?.remarks || '').toLowerCase().includes('completed'))
+    .map(entry => entry.changedAt || entry.updatedAt)
     .filter(Boolean)
     .sort((a, b) => new Date(b) - new Date(a))[0];
-  if (historyDate) return historyDate;
+  if (compHistory) return compHistory;
 
   const activityLogs = Array.isArray(task?.activityLogs) ? task.activityLogs : [];
-  return activityLogs
-    .filter(entry => normalizeTaskStatus(entry?.newValue || entry?.newValues?.status || entry?.status) === 'completed')
-    .map(entry => entry.performedAt || entry.changedAt || entry.createdAt || entry.updatedAt)
+  const compActivity = activityLogs
+    .filter(entry => {
+      const s = normalizeTaskStatus(entry?.newValue || entry?.newValues?.status || entry?.status);
+      if (s === 'completed') return true;
+      const desc = String(entry?.description || entry?.remarks || '').toLowerCase();
+      return desc.includes('changed to completed') || desc.includes('marked as completed');
+    })
+    .map(entry => entry.performedAt || entry.changedAt)
     .filter(Boolean)
-    .sort((a, b) => new Date(b) - new Date(a))[0] || null;
+    .sort((a, b) => new Date(b) - new Date(a))[0];
+  if (compActivity) return compActivity;
+
+  const sbuComp = (Array.isArray(task?.statusByUser) ? task.statusByUser : [])
+    .find(s => s && normalizeTaskStatus(s.status) === 'completed');
+  if (sbuComp?.updatedAt) return sbuComp.updatedAt;
+
+  return null;
 };
 
+const getTaskStatusChangeDate = task => {
+  // Set by the status endpoints (and list fetchers for older tasks) when a user changes the status.
+  if (task?.statusChangedAt) return task.statusChangedAt;
+
+  const statusHistory = Array.isArray(task?.statusHistory) ? task.statusHistory : [];
+  if (statusHistory.length > 0) {
+    const last = statusHistory[statusHistory.length - 1];
+    if (last?.changedAt) return last.changedAt;
+  }
+
+  const activityLogs = Array.isArray(task?.activityLogs) ? task.activityLogs : [];
+  const statusLogs = activityLogs.filter(l => l && (l.type === 'status_change' || l.type === 'status_changed' || l.action === 'status_updated' || l.field === 'status' || l.previousStatus || l.newStatus || String(l.description || l.remarks || '').toLowerCase().includes('status')));
+  const logDate = log => log?.performedAt || log?.changedAt || log?.createdAt;
+  if (statusLogs.length > 0) {
+    const sorted = [...statusLogs].sort((a, b) => new Date(logDate(b) || 0) - new Date(logDate(a) || 0));
+    if (logDate(sorted[0])) return logDate(sorted[0]);
+  }
+
+  if (task?.inProgressSince) return task.inProgressSince;
+
+  const sbu = (Array.isArray(task?.statusByUser) ? task.statusByUser : [])
+    .find(s => s && normalizeTaskStatus(s.status) !== 'pending');
+  if (sbu?.updatedAt) return sbu.updatedAt;
+
+  return null;
+};
+
+// The date a task is listed under: the day its status was last changed by a user,
+// otherwise its due date. A task created today and due on the 4th shows on the 4th
+// until someone changes its status.
 const getTaskReportDate = task => {
   const status = normalizeTaskStatus(task?.userStatus || task?.status || task?.overallStatus);
+
   if (status === 'completed') {
-    return getTaskCompletionDate(task) || task?.updatedAt || task?.dueDateTime || task?.dueDate || task?.createdAt;
+    const compDate = getTaskCompletionDate(task) || task?.statusChangedAt;
+    if (compDate) return compDate;
+    return task?.dueDateTime || task?.dueDate || null;
   }
-  return task?.dueDateTime || task?.dueDate || task?.createdAt;
+
+  // statusChangedAt is only recorded for real changes, so it also covers a task moved back to pending.
+  const statusChangeDate = task?.statusChangedAt || (status !== 'pending' ? getTaskStatusChangeDate(task) : null);
+  if (statusChangeDate) return statusChangeDate;
+
+  if (task?.dueDateTime || task?.dueDate) {
+    return task.dueDateTime || task.dueDate;
+  }
+
+  // Active task without due date is awaiting action today.
+  if (['pending', 'in-progress', 'onhold', 'reopen'].includes(status)) {
+    return new Date();
+  }
+
+  return null;
+};
+
+// When this user last changed the status. Entries saved since statusChangedAt
+// existed carry it; for older ones an updatedAt later than creation counts.
+const getUserStatusChangedAt = (task, userId) => {
+  const entry = (Array.isArray(task?.statusByUser) ? task.statusByUser : [])
+    .find(s => String(s?.user?._id || s?.user || '') === String(userId));
+  if (entry?.statusChangedAt) return new Date(entry.statusChangedAt);
+  // Older entries have no statusChangedAt: fall back to updatedAt.
+  const changedAt = entry?.updatedAt ? new Date(entry.updatedAt) : null;
+  const createdAt = task?.createdAt ? new Date(task.createdAt) : null;
+  if (!changedAt || Number.isNaN(changedAt.getTime())) return null;
+  if (createdAt && changedAt.getTime() - createdAt.getTime() < 60 * 1000) return null;
+  return changedAt;
+};
+
+const STATUS_LOG_TYPES = ['status_change', 'status_changed'];
+const CLIENT_STATUS_LOG_ACTIONS = ['status_updated', 'completed', 'reopened'];
+
+// Change time for client tasks saved before statusChangedAt existed, from fields the
+// task already carries (no extra query; reading activity logs doubled list time).
+const getClientLegacyStatusChangedAt = (task, status) => {
+  if (status === 'completed') return task.completedAt || null;
+  if (status === 'in-progress') return task.inProgressSince || null;
+  if (status === 'onhold') return task.holdStartedAt || null;
+  return null;
+};
+
+const getTaskSourceAwareDate = task => {
+  if (!task) return null;
+  return getTaskReportDate(task);
 };
 
 const groupTasksByDate = (tasks, dateField = 'createdAt', serialKey = 'serialNo') => {
@@ -326,8 +404,11 @@ const groupTasksByDate = (tasks, dateField = 'createdAt', serialKey = 'serialNo'
   return sortedGrouped;
 };
 
+// Newest-first by the date a task is listed under, so pages follow the date groups.
 const getTaskSortDate = task => {
-  const dateValue = task?.createdAt || task?.createdDate || task?.updatedAt || getTaskSourceAwareDate(task);
+  let reportDate = null;
+  try { reportDate = getTaskReportDate(task); } catch { reportDate = null; }
+  const dateValue = reportDate || task?.createdAt || task?.createdDate || task?.updatedAt;
   const date = new Date(dateValue || 0);
   return Number.isNaN(date.getTime()) ? 0 : date.getTime();
 };
@@ -425,15 +506,30 @@ const enrichStatusInfo = async (tasks) => {
   users.forEach(u => { userMap[u._id.toString()] = u; });
 
   return tasks.map(task => {
-    if (!task.statusByUser) return task;
-    const info = task.statusByUser.map(s => {
-      const u = userMap[s.user.toString()];
+    if (!task.statusByUser || !Array.isArray(task.statusByUser)) return task;
+    const seenUserIds = new Set();
+    const latestStatusByUser = [];
+    for (let i = task.statusByUser.length - 1; i >= 0; i--) {
+      const s = task.statusByUser[i];
+      const uid = String(s.user?._id || s.user || '');
+      if (!uid || seenUserIds.has(uid)) continue;
+      seenUserIds.add(uid);
+      latestStatusByUser.unshift(s);
+    }
+
+    const info = latestStatusByUser.map(s => {
+      const uid = String(s.user?._id || s.user || '');
+      const u = userMap[uid];
+      let img = u?.profileImage || u?.avatar || null;
+      if (typeof img === 'string' && img.startsWith('data:') && img.length > 500) {
+        img = null;
+      }
       return {
         userId: s.user,
         name: u?.name || 'Unknown',
         role: u?.role || u?.jobRole || u?.companyRole || 'N/A',
         email: u?.email || 'N/A',
-        profileImage: u?.profileImage || u?.avatar || null,
+        profileImage: img,
         department: u?.department || null,
         branch: u?.branch || null,
         status: s.status,
@@ -441,7 +537,7 @@ const enrichStatusInfo = async (tasks) => {
         ...(s.status === 'rejected' && { rejectedByUser: `${u?.name} (${u?.role || u?.jobRole || 'User'})` })
       };
     });
-    return { ...task, ...normalizeTaskRecurrenceFields(task), statusInfo: info };
+    return { ...task, ...normalizeTaskRecurrenceFields(task), statusInfo: info, statusByUser: latestStatusByUser };
   });
 };
 
@@ -509,8 +605,12 @@ const applyCleanListFilters = (tasks, req) => {
   return tasks.filter(t => {
     if (status && status !== 'all') {
       const requestedStatus = normalizeTaskStatus(status);
+      const requestedPriority = String(status).toLowerCase().replace('-priority', '');
       const taskStatus = getCleanTaskStatus(t);
-      if (requestedStatus === 'overdue') {
+      if (['high', 'medium', 'low'].includes(requestedPriority)) {
+        // Priority stat cards filter by priority, not by task status.
+        if (String(t.priority || '').toLowerCase() !== requestedPriority) return false;
+      } else if (requestedStatus === 'overdue') {
         if (taskStatus !== 'overdue') return false;
       } else if (taskStatus !== requestedStatus) {
         return false;
@@ -528,7 +628,14 @@ const applyCleanListFilters = (tasks, req) => {
       if (!searchHaystack.includes(query)) return false;
     }
     if (range) {
-      const sourceDate = getCleanFilterDate(t, dateField);
+      let sourceDate;
+      try {
+        sourceDate = getCleanFilterDate(t, dateField);
+      } catch (error) {
+        // A malformed old record is left out of date filters instead of failing the list.
+        console.error('[tasks] date filter skipped task', String(t?._id || ''), error.message);
+        return false;
+      }
       const dateVal = new Date(sourceDate);
       if (isNaN(dateVal.getTime())) return false;
       if (range.$gte && dateVal < range.$gte) return false;
@@ -539,7 +646,19 @@ const applyCleanListFilters = (tasks, req) => {
 };
 
 const sendCleanTaskList = (res, tasks, view, dateField = 'createdAt', req = null) => {
-  const sortedTasks = sortTasksNewestFirst(tasks);
+  const safeReportDate = task => {
+    try { return getTaskReportDate(task); } catch { return null; }
+  };
+  const timeOf = value => {
+    const time = new Date(value || 0).getTime();
+    return Number.isNaN(time) ? 0 : time;
+  };
+  // Pages follow the date the list is grouped by (status-change day, otherwise due
+  // date). Sorting by createdAt put re-imported old tasks first, so page 1 jumped
+  // from today straight to July while Aug-Oct tasks sat on later pages.
+  const sortedTasks = tasks
+    .map(task => ({ ...task, reportDate: safeReportDate(task) }))
+    .sort((a, b) => (timeOf(b.reportDate) - timeOf(a.reportDate)) || (timeOf(b.createdAt) - timeOf(a.createdAt)));
   const shouldPaginate = req && !['true', '1', 'yes'].includes(String(req.query?.all || req.query?.noPagination || '').toLowerCase());
   const pagination = shouldPaginate ? paginateTasks(sortedTasks, req) : null;
   const responseTasks = pagination ? pagination.tasks : sortedTasks;
@@ -577,7 +696,7 @@ const getProjectTaskAssignedBy = (task, project) => {
   return task.createdBy || creationLog?.performedBy || project.createdBy;
 };
 
-const fetchPersonalTaskList = async (req) => {
+const fetchPersonalTaskList = async (req, { includeCreatedForOthers = false } = {}) => {
   const companyCode = req.user.companyCode;
   const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
   const companyFilter = baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : companyCode;
@@ -585,7 +704,7 @@ const fetchPersonalTaskList = async (req) => {
   const tasks = await Task.find({
     companyCode: companyFilter,
     createdBy: req.user._id,
-    taskFor: 'self',
+    ...(includeCreatedForOthers ? { taskFor: { $in: ['self', 'others'] } } : { taskFor: 'self' }),
     isActive: true
   })
     // Remarks and status history are loaded by their dedicated detail endpoints.
@@ -599,7 +718,25 @@ const fetchPersonalTaskList = async (req) => {
     .lean();
 
   const enriched = await enrichStatusInfo(tasks);
-  return enriched.map(t => ({ ...t, status: normalizeTaskStatus(t.overallStatus), taskSource: 'self', __taskSource: 'self' }));
+  return enriched.map(t => {
+    const isPersonal = t.taskFor === 'self';
+    // A task created for others is listed by the latest change any assignee made.
+    const statusChangedAt = isPersonal
+      ? getUserStatusChangedAt(t, req.user._id)
+      : (t.statusByUser || [])
+        .map(entry => getUserStatusChangedAt(t, entry?.user?._id || entry?.user))
+        .filter(Boolean)
+        .sort((a, b) => b - a)[0] || null;
+    return {
+      ...t,
+      statusChangedAt,
+      status: normalizeTaskStatus(t.overallStatus),
+      // Created-for-others tasks use the assigned update path, which permits
+      // their creator to update the shared task status.
+      taskSource: isPersonal ? 'self' : 'assigned',
+      __taskSource: isPersonal ? 'self' : 'assigned'
+    };
+  });
 };
 
 const fetchAssignedToMeTaskList = async (req) => {
@@ -632,7 +769,13 @@ const fetchAssignedToMeTaskList = async (req) => {
   return enriched.map(t => {
     const userEntry = t.statusByUser?.find(s => (s.user?._id || s.user)?.toString() === currentUserId.toString());
     const status = userEntry?.status || t.overallStatus || 'pending';
-    return { ...t, status: normalizeTaskStatus(status), taskSource: 'assigned', __taskSource: 'assigned' };
+    return {
+      ...t,
+      statusChangedAt: getUserStatusChangedAt(t, currentUserId),
+      status: normalizeTaskStatus(status),
+      taskSource: 'assigned',
+      __taskSource: 'assigned'
+    };
   });
 };
 
@@ -659,7 +802,6 @@ const fetchAssignedClientTaskList = async (req) => {
     .populate('clientId', 'client name email company phone companyCode')
     .sort({ createdAt: -1 })
     .lean();
-
   return tasks.map(t => {
     const status = t.completed ? 'completed' : normalizeTaskStatus(t.status || 'pending');
     return {
@@ -667,6 +809,10 @@ const fetchAssignedClientTaskList = async (req) => {
       title: t.name,
       name: t.name,
       description: t.description || t.name,
+      service: t.service || '',
+      completedAt: t.completedAt || null,
+      inProgressSince: t.inProgressSince || null,
+      statusChangedAt: t.statusChangedAt || getClientLegacyStatusChangedAt(t, status),
       dueDate: t.dueDate,
       dueDateTime: t.dueDate,
       completed: t.completed,
@@ -687,27 +833,82 @@ const fetchAssignedClientTaskList = async (req) => {
 
 const fetchAssignedProjectTaskList = async (req) => {
   const currentUserId = (req.user._id || req.user.id).toString();
+  const currentUserObjectId = mongoose.Types.ObjectId.isValid(currentUserId)
+    ? new mongoose.Types.ObjectId(currentUserId)
+    : currentUserId;
 
-  const projects = await Project.find({ 'tasks.assignedTo': currentUserId })
-    .select('projectName description createdBy users tasks createdAt updatedAt')
-    .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
-    .populate('tasks.assignedTo', TASK_USER_POPULATE_FIELDS)
-    .populate('tasks.assignedUsers', TASK_USER_POPULATE_FIELDS)
-    .populate('tasks.createdBy', TASK_CREATOR_POPULATE_FIELDS)
-    .lean();
+  const projects = await Project.aggregate([
+    { $match: { 'tasks.assignedTo': currentUserObjectId } },
+    {
+      $project: {
+        projectName: 1,
+        description: 1,
+        createdBy: 1,
+        createdAt: 1,
+        updatedAt: 1,
+        tasks: {
+          $filter: {
+            input: '$tasks',
+            as: 'task',
+            cond: { $eq: ['$$task.assignedTo', currentUserObjectId] }
+          }
+        }
+      }
+    },
+    // List cards fetch remarks and activity only when the user opens their
+    // respective dialogs. Keeping those unbounded arrays in the aggregate
+    // makes the task-management page increasingly slow as history grows.
+    { $unset: ['tasks.activityLogs', 'tasks.remarks'] }
+  ]);
+
+  const userIds = new Set();
+  projects.forEach(project => {
+    if (project.createdBy) userIds.add(String(project.createdBy));
+    (project.tasks || []).forEach(task => {
+      if (task.assignedTo) userIds.add(String(task.assignedTo));
+      if (task.createdBy) userIds.add(String(task.createdBy));
+      (task.assignedUsers || []).forEach(userId => {
+        if (userId) userIds.add(String(userId));
+      });
+      (task.activityLogs || []).forEach(log => {
+        if (log.performedBy) userIds.add(String(log.performedBy));
+      });
+    });
+  });
+
+  const users = userIds.size
+    ? await User.find({ _id: { $in: [...userIds] } }).select(TASK_CREATOR_POPULATE_FIELDS).lean()
+    : [];
+  const usersById = new Map(users.map(user => [String(user._id), user]));
+  const hydrateUser = value => {
+    if (!value) return value;
+    if (typeof value === 'object' && value.name) return value;
+    return usersById.get(String(value)) || value;
+  };
 
   const tasks = [];
 
   projects.forEach(project => {
+    const projectCreatedBy = hydrateUser(project.createdBy);
     (project.tasks || []).forEach(task => {
-      const assignedTo = task.assignedTo?._id || task.assignedTo;
+      const assignedTo = hydrateUser(task.assignedTo);
+      const assignedToId = assignedTo?._id || assignedTo;
       const isAssignedToMe = assignedTo?.toString() === currentUserId;
-      if (!isAssignedToMe) return;
+      const isHydratedAssignedToMe = assignedToId?.toString() === currentUserId;
+      if (!isAssignedToMe && !isHydratedAssignedToMe) return;
+
+      const assignedUsers = Array.isArray(task.assignedUsers)
+        ? task.assignedUsers.map(hydrateUser)
+        : [];
+      const taskCreatedBy = hydrateUser(task.createdBy);
+      const activityLogs = [];
 
       const status = normalizeProjectTaskStatus(task.status);
       const lastActivityAt = task.updatedAt || task.createdAt || project.updatedAt || project.createdAt;
-      const assignedBy = getProjectTaskAssignedBy(task, project);
-      const activityLogs = Array.isArray(task.activityLogs) ? task.activityLogs : [];
+      const assignedBy = getProjectTaskAssignedBy(
+        { ...task, createdBy: taskCreatedBy, activityLogs },
+        { ...project, createdBy: projectCreatedBy }
+      );
       const latestActivityDate = (predicate) => activityLogs
         .filter(predicate)
         .map(log => log.performedAt || log.createdAt)
@@ -733,12 +934,13 @@ const fetchAssignedProjectTaskList = async (req) => {
         priority: String(task.priority || 'medium').toLowerCase(),
         status,
         userStatus: status,
-        assignedTo: task.assignedTo,
+        assignedTo,
+        assignedUsers,
         createdBy: assignedBy,
         assignedBy,
         assignedByName: assignedBy?.name || assignedBy?.email || 'Unknown',
-        assignedToName: task.assignedTo?.name || 'Unknown',
-        assignedToEmail: task.assignedTo?.email || '',
+        assignedToName: assignedTo?.name || 'Unknown',
+        assignedToEmail: assignedTo?.email || '',
         projectName: project.projectName,
         projectTaskId: task._id,
         checkpoints: task.checkpoints || [],
@@ -747,14 +949,18 @@ const fetchAssignedProjectTaskList = async (req) => {
           originalName: task.pdfFile.filename,
           path: task.pdfFile.path
         }] : [],
-        remarks: task.remarks || [],
-        activityLogs: task.activityLogs || [],
+        remarks: [],
+        activityLogs,
         createdAt: task.createdAt || project.createdAt,
         updatedAt: task.updatedAt || project.updatedAt,
         lastActivityAt,
         assignedAt,
         statusUpdatedAt,
-        completedAt,
+        completedAt: task.completionDate || completedAt,
+        completionDate: task.completionDate || null,
+        // Older tasks get statusChangedAt from scripts/backfillStatusChangedAt.js;
+        // scanning activity logs on every request doubled the list time.
+        statusChangedAt: task.statusChangedAt || null,
         source: 'project',
         taskSource: 'project',
         __taskSource: 'project',
@@ -804,7 +1010,12 @@ module.exports = {
   normalizeProjectTaskStatus,
   getProjectTaskAssignedBy,
   getTaskCompletionDate,
+  getTaskStatusChangeDate,
   getTaskReportDate,
+  getTaskSourceAwareDate,
+  getUserStatusChangedAt,
+  getClientLegacyStatusChangedAt,
+  STATUS_LOG_TYPES,
   fetchPersonalTaskList,
   fetchAssignedToMeTaskList,
   fetchAssignedClientTaskList,

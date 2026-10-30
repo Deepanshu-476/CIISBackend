@@ -229,10 +229,14 @@ const calculateAttendanceByShift = ({ inTime, outTime, shiftSettings, currentSta
 
   const totalMs = outTime - inTime;
   let finalStatus = status;
-
+  // Half day needs at least half of the assigned shift hours worked.
+  // Anything shorter (for example a 2 minute punch) is not a half day.
   // Keep LATE determined from clock-in from being overwritten when the
   // auto-clock-out sweep recalculates the record.
-  if (finalStatus === 'PRESENT') {
+  const halfShiftMs = Math.max(schedule.shiftEnd - schedule.shiftStart, 0) / 2;
+  if (totalMs < halfShiftMs) {
+    finalStatus = 'ABSENT';
+  } else if (finalStatus === 'PRESENT') {
     if (outTime < schedule.halfDayEarlyLimit) {
       finalStatus = 'HALF DAY';
     } else if (outTime < schedule.shortLeaveEarlyLimit) {
@@ -285,6 +289,7 @@ const resolveSelectedShiftSettings = async (userObj) => {
 };
 
 let isAutoClockOutSweepRunning = false;
+let lastAutoClockOutSweepAt = 0;
 
 const runAutoClockOutSweep = async () => {
   if (mongoose.connection.readyState !== 1) return { processed: 0, updated: 0 };
@@ -420,13 +425,22 @@ const runAutoClockOutSweep = async () => {
     return { processed: records.length, updated };
   } finally {
     isAutoClockOutSweepRunning = false;
+    lastAutoClockOutSweepAt = Date.now();
   }
+};
+
+// Request handlers (attendance status/list) used to run the full all-company sweep on every call.
+// The cron below already runs it every minute, so requests only trigger it when the last run is stale.
+const runAutoClockOutSweepIfStale = async (maxAgeMs = 60000) => {
+  if (Date.now() - lastAutoClockOutSweepAt < maxAgeMs) return { processed: 0, updated: 0, skipped: true };
+  return runAutoClockOutSweep();
 };
 
 let autoClockOutJob = null;
 
 const scheduleAutoClockOutJob = () => {
   if (autoClockOutJob) return autoClockOutJob;
+  if (!require('../../utils/scheduledJobs').scheduledJobsEnabled()) return null;
 
   schedule.scheduleJob('*/1 * * * *', async () => {
     try {
@@ -444,5 +458,6 @@ scheduleAutoClockOutJob();
 
 module.exports = {
   runAutoClockOutSweep,
+  runAutoClockOutSweepIfStale,
   scheduleAutoClockOutJob
 };

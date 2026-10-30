@@ -1,4 +1,5 @@
 const Company = require("../models/Company");
+const { isPlatformOwner } = require("../middleware/authMiddleware");
 const User = require("../models/User");
 const Branch = require("../models/Branch");
 const Department = require("../models/Department");
@@ -693,6 +694,12 @@ exports.getAllCompanies = async (req, res) => {
   try {
     const { page, limit, skip } = getPaginationOptions(req.query, { limit: 20, maxLimit: 100 });
     const filter = {};
+    // Company owners (jobRole super_admin) only see their own company; the platform owner sees all.
+    if (!isPlatformOwner(req.user)) {
+      const ownCompanyId = getScopedCompanyId(req.user?.company || req.user?.companyId);
+      if (!ownCompanyId) return res.status(403).json({ success: false, message: "Company scope required" });
+      filter._id = ownCompanyId;
+    }
     const search = String(req.query.search || req.query.q || "").trim();
 
     if (search) {
@@ -709,7 +716,7 @@ exports.getAllCompanies = async (req, res) => {
       Company.find(filter)
       .select(
         "_id companyName companyEmail companyAddress companyPhone ownerName logo companyDomain loginToken isActive deactivatedAt subscriptionExpiry createdAt updatedAt companyCode dbIdentifier loginUrl"
-          + " allowedPages allowedSuperAdminPages accessConfiguredAt accessUpdatedBy selectedPlan subscriptionPlan subscriptionAmount subscriptionPaymentStatus subscriptionPayments planDurationDays planFeatures"
+          + " allowedPages allowedSuperAdminPages moduleDashboardConfig bulkEmailLimits accessConfiguredAt accessUpdatedBy selectedPlan subscriptionPlan subscriptionAmount subscriptionPaymentStatus subscriptionPayments planDurationDays planFeatures"
       )
       .populate("selectedPlan", "name price durationDays features allowedPages allowedSuperAdminPages")
         .sort({ createdAt: -1 })
@@ -1292,6 +1299,22 @@ exports.updateCompanyAccess = async (req, res) => {
 
     if (updatedBy && isValidObjectId(updatedBy)) {
       updateData.accessUpdatedBy = updatedBy;
+    }
+
+    if (req.body.moduleDashboardConfig && typeof req.body.moduleDashboardConfig === "object") {
+      updateData.moduleDashboardConfig = req.body.moduleDashboardConfig;
+    }
+
+    if (req.body.bulkEmailLimits && typeof req.body.bulkEmailLimits === "object") {
+      const daily = Number(req.body.bulkEmailLimits.daily);
+      const monthly = Number(req.body.bulkEmailLimits.monthly);
+      if (!Number.isInteger(daily) || !Number.isInteger(monthly) || daily < 0 || monthly < 0) {
+        return res.status(400).json({ success: false, message: "Email limits must be whole numbers of 0 or more" });
+      }
+      if (daily > monthly) {
+        return res.status(400).json({ success: false, message: "Daily email limit cannot be more than the monthly limit" });
+      }
+      updateData.bulkEmailLimits = { daily, monthly };
     }
 
     const company = await Company.findByIdAndUpdate(
@@ -1939,7 +1962,8 @@ const getScopedCompanyId = (value) => {
 const canManageDashboardConfig = (req, companyId) => {
   const userCompanyId = getScopedCompanyId(req.user?.company || req.user?.companyId);
   const userRole = String(req.user?.role || req.user?.jobRole || req.user?.companyRole || "").toLowerCase();
-  const isPlatformAdmin = Boolean(req.user?.isSuperAdmin) || userRole === "super-admin" || userRole === "super_admin";
+  // jobRole super_admin is every company owner; only the real platform owner may manage other companies.
+  const isPlatformAdmin = isPlatformOwner(req.user);
 
   return isPlatformAdmin || (userCompanyId && userCompanyId === String(companyId));
 };
@@ -2092,3 +2116,79 @@ exports.updateCompanyLocation = async (req, res) => {
 };
 
 void 0;
+
+
+// GET /company/:id/admins: the people who registered / administer a company (owner, admins, super admins),
+// for the super admin "All Company" page. Only contact and account fields are returned: no password,
+// tokens, ID numbers, bank or salary data.
+const ADMIN_USER_FIELDS = [
+  "name", "email", "phone", "companyRole", "jobRole", "jobRoleName", "department", "departmentName",
+  "branch", "branchName", "branchCode", "employeeId", "employeeType", "dateOfJoining", "profileImage",
+  "gender", "city", "state", "country", "isActive", "registrationSource", "registrationStatus",
+  "isVerified", "isOnline", "lastLogin", "lastSeen", "createdAt", "updatedAt",
+].join(" ");
+const ADMIN_COMPANY_FIELDS = [
+  "companyName", "companyEmail", "companyPhone", "companyAddress", "ownerName", "logo", "companyCode",
+  "companyDomain", "loginUrl", "isActive", "deactivatedAt", "subscriptionPlan", "subscriptionExpiry",
+  "subscriptionPaymentStatus", "planDurationDays", "createdAt",
+].join(" ");
+const ADMIN_ROLE_PATTERN = /^(owner|admin|company[ _-]?owner|company[ _-]?admin|super[ _-]?admin)$/i;
+const OBJECT_ID_PATTERN = /^[0-9a-f]{24}$/i;
+
+exports.getCompanyAdmins = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ success: false, message: "Invalid company id" });
+    }
+    const company = await Company.findById(id).select(ADMIN_COMPANY_FIELDS).lean();
+    if (!company) {
+      return res.status(404).json({ success: false, message: "Company not found" });
+    }
+
+    const ownerEmail = String(company.companyEmail || "").trim().toLowerCase();
+    const users = await User.find({
+      company: id,
+      $or: [
+        { companyRole: ADMIN_ROLE_PATTERN },
+        { jobRole: ADMIN_ROLE_PATTERN },
+        { jobRoleName: ADMIN_ROLE_PATTERN },
+        ...(ownerEmail ? [{ email: ownerEmail }] : []),
+      ],
+    })
+      .select(ADMIN_USER_FIELDS)
+      .populate("branch", "name branchCode")
+      .sort({ createdAt: 1 })
+      .lean();
+
+    // jobRole / department hold either a name or an id; resolve ids to names.
+    const roleIds = [...new Set(users.map(u => u.jobRole).filter(v => OBJECT_ID_PATTERN.test(String(v || ""))))];
+    const deptIds = [...new Set(users.map(u => u.department).filter(v => OBJECT_ID_PATTERN.test(String(v || ""))))];
+    const [roles, departments] = await Promise.all([
+      roleIds.length ? JobRole.find({ _id: { $in: roleIds } }).select("name").lean() : [],
+      deptIds.length ? Department.find({ _id: { $in: deptIds } }).select("name").lean() : [],
+    ]);
+    const roleName = new Map(roles.map(r => [String(r._id), r.name]));
+    const deptName = new Map(departments.map(d => [String(d._id), d.name]));
+
+    const rank = user => {
+      const role = String(user.companyRole || "").toLowerCase();
+      if (role.includes("owner") || String(user.email || "").toLowerCase() === ownerEmail) return 0;
+      if (/super/.test(role) || /super/.test(String(user.jobRole || ""))) return 1;
+      return 2;
+    };
+    const admins = users
+      .map(user => ({
+        ...user,
+        jobRoleName: user.jobRoleName || roleName.get(String(user.jobRole)) || (OBJECT_ID_PATTERN.test(String(user.jobRole || "")) ? "" : user.jobRole) || "",
+        departmentName: user.departmentName || deptName.get(String(user.department)) || (OBJECT_ID_PATTERN.test(String(user.department || "")) ? "" : user.department) || "",
+        isCompanyOwner: rank(user) === 0,
+      }))
+      .sort((a, b) => rank(a) - rank(b));
+
+    res.json({ success: true, company, admins, count: admins.length });
+  } catch (error) {
+    console.error("getCompanyAdmins error:", error);
+    res.status(500).json({ success: false, message: "Failed to load company admins" });
+  }
+};

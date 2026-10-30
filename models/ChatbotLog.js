@@ -9,7 +9,6 @@ const chatbotLogSchema = new mongoose.Schema({
   companyCode: {
     type: String,
     required: true,
-    index: true,
   },   
   user: {
     type: mongoose.Schema.Types.ObjectId,

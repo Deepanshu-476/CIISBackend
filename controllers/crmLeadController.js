@@ -3,6 +3,8 @@ const validator = require('validator');
 const Lead = require('../models/Lead');
 const LeadType = require('../models/LeadType');
 const LeadSource = require('../models/LeadSource');
+let crmListQuery = {};
+try { crmListQuery = require('../services/crmListQuery'); } catch (e) {}
 let formatLeadForClient = item => item;
 let cascadeLeadUpdate = async () => {};
 try {
@@ -62,8 +64,13 @@ exports.options = async (req, res, next) => {
 exports.create = async (req, res, next) => {
   try {
     const { data, errors } = validate(req.body);
-    if (Object.keys(errors).length) return res.status(400).json({ message: 'Please check the highlighted fields.', errors });
     const company = req.crmCompany;
+    // Custom fields named by the admin are checked against their type (number, date, dropdown, required).
+    const pipeline = require('./crmPipelineController');
+    if (typeof pipeline.loadFieldConfig === 'function') {
+      Object.assign(errors, pipeline.validateCustomValues(await pipeline.loadFieldConfig(company), data, { requireRequired: true }));
+    }
+    if (Object.keys(errors).length) return res.status(400).json({ message: 'Please check the highlighted fields.', errors });
     const [type, source] = await Promise.all([
       LeadType.findOne({ _id: data.leadType, company, status: 'Active' }).lean(),
       LeadSource.findOne({ _id: data.leadSource, company, status: 'Active' }).lean()
@@ -71,6 +78,15 @@ exports.create = async (req, res, next) => {
     if (!type) errors.leadType = 'This lead type is unavailable or inactive. Select an active type.';
     if (!source) errors.leadSource = 'This lead source is unavailable or inactive. Select an active source.';
     if (Object.keys(errors).length) return res.status(400).json({ message: 'Please update the lead classification.', errors });
+    // Same rule as the Excel import (leadTransferService): phone or email already used in this company.
+    const existing = await Lead.findOne({ company, $or: [{ phone: data.phone }, { email: data.email }] }).select('name phone email').lean();
+    if (existing) {
+      const field = existing.phone === data.phone ? 'phone' : 'email';
+      return res.status(409).json({
+        message: `A lead with this ${field} already exists (${existing.name || 'existing lead'}).`,
+        errors: { [field]: `This ${field} is already used by lead "${existing.name || 'existing lead'}".` }
+      });
+    }
     const item = await Lead.create({
       ...data,
       company,
@@ -87,6 +103,9 @@ exports.create = async (req, res, next) => {
 };
 exports.list = async (req, res, next) => {
   try {
+    if (typeof crmListQuery.isPagedRequest === 'function' && crmListQuery.isPagedRequest(req)) {
+      return await crmListQuery.sendLeadPage(req, res, { name: 'all-leads', base: { company: req.crmCompany }, sort: { createdAt: -1 } });
+    }
     const items = await Lead.find({ company: req.crmCompany }).sort({ createdAt: -1, _id: -1 })
       .populate('leadType', 'name').populate('leadSource', 'name').populate('assignedTo', 'name').lean();
     res.json({ items: (items || []).map(formatLeadForClient) });
@@ -99,7 +118,8 @@ exports.team = async (req, res, next) => {
     let clientUserIds = [];
     try {
       const Client = mongoose.models.Client || require('../HR-CDS/models/Client');
-      const clients = await Client.find({ userId: { $exists: true, $ne: null } }).select('userId').lean();
+      const companyCode = req.user?.companyCode || req.user?.company?.companyCode;
+      const clients = await Client.find({ ...(companyCode ? { companyCode } : {}), userId: { $exists: true, $ne: null } }).select('userId').lean();
       clientUserIds = clients.map(c => String(c.userId));
     } catch (e) {
       // Ignore if Client model not available

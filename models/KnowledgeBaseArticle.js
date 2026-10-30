@@ -9,7 +9,6 @@ const knowledgeBaseArticleSchema = new mongoose.Schema({
   companyCode: {
     type: String,
     required: true,
-    index: true,
   },
   title: {
     type: String,
