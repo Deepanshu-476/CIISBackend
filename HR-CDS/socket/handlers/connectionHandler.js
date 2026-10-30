@@ -1,43 +1,6 @@
 
 const User = require('../../../models/User');
-
-const getRawCompanyId = company => {
-  if (!company) return '';
-  if (typeof company === 'string') return company;
-  if (company._id) return company._id.toString();
-  if (company.id) return company.id.toString();
-  return company.toString();
-};
-
-const getCompanyOnlineUsers = (io, companyId) => {
-  if (!companyId) return [];
-
-  const companyKey = getRawCompanyId(companyId);
-  const userIds = new Set();
-
-  io.sockets.sockets.forEach((connectedSocket) => {
-    const socketCompId = getRawCompanyId(connectedSocket.companyId);
-    if (companyKey && socketCompId && socketCompId !== companyKey) return;
-    if (!connectedSocket.userId) return;
-    userIds.add(connectedSocket.userId.toString());
-  });
-
-  return Array.from(userIds);
-};
-
-const emitPresence = (io, socket, isOnline) => {
-  if (!socket.userId || !socket.companyId) return;
-
-  const payload = {
-    userId: socket.userId,
-    isOnline,
-    lastSeen: new Date(),
-  };
-
-  io.to(`company:${socket.companyId}`).emit(isOnline ? 'user:online' : 'user:offline', payload);
-  io.to(`company:${socket.companyId}`).emit(isOnline ? 'chat:user-online' : 'chat:user-offline', payload);
-  io.to(`company:${socket.companyId}`).emit('chat:online-users', getCompanyOnlineUsers(io, socket.companyId));
-};
+const { getCompanyOnlineUsers, isUserOnline, broadcastOnlineUsers } = require('../presence');
 
 const connectionHandler = (io, socket) => {
   void 0;
@@ -55,29 +18,34 @@ const connectionHandler = (io, socket) => {
   }
 
   updateUserOnlineStatus(socket.userId, true);
-  emitPresence(io, socket, true);
+  if (socket.userId && socket.companyId) {
+    const payload = {
+      userId: socket.userId,
+      isOnline: true,
+      lastSeen: new Date(),
+    };
+    io.to(`company:${socket.companyId}`).emit('user:online', payload);
+    io.to(`company:${socket.companyId}`).emit('chat:user-online', payload);
+    broadcastOnlineUsers(io, socket.companyId).catch(() => {});
+  }
 
-  socket.on('disconnect', async () => {
+  socket.on('disconnect', () => {
     setTimeout(async () => {
-      let hasActiveSocket = false;
-      const userRoom = io.sockets.adapter?.rooms?.get(`user:${socket.userId}`);
-      if (userRoom && userRoom.size > 0) {
-        hasActiveSocket = true;
-      } else if (io.sockets?.sockets) {
-        for (const [_, connected] of io.sockets.sockets) {
-          if (connected.userId?.toString() === socket.userId?.toString()) {
-            hasActiveSocket = true;
-            connected.join(`user:${socket.userId}`);
-            break;
-          }
+      const stillOnline = await isUserOnline(io, socket.userId);
+      if (!stillOnline) {
+        await updateUserOnlineStatus(socket.userId, false);
+        if (socket.userId && socket.companyId) {
+          const payload = {
+            userId: socket.userId,
+            isOnline: false,
+            lastSeen: new Date(),
+          };
+          io.to(`company:${socket.companyId}`).emit('user:offline', payload);
+          io.to(`company:${socket.companyId}`).emit('chat:user-offline', payload);
         }
       }
-
-      if (!hasActiveSocket) {
-        await updateUserOnlineStatus(socket.userId, false);
-        emitPresence(io, socket, false);
-      } else {
-        io.to(`company:${socket.companyId}`).emit('chat:online-users', getCompanyOnlineUsers(io, socket.companyId));
+      if (socket.companyId) {
+        await broadcastOnlineUsers(io, socket.companyId);
       }
     }, 15000);
   });

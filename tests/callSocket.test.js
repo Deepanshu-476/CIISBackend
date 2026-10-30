@@ -5,10 +5,38 @@ const vm = require('node:vm');
 
 function fixture() {
   const pushes = [], emitted = [], queries = [], timers = [], history = [];
-  const io = {sockets: {adapter: {rooms: new Map()}, sockets: new Map()}, to: room => ({emit: (event, data) => emitted.push({room, event, data})})};
+  const roomsStore = new Map();
+  const io = {
+    sockets: {adapter: {rooms: new Map()}, sockets: new Map()},
+    to: room => ({emit: (event, data) => emitted.push({room, event, data})}),
+    in: () => ({fetchSockets: async () => []}),
+  };
   const module = {exports: {}};
   vm.runInNewContext(fs.readFileSync(require.resolve('../HR-CDS/chat/socket/callSocket'), 'utf8'), {
     module, require(name) {
+      if (name.includes('presence')) return {
+        isUserOnline: async () => false,
+      };
+      if (name.includes('callStore')) return {
+        save: async (room) => { roomsStore.set(room.callId, JSON.parse(JSON.stringify(room))); return room; },
+        get: async (callId) => roomsStore.has(callId) ? JSON.parse(JSON.stringify(roomsStore.get(callId))) : null,
+        remove: async (callId) => roomsStore.delete(callId),
+        listAll: async () => Array.from(roomsStore.values()),
+        claimAnswer: async (callId, userId, socketId) => {
+          const room = roomsStore.get(callId);
+          if (!room) return { success: false, reason: 'Call not found' };
+          const p = room.participants?.[userId];
+          if (!p) return { success: false, reason: 'Not a participant' };
+          if (p.status === 'joined' && p.socketId && p.socketId !== socketId) {
+            return { success: false, reason: 'Already answered on another device', alreadyAnswered: true };
+          }
+          p.status = 'joined';
+          p.socketId = socketId;
+          room.answeredAt = room.answeredAt || Date.now();
+          return { success: true, room };
+        },
+        withCallLock: async (callId, fn) => fn(),
+      };
       if (name.includes('models/User')) return {findOne: query => {
         queries.push(query);
         return {select: () => ({lean: async () => query.company === 'company' && ['receiver', 'second'].includes(query._id) ? {_id: query._id} : null})};
@@ -23,14 +51,27 @@ function fixture() {
       throw new Error(name);
     }, setTimeout: fn => { timers.push(fn); return timers.length; }, clearTimeout() {}, Date, console,
   });
-  function socket(userId, companyId = 'company') {
+  function socket(userId, companyId = 'company', socketIdSuffix = '') {
     const handlers = new Map();
-    const s = {userId, companyId, user: {_id: userId, name: userId}, on: (event, handler) => handlers.set(event, handler),
-      emit: (event, data) => emitted.push({room: userId, event, data})};
+    const id = 'sock-' + userId + (socketIdSuffix ? '-' + socketIdSuffix : '');
+    const s = {
+      id,
+      userId,
+      companyId,
+      user: {_id: userId, name: userId},
+      data: {userId, companyId, user: {_id: userId, name: userId}},
+      on: (event, handler) => handlers.set(event, handler),
+      emit: (event, data) => emitted.push({room: userId, event, data}),
+      to: room => ({emit: (event, data) => emitted.push({room, event, data})}),
+    };
     module.exports(io, s);
-    return {run: (event, ...args) => handlers.get(event)(...args)};
+    return {
+      id,
+      userId,
+      run: (event, ...args) => handlers.get(event)(...args),
+    };
   }
-  return {socket, pushes, emitted, queries, timers, history};
+  return {socket, pushes, emitted, queries, timers, history, roomsStore};
 }
 const invite = {callId: 'call-1', callType: 'video', conversationId: 'conversation', participantIds: ['receiver']};
 
@@ -52,15 +93,15 @@ test('cold-started receiver restores and accepts only its own invitation', async
   await f.socket('caller').run('call:invite', invite);
   const receiver = f.socket('receiver');
   let restored;
-  receiver.run('call:sync-incoming', {callId: invite.callId}, result => { restored = result; });
+  await receiver.run('call:sync-incoming', {callId: invite.callId}, result => { restored = result; });
   assert.equal(restored.success, true);
   assert.equal(restored.call.fromUserId, 'caller');
   const stranger = f.socket('stranger');
-  stranger.run('call:sync-incoming', {callId: invite.callId}, result => assert.equal(result.success, false));
-  stranger.run('call:accept', {callId: invite.callId});
+  await stranger.run('call:sync-incoming', {callId: invite.callId}, result => assert.equal(result.success, false));
+  await stranger.run('call:accept', {callId: invite.callId});
   assert.ok(f.emitted.some(e => e.room === 'stranger' && e.event === 'call:unavailable'));
-  receiver.run('call:accept', {callId: invite.callId});
-  assert.ok(f.emitted.some(e => e.room === 'user:receiver' && e.event === 'call:joined'));
+  await receiver.run('call:accept', {callId: invite.callId});
+  assert.ok(f.emitted.some(e => (e.room === receiver.id || e.room === 'user:receiver') && e.event === 'call:joined'));
   assert.ok(f.pushes.some(p => p.data.type === 'call:cancelled' && p.userIds.includes('receiver')));
 });
 
@@ -68,17 +109,17 @@ test('caller hangup cancels background ringing and prevents stale restoration', 
   const f = fixture();
   const caller = f.socket('caller');
   await caller.run('call:invite', invite);
-  caller.run('call:end', {callId: invite.callId});
+  await caller.run('call:end', {callId: invite.callId});
   assert.ok(f.pushes.some(p => p.data.type === 'call:cancelled' && p.userIds.includes('receiver')));
-  f.socket('receiver').run('call:sync-incoming', {callId: invite.callId}, result => assert.equal(result.success, false));
+  await f.socket('receiver').run('call:sync-incoming', {callId: invite.callId}, result => assert.equal(result.success, false));
 });
 
 test('ring timeout clears the invitation and background notification', async () => {
   const f = fixture();
   await f.socket('caller').run('call:invite', invite);
-  f.timers[0]();
+  await f.timers[0]();
   assert.ok(f.pushes.some(p => p.data.type === 'call:cancelled'));
-  f.socket('receiver').run('call:sync-incoming', {}, result => assert.equal(result.success, false));
+  await f.socket('receiver').run('call:sync-incoming', {}, result => assert.equal(result.success, false));
 });
 
 test('cross-company recipients are unavailable', async () => {
@@ -92,7 +133,7 @@ test('group add-participants push uses the existing call type', async () => {
   const f = fixture();
   const caller = f.socket('caller');
   await caller.run('call:invite', invite);
-  f.socket('receiver').run('call:accept', {callId: invite.callId});
+  await f.socket('receiver').run('call:accept', {callId: invite.callId});
   await caller.run('call:add-participants', {callId: invite.callId, participantIds: ['second']});
   const push = f.pushes.find(p => p.data.type === 'call:incoming' && p.userIds.includes('second'));
   assert.ok(push);
@@ -105,8 +146,8 @@ test('call history records start, answer and finish', async () => {
   const caller = f.socket('caller');
   const receiver = f.socket('receiver');
   await caller.run('call:invite', invite);
-  receiver.run('call:accept', {callId: 'call-1'});
-  caller.run('call:end', {callId: 'call-1'});
+  await receiver.run('call:accept', {callId: 'call-1'});
+  await caller.run('call:end', {callId: 'call-1'});
   assert.deepEqual(f.history.map(item => item[0]), ['started', 'answered', 'finished']);
   assert.equal(f.history[2][2], 'answered');
 });
@@ -114,7 +155,30 @@ test('call history records start, answer and finish', async () => {
 test('unanswered call is recorded as finished when the ring times out', async () => {
   const f = fixture();
   await f.socket('caller').run('call:invite', invite);
-  f.timers[0]();
+  await f.timers[0]();
   assert.deepEqual(f.history.map(item => item[0]), ['started', 'finished']);
   assert.equal(f.history[1][2], 'unanswered');
+});
+
+test('multi-device: device 1 answers, device 2 receives answered-elsewhere', async () => {
+  const f = fixture();
+  const caller = f.socket('caller');
+  await caller.run('call:invite', invite);
+
+  const deviceApp = f.socket('receiver', 'company', 'app');
+  const deviceWeb = f.socket('receiver', 'company', 'web');
+
+  await deviceApp.run('call:accept', {callId: 'call-1'});
+
+  // Only the winning socket gets call:joined
+  assert.ok(f.emitted.some(e => e.room === deviceApp.id && e.event === 'call:joined'));
+  assert.ok(!f.emitted.some(e => e.room === deviceWeb.id && e.event === 'call:joined'));
+
+  // Other devices of the same user receive call:answered-elsewhere
+  assert.ok(f.emitted.some(e => e.room === 'user:receiver' && e.event === 'call:answered-elsewhere'));
+
+  // If stale device later rejects, it should be ignored
+  await deviceWeb.run('call:reject', {callId: 'call-1'});
+  const room = await f.roomsStore.get('call-1');
+  assert.equal(room.participants.receiver.status, 'joined');
 });

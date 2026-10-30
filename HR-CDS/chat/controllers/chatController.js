@@ -249,7 +249,8 @@ exports.createGroupConversation = async (req, res) => {
       return res.json({ success: true, conversation });
     }
     if (projectId) {
-      const existing = await Conversation.findOne({ projectId, companyId: req.user.company });
+      if (!mongoose.isValidObjectId(projectId)) return res.status(400).json({ success: false, message: 'Invalid projectId' });
+      const existing = await Conversation.findOne({ projectId, companyId: req.user.company, clientId: { $exists: false } });
       const conversation = existing && await require('../../utils/projectChatService').refreshConversation(existing._id, req.user.company);
       if (!conversation || !conversation.members.some(member => String(member) === getUserId(req))) return res.status(403).json({ success: false, message: 'Project group access denied' });
       return res.status(200).json({ success: true, conversation });

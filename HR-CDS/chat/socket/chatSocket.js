@@ -1,66 +1,7 @@
 const Conversation = require("../models/Conversation");
 const Message = require("../models/Message");
-
-const onlineUsers = new Map();
-
-const addOnlineUser = (userId, socketId) => {
-    const key = userId.toString();
-    const sockets = onlineUsers.get(key) || new Set();
-    sockets.add(socketId);
-    onlineUsers.set(key, sockets);
-};
-
-const removeOnlineUser = (userId, socketId) => {
-    const key = userId.toString();
-    const sockets = onlineUsers.get(key);
-    if (!sockets) return;
-    sockets.delete(socketId);
-    if (sockets.size === 0) {
-        onlineUsers.delete(key);
-    }
-};
-
-const getOnlineUserIds = () => Array.from(onlineUsers.keys());
-
-const emitOnlineUsers = (io, companyId) => {
-    const users = getCompanyOnlineUsers(io, companyId);
-
-    if (!companyId) {
-        io.emit("chat:online-users", users);
-        return;
-    }
-
-    io.to(`company:${companyId}`).emit(
-        "chat:online-users",
-        users
-    );
-};
-
-const getRawCompanyId = company => {
-    if (!company) return "";
-    if (typeof company === "string") return company;
-    if (company._id) return company._id.toString();
-    if (company.id) return company.id.toString();
-    return company.toString();
-};
-
-const getCompanyOnlineUsers = (io, companyId) => {
-    const companyKey = getRawCompanyId(companyId);
-    if (!companyKey) return getOnlineUserIds();
-
-    const userIds = new Set();
-
-    io.sockets.sockets.forEach(connectedSocket => {
-        const socketCompId = getRawCompanyId(connectedSocket.companyId);
-        if (companyKey && socketCompId && socketCompId !== companyKey) return;
-        if (!connectedSocket.userId) return;
-        userIds.add(connectedSocket.userId.toString());
-    });
-
-    return Array.from(userIds);
-};
-
-const {getUnreadCount} = require("../utils/unreadCount");
+const { getCompanyOnlineUsers } = require("../../socket/presence");
+const { getUnreadCount } = require("../utils/unreadCount");
 
 const emitUnreadCounts = async (io, conversation, senderId) => {
     if (!conversation) return;
@@ -90,24 +31,12 @@ const chatSocket = (io, socket) => {
     socket.join(`company:${socket.companyId}`);
 
     
-    addOnlineUser(socket.userId, socket.id);
-    void 0;
-
-    
-    emitOnlineUsers(io, socket.companyId);
-
-    socket.on("chat:get-online-users", (callback) => {
-        const users = getCompanyOnlineUsers(io, socket.companyId);
+    socket.on("chat:get-online-users", async (callback) => {
+        const users = await getCompanyOnlineUsers(io, socket.companyId);
         if (typeof callback === "function") {
             callback(users);
         } else {
             socket.emit("chat:online-users", users);
-        }
-    });
-
-    socket.on("chat:heartbeat", (callback) => {
-        if (typeof callback === "function") {
-            callback({ status: "ok", timestamp: Date.now() });
         }
     });
 
@@ -353,17 +282,6 @@ socket.on(
             }
         }
     );
-
-
-    
-    socket.on("disconnect", () => {
-
-        void 0;
-
-        removeOnlineUser(socket.userId, socket.id);
-
-        emitOnlineUsers(io, socket.companyId);
-    });
 };
 
 module.exports = chatSocket;
