@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { trackHoldClock } = require("../utils/onHoldDeadline");
 const {
   normalizeRepeatPattern,
   normalizeRepeatDays,
@@ -99,7 +100,11 @@ const statusSchema = new mongoose.Schema(
       default: "pending",
     },
     updatedAt: { type: Date, default: Date.now },
+    // When this user last changed the status (set on save); the task list shows the task on this day.
+    statusChangedAt: { type: Date, default: null },
     remarks: String,
+    holdStartedAt: { type: Date, default: null },
+    holdOverdueCheckAt: { type: Date, default: null },
     pendingDueReminderSentAt: Date,
     pendingDueReminderDueAt: Date,
   },
@@ -167,7 +172,6 @@ const taskSchema = new mongoose.Schema(
     companyCode: {
       type: String,
       required: true,
-      index: true,
       default: ''
     },
 
@@ -276,6 +280,8 @@ const taskSchema = new mongoose.Schema(
     overdueReason: String,
     overdueNotified: { type: Boolean, default: false },
     onHoldReleasedAt: { type: Date, default: null },
+    holdStartedAt: { type: Date, default: null },
+    holdOverdueCheckAt: { type: Date, default: null },
     completionDate: Date,
 
     lastActivityAt: { type: Date, default: Date.now },
@@ -313,7 +319,10 @@ taskSchema.index({ isActive: 1, dueDateTime: 1, overallStatus: 1 });
 taskSchema.index({ isActive: 1, dueDateTime: 1, 'statusByUser.status': 1 });
 taskSchema.index({ createdBy: 1, createdAt: -1 });
 taskSchema.index({ companyCode: 1, createdBy: 1, createdAt: -1 });
+taskSchema.index({ companyCode: 1, createdBy: 1, taskFor: 1, isActive: 1, createdAt: -1 });
 taskSchema.index({ companyCode: 1, assignedUsers: 1, updatedAt: -1 });
+taskSchema.index({ companyCode: 1, assignedUsers: 1, isActive: 1, updatedAt: -1 });
+taskSchema.index({ companyCode: 1, lastActivityAt: -1, updatedAt: -1 });
 taskSchema.index({ companyCode: 1, taskFor: 1, isActive: 1, createdAt: -1 });
 taskSchema.index({ 'statusByUser.user': 1, 'statusByUser.status': 1 });
 taskSchema.index(
@@ -367,9 +376,25 @@ taskSchema.virtual('daysOverdue').get(function() {
  
 
 
+// assignedUsers / statusByUser.user may be populated user documents (the overdue cron populates
+// assignedUsers). Document.toString() is not the id, so a plain toString() comparison never matched and
+// checkAndMarkOverdue pushed a second statusByUser entry per user while the stale one stayed first.
+const sameTaskUserId = (left, right) => String(left?._id || left) === String(right?._id || right);
+
+// Automatic overdue marking is not a user change; the task keeps its listed date.
+taskSchema.pre('save', function (next) {
+  if (!this.isNew) {
+    const now = new Date();
+    (this.statusByUser || []).forEach(entry => {
+      if ((entry.isNew || entry.isModified('status')) && entry.status !== 'overdue') entry.statusChangedAt = now;
+    });
+  }
+  next();
+});
+
 taskSchema.methods.updateUserStatus = function (userId, status, remarks = "") {
   const userStatusIndex = this.statusByUser.findIndex(
-    (s) => s.user && s.user.toString() === userId.toString()
+    (s) => s.user && sameTaskUserId(s.user, userId)
   );
 
   const oldStatus = userStatusIndex !== -1 
@@ -416,7 +441,7 @@ taskSchema.methods.checkAndMarkOverdue = function () {
   
   this.assignedUsers.forEach((userId) => {
     const userStatusIndex = this.statusByUser.findIndex(
-      (s) => s.user && s.user.toString() === userId.toString()
+      (s) => s.user && sameTaskUserId(s.user, userId)
     );
     
     if (userStatusIndex !== -1) {
@@ -443,7 +468,7 @@ taskSchema.methods.checkAndMarkOverdue = function () {
   
   const allUsersOverdue = this.assignedUsers.length > 0 && this.assignedUsers.every((assignedUserId) => {
     const userStatus = this.statusByUser.find(
-      s => s.user && s.user.toString() === assignedUserId.toString()
+      s => s.user && sameTaskUserId(s.user, assignedUserId)
     );
     return userStatus && userStatus.status === 'overdue';
   });
@@ -476,7 +501,7 @@ taskSchema.methods.markUserStatusOverdue = function (userId, remarks = '') {
   if (!canMoveToOverdue(this.overallStatus)) return false;
 
   const userStatusIndex = this.statusByUser.findIndex(
-    (s) => s.user && s.user.toString() === userId.toString()
+    (s) => s.user && sameTaskUserId(s.user, userId)
   );
   
   if (userStatusIndex === -1) {
@@ -498,7 +523,7 @@ taskSchema.methods.markUserStatusOverdue = function (userId, remarks = '') {
   
   const allUsersOverdue = this.assignedUsers.every(assignedUserId => {
     const userStatus = this.statusByUser.find(
-      s => s.user && s.user.toString() === assignedUserId.toString()
+      s => s.user && sameTaskUserId(s.user, assignedUserId)
     );
     return userStatus && userStatus.status === 'overdue';
   });
@@ -604,7 +629,7 @@ taskSchema.statics.getTaskWithUserStatus = async function (taskId, userId) {
   if (!task) return null;
   
   const userStatus = task.statusByUser.find(
-    s => s.user && s.user.toString() === userId.toString()
+    s => s.user && sameTaskUserId(s.user, userId)
   );
   
   return {
@@ -615,6 +640,15 @@ taskSchema.statics.getTaskWithUserStatus = async function (taskId, userId) {
 };
 
  
+taskSchema.pre('save', function(next) {
+  const now = new Date();
+  trackHoldClock(this, this.overallStatus, this.isModified('overallStatus'), now);
+  for (const item of this.statusByUser || []) {
+    trackHoldClock(item, item.status, item.isModified('status'), now);
+  }
+  next();
+});
+
 taskSchema.pre("save", function (next) {
   const normalizedRepeatPattern = normalizeRepeatPattern(this.repeatPattern || this.recurringPattern);
   const normalizedRepeatDays = normalizeRepeatDays(this.repeatDays);
@@ -678,4 +712,11 @@ taskSchema.post("save", function (doc) {
 });
 
  
+taskSchema.index({ overallStatus: 1, holdOverdueCheckAt: 1 });
+taskSchema.index({ 'statusByUser.status': 1, 'statusByUser.holdOverdueCheckAt': 1 });
+taskSchema.index({ companyCode: 1, taskFor: 1, isActive: 1, createdAt: -1 });
+taskSchema.index({ companyCode: 1, assignedUsers: 1, isActive: 1, createdAt: -1 });
+taskSchema.index({ companyCode: 1, createdBy: 1, isActive: 1, createdAt: -1 });
+taskSchema.index({ companyCode: 1, branch: 1, isActive: 1, createdAt: -1 });
+
 module.exports = mongoose.model("Task", taskSchema);

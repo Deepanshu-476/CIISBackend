@@ -91,7 +91,6 @@ departmentSchema.index({ name: 1, company: 1 }, {
   partialFilterExpression: { isActive: true }
 });
 departmentSchema.index({ company: 1, isActive: 1, createdAt: -1 });
-departmentSchema.index({ company: 1, branch: 1, isActive: 1 });
 departmentSchema.index({ company: 1, supportHead: 1, isActive: 1 });
 departmentSchema.index({ company: 1, branch: 1, isActive: 1, createdAt: -1 });
 departmentSchema.index({ companyCode: 1, isActive: 1 });

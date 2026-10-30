@@ -53,6 +53,12 @@ const sanitizeConfig = config => {
   return config;
 };
 
+const toMutableConfig = config => {
+  if (!config) return config;
+  if (typeof config.toObject === 'function') return config.toObject();
+  return { ...config };
+};
+
 const getRouteAccessKeys = item => {
   const id = String(item?.id || '').trim();
   const rawPath = String(item?.path || '').trim();
@@ -86,8 +92,21 @@ const getRouteAccessKeys = item => {
   return keys;
 };
 
+const companyPlanCache = new Map();
+const getCompanyPlanAccess = async (companyId) => {
+  const key = String(companyId || '').trim();
+  if (!key) return null;
+  const cached = companyPlanCache.get(key);
+  if (cached && (Date.now() - cached.timestamp < 30000)) {
+    return cached.company;
+  }
+  const company = await Company.findById(key).select('allowedPages isActive subscriptionExpiry').lean();
+  companyPlanCache.set(key, { timestamp: Date.now(), company });
+  return company;
+};
+
 const filterMenuItemsByCompanyAccess = async (companyId, menuItems) => {
-  const company = await Company.findById(companyId).select('allowedPages isActive subscriptionExpiry');
+  const company = await getCompanyPlanAccess(companyId);
   const isPlanActive = company && company.isActive && company.subscriptionExpiry && new Date() <= new Date(company.subscriptionExpiry);
   const allowedPages = isPlanActive && Array.isArray(company?.allowedPages) ? company.allowedPages : [];
 
@@ -100,6 +119,23 @@ const filterMenuItemsByCompanyAccess = async (companyId, menuItems) => {
     const itemKeys = [...getRouteAccessKeys(item)].map(key => normalizeKey(key)).filter(Boolean);
     return itemKeys.some(key => allowedSet.has(key));
   });
+};
+
+const sidebarCache = new Map();
+const SIDEBAR_CACHE_TTL = 30000;
+const invalidateSidebarCache = () => {
+  sidebarCache.clear();
+  companyPlanCache.clear();
+};
+
+const sanitizeConfigForCompanyAccess = async (config) => {
+  if (!config) return config;
+  const mutableConfig = sanitizeConfig(toMutableConfig(config));
+  mutableConfig.menuItems = await filterMenuItemsByCompanyAccess(
+    mutableConfig.companyId?._id || mutableConfig.companyId,
+    mutableConfig.menuItems
+  );
+  return mutableConfig;
 };
 
 const escapeRegex = value => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -203,16 +239,6 @@ const findSidebarConfig = async ({ companyId, branchId, departmentId, role }) =>
     if (anyConfig) return anyConfig;
   }
 
-  if (baseQuery.departmentId) {
-    const roleOnlyQuery = { companyId, role: roleQuery, isActive: { $ne: false } };
-    if (branchId && mongoose.Types.ObjectId.isValid(branchId)) {
-      const branchRoleConfig = await SidebarConfig.findOne({ ...roleOnlyQuery, branchId }).sort({ updatedAt: -1 });
-      if (branchRoleConfig) return branchRoleConfig;
-    }
-    const anyRoleConfig = await SidebarConfig.findOne(roleOnlyQuery).sort({ updatedAt: -1 });
-    if (anyRoleConfig) return anyRoleConfig;
-  }
-
   return null;
 };
 
@@ -246,6 +272,12 @@ router.get('/', async (req, res) => {
       return res.json({ success: true, count: 0, data: [] });
     }
     
+    const cacheKey = `list_${companyId || ''}_${branchId || ''}_${departmentId || ''}_${role || ''}`;
+    const cached = sidebarCache.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp < SIDEBAR_CACHE_TTL)) {
+      return res.json(cached.payload);
+    }
+
     let query = {};
     if (companyId) query.companyId = companyId;
     if (branchId) query.branchId = branchId;
@@ -258,11 +290,31 @@ router.get('/', async (req, res) => {
       .populate('departmentId', 'name')
       .sort({ createdAt: -1 });
     
-    res.json({
+    const sanitizedConfigs = await Promise.all(configs.map(sanitizeConfigForCompanyAccess));
+    // Role is stored as a string (either a role name or a JobRole ObjectId).
+    // Resolve names here so display does not depend on the job-role management API.
+    const roleIds = [...new Set(sanitizedConfigs.map(config => String(config.role || ''))
+      .filter(value => mongoose.Types.ObjectId.isValid(value)))];
+    if (roleIds.length) {
+      // Copied sidebar templates can retain source-company role IDs.
+      // Resolve only names of roles explicitly referenced by authorized configs.
+      const roles = await JobRole.find({ _id: { $in: roleIds } })
+        .select('_id name').lean();
+      const roleNames = new Map(roles.map(item => [String(item._id), item.name]));
+      sanitizedConfigs.forEach(config => {
+        config.roleName = roleNames.get(String(config.role)) ||
+          (mongoose.Types.ObjectId.isValid(String(config.role || ''))
+            ? 'Role unavailable' : config.role);
+      });
+    }
+
+    const payload = {
       success: true,
-      count: configs.length,
-      data: configs.map(sanitizeConfig)
-    });
+      count: sanitizedConfigs.length,
+      data: sanitizedConfigs
+    };
+    sidebarCache.set(cacheKey, { timestamp: Date.now(), payload });
+    return res.json(payload);
   } catch (error) {
     console.error('Error fetching sidebar configs:', error);
     res.status(500).json({ 
@@ -294,6 +346,12 @@ router.get('/config', async (req, res) => {
         success: false,
         message: 'Company and role are required'
       });
+    }
+
+    const cacheKey = `config_${companyId || ''}_${branchId || ''}_${departmentId || ''}_${role || ''}`;
+    const cached = sidebarCache.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp < SIDEBAR_CACHE_TTL)) {
+      return res.json(cached.payload);
     }
 
     if (companyId && mongoose.Types.ObjectId.isValid(companyId) && departmentId) {
@@ -345,13 +403,15 @@ router.get('/config', async (req, res) => {
       });
     }
 
-    sanitizeConfig(config);
+    const sanitizedConfig = await sanitizeConfigForCompanyAccess(config);
     
-    res.json({
+    const payload = {
       success: true,
       message: 'Configuration found',
-      data: config
-    });
+      data: sanitizedConfig
+    };
+    sidebarCache.set(cacheKey, { timestamp: Date.now(), payload });
+    return res.json(payload);
   } catch (error) {
     console.error('Error fetching config:', error);
     res.status(500).json({ 
@@ -422,7 +482,10 @@ router.post('/', requireSidebarManager, async (req, res) => {
       }
     }
     
-    const cleanedItems = removeRetiredSidebarItems(menuItems);
+    const cleanedItems = await filterMenuItemsByCompanyAccess(
+      companyId,
+      removeRetiredSidebarItems(menuItems)
+    );
     const cleanedRanges = Array.isArray(ranges) ? ranges : [];
 
     const configKey = {
@@ -445,32 +508,11 @@ router.post('/', requireSidebarManager, async (req, res) => {
       { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
     );
 
-    // Synchronize all other configs for this role in this company
-    // so every user assigned this role receives the changes!
-    try {
-      const { query: roleQuery } = await buildRoleQuery(companyId, departmentId, role);
-      await SidebarConfig.updateMany(
-        {
-          companyId,
-          role: roleQuery,
-          _id: { $ne: savedConfig._id }
-        },
-        {
-          $set: {
-            menuItems: cleanedItems,
-            ranges: cleanedRanges,
-            updatedAt: new Date()
-          }
-        }
-      );
-    } catch (syncErr) {
-      console.warn('Warning: sync cross-branch error in POST:', syncErr.message);
-    }
-
     const populatedConfig = await SidebarConfig.findById(savedConfig._id)
       .populate('companyId', 'companyName companyCode')
       .populate('departmentId', 'name');
     
+    invalidateSidebarCache();
     res.status(200).json({
       success: true,
       message: 'Configuration saved successfully',
@@ -539,7 +581,10 @@ router.put('/:id', requireSidebarManager, async (req, res) => {
       }
     }
 
-    const cleanedItems = removeRetiredSidebarItems(menuItems);
+    const cleanedItems = await filterMenuItemsByCompanyAccess(
+      targetCompanyId,
+      removeRetiredSidebarItems(menuItems)
+    );
     const cleanedRanges = Array.isArray(ranges) ? ranges : [];
 
     const updatedConfig = await SidebarConfig.findByIdAndUpdate(
@@ -556,33 +601,7 @@ router.put('/:id', requireSidebarManager, async (req, res) => {
     ).populate('companyId', 'companyName')
      .populate('departmentId', 'name');
 
-    // Also synchronize this role's other configs across the company
-    try {
-      const targetRole = role || existingConfig.role;
-      const targetDept = departmentId || existingConfig.departmentId?._id || existingConfig.departmentId;
-
-      if (targetCompanyId && targetRole) {
-        const { query: roleQuery } = await buildRoleQuery(targetCompanyId, targetDept, targetRole);
-
-        await SidebarConfig.updateMany(
-          {
-            companyId: targetCompanyId,
-            role: roleQuery,
-            _id: { $ne: id }
-          },
-          {
-            $set: {
-              menuItems: cleanedItems,
-              ranges: cleanedRanges,
-              updatedAt: new Date()
-            }
-          }
-        );
-      }
-    } catch (syncError) {
-      console.warn('Warning: Could not sync cross-branch configs:', syncError.message);
-    }
-    
+    invalidateSidebarCache();
     res.json({
       success: true,
       message: 'Configuration updated successfully',
@@ -623,6 +642,7 @@ router.delete('/:id', requireSidebarManager, async (req, res) => {
     }
 
     await SidebarConfig.findByIdAndDelete(id);
+    invalidateSidebarCache();
     
     res.json({
       success: true,
@@ -681,12 +701,12 @@ router.get('/user-config', async (req, res) => {
       });
     }
 
-    sanitizeConfig(config);
+    const sanitizedConfig = await sanitizeConfigForCompanyAccess(config);
     
     res.json({
       success: true,
       message: 'Configuration found',
-      data: config
+      data: sanitizedConfig
     });
   } catch (error) {
     console.error('Error fetching user config:', error);
@@ -706,5 +726,6 @@ router.get("/test", (req, res) => {
     user: req.user
   });
 });
+router.findSidebarConfig = findSidebarConfig;
 module.exports = router;
-void 0;
+module.exports.findSidebarConfig = findSidebarConfig;

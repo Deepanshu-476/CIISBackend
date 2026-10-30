@@ -2,11 +2,11 @@ const mongoose = require("mongoose");
 const { autoResolveLead, cascadeLeadUpdate } = require("../services/cascadeSyncEngine");
 
 const leadSchema = new mongoose.Schema({
-  company: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', index: true },
+  company: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' },
   leadSource: { type: mongoose.Schema.Types.ObjectId, ref: 'LeadSource', index: true },
-  leadSourceName: { type: String, index: true, default: '' },
+  leadSourceName: { type: String, default: '' },
   leadType: { type: mongoose.Schema.Types.ObjectId, ref: 'LeadType', index: true },
-  leadTypeName: { type: String, index: true, default: '' },
+  leadTypeName: { type: String, default: '' },
   gender: { type: String, enum: ['', 'Male', 'Female', 'Other'], default: '' },
   leadDate: String,
   address: String,
@@ -16,22 +16,22 @@ const leadSchema = new mongoose.Schema({
   customField4: String,
   customField5: String,
   remarks: String,
-  name: { type: String, index: true },
-  phone: { type: String, index: true },
+  name: { type: String },
+  phone: { type: String },
   email: String,
-  source: { type: String, index: true },       
+  source: { type: String },       
   status: {
     type: String,
-    enum: ["new", "follow-up", "interested", "not interested", "converted", "closed"],
+    // contacted and negotiation are pipeline stages set from the Kanban board.
+    enum: ["new", "contacted", "follow-up", "interested", "negotiation", "not interested", "converted", "closed"],
     default: "new",
-    index: true,
   },
   assignedTo: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
     index: true
   },
-  assignedToName: { type: String, index: true, default: '' },
+  assignedToName: { type: String, default: '' },
   assignedToEmail: { type: String, default: '' },
   assignedToRole: { type: String, default: '' },
   assignedAt: {
@@ -39,6 +39,10 @@ const leadSchema = new mongoose.Schema({
     index: true
   },
   nextFollowUp: { type: Date, index: true },
+  // Set by a missed call from the lead; cleared by the next answered or outgoing call. Lists show these first.
+  lastMissedCallAt: { type: Date, default: null },
+  campaign: { type: mongoose.Schema.Types.ObjectId, ref: 'Campaign', default: null },
+  campaignName: { type: String, default: '' },
   callHistory: [{
     _id: false,
     id: { type: String, required: true },
@@ -77,6 +81,11 @@ leadSchema.index({ company: 1, name: 1, phone: 1 });
 leadSchema.index({ company: 1, assignedToName: 1 });
 leadSchema.index({ company: 1, leadSourceName: 1 });
 leadSchema.index({ company: 1, leadTypeName: 1 });
+leadSchema.index({ company: 1, campaign: 1 });
+// Sort keys of the paged CRM lists (assigned / pending / completed / converted).
+leadSchema.index({ company: 1, assignedAt: -1 });
+leadSchema.index({ company: 1, status: 1, assignedAt: -1 });
+leadSchema.index({ company: 1, status: 1, updatedAt: -1 });
 
 // Pre-save Auto-Resolution
 leadSchema.pre('save', async function(next) {

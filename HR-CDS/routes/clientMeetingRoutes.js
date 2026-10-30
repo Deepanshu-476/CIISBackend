@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { protect } = require('../../middleware/authMiddleware');
 const {
   getMeetings,
   getMeeting,
@@ -17,6 +18,7 @@ const {
   getMeetingHistory
 } = require('../controllers/clientMeetingController');
 
+router.use(protect);
 
 router.get('/', getMeetings);
 router.get('/stats', getMeetingStats);

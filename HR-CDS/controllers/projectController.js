@@ -3,8 +3,12 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const sharp = require("sharp");
-const { notifyDirectUsers } = require("../utils/systemNotificationService");
-const { enqueueCompletionJob } = require("../utils/backgroundJobQueue");
+const { notifyDirectUsers: sendDirectUserNotifications } = require("../utils/systemNotificationService");
+const notifyDirectUsers = async options => {
+  try { return await sendDirectUserNotifications(options); }
+  catch (error) { console.error('Project notification delivery failed:', error.message); return []; }
+};
+const { enqueueCompletionJob, enqueueBackgroundJob } = require("../utils/backgroundJobQueue");
 const { sendEmail } = require("../../utils/sendEmail");
 const { normalizeTaskReminderSettings } = require("../utils/taskReminderSettings");
 const User = require("../../models/User");
@@ -13,6 +17,7 @@ const mongoose = require("mongoose");
 const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagination");
 
 const PROJECT_USER_POPULATE_FIELDS = 'name email role jobRole companyRole profileImage avatar department branch assignedBranches';
+const PROJECT_TASK_USER_POPULATE_FIELDS = 'name email role jobRole companyRole';
 
 const normalizeIdList = (value) => {
   const input = Array.isArray(value) ? value : value ? [value] : [];
@@ -172,6 +177,7 @@ const normalizeTaskStatus = (value = "pending") => {
   const normalized = String(value || "pending").trim().toLowerCase();
   if (normalized === "in progress" || normalized === "inprogress") return "in-progress";
   if (normalized === "on hold" || normalized === "onhold") return "onhold";
+  if (normalized === "re-open" || normalized === "re open") return "reopen";
   return normalized;
 };
 
@@ -179,6 +185,7 @@ const toProjectTaskStatus = (value = "pending") => {
   const normalized = normalizeTaskStatus(value);
   if (normalized === "in-progress") return "in progress";
   if (normalized === "onhold") return "on hold";
+  if (normalized === "reopen" || normalized === "re-open") return "reopen";
   return normalized;
 };
 
@@ -284,27 +291,6 @@ const projectBelongsToUserCompany = (project, user = {}) => {
   return true;
 };
 
-const hasProjectAccess = (project, userId, userRole, user = {}) => {
-  if (!projectBelongsToUserCompany(project, user)) {
-    return false;
-  }
-
-
-  if (isProjectAdmin({ ...user, role: userRole || user.role })) {
-    return true;
-  }
-
-
-  const isUserInProject = project.users.some(user =>
-    idsEqual(user, userId)
-  );
-
-
-  const isCreator = idsEqual(project.createdBy, userId);
-
-  return isUserInProject || isCreator;
-};
-
 const idsEqual = (left, right) => {
   if (!left || !right) return false;
   const leftId = left._id || left.id || left;
@@ -320,6 +306,29 @@ const getTaskAssigneeIds = (task = {}) => {
 
 const isTaskAssignedToUser = (task, userId) =>
   getTaskAssigneeIds(task).some(assigneeId => idsEqual(assigneeId, userId));
+
+const hasProjectAccess = (project, userId, userRole, user = {}) => {
+  if (!projectBelongsToUserCompany(project, user)) {
+    return false;
+  }
+
+  if (isProjectAdmin({ ...user, role: userRole || user.role })) {
+    return true;
+  }
+
+  const isUserInProject = Array.isArray(project.users) && project.users.some(u =>
+    idsEqual(u, userId)
+  );
+
+  const isCreator = idsEqual(project.createdBy, userId);
+
+  const hasAssignedTask = Array.isArray(project.tasks) && project.tasks.some(task =>
+    isTaskAssignedToUser(task, userId)
+  );
+
+  const isManager = (project.managers || []).some(user => idsEqual(user, userId));
+  return Boolean(isUserInProject || isCreator || isManager || hasAssignedTask);
+};
 
 const sendProjectTaskAssignmentEmail = async ({ user, actorName, taskTitle, projectName, dueDate }) => {
   if (!user?.email) return;
@@ -413,6 +422,8 @@ const resolveProjectFilePath = (rawPath, filename) => {
     cleanName ? path.resolve("/var/www/app1/uploads/projects", cleanName) : null,
     cleanName ? path.resolve("/var/www/app2/HR-CDS/uploads/projects", cleanName) : null,
     cleanName ? path.resolve("/var/www/app1/HR-CDS/uploads/projects", cleanName) : null,
+    cleanName ? path.resolve("/var/www/CIISWEBBACKEND/uploads/projects", cleanName) : null,
+    cleanName ? path.resolve("/var/www/CIISWEBBACKEND/HR-CDS/uploads/projects", cleanName) : null,
     cleanName ? path.resolve("/var/www/backendruno/uploads/projects", cleanName) : null,
     cleanName ? path.resolve("/var/www/backendruno/HR-CDS/uploads/projects", cleanName) : null,
     cleanName ? path.resolve("/var/www/backendruno_backup_20261007/uploads/projects", cleanName) : null,
@@ -448,8 +459,6 @@ const normalizeTaskPdfFile = (task, project = null) => {
   const rawPath = String(pdfFile?.path || pdfFile?.url || '').trim();
   if (!pdfFile || !rawPath) return null;
   const original = pdfFile.originalName || pdfFile.filename || path.basename(rawPath);
-  const resolved = resolveProjectFilePath(rawPath, original);
-  if (!resolved && !String(rawPath).startsWith('http')) return null;
   return {
     ...pdfFile,
     filename: original,
@@ -718,13 +727,22 @@ exports.listProjects = async (req, res) => {
 
 
     if (!isProjectAdmin(req.user)) {
+      const userObjId = mongoose.Types.ObjectId.isValid(req.user.id) ? new mongoose.Types.ObjectId(req.user.id) : null;
       query = {
         $and: [
           query,
           {
             $or: [
               { users: req.user.id },
-              { createdBy: req.user.id }
+              { createdBy: req.user.id },
+              { "tasks.assignedTo": req.user.id },
+              { "tasks.assignedUsers": req.user.id },
+              ...(userObjId ? [
+                { users: userObjId },
+                { createdBy: userObjId },
+                { "tasks.assignedTo": userObjId },
+                { "tasks.assignedUsers": userObjId },
+              ] : [])
             ]
           }
         ]
@@ -772,6 +790,7 @@ exports.listProjects = async (req, res) => {
     }
 
     const projectQuery = Project.find(query)
+      .select('-tasks.activityLogs -tasks.remarks -notifications')
       .populate('users', PROJECT_USER_POPULATE_FIELDS)
       .populate('branch', 'name branchCode')
       .populate('createdBy', PROJECT_USER_POPULATE_FIELDS)
@@ -780,9 +799,9 @@ exports.listProjects = async (req, res) => {
       .limit(limit);
 
     projectQuery
-      .populate('tasks.assignedTo', PROJECT_USER_POPULATE_FIELDS)
-      .populate('tasks.assignedUsers', PROJECT_USER_POPULATE_FIELDS)
-      .populate('tasks.createdBy', PROJECT_USER_POPULATE_FIELDS);
+      .populate('tasks.assignedTo', PROJECT_TASK_USER_POPULATE_FIELDS)
+      .populate('tasks.assignedUsers', PROJECT_TASK_USER_POPULATE_FIELDS)
+      .populate('tasks.createdBy', PROJECT_TASK_USER_POPULATE_FIELDS);
 
     const [projects, total] = await Promise.all([
       projectQuery.lean(),
@@ -814,40 +833,323 @@ exports.listProjects = async (req, res) => {
 
 exports.getProjectById = async (req, res) => {
   try {
-    void 0;
-    void 0;
-    void 0;
-    void 0;
+    const projectId = req.params.id;
+    if (!mongoose.Types.ObjectId.isValid(projectId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid project ID"
+      });
+    }
 
-    const project = await Project.findById(req.params.id)
-      .populate('users', PROJECT_USER_POPULATE_FIELDS)
-      .populate('createdBy', PROJECT_USER_POPULATE_FIELDS)
-      .populate('branch', 'name branchCode')
-      .populate('tasks.assignedTo', PROJECT_USER_POPULATE_FIELDS)
-      .populate('tasks.assignedUsers', PROJECT_USER_POPULATE_FIELDS)
-      .populate('tasks.createdBy', PROJECT_USER_POPULATE_FIELDS)
-      .populate('tasks.remarks.createdBy', PROJECT_USER_POPULATE_FIELDS)
-      .lean();
+    const id = new mongoose.Types.ObjectId(projectId);
+    const now = new Date();
+
+    // Pagination & Filter params
+    const isAllRequested = ['1', 'true', 'yes'].includes(String(req.query.all || '').toLowerCase());
+    const rawPage = parseInt(req.query.page, 10);
+    const page = Number.isInteger(rawPage) && rawPage > 0 ? rawPage : 1;
+
+    const rawLimit = parseInt(req.query.limit, 10);
+    const limit = Number.isInteger(rawLimit) && rawLimit > 0 ? Math.min(Math.max(rawLimit, 1), 100) : 10;
+    const startIndex = (page - 1) * limit;
+
+    // Build filter conditions for tasks
+    const filterConds = [];
+
+    const statusFilter = String(req.query.status || '').trim().toLowerCase();
+    if (statusFilter && statusFilter !== 'all') {
+      if (statusFilter === 'overdue') {
+        filterConds.push({
+          $or: [
+            { $eq: [{ $toLower: { $ifNull: ["$$t.status", "pending"] } }, "overdue"] },
+            {
+              $and: [
+                { $eq: [{ $toLower: { $ifNull: ["$$t.status", "pending"] } }, "pending"] },
+                { $lt: ["$$t.dueDate", now] }
+              ]
+            }
+          ]
+        });
+      } else if (statusFilter === 'high priority' || statusFilter === 'high-priority') {
+        filterConds.push({
+          $eq: [{ $toLower: { $ifNull: ["$$t.priority", "medium"] } }, "high"]
+        });
+      } else if (statusFilter === 'in-progress' || statusFilter === 'in progress') {
+        filterConds.push({
+          $in: [{ $toLower: { $ifNull: ["$$t.status", "pending"] } }, ["in-progress", "in progress", "inprogress"]]
+        });
+      } else if (statusFilter === 'onhold' || statusFilter === 'on hold') {
+        filterConds.push({
+          $in: [{ $toLower: { $ifNull: ["$$t.status", "pending"] } }, ["onhold", "on hold"]]
+        });
+      } else if (statusFilter === 'pending') {
+        filterConds.push({
+          $and: [
+            { $eq: [{ $toLower: { $ifNull: ["$$t.status", "pending"] } }, "pending"] },
+            {
+              $or: [
+                { $eq: [{ $ifNull: ["$$t.dueDate", null] }, null] },
+                { $gte: ["$$t.dueDate", now] }
+              ]
+            }
+          ]
+        });
+      } else {
+        filterConds.push({
+          $eq: [{ $toLower: { $ifNull: ["$$t.status", "pending"] } }, statusFilter]
+        });
+      }
+    }
+
+    const teamFilter = String(req.query.team || req.query.assignee || '').trim();
+    if (teamFilter && teamFilter !== 'all') {
+      if (teamFilter === 'unassigned') {
+        filterConds.push({
+          $and: [
+            { $eq: [{ $ifNull: ["$$t.assignedTo", null] }, null] },
+            { $eq: [{ $size: { $ifNull: ["$$t.assignedUsers", []] } }, 0] }
+          ]
+        });
+      } else if (mongoose.Types.ObjectId.isValid(teamFilter)) {
+        const teamObjId = new mongoose.Types.ObjectId(teamFilter);
+        filterConds.push({
+          $or: [
+            { $eq: ["$$t.assignedTo", teamObjId] },
+            { $in: [teamObjId, { $ifNull: ["$$t.assignedUsers", []] }] }
+          ]
+        });
+      }
+    }
+
+    const searchTerm = String(req.query.search || '').trim();
+    if (searchTerm) {
+      filterConds.push({
+        $or: [
+          { $regexMatch: { input: { $ifNull: ["$$t.title", ""] }, regex: searchTerm, options: "i" } },
+          { $regexMatch: { input: { $ifNull: ["$$t.description", ""] }, regex: searchTerm, options: "i" } }
+        ]
+      });
+    }
+
+    const taskFilterExpr = filterConds.length === 0
+      ? { $ifNull: ["$tasks", []] }
+      : {
+          $filter: {
+            input: { $ifNull: ["$tasks", []] },
+            as: "t",
+            cond: { $and: filterConds }
+          }
+        };
+
+    // Run project metadata query and task aggregation in parallel
+    const [project, aggResults] = await Promise.all([
+      Project.findById(id)
+        .select('projectName description company companyCode branch users status startDate endDate priority pdfFile createdBy createdAt updatedAt')
+        .populate('users', PROJECT_USER_POPULATE_FIELDS)
+        .populate('createdBy', PROJECT_USER_POPULATE_FIELDS)
+        .populate('branch', 'name branchCode')
+        .lean(),
+      Project.aggregate([
+        { $match: { _id: id } },
+        {
+          $project: {
+            stats: {
+              totalTasks: { $size: { $ifNull: ["$tasks", []] } },
+              completedTasks: {
+                $size: {
+                  $filter: {
+                    input: { $ifNull: ["$tasks", []] },
+                    as: "t",
+                    cond: { $eq: [{ $toLower: { $ifNull: ["$$t.status", "pending"] } }, "completed"] }
+                  }
+                }
+              },
+              inProgressTasks: {
+                $size: {
+                  $filter: {
+                    input: { $ifNull: ["$tasks", []] },
+                    as: "t",
+                    cond: {
+                      $in: [
+                        { $toLower: { $ifNull: ["$$t.status", "pending"] } },
+                        ["in-progress", "in progress", "inprogress"]
+                      ]
+                    }
+                  }
+                }
+              },
+              overdueTasks: {
+                $size: {
+                  $filter: {
+                    input: { $ifNull: ["$tasks", []] },
+                    as: "t",
+                    cond: {
+                      $or: [
+                        { $eq: [{ $toLower: { $ifNull: ["$$t.status", "pending"] } }, "overdue"] },
+                        {
+                          $and: [
+                            { $eq: [{ $toLower: { $ifNull: ["$$t.status", "pending"] } }, "pending"] },
+                            { $lt: ["$$t.dueDate", now] }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              },
+              pendingTasks: {
+                $size: {
+                  $filter: {
+                    input: { $ifNull: ["$tasks", []] },
+                    as: "t",
+                    cond: {
+                      $and: [
+                        { $eq: [{ $toLower: { $ifNull: ["$$t.status", "pending"] } }, "pending"] },
+                        {
+                          $or: [
+                            { $eq: [{ $ifNull: ["$$t.dueDate", null] }, null] },
+                            { $gte: ["$$t.dueDate", now] }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              },
+              onHoldTasks: {
+                $size: {
+                  $filter: {
+                    input: { $ifNull: ["$tasks", []] },
+                    as: "t",
+                    cond: {
+                      $in: [
+                        { $toLower: { $ifNull: ["$$t.status", "pending"] } },
+                        ["onhold", "on hold"]
+                      ]
+                    }
+                  }
+                }
+              },
+              cancelledTasks: {
+                $size: {
+                  $filter: {
+                    input: { $ifNull: ["$tasks", []] },
+                    as: "t",
+                    cond: { $eq: [{ $toLower: { $ifNull: ["$$t.status", "pending"] } }, "cancelled"] }
+                  }
+                }
+              },
+              unassignedTasks: {
+                $size: {
+                  $filter: {
+                    input: { $ifNull: ["$tasks", []] },
+                    as: "t",
+                    cond: {
+                      $and: [
+                        { $eq: [{ $ifNull: ["$$t.assignedTo", null] }, null] },
+                        { $eq: [{ $size: { $ifNull: ["$$t.assignedUsers", []] } }, 0] }
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            tasksSummary: {
+              $map: {
+                input: { $ifNull: ["$tasks", []] },
+                as: "t",
+                in: {
+                  assignedTo: "$$t.assignedTo",
+                  assignedUsers: "$$t.assignedUsers",
+                  status: "$$t.status",
+                  dueDate: "$$t.dueDate"
+                }
+              }
+            },
+            matchedTasks: {
+              $sortArray: {
+                input: taskFilterExpr,
+                sortBy: { createdAt: -1 }
+              }
+            }
+          }
+        },
+        {
+          $project: {
+            stats: {
+              $mergeObjects: [
+                "$stats",
+                {
+                  progress: {
+                    $cond: [
+                      { $gt: ["$stats.totalTasks", 0] },
+                      { $round: [{ $multiply: [{ $divide: ["$stats.completedTasks", "$stats.totalTasks"] }, 100] }, 0] },
+                      0
+                    ]
+                  }
+                }
+              ]
+            },
+            tasksSummary: 1,
+            totalFiltered: { $size: "$matchedTasks" },
+            // Omit activityLogs from slicedTasks for ultra-lightweight response (activity logs load on demand via /activity endpoint)
+            slicedTasks: {
+              $map: {
+                input: isAllRequested
+                  ? "$matchedTasks"
+                  : { $slice: ["$matchedTasks", startIndex, limit] },
+                as: "st",
+                in: {
+                  _id: "$$st._id",
+                  title: "$$st.title",
+                  description: "$$st.description",
+                  assignedTo: "$$st.assignedTo",
+                  assignedUsers: "$$st.assignedUsers",
+                  dueDate: "$$st.dueDate",
+                  dueDateTime: "$$st.dueDateTime",
+                  onHoldReleasedAt: "$$st.onHoldReleasedAt",
+                  completionDate: "$$st.completionDate",
+                  priority: "$$st.priority",
+                  status: "$$st.status",
+                  pdfFile: "$$st.pdfFile",
+                  checkpoints: "$$st.checkpoints",
+                  reminderSettings: "$$st.reminderSettings",
+                  remarks: "$$st.remarks",
+                  createdBy: "$$st.createdBy",
+                  createdAt: "$$st.createdAt",
+                  updatedAt: "$$st.updatedAt"
+                }
+              }
+            }
+          }
+        }
+      ])
+    ]);
 
     if (!project) {
-      void 0;
       return res.status(404).json({
         success: false,
         message: "Project not found"
       });
     }
 
-    void 0;
-    void 0;
-    void 0;
+    const agg = aggResults[0] || {};
+    const totalFiltered = agg.totalFiltered || 0;
+    const totalPages = Math.max(1, Math.ceil(totalFiltered / limit));
+    const safePage = Math.min(page, totalPages);
+    const slicedTasks = agg.slicedTasks || [];
+    const tasksSummary = agg.tasksSummary || [];
 
+    // Access control check
+    const isCompanyAdmin = isProjectAdmin(req.user);
+    const isMember = Array.isArray(project.users) && project.users.some(u => idsEqual(u, req.user.id));
+    const isCreator = idsEqual(project.createdBy, req.user.id);
+    const hasAssignedTask = tasksSummary.some(t => {
+      const assignees = [t.assignedTo, ...(t.assignedUsers || [])].filter(Boolean);
+      return assignees.some(a => idsEqual(a, req.user.id));
+    });
 
-    if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
-      void 0;
-      void 0;
-      void 0;
-
-
+    if (!projectBelongsToUserCompany(project, req.user) || (!isCompanyAdmin && !isMember && !isCreator && !hasAssignedTask)) {
       return res.status(403).json({
         success: false,
         message: "Access denied. You are not a member of this project.",
@@ -860,12 +1162,82 @@ exports.getProjectById = async (req, res) => {
       });
     }
 
-    void 0;
+    // Populate user details on ONLY the sliced tasks (super fast!)
+    if (slicedTasks.length > 0) {
+      await Project.populate(slicedTasks, [
+        { path: 'assignedTo', select: PROJECT_TASK_USER_POPULATE_FIELDS, model: 'User' },
+        { path: 'assignedUsers', select: PROJECT_TASK_USER_POPULATE_FIELDS, model: 'User' },
+        { path: 'createdBy', select: PROJECT_TASK_USER_POPULATE_FIELDS, model: 'User' },
+        { path: 'remarks.createdBy', select: PROJECT_TASK_USER_POPULATE_FIELDS, model: 'User' }
+      ]);
+    }
+
+    // Calculate user task summary over ALL tasks (in memory, ~1ms)
+    const projectUsers = Array.isArray(project.users) ? project.users : [];
+    const userTaskSummary = projectUsers.map(member => {
+      const memberId = normalizeId(member._id || member.id || member);
+      const memberTasks = tasksSummary.filter(t => {
+        const assignees = [t.assignedTo, ...(t.assignedUsers || [])].filter(Boolean).map(a => normalizeId(a?._id || a?.id || a));
+        return assignees.includes(memberId);
+      });
+      return {
+        id: memberId,
+        name: member?.name || member?.email || (memberId ? `User (${memberId.slice(-4)})` : 'Member'),
+        email: member?.email || '',
+        role: member?.role || member?.jobRole || member?.companyRole || '',
+        total: memberTasks.length,
+        completed: memberTasks.filter(t => normalizeTaskStatus(t.status) === 'completed').length,
+        pending: memberTasks.filter(t => normalizeTaskStatus(t.status) === 'pending' && (!t.dueDate || new Date(t.dueDate) >= now)).length,
+        inProgress: memberTasks.filter(t => ['in-progress', 'in progress'].includes(normalizeTaskStatus(t.status))).length,
+      };
+    });
+
+    const unassignedTasksCount = agg.stats?.unassignedTasks || 0;
+    if (unassignedTasksCount > 0 || userTaskSummary.length === 0) {
+      const unassignedList = tasksSummary.filter(t => [t.assignedTo, ...(t.assignedUsers || [])].filter(Boolean).length === 0);
+      userTaskSummary.push({
+        id: 'unassigned',
+        name: 'Unassigned',
+        email: '',
+        role: '',
+        total: unassignedList.length,
+        completed: unassignedList.filter(t => normalizeTaskStatus(t.status) === 'completed').length,
+        pending: unassignedList.filter(t => normalizeTaskStatus(t.status) === 'pending' && (!t.dueDate || new Date(t.dueDate) >= now)).length,
+        inProgress: unassignedList.filter(t => ['in-progress', 'in progress'].includes(normalizeTaskStatus(t.status))).length,
+      });
+    }
+
+    const normalizedTasks = slicedTasks.map(t => ({
+      ...t,
+      pdfFile: normalizeTaskPdfFile(t, project),
+    }));
 
     res.status(200).json({
       success: true,
-      ...withSortedProjectTasks(project),
-      userHasAccess: true
+      ...project,
+      pdfFile: normalizeProjectPdfFile(project),
+      tasks: normalizedTasks,
+      stats: agg.stats || {
+        totalTasks: 0,
+        completedTasks: 0,
+        pendingTasks: 0,
+        inProgressTasks: 0,
+        overdueTasks: 0,
+        onHoldTasks: 0,
+        cancelledTasks: 0,
+        unassignedTasks: 0,
+        progress: 0,
+      },
+      userTaskSummary,
+      pagination: {
+        total: totalFiltered,
+        page: safePage,
+        limit,
+        totalPages,
+        hasNextPage: safePage < totalPages,
+        hasPrevPage: safePage > 1,
+      },
+      userHasAccess: true,
     });
   } catch (error) {
     console.error("❌ Error fetching project:", error);
@@ -936,6 +1308,7 @@ exports.createProject = async (req, res) => {
         companyCode: getUserCompanyCode(req.user),
         branch: branchAccess.branchId,
         users: usersArray,
+        managers: parseMentionIds(req.body.managers).filter(value => allowedUserIds.includes(String(value))),
         startDate,
         endDate,
         priority: priority?.toLowerCase(),
@@ -1067,6 +1440,7 @@ exports.updateProject = async (req, res) => {
       project.description = description || project.description;
       project.branch = branchAccess.branchId || project.branch;
       project.users = usersArray;
+      if (req.body.managers !== undefined) project.managers = parseMentionIds(req.body.managers).filter(value => allowedUserIds.includes(String(value)));
       project.startDate = startDate || project.startDate;
       project.endDate = endDate || project.endDate;
       project.priority = priority?.toLowerCase() || project.priority;
@@ -1333,17 +1707,25 @@ exports.addTask = async (req, res) => {
       }
 
       const rawAssignedUsers = req.body.assignedUsers;
+      // Multipart forms (web Create Task with an attachment) send assignedUsers as a JSON
+      // string like ["id"]; plain splitting kept the brackets/quotes and dropped the assignee.
+      const parseAssigneeList = value => {
+        if (typeof value === "string" && value.trim().startsWith("[")) {
+          try { return JSON.parse(value); } catch { /* fall through to comma splitting */ }
+        }
+        return [value];
+      };
       const requestedAssigneeIds = (
         Array.isArray(rawAssignedUsers)
           ? rawAssignedUsers
           : rawAssignedUsers
-            ? [rawAssignedUsers]
+            ? parseAssigneeList(rawAssignedUsers)
             : assignedTo
               ? [assignedTo]
               : []
       )
-        .flatMap(value => String(value).split(','))
-        .map(value => value.trim())
+        .flatMap(value => String(value?._id || value).split(','))
+        .map(value => value.trim().replace(/^["']|["']$/g, ''))
         .filter(value => mongoose.isValidObjectId(value));
       const projectUserIds = project.users.map(user => normalizeId(user));
       const assignedUserIds = [...new Set(requestedAssigneeIds)]
@@ -1367,7 +1749,9 @@ exports.addTask = async (req, res) => {
       const safeTitle = title?.trim() || "Untitled Task";
       const now = new Date();
       const task = {
+        _id: mutationId(req, `task:${id}`),
         title: safeTitle,
+        mentions: require("../utils/projectChatEvents").ids(parseMentionIds(req.body.mentions)),
         description: description?.trim() || "",
         priority: priority?.toLowerCase(),
         status: status?.toLowerCase() || 'pending',
@@ -1406,10 +1790,27 @@ exports.addTask = async (req, res) => {
       task.activityLogs = [activityLog];
 
 
-      project.tasks.push(task);
-      await project.save();
+      const updateResult = await Project.updateOne(
+        { _id: id, "tasks._id": { $ne: task._id } },
+        {
+          $push: { tasks: task },
+          $set: { updatedAt: now }
+        },
+        { runValidators: true }
+      );
 
-      const createdTask = project.tasks[project.tasks.length - 1];
+      if (!updateResult.modifiedCount && req.headers['idempotency-key']) {
+        const existing = await Project.findOne({ _id: id, 'tasks._id': task._id });
+        if (existing) return res.status(200).json({ success: true, task: existing.tasks.id(task._id), message: 'Task already created' });
+      }
+      if (!updateResult.modifiedCount) {
+        return res.status(500).json({
+          success: false,
+          message: "Task could not be added"
+        });
+      }
+
+      const createdTask = task;
 
       if (assignedUserIds.length) {
         const assignedUsers = await User.find({ _id: { $in: assignedUserIds } })
@@ -1426,33 +1827,44 @@ exports.addTask = async (req, res) => {
           createdBy: req.user.id
         };
 
-        await project.addNotification(notification);
+        enqueueBackgroundJob(async () => {
+          const results = await Promise.allSettled([
+            Project.updateOne(
+              { _id: project._id },
+              { $push: { notifications: notification } }
+            ),
+            notifyDirectUsers({
+              userIds: assignedUserIds,
+              targetPath: '/ciisUser/task-management',
+              type: 'project_task_assigned',
+              title: 'New Project Task',
+              message: `${req.user.name} assigned you task "${safeTitle}" in project "${project.projectName}"`,
+              actor: req.user.id,
+              data: {
+                projectId: project._id,
+                taskId: createdTask._id,
+                title: safeTitle,
+                projectName: project.projectName,
+              },
+              priority: priority?.toLowerCase() || 'medium',
+            }),
+            ...assignedUsers.map(user =>
+            sendProjectTaskAssignmentEmail({
+              user,
+              actorName: req.user.name,
+              taskTitle: safeTitle,
+              projectName: project.projectName,
+              dueDate: createdTask.dueDate
+            })
+            )
+          ]);
 
-        await notifyDirectUsers({
-          userIds: assignedUserIds,
-          targetPath: '/ciisUser/task-management',
-          type: 'project_task_assigned',
-          title: 'New Project Task',
-          message: `${req.user.name} assigned you task "${safeTitle}" in project "${project.projectName}"`,
-          actor: req.user.id,
-          data: {
-            projectId: project._id,
-            taskId: createdTask._id,
-            title: safeTitle,
-            projectName: project.projectName,
-          },
-          priority: priority?.toLowerCase() || 'medium',
+          results.forEach(result => {
+            if (result.status === 'rejected') {
+              console.error('Project task create background notification failed:', result.reason);
+            }
+          });
         });
-
-        await Promise.allSettled(assignedUsers.map(user =>
-          sendProjectTaskAssignmentEmail({
-            user,
-            actorName: req.user.name,
-            taskTitle: safeTitle,
-            projectName: project.projectName,
-            dueDate: createdTask.dueDate
-          })
-        ));
       }
 
       void 0;
@@ -1461,7 +1873,7 @@ exports.addTask = async (req, res) => {
         success: true,
         message: "Task added successfully",
         task: {
-          ...(typeof createdTask.toObject === 'function' ? createdTask.toObject() : createdTask),
+          ...createdTask,
           pdfFile: normalizeTaskPdfFile(createdTask, project)
         }
       });
@@ -1521,7 +1933,8 @@ exports.updateTask = async (req, res) => {
 
 
     Object.keys(updateData).forEach(key => {
-      if (key === '_id') return;
+      if (['_id', 'createdBy', 'activityLogs'].includes(key)) return;
+      if (key === 'mentions') { task.mentions = require('../utils/projectChatEvents').ids(parseMentionIds(updateData[key])); return; }
 
       if (key === 'assignedTo') {
         task.assignedTo = updateData[key] || undefined;
@@ -1754,16 +2167,31 @@ exports.deleteTask = async (req, res) => {
 
 
 
+// Saves an uploaded remark image under uploads/remarks and returns its stored path.
+const saveRemarkImage = async (req) => {
+  if (!req.file) return null;
+  const uploadDir = path.join(__dirname, '../../uploads/remarks');
+  if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+  const filename = `remark_${Date.now()}_${req.user.id}.jpg`;
+  const savePath = path.join(uploadDir, filename);
+  try {
+    await sharp(req.file.buffer)
+      .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 80 })
+      .toFile(savePath);
+  } catch (sharpErr) {
+    console.warn('Sharp compression failed for remark image, saving raw buffer:', sharpErr.message);
+    fs.writeFileSync(savePath, req.file.buffer);
+  }
+  return `remarks/${filename}`;
+};
+
 exports.updateTaskStatus = async (req, res) => {
   try {
     const { projectId, taskId } = req.params;
     const { status, remark } = req.body;
-
-    void 0;
-    void 0;
-    void 0;
-    void 0;
-    void 0;
+    // Typed by the user in the status remark dialog (optionally with an image).
+    const statusRemark = String(req.body.statusRemark || '').trim();
 
     const nextStatus = normalizeTaskStatus(status);
     const nextProjectStatus = toProjectTaskStatus(status);
@@ -1775,15 +2203,35 @@ exports.updateTaskStatus = async (req, res) => {
       });
     }
 
-    const project = await Project.findById(projectId);
+    const project = await Project.findOne(
+      { _id: projectId, "tasks._id": taskId },
+      {
+        "tasks.$": 1,
+        projectName: 1,
+        createdBy: 1,
+        users: 1,
+        managers: 1,
+        company: 1,
+        companyCode: 1,
+        __v: 1
+      }
+    );
+
     if (!project) {
+      const projectExists = await Project.exists({ _id: projectId });
+      if (!projectExists) {
+        return res.status(404).json({
+          success: false,
+          message: "Project not found"
+        });
+      }
       return res.status(404).json({
         success: false,
-        message: "Project not found"
+        message: "Task not found"
       });
     }
 
-    const task = project.tasks.id(taskId);
+    const task = project.tasks && project.tasks[0];
     if (!task) {
       return res.status(404).json({
         success: false,
@@ -1831,7 +2279,7 @@ exports.updateTaskStatus = async (req, res) => {
     }
 
     const allowCompanyAllEdit = isCompanyAllTaskEdit(req);
-    const isOverdueTransitionAllowed = ['in-progress', 'completed', 'onhold', 'cancelled', 'rejected'].includes(nextStatus);
+    const isOverdueTransitionAllowed = ['in-progress', 'completed', 'onhold', 'cancelled', 'rejected', 'reopen'].includes(nextStatus);
 
     if (nextStatus !== "overdue" && normalizedOldStatus === "overdue" && !allowCompanyAllEdit && !isOverdueTransitionAllowed) {
       return res.status(400).json({
@@ -1840,21 +2288,36 @@ exports.updateTaskStatus = async (req, res) => {
       });
     }
 
+    if (normalizedOldStatus === 'completed' && nextStatus !== 'completed' && nextStatus !== 'reopen' && !allowCompanyAllEdit) {
+      return res.status(400).json({
+        success: false,
+        message: "Completed tasks can only be reopened."
+      });
+    }
+
     const isResumedFromHold = (normalizedOldStatus === "onhold" || normalizedOldStatus === "on hold") && nextStatus === "in-progress";
 
-    if (!["overdue", "onhold"].includes(nextStatus) && !isResumedFromHold && !isOverdueTransitionAllowed && isPendingTaskPastDue(task) && !allowCompanyAllEdit) {
+    if (!["overdue", "onhold", "reopen"].includes(nextStatus) && !isResumedFromHold && !isOverdueTransitionAllowed && isPendingTaskPastDue(task) && !allowCompanyAllEdit) {
       if (isPendingTaskPastDue(task)) {
-        task.status = "overdue";
-        task.updatedAt = new Date();
-        task.activityLogs.push({
-          type: "status_change",
-          description: "Automatically marked overdue after due time passed",
-          oldValue: oldStatus,
-          newValue: "overdue",
-          performedBy: req.user.id,
-          remark: "Automatically marked overdue after due time passed"
-        });
-        await project.save();
+        await Project.updateOne(
+          { _id: projectId, "tasks._id": taskId },
+          {
+            $set: {
+              "tasks.$.status": "overdue",
+              "tasks.$.updatedAt": new Date()
+            },
+            $push: {
+              "tasks.$.activityLogs": {
+                type: "status_change",
+                description: "Automatically marked overdue after due time passed",
+                oldValue: oldStatus,
+                newValue: "overdue",
+                performedBy: req.user.id,
+                remark: "Automatically marked overdue after due time passed"
+              }
+            }
+          }
+        );
       }
       return res.status(400).json({
         success: false,
@@ -1862,44 +2325,80 @@ exports.updateTaskStatus = async (req, res) => {
       });
     }
 
-    task.status = nextProjectStatus;
-    task.updatedAt = new Date();
+    const now = new Date();
+    const updateFields = {
+      "tasks.$.status": nextProjectStatus,
+      "tasks.$.updatedAt": now,
+      "tasks.$.statusChangedAt": now
+    };
 
     if (isResumedFromHold) {
-      const now = new Date();
-      task.onHoldReleasedAt = now;
-      task.dueDate = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-      task.dueDateTime = task.dueDate;
+      const newDueDate = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+      updateFields["tasks.$.onHoldReleasedAt"] = now;
+      updateFields["tasks.$.dueDate"] = newDueDate;
+      updateFields["tasks.$.dueDateTime"] = newDueDate;
     } else if (nextStatus === "onhold" || nextStatus === "on hold") {
-      task.onHoldReleasedAt = null;
+      updateFields["tasks.$.onHoldReleasedAt"] = null;
     }
 
     if (nextStatus === "completed") {
-      task.completionDate = new Date();
+      updateFields["tasks.$.completionDate"] = now;
     } else if (nextStatus !== "completed" && task.completionDate) {
-      task.completionDate = null;
+      updateFields["tasks.$.completionDate"] = null;
     }
 
-
-    task.activityLogs.push({
+    const activityLog = {
       type: "status_change",
       description: `Status changed from ${oldStatus} to ${nextProjectStatus}`,
       oldValue: oldStatus,
       newValue: nextProjectStatus,
       performedBy: req.user.id,
-      remark: remark
-    });
-
-    await project.save();
-
-    const notification = {
-      title: "Task Status Updated",
-      message: `Task "${task.title}" status changed from ${oldStatus} to ${nextProjectStatus}`,
-      type: "status_changed",
-      relatedTo: "task",
-      referenceId: task._id,
-      createdBy: req.user.id
+      remark: statusRemark || remark
     };
+
+    const imagePath = await saveRemarkImage(req);
+    const statusRemarkDoc = statusRemark || imagePath ? {
+      _id: new mongoose.Types.ObjectId(),
+      mentions: [],
+      text: statusRemark || "Image attachment",
+      createdBy: req.user.id,
+      image: imagePath || undefined,
+      ...(oldStatus !== nextProjectStatus ? { statusChange: nextProjectStatus } : {}),
+      createdAt: now
+    } : null;
+
+    await Project.updateOne(
+      { _id: projectId, "tasks._id": taskId },
+      {
+        $set: updateFields,
+        $push: {
+          "tasks.$.activityLogs": activityLog,
+          ...(statusRemarkDoc ? { "tasks.$.remarks": statusRemarkDoc } : {})
+        }
+      }
+    );
+
+    task.status = nextProjectStatus;
+    task.updatedAt = now;
+    if (isResumedFromHold) {
+      task.onHoldReleasedAt = now;
+      task.dueDate = updateFields["tasks.$.dueDate"];
+      task.dueDateTime = updateFields["tasks.$.dueDateTime"];
+    } else if (nextStatus === "onhold" || nextStatus === "on hold") {
+      task.onHoldReleasedAt = null;
+    }
+    if (nextStatus === "completed") {
+      task.completionDate = now;
+    } else if (nextStatus !== "completed") {
+      task.completionDate = null;
+    }
+    task.statusChangedAt = now;
+    task.activityLogs = task.activityLogs || [];
+    task.activityLogs.push(activityLog);
+    if (statusRemarkDoc) {
+      task.remarks = task.remarks || [];
+      task.remarks.push(statusRemarkDoc);
+    }
 
     res.status(200).json({
       success: true,
@@ -1908,51 +2407,83 @@ exports.updateTaskStatus = async (req, res) => {
     });
 
     const runStatusPostProcessing = async () => {
-      await project.addNotification(notification);
+      try {
+        const notification = {
+          title: "Task Status Updated",
+          message: `Task "${task.title}" status changed from ${oldStatus} to ${nextProjectStatus}`,
+          type: "status_changed",
+          relatedTo: "task",
+          referenceId: task._id,
+          createdBy: req.user.id,
+          createdAt: new Date()
+        };
 
-      const statusNotificationUsers = [project.createdBy, ...getTaskAssigneeIds(task)]
-        .filter(userId => userId && !idsEqual(userId, req.user.id));
+        await Project.updateOne(
+          { _id: projectId },
+          { $push: { notifications: notification } }
+        ).catch(err => console.error("Error adding project notification:", err.message));
 
-      await notifyDirectUsers({
-        userIds: statusNotificationUsers,
-        targetPath: '/ciisUser/task-management',
-        type: 'project_task_status_changed',
-        title: 'Project Task Updated',
-        message: `${req.user.name} changed "${task.title}" status from ${oldStatus} to ${nextProjectStatus}${remark ? ': ' + remark : ''}`,
-        actor: req.user.id,
-        data: {
-          projectId: project._id,
-          taskId: task._id,
-          oldStatus,
-          newStatus: nextProjectStatus,
-          remark,
-        },
-        priority: 'medium',
-      });
+        const statusNotificationUsers = [project.createdBy, ...getTaskAssigneeIds(task)]
+          .filter(userId => userId && !idsEqual(userId, req.user.id));
+
+        await notifyDirectUsers({
+          userIds: statusNotificationUsers,
+          targetPath: '/ciisUser/task-management',
+          type: 'project_task_status_changed',
+          title: 'Project Task Updated',
+          message: `${req.user.name} changed "${task.title}" status from ${oldStatus} to ${nextProjectStatus}${remark ? ': ' + remark : ''}`,
+          actor: req.user.id,
+          data: {
+            projectId: project._id,
+            taskId: task._id,
+            oldStatus,
+            newStatus: nextProjectStatus,
+            remark,
+          },
+          priority: 'medium',
+        });
+
+        try {
+          const { label } = require('../utils/projectChatEvents');
+          const { syncProject, deliverEvent } = require('../utils/projectChatService');
+          const { createHash } = require('node:crypto');
+          const event = {
+            key: createHash('sha256').update(`${projectId}:${task._id}:task_status_changed:${oldStatus}:${nextProjectStatus}:${Date.now()}`).digest('hex'),
+            type: 'task_status_changed',
+            actor: req.user.id,
+            task: String(task._id),
+            title: task.title,
+            from: label(oldStatus),
+            to: label(nextProjectStatus),
+            ...(statusRemark ? { remark: statusRemark } : {}),
+            ...(imagePath ? { image: `/uploads/${imagePath}` } : {})
+          };
+          // Pass only the id so the group syncs against the current project version
+          // (the status write above already bumped it).
+          const conversation = event.from !== event.to && await syncProject(project._id);
+          if (conversation) {
+            await deliverEvent(project, conversation, event);
+          }
+        } catch (chatErr) {
+          console.error("Error delivering task status chat event:", chatErr.message);
+        }
+      } catch (asyncErr) {
+        console.error('❌ Background project task post-processing failed:', asyncErr);
+      }
     };
 
     if (nextProjectStatus === 'completed') {
-      enqueueCompletionJob(async () => {
-        try {
-          await runStatusPostProcessing();
-        } catch (asyncErr) {
-          console.error('❌ Background project task post-processing failed:', asyncErr);
-        }
-      });
+      enqueueCompletionJob(runStatusPostProcessing);
     } else {
-      void (async () => {
-        try {
-          await runStatusPostProcessing();
-        } catch (asyncErr) {
-          console.error('❌ Background project task post-processing failed:', asyncErr);
-        }
-      })();
+      setImmediate(runStatusPostProcessing);
     }
   } catch (error) {
     console.error("❌ Error updating task status:", error);
     res.status(500).json({
       success: false,
-      message: "Error updating task status"
+      message: "Error updating task status",
+      error: error.message,
+      stack: error.stack
     });
   }
 };
@@ -2030,12 +2561,17 @@ exports.getTaskActivityLogs = async (req, res) => {
   try {
     const { projectId, taskId } = req.params;
 
-    void 0;
-    void 0;
-    void 0;
-    void 0;
-
-    const project = await Project.findById(projectId);
+    const project = await Project.findOne(
+      { _id: projectId, "tasks._id": taskId },
+      {
+        projectName: 1,
+        company: 1,
+        companyCode: 1,
+        users: 1,
+        createdBy: 1,
+        tasks: { $elemMatch: { _id: taskId } }
+      }
+    ).lean();
     if (!project) {
       return res.status(404).json({
         success: false,
@@ -2051,7 +2587,7 @@ exports.getTaskActivityLogs = async (req, res) => {
       });
     }
 
-    const task = project.tasks.id(taskId);
+    const task = Array.isArray(project.tasks) ? project.tasks[0] : null;
     if (!task) {
       return res.status(404).json({
         success: false,
@@ -2059,19 +2595,17 @@ exports.getTaskActivityLogs = async (req, res) => {
       });
     }
 
-
-    await Project.populate(task, {
-      path: 'activityLogs.performedBy',
-      select: 'name email'
-    });
-
-    void 0;
+    const performerIds = [...new Set((task.activityLogs || [])
+      .map(entry => normalizeId(entry.performedBy))
+      .filter(Boolean))];
+    const performers = performerIds.length
+      ? await User.find({ _id: { $in: performerIds } }).select('name email').lean()
+      : [];
+    const performersById = new Map(performers.map(user => [String(user._id), user]));
 
     const activityLogs = (task.activityLogs || []).map((entry) => {
-      const log = typeof entry.toObject === 'function' ? entry.toObject() : entry;
-      const actor = log.performedBy && typeof log.performedBy === 'object'
-        ? log.performedBy
-        : null;
+      const log = entry || {};
+      const actor = performersById.get(normalizeId(log.performedBy)) || null;
 
       return {
         ...log,
@@ -2191,29 +2725,13 @@ exports.addRemark = async (req, res) => {
       });
     }
 
-    let imgPath = null;
-    if (req.file) {
-      const uploadDir = path.join(__dirname, '../../uploads/remarks');
-      if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-      const filename = `remark_${Date.now()}_${req.user.id}.jpg`;
-      const savePath = path.join(uploadDir, filename);
-      imgPath = `remarks/${filename}`;
-
-      try {
-        await sharp(req.file.buffer)
-          .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
-          .jpeg({ quality: 80 })
-          .toFile(savePath);
-      } catch (sharpErr) {
-        console.warn('Sharp compression failed in projectController.addRemark, saving raw buffer:', sharpErr.message);
-        fs.writeFileSync(savePath, req.file.buffer);
-      }
-    }
+    const imgPath = await saveRemarkImage(req);
 
 
     const now = new Date();
     const remark = {
-      _id: new mongoose.Types.ObjectId(),
+      _id: mutationId(req, `remark:${projectId}:${taskId}`),
+      mentions: require("../utils/projectChatEvents").ids(parseMentionIds(req.body.mentions)),
       text: remarkText || (imgPath ? "Image attachment" : ""),
       createdBy: req.user.id,
       image: imgPath || undefined,
@@ -2241,7 +2759,7 @@ exports.addRemark = async (req, res) => {
     };
 
     const updateResult = await Project.updateOne(
-      { _id: projectId, "tasks._id": taskId },
+      { _id: projectId, tasks: { $elemMatch: { _id: taskId, "remarks._id": { $ne: remark._id } } } },
       {
         $push: {
           "tasks.$.remarks": remark,
@@ -2255,6 +2773,11 @@ exports.addRemark = async (req, res) => {
       }
     );
 
+    if (updateResult.matchedCount === 0 && req.headers['idempotency-key']) {
+      const existing = await Project.findOne({ _id: projectId, 'tasks._id': taskId });
+      const saved = existing?.tasks.id(taskId)?.remarks.id(remark._id);
+      if (saved) return res.status(200).json({ success: true, remark: saved });
+    }
     if (updateResult.matchedCount === 0) {
       return res.status(404).json({
         success: false,
@@ -2323,3 +2846,22 @@ exports.updateTaskReminder = async (req, res) => {
     });
   }
 };
+
+// All route aliases use this shared controller and retain the authenticated actor.
+function parseMentionIds(value) {
+  if (Array.isArray(value)) return value;
+  try { const parsed = JSON.parse(value || '[]'); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
+}
+for (const [name, handler] of Object.entries(exports)) {
+  if (typeof handler !== 'function') continue;
+  exports[name] = (req, res, ...rest) => require('../utils/projectChatEvents').context.run(
+    { actor: req.user?.id || req.user?._id }, () => handler(req, res, ...rest)
+  );
+}
+
+function mutationId(req, scope) {
+  const key = req.headers['idempotency-key'];
+  if (!key) return new mongoose.Types.ObjectId();
+  const digest = require('node:crypto').createHash('sha256').update(`${req.user.id}:${scope}:${String(key).slice(0, 200)}`).digest('hex');
+  return new mongoose.Types.ObjectId(digest.slice(0, 24));
+}

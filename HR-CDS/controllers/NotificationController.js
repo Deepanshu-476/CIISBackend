@@ -5,20 +5,25 @@ const User = require('../../models/User');
 exports.getMyNotifications = async (req, res) => {
   try {
     const userId = req.user._id;
-    const { page = 1, limit = 20, unreadOnly = false } = req.query;
+    const { page = 1, limit = 50, unreadOnly } = req.query;
+    const isReadParam = req.query.isRead;
 
     const filter = { recipient: userId };
-    if (unreadOnly === 'true') {
+    if (unreadOnly === 'true' || unreadOnly === true || isReadParam === 'false' || isReadParam === false) {
       filter.isRead = false;
+    } else if (isReadParam === 'true' || isReadParam === true) {
+      filter.isRead = true;
     }
 
-    const skip = (page - 1) * limit;
+    const parsedLimit = Math.min(Math.max(1, parseInt(limit, 10) || 50), 200);
+    const parsedPage = Math.max(1, parseInt(page, 10) || 1);
+    const skip = (parsedPage - 1) * parsedLimit;
 
     const [notifications, total, unreadCount] = await Promise.all([
       Notification.find(filter)
         .sort({ createdAt: -1 })
         .skip(skip)
-        .limit(parseInt(limit))
+        .limit(parsedLimit)
         .lean(),
       Notification.countDocuments(filter),
       Notification.countDocuments({ recipient: userId, isRead: false })
@@ -29,10 +34,10 @@ exports.getMyNotifications = async (req, res) => {
       data: {
         notifications,
         pagination: {
-          page: parseInt(page),
-          limit: parseInt(limit),
+          page: parsedPage,
+          limit: parsedLimit,
           total,
-          pages: Math.ceil(total / limit),
+          pages: Math.ceil(total / parsedLimit),
           unreadCount
         }
       }

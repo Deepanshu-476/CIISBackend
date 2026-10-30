@@ -1,3 +1,4 @@
+const taskStatusRequest = require('../../middleware/taskStatusRequest');
 const express = require('express');
 const router = express.Router();
 const taskController = require('../controllers/ClientTask');
@@ -157,7 +158,7 @@ router.get('/assigned-to-me/stats', authMiddleware, taskController.getAssignedTo
 
 router.get('/user/:userId/assigned-tasks', authMiddleware, taskController.getAssignedTasksByUserId);
 
-router.patch('/assigned/:taskId/status', authMiddleware, taskController.updateAssignedTaskStatus);
+router.patch('/assigned/:taskId/status', authMiddleware, safeClientRemarkUpload, taskStatusRequest, taskController.updateAssignedTaskStatus);
 
 
 router.post('/:taskId/client-remarks', authMiddleware, taskController.addClientRemark);
@@ -184,6 +185,19 @@ router.get('/:taskId/debug', (req, res, next) => {
   next();
 }, authMiddleware, taskController.debugActivityLogs);
 
+
+router.get('/', authMiddleware, (req, res, next) => {
+  if (req.query.clientId && req.query.service) {
+    req.params.clientId = req.query.clientId;
+    req.params.service = req.query.service;
+    return taskController.getTasksByClientService(req, res, next);
+  }
+  if (req.query.clientId) {
+    req.params.clientId = req.query.clientId;
+    return taskController.getClientTasks(req, res, next);
+  }
+  return res.status(400).json({ success: false, message: 'clientId parameter is required' });
+});
 
 router.get('/client/:clientId/service/:service', authMiddleware, taskController.getTasksByClientService);
 router.post('/client/:clientId/service/:service', authMiddleware, taskController.addTask);

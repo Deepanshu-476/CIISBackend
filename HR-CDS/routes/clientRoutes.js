@@ -3,6 +3,7 @@ const router = express.Router();
 const auth = require('../../middleware/authMiddleware');
 const path = require('path');
 const fs = require('fs');
+const {resolveReceiptFile} = require('../utils/receiptFile');
 
 const serviceController = require('../controllers/services');
 const serviceEnquiryController = require('../controllers/serviceEnquiryController');
@@ -30,6 +31,7 @@ const {
   uploadClientReceipt,
   updateClientReceiptStatus,
   markClientReceiptPaymentDone,
+  deleteClientReceipt,
   getClientDashboardOverview,
   getClientDashboardStats
 } = require('../controllers/clientController');
@@ -91,6 +93,7 @@ router.post('/due-invoice/:id', addClientDueInvoice);
 router.post('/upload-receipt/:id', uploadReceipt.single('receipt'), uploadClientReceipt);
 router.patch('/:id/receipt/:receiptId/payment-done', markClientReceiptPaymentDone);
 router.patch('/:id/receipt/:receiptId/status', updateClientReceiptStatus);
+router.delete('/:id/receipt/:receiptId', deleteClientReceipt);
 
 
 
@@ -99,11 +102,10 @@ router.get('/receipt-image/:filename', (req, res) => {
     const { filename } = req.params;
     
     
-    const safeFilename = path.basename(filename);
-    const imagePath = path.join(__dirname, '../uploads/receipts', safeFilename);
+    const imagePath = resolveReceiptFile(filename);
     
     
-    if (fs.existsSync(imagePath)) {
+    if (imagePath) {
       
       res.sendFile(imagePath, (err) => {
         if (err) {
@@ -151,10 +153,9 @@ router.get('/client/:clientId/receipt/:receiptId', async (req, res) => {
       });
     }
     
-    const imagePath = receipt.receiptImage;
-    const fullPath = path.join(__dirname, '..', imagePath);
+    const fullPath = resolveReceiptFile(receipt.receiptImage);
     
-    if (fs.existsSync(fullPath)) {
+    if (fullPath) {
       res.sendFile(fullPath, (err) => {
         if (err) {
           console.error('Error sending file:', err);

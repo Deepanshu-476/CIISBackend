@@ -144,7 +144,6 @@ const attendanceSchema = new mongoose.Schema({
   companyCode: {
     type: String,
     required: true,
-    index: true,
     default: 'UNKNOWN' 
   }
 }, {
@@ -157,6 +156,8 @@ attendanceSchema.index({ user: 1, companyCode: 1, date: -1 });
 attendanceSchema.index({ date: 1 });
 attendanceSchema.index({ companyCode: 1, date: -1 });
 attendanceSchema.index({ companyCode: 1, date: 1, status: 1 });
+// Auto clock-out sweep: open sessions (isClockedIn, no outTime) from the last few days.
+attendanceSchema.index({ isClockedIn: 1, inTime: -1 }, { partialFilterExpression: { isClockedIn: true } });
 
 const Attendance = mongoose.model('Attendance', attendanceSchema);
 

@@ -32,6 +32,24 @@ const callLogsHandler = typeof controller.callLogs === 'function'
   : (req, res) => res.json({ items: [] });
 router.get('/', requireCrmPagePermission(telecallerPaths), controller.list);
 router.get('/call-logs', requireCrmPagePermission(telecallerPaths), callLogsHandler);
+const lookupHandler = typeof controller.lookup === 'function'
+  ? controller.lookup
+  : (req, res) => res.json({ found: false });
+router.get('/lookup', requireCrmPagePermission(telecallerPaths), lookupHandler);
+const workspaceEnabled = (req, res, next) => (enabled(req.telecallerPages, 'call-workspace')
+  ? next()
+  : res.status(403).json({ message: 'This call update page is not enabled for your company.' }));
+if (typeof controller.quickLead === 'function') {
+  router.post('/quick-lead', workspaceEnabled, requireCrmPagePermission('/ciisUser/telecaller/call-workspace', 'edit'), controller.quickLead);
+}
+if (typeof controller.fieldConfig === 'function') {
+  router.get('/field-config', requireCrmPagePermission(telecallerPaths), controller.fieldConfig);
+}
+const templates = require('../controllers/messageTemplateController');
+router.get('/templates', requireCrmPagePermission(telecallerPaths), templates.list);
+router.post('/templates', templates.requireAdmin, templates.create);
+router.put('/templates/:templateId', templates.requireAdmin, templates.update);
+router.delete('/templates/:templateId', templates.requireAdmin, templates.remove);
 router.get('/:id', requireCrmPagePermission(telecallerPaths), controller.getOne);
 router.post('/:id/calls', (req, res, next) => {
   if (!enabled(req.telecallerPages, 'call-workspace') && !(req.body?.outcome === 'Note Added' && enabled(req.telecallerPages, 'lead-detail'))) {
@@ -62,12 +80,36 @@ const recordingStorage = multer.diskStorage({
   },
 });
 
+const AUDIO_EXTENSIONS = new Set(['.m4a', '.mp3', '.aac', '.amr', '.wav', '.ogg', '.opus', '.3gp', '.3gpp', '.mp4', '.webm']);
 const uploadAudio = multer({
   storage: recordingStorage,
   limits: { fileSize: 30 * 1024 * 1024 },
+  // Phones report recordings with many types (audio/*, video/3gpp, octet-stream), so the extension decides.
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(String(file.originalname || '')).toLowerCase();
+    const type = String(file.mimetype || '').toLowerCase();
+    const ok = AUDIO_EXTENSIONS.has(ext) || (!ext && (type.startsWith('audio/') || type === 'video/3gpp'));
+    cb(ok ? null : Object.assign(new Error('Only audio recordings can be uploaded.'), { status: 400 }), ok);
+  },
 });
 
-router.post('/:id/recording', uploadAudio.single('audio'), (req, res) => {
+// Same page rule as saving a call, and the lead must be one this user may log calls for, so a file is
+// stored only for a real call.
+const recordingLead = typeof controller.recordingLead === 'function'
+  ? controller.recordingLead
+  : (req, res, next) => next();
+const receiveAudio = (req, res, next) => uploadAudio.single('audio')(req, res, error => {
+  if (!error) return next();
+  const tooLarge = error.code === 'LIMIT_FILE_SIZE';
+  res.status(tooLarge ? 413 : error.status || 400).json({ message: tooLarge ? 'Recording is larger than 30 MB.' : error.message });
+});
+
+router.post('/:id/recording', (req, res, next) => {
+  if (!enabled(req.telecallerPages, 'call-workspace')) {
+    return res.status(403).json({ message: 'This call update page is not enabled for your company.' });
+  }
+  next();
+}, requireCrmPagePermission('/ciisUser/telecaller/call-workspace', 'edit'), recordingLead, receiveAudio, (req, res) => {
   if (!req.file) return res.status(400).json({ message: 'No audio recording file uploaded.' });
   const fileUrl = `/uploads/recordings/${req.file.filename}`;
   res.json({ success: true, recordingUrl: fileUrl, filename: req.file.filename });

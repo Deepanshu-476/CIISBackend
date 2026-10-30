@@ -16,6 +16,7 @@ const multer = require('multer');
 const path = require('path');
 const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
 const { isSuperAdminUser } = require('../../middleware/authMiddleware');
+const { syncClient } = require('../utils/clientChatService');
 
 
 const DEFAULT_CLIENT_DEPARTMENT_ID = '69ae555c9a1e47e80a40204c';
@@ -210,7 +211,7 @@ const toCompanyCard = (client, taskSummary = {}) => {
     _id: client._id,
     parentClientId: client.parentClientId || client._id,
     parentClientName: client.parentClientName || client.client,
-    companyLogo: client.companyLogo || '',
+    companyLogo: client.companyLogo || client.logo || '',
     companyName: client.company || client.businessName || client.client,
     company: client.company || client.businessName || client.client,
     clientCode: client.clientCode || client.code || `CL-${String(client._id).slice(-4).toUpperCase()}`,
@@ -395,9 +396,11 @@ const normalizeProjectMember = person => {
   if (!name) return null;
   return {
     _id: typeof person === 'object' && person ? person._id || person.id || person.userId || person.employeeId || name : name,
-    name,
+    name: typeof person === 'object' && person?.name ? person.name : name,
     email: getPersonEmail(person),
-    role: getPersonRole(person)
+    phone: typeof person === 'object' && person ? person.phone || person.mobile || '' : '',
+    role: getPersonRole(person),
+    avatar: typeof person === 'object' && person ? person.avatar || person.profileImage || person.image || '' : '',
   };
 };
 
@@ -417,20 +420,26 @@ const findUserForAssignedMember = (member, users = []) => {
     const userId = String(user._id || user.id || user.userId || user.employeeId || '').toLowerCase();
     const userName = String(user.name || user.fullName || user.employeeName || '').trim().toLowerCase();
     const userEmail = String(user.email || user.employeeEmail || '').trim().toLowerCase();
-    return (
-      (memberId && userId && String(memberId).toLowerCase() === userId) ||
-      (memberEmail && userEmail && memberEmail === userEmail) ||
-      (memberName && userName && memberName === userName)
-    );
+    if (memberId && userId && String(memberId).toLowerCase() === userId) return true;
+    if (memberEmail && userEmail && memberEmail === userEmail) return true;
+    if (memberName && userName) {
+      if (memberName === userName) return true;
+      const cleanMember = memberName.replace(/[^a-z0-9]/g, '');
+      const cleanUser = userName.replace(/[^a-z0-9]/g, '');
+      if (cleanMember.length >= 3 && (cleanUser.startsWith(cleanMember) || cleanMember.startsWith(cleanUser))) {
+        return true;
+      }
+    }
+    return false;
   });
 };
 
 const collectProjectMembers = (currentClient, users = []) => {
   const membersMap = new Map();
-  [currentClient?.projectManagers, currentClient?.projectManager].forEach(group => {
+  [currentClient?.projectManagers, currentClient?.projectManager, currentClient?.accountManager, currentClient?.assignedTo].forEach(group => {
     if (Array.isArray(group)) {
       group.forEach(person => addUniqueProjectMember(membersMap, findUserForAssignedMember(person, users) || person));
-    } else {
+    } else if (group) {
       addUniqueProjectMember(membersMap, findUserForAssignedMember(group, users) || group);
     }
   });
@@ -1239,6 +1248,16 @@ const getClientDashboardOverview = async (req, res) => {
     ]);
 
     const userMatchedClients = clients.filter(client => isClientForLoggedInUser(client, currentUser));
+    userMatchedClients.sort((a, b) => {
+      const targetEmail = String(currentUser.email || '').trim().toLowerCase();
+      const rawDetails = parseAdditionalDetails(currentUser.additionalDetails);
+      const targetClientId = String(rawDetails.clientId || currentUser.clientId || currentUser.employeeType || '');
+      const aEmailMatch = String(a.email || '').trim().toLowerCase() === targetEmail ? 2 : 0;
+      const bEmailMatch = String(b.email || '').trim().toLowerCase() === targetEmail ? 2 : 0;
+      const aIdMatch = targetClientId && String(a._id) === targetClientId ? 1 : 0;
+      const bIdMatch = targetClientId && String(b._id) === targetClientId ? 1 : 0;
+      return (bEmailMatch + bIdMatch) - (aEmailMatch + aIdMatch);
+    });
     const availableClients = userMatchedClients.length > 0
       ? userMatchedClients
       : (isPrivilegedPortalViewer ? clients : []);
@@ -1262,27 +1281,130 @@ const getClientDashboardOverview = async (req, res) => {
       });
     }
 
+    const availableClientIds = availableClients.map(c => c._id).filter(Boolean);
     const services = Array.isArray(currentClient.services) ? currentClient.services : [];
-    const serviceTasks = services.length
-      ? await ClientTask.find({
-          clientId: currentClient._id,
-          service: { $in: services },
-        })
-          .sort({ completed: 1, dueDate: 1, createdAt: -1 })
-          .limit(500)
-          .lean()
-      : [];
+
+    const [serviceTasks, allAvailableClientTasks, taskStatsAggregation] = await Promise.all([
+      ClientTask.find({
+        clientId: currentClient._id,
+        ...(services.length ? {
+          $or: [
+            { service: { $in: services } },
+            { service: { $in: services.map(s => new RegExp(`^${escapeRegExp(s)}$`, 'i')) } }
+          ]
+        } : {})
+      })
+        .select('_id name task title service completed status dueDate createdAt updatedAt')
+        .sort({ updatedAt: -1, createdAt: -1 })
+        .lean(),
+      availableClientIds.length
+        ? ClientTask.find({ clientId: { $in: availableClientIds } })
+            .select('clientId service')
+            .lean()
+        : Promise.resolve([]),
+      ClientTask.aggregate([
+        {
+          $match: {
+            $or: [
+              { clientId: currentClient._id },
+              ...(mongoose.Types.ObjectId.isValid(currentClient._id) ? [{ clientId: new mongoose.Types.ObjectId(currentClient._id) }] : [])
+            ]
+          }
+        },
+        {
+          $group: {
+            _id: '$service',
+            total: { $sum: 1 },
+            completed: { $sum: { $cond: [{ $eq: ['$completed', true] }, 1, 0] } },
+            inProgress: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $ne: ['$completed', true] },
+                      { $regexMatch: { input: { $ifNull: ['$status', ''] }, regex: /progress/i } }
+                    ]
+                  },
+                  1,
+                  0
+                ]
+              }
+            },
+            open: { $sum: { $cond: [{ $ne: ['$completed', true] }, 1, 0] } },
+            overdue: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $ne: ['$completed', true] },
+                      { $in: [{ $toLower: { $ifNull: ['$status', ''] } }, ['overdue']] }
+                    ]
+                  },
+                  1,
+                  0
+                ]
+              }
+            }
+          }
+        }
+      ]),
+    ]);
+
+    let overall = { total: 0, completed: 0, inProgress: 0, open: 0, overdue: 0 };
+    const serviceStatsMap = {};
+    (taskStatsAggregation || []).forEach(item => {
+      overall.total += item.total || 0;
+      overall.completed += item.completed || 0;
+      overall.inProgress += item.inProgress || 0;
+      overall.open += item.open || 0;
+      overall.overdue += item.overdue || 0;
+      serviceStatsMap[item._id] = {
+        total: item.total || 0,
+        completed: item.completed || 0,
+        inProgress: item.inProgress || 0,
+        open: item.open || 0,
+        overdue: item.overdue || 0,
+        progress: item.total ? Math.round(((item.completed || 0) / item.total) * 100) : 0,
+      };
+    });
+
+    const clientTaskCountMap = {};
+    allAvailableClientTasks.forEach(task => {
+      const cId = String(task.clientId || '');
+      if (!cId) return;
+      clientTaskCountMap[cId] = (clientTaskCountMap[cId] || 0) + 1;
+    });
+
+    const enrichedAvailableClients = availableClients.map(c => {
+      const cId = String(c._id || '');
+      const count = clientTaskCountMap[cId] ?? (Array.isArray(c.tasks) ? c.tasks.length : 0);
+      return {
+        ...c,
+        totalTasks: count,
+        taskCount: count,
+      };
+    });
 
     return res.json({
       success: true,
       data: {
-        availableClients,
+        availableClients: enrichedAvailableClients,
         client: currentClient,
         services,
         projectManagers: collectProjectMembers(currentClient, companyUsers),
+        taskStats: {
+          total: overall.total,
+          completed: overall.completed,
+          inProgress: overall.inProgress,
+          open: overall.open,
+          overdue: overall.overdue,
+          pending: Math.max(0, overall.open - overall.overdue),
+        },
+        serviceTaskStats: serviceStatsMap,
         serviceTasks: serviceTasks.map(task => ({
           ...task,
           serviceName: task.service,
+          completed: Boolean(task.completed || String(task.status || '').toLowerCase() === 'completed'),
           status: normalizeClientTaskStatus(task),
         })),
         supportTickets: supportTickets.map(serializeSupportTicketForClient),
@@ -1322,7 +1444,7 @@ const getClientDashboardStats = async (req, res) => {
       return acc;
     }, { total: 0, completed: 0, pending: 0, overdue: 0, 'in-progress': 0, onhold: 0, byService: {} });
 
-    return res.json({ success: true, stats });
+    return res.json({ success: true, stats, data: stats });
   } catch (error) {
     console.error('❌ Error fetching client dashboard stats:', error);
     return res.status(500).json({ success: false, message: 'Failed to fetch client dashboard stats' });
@@ -1857,6 +1979,7 @@ const addClient = async (req, res) => {
     );
 
     await session.commitTransaction();
+    syncClient(newClient._id).catch(err => console.error('Error syncing client chat on addClient:', err));
     if (!reusableClientUser && req.body?.sendWelcomeEmail !== false) {
       sendWelcomeEmail(cleanEmail, cleanClientName, cleanCompanyName, autoPassword, cleanCompanyCode)
         .then(result => {
@@ -2093,7 +2216,7 @@ const updateClient = async (req, res) => {
     if (company !== undefined) updateData.company = company.trim();
     if (parentClientId !== undefined) updateData.parentClientId = parentClientId || null;
     if (parentClientName !== undefined) updateData.parentClientName = parentClientName.trim();
-    if (companyLogo !== undefined) updateData.companyLogo = companyLogo.trim();
+    if (companyLogo !== undefined) updateData.companyLogo = typeof companyLogo === 'string' ? companyLogo.trim() : '';
     if (industry !== undefined) updateData.industry = industry.trim();
     if (gst !== undefined) updateData.gst = gst.trim().toUpperCase();
     if (pan !== undefined) updateData.pan = pan.trim().toUpperCase();
@@ -2158,8 +2281,20 @@ const updateClient = async (req, res) => {
       });
     }
 
+    if (updatedClient?.userId) {
+      const userUpdate = {};
+      if (updateData.client) userUpdate.name = updateData.client;
+      if (updateData.phone) userUpdate.phone = updateData.phone;
+      if (Object.keys(userUpdate).length > 0) {
+        await User.findByIdAndUpdate(updatedClient.userId, { $set: userUpdate });
+      }
+    }
+
     void 0;
     void 0;
+    if (updatedClient?._id) {
+      syncClient(updatedClient._id).catch(err => console.error('Error syncing client chat on updateClient:', err));
+    }
     
     res.json({
       success: true,
@@ -2359,6 +2494,7 @@ const addProjectManager = async (req, res) => {
     }
 
     await client.addProjectManager(managerName);
+    syncClient(client._id).catch(err => console.error('Error syncing client chat on addProjectManager:', err));
 
     res.json({
       success: true,
@@ -2390,6 +2526,7 @@ const removeProjectManager = async (req, res) => {
     }
 
     await client.removeProjectManager(managerName);
+    syncClient(client._id).catch(err => console.error('Error syncing client chat on removeProjectManager:', err));
 
     res.json({
       success: true,
@@ -2815,6 +2952,48 @@ const markClientReceiptPaymentDone = async (req, res) => {
   return updateClientReceiptStatus(req, res);
 };
 
+const deleteClientReceipt = async (req, res) => {
+  try {
+    const { id, receiptId } = req.params;
+    const client = await Client.findById(id);
+    if (!client) {
+      return res.status(404).json({ success: false, message: 'Client not found' });
+    }
+
+    const receipt = client.paymentReceipts?.id(receiptId);
+    if (!receipt) {
+      return res.status(404).json({ success: false, message: 'Receipt not found' });
+    }
+
+    if (receipt.dueInvoiceId && client.dueInvoices) {
+      const dueInvoice = client.dueInvoices.id(receipt.dueInvoiceId);
+      if (dueInvoice && dueInvoice.status === 'Pending Verification') {
+        dueInvoice.status = 'Due';
+        dueInvoice.receiptId = null;
+      }
+    }
+
+    if (receipt.receiptUrl) {
+      const filePath = path.join(__dirname, '../uploads/receipts', path.basename(receipt.receiptUrl));
+      if (fs.existsSync(filePath)) {
+        try { fs.unlinkSync(filePath); } catch (e) { /* ignore */ }
+      }
+    }
+
+    client.paymentReceipts.pull({ _id: receiptId });
+    await client.save();
+
+    return res.json({
+      success: true,
+      message: 'Payment proof removed successfully',
+      data: client
+    });
+  } catch (error) {
+    console.error('Error deleting client receipt:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   getWelcomeEmailTemplate,
   getCompanyLoginUrl,
@@ -2842,7 +3021,17 @@ module.exports = {
   addClientDueInvoice,
   uploadClientReceipt,
   updateClientReceiptStatus,
-  markClientReceiptPaymentDone
+  markClientReceiptPaymentDone,
+  deleteClientReceipt
 };
 
 void 0;
+
+// Preserve authenticated actor across all existing controller aliases and callbacks.
+for (const [key, handler] of Object.entries(module.exports)) {
+  if (typeof handler === 'function') module.exports[key] = (...args) => {
+    const req = args[0];
+    if (!req?.user) return handler(...args);
+    return require('../utils/projectChatEvents').context.run({ actor: req.user.id || req.user._id }, () => handler(...args));
+  };
+}

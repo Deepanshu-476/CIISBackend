@@ -244,6 +244,43 @@ const companySchema = new mongoose.Schema(
       ]
     },
 
+    // Bulk Email page: how many emails the whole company may send, set by the platform owner.
+    bulkEmailLimits: {
+      daily: { type: Number, min: 0, default: 100 },
+      monthly: { type: Number, min: 0, default: 2000 },
+    },
+
+    moduleDashboardConfig: {
+      type: mongoose.Schema.Types.Mixed,
+      default: () => ({
+        employeesOverview: { enabled: true },
+        attendanceOverview: { enabled: true },
+        leavesOverview: { enabled: true },
+        payrollOverview: { enabled: true },
+        assetsOverview: { enabled: true },
+
+        tasksOverview: { enabled: true },
+        projectsOverview: { enabled: true },
+        meetingsOverview: { enabled: true },
+        chatOverview: { enabled: true },
+        alertsOverview: { enabled: true },
+
+        clientManagementOverview: { enabled: true },
+        clientServicesOverview: { enabled: true },
+        clientPortalOverview: { enabled: true },
+        supportOverview: { enabled: true },
+
+        employeeActivityOverview: { enabled: true },
+        attendanceAnalyticsOverview: { enabled: true },
+        taskAnalyticsOverview: { enabled: true },
+        teamVisibilityOverview: { enabled: true },
+        payrollReportsOverview: { enabled: true },
+
+        updatedAt: null,
+        updatedBy: null,
+      }),
+    },
+
     accessConfiguredAt: {
       type: Date,
       default: null,

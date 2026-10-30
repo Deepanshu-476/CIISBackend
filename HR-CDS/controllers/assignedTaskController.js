@@ -26,9 +26,10 @@ const {
   sharp,
   TASK_USER_POPULATE_FIELDS,
   TASK_GROUP_POPULATE_FIELDS,
-  TASK_CREATOR_POPULATE_FIELDS
+  TASK_CREATOR_POPULATE_FIELDS,
+  getUserStatusChangedAt
 } = require('./taskHelper');
-const { enqueueCompletionJob } = require('../utils/backgroundJobQueue');
+const { enqueueCompletionJob, enqueueBackgroundJob } = require('../utils/backgroundJobQueue');
 const mongoose = require('mongoose');
 
 const getRequestedTaskBranchId = req => {
@@ -57,6 +58,7 @@ const fetchAssignedToMeTaskList = async (req) => {
       { assignedGroups: { $in: groupIds } }
     ]
   })
+    .select('-remarks -statusHistory')
     .populate('assignedUsers', TASK_USER_POPULATE_FIELDS)
     .populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS)
     .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
@@ -67,7 +69,13 @@ const fetchAssignedToMeTaskList = async (req) => {
   return enriched.map(t => {
     const userEntry = t.statusByUser?.find(s => (s.user?._id || s.user)?.toString() === currentUserId.toString());
     const status = userEntry?.status || t.overallStatus || 'pending';
-    return { ...t, status: normalizeTaskStatus(status), taskSource: 'assigned', __taskSource: 'assigned' };
+    return {
+      ...t,
+      statusChangedAt: getUserStatusChangedAt(t, currentUserId),
+      status: normalizeTaskStatus(status),
+      taskSource: 'assigned',
+      __taskSource: 'assigned'
+    };
   });
 };
 
@@ -146,21 +154,31 @@ exports.createTaskForOthers = async (req, res) => {
         global.io.to('user:' + assigneeId).emit('task:new', task);
       }
     }
+    await createActivityLog(req.user, 'task_created_for_others', task._id, `Created task for others: ${title}`, null, task.toObject(), req);
 
     if (task.assignedUsers?.length > 0) {
-      await sendTaskCreationEmail(task, task.assignedUsers);
-      const targetUsers = task.assignedUsers.map(u => u._id.toString()).filter(id => id !== req.user._id.toString());
-      await createNotification(
-        task.createdBy._id,
-        'New Task Assigned',
-        `${req.user.name} assigned you task "${title}"`,
-        'task_assigned',
-        task._id,
-        { priority, dueDateTime: parsedDue, targetUsers }
-      );
-    }
+      const assignedUsers = task.assignedUsers.map(user => ({
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+      }));
+      const targetUsers = assignedUsers.map(u => u._id.toString()).filter(id => id !== req.user._id.toString());
+      const createdById = task.createdBy._id;
+      const taskId = task._id;
+      const creatorName = req.user.name || 'Someone';
 
-    await createActivityLog(req.user, 'task_created_for_others', task._id, `Created task for others: ${title}`, null, task.toObject(), req);
+      enqueueBackgroundJob(async () => {
+        await sendTaskCreationEmail({ ...task.toObject(), _id: taskId, assignedUsers }, assignedUsers);
+        await createNotification(
+          createdById,
+          'New Task Assigned',
+          `${creatorName} assigned you task "${title}"`,
+          'task_assigned',
+          taskId,
+          { priority, dueDateTime: parsedDue, targetUsers }
+        );
+      });
+    }
 
     return res.status(201).json({ success: true, task, message: 'Task created successfully' });
   } catch (error) {
@@ -371,6 +389,7 @@ exports.getAssignedTasks = async (req, res) => {
       taskFor: 'others',
       isActive: true
     })
+      .select('-remarks -statusHistory')
       .populate('assignedUsers', TASK_USER_POPULATE_FIELDS)
       .populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS)
       .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)

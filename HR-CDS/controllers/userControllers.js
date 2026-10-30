@@ -205,6 +205,8 @@ const SENSITIVE_USER_LIST_KEYS = [
   'panNumber',
   'fatherName',
   'motherName',
+  'spouseName',
+  'children',
   'documents',
 ];
 
@@ -358,8 +360,14 @@ const sanitizeAdminUserUpdateData = updateData => {
     if (clean[field] !== undefined) clean[field] = String(clean[field] || '').replace(/\D/g, '').slice(0, 10);
   });
   if (clean.pinCode !== undefined) clean.pinCode = String(clean.pinCode || '').replace(/\D/g, '').slice(0, 6);
+  if (clean.zipCode !== undefined) {
+    const cleanZip = String(clean.zipCode || '').replace(/\D/g, '').slice(0, 6);
+    clean.zipCode = cleanZip;
+    if (!clean.pinCode) clean.pinCode = cleanZip;
+  }
+  if (clean.accountNumber !== undefined) clean.accountNumber = String(clean.accountNumber || '').replace(/\D/g, '').slice(0, 20);
 
-  if (clean.ifsc) clean.ifsc = String(clean.ifsc).trim().toUpperCase();
+  if (clean.ifsc) clean.ifsc = String(clean.ifsc).trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 11);
 
   if (clean.salary === '' || clean.salary === null || clean.salary === undefined) {
     delete clean.salary;
@@ -881,7 +889,27 @@ exports.updateMe = async (req, res) => {
     .select('-password -resetToken -resetTokenExpiry')
     .populate('department', 'name description')
     .populate('company', 'name companyCode');
-    
+
+    // If the user has a linked Client record, keep Client name, phone, address synchronized
+    try {
+      const Client = mongoose.models.Client || require('../models/Client');
+      const clientUpdate = {};
+      if (updateData.name) clientUpdate.client = updateData.name;
+      if (updateData.phone) clientUpdate.phone = updateData.phone;
+      if (updateData.address) clientUpdate.address = updateData.address;
+      if (updateData.city) clientUpdate.city = updateData.city;
+      if (updateData.state) clientUpdate.state = updateData.state;
+      if (updateData.pinCode) clientUpdate.pincode = updateData.pinCode;
+      if (Object.keys(clientUpdate).length > 0) {
+        await Client.updateMany(
+          { $or: [{ userId: updatedUser._id }, { email: updatedUser.email }] },
+          { $set: clientUpdate }
+        );
+      }
+    } catch (clientSyncErr) {
+      console.warn("Client model sync warning:", clientSyncErr.message);
+    }
+
     return successResponse(res, 200, {
       message: "Profile updated successfully",
       user: updatedUser
@@ -1574,6 +1602,9 @@ exports.getAllUsers = async (req, res) => {
 
 exports.getUser = async (req, res) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return errorResponse(res, 400, "Invalid user ID");
+    }
     const user = await User.findById(req.params.id)
       .select('-password -resetToken -resetTokenExpiry')
       .populate('department', 'name description')
@@ -1813,6 +1844,7 @@ exports.updateUser = async (req, res) => {
 
     delete updateData.userId;
     delete updateData.targetUserId;
+    delete updateData.employeeId;
     const sanitizedUpdateData = sanitizeAdminUserUpdateData(updateData);
     Object.keys(updateData).forEach(key => delete updateData[key]);
     Object.assign(updateData, sanitizedUpdateData);
@@ -2023,7 +2055,7 @@ exports.updateSelfUser = async (req, res) => {
     const updateData = {};
     
     const blockedUpdateFields = new Set([
-      'password', 'resetToken', 'resetTokenExpiry', '__v', 'spouseName', 'children',
+      'password', 'resetToken', 'resetTokenExpiry', '__v',
       'zipCode', 'workLocation', 'noticePeriod', 'aadhaar', 'aadhar', 'pan',
       'companyRole', 'role', 'jobRole', 'employeeType', 'salary', 'isActive',
       'branch', 'assignedBranches', 'company', 'companyCode', 'workFromHome',
@@ -2430,7 +2462,7 @@ exports.getCompanyUsers = async (req, res) => {
 
     const taskOverviewView = String(req.query.view || '').toLowerCase() === 'task-overview';
     const userProjection = taskOverviewView
-      ? 'name email role companyRole jobRole employeeType employeeId company companyCode department branch assignedBranches isActive status createdAt'
+      ? 'name email phone role companyRole jobRole employeeType employeeId company companyCode department branch assignedBranches isActive status createdAt'
       : '-password -resetToken -resetTokenExpiry';
 
     const users = await User.find(filter)

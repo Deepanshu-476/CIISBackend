@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 
 const {
   Task,
@@ -20,6 +21,10 @@ const {
   sendCleanTaskList,
   normalizeProjectTaskStatus,
   getProjectTaskAssignedBy,
+  getTaskCompletionDate,
+  getTaskStatusChangeDate,
+  getTaskReportDate,
+  getTaskSourceAwareDate,
   TASK_USER_POPULATE_FIELDS,
   TASK_GROUP_POPULATE_FIELDS,
   TASK_CREATOR_POPULATE_FIELDS
@@ -132,6 +137,10 @@ const buildAssigneeNameConditions = names => {
 };
 
 
+// Log fields read by getTaskStatusChangeDate / getTaskCompletionDate.
+const STATS_LOG_FIELDS = ['type', 'action', 'field', 'previousStatus', 'newStatus', 'status', 'newValue', 'newValues.status',
+  'description', 'remarks', 'performedAt', 'changedAt', 'createdAt'];
+
 const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, companyId = null) => {
   const targetUserId = userId.toString();
   const isStatsOnly = Boolean(queryOptions.onlyStats);
@@ -169,9 +178,10 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
   const dateOr = range ? [
     { dueDateTime: range },
     { dueDate: range },
-    { createdAt: range },
     { completionDate: range },
-    { completedAt: range }
+    { completedAt: range },
+    { inProgressSince: range },
+    { 'statusHistory.changedAt': range }
   ] : null;
 
   const personalQuery = {
@@ -196,7 +206,21 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
       ...buildAssigneeNameConditions([targetUser?.name, targetUser?.email])
     ].filter(condition => Object.values(condition)[0])
   };
-  if (dateOr) clientQuery.$and = [{ $or: [{ dueDate: range }, { createdAt: range }, { completedAt: range }] }];
+  if (dateOr) {
+    clientQuery.$and = [
+      ...(clientQuery.$and || []),
+      {
+        $or: [
+          { dueDate: range },
+          { dueDateTime: range },
+          { completionDate: range },
+          { completedAt: range },
+          { inProgressSince: range },
+          { 'activityLogs.performedAt': range }
+        ]
+      }
+    ];
+  }
   if (priority) clientQuery.priority = new RegExp(`^${priority}$`, 'i');
   if (hasSearch) {
     clientQuery.$and = [
@@ -205,13 +229,26 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
     ];
   }
 
-  const projectTaskElemMatch = { assignedTo: userId };
+  const projectTaskElemMatch = {
+    $and: [{
+      $or: [{ assignedTo: userId }, { assignedUsers: userId }]
+    }]
+  };
   if (range) {
-    projectTaskElemMatch.$or = [
-      { dueDate: range },
-      { createdAt: range },
-      { completedAt: range }
-    ];
+    projectTaskElemMatch.$and.push({
+      $or: [
+        { dueDate: range },
+        { dueDateTime: range },
+        { completionDate: range },
+        { completedAt: range },
+        { inProgressSince: range },
+        { 'activityLogs.performedAt': range },
+        {
+          status: { $in: ['pending', 'in-progress', 'inprogress', 'onhold', 'on-hold', 'reopen'] },
+          $or: [{ dueDate: { $exists: false } }, { dueDate: null }]
+        }
+      ]
+    });
   }
   if (priority) projectTaskElemMatch.priority = new RegExp(`^${priority}$`, 'i');
 
@@ -231,18 +268,39 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
   let projectQueryExec = Project.find(projectQuery);
 
   if (isStatsOnly) {
+    // Logs only decide a task's report date for a date range (getTaskReportDate);
+    // fetch just the fields those helpers read, and none without a range.
+    // Full logs made a 20-user stats request move megabytes per user.
+    const filterFrom = queryOptions.fromDate || queryOptions.startDate;
+    const filterTo = queryOptions.toDate || queryOptions.endDate;
+    const filterRange = getCleanTaskDateRange({ period: filterFrom || filterTo ? 'all' : queryOptions.period, fromDate: filterFrom, toDate: filterTo });
+    const logFields = prefix => filterRange
+      ? STATS_LOG_FIELDS.map(field => `${prefix}.${field}`).join(' ')
+      : '';
+    // Without a range only this user's status is read, and the first entry is
+    // the one used (statusByUser.find below). Some tasks carry thousands of
+    // repeated status entries, so the full arrays are fetched only for ranges.
+    const userIdValues = mongoose.Types.ObjectId.isValid(targetUserId)
+      ? [new mongoose.Types.ObjectId(targetUserId), targetUserId]
+      : [targetUserId];
     personalQueryExec = personalQueryExec
-      .select('overallStatus statusByUser dueDate dueDateTime priority createdAt updatedAt')
+      .select(filterRange
+        ? 'createdBy assignedUsers overallStatus statusByUser statusHistory dueDate dueDateTime priority inProgressSince completionDate completedAt'
+        : {
+          createdBy: 1, assignedUsers: 1, overallStatus: 1, dueDate: 1, dueDateTime: 1, priority: 1,
+          inProgressSince: 1, completionDate: 1, completedAt: 1,
+          statusByUser: { $elemMatch: { user: { $in: userIdValues } } },
+        })
       .lean();
     clientQueryExec = clientQueryExec
-      .select('status completed dueDate priority createdAt updatedAt')
+      .select(`assignee assigneeId status completed dueDate priority inProgressSince completionDate completedAt ${logFields('activityLogs')}`)
       .lean();
     projectQueryExec = projectQueryExec
-      .select('tasks._id tasks.assignedTo tasks.status tasks.dueDate tasks.priority tasks.createdAt tasks.updatedAt')
+      .select(`tasks._id tasks.assignedTo tasks.assignedUsers tasks.status tasks.dueDate tasks.priority tasks.inProgressSince tasks.completionDate tasks.completedAt ${logFields('tasks.activityLogs')}`)
       .lean();
   } else {
     personalQueryExec = personalQueryExec
-      .select('title description dueDate dueDateTime priority overallStatus statusByUser statusHistory completionDate assignedUsers assignedGroups createdBy companyCode taskFor onHoldReleasedAt createdAt updatedAt remarks lastEditedBy lastEditedByName lastEditedAt lastEditChanges')
+      .select('title description dueDate dueDateTime priority overallStatus statusByUser statusHistory completionDate assignedUsers assignedGroups createdBy companyCode taskFor onHoldReleasedAt createdAt updatedAt remarks checkpoints lastEditedBy lastEditedByName lastEditedAt lastEditChanges')
       .populate('assignedUsers', TASK_USER_POPULATE_FIELDS)
       .populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS)
       .populate('createdBy', TASK_CREATOR_POPULATE_FIELDS)
@@ -252,7 +310,7 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
       .lean();
 
     clientQueryExec = clientQueryExec
-      .select('name description dueDate priority status completed clientId service createdAt updatedAt assignee assigneeId activityLogs remarks lastEditedBy lastEditedByName lastEditedAt lastEditChanges')
+      .select('name description dueDate priority status completed clientId service createdAt updatedAt assignee assigneeId activityLogs remarks checkpoints lastEditedBy lastEditedByName lastEditedAt lastEditChanges')
       .populate('clientId', 'client name email company phone companyCode')
       .populate('assigneeId', TASK_USER_POPULATE_FIELDS)
       .populate('activityLogs.user', TASK_USER_POPULATE_FIELDS)
@@ -280,6 +338,7 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
         'tasks.updatedAt',
         'tasks.activityLogs',
         'tasks.remarks',
+        'tasks.checkpoints',
         'tasks.lastEditedBy',
         'tasks.lastEditedByName',
         'tasks.lastEditedAt',
@@ -355,7 +414,8 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
   projectTasks.forEach(project => {
     (project.tasks || []).forEach(task => {
       const assignedTo = task.assignedTo?._id || task.assignedTo;
-      const isAssignedToUser = assignedTo?.toString() === targetUserId;
+      const isAssignedToUser = assignedTo?.toString() === targetUserId
+        || (task.assignedUsers || []).some(user => String(user?._id || user) === targetUserId);
       if (!isAssignedToUser) return;
 
       const projectStatus = normalizeProjectTaskStatus(task.status);
@@ -370,6 +430,8 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
         description: task.description || project.description || '',
         dueDate: task.dueDate,
         dueDateTime: task.dueDate,
+        completionDate: task.completionDate || null,
+        completedAt: task.completedAt || task.completionDate || null,
         priority: String(task.priority || 'medium').toLowerCase(),
         status: displayStatus,
         userStatus: projectStatus,
@@ -377,6 +439,7 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
         projectTaskId: task._id,
         activityLogs: Array.isArray(task.activityLogs) ? task.activityLogs : [],
         remarks: Array.isArray(task.remarks) ? task.remarks : [],
+        checkpoints: Array.isArray(task.checkpoints) ? task.checkpoints : [],
         createdAt: task.createdAt || project.createdAt,
         updatedAt: task.updatedAt || project.updatedAt,
         lastActivityAt: task.updatedAt || task.createdAt || project.updatedAt || project.createdAt,
@@ -394,35 +457,8 @@ const queryAllUserTasks = async (userId, companyCode, queryOptions = {}, company
 const getFilterDate = (task, dateField) => {
   const normalizedField = String(dateField || '').toLowerCase();
   if (normalizedField === 'createdat' || normalizedField === 'createddate') return task.createdAt;
-  if (normalizedField === 'updatedat' || normalizedField === 'updateddate') return task.updatedAt || task.createdAt;
-  if (normalizedField === 'completedat' || normalizedField === 'completiondate') return task.completionDate || task.completedAt;
+  if (normalizedField === 'completedat' || normalizedField === 'completiondate') return getTaskCompletionDate(task) || task.completionDate || task.completedAt;
   return getTaskReportDate(task);
-};
-
-const getTaskCompletionDate = task => {
-  const directDate = task?.completionDate || task?.completedAt;
-  if (directDate) return directDate;
-  const statusHistory = Array.isArray(task?.statusHistory) ? task.statusHistory : [];
-  const historyDate = statusHistory
-    .filter(entry => normalizeTaskStatus(entry?.status || entry?.newValue || entry?.newValues?.status) === 'completed')
-    .map(entry => entry.changedAt || entry.createdAt || entry.updatedAt)
-    .filter(Boolean)
-    .sort((a, b) => new Date(b) - new Date(a))[0];
-  if (historyDate) return historyDate;
-  const activityLogs = Array.isArray(task?.activityLogs) ? task.activityLogs : [];
-  return activityLogs
-    .filter(entry => normalizeTaskStatus(entry?.newValue || entry?.newValues?.status || entry?.status) === 'completed')
-    .map(entry => entry.performedAt || entry.changedAt || entry.createdAt || entry.updatedAt)
-    .filter(Boolean)
-    .sort((a, b) => new Date(b) - new Date(a))[0] || null;
-};
-
-const getTaskReportDate = task => {
-  const status = normalizeTaskStatus(task?.userStatus || task?.status || task?.overallStatus);
-  if (status === 'completed') {
-    return getTaskCompletionDate(task) || task?.updatedAt || task?.dueDateTime || task?.dueDate || task?.createdAt;
-  }
-  return task?.dueDateTime || task?.dueDate || task?.createdAt;
 };
 
 const getFilterStatus = (task) => {
@@ -433,7 +469,7 @@ const getFilterStatus = (task) => {
 const filterUserTasks = (tasks, queryParams) => {
   const fromDate = queryParams.fromDate || queryParams.startDate;
   const toDate = queryParams.toDate || queryParams.endDate;
-  const { status, search, period, priority, dateField } = queryParams;
+  const { status, search, period, priority, dateField, taskType } = queryParams;
   const range = getCleanTaskDateRange({ period: fromDate || toDate ? 'all' : period, fromDate, toDate });
   const query = search ? String(search).trim().toLowerCase() : '';
 
@@ -444,6 +480,13 @@ const filterUserTasks = (tasks, queryParams) => {
     }
     if (priority && priority !== 'all' && String(t.priority || '').toLowerCase() !== String(priority).toLowerCase()) {
       return false;
+    }
+    if (taskType && taskType !== 'all') {
+      const requestedType = String(taskType).toLowerCase().trim();
+      const actualType = String(t.source || t.taskSource || t.__taskSource || 'personal').toLowerCase();
+      if (requestedType === 'personal' && !['self', 'personal'].includes(actualType)) return false;
+      if (requestedType === 'project' && actualType !== 'project') return false;
+      if (requestedType === 'client' && actualType !== 'client') return false;
     }
     if (query) {
       const haystack = [t.title, t.description, t.clientName, t.projectName].map(v => String(v || '').toLowerCase()).join(' ');
@@ -480,13 +523,7 @@ const filterUserTasks = (tasks, queryParams) => {
         (!range.$lte || reportDateValue <= range.$lte);
 
       if (!hasMatchingDate) {
-        // If range covers current moment, include actively in-progress tasks
-        const now = new Date();
-        const coversNow = (!range.$gte || now >= range.$gte) && (!range.$lte || now <= range.$lte);
-        const normStatus = normalizeTaskStatus(t.userStatus || t.status || t.overallStatus);
-        if (!coversNow || normStatus !== 'in-progress') {
-          return false;
-        }
+        return false;
       }
     }
     return true;
@@ -522,6 +559,10 @@ const calculateUserStatusCounts = (filtered) => {
     cancelled: 0
   };
 
+  let personalCount = 0;
+  let projectCount = 0;
+  let clientCount = 0;
+
   filtered.forEach(task => {
     let rawStatus = task.userStatus || task.status || task.overallStatus || 'pending';
     let status = normalizeTaskStatus(rawStatus);
@@ -533,6 +574,11 @@ const calculateUserStatusCounts = (filtered) => {
     } else {
       counts.pending += 1;
     }
+
+    const src = String(task.source || task.taskSource || task.__taskSource || '').toLowerCase();
+    if (src === 'project') projectCount += 1;
+    else if (src === 'client') clientCount += 1;
+    else personalCount += 1;
   });
 
   const total = filtered.length;
@@ -551,7 +597,11 @@ const calculateUserStatusCounts = (filtered) => {
     onhold: toStat(counts.onhold),
     onHold: toStat(counts.onhold),
     reopen: toStat(counts.reopen),
-    cancelled: toStat(counts.cancelled)
+    cancelled: toStat(counts.cancelled),
+    personal: toStat(personalCount),
+    project: toStat(projectCount),
+    client: toStat(clientCount),
+    work: toStat(projectCount + clientCount)
   };
 };
 
@@ -565,29 +615,32 @@ exports.getAllMyTaskViews = async (req, res) => {
       fetchAssignedProjectTaskList
     } = require('./taskHelper');
 
-    const [personal, assigned, client, project] = await Promise.all([
-      fetchPersonalTaskList(req),
-      fetchAssignedToMeTaskList(req),
-      fetchAssignedClientTaskList(req),
-      fetchAssignedProjectTaskList(req)
-    ]);
     const requestedView = String(req.query.view || req.query.taskType || req.query.type || 'all').trim().toLowerCase();
-    const viewMap = {
-      all: [...personal, ...assigned, ...client, ...project],
-      self: personal,
-      personal,
-      'my-personal-task': personal,
-      'my-personal-tasks': personal,
-      assigned,
-      'assigned-to-me': assigned,
-      client,
-      'client-tasks': client,
-      project,
-      'project-tasks': project
+    const fetchers = {
+      self: fetchPersonalTaskList,
+      personal: fetchPersonalTaskList,
+      'my-personal-task': fetchPersonalTaskList,
+      'my-personal-tasks': fetchPersonalTaskList,
+      assigned: fetchAssignedToMeTaskList,
+      'assigned-to-me': fetchAssignedToMeTaskList,
+      client: fetchAssignedClientTaskList,
+      'client-tasks': fetchAssignedClientTaskList,
+      project: fetchAssignedProjectTaskList,
+      'project-tasks': fetchAssignedProjectTaskList
     };
-    const view = Object.prototype.hasOwnProperty.call(viewMap, requestedView) ? requestedView : 'all';
-    const list = applyCleanListFilters(viewMap[view], req);
-    return sendCleanTaskList(res, list, view, 'source-aware', req);
+    const view = requestedView === 'all' || Object.prototype.hasOwnProperty.call(fetchers, requestedView)
+      ? requestedView
+      : 'all';
+    const list = view === 'all'
+      ? (await Promise.all([
+        fetchPersonalTaskList(req, { includeCreatedForOthers: true }),
+        fetchAssignedToMeTaskList(req),
+        fetchAssignedClientTaskList(req),
+        fetchAssignedProjectTaskList(req)
+      ])).flat()
+      : await fetchers[view](req);
+    const filteredList = applyCleanListFilters(list, req);
+    return sendCleanTaskList(res, filteredList, view, 'source-aware', req);
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
@@ -603,29 +656,32 @@ exports.getAllMyTaskStats = async (req, res) => {
       fetchAssignedProjectTaskList
     } = require('./taskHelper');
 
-    const [personal, assigned, client, project] = await Promise.all([
-      fetchPersonalTaskList(req),
-      fetchAssignedToMeTaskList(req),
-      fetchAssignedClientTaskList(req),
-      fetchAssignedProjectTaskList(req)
-    ]);
     const requestedView = String(req.query.view || req.query.taskType || req.query.type || 'all').trim().toLowerCase();
-    const viewMap = {
-      all: [...personal, ...assigned, ...client, ...project],
-      self: personal,
-      personal,
-      'my-personal-task': personal,
-      'my-personal-tasks': personal,
-      assigned,
-      'assigned-to-me': assigned,
-      client,
-      'client-tasks': client,
-      project,
-      'project-tasks': project
+    const fetchers = {
+      self: fetchPersonalTaskList,
+      personal: fetchPersonalTaskList,
+      'my-personal-task': fetchPersonalTaskList,
+      'my-personal-tasks': fetchPersonalTaskList,
+      assigned: fetchAssignedToMeTaskList,
+      'assigned-to-me': fetchAssignedToMeTaskList,
+      client: fetchAssignedClientTaskList,
+      'client-tasks': fetchAssignedClientTaskList,
+      project: fetchAssignedProjectTaskList,
+      'project-tasks': fetchAssignedProjectTaskList
     };
-    const view = Object.prototype.hasOwnProperty.call(viewMap, requestedView) ? requestedView : 'all';
-    const list = applyCleanListFilters(viewMap[view], req);
-    return res.json({ success: true, view, stats: calculateUnifiedTaskStats(list) });
+    const view = requestedView === 'all' || Object.prototype.hasOwnProperty.call(fetchers, requestedView)
+      ? requestedView
+      : 'all';
+    const list = view === 'all'
+      ? (await Promise.all([
+        fetchPersonalTaskList(req, { includeCreatedForOthers: true }),
+        fetchAssignedToMeTaskList(req),
+        fetchAssignedClientTaskList(req),
+        fetchAssignedProjectTaskList(req)
+      ])).flat()
+      : await fetchers[view](req);
+    const filteredList = applyCleanListFilters(list, req);
+    return res.json({ success: true, view, stats: calculateUnifiedTaskStats(filteredList) });
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
@@ -762,10 +818,10 @@ exports.getUserAllTasksPaginated = async (req, res) => {
 
     const allTasks = await queryAllUserTasks(userId, req.user.companyCode, req.query, req.user.company?._id || req.user.company);
     const filtered = filterUserTasks(allTasks, req.query);
+    const statsFiltered = filterUserTasks(allTasks, { ...req.query, status: 'all' });
 
     const sortedFiltered = sortTasksNewestFirst(filtered);
 
-    
     const total = sortedFiltered.length;
     const pages = Math.max(1, Math.ceil(total / limit));
     const safePage = Math.min(page, pages);
@@ -773,37 +829,7 @@ exports.getUserAllTasksPaginated = async (req, res) => {
     const tasks = sortedFiltered.slice(start, start + limit);
     const enrichedTasks = await enrichTasksWithActivityAndRemarks(tasks);
 
-    const counts = {
-      total: allTasks.length,
-      pending: 0,
-      'in-progress': 0,
-      completed: 0,
-      overdue: 0,
-      onhold: 0
-    };
-
-    allTasks.forEach(task => {
-      const status = task.status;
-      if (counts[status] !== undefined) {
-        counts[status] += 1;
-      } else if (status === 'pending') {
-        counts.pending += 1;
-      }
-    });
-
-    const toStat = (count) => ({
-      count,
-      percentage: allTasks.length > 0 ? Math.round((count / allTasks.length) * 100) : 0
-    });
-
-    const calculatedStats = {
-      total: allTasks.length,
-      pending: toStat(counts.pending),
-      inProgress: toStat(counts['in-progress']),
-      completed: toStat(counts.completed),
-      overdue: toStat(counts.overdue),
-      onhold: toStat(counts.onhold)
-    };
+    const calculatedStats = calculateUserStatusCounts(statsFiltered);
 
     res.json({
       success: true,
@@ -987,6 +1013,7 @@ exports.getCompanyAllTaskOverview = async (req, res) => {
       toDate: req.query.toDate,
       status: req.query.status || 'all',
       priority: req.query.priority || 'all',
+      taskType: req.query.taskType || 'all',
       search: req.query.search || '',
       branch: req.query.branch,
       branchId: req.query.branchId,

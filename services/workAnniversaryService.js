@@ -278,7 +278,7 @@ const runWorkAnniversaryEmails = async (now = new Date()) => {
   return summary;
 };
 
-cron.schedule(
+if (require("../utils/scheduledJobs").scheduledJobsEnabled()) cron.schedule(
   // Run hourly so an email is not missed when the server was unavailable at
   // 9:00 AM or an employee's joining date is added later in the day. The
   // yearly per-user log keeps these catch-up runs idempotent.
