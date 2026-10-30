@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Conversation = require('../chat/models/Conversation');
 const User = require('../../models/User');
 const { id, ids } = require('./projectChatEvents');
@@ -22,7 +23,7 @@ function normalizePerson(val) {
   return { id: '', name: s, email: '' };
 }
 
-function resolveMember(value, users) {
+function resolveMember(value, users, client = null) {
   const target = normalizePerson(value);
   if (!target) return null;
 
@@ -45,17 +46,23 @@ function resolveMember(value, users) {
     const exact = users.find(u => String(u.name || '').trim().toLowerCase() === targetName);
     if (exact) return exact._id;
 
-    // 3b. Clean alphanumeric prefix/substring match (e.g. "Prashant" <-> "Prashant kumar", "Shivani" <-> "Shivani Chandel")
+    // 3b. Clean alphanumeric prefix match (only when unique)
     const cleanTarget = targetName.replace(/[^a-z0-9]/g, '');
     if (cleanTarget.length >= 3) {
-      const candidates = users.filter(u => {
+      let candidates = users.filter(u => {
         const cleanUser = String(u.name || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-        return cleanUser.length >= 3 && (cleanUser.startsWith(cleanTarget) || cleanTarget.startsWith(cleanUser));
+        return cleanUser.length >= 3 && cleanUser.startsWith(cleanTarget);
       });
+      const clientDept = String(client?.department || client?.team || '').trim().toLowerCase();
+      if (clientDept && candidates.length > 1) {
+        candidates = candidates.filter(u => {
+          const userDept = String(u.department || u.team || u.departmentName || '').trim().toLowerCase();
+          return userDept && userDept === clientDept;
+        });
+      }
       if (candidates.length === 1) return candidates[0]._id;
-      const startsWith = candidates.filter(u => String(u.name || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '').startsWith(cleanTarget));
-      if (startsWith.length === 1) return startsWith[0]._id;
     }
+    console.warn('[client-chat] unmatched member name:', target.name, 'for client:', client?.client || client?._id || 'unknown');
   }
 
   return null;
@@ -84,9 +91,10 @@ const RESYNC_AFTER_MS = 10 * 60 * 1000;
 const notSyncedSince = (ms = RESYNC_AFTER_MS) => ({ clientSyncedAt: { $not: { $gte: new Date(Date.now() - ms) } } });
 
 async function syncClient(clientId) {
+  if (!clientId || !mongoose.isValidObjectId(clientId)) return null;
   const startedAt = new Date();
   const client = await Client().findById(clientId).lean();
-  const existing = await Conversation.findOne({ clientId });
+  const existing = await Conversation.findOne({ clientId, projectId: { $exists: false } });
   if (!client) {
     if (existing) {
       require('./projectChatService').emitMembers(existing, 'chat:project-membership-updated', { conversationId: existing._id, clientId });
@@ -101,14 +109,14 @@ async function syncClient(clientId) {
     await Conversation.updateOne({ _id: existing._id }, { $set: { members: [], admins: [] } });
     global.io?.in(`conversation:${existing._id}`).socketsLeave(`conversation:${existing._id}`);
   }
-  const users = (await User.find({ company: company._id, isActive: { $ne: false } }).select('_id name email companyRole role jobRoleName employeeType')).filter(user => internal(user, client));
+  const users = (await User.find({ company: company._id, isActive: { $ne: false } }).select('_id name email companyRole role jobRoleName employeeType department departmentName team')).filter(user => internal(user, client));
   const tasks = await Task().find({ clientId }).select('assigneeId assignee').lean();
   const rawManagers = collectClientManagerValues(client);
-  const managers = ids(rawManagers.map(value => resolveMember(value, users)));
-  const taskAssignees = ids(tasks.map(task => task.assigneeId ? users.find(user => id(user) === id(task.assigneeId))?._id : resolveMember(task.assignee, users)));
+  const managers = ids(rawManagers.map(value => resolveMember(value, users, client)));
+  const taskAssignees = ids(tasks.map(task => task.assigneeId ? users.find(user => id(user) === id(task.assigneeId))?._id : resolveMember(task.assignee, users, client)));
   const candidates = ids([...managers, ...taskAssignees]);
   const members = client.status === 'Inactive' ? [] : candidates;
-  const query = { companyId: company._id, clientId };
+  const query = { companyId: company._id, clientId, projectId: { $exists: false } };
   let conversation;
   const updatePayload = {
     $set: {
@@ -137,8 +145,13 @@ async function syncClient(clientId) {
 }
 
 async function drainTask(taskId) {
+  if (!taskId || !mongoose.isValidObjectId(taskId)) return;
   const task = await Task().findById(taskId).select('+chatOutbox').lean();
   if (!task) return;
+  if (!task.clientId || !mongoose.isValidObjectId(task.clientId)) {
+    console.warn('[client-chat] task has missing or invalid clientId', id(taskId));
+    return;
+  }
   const conversation = await syncClient(task.clientId);
   if (!conversation) return;
   if (!conversation.members.length) {

@@ -177,7 +177,11 @@ exports.downloadSampleExcel = async (req, res) => {
     res.end();
   } catch (error) {
     console.error("❌ Error generating sample excel:", error);
-    res.status(500).json({ success: false, message: "Error generating sample template", error: error.message });
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, message: "Error generating sample template", error: error.message });
+    } else {
+      res.end();
+    }
   }
 };
 
