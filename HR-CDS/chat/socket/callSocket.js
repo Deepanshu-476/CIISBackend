@@ -103,6 +103,7 @@ const incomingPayload = (room, userId) => ({
     isGroupCall: room.isGroupCall,
     callType: room.callType,
     expiresAt: room.participants?.[userId]?.expiresAt || room.expiresAt,
+    answeredAt: room.answeredAt || null,
 });
 
 const clearCallPush = (userIds, callId) => {
@@ -400,6 +401,7 @@ const callSocket = (io, socket) => {
                 participants: existingJoinedParticipants,
                 title: room.title,
                 isGroupCall: Boolean(room.isGroupCall),
+                answeredAt: room.answeredAt,
             });
 
             // Notify already-joined participants
@@ -408,6 +410,7 @@ const callSocket = (io, socket) => {
                 fromUserId: socket.userId,
                 fromUser: participantUser,
                 callType: room.callType,
+                answeredAt: room.answeredAt,
             }, socket.userId);
         });
     });
