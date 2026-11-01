@@ -24,12 +24,12 @@ module.exports = socket => async (packet, next) => {
       }
     }
     if (conversationId) {
-      const conversation = await refreshConversation(conversationId, socket.companyId);
+      const conversation = await refreshConversation(conversationId, socket.companyId, { maxAgeMs: 60 * 1000 });
       if (!conversation?.members.some(member => String(member) === String(socket.userId))) return reject();
     }
     if (event === 'chat:join-conversations') {
       const conversations = await Conversation.find({ _id: { $in: data.conversationIds || [] }, companyId: socket.companyId, members: socket.userId }).select('_id');
-      for (const conversation of conversations) await refreshConversation(conversation._id, socket.companyId);
+      for (const conversation of conversations) await refreshConversation(conversation._id, socket.companyId, { maxAgeMs: 60 * 1000 });
     }
     if (!conversationId && data.receiverId) {
       if (!await User.exists({ _id: data.receiverId, company: socket.companyId, isActive: { $ne: false } })) return reject();

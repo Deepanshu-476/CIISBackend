@@ -441,12 +441,9 @@ const getEmployeeDashboardSummary = async (req, res) => {
         .sort({startDate: -1})
         .limit(60)
         .lean(),
+      // These task queries had two $or keys, so the company $or was silently dropped; the
+      // user's own tasks are what the dashboard shows, so only the user filter is kept.
       EmployeeTask.find({
-        $or: [
-          {companyCode},
-          ...(companyCode ? [{companyCode: companyCode.toUpperCase()}] : []),
-          ...(companyId ? [{company: companyId}] : []),
-        ],
         isActive: {$ne: false},
         $or: [
           {createdBy: userId},
@@ -458,12 +455,29 @@ const getEmployeeDashboardSummary = async (req, res) => {
         .sort({updatedAt: -1, createdAt: -1})
         .limit(8)
         .lean(),
-      EmployeeTask.find({
-        $or: [
-          {companyCode},
-          ...(companyCode ? [{companyCode: companyCode.toUpperCase()}] : []),
-          ...(companyId ? [{company: companyId}] : []),
-        ],
+      // Stats only read this user's statusByUser entry and the "completed" history entries; the
+      // full arrays (every assignee, every status change) made this the heaviest query here.
+      userObjectId ? EmployeeTask.aggregate([
+        {$match: {
+          isActive: {$ne: false},
+          $or: [
+            {createdBy: {$in: [userObjectId, String(userId)]}},
+            {assignedUsers: {$in: [userObjectId, String(userId)]}},
+            {"statusByUser.user": {$in: [userObjectId, String(userId)]}},
+          ],
+        }},
+        {$project: {
+          createdAt: 1, updatedAt: 1, dueDateTime: 1, completionDate: 1, overallStatus: 1, status: 1, creatorStatus: 1,
+          statusByUser: {$filter: {
+            input: {$ifNull: ["$statusByUser", []]},
+            cond: {$in: ["$$this.user", [userObjectId, String(userId)]]},
+          }},
+          statusHistory: {$filter: {
+            input: {$ifNull: ["$statusHistory", []]},
+            cond: {$in: [{$toLower: {$trim: {input: {$toString: {$ifNull: ["$$this.status", ""]}}}}}, ["completed", "approved", "done"]]},
+          }},
+        }},
+      ]) : EmployeeTask.find({
         isActive: {$ne: false},
         $or: [
           {createdBy: userId},
@@ -498,8 +512,8 @@ const getEmployeeDashboardSummary = async (req, res) => {
             { "tasks.assignedTo": userObjectId },
             { "tasks.assignedUsers": userObjectId },
           ] : []),
-          ...(companyCode ? [{companyCode}, {companyCode: companyCode.toUpperCase()}] : []),
-          ...(companyId ? [{company: companyId}] : []),
+          // The company clauses used to sit inside this $or, which returned every project in
+          // the company instead of the user's own.
         ]
       })
         .sort({updatedAt: -1, createdAt: -1})
@@ -915,25 +929,27 @@ const getOwnerDashboard = async (companyCode, ownerId) => {
     monthEnd.setDate(0);
     monthEnd.setHours(23, 59, 59, 999);
 
+    // Only counts are shown, so count in the database instead of loading every employee and
+    // every attendance record of the day.
     const [
-      allEmployees,
-      todayAttendance,
+      totalEmployees,
+      todayAttendanceCounts,
       monthlyAttendance,
       leaveRequests,
       assetRequests,
       ownerTasks,
       meetings
     ] = await Promise.all([
-      User.find({
+      User.countDocuments({
         companyCode: companyCode,
         companyRole: "employee",
         isActive: true,
-      }).select("_id name email employeeId companyRole").lean(),
+      }),
 
-      Attendance.find({
-        companyCode: companyCode,
-        date: { $gte: todayStart, $lte: todayEnd },
-      }).lean(),
+      Attendance.aggregate([
+        { $match: { companyCode: companyCode, date: { $gte: todayStart, $lte: todayEnd } } },
+        { $group: { _id: "$status", count: { $sum: 1 } } },
+      ]),
 
       Attendance.aggregate([
         {
@@ -999,10 +1015,13 @@ const getOwnerDashboard = async (companyCode, ownerId) => {
       .lean(),
     ]);
 
-    const presentCount = todayAttendance.filter((a) => a.status === "PRESENT").length;
-    const lateCount = todayAttendance.filter((a) => a.status === "LATE").length;
-    const absentCount = todayAttendance.filter((a) => a.status === "ABSENT").length;
-    const halfDayCount = todayAttendance.filter((a) => ["HALF DAY", "HALFDAY"].includes(a.status)).length;
+    const todayCount = statuses => todayAttendanceCounts
+      .filter((item) => statuses.includes(item._id))
+      .reduce((total, item) => total + item.count, 0);
+    const presentCount = todayCount(["PRESENT"]);
+    const lateCount = todayCount(["LATE"]);
+    const absentCount = todayCount(["ABSENT"]);
+    const halfDayCount = todayCount(["HALF DAY", "HALFDAY"]);
 
     const monthlyStats = {
       present: monthlyAttendance.find((m) => m._id === "PRESENT")?.count || 0,
@@ -1014,13 +1033,13 @@ const getOwnerDashboard = async (companyCode, ownerId) => {
     };
 
     const attendanceSummary = {
-      totalEmployees: allEmployees.length,
+      totalEmployees,
       today: {
         present: presentCount,
         late: lateCount,
         absent: absentCount,
         halfDay: halfDayCount,
-        notClockedIn: allEmployees.length - (presentCount + lateCount + absentCount + halfDayCount),
+        notClockedIn: totalEmployees - (presentCount + lateCount + absentCount + halfDayCount),
       },
       monthly: monthlyStats,
     };

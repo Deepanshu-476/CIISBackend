@@ -21,7 +21,7 @@ module.exports = async (req, res, next) => {
         return res.status(403).json({ success: false, message: 'Task updates cannot be deleted' });
       }
     }
-    if (conversationId) await service.refreshConversation(conversationId, company);
+    if (conversationId) await service.refreshConversation(conversationId, company, { maxAgeMs: 60 * 1000 });
     next();
   } catch (error) { next(error); }
 };
