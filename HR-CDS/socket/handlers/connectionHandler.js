@@ -18,6 +18,9 @@ const connectionHandler = (io, socket) => {
   }
 
   updateUserOnlineStatus(socket.userId, true);
+  require('../../chat/utils/messageReceipts')
+    .recordPendingDeliveries(io, socket.userId, socket.companyId)
+    .catch(error => console.error('[chat] pending deliveries failed:', error.message));
   if (socket.userId && socket.companyId) {
     const payload = {
       userId: socket.userId,
@@ -71,13 +74,27 @@ const connectionHandler = (io, socket) => {
 };
 
 
+// Connects and the 25s chat heartbeat used to write the user doc every time. "Online" is now
+// written at most once a minute per user; going offline is always written.
+const ONLINE_WRITE_INTERVAL_MS = 60 * 1000;
+const lastOnlineWriteAt = new Map();
+
 const updateUserOnlineStatus = async (userId, isOnline) => {
   if (!userId) return;
 
+  const key = String(userId);
+  const now = Date.now();
+  if (isOnline) {
+    if (now - (lastOnlineWriteAt.get(key) || 0) < ONLINE_WRITE_INTERVAL_MS) return;
+    lastOnlineWriteAt.set(key, now);
+  } else {
+    lastOnlineWriteAt.delete(key);
+  }
+
   try {
-    await User.findByIdAndUpdate(userId, {
+    await User.updateOne({ _id: userId }, {
       isOnline,
-      lastSeen: new Date()
+      lastSeen: new Date(now)
     });
   } catch (error) {
     console.error('Error updating user status:', error);
