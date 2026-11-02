@@ -116,7 +116,9 @@ module.exports = function clientChatPlugin(schema, { task = false } = {}) {
       const actor = context.getStore()?.actor;
       for (const doc of this._chatDocs || []) {
         try {
-          const conversation = await require('./clientChatService').syncClient(task ? doc.clientId : doc._id);
+          const targetId = task ? doc.clientId : doc._id;
+          if (!targetId || !require('mongoose').isValidObjectId(targetId)) continue;
+          const conversation = await require('./clientChatService').syncClient(targetId);
           if (task && actor && conversation?.members.length) {
             await require('./projectChatService').deliverEvent({ _id: doc.clientId, chatEntity: 'client' }, conversation, {
               key: createHash('sha256').update(`${id(doc.clientId)}:${id(doc)}:task_deleted`).digest('hex'),

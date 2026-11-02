@@ -23,6 +23,7 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@socket.io/redis-adapter": "^8.3.0",
     "axios": "^1.15.2",
     "bcrypt": "^6.0.0",
     "bcryptjs": "^3.0.2",
@@ -47,6 +48,7 @@
     "node-schedule": "^2.1.1",
     "nodemailer": "^7.0.10",
     "react-helmet-async": "^2.0.5",
+    "redis": "^6.3.1",
     "sharp": "^0.34.5",
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3",

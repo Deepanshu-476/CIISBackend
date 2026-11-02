@@ -580,6 +580,82 @@ exports.downloadTaskDocument = async (req, res) => {
   }
 };
 
+exports.downloadTaskFile = async (req, res) => {
+  try {
+    const { id, taskId } = req.params;
+    const requestedPath = String(req.query?.path || "").trim();
+    if (!requestedPath) {
+      return res.status(400).json({ success: false, message: "File path parameter is required" });
+    }
+
+    const project = await Project.findById(id).lean();
+    if (!project) {
+      return res.status(404).json({ success: false, message: "Project not found" });
+    }
+
+    if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
+      return res.status(403).json({ success: false, message: "Access denied to download file" });
+    }
+
+    const task = (project.tasks || []).find(item => idsEqual(item._id, taskId));
+    if (!task) {
+      return res.status(404).json({ success: false, message: "Task not found" });
+    }
+
+    const normalizedReq = requestedPath.replace(/\\/g, "/").replace(/^\/+/, "");
+    const reqBase = path.basename(normalizedReq);
+
+    const allowedPaths = new Set();
+    const addPath = (p) => {
+      if (!p) return;
+      const str = String(p).replace(/\\/g, "/").replace(/^\/+/, "");
+      allowedPaths.add(str);
+      allowedPaths.add(path.basename(str));
+    };
+
+    if (task.pdfFile) {
+      addPath(task.pdfFile.path);
+      addPath(task.pdfFile.url);
+      addPath(task.pdfFile.filename);
+      addPath(task.pdfFile.originalName);
+    }
+
+    (task.remarks || []).forEach(remark => {
+      addPath(remark.image);
+      addPath(remark.imageUrl);
+      addPath(remark.file);
+      addPath(remark.filePath);
+      addPath(remark.attachment);
+      addPath(remark.url);
+      if (Array.isArray(remark.images)) remark.images.forEach(addPath);
+      if (Array.isArray(remark.files)) remark.files.forEach(addPath);
+      if (Array.isArray(remark.attachments)) remark.attachments.forEach(addPath);
+    });
+
+    if (Array.isArray(task.files)) {
+      task.files.forEach(f => {
+        if (typeof f === "string") addPath(f);
+        else if (f) {
+          addPath(f.path);
+          addPath(f.url);
+          addPath(f.filename);
+        }
+      });
+    }
+
+    const isAuthorized = allowedPaths.has(normalizedReq) || allowedPaths.has(reqBase);
+    if (!isAuthorized) {
+      return res.status(403).json({ success: false, message: "Access denied: requested file does not belong to this task" });
+    }
+
+    const filename = req.query.name || reqBase || "attachment";
+    return sendProjectAttachment(req, res, { path: requestedPath, filename }, filename);
+  } catch (error) {
+    console.error("❌ Error downloading task file:", error);
+    return res.status(500).json({ success: false, message: "Error downloading file" });
+  }
+};
+
 
 exports.getUserNotifications = async (req, res) => {
   try {

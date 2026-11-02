@@ -90,6 +90,13 @@ const conversationSchema = new mongoose.Schema(
 { timestamps: true }
 );
 
+conversationSchema.pre('validate', function(next) {
+    if (this.projectId && this.clientId) {
+        return next(new Error('Conversation cannot have both projectId and clientId'));
+    }
+    next();
+});
+
 conversationSchema.index({ companyId: 1, members: 1, updatedAt: -1 });
 conversationSchema.index({ companyId: 1, groupId: 1 });
 conversationSchema.index({ companyId: 1, projectId: 1 }, { unique: true, partialFilterExpression: { projectId: { $type: "objectId" } } });
