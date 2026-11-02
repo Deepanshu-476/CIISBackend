@@ -4,7 +4,7 @@ const Message = require("../models/Message");
 const User = require("../../../models/User");
 const Group = require("../../models/Group");
 const {notifyDirectUsers} = require("../../utils/systemNotificationService");
-const {deliveryReceiptsFor, recordSeen, recordConversationRead} = require("../utils/messageReceipts");
+const {deliveryReceiptsFor, recordSeen, recordConversationRead, seenByAllOthers} = require("../utils/messageReceipts");
 const {getCompanyOnlineUsers} = require("../../socket/presence");
 
 const getUserId = req => req.user._id?.toString() || req.user.id?.toString();
@@ -648,7 +648,7 @@ exports.getMessages = async (req, res) => {
           ? deliveredTo.some(memberId => memberId !== userId)
           : deliveredTo.includes(userId),
         seen: senderId === userId
-          ? seenBy.some(memberId => memberId !== userId)
+          ? seenByAllOthers(conversation.members, userId, seenBy)
           : seenBy.includes(userId),
       };
     });
@@ -658,7 +658,7 @@ exports.getMessages = async (req, res) => {
         const senderId = message.sender?._id?.toString() || message.sender?.toString();
         const seenBy = (message.seenBy || []).map(member => member.toString());
         return senderId !== userId && !seenBy.includes(userId)
-          ? {messageId: message._id, senderId}
+          ? {messageId: message._id, senderId, allSeen: seenByAllOthers(conversation.members, senderId, [...seenBy, userId])}
           : null;
       })
       .filter(Boolean);
@@ -700,6 +700,7 @@ exports.getMessages = async (req, res) => {
             messageId: message.messageId,
             conversationId: conversation._id,
             seenBy: userId,
+            allSeen: message.allSeen,
           });
         });
       }
@@ -1161,10 +1162,12 @@ exports.markMessageSeen = async (req, res) => {
     await emitUnreadCounts(conversation, userId, {onlyUserId: userId});
 
     if (global.io) {
+      const fresh = await Message.findById(message._id).select("seenBy").lean();
       global.io.to(`user:${message.sender}`).emit("chat:message-seen", {
         messageId: message._id,
         conversationId: conversation._id,
         seenBy: userId,
+        allSeen: seenByAllOthers(conversation.members, message.sender, fresh?.seenBy),
       });
     }
 
