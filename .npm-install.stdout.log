@@ -1,0 +1,285 @@
+
+> bcrypt@6.0.0 install
+> node-gyp-build
+
+
+> ffmpeg-static@5.3.0 install
+> node install.js
+
+ffmpeg is installed already.
+
+> sharp@0.34.5 install
+> node install/check.js || npm run build
+
+
+> @firebase/util@1.15.1 postinstall
+> node ./postinstall.js
+
+
+> mongodb-memory-server@11.3.0 postinstall
+> node ./postinstall.js
+
+Mongodb-Memory-Server* checking MongoDB binaries
+Downloading MongoDB "8.2.6": 0% (0mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 0.1% (0.8mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 0.2% (1.6mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 0.3% (2.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 0.4% (2.9mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 0.4% (3mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 0.5% (3.9mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 0.6% (4.6mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 0.7% (5.3mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 0.8% (6.3mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 0.9% (7.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 1% (8.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 1.2% (9.5mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 1.3% (10.5mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 1.4% (11mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 1.6% (12.3mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 1.7% (13.6mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 1.9% (15mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 2.1% (16.4mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 2.2% (17.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 2.3% (17.7mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 2.4% (18.4mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 2.5% (19.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 2.6% (20mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 2.7% (21mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 2.8% (21.9mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 2.9% (22.6mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 3% (23.5mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 3.1% (24.6mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 3.3% (25.8mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 3.5% (27.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 3.6% (28.5mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 3.9% (30.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 4% (31.5mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 4.3% (33.6mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 4.6% (35.8mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 4.9% (38.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 5.1% (40.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 5.4% (42.4mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 5.6% (43.9mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 5.8% (45.5mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 6% (46.9mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 6.3% (49.5mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 6.7% (52.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 7.1% (55.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 7.4% (58mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 7.6% (59.6mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 7.8% (60.9mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 7.9% (62mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 8.1% (63.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 8.4% (65.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 8.7% (67.6mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 9% (70.4mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 9.1% (70.7mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 9.2% (71.5mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 9.5% (74.3mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 9.9% (77.6mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 10.3% (80.5mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 10.5% (82mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 10.7% (83.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 10.8% (84.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 10.9% (85.4mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 11.1% (87.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 11.4% (88.7mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 11.6% (90.4mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 11.8% (92mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 12% (93.5mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 12.2% (95.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 12.5% (97.4mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 12.8% (100.3mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 13.1% (102.6mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 13.4% (104.6mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 13.8% (107.7mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 14.5% (113.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 15.2% (119mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 16.2% (126.3mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 17.2% (134.4mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 18.3% (143mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 19.4% (151.5mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 19.8% (154.5mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 20.4% (159.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 20.7% (161.6mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 21% (163.7mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 21.4% (167.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 21.7% (169.5mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 22.2% (173.7mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 22.8% (178.3mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 23.3% (181.9mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 23.7% (184.9mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 23.9% (186.7mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 24.2% (189.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 24.5% (191.4mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 25% (195.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 25.5% (199mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 25.8% (201.7mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 26.3% (205.6mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 26.6% (207.5mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 26.9% (210mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 27.2% (212.6mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 27.6% (215.5mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 27.9% (217.6mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 28.2% (220.3mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 28.6% (223.7mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 29.3% (228.8mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 30.1% (235.4mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 31% (242.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 31.6% (247.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 32.5% (253.6mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 33.2% (259.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 33.9% (264.5mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 34.3% (268.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 34.9% (273mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 35.6% (278.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 36.2% (282.9mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 36.8% (287.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 37.5% (292.8mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 38.4% (299.7mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 39% (304.6mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 39.5% (308.7mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 40% (312.8mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 40.7% (317.8mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 41.2% (321.7mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 41.9% (327.6mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 42.5% (331.7mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 42.9% (334.8mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 43.3% (338.4mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 43.8% (342.3mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 44.7% (348.9mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 45.5% (355.7mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 46.3% (361.5mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 47.4% (370.3mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 48.1% (375.6mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 48.7% (380.6mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 49.2% (384.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 49.8% (389.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 50.4% (393.7mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 51% (398.7mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 51.6% (403.3mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 52.4% (409mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 52.9% (413.6mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 53.4% (417.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 54% (421.7mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 54.6% (426.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 55.3% (431.6mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 56% (437.5mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 56.7% (443.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 57.2% (446.6mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 57.8% (451.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 58.2% (454.4mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 58.7% (458.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 59.1% (461.8mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 59.4% (464.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 59.7% (466.4mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 59.9% (468.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 60.3% (471.3mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 60.7% (474.4mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 61.4% (479.7mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 62.3% (486.6mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 63% (492.3mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 63.7% (497.5mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 64.3% (502.3mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 64.8% (506.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 65.4% (511.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 66.1% (516.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 66.6% (520.5mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 67.3% (525.8mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 68% (531.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 68.5% (535.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 68.9% (537.8mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 69.2% (540.5mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 69.6% (543.8mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 69.9% (545.7mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 70.1% (547.4mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 70.3% (549.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 70.6% (551.5mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 70.9% (553.8mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 71.2% (556.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 71.6% (559.3mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 71.8% (561.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 72.1% (563.5mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 72.5% (566.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 72.8% (568.6mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 73.1% (571.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 73.5% (573.9mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 73.7% (575.9mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 73.9% (577.3mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 74.1% (578.5mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 74.3% (580.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 74.5% (582.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 74.8% (583.9mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 75% (585.7mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 75.1% (586.9mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 75.3% (588.4mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 75.6% (590.5mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 75.9% (592.8mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 76.2% (595.3mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 76.5% (597.9mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 76.9% (600.3mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 77.1% (602.3mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 77.5% (605.3mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 78% (609.4mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 78.7% (615mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 79.6% (621.4mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 80.5% (628.5mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 81.6% (637mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 82.7% (645.6mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 83.5% (652.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 84.1% (657mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 84.5% (660.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 84.9% (663.5mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 85.3% (666.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 85.6% (668.8mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 85.9% (670.9mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 86.3% (673.8mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 86.6% (676.6mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 87% (679.7mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 87.3% (682.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 87.5% (683.4mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 87.6% (684.5mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 87.9% (686.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 88.1% (688.4mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 88.5% (691.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 88.8% (694mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 89.3% (697.3mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 89.8% (701.5mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 90.4% (706.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 90.9% (709.8mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 91.3% (713mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 91.7% (716.6mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 92% (719mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 92.7% (723.8mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 93.2% (727.9mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 93.8% (732.7mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 94.2% (736.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 94.5% (738mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 94.6% (738.9mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 94.9% (740.9mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 95.1% (743mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 95.4% (745.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 95.8% (748.3mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 96.3% (752.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 96.8% (755.8mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 97.1% (758.8mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 97.6% (762.4mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 98.1% (766.2mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 98.6% (770.4mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 99% (773.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 99.2% (775mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 99.5% (777.3mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 99.7% (778.9mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 99.9% (780.7mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 100% (781.1mb / 781.1mb)[0G
+Downloading MongoDB "8.2.6": 100% (0mb / 0mb)[0G
+Mongodb-Memory-Server* found binary: "D:\CIIS-Network\CIISBackend\node_modules\.cache\mongodb-memory-server\mongod-x64-win32-8.2.6.exe"
+
+> protobufjs@7.6.0 postinstall
+> node scripts/postinstall
+
+
+added 508 packages in 9m
+
+78 packages are looking for funding
+  run `npm fund` for details
