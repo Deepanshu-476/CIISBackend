@@ -4,7 +4,8 @@ const { refreshConversation } = require('../../utils/projectChatService');
 
 exports.getTask = async (req, res, next) => {
   try {
-    const existing = await Conversation.findOne({ projectId: req.params.projectId, companyId: req.user.company });
+    if (!require('mongoose').isValidObjectId(req.params.projectId)) return res.status(400).json({ success: false, message: 'Invalid projectId' });
+    const existing = await Conversation.findOne({ projectId: req.params.projectId, companyId: req.user.company, clientId: { $exists: false } });
     const conversation = existing && await refreshConversation(existing._id, req.user.company);
     if (!conversation || !conversation.members.some(member => String(member) === String(req.user.id || req.user._id))) {
       return res.status(403).json({ success: false, message: 'Project group access denied' });

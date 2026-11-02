@@ -83,8 +83,11 @@ const getLeavePeriodEndInIst = (endDate) => {
 const autoRejectExpiredLeaves = async (scopeFilter = {}) => {
   try {
     const now = new Date();
+    // Only leaves whose endDate has passed can be expired (the IST period end is never before
+    // endDate), so skip loading every other pending leave on these list requests.
     const query = {
       status: 'Pending',
+      endDate: { $lt: now },
       ...scopeFilter
     };
 

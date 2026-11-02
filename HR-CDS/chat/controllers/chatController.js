@@ -1,8 +1,11 @@
+const mongoose = require("mongoose");
 const Conversation = require("../models/Conversation");
 const Message = require("../models/Message");
 const User = require("../../../models/User");
 const Group = require("../../models/Group");
 const {notifyDirectUsers} = require("../../utils/systemNotificationService");
+const {deliveryReceiptsFor, recordSeen, recordConversationRead} = require("../utils/messageReceipts");
+const {getCompanyOnlineUsers} = require("../../socket/presence");
 
 const getUserId = req => req.user._id?.toString() || req.user.id?.toString();
 
@@ -118,10 +121,13 @@ const withConversationsMeta = async (conversations, userId, companyId) => {
   }));
 };
 
-const emitUnreadCounts = async (conversation, senderId) => {
+// onlyUserId: reading or hiding messages changes only that user's count, so skip the
+// per-member count queries (one per group member) for everyone else.
+const emitUnreadCounts = async (conversation, senderId, {onlyUserId} = {}) => {
   if (!global.io || !conversation) return;
 
-  await Promise.all((conversation.members || []).map(async member => {
+  const members = onlyUserId ? [onlyUserId] : (conversation.members || []);
+  await Promise.all(members.map(async member => {
     const memberId = member.toString();
     const count = await getUnreadCount(conversation._id, memberId, conversation.companyId, conversation.readState || []);
     global.io.to(`user:${memberId}`).emit("chat:unread-update", {
@@ -147,7 +153,7 @@ const getSocketOnlineUserIds = (companyId) => {
   if (!global.io?.sockets?.sockets) return onlineIds;
 
   global.io.sockets.sockets.forEach(socket => {
-    const socketUserId = socket.userId?.toString();
+    const socketUserId = (socket.userId || socket.data?.userId)?.toString();
     const socketCompanyId = getRawCompanyId(socket.companyId);
 
     if (!socketUserId) return;
@@ -186,16 +192,6 @@ const emitMessageToConversationMembers = (conversation, eventName, payload) => {
     if (memberId) target = target.to(`user:${memberId}`);
   });
   target.emit(eventName, payload);
-};
-
-const isRecentlyOnlineInDb = (user) => {
-  if (!user?.isOnline) return false;
-  if (!user.lastSeen) return true;
-
-  const lastSeenTime = new Date(user.lastSeen).getTime();
-  if (Number.isNaN(lastSeenTime)) return true;
-
-  return Date.now() - lastSeenTime < 10 * 60 * 1000;
 };
 
 exports.createConversation = async (req, res) => {
@@ -249,7 +245,8 @@ exports.createGroupConversation = async (req, res) => {
       return res.json({ success: true, conversation });
     }
     if (projectId) {
-      const existing = await Conversation.findOne({ projectId, companyId: req.user.company });
+      if (!mongoose.isValidObjectId(projectId)) return res.status(400).json({ success: false, message: 'Invalid projectId' });
+      const existing = await Conversation.findOne({ projectId, companyId: req.user.company, clientId: { $exists: false } });
       const conversation = existing && await require('../../utils/projectChatService').refreshConversation(existing._id, req.user.company);
       if (!conversation || !conversation.members.some(member => String(member) === getUserId(req))) return res.status(403).json({ success: false, message: 'Project group access denied' });
       return res.status(200).json({ success: true, conversation });
@@ -542,6 +539,7 @@ exports.sendMessage = async (req, res) => {
       expiresAt,
       seenBy: [senderId],
       deliveredTo,
+      deliveryReceipts: deliveryReceiptsFor(deliveredTo),
     });
 
     const populatedMessage = await populateMessage(Message.findById(message._id));
@@ -680,20 +678,20 @@ exports.getMessages = async (req, res) => {
 
     // Time taken before marking so a message arriving meanwhile stays unread.
     const readAt = new Date();
-    await Message.updateMany(
+    await recordConversationRead(
       {
         conversationId: req.params.id,
         companyId: req.user.company,
         sender: {$ne: userId},
-        seenBy: {$ne: userId},
         ...activeMessageFilter(),
       },
-      {$addToSet: {seenBy: userId, deliveredTo: userId}}
+      userId,
+      readAt
     );
     await setReadMark(conversation._id, userId, readAt);
     conversation.readState = (await Conversation.findById(conversation._id).select("readState").lean())?.readState || [];
 
-    await emitUnreadCounts(conversation, userId);
+    await emitUnreadCounts(conversation, userId, {onlyUserId: userId});
 
     if (global.io) {
       newlySeenMessages.forEach(message => {
@@ -868,15 +866,8 @@ exports.getCompanyUsers = async (req, res) => {
   try {
     const requesterId = getUserId(req);
     const companyId = getRawCompanyId(req.user.company);
-    const socketOnlineIds = getSocketOnlineUserIds(companyId);
-
-    // Keep requester's own presence fresh in database
-    if (requesterId) {
-      User.findByIdAndUpdate(requesterId, {
-        isOnline: true,
-        lastSeen: new Date(),
-      }).catch(() => {});
-    }
+    const onlineList = global.io ? await getCompanyOnlineUsers(global.io, companyId) : [];
+    const socketOnlineIds = new Set(onlineList.map(String));
 
     const users = await User.find({
       company: req.user.company?._id || req.user.company || companyId,
@@ -891,7 +882,7 @@ exports.getCompanyUsers = async (req, res) => {
         ...user,
         profileImage: avatarValue,
         avatar: avatarValue,
-        isOnline: socketOnlineIds.has(user._id.toString()) || isRecentlyOnlineInDb(user),
+        isOnline: socketOnlineIds.has(user._id.toString()),
       };
     });
 
@@ -925,7 +916,7 @@ exports.deleteMessageForMe = async (req, res) => {
 
     message.deletedFor.addToSet(userId);
     await message.save();
-    await emitUnreadCounts(conversation, userId);
+    await emitUnreadCounts(conversation, userId, {onlyUserId: userId});
 
     if (global.io) {
       global.io.to(`user:${userId}`).emit("chat:message-deleted-for-me", {
@@ -1056,6 +1047,7 @@ exports.forwardMessage = async (req, res) => {
         duration: original.duration || 0,
         seenBy: [userId],
         deliveredTo,
+        deliveryReceipts: deliveryReceiptsFor(deliveredTo),
         isForwarded: true,
         originalMessage: original._id,
       });
@@ -1073,6 +1065,80 @@ exports.forwardMessage = async (req, res) => {
     }
 
     res.status(201).json({success: true, messages: forwardedMessages});
+  } catch (error) {
+    res.status(500).json({success: false, message: error.message});
+  }
+};
+
+// "Message info" (as in WhatsApp): for the sender of a message, which members have read it,
+// which have only received it, and which have neither — with times where they were recorded.
+exports.getMessageInfo = async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const message = await Message.findOne({
+      _id: req.params.messageId,
+      companyId: req.user.company,
+      deletedFor: {$ne: userId},
+    }).select("conversationId sender text file fileType fileName messageType deletedForEveryone createdAt seenBy deliveredTo +readReceipts +deliveryReceipts").lean();
+
+    if (!message) {
+      return res.status(404).json({success: false, message: "Message not found"});
+    }
+    if (String(message.sender) !== userId) {
+      return res.status(403).json({success: false, message: "Message info is only available for your own messages"});
+    }
+
+    const conversation = await Conversation.findOne({
+      _id: message.conversationId,
+      companyId: req.user.company,
+      members: userId,
+    }).select("members isGroup").lean();
+    if (!conversation) {
+      return res.status(403).json({success: false, message: "You are not a member of this conversation"});
+    }
+
+    const memberIds = (conversation.members || []).map(String).filter(id => id !== userId);
+    const users = await User.find({_id: {$in: memberIds}})
+      .select("name email profileImage avatar image photo").lean();
+    const userById = new Map(users.map(user => [String(user._id), user]));
+    const timeByUser = receipts => new Map((receipts || []).map(receipt => [String(receipt.user), receipt.at]));
+    const readTimes = timeByUser(message.readReceipts);
+    const deliveryTimes = timeByUser(message.deliveryReceipts);
+    const seen = new Set((message.seenBy || []).map(String));
+    const delivered = new Set((message.deliveredTo || []).map(String));
+
+    const readBy = [];
+    const deliveredTo = [];
+    const pending = [];
+    for (const memberId of memberIds) {
+      const user = userById.get(memberId) || {_id: memberId, name: "User"};
+      if (seen.has(memberId)) {
+        readBy.push({user, readAt: readTimes.get(memberId) || null, deliveredAt: deliveryTimes.get(memberId) || null});
+      } else if (delivered.has(memberId)) {
+        deliveredTo.push({user, deliveredAt: deliveryTimes.get(memberId) || null});
+      } else {
+        pending.push({user});
+      }
+    }
+    const newestFirst = key => (a, b) => new Date(b[key] || 0) - new Date(a[key] || 0);
+    readBy.sort(newestFirst("readAt"));
+    deliveredTo.sort(newestFirst("deliveredAt"));
+
+    res.status(200).json({
+      success: true,
+      message: {
+        _id: message._id,
+        conversationId: message.conversationId,
+        text: message.deletedForEveryone ? "" : message.text,
+        fileType: message.fileType,
+        fileName: message.fileName,
+        createdAt: message.createdAt,
+      },
+      isGroup: Boolean(conversation.isGroup),
+      readBy,
+      deliveredTo,
+      pending,
+    });
   } catch (error) {
     res.status(500).json({success: false, message: error.message});
   }
@@ -1100,10 +1166,8 @@ exports.markMessageSeen = async (req, res) => {
       return res.status(403).json({success: false, message: "You are not a member of this conversation"});
     }
 
-    message.deliveredTo.addToSet(userId);
-    message.seenBy.addToSet(userId);
-    await message.save();
-    await emitUnreadCounts(conversation, userId);
+    await recordSeen(message, userId);
+    await emitUnreadCounts(conversation, userId, {onlyUserId: userId});
 
     if (global.io) {
       global.io.to(`user:${message.sender}`).emit("chat:message-seen", {

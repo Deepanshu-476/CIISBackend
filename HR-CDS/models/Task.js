@@ -5,7 +5,7 @@ const {
   normalizeRepeatDays,
 } = require("../utils/taskRecurrence");
 
- 
+
 const SYSTEM_USER_ID = new mongoose.Types.ObjectId("000000000000000000000001");
 const OVERDUE_LOCKED_STATUSES = new Set(['onhold', 'on hold', 'completed', 'approved', 'rejected', 'cancelled', 'overdue']);
 const ON_HOLD_OVERDUE_GRACE_MS = 24 * 60 * 60 * 1000;
@@ -27,7 +27,7 @@ const getOverdueEligibilityDate = (task) => {
   return dueDate;
 };
 
- 
+
 const statusHistorySchema = new mongoose.Schema(
   {
     status: {
@@ -52,7 +52,7 @@ const statusHistorySchema = new mongoose.Schema(
     },
     changedByType: {
       type: String,
-      
+
       default: "user",
     },
     changedAt: {
@@ -64,7 +64,7 @@ const statusHistorySchema = new mongoose.Schema(
   { _id: false }
 );
 
- 
+
 const remarkSchema = new mongoose.Schema(
   {
     user: {
@@ -80,7 +80,7 @@ const remarkSchema = new mongoose.Schema(
   { _id: false }
 );
 
- 
+
 const statusSchema = new mongoose.Schema(
   {
     user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
@@ -111,7 +111,7 @@ const statusSchema = new mongoose.Schema(
   { _id: false }
 );
 
- 
+
 const fileSchema = new mongoose.Schema(
   {
     filename: String,
@@ -150,7 +150,7 @@ const reminderSettingsSchema = new mongoose.Schema(
   { _id: false }
 );
 
- 
+
 const taskSchema = new mongoose.Schema(
   {
     title: { type: String, required: true, trim: true },
@@ -166,9 +166,9 @@ const taskSchema = new mongoose.Schema(
       lowercase: true,
       trim: true,
     },
-    
 
-    
+
+
     companyCode: {
       type: String,
       required: true,
@@ -196,12 +196,12 @@ const taskSchema = new mongoose.Schema(
       default: () => ({ enabled: false, options: [], sentKeys: [] }),
     },
     remarks: [remarkSchema],
-    snoozedUntil: {type: Date, default: null},
+    snoozedUntil: { type: Date, default: null },
     isSnoozed: {
       type: Boolean,
       default: false
     }
-,
+    ,
     files: [fileSchema],
     voiceNote: {
       filename: String,
@@ -242,7 +242,7 @@ const taskSchema = new mongoose.Schema(
 
     taskFor: {
       type: String,
-      
+
       default: "self"
     },
 
@@ -309,7 +309,7 @@ const taskSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
- 
+
 taskSchema.index({ assignedUsers: 1, dueDateTime: 1 });
 taskSchema.index({ overallStatus: 1, dueDateTime: 1 });
 taskSchema.index({ companyCode: 1, overallStatus: 1, dueDateTime: 1 });
@@ -336,7 +336,7 @@ taskSchema.index(
   }
 );
 
-taskSchema.statics.repairRecurrenceUniqueIndex = async function() {
+taskSchema.statics.repairRecurrenceUniqueIndex = async function () {
   const indexName = "recurrenceSourceId_1_recurrenceOccurrenceKey_1";
   const partialFilterExpression = {
     recurrenceSourceId: { $type: "objectId" },
@@ -359,13 +359,13 @@ taskSchema.statics.repairRecurrenceUniqueIndex = async function() {
   );
 };
 
- 
-taskSchema.virtual('isPastDue').get(function() {
+
+taskSchema.virtual('isPastDue').get(function () {
   if (!this.dueDateTime) return false;
   return new Date(this.dueDateTime) < new Date();
 });
 
-taskSchema.virtual('daysOverdue').get(function() {
+taskSchema.virtual('daysOverdue').get(function () {
   if (!this.dueDateTime || !this.markedOverdueAt) return 0;
   const overdueDate = this.markedOverdueAt || new Date();
   const dueDate = new Date(this.dueDateTime);
@@ -373,7 +373,7 @@ taskSchema.virtual('daysOverdue').get(function() {
   return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 });
 
- 
+
 
 
 // assignedUsers / statusByUser.user may be populated user documents (the overdue cron populates
@@ -397,8 +397,8 @@ taskSchema.methods.updateUserStatus = function (userId, status, remarks = "") {
     (s) => s.user && sameTaskUserId(s.user, userId)
   );
 
-  const oldStatus = userStatusIndex !== -1 
-    ? this.statusByUser[userStatusIndex].status 
+  const oldStatus = userStatusIndex !== -1
+    ? this.statusByUser[userStatusIndex].status
     : "pending";
 
   if (userStatusIndex === -1) {
@@ -430,23 +430,23 @@ taskSchema.methods.updateUserStatus = function (userId, status, remarks = "") {
 taskSchema.methods.checkAndMarkOverdue = function () {
   if (!this.dueDateTime) return false;
   if (!canMoveToOverdue(this.overallStatus)) return false;
-  
+
   const now = new Date();
   const dueDate = getOverdueEligibilityDate(this);
-  
+
   if (!dueDate || dueDate >= now) return false;
-  
+
   let anyUserMarked = false;
-  
-  
+
+
   this.assignedUsers.forEach((userId) => {
     const userStatusIndex = this.statusByUser.findIndex(
       (s) => s.user && sameTaskUserId(s.user, userId)
     );
-    
+
     if (userStatusIndex !== -1) {
       const currentStatus = this.statusByUser[userStatusIndex].status;
-      
+
       if (canMoveToOverdue(currentStatus)) {
         this.statusByUser[userStatusIndex].status = 'overdue';
         this.statusByUser[userStatusIndex].updatedAt = now;
@@ -465,7 +465,7 @@ taskSchema.methods.checkAndMarkOverdue = function () {
       }
     }
   });
-  
+
   const allUsersOverdue = this.assignedUsers.length > 0 && this.assignedUsers.every((assignedUserId) => {
     const userStatus = this.statusByUser.find(
       s => s.user && sameTaskUserId(s.user, assignedUserId)
@@ -480,7 +480,7 @@ taskSchema.methods.checkAndMarkOverdue = function () {
       this.markedOverdueAt = now;
       this.overdueReason = 'Automatic overdue detection';
     }
-    
+
     this.statusHistory.push({
       status: 'overdue',
       changedBy: SYSTEM_USER_ID,
@@ -488,11 +488,11 @@ taskSchema.methods.checkAndMarkOverdue = function () {
       remarks: `Task automatically marked overdue from ${oldStatus}`,
       changedAt: now
     });
-    
+
     this.lastActivityAt = now;
     return true;
   }
-  
+
   return false;
 };
 
@@ -503,7 +503,7 @@ taskSchema.methods.markUserStatusOverdue = function (userId, remarks = '') {
   const userStatusIndex = this.statusByUser.findIndex(
     (s) => s.user && sameTaskUserId(s.user, userId)
   );
-  
+
   if (userStatusIndex === -1) {
     this.statusByUser.push({
       user: userId,
@@ -514,26 +514,26 @@ taskSchema.methods.markUserStatusOverdue = function (userId, remarks = '') {
   } else {
     const oldStatus = this.statusByUser[userStatusIndex].status;
     if (!canMoveToOverdue(oldStatus)) return false;
-    
+
     this.statusByUser[userStatusIndex].status = 'overdue';
     this.statusByUser[userStatusIndex].updatedAt = new Date();
     this.statusByUser[userStatusIndex].remarks = remarks || `Changed from ${oldStatus} to overdue`;
   }
-  
-  
+
+
   const allUsersOverdue = this.assignedUsers.every(assignedUserId => {
     const userStatus = this.statusByUser.find(
       s => s.user && sameTaskUserId(s.user, assignedUserId)
     );
     return userStatus && userStatus.status === 'overdue';
   });
-  
+
   if (allUsersOverdue && this.overallStatus !== 'overdue') {
     this.overallStatus = 'overdue';
     this.markedOverdueAt = new Date();
     this.overdueReason = remarks || 'All users overdue';
   }
-  
+
   this.statusHistory.push({
     status: 'overdue',
     changedBy: userId,
@@ -541,25 +541,25 @@ taskSchema.methods.markUserStatusOverdue = function (userId, remarks = '') {
     remarks: remarks || 'Manually marked as overdue',
     changedAt: new Date()
   });
-  
+
   this.lastActivityAt = new Date();
   return true;
 };
 
- 
+
 
 
 taskSchema.statics.getUserOverdueTasks = async function (userId) {
   const now = new Date();
   const lockedStatuses = Array.from(OVERDUE_LOCKED_STATUSES);
-  
+
   return await this.find({
     assignedUsers: userId,
     dueDateTime: { $lt: now },
     isActive: true,
     overallStatus: { $nin: lockedStatuses },
     $or: [
-      { 
+      {
         'statusByUser': {
           $elemMatch: {
             user: userId,
@@ -567,15 +567,15 @@ taskSchema.statics.getUserOverdueTasks = async function (userId) {
           }
         }
       },
-      { 
+      {
         'statusByUser.user': { $ne: userId },
         'overallStatus': { $nin: lockedStatuses }
       }
     ]
   })
-  .populate('assignedUsers', 'name email')
-  .populate('createdBy', 'name email')
-  .sort({ dueDateTime: 1 });
+    .populate('assignedUsers', 'name email')
+    .populate('createdBy', 'name email')
+    .sort({ dueDateTime: 1 });
 };
 
 
@@ -588,12 +588,12 @@ taskSchema.statics.updateAllOverdueTasks = async function () {
     overallStatus: { $nin: lockedStatuses },
     $or: [
       { overallStatus: { $nin: lockedStatuses } },
-      { 
+      {
         'statusByUser.status': { $nin: lockedStatuses }
       }
     ]
   });
-  
+
   let updated = 0;
   let alreadyOverdue = 0;
   let skipped = 0;
@@ -625,13 +625,13 @@ taskSchema.statics.getTaskWithUserStatus = async function (taskId, userId) {
     .populate('assignedUsers', 'name email')
     .populate('createdBy', 'name email')
     .populate('assignedGroups', 'name description');
-  
+
   if (!task) return null;
-  
+
   const userStatus = task.statusByUser.find(
     s => s.user && sameTaskUserId(s.user, userId)
   );
-  
+
   return {
     ...task.toObject(),
     userStatus: userStatus ? userStatus.status : 'pending',
@@ -639,8 +639,8 @@ taskSchema.statics.getTaskWithUserStatus = async function (taskId, userId) {
   };
 };
 
- 
-taskSchema.pre('save', function(next) {
+
+taskSchema.pre('save', function (next) {
   const now = new Date();
   trackHoldClock(this, this.overallStatus, this.isModified('overallStatus'), now);
   for (const item of this.statusByUser || []) {
@@ -656,15 +656,15 @@ taskSchema.pre("save", function (next) {
   this.recurringPattern = normalizedRepeatPattern;
   this.repeatDays = normalizedRepeatDays;
   this.isRecurring = Boolean(this.isRecurring || normalizedRepeatPattern !== 'none');
-  
+
   if (this.dueDateTime) {
     const now = new Date();
     const dueDate = getOverdueEligibilityDate(this);
-    
+
     if (dueDate && dueDate < now) {
       this.checkAndMarkOverdue();
     } else if (this.taskFor !== 'self') {
-      
+
       if (this.overallStatus === 'overdue') {
         let hasInProgress = false;
         let hasPending = false;
@@ -696,22 +696,22 @@ taskSchema.pre("save", function (next) {
       }
     }
   }
-  
-  
+
+
   this.lastActivityAt = new Date();
-  
+
   next();
 });
 
- 
+
 taskSchema.post("save", function (doc) {
-  
+
   if (process.env.NODE_ENV === 'development') {
     void 0;
   }
 });
 
- 
+
 taskSchema.index({ overallStatus: 1, holdOverdueCheckAt: 1 });
 taskSchema.index({ 'statusByUser.status': 1, 'statusByUser.holdOverdueCheckAt': 1 });
 taskSchema.index({ companyCode: 1, taskFor: 1, isActive: 1, createdAt: -1 });

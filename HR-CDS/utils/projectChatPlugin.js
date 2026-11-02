@@ -50,9 +50,10 @@ module.exports = function projectChatPlugin(schema) {
   });
   schema.post('deleteOne', { document: true, query: false }, async function() {
     try {
+      if (!this._id || !require('mongoose').isValidObjectId(this._id)) return;
       const service = require('./projectChatService');
       const Conversation = require('../chat/models/Conversation');
-      const conversation = await Conversation.findOne({ projectId: this._id });
+      const conversation = await Conversation.findOne({ projectId: this._id, clientId: { $exists: false } });
       if (conversation) {
         service.emitMembers(conversation, 'chat:project-membership-updated', { conversationId: conversation._id });
         await service.refreshConversation(conversation._id, conversation.companyId);

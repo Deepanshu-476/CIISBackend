@@ -4,7 +4,6 @@
   "main": "server.js",
   "scripts": {
     "test": "node --test tests/*.test.js",
-    "ai:scenarios": "node tests/helpers/goldenMasterReplay.js",
     "start": "node server.js",
     "sync:indexes": "node scripts/syncPerformanceIndexes.js",
     "cleanup:orphan-companies": "node scripts/cleanupOrphanCompanyData.js",
@@ -24,9 +23,7 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "@langchain/core": "^1.2.17",
-    "@langchain/google-genai": "^2.3.2",
-    "@langchain/groq": "^1.3.1",
+    "@socket.io/redis-adapter": "^8.3.0",
     "axios": "^1.15.2",
     "bcrypt": "^6.0.0",
     "bcryptjs": "^3.0.2",
@@ -51,17 +48,19 @@
     "node-schedule": "^2.1.1",
     "nodemailer": "^7.0.10",
     "react-helmet-async": "^2.0.5",
+    "redis": "^6.3.1",
     "sharp": "^0.34.5",
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3",
     "validator": "^13.15.20",
     "yauzl": "^3.4.0",
-    "zod": "^4.6.6"
+    "@langchain/core": "^1.2.17",
+    "@langchain/google-genai": "^2.3.2",
+    "@langchain/groq": "^1.3.1"
   },
   "devDependencies": {
     "mongodb-memory-server": "^11.3.0",
-    "nodemon": "^3.1.10",
-    "supertest": "^7.3.1"
+    "nodemon": "^3.1.10"
   },
   "repository": {
     "type": "git",

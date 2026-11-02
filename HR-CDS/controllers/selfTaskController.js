@@ -39,7 +39,7 @@ const {
 const {
   generateRecurringOccurrences,
   runRecurringTaskSweep,
-  isUserAbsentOnDate,
+  buildAbsenceChecker,
   cleanRecurringTasksForAbsentUser,
 } = require('../cron/recurringTasks');
 const { normalizeTaskReminderSettings } = require('../utils/taskReminderSettings');
@@ -73,6 +73,22 @@ const applyRecurringFields = (task, body = {}, dueDateTime = null) => {
 };
 
 
+// The 15-minute cron covers everyone; a user's own list refresh only re-runs their sweep once a minute.
+const USER_RECURRING_SWEEP_MS = 60 * 1000;
+const lastUserRecurringSweepAt = new Map();
+const shouldRunUserRecurringSweep = (userId) => {
+  const key = String(userId);
+  const now = Date.now();
+  if (now - (lastUserRecurringSweepAt.get(key) || 0) < USER_RECURRING_SWEEP_MS) return false;
+  lastUserRecurringSweepAt.set(key, now);
+  if (lastUserRecurringSweepAt.size > 5000) {
+    for (const [id, at] of lastUserRecurringSweepAt) {
+      if (now - at >= USER_RECURRING_SWEEP_MS) lastUserRecurringSweepAt.delete(id);
+    }
+  }
+  return true;
+};
+
 const fetchPersonalTaskList = async (req) => {
   const companyCode = req.user.companyCode;
   const baseCode = typeof companyCode === 'string' ? companyCode.split('-')[0].trim() : '';
@@ -90,10 +106,18 @@ const fetchPersonalTaskList = async (req) => {
     .sort({ createdAt: -1 })
     .lean();
 
+  const isPendingOccurrence = t => (
+    t.recurrenceSourceId && String(t.recurrenceSourceId) !== 'null' && t.overallStatus === 'pending'
+  );
+  const isAbsentOn = await buildAbsenceChecker(
+    req.user._id,
+    tasks.filter(isPendingOccurrence).map(t => t.dueDateTime)
+  );
+
   const filteredTasks = [];
   for (const t of tasks) {
-    if (t.recurrenceSourceId && String(t.recurrenceSourceId) !== 'null' && t.overallStatus === 'pending') {
-      const isAbsent = await isUserAbsentOnDate(req.user._id, t.dueDateTime);
+    if (isPendingOccurrence(t)) {
+      const isAbsent = isAbsentOn(t.dueDateTime);
       if (isAbsent) {
         cleanRecurringTasksForAbsentUser(req.user._id, t.dueDateTime).catch(() => { });
         continue;
@@ -271,7 +295,7 @@ exports.createTaskForSelf = async (req, res) => {
 
 exports.getPersonalTasks = async (req, res) => {
   try {
-    if (req.user?._id) {
+    if (req.user?._id && shouldRunUserRecurringSweep(req.user._id)) {
       try {
         await runRecurringTaskSweep({ createdBy: req.user._id });
       } catch (sweepErr) {
@@ -279,7 +303,7 @@ exports.getPersonalTasks = async (req, res) => {
       }
     }
     const list = await fetchPersonalTaskList(req);
-    return sendCleanTaskList(res, applyCleanListFilters(list, req), 'personal', 'createdAt');
+    return sendCleanTaskList(res, applyCleanListFilters(list, req), 'personal', 'createdAt', (req.query?.page || req.query?.limit ? req : null));
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }

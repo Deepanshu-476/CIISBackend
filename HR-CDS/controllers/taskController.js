@@ -36,7 +36,8 @@ const {
   getTaskReportDate,
   getUserStatusChangedAt,
   getClientLegacyStatusChangedAt,
-  getTaskSourceAwareDate
+  getTaskSourceAwareDate,
+  trimStatusHistoryForList
 } = require('./taskHelper');
 
 const TASK_USER_POPULATE_FIELDS = 'name email role jobRole companyRole profileImage avatar department branch assignedBranches';
@@ -1636,7 +1637,7 @@ const sendCleanTaskList = (res, tasks, view, dateField = 'createdAt', req = null
     .sort((a, b) => (timeOf(b.reportDate) - timeOf(a.reportDate)) || (timeOf(b.createdAt) - timeOf(a.createdAt)));
   const shouldPaginate = req && !['true', '1', 'yes'].includes(String(req.query?.all || req.query?.noPagination || '').toLowerCase());
   const pagination = shouldPaginate ? paginateTasks(sortedTasks, req) : null;
-  const responseTasks = pagination ? pagination.tasks : sortedTasks;
+  const responseTasks = (pagination ? pagination.tasks : sortedTasks).map(trimStatusHistoryForList);
 
   return res.json({
     success: true,
@@ -1664,7 +1665,7 @@ const sendCleanTaskList = (res, tasks, view, dateField = 'createdAt', req = null
 exports.getPersonalTasks = async (req, res) => {
   try {
     const list = await fetchPersonalTaskList(req);
-    return sendCleanTaskList(res, applyCleanListFilters(list, req), 'personal', 'createdAt');
+    return sendCleanTaskList(res, applyCleanListFilters(list, req), 'personal', 'createdAt', (req.query?.page || req.query?.limit ? req : null));
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
@@ -1673,7 +1674,7 @@ exports.getPersonalTasks = async (req, res) => {
 exports.getAssignedToMeTasks = async (req, res) => {
   try {
     const list = await fetchAssignedToMeTaskList(req);
-    return sendCleanTaskList(res, applyCleanListFilters(list, req), 'assigned', 'createdAt');
+    return sendCleanTaskList(res, applyCleanListFilters(list, req), 'assigned', 'createdAt', (req.query?.page || req.query?.limit ? req : null));
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
@@ -1682,7 +1683,7 @@ exports.getAssignedToMeTasks = async (req, res) => {
 exports.getAssignedProjectTasks = async (req, res) => {
   try {
     const list = await fetchAssignedProjectTaskList(req);
-    return sendCleanTaskList(res, applyCleanListFilters(list, req), 'project', 'createdAt');
+    return sendCleanTaskList(res, applyCleanListFilters(list, req), 'project', 'createdAt', (req.query?.page || req.query?.limit ? req : null));
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
