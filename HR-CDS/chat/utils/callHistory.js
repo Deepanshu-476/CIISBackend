@@ -17,12 +17,24 @@ const safely = (label, task) => Promise.resolve().then(task).catch(error => {
     console.error(`Call history ${label} failed:`, error?.message || error);
 });
 
+const getParticipantKeys = participants => {
+    if (!participants) return [];
+    if (typeof participants.keys === "function") return Array.from(participants.keys());
+    return Object.keys(participants);
+};
+
+const getParticipantEntries = participants => {
+    if (!participants) return [];
+    if (typeof participants.entries === "function") return Array.from(participants.entries());
+    return Object.entries(participants);
+};
+
 const recordCallStarted = room => safely("start", () => ChatCall.create({
     callId: room.callId,
     companyId: toObjectId(room.companyId),
     conversationId: toObjectId(room.conversationId),
     caller: room.hostUserId,
-    participants: Array.from(room.participants.keys()).filter(id => id !== room.hostUserId),
+    participants: getParticipantKeys(room.participants).filter(id => id !== room.hostUserId),
     callType: room.callType,
     isGroupCall: Boolean(room.isGroupCall),
     title: room.title || "",
@@ -45,7 +57,7 @@ const recordCallAnswered = (callId, userId, answeredAt) => safely("answer", () =
 
 const getFinalStatus = room => {
     if (room.answeredAt) return "completed";
-    const invitees = Array.from(room.participants.entries()).filter(([id]) => id !== room.hostUserId);
+    const invitees = getParticipantEntries(room.participants).filter(([id]) => id !== room.hostUserId);
     if (invitees.length && invitees.every(([, participant]) => participant.status === "rejected")) return "rejected";
     return "missed";
 };

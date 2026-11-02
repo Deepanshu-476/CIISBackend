@@ -102,12 +102,12 @@ const isWorkFromHomeEmployee = (user = {}) => {
   });
 };
 
+// The sweep reads every clocked-in record of every company, so requests no longer wait on it:
+// it runs in the background (the per-minute cron keeps the status at most a minute stale).
 const refreshAutoClockOuts = async () => {
-  try {
-    await runAutoClockOutSweepIfStale();
-  } catch (error) {
+  runAutoClockOutSweepIfStale().catch(error => {
     console.error("[AutoClockOut] refresh failed:", error.message);
-  }
+  });
 };
 
 const getBranchScopedUserIds = async (req, companyCode) => {

@@ -37,7 +37,7 @@ const updateFile = (file, targetPath, mimetype) => {
 
 const removeQuietly = filePath => {
   if (!filePath) return;
-  fs.promises.unlink(filePath).catch(() => {});
+  fs.promises.unlink(filePath).catch(() => { });
 };
 
 const compressedPathFor = (filePath, extension) => {

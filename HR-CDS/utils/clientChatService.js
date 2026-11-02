@@ -90,7 +90,18 @@ async function companyFor(client) {
 const RESYNC_AFTER_MS = 10 * 60 * 1000;
 const notSyncedSince = (ms = RESYNC_AFTER_MS) => ({ clientSyncedAt: { $not: { $gte: new Date(Date.now() - ms) } } });
 
-async function syncClient(clientId) {
+// usersByCompany: sweeps pass one Map so each company's users are read once per pass instead of
+// once per client.
+const loadCompanyUsers = (companyId, usersByCompany) => {
+  const read = () => User.find({ company: companyId, isActive: { $ne: false } })
+    .select('_id name email companyRole role jobRoleName employeeType department departmentName team').lean();
+  if (!usersByCompany) return read();
+  const key = id(companyId);
+  if (!usersByCompany.has(key)) usersByCompany.set(key, read());
+  return usersByCompany.get(key);
+};
+
+async function syncClient(clientId, { usersByCompany } = {}) {
   if (!clientId || !mongoose.isValidObjectId(clientId)) return null;
   const startedAt = new Date();
   const client = await Client().findById(clientId).lean();
@@ -109,7 +120,7 @@ async function syncClient(clientId) {
     await Conversation.updateOne({ _id: existing._id }, { $set: { members: [], admins: [] } });
     global.io?.in(`conversation:${existing._id}`).socketsLeave(`conversation:${existing._id}`);
   }
-  const users = (await User.find({ company: company._id, isActive: { $ne: false } }).select('_id name email companyRole role jobRoleName employeeType department departmentName team')).filter(user => internal(user, client));
+  const users = (await loadCompanyUsers(company._id, usersByCompany)).filter(user => internal(user, client));
   const tasks = await Task().find({ clientId }).select('assigneeId assignee').lean();
   const rawManagers = collectClientManagerValues(client);
   const managers = ids(rawManagers.map(value => resolveMember(value, users, client)));
@@ -134,10 +145,23 @@ async function syncClient(clientId) {
     if (error.code !== 11000) throw error;
     conversation = await Conversation.findOneAndUpdate(query, { $set: updatePayload.$set }, { new: true });
   }
-  if (global.io) for (const socket of await global.io.in(`conversation:${conversation._id}`).fetchSockets()) {
-    if (!conversation.members.some(member => id(member) === id(socket.userId || socket.data?.userId))) socket.leave(`conversation:${conversation._id}`);
+  const membersChanged = !existing || existing.members.map(id).sort().join() !== conversation.members.map(id).sort().join();
+  // Removed members are dropped from the room. Asking every server for its sockets is only needed
+  // when membership changed, and must not hang the sync (same 2s limit as project chats).
+  if (global.io && membersChanged) {
+    try {
+      const sockets = await Promise.race([
+        global.io.in(`conversation:${conversation._id}`).fetchSockets(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('fetchSockets timeout')), 2000)),
+      ]);
+      for (const socket of sockets) {
+        if (!conversation.members.some(member => id(member) === id(socket.userId || socket.data?.userId))) socket.leave(`conversation:${conversation._id}`);
+      }
+    } catch (sockErr) {
+      console.warn('[client-chat] fetchSockets error:', sockErr.message);
+    }
   }
-  if (!existing || existing.groupName !== conversation.groupName || existing.members.map(id).sort().join() !== conversation.members.map(id).sort().join()) {
+  if (membersChanged || existing.groupName !== conversation.groupName) {
     const recipients = ids([...(existing?.members || []), ...conversation.members]);
     if (recipients.length) global.io?.to(recipients.map(member => `user:${member}`)).emit('chat:project-membership-updated', { conversationId: conversation._id, clientId });
   }
@@ -174,12 +198,14 @@ async function drainTask(taskId) {
 async function syncForUser(companyId) {
   const company = await require('../../models/Company').findById(companyId).select('companyCode');
   if (!company) return;
-  for await (const client of Client().find({ companyCode: company.companyCode }).select('_id').lean().cursor()) await syncClient(client._id);
+  const usersByCompany = new Map();
+  for await (const client of Client().find({ companyCode: company.companyCode }).select('_id').lean().cursor()) await syncClient(client._id, { usersByCompany });
 }
 
 async function sweep() {
+  const usersByCompany = new Map();
   for await (const client of Client().find({ chatSyncPending: true }).select('_id updatedAt __v').lean().cursor()) {
-    try { await syncClient(client._id); await Client().collection.updateOne({ _id: client._id, __v: client.__v, updatedAt: client.updatedAt }, { $set: { chatSyncPending: false } }); }
+    try { await syncClient(client._id, { usersByCompany }); await Client().collection.updateOne({ _id: client._id, __v: client.__v, updatedAt: client.updatedAt }, { $set: { chatSyncPending: false } }); }
     catch (error) { console.error('[client-chat] sync pending', id(client), error.message); }
   }
   for await (const task of Task().find({ $or: [{ 'chatOutbox.0': { $exists: true } }, { chatSyncPending: true }] }).select('_id').lean().cursor()) {
@@ -189,13 +215,14 @@ async function sweep() {
   // Client and task saves sync right away, so this pass only needs to catch
   // what they miss (deleted clients, deactivated users) and skips recent ones.
   for await (const conversation of Conversation.find({ clientId: { $exists: true }, 'members.0': { $exists: true }, ...notSyncedSince() }).select('clientId').lean().cursor()) {
-    try { await syncClient(conversation.clientId); } catch (error) { console.error('[client-chat] refresh pending', error.message); }
+    try { await syncClient(conversation.clientId, { usersByCompany }); } catch (error) { console.error('[client-chat] refresh pending', error.message); }
   }
 }
 
 async function syncAllClients() {
+  const usersByCompany = new Map();
   for await (const client of Client().find({}).select('_id').lean().cursor()) {
-    try { await syncClient(client._id); }
+    try { await syncClient(client._id, { usersByCompany }); }
     catch (error) { console.error('[client-chat] sync all error', id(client), error.message); }
   }
 }

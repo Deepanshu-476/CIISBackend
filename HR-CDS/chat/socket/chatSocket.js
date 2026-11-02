@@ -2,11 +2,14 @@ const Conversation = require("../models/Conversation");
 const Message = require("../models/Message");
 const { getCompanyOnlineUsers } = require("../../socket/presence");
 const { getUnreadCount } = require("../utils/unreadCount");
+const { recordSeen, recordDelivered } = require("../utils/messageReceipts");
 
-const emitUnreadCounts = async (io, conversation, senderId) => {
+// onlyUserId: marking a message seen changes only that user's count.
+const emitUnreadCounts = async (io, conversation, senderId, {onlyUserId} = {}) => {
     if (!conversation) return;
 
-    await Promise.all((conversation.members || []).map(async member => {
+    const members = onlyUserId ? [onlyUserId] : (conversation.members || []);
+    await Promise.all(members.map(async member => {
         const memberId = member.toString();
         const count = await getUnreadCount(conversation._id, memberId, conversation.companyId, conversation.readState || []);
         io.to(`user:${memberId}`).emit("chat:unread-update", {
@@ -117,28 +120,32 @@ socket.on(
         }
 
         if (data.conversationId) {
+          try {
             const conversation = await Conversation.findOne({
                 _id: data.conversationId,
                 companyId: socket.companyId,
                 members: socket.userId
             });
-            const deliveredTo = conversation
-                ? getCompanyOnlineUsers(io, socket.companyId)
-                    .filter(userId => userId !== socket.userId.toString())
-                    .filter(userId => (conversation.members || []).map(member => member.toString()).includes(userId))
+            // The REST send already stored the message, emitted unread counts and marked members
+            // online on that server as delivered. This adds members online on other servers.
+            const memberIds = new Set((conversation?.members || []).map(member => member.toString()));
+            const onlineMembers = conversation
+                ? (await getCompanyOnlineUsers(io, socket.companyId))
+                    .filter(userId => userId !== socket.userId.toString() && memberIds.has(userId))
                 : [];
-            if (data?._id && deliveredTo.length) {
-                await Message.updateOne(
-                    {_id: data._id, companyId: socket.companyId},
-                    {$addToSet: {deliveredTo: {$each: deliveredTo}}}
-                );
+            const deliveredTo = data?._id
+                ? await recordDelivered(data._id, socket.companyId, onlineMembers)
+                : [];
+            if (deliveredTo.length) {
                 io.to(`user:${socket.userId}`).emit("chat:message-delivered", {
                     messageId: data._id,
                     conversationId: data.conversationId,
                     deliveredTo,
                 });
             }
-            await emitUnreadCounts(io, conversation, socket.userId);
+          } catch (error) {
+            console.error("[chat] send-message delivery update failed:", error.message);
+          }
         } else if (data.receiverId) {
             socket.to(`user:${data.receiverId}`).emit(
                 "chat:unread-update",
@@ -222,10 +229,8 @@ socket.on(
 
         if (!conversation) return;
 
-        message.deliveredTo.addToSet(socket.userId);
-        message.seenBy.addToSet(socket.userId);
-        await message.save();
-        await emitUnreadCounts(io, conversation, socket.userId);
+        await recordSeen(message, socket.userId);
+        await emitUnreadCounts(io, conversation, socket.userId, {onlyUserId: socket.userId});
 
         io.to(
             `user:${message.sender}`

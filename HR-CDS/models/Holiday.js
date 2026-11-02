@@ -55,5 +55,7 @@ holidaySchema.index({ title: 1, company: 1, date: 1 }, {
 
 holidaySchema.index({ company: 1, month: 1, isActive: 1 });
 holidaySchema.index({ company: 1, date: 1, isActive: 1 });
+// Attendance status, dashboards and the absence job look holidays up by companyCode.
+holidaySchema.index({ companyCode: 1, date: 1, isActive: 1 });
 
 module.exports = mongoose.model("Holiday", holidaySchema);

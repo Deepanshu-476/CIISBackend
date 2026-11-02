@@ -101,7 +101,11 @@ test('cold-started receiver restores and accepts only its own invitation', async
   await stranger.run('call:accept', {callId: invite.callId});
   assert.ok(f.emitted.some(e => e.room === 'stranger' && e.event === 'call:unavailable'));
   await receiver.run('call:accept', {callId: invite.callId});
-  assert.ok(f.emitted.some(e => (e.room === receiver.id || e.room === 'user:receiver') && e.event === 'call:joined'));
+  const joinedEvent = f.emitted.find(e => (e.room === receiver.id || e.room === 'user:receiver') && e.event === 'call:joined');
+  assert.ok(joinedEvent && typeof joinedEvent.data.answeredAt === 'number');
+  const participantJoinedEvent = f.emitted.find(e => e.event === 'call:participant-joined');
+  assert.ok(participantJoinedEvent && typeof participantJoinedEvent.data.answeredAt === 'number');
+  assert.equal(joinedEvent.data.answeredAt, participantJoinedEvent.data.answeredAt);
   assert.ok(f.pushes.some(p => p.data.type === 'call:cancelled' && p.userIds.includes('receiver')));
 });
 
