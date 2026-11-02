@@ -343,7 +343,7 @@ exports.updateCheckpoint = async (req, res) => {
 exports.getAssignedToMeTasks = async (req, res) => {
   try {
     const list = await fetchAssignedToMeTaskList(req);
-    return sendCleanTaskList(res, applyCleanListFilters(list, req), 'assigned', 'createdAt');
+    return sendCleanTaskList(res, applyCleanListFilters(list, req), 'assigned', 'createdAt', (req.query?.page || req.query?.limit ? req : null));
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }

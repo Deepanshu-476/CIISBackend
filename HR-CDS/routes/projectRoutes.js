@@ -18,6 +18,7 @@ router.post("/bulk-import", protect, uploadExcel.single("file"), projectBulkImpo
 router.get("/", protect, projectController.listProjects);
 router.get("/:id/document", protect, projectController.downloadProjectDocument);
 router.get("/:id/tasks/:taskId/document", protect, projectController.downloadTaskDocument);
+router.get("/:id/tasks/:taskId/files", protect, projectController.downloadTaskFile);
 router.get("/:id", protect, projectController.getProjectById);
 
 router.post("/", protect, [

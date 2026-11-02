@@ -145,7 +145,29 @@ const messageSchema = new mongoose.Schema(
     deliveredTo: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: "User"
-    }]
+    }],
+
+    // When each member received / read the message, for "Message info". seenBy and
+    // deliveredTo stay the source of the tick marks; messages from before these fields
+    // existed simply have no times. Not sent with messages (one entry per member would
+    // bloat every group message); only the message-info endpoint selects them.
+    deliveryReceipts: {
+      select: false,
+      type: [{
+        _id: false,
+        user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+        at: { type: Date, required: true }
+      }]
+    },
+
+    readReceipts: {
+      select: false,
+      type: [{
+        _id: false,
+        user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+        at: { type: Date, required: true }
+      }]
+    }
 },
 { timestamps: true }
 );

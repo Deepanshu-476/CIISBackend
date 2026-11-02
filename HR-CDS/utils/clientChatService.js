@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Conversation = require('../chat/models/Conversation');
 const User = require('../../models/User');
 const { id, ids } = require('./projectChatEvents');
@@ -22,7 +23,7 @@ function normalizePerson(val) {
   return { id: '', name: s, email: '' };
 }
 
-function resolveMember(value, users) {
+function resolveMember(value, users, client = null) {
   const target = normalizePerson(value);
   if (!target) return null;
 
@@ -45,17 +46,23 @@ function resolveMember(value, users) {
     const exact = users.find(u => String(u.name || '').trim().toLowerCase() === targetName);
     if (exact) return exact._id;
 
-    // 3b. Clean alphanumeric prefix/substring match (e.g. "Prashant" <-> "Prashant kumar", "Shivani" <-> "Shivani Chandel")
+    // 3b. Clean alphanumeric prefix match (only when unique)
     const cleanTarget = targetName.replace(/[^a-z0-9]/g, '');
     if (cleanTarget.length >= 3) {
-      const candidates = users.filter(u => {
+      let candidates = users.filter(u => {
         const cleanUser = String(u.name || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-        return cleanUser.length >= 3 && (cleanUser.startsWith(cleanTarget) || cleanTarget.startsWith(cleanUser));
+        return cleanUser.length >= 3 && cleanUser.startsWith(cleanTarget);
       });
+      const clientDept = String(client?.department || client?.team || '').trim().toLowerCase();
+      if (clientDept && candidates.length > 1) {
+        candidates = candidates.filter(u => {
+          const userDept = String(u.department || u.team || u.departmentName || '').trim().toLowerCase();
+          return userDept && userDept === clientDept;
+        });
+      }
       if (candidates.length === 1) return candidates[0]._id;
-      const startsWith = candidates.filter(u => String(u.name || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '').startsWith(cleanTarget));
-      if (startsWith.length === 1) return startsWith[0]._id;
     }
+    console.warn('[client-chat] unmatched member name:', target.name, 'for client:', client?.client || client?._id || 'unknown');
   }
 
   return null;
@@ -83,10 +90,22 @@ async function companyFor(client) {
 const RESYNC_AFTER_MS = 10 * 60 * 1000;
 const notSyncedSince = (ms = RESYNC_AFTER_MS) => ({ clientSyncedAt: { $not: { $gte: new Date(Date.now() - ms) } } });
 
-async function syncClient(clientId) {
+// usersByCompany: sweeps pass one Map so each company's users are read once per pass instead of
+// once per client.
+const loadCompanyUsers = (companyId, usersByCompany) => {
+  const read = () => User.find({ company: companyId, isActive: { $ne: false } })
+    .select('_id name email companyRole role jobRoleName employeeType department departmentName team').lean();
+  if (!usersByCompany) return read();
+  const key = id(companyId);
+  if (!usersByCompany.has(key)) usersByCompany.set(key, read());
+  return usersByCompany.get(key);
+};
+
+async function syncClient(clientId, { usersByCompany } = {}) {
+  if (!clientId || !mongoose.isValidObjectId(clientId)) return null;
   const startedAt = new Date();
   const client = await Client().findById(clientId).lean();
-  const existing = await Conversation.findOne({ clientId });
+  const existing = await Conversation.findOne({ clientId, projectId: { $exists: false } });
   if (!client) {
     if (existing) {
       require('./projectChatService').emitMembers(existing, 'chat:project-membership-updated', { conversationId: existing._id, clientId });
@@ -101,14 +120,14 @@ async function syncClient(clientId) {
     await Conversation.updateOne({ _id: existing._id }, { $set: { members: [], admins: [] } });
     global.io?.in(`conversation:${existing._id}`).socketsLeave(`conversation:${existing._id}`);
   }
-  const users = (await User.find({ company: company._id, isActive: { $ne: false } }).select('_id name email companyRole role jobRoleName employeeType')).filter(user => internal(user, client));
+  const users = (await loadCompanyUsers(company._id, usersByCompany)).filter(user => internal(user, client));
   const tasks = await Task().find({ clientId }).select('assigneeId assignee').lean();
   const rawManagers = collectClientManagerValues(client);
-  const managers = ids(rawManagers.map(value => resolveMember(value, users)));
-  const taskAssignees = ids(tasks.map(task => task.assigneeId ? users.find(user => id(user) === id(task.assigneeId))?._id : resolveMember(task.assignee, users)));
+  const managers = ids(rawManagers.map(value => resolveMember(value, users, client)));
+  const taskAssignees = ids(tasks.map(task => task.assigneeId ? users.find(user => id(user) === id(task.assigneeId))?._id : resolveMember(task.assignee, users, client)));
   const candidates = ids([...managers, ...taskAssignees]);
   const members = client.status === 'Inactive' ? [] : candidates;
-  const query = { companyId: company._id, clientId };
+  const query = { companyId: company._id, clientId, projectId: { $exists: false } };
   let conversation;
   const updatePayload = {
     $set: {
@@ -126,10 +145,23 @@ async function syncClient(clientId) {
     if (error.code !== 11000) throw error;
     conversation = await Conversation.findOneAndUpdate(query, { $set: updatePayload.$set }, { new: true });
   }
-  if (global.io) for (const socket of await global.io.in(`conversation:${conversation._id}`).fetchSockets()) {
-    if (!conversation.members.some(member => id(member) === id(socket.userId || socket.data?.userId))) socket.leave(`conversation:${conversation._id}`);
+  const membersChanged = !existing || existing.members.map(id).sort().join() !== conversation.members.map(id).sort().join();
+  // Removed members are dropped from the room. Asking every server for its sockets is only needed
+  // when membership changed, and must not hang the sync (same 2s limit as project chats).
+  if (global.io && membersChanged) {
+    try {
+      const sockets = await Promise.race([
+        global.io.in(`conversation:${conversation._id}`).fetchSockets(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('fetchSockets timeout')), 2000)),
+      ]);
+      for (const socket of sockets) {
+        if (!conversation.members.some(member => id(member) === id(socket.userId || socket.data?.userId))) socket.leave(`conversation:${conversation._id}`);
+      }
+    } catch (sockErr) {
+      console.warn('[client-chat] fetchSockets error:', sockErr.message);
+    }
   }
-  if (!existing || existing.groupName !== conversation.groupName || existing.members.map(id).sort().join() !== conversation.members.map(id).sort().join()) {
+  if (membersChanged || existing.groupName !== conversation.groupName) {
     const recipients = ids([...(existing?.members || []), ...conversation.members]);
     if (recipients.length) global.io?.to(recipients.map(member => `user:${member}`)).emit('chat:project-membership-updated', { conversationId: conversation._id, clientId });
   }
@@ -137,8 +169,13 @@ async function syncClient(clientId) {
 }
 
 async function drainTask(taskId) {
+  if (!taskId || !mongoose.isValidObjectId(taskId)) return;
   const task = await Task().findById(taskId).select('+chatOutbox').lean();
   if (!task) return;
+  if (!task.clientId || !mongoose.isValidObjectId(task.clientId)) {
+    console.warn('[client-chat] task has missing or invalid clientId', id(taskId));
+    return;
+  }
   const conversation = await syncClient(task.clientId);
   if (!conversation) return;
   if (!conversation.members.length) {
@@ -161,12 +198,14 @@ async function drainTask(taskId) {
 async function syncForUser(companyId) {
   const company = await require('../../models/Company').findById(companyId).select('companyCode');
   if (!company) return;
-  for await (const client of Client().find({ companyCode: company.companyCode }).select('_id').lean().cursor()) await syncClient(client._id);
+  const usersByCompany = new Map();
+  for await (const client of Client().find({ companyCode: company.companyCode }).select('_id').lean().cursor()) await syncClient(client._id, { usersByCompany });
 }
 
 async function sweep() {
+  const usersByCompany = new Map();
   for await (const client of Client().find({ chatSyncPending: true }).select('_id updatedAt __v').lean().cursor()) {
-    try { await syncClient(client._id); await Client().collection.updateOne({ _id: client._id, __v: client.__v, updatedAt: client.updatedAt }, { $set: { chatSyncPending: false } }); }
+    try { await syncClient(client._id, { usersByCompany }); await Client().collection.updateOne({ _id: client._id, __v: client.__v, updatedAt: client.updatedAt }, { $set: { chatSyncPending: false } }); }
     catch (error) { console.error('[client-chat] sync pending', id(client), error.message); }
   }
   for await (const task of Task().find({ $or: [{ 'chatOutbox.0': { $exists: true } }, { chatSyncPending: true }] }).select('_id').lean().cursor()) {
@@ -176,13 +215,14 @@ async function sweep() {
   // Client and task saves sync right away, so this pass only needs to catch
   // what they miss (deleted clients, deactivated users) and skips recent ones.
   for await (const conversation of Conversation.find({ clientId: { $exists: true }, 'members.0': { $exists: true }, ...notSyncedSince() }).select('clientId').lean().cursor()) {
-    try { await syncClient(conversation.clientId); } catch (error) { console.error('[client-chat] refresh pending', error.message); }
+    try { await syncClient(conversation.clientId, { usersByCompany }); } catch (error) { console.error('[client-chat] refresh pending', error.message); }
   }
 }
 
 async function syncAllClients() {
+  const usersByCompany = new Map();
   for await (const client of Client().find({}).select('_id').lean().cursor()) {
-    try { await syncClient(client._id); }
+    try { await syncClient(client._id, { usersByCompany }); }
     catch (error) { console.error('[client-chat] sync all error', id(client), error.message); }
   }
 }
