@@ -106,6 +106,15 @@ const incomingPayload = (room, userId) => ({
     answeredAt: room.answeredAt || null,
 });
 
+// FCM data payloads are limited to 4KB on Android. A base64 profile photo in fromUser made every
+// call:incoming push fail with messaging/invalid-argument, so a backgrounded phone never rang.
+const pushSafeUser = (user = {}) => {
+    const avatar = typeof user.avatar === "string" && !user.avatar.startsWith("data:") && user.avatar.length <= 500
+        ? user.avatar
+        : "";
+    return { _id: user._id, id: user.id || user._id, name: user.name, avatar, profileImage: avatar };
+};
+
 const clearCallPush = (userIds, callId) => {
     if (!userIds || !userIds.length) return;
     sendPushToUsers({userIds, data: {type: "call:cancelled", callId}}).catch(() => {});
@@ -318,7 +327,7 @@ const callSocket = (io, socket) => {
                         callType,
                         fromUserId: socket.userId,
                         title: callTitle,
-                        fromUser: callerUser,
+                        fromUser: pushSafeUser(callerUser),
                         conversationId: data.conversationId,
                         participantIds: [socket.userId, ...targetParticipantIds],
                         isGroupCall,
@@ -500,7 +509,7 @@ const callSocket = (io, socket) => {
                         callType: room.callType,
                         fromUserId: socket.userId,
                         title: callTitle,
-                        fromUser: inviterUser,
+                        fromUser: pushSafeUser(inviterUser),
                         conversationId: room.conversationId,
                         participantIds: [...joinedIds, ...targetParticipantIds],
                         isGroupCall: true,
