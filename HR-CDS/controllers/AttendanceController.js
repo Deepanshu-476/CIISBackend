@@ -224,9 +224,10 @@ const getIndiaDayRange = value => ({
 
 const parseIndiaDateOnly = value => {
   if (typeof value === 'string') {
-    const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (match) {
-      return indiaDateTimeToUtc(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    const trimmed = value.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      const [y, m, d] = trimmed.split('-').map(Number);
+      return indiaDateTimeToUtc(y, m - 1, d);
     }
   }
   return getIndiaDayStart(value);
@@ -1888,6 +1889,36 @@ const updateAttendanceRecord = async (req, res) => {
     
     
     
+    let dateChanged = false;
+    let targetDate = null;
+    if (updateData.date !== undefined && updateData.date !== null && String(updateData.date).trim() !== '') {
+      targetDate = parseIndiaDateOnly(updateData.date);
+      const currentDateStart = getIndiaDayStart(record.date);
+      dateChanged = targetDate.getTime() !== currentDateStart.getTime();
+      if (dateChanged) {
+        const existingConflict = await Attendance.findOne({
+          _id: { $ne: record._id },
+          user: record.user,
+          date: { $gte: targetDate, $lte: getIndiaDayEnd(targetDate) }
+        });
+        if (existingConflict) {
+          const formattedTarget = formatIndiaDateKey(targetDate);
+          return res.status(409).json({
+            success: false,
+            message: `An attendance record already exists for this employee on ${formattedTarget}. Cannot move record to that date.`
+          });
+        }
+        record.date = targetDate;
+      }
+    }
+
+    const attendanceUser = await User.findById(record.user).select('company jobRole shiftId shiftName shiftType');
+    const shiftSettings = record.shiftStart && record.shiftEnd
+      ? getRecordShiftSettings(record)
+      : await resolveSelectedShiftSettings(attendanceUser);
+    const schedule = buildShiftSchedule(record.inTime || record.date, shiftSettings);
+    applyShiftSnapshot(record, buildShiftSnapshot(shiftSettings || {}, schedule));
+
     if (updateData.inTime !== undefined) {
       record.inTime = updateData.inTime ? new Date(updateData.inTime) : null;
     }
@@ -1900,43 +1931,46 @@ const updateAttendanceRecord = async (req, res) => {
       }
     }
     
-    if (updateData.status && String(updateData.status).trim() !== '') {
-      record.status = normalizeAttendanceStatusForSave(updateData.status, record.status);
-    } else if (updateData.inTime !== undefined || updateData.outTime !== undefined) {
-      const attendanceUser = await User.findById(record.user).select('company jobRole shiftId shiftName shiftType');
-      const shiftSettings = record.shiftStart && record.shiftEnd
-        ? getRecordShiftSettings(record)
-        : await resolveSelectedShiftSettings(attendanceUser);
-      const schedule = buildShiftSchedule(record.inTime || record.date, shiftSettings);
-      applyShiftSnapshot(record, buildShiftSnapshot(shiftSettings || {}, schedule));
+    const rawStatus = updateData.status !== undefined && String(updateData.status).trim() !== ''
+      ? String(updateData.status).trim()
+      : null;
+    const explicitStatus = rawStatus ? normalizeAttendanceStatusForSave(rawStatus) : null;
+    const isAbsentType = explicitStatus && ['ABSENT', 'UNINFORMED LEAVE', 'HOLIDAY', 'WEEKEND'].includes(explicitStatus);
+
+    if (isAbsentType) {
+      record.status = explicitStatus;
+      record.inTime = null;
+      record.outTime = null;
+      record.isClockedIn = false;
+      record.lateBy = "00:00:00";
+      record.earlyLeave = "00:00:00";
+      record.overTime = "00:00:00";
+      record.totalTime = "00:00:00";
+    } else {
       const recalculated = calculateAttendanceByShift({
         inTime: record.inTime,
         outTime: record.outTime,
         shiftSettings,
-        currentStatus: record.status,
+        currentStatus: explicitStatus || record.status,
         hasOvertimeApproved: Boolean(record.hasOvertimeApproved)
       });
-      Object.assign(record, recalculated);
+
+      record.status = explicitStatus || recalculated.status;
+
+      if (updateData.manualOverride === true) {
+        if (updateData.lateBy !== undefined) record.lateBy = updateData.lateBy;
+        if (updateData.earlyLeave !== undefined) record.earlyLeave = updateData.earlyLeave;
+        if (updateData.overTime !== undefined) record.overTime = updateData.overTime;
+      } else {
+        record.lateBy = recalculated.lateBy;
+        record.earlyLeave = recalculated.earlyLeave;
+        record.overTime = recalculated.overTime;
+      }
+      record.totalTime = recalculated.totalTime;
     }
-    
-    if (updateData.lateBy !== undefined) {
-      record.lateBy = updateData.lateBy;
-    }
-    
-    if (updateData.earlyLeave !== undefined) {
-      record.earlyLeave = updateData.earlyLeave;
-    }
-    
-    if (updateData.overTime !== undefined) {
-      record.overTime = updateData.overTime;
-    }
-    
+
     if (updateData.notes !== undefined) {
       record.notes = updateData.notes;
-    }
-    
-    if (updateData.date !== undefined) {
-      record.date = parseIndiaDateOnly(updateData.date);
     }
     
     if (!record.companyCode) {
@@ -1947,6 +1981,13 @@ const updateAttendanceRecord = async (req, res) => {
       await record.save();
     } catch (err) {
       if (err.code === 11000) {
+        if (dateChanged) {
+          const formattedTarget = formatIndiaDateKey(targetDate);
+          return res.status(409).json({
+            success: false,
+            message: `An attendance record already exists for this employee on ${formattedTarget}. Cannot move record to that date.`
+          });
+        }
         const searchDate = record.date;
         const existingRecord = await Attendance.findOne({
           _id: { $ne: record._id },
@@ -1959,9 +2000,13 @@ const updateAttendanceRecord = async (req, res) => {
         });
 
         if (existingRecord) {
-          if (updateData.inTime !== undefined) existingRecord.inTime = updateData.inTime ? new Date(updateData.inTime) : null;
-          if (updateData.outTime !== undefined) existingRecord.outTime = updateData.outTime ? new Date(updateData.outTime) : null;
-          if (updateData.status) existingRecord.status = normalizeAttendanceStatusForSave(updateData.status, existingRecord.status);
+          existingRecord.inTime = record.inTime;
+          existingRecord.outTime = record.outTime;
+          existingRecord.status = record.status;
+          existingRecord.lateBy = record.lateBy;
+          existingRecord.earlyLeave = record.earlyLeave;
+          existingRecord.overTime = record.overTime;
+          existingRecord.totalTime = record.totalTime;
           if (updateData.notes !== undefined) existingRecord.notes = updateData.notes;
           existingRecord.companyCode = userCompanyCode;
           await existingRecord.save();
@@ -2048,12 +2093,35 @@ const createManualAttendance = async (req, res) => {
     const scheduleReference = inTime ? new Date(inTime) : parseIndiaDateOnly(date);
     const schedule = buildShiftSchedule(scheduleReference, shiftSettings);
     const shiftSnapshot = buildShiftSnapshot(shiftSettings || {}, schedule);
-    const calculated = calculateAttendanceByShift({
-      inTime: inTime ? new Date(inTime) : null,
-      outTime: outTime ? new Date(outTime) : null,
-      shiftSettings,
-      currentStatus: normalizeAttendanceStatusForSave(status, "ABSENT")
-    });
+
+    const normStatus = status ? normalizeAttendanceStatusForSave(status) : null;
+    const isAbsentType = normStatus && ['ABSENT', 'UNINFORMED LEAVE', 'HOLIDAY', 'WEEKEND'].includes(normStatus);
+
+    const parsedInTime = isAbsentType ? null : (inTime ? new Date(inTime) : null);
+    const parsedOutTime = isAbsentType ? null : (outTime ? new Date(outTime) : null);
+
+    let calculated = {
+      status: normStatus || "ABSENT",
+      lateBy: "00:00:00",
+      earlyLeave: "00:00:00",
+      overTime: "00:00:00",
+      totalTime: "00:00:00"
+    };
+
+    if (!isAbsentType) {
+      calculated = calculateAttendanceByShift({
+        inTime: parsedInTime,
+        outTime: parsedOutTime,
+        shiftSettings,
+        currentStatus: normStatus
+      });
+    }
+
+    const finalStatus = normStatus || calculated.status;
+    const finalLateBy = (req.body.manualOverride && lateBy !== undefined) ? lateBy : calculated.lateBy;
+    const finalEarlyLeave = (req.body.manualOverride && earlyLeave !== undefined) ? earlyLeave : calculated.earlyLeave;
+    const finalOverTime = (req.body.manualOverride && overTime !== undefined) ? overTime : calculated.overTime;
+    const finalTotalTime = calculated.totalTime;
     
     const existingDate = parseIndiaDateOnly(date);
     const endOfDay = getIndiaDayEnd(existingDate);
@@ -2064,27 +2132,20 @@ const createManualAttendance = async (req, res) => {
     });
     
     if (existingAttendance) {
-      existingAttendance.status = status ? normalizeAttendanceStatusForSave(status, existingAttendance.status) : existingAttendance.status;
-      existingAttendance.inTime = inTime ? new Date(inTime) : existingAttendance.inTime;
-      existingAttendance.outTime = outTime ? new Date(outTime) : existingAttendance.outTime;
-      existingAttendance.isClockedIn = outTime || status ? false : existingAttendance.isClockedIn;
-      existingAttendance.clockOutMode = outTime
+      existingAttendance.status = finalStatus;
+      existingAttendance.inTime = parsedInTime;
+      existingAttendance.outTime = parsedOutTime;
+      existingAttendance.isClockedIn = parsedOutTime || isAbsentType ? false : existingAttendance.isClockedIn;
+      existingAttendance.clockOutMode = parsedOutTime
         ? normalizeClockOutMode(clockOutMode || existingAttendance.clockOutMode || 'MANUAL')
-        : existingAttendance.clockOutMode;
-      existingAttendance.lateBy = lateBy || existingAttendance.lateBy;
-      existingAttendance.earlyLeave = earlyLeave || existingAttendance.earlyLeave;
-      existingAttendance.overTime = overTime || existingAttendance.overTime;
+        : (isAbsentType ? null : existingAttendance.clockOutMode);
+      existingAttendance.lateBy = finalLateBy;
+      existingAttendance.earlyLeave = finalEarlyLeave;
+      existingAttendance.overTime = finalOverTime;
+      existingAttendance.totalTime = finalTotalTime;
       existingAttendance.notes = notes || existingAttendance.notes;
       existingAttendance.companyCode = userCompanyCode;
       applyShiftSnapshot(existingAttendance, shiftSnapshot);
-
-      if (!status) {
-        existingAttendance.status = calculated.status;
-        existingAttendance.lateBy = lateBy || calculated.lateBy;
-        existingAttendance.earlyLeave = earlyLeave || calculated.earlyLeave;
-        existingAttendance.overTime = overTime || calculated.overTime;
-        existingAttendance.totalTime = calculated.totalTime;
-      }
 
       await existingAttendance.save();
 
@@ -2101,16 +2162,16 @@ const createManualAttendance = async (req, res) => {
     const attendance = new Attendance({
       user,
       date: existingDate,
-      inTime: inTime ? new Date(inTime) : null,
-      outTime: outTime ? new Date(outTime) : null,
-      clockOutMode: outTime ? normalizeClockOutMode(clockOutMode || 'MANUAL') : null,
-      status: status ? normalizeAttendanceStatusForSave(status, calculated.status) : calculated.status,
-      lateBy: lateBy || calculated.lateBy,
-      earlyLeave: earlyLeave || calculated.earlyLeave,
-      overTime: overTime || calculated.overTime,
-      totalTime: calculated.totalTime,
+      inTime: parsedInTime,
+      outTime: parsedOutTime,
+      clockOutMode: parsedOutTime ? normalizeClockOutMode(clockOutMode || 'MANUAL') : null,
+      status: finalStatus,
+      lateBy: finalLateBy,
+      earlyLeave: finalEarlyLeave,
+      overTime: finalOverTime,
+      totalTime: finalTotalTime,
       notes: notes || "",
-      isClockedIn: Boolean(inTime && !outTime && !status),
+      isClockedIn: Boolean(parsedInTime && !parsedOutTime && !isAbsentType),
       companyCode: userCompanyCode
     });
     applyShiftSnapshot(attendance, shiftSnapshot);
@@ -2124,9 +2185,13 @@ const createManualAttendance = async (req, res) => {
           date: { $gte: existingDate, $lte: endOfDay }
         });
         if (existingRecord) {
-          existingRecord.status = status ? normalizeAttendanceStatusForSave(status, existingRecord.status) : existingRecord.status;
-          if (inTime !== undefined) existingRecord.inTime = inTime ? new Date(inTime) : existingRecord.inTime;
-          if (outTime !== undefined) existingRecord.outTime = outTime ? new Date(outTime) : existingRecord.outTime;
+          existingRecord.status = finalStatus;
+          existingRecord.inTime = parsedInTime;
+          existingRecord.outTime = parsedOutTime;
+          existingRecord.lateBy = finalLateBy;
+          existingRecord.earlyLeave = finalEarlyLeave;
+          existingRecord.overTime = finalOverTime;
+          existingRecord.totalTime = finalTotalTime;
           existingRecord.notes = notes || existingRecord.notes;
           existingRecord.companyCode = userCompanyCode;
           await existingRecord.save();
@@ -2581,6 +2646,72 @@ const getAttendanceStats = async (req, res) => {
   }
 };
 
+const previewAttendance = async (req, res) => {
+  try {
+    const { userId, user, date, inTime, outTime, status } = req.body;
+    const targetUserId = userId || user || req.user.id || req.user._id;
+    const userDoc = await User.findById(targetUserId).select('company companyCode jobRole shiftId shiftName shiftType');
+    if (!userDoc) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const shiftSettings = await resolveSelectedShiftSettings(userDoc);
+    const scheduleReference = inTime ? new Date(inTime) : (date ? parseIndiaDateOnly(date) : new Date());
+    const schedule = buildShiftSchedule(scheduleReference, shiftSettings);
+
+    const normStatus = status ? normalizeAttendanceStatusForSave(status) : null;
+    const isAbsentType = normStatus && ['ABSENT', 'UNINFORMED LEAVE', 'HOLIDAY', 'WEEKEND'].includes(normStatus);
+
+    if (isAbsentType) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          lateBy: '00:00:00',
+          earlyLeave: '00:00:00',
+          overTime: '00:00:00',
+          workingHours: '00:00:00',
+          suggestedStatus: normStatus,
+          shiftSettings: {
+            shiftStart: schedule.shiftStartStr,
+            shiftEnd: schedule.shiftEndStr,
+            lateGraceLimit: schedule.lateGraceLimitStr,
+            halfDayLateLimit: schedule.halfDayLateLimitStr,
+            halfDayEarlyLimit: schedule.halfDayEarlyLimitStr,
+          }
+        }
+      });
+    }
+
+    const calculated = calculateAttendanceByShift({
+      inTime: inTime ? new Date(inTime) : null,
+      outTime: outTime ? new Date(outTime) : null,
+      shiftSettings,
+      currentStatus: normStatus
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        lateBy: calculated.lateBy,
+        earlyLeave: calculated.earlyLeave,
+        overTime: calculated.overTime,
+        workingHours: calculated.totalTime,
+        suggestedStatus: calculated.status,
+        shiftSettings: {
+          shiftStart: schedule.shiftStartStr,
+          shiftEnd: schedule.shiftEndStr,
+          lateGraceLimit: schedule.lateGraceLimitStr,
+          halfDayLateLimit: schedule.halfDayLateLimitStr,
+          halfDayEarlyLimit: schedule.halfDayEarlyLimitStr,
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Attendance preview error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to generate attendance preview' });
+  }
+};
+
 module.exports = {
   clockIn,
   clockOut,
@@ -2592,7 +2723,10 @@ module.exports = {
   createManualAttendance,
   getAttendanceByUser,
   markDailyAbsent,
-  getAttendanceStats
+  getAttendanceStats,
+  previewAttendance,
+  parseIndiaDateOnly,
+  normalizeAttendanceStatusForSave
 };
 
 void 0;
