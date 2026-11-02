@@ -436,6 +436,7 @@ const io = socketIo(server, {
 
 global.io = io;
 
+const { attachRedisAdapter, getRedis } = require('./HR-CDS/socket/redis');
 
 const initializeSocket = require('./HR-CDS/socket/index.js');
 
@@ -1041,7 +1042,8 @@ const corsOptions = {
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "Cache-Control", "X-Permanent-Delete", "x-company-code", "companyCode", "X-Company-Code"]
+  allowedHeaders: ["Content-Type", "Authorization", "Cache-Control", "X-Permanent-Delete", "x-company-code", "companyCode", "X-Company-Code"],
+  exposedHeaders: ["Content-Disposition"]
 };
 
 app.use(cors(corsOptions));
@@ -1072,6 +1074,12 @@ const uploadStaticDirs = [
 const embeddableStaticHeaders = (req, res, next) => {
   res.removeHeader("X-Frame-Options");
   res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+  const origin = req.headers.origin;
+  if (origin && isAllowedOrigin(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+  }
   res.setHeader(
     "Content-Security-Policy",
     "frame-ancestors 'self' https://ciisnetwork.com https://backendciisnetwork.com http://localhost:* http://127.0.0.1:* https://*.ciisnetwork.in https://ciisnetwork.com https://*.ciisnetwork.com"
@@ -1198,6 +1206,20 @@ app.use("/api/overtime", require("./HR-CDS/routes/overtimeRoutes.js"));
 app.use("/overtime", require("./HR-CDS/routes/overtimeRoutes.js"));
 app.use("/api/leaves", require("./HR-CDS/routes/LeaveRoutes.js"));
 app.use("/api/asset-requests", require("./HR-CDS/routes/assetRequestRoutes.js"));
+// Any write that can change a task (task, project, client and client-task routes) clears the
+// cached merged task lists behind /api/tasks/all, so the writer sees the change at once.
+{
+  const { invalidateTaskListCache } = require("./HR-CDS/controllers/allTaskController");
+  const clearTaskListsAfterWrite = (req, res, next) => {
+    if (req.method !== "GET" && req.method !== "HEAD" && req.method !== "OPTIONS") {
+      res.on("finish", () => {
+        if (res.statusCode < 400) invalidateTaskListCache();
+      });
+    }
+    next();
+  };
+  app.use(["/api/task", "/task", "/api/tasks", "/api/projects", "/api/clientsservice", "/api/client-tasks"], clearTaskListsAfterWrite);
+}
 app.use("/api/task", require("./HR-CDS/routes/taskRoute.js"));
 app.use("/task", require("./HR-CDS/routes/taskRoute.js"));
 app.use("/api/users/profile", require("./HR-CDS/routes/profileRoute.js"));
@@ -1276,6 +1298,7 @@ app.get("/", (req, res) => {
     status: "active",
     basePath: "/api",
     socket: global.io ? "connected" : "disconnected",
+    redis: getRedis() ? "connected" : "off",
     timestamp: new Date().toISOString()
   });
 });
@@ -1291,6 +1314,7 @@ app.get("/api", (req, res) => {
       task_overdue_cron: "active",
       attendance_cron: "active",
       socket_io: global.io ? "active" : "inactive",
+      redis: getRedis() ? "connected" : "off",
       database: "MongoDB connected"
     }
   });
@@ -1302,7 +1326,8 @@ app.get("/api/socket-status", protect, restrictTo("super_admin"), sensitiveActio
     const socketStatus = {
       initialized: !!global.io,
       connections: global.io?.engine?.clientsCount || 0,
-      rooms: global.io?.sockets?.adapter?.rooms?.size || 0
+      rooms: global.io?.sockets?.adapter?.rooms?.size || 0,
+      redis: getRedis() ? "connected" : "off"
     };
     
     res.json({
@@ -1405,6 +1430,13 @@ const startServer = async () => {
   // port opened first, so initial page-permission requests could time out and
   // make CRM navigation disappear until a full refresh.
   await dbConnectionPromise;
+
+  try {
+    await attachRedisAdapter(io);
+  } catch (e) {
+    console.error('[socket] Redis adapter failed, falling back to memory:', e.message);
+  }
+
   // Uniqueness is a prerequisite for safe concurrent group/event delivery.
   for (const model of [require('./HR-CDS/chat/models/Conversation'), require('./HR-CDS/chat/models/Message'), require('./HR-CDS/models/Notification')]) await model.createIndexes();
   require('./HR-CDS/utils/projectChatWorker').start();

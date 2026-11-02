@@ -1,71 +1,15 @@
 const Conversation = require("../models/Conversation");
 const Message = require("../models/Message");
+const { getCompanyOnlineUsers } = require("../../socket/presence");
+const { getUnreadCount } = require("../utils/unreadCount");
+const { recordSeen, recordDelivered } = require("../utils/messageReceipts");
 
-const onlineUsers = new Map();
-
-const addOnlineUser = (userId, socketId) => {
-    const key = userId.toString();
-    const sockets = onlineUsers.get(key) || new Set();
-    sockets.add(socketId);
-    onlineUsers.set(key, sockets);
-};
-
-const removeOnlineUser = (userId, socketId) => {
-    const key = userId.toString();
-    const sockets = onlineUsers.get(key);
-    if (!sockets) return;
-    sockets.delete(socketId);
-    if (sockets.size === 0) {
-        onlineUsers.delete(key);
-    }
-};
-
-const getOnlineUserIds = () => Array.from(onlineUsers.keys());
-
-const emitOnlineUsers = (io, companyId) => {
-    const users = getCompanyOnlineUsers(io, companyId);
-
-    if (!companyId) {
-        io.emit("chat:online-users", users);
-        return;
-    }
-
-    io.to(`company:${companyId}`).emit(
-        "chat:online-users",
-        users
-    );
-};
-
-const getRawCompanyId = company => {
-    if (!company) return "";
-    if (typeof company === "string") return company;
-    if (company._id) return company._id.toString();
-    if (company.id) return company.id.toString();
-    return company.toString();
-};
-
-const getCompanyOnlineUsers = (io, companyId) => {
-    const companyKey = getRawCompanyId(companyId);
-    if (!companyKey) return getOnlineUserIds();
-
-    const userIds = new Set();
-
-    io.sockets.sockets.forEach(connectedSocket => {
-        const socketCompId = getRawCompanyId(connectedSocket.companyId);
-        if (companyKey && socketCompId && socketCompId !== companyKey) return;
-        if (!connectedSocket.userId) return;
-        userIds.add(connectedSocket.userId.toString());
-    });
-
-    return Array.from(userIds);
-};
-
-const {getUnreadCount} = require("../utils/unreadCount");
-
-const emitUnreadCounts = async (io, conversation, senderId) => {
+// onlyUserId: marking a message seen changes only that user's count.
+const emitUnreadCounts = async (io, conversation, senderId, {onlyUserId} = {}) => {
     if (!conversation) return;
 
-    await Promise.all((conversation.members || []).map(async member => {
+    const members = onlyUserId ? [onlyUserId] : (conversation.members || []);
+    await Promise.all(members.map(async member => {
         const memberId = member.toString();
         const count = await getUnreadCount(conversation._id, memberId, conversation.companyId, conversation.readState || []);
         io.to(`user:${memberId}`).emit("chat:unread-update", {
@@ -90,24 +34,12 @@ const chatSocket = (io, socket) => {
     socket.join(`company:${socket.companyId}`);
 
     
-    addOnlineUser(socket.userId, socket.id);
-    void 0;
-
-    
-    emitOnlineUsers(io, socket.companyId);
-
-    socket.on("chat:get-online-users", (callback) => {
-        const users = getCompanyOnlineUsers(io, socket.companyId);
+    socket.on("chat:get-online-users", async (callback) => {
+        const users = await getCompanyOnlineUsers(io, socket.companyId);
         if (typeof callback === "function") {
             callback(users);
         } else {
             socket.emit("chat:online-users", users);
-        }
-    });
-
-    socket.on("chat:heartbeat", (callback) => {
-        if (typeof callback === "function") {
-            callback({ status: "ok", timestamp: Date.now() });
         }
     });
 
@@ -188,28 +120,32 @@ socket.on(
         }
 
         if (data.conversationId) {
+          try {
             const conversation = await Conversation.findOne({
                 _id: data.conversationId,
                 companyId: socket.companyId,
                 members: socket.userId
             });
-            const deliveredTo = conversation
-                ? getCompanyOnlineUsers(io, socket.companyId)
-                    .filter(userId => userId !== socket.userId.toString())
-                    .filter(userId => (conversation.members || []).map(member => member.toString()).includes(userId))
+            // The REST send already stored the message, emitted unread counts and marked members
+            // online on that server as delivered. This adds members online on other servers.
+            const memberIds = new Set((conversation?.members || []).map(member => member.toString()));
+            const onlineMembers = conversation
+                ? (await getCompanyOnlineUsers(io, socket.companyId))
+                    .filter(userId => userId !== socket.userId.toString() && memberIds.has(userId))
                 : [];
-            if (data?._id && deliveredTo.length) {
-                await Message.updateOne(
-                    {_id: data._id, companyId: socket.companyId},
-                    {$addToSet: {deliveredTo: {$each: deliveredTo}}}
-                );
+            const deliveredTo = data?._id
+                ? await recordDelivered(data._id, socket.companyId, onlineMembers)
+                : [];
+            if (deliveredTo.length) {
                 io.to(`user:${socket.userId}`).emit("chat:message-delivered", {
                     messageId: data._id,
                     conversationId: data.conversationId,
                     deliveredTo,
                 });
             }
-            await emitUnreadCounts(io, conversation, socket.userId);
+          } catch (error) {
+            console.error("[chat] send-message delivery update failed:", error.message);
+          }
         } else if (data.receiverId) {
             socket.to(`user:${data.receiverId}`).emit(
                 "chat:unread-update",
@@ -293,10 +229,8 @@ socket.on(
 
         if (!conversation) return;
 
-        message.deliveredTo.addToSet(socket.userId);
-        message.seenBy.addToSet(socket.userId);
-        await message.save();
-        await emitUnreadCounts(io, conversation, socket.userId);
+        await recordSeen(message, socket.userId);
+        await emitUnreadCounts(io, conversation, socket.userId, {onlyUserId: socket.userId});
 
         io.to(
             `user:${message.sender}`
@@ -353,17 +287,6 @@ socket.on(
             }
         }
     );
-
-
-    
-    socket.on("disconnect", () => {
-
-        void 0;
-
-        removeOnlineUser(socket.userId, socket.id);
-
-        emitOnlineUsers(io, socket.companyId);
-    });
 };
 
 module.exports = chatSocket;

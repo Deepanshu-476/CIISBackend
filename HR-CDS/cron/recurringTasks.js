@@ -323,8 +323,50 @@ if (process.env.NODE_ENV !== 'test' && require('../../utils/scheduledJobs').sche
   }, { timezone: 'Asia/Kolkata' });
 }
 
+// Same absence rule as isUserAbsentOnDate, but for many dates with one attendance and one leave
+// query, so task lists don't run two queries per recurring task.
+const buildAbsenceChecker = async (userId, dateValues = []) => {
+  const ranges = dateValues
+    .map(value => toValidDate(value))
+    .filter(Boolean)
+    .map(date => getIndiaDayRange(date))
+    .filter(Boolean);
+  if (!userId || !ranges.length || mongoose.connection?.readyState === 0) return () => false;
+
+  const start = new Date(Math.min(...ranges.map(range => range.start.getTime())));
+  const end = new Date(Math.max(...ranges.map(range => range.end.getTime())));
+  let attendance = [];
+  let leaves = [];
+  try {
+    [attendance, leaves] = await Promise.all([
+      Attendance.find({ user: userId, date: { $gte: start, $lte: end } })
+        .select('date status isClockedIn inTime').lean(),
+      Leave.find({ user: userId, status: 'Approved', startDate: { $lte: end }, endDate: { $gte: start } })
+        .select('startDate endDate').lean(),
+    ]);
+  } catch (error) {
+    return () => false;
+  }
+
+  return (dateValue) => {
+    const targetDate = toValidDate(dateValue);
+    const bounds = targetDate && getIndiaDayRange(targetDate);
+    if (!bounds) return false;
+    const absentByAttendance = attendance.some(record => {
+      const recordDate = toValidDate(record.date);
+      if (!recordDate || recordDate < bounds.start || recordDate > bounds.end) return false;
+      const status = String(record.status || '').trim().toUpperCase();
+      const isClockedIn = record.isClockedIn === true || Boolean(record.inTime);
+      return !isClockedIn && ['ABSENT', 'UNINFORMED LEAVE', 'UNINFORMEDLEAVE'].includes(status);
+    });
+    if (absentByAttendance) return true;
+    return leaves.some(leave => new Date(leave.startDate) <= bounds.end && new Date(leave.endDate) >= bounds.start);
+  };
+};
+
 module.exports = {
   createOccurrenceIfMissing,
+  buildAbsenceChecker,
   generateRecurringOccurrences,
   processRecurringTemplate,
   runRecurringTaskSweep,

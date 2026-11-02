@@ -1048,7 +1048,9 @@ const getAllClients = async (req, res) => {
       filter.$and = [...(filter.$and || []), branchFilter];
     }
     
-    if (status && status !== 'All') filter.status = status;
+    if (status && status !== 'All') {
+      filter.status = { $regex: new RegExp(`^${escapeRegExp(status.trim())}$`, 'i') };
+    }
     
     if (projectManager && projectManager !== 'All') {
       filter.projectManager = projectManager;

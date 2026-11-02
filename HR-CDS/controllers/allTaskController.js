@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { getCached, setCached, invalidateCache } = require('../../utils/inMemoryCache');
 
 const {
   Task,
@@ -606,6 +607,51 @@ const calculateUserStatusCounts = (filtered) => {
 };
 
 
+// /tasks/all and /tasks/all/stats both rebuild the user's whole merged list from four sources
+// (personal, assigned, client and project tasks) on every request, including each page change.
+// The filtered list is kept for 5s per user and filter set, so the list, its stats and its
+// pages share one build; any task/project/client write clears it (see server.js), so a user's
+// own change shows at once. The app and web backends are separate processes, and cron jobs
+// write directly, so their changes show within 5s.
+const TASK_LIST_CACHE_TTL_MS = 5 * 1000;
+const TASK_LIST_CACHE_PREFIX = 'task-list|';
+const pendingTaskLists = new Map();
+const PAGE_QUERY_KEYS = new Set(['page', 'limit', 'all', 'noPagination', '_', 't']);
+
+const getMergedTaskList = (req, view, fetchers) => {
+  const query = Object.keys(req.query || {})
+    .filter(key => !PAGE_QUERY_KEYS.has(key))
+    .sort()
+    .map(key => `${key}=${String(req.query[key])}`)
+    .join('&');
+  const key = `${TASK_LIST_CACHE_PREFIX}${String(req.user?._id || req.user?.id)}|${view}|${query}`;
+  const cached = getCached(key);
+  if (cached) return Promise.resolve(cached);
+  if (pendingTaskLists.has(key)) return pendingTaskLists.get(key);
+
+  const build = (async () => {
+    const {
+      fetchPersonalTaskList,
+      fetchAssignedToMeTaskList,
+      fetchAssignedClientTaskList,
+      fetchAssignedProjectTaskList
+    } = require('./taskHelper');
+    const list = view === 'all'
+      ? (await Promise.all([
+        fetchPersonalTaskList(req, { includeCreatedForOthers: true }),
+        fetchAssignedToMeTaskList(req),
+        fetchAssignedClientTaskList(req),
+        fetchAssignedProjectTaskList(req)
+      ])).flat()
+      : await fetchers[view](req);
+    return setCached(key, applyCleanListFilters(list, req), TASK_LIST_CACHE_TTL_MS);
+  })().finally(() => pendingTaskLists.delete(key));
+  pendingTaskLists.set(key, build);
+  return build;
+};
+
+exports.invalidateTaskListCache = () => invalidateCache(TASK_LIST_CACHE_PREFIX);
+
 exports.getAllMyTaskViews = async (req, res) => {
   try {
     const {
@@ -631,15 +677,7 @@ exports.getAllMyTaskViews = async (req, res) => {
     const view = requestedView === 'all' || Object.prototype.hasOwnProperty.call(fetchers, requestedView)
       ? requestedView
       : 'all';
-    const list = view === 'all'
-      ? (await Promise.all([
-        fetchPersonalTaskList(req, { includeCreatedForOthers: true }),
-        fetchAssignedToMeTaskList(req),
-        fetchAssignedClientTaskList(req),
-        fetchAssignedProjectTaskList(req)
-      ])).flat()
-      : await fetchers[view](req);
-    const filteredList = applyCleanListFilters(list, req);
+    const filteredList = await getMergedTaskList(req, view, fetchers);
     return sendCleanTaskList(res, filteredList, view, 'source-aware', req);
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
@@ -672,15 +710,7 @@ exports.getAllMyTaskStats = async (req, res) => {
     const view = requestedView === 'all' || Object.prototype.hasOwnProperty.call(fetchers, requestedView)
       ? requestedView
       : 'all';
-    const list = view === 'all'
-      ? (await Promise.all([
-        fetchPersonalTaskList(req, { includeCreatedForOthers: true }),
-        fetchAssignedToMeTaskList(req),
-        fetchAssignedClientTaskList(req),
-        fetchAssignedProjectTaskList(req)
-      ])).flat()
-      : await fetchers[view](req);
-    const filteredList = applyCleanListFilters(list, req);
+    const filteredList = await getMergedTaskList(req, view, fetchers);
     return res.json({ success: true, view, stats: calculateUnifiedTaskStats(filteredList) });
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });

@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { getCacheKey, getCached, setCached } = require("../utils/inMemoryCache");
 const Company = require("../models/Company");
 const Plan = require("../models/Plan");
 const User = require("../models/User");
@@ -298,7 +299,7 @@ const resolveTargetCompany = async (req) => {
   return null;
 };
 
-exports.getDynamicDashboardOverviewData = async (req, res) => {
+const buildDynamicDashboardOverview = async (req, res) => {
   try {
     const company = await resolveTargetCompany(req);
     if (!company) {
@@ -1029,6 +1030,52 @@ exports.getDynamicDashboardOverviewData = async (req, res) => {
   } catch (error) {
     console.error("getDynamicDashboardOverviewData error:", error);
     res.status(500).json({
+      success: false,
+      message: "Failed to generate dynamic dashboard overview data",
+      error: error.message,
+    });
+  }
+};
+
+// The overview runs ~20 company-wide queries and every admin's dashboard polls it. The payload
+// depends only on the company and on whether the viewer may see super-admin / payroll data,
+// so it is shared for 60 seconds per company and permission level; concurrent requests share
+// one computation.
+const OVERVIEW_CACHE_TTL_MS = 60 * 1000;
+const pendingOverviewBuilds = new Map();
+
+exports.getDynamicDashboardOverviewData = async (req, res) => {
+  try {
+    const company = await resolveTargetCompany(req);
+    if (!company) return buildDynamicDashboardOverview(req, res);
+
+    const key = getCacheKey("dashboard-overview", {
+      company: String(company._id),
+      superAdmin: req.user?.role === "super_admin",
+      payroll: canAccessSensitivePayroll(req.user),
+    });
+    const cached = getCached(key);
+    if (cached) return res.status(200).json(cached);
+
+    if (!pendingOverviewBuilds.has(key)) {
+      const build = (async () => {
+        let status = 200;
+        let body;
+        const capture = {
+          status(code) { status = code; return capture; },
+          json(payload) { body = payload; return capture; },
+        };
+        await buildDynamicDashboardOverview(req, capture);
+        if (status === 200 && body?.success) setCached(key, body, OVERVIEW_CACHE_TTL_MS);
+        return { status, body };
+      })().finally(() => pendingOverviewBuilds.delete(key));
+      pendingOverviewBuilds.set(key, build);
+    }
+    const { status, body } = await pendingOverviewBuilds.get(key);
+    return res.status(status).json(body);
+  } catch (error) {
+    console.error("getDynamicDashboardOverviewData error:", error);
+    return res.status(500).json({
       success: false,
       message: "Failed to generate dynamic dashboard overview data",
       error: error.message,
