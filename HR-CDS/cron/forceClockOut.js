@@ -300,18 +300,24 @@ const runAutoClockOutSweep = async () => {
     const now = new Date();
     const scanFrom = addIndiaDays(getIndiaDayStart(now), -2);
 
+    // Runs every minute over every company's clocked-in records: read plain objects, and look a
+    // job role's shift up once per sweep rather than once per record.
     const records = await Attendance.find({
       isClockedIn: true,
       outTime: null,
       inTime: { $ne: null, $gte: scanFrom }
     }).populate({
       path: 'user',
-      select: 'name email company jobRole shiftId shiftName shiftType companyCode',
-      populate: {
-        path: 'company',
-        select: 'companyCode companyName'
-      }
-    });
+      select: 'name email company jobRole shiftId shiftName shiftType companyCode'
+    }).lean();
+
+    const shiftLookups = new Map();
+    const resolveShiftOnce = (recordUser) => {
+      const companyId = recordUser?.company?._id || recordUser?.company || recordUser?.companyId || '';
+      const key = `${companyId}|${recordUser?.jobRole || ''}|${recordUser?.shiftId || ''}`;
+      if (!shiftLookups.has(key)) shiftLookups.set(key, resolveSelectedShiftSettings(recordUser));
+      return shiftLookups.get(key);
+    };
 
     let updated = 0;
 
@@ -322,7 +328,7 @@ const runAutoClockOutSweep = async () => {
 
         const shiftSettings = record.shiftStart && record.shiftEnd
           ? getRecordShiftSettings(record)
-          : await resolveSelectedShiftSettings(recordUser);
+          : await resolveShiftOnce(recordUser);
 
         if (!shiftSettings) continue;
 
@@ -334,8 +340,7 @@ const runAutoClockOutSweep = async () => {
         const hasApprovedOvertime = record.hasOvertimeApproved || (await isOvertimeApprovedForUserDate(recordUser._id, record.inTime || record.date || now));
         if (hasApprovedOvertime) {
           if (!record.hasOvertimeApproved) {
-            record.hasOvertimeApproved = true;
-            await record.save();
+            await Attendance.updateOne({ _id: record._id }, { $set: { hasOvertimeApproved: true } });
           }
           // User continues their overtime shift without being automatically forced out
           continue;

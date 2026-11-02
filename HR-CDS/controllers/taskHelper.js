@@ -645,6 +645,27 @@ const applyCleanListFilters = (tasks, req) => {
   });
 };
 
+// statusHistory can hold thousands of entries per task. List screens only read the last entry
+// (status-change date) and the newest "completed" entry (completion date); the full history is
+// served by the task activity endpoints. Keep the last 10 entries plus that completed entry.
+const LIST_STATUS_HISTORY_LIMIT = 10;
+const isCompletionHistoryEntry = entry =>
+  normalizeTaskStatus(entry?.status || entry?.newValue || entry?.newValues?.status) === 'completed'
+  || String(entry?.remarks || '').toLowerCase().includes('completed');
+const trimStatusHistoryForList = task => {
+  const history = Array.isArray(task?.statusHistory) ? task.statusHistory : null;
+  if (!history || history.length <= LIST_STATUS_HISTORY_LIMIT) return task;
+  const keep = new Set(history.slice(-LIST_STATUS_HISTORY_LIMIT));
+  let latestCompletion = null;
+  for (const entry of history) {
+    if (!isCompletionHistoryEntry(entry)) continue;
+    const time = new Date(entry.changedAt || entry.updatedAt || 0).getTime();
+    if (!latestCompletion || time > latestCompletion.time) latestCompletion = { entry, time };
+  }
+  if (latestCompletion) keep.add(latestCompletion.entry);
+  return { ...task, statusHistory: history.filter(entry => keep.has(entry)) };
+};
+
 const sendCleanTaskList = (res, tasks, view, dateField = 'createdAt', req = null) => {
   const safeReportDate = task => {
     try { return getTaskReportDate(task); } catch { return null; }
@@ -661,7 +682,7 @@ const sendCleanTaskList = (res, tasks, view, dateField = 'createdAt', req = null
     .sort((a, b) => (timeOf(b.reportDate) - timeOf(a.reportDate)) || (timeOf(b.createdAt) - timeOf(a.createdAt)));
   const shouldPaginate = req && !['true', '1', 'yes'].includes(String(req.query?.all || req.query?.noPagination || '').toLowerCase());
   const pagination = shouldPaginate ? paginateTasks(sortedTasks, req) : null;
-  const responseTasks = pagination ? pagination.tasks : sortedTasks;
+  const responseTasks = (pagination ? pagination.tasks : sortedTasks).map(trimStatusHistoryForList);
 
   return res.json({
     success: true,
@@ -1007,6 +1028,7 @@ module.exports = {
   sendTaskCreationEmail,
   applyCleanListFilters,
   sendCleanTaskList,
+  trimStatusHistoryForList,
   normalizeProjectTaskStatus,
   getProjectTaskAssignedBy,
   getTaskCompletionDate,

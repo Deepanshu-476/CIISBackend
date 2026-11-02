@@ -35,16 +35,6 @@ const getSocketOnlineUserIds = (companyId) => {
   return onlineIds;
 };
 
-const isRecentlyOnlineInDb = (user) => {
-  if (!user?.isOnline) return false;
-  if (!user.lastSeen) return true;
-
-  const lastSeenTime = new Date(user.lastSeen).getTime();
-  if (Number.isNaN(lastSeenTime)) return true;
-
-  return Date.now() - lastSeenTime < 30 * 1000;
-};
-
 const validateAssignableDepartment = async (departmentId, companyId) => {
   const department = await Department.findById(departmentId);
 
@@ -108,7 +98,7 @@ const getUserPresence = (user, socketOnlineIds) => {
   const userId = user?._id?.toString() || user?.id?.toString();
 
   return {
-    isOnline: Boolean(userId && socketOnlineIds.has(userId)) || isRecentlyOnlineInDb(user),
+    isOnline: Boolean(userId && socketOnlineIds.has(userId)),
     lastSeen: user?.lastSeen || null,
   };
 };
@@ -217,7 +207,7 @@ const sanitizeUserRecordForList = (userObj = {}, req = {}) => {
   if (requesterId && targetId && requesterId === targetId) {
     return userObj;
   }
-  if (includeSensitive && isPrivilegedPiiViewer(req?.user)) {
+  if (req?.allowSensitiveEmployeeDetails === true || (includeSensitive && isPrivilegedPiiViewer(req?.user))) {
     return userObj;
   }
   const cloned = { ...userObj };
@@ -232,6 +222,27 @@ const sanitizeUserRecordForList = (userObj = {}, req = {}) => {
     cloned.additionalDetails = safeAdditional;
   }
   return cloned;
+};
+
+const canViewSensitiveEmployeeDetails = async (user = {}) => {
+  const companyId = user.company?._id || user.company || user.companyId;
+  const userId = user._id || user.id;
+  if (!companyId || !userId) return false;
+
+  const permission = await PagePermission.findOne({
+    company: companyId,
+    $or: [
+      { path: '/ciisUser/emp-details' },
+      { pageKey: 'emp-details' }
+    ]
+  }).select('viewUsers editUsers').lean();
+
+  if (!permission) return false;
+  const targetId = String(userId);
+  return [
+    ...(permission.viewUsers || []),
+    ...(permission.editUsers || [])
+  ].some(entry => String(entry?.user || entry) === targetId);
 };
 
 const appendAndCondition = (filter, condition) => {
@@ -2458,12 +2469,19 @@ exports.getCompanyUsers = async (req, res) => {
     if (!shouldIncludeInactiveUsers(req.query)) {
       filter.isActive = { $ne: false };
     }
+    // ?userId= returns one employee; the directory loads family/bank details this way only
+    // when one is opened, instead of for the whole company with the list.
+    if (req.query.userId && mongoose.Types.ObjectId.isValid(String(req.query.userId))) {
+      filter._id = String(req.query.userId);
+    }
     applyBranchAccessFilter(filter, req);
 
     const taskOverviewView = String(req.query.view || '').toLowerCase() === 'task-overview';
     const userProjection = taskOverviewView
       ? 'name email phone role companyRole jobRole employeeType employeeId company companyCode department branch assignedBranches isActive status createdAt'
-      : '-password -resetToken -resetTokenExpiry';
+      // Lists never show the registration review, chat/notification settings (each user loads
+      // their own from the profile) or account-security fields; verificationToken must not leak.
+      : '-password -resetToken -resetTokenExpiry -verificationToken -loginAttempts -lockUntil -registrationVerification -chatSettings -notificationPreferences';
 
     const users = await User.find(filter)
       .select(userProjection)

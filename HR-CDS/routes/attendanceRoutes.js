@@ -107,6 +107,7 @@ router.get('/status', protect, attendanceController.getTodayStatus);
 router.get('/list', protect, attendanceController.getAttendanceList);
 
 router.get('/all', protect, checkAttendanceAccess('view'), attendanceController.getAllUsersAttendance);
+router.post('/preview', protect, checkAttendanceAccess('view'), attendanceController.previewAttendance);
 router.post('/manual', protect, checkAttendanceAccess('edit'), attendanceController.createManualAttendance);
 router.put('/:id', protect, checkAttendanceAccess('edit'), attendanceController.updateAttendanceRecord);
 router.delete('/:id', protect, checkAttendanceAccess('delete'), attendanceController.deleteAttendanceRecord);
