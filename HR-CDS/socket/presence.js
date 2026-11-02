@@ -1,7 +1,7 @@
 const getCompanyOnlineUsers = async (io, companyId) => {
   if (!companyId) return [];
   const sockets = await io.in(`company:${companyId}`).fetchSockets();   // all servers
-  return [...new Set(sockets.map(s => s.data?.userId).filter(Boolean).map(String))];
+  return [...new Set(sockets.map(s => s.data?.userId || s.userId).filter(Boolean).map(String))];
 };
 
 const isUserOnline = async (io, userId) => {
