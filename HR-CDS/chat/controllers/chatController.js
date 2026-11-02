@@ -146,27 +146,14 @@ const getRawCompanyId = company => {
   return company.toString();
 };
 
-const getSocketOnlineUserIds = (companyId) => {
-  const onlineIds = new Set();
-  const companyKey = getRawCompanyId(companyId);
-
-  if (!global.io?.sockets?.sockets) return onlineIds;
-
-  global.io.sockets.sockets.forEach(socket => {
-    const socketUserId = (socket.userId || socket.data?.userId)?.toString();
-    const socketCompanyId = getRawCompanyId(socket.companyId);
-
-    if (!socketUserId) return;
-    if (companyKey && socketCompanyId && socketCompanyId !== companyKey) return;
-
-    onlineIds.add(socketUserId);
-  });
-
-  return onlineIds;
+// Cluster-wide (via the Redis adapter): app and web users connect to different backend processes.
+const getSocketOnlineUserIds = async (companyId) => {
+  if (!global.io) return new Set();
+  return new Set((await getCompanyOnlineUsers(global.io, getRawCompanyId(companyId))).map(String));
 };
 
-const getDeliveredMemberIds = (conversation, senderId) => {
-  const onlineIds = getSocketOnlineUserIds(conversation.companyId);
+const getDeliveredMemberIds = async (conversation, senderId) => {
+  const onlineIds = await getSocketOnlineUserIds(conversation.companyId);
   return (conversation.members || [])
     .map(member => member.toString())
     .filter(memberId => memberId !== senderId)
@@ -522,7 +509,7 @@ exports.sendMessage = async (req, res) => {
 
     const duration = DISAPPEARING_DURATIONS[conversation.disappearingMode];
     const expiresAt = duration ? new Date(Date.now() + duration) : null;
-    const deliveredTo = getDeliveredMemberIds(conversation, senderId);
+    const deliveredTo = await getDeliveredMemberIds(conversation, senderId);
 
     const message = await Message.create({
       companyId: req.user.company,
@@ -1037,7 +1024,7 @@ exports.forwardMessage = async (req, res) => {
         });
       }
 
-      const deliveredTo = getDeliveredMemberIds(conversation, userId);
+      const deliveredTo = await getDeliveredMemberIds(conversation, userId);
 
       const message = await Message.create({
         companyId: req.user.company,
