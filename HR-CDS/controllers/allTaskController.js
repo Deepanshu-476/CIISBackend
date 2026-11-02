@@ -87,10 +87,12 @@ const applyBranchUserFilter = (query, req, currentUser = req.user || {}) => {
   if (!requestedBranch) {
     const accessibleBranchIds = getUserBranchIds(currentUser);
     if (!canViewAllBranchData(currentUser) && accessibleBranchIds.length > 0) {
-      return appendBranchCondition({ $or: [
-        { branch: { $in: accessibleBranchIds } },
-        { assignedBranches: { $in: accessibleBranchIds } }
-      ] });
+      return appendBranchCondition({
+        $or: [
+          { branch: { $in: accessibleBranchIds } },
+          { assignedBranches: { $in: accessibleBranchIds } }
+        ]
+      });
     }
     return query;
   }
@@ -102,10 +104,12 @@ const applyBranchUserFilter = (query, req, currentUser = req.user || {}) => {
     return query;
   }
 
-  return appendBranchCondition({ $or: [
-    { branch: requestedBranchId },
-    { assignedBranches: requestedBranchId }
-  ] });
+  return appendBranchCondition({
+    $or: [
+      { branch: requestedBranchId },
+      { assignedBranches: requestedBranchId }
+    ]
+  });
 };
 
 const escapeRegex = value => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
