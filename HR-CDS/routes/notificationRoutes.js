@@ -144,6 +144,25 @@ const loadScopedUsers = async (req, requestedScope, ids = []) => {
   return {access, users, query};
 };
 
+// Allow unregistering device tokens even if unauthenticated (e.g. app launched while logged out, or after logout)
+router.post('/devices/unregister', async (req, res) => {
+  try {
+    const deviceToken = req.body?.deviceToken || req.query?.deviceToken || req.params?.deviceToken;
+    if (!deviceToken) {
+      return res.status(400).json({success: false, message: 'deviceToken is required'});
+    }
+    const result = await Device.deleteMany({deviceToken});
+    return res.status(200).json({
+      success: true,
+      message: 'Device unregistered successfully',
+      deletedCount: result.deletedCount,
+    });
+  } catch (error) {
+    console.error('[FCM DEBUG] device-unregister:error', error);
+    return res.status(500).json({success: false, message: 'Device unregistration failed'});
+  }
+});
+
 router.use(protect);
 
 router.get('/', NotificationController.getMyNotifications);
@@ -324,11 +343,19 @@ router.post('/devices', async (req, res) => {
   }
 });
 
-router.delete('/devices/:deviceToken', async (req, res) => {
+const deleteDeviceHandler = async (req, res) => {
   try {
-    const result = await Device.deleteOne({userId: req.user._id, deviceToken: req.params.deviceToken});
-    void 0;
-    res.json({success: true});
+    const deviceToken = req.params?.deviceToken || req.body?.deviceToken || req.query?.deviceToken;
+    let query = {};
+    if (deviceToken) {
+      query.deviceToken = deviceToken;
+    } else if (req.user?._id) {
+      query.userId = req.user._id;
+    } else {
+      return res.status(400).json({success: false, message: 'deviceToken or user authentication required'});
+    }
+    const result = await Device.deleteMany(query);
+    res.json({success: true, deletedCount: result.deletedCount});
   } catch (error) {
     console.error('[FCM DEBUG] device-delete:error', {
       at: new Date().toISOString(),
@@ -337,7 +364,10 @@ router.delete('/devices/:deviceToken', async (req, res) => {
     });
     res.status(500).json({success: false, message: 'Device removal failed'});
   }
-});
+};
+
+router.delete('/devices', deleteDeviceHandler);
+router.delete('/devices/:deviceToken', deleteDeviceHandler);
 
 
 router.get('/preferences', async (req, res) => {

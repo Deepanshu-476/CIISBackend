@@ -9,7 +9,7 @@ const http = require('http');
 const socketIo = require('socket.io');
 const mongoose = require('mongoose');
 const { protect, restrictTo, invalidateAuthUser } = require("./middleware/authMiddleware");
-    
+
 dotenv.config();
 
 const requiredEnvVars = ["JWT_SECRET"];
@@ -137,8 +137,8 @@ const Holiday = require("./HR-CDS/models/Holiday");
 const User = require("./models/User");
 const Leave = require("./HR-CDS/models/Leave");
 require("./models/Company");
-const {notifyDirectUsers, sendSystemNotification} = require("./HR-CDS/utils/systemNotificationService");
-const {sendEmail} = require("./utils/sendEmail");
+const { notifyDirectUsers, sendSystemNotification } = require("./HR-CDS/utils/systemNotificationService");
+const { sendEmail } = require("./utils/sendEmail");
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const INITIAL_DB_JOB_DELAY_MS = Number(process.env.INITIAL_DB_JOB_DELAY_MS || 60000);
@@ -185,7 +185,7 @@ const isTransientMongoError = error => {
     /\bconnection\b.*\btimed out\b/.test(message);
 };
 
-const runDbJobWithRetry = async (label, job, {retries = 2, delayMs = 1000} = {}) => {
+const runDbJobWithRetry = async (label, job, { retries = 2, delayMs = 1000 } = {}) => {
   if (!isDbReady()) {
     console.warn(`⚠️ ${label} skipped: MongoDB not connected`, {
       readyState: mongoose.connection.readyState,
@@ -273,7 +273,7 @@ const formatTaskDueDate = dueDateTime => {
   });
 };
 
-const buildPendingTaskReminderEmail = ({userName, taskTitle, dueDateText}) => `
+const buildPendingTaskReminderEmail = ({ userName, taskTitle, dueDateText }) => `
   <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #1f2937; padding: 20px;">
     <h2 style="margin: 0 0 12px; color: #111827;">Pending Task Reminder</h2>
     <p>Hello <strong>${escapeHtml(userName || 'User')}</strong>,</p>
@@ -424,7 +424,7 @@ const io = socketIo(server, {
       }
     },
     credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"], 
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "X-Permanent-Delete", "x-company-code", "companyCode", "X-Company-Code"]
   },
   transports: ['websocket', 'polling'],
@@ -449,34 +449,34 @@ initializeSocket(io);
 const checkAndMarkOverdueTasks = async () => {
   try {
     void 0;
-    
+
     const now = new Date();
-    
-    
+
+
     const overdueTasks = await Task.find({
       dueDateTime: { $lt: now },
       isActive: true,
       $or: [
         { overallStatus: { $in: ['pending', 'in-progress', 'reopen'] } },
-        { 
+        {
           'statusByUser.status': { $in: ['pending', 'in-progress', 'reopen'] }
         }
       ]
     })
-    .populate('assignedUsers', 'name email companyCode company')
-    .populate('createdBy', 'name email companyCode company')
-    .sort({ dueDateTime: 1 })
-    .limit(MAX_CRON_TASK_BATCH_SIZE);
-    
+      .populate('assignedUsers', 'name email companyCode company')
+      .populate('createdBy', 'name email companyCode company')
+      .sort({ dueDateTime: 1 })
+      .limit(MAX_CRON_TASK_BATCH_SIZE);
+
     void 0;
-    
+
     let markedCount = 0;
     let notificationCount = 0;
-    
+
     for (const task of overdueTasks) {
       try {
         const wasUpdated = task.checkAndMarkOverdue();
-        
+
         if (wasUpdated) {
           if (!task.companyCode) {
             const companyCode = getTaskCompanyCode(task);
@@ -489,13 +489,13 @@ const checkAndMarkOverdueTasks = async () => {
 
           await task.save();
           markedCount++;
-          
-          
+
+
           for (const assignedUser of task.assignedUsers) {
             try {
-              
+
               const userId = assignedUser._id || assignedUser.id || assignedUser;
-              
+
               if (!userId) {
                 console.error('❌ Invalid user object:', assignedUser);
                 continue;
@@ -517,7 +517,7 @@ const checkAndMarkOverdueTasks = async () => {
                 },
                 priority: 'high',
               });
-              
+
               notificationCount++;
               void 0;
             } catch (notifyError) {
@@ -529,9 +529,9 @@ const checkAndMarkOverdueTasks = async () => {
         console.error(`Error processing task ${task._id}:`, taskError);
       }
     }
-    
+
     void 0;
-      
+
   } catch (error) {
     if (isTransientMongoError(error)) throw error;
     console.error('❌ Error in overdue tasks check:', error);
@@ -544,7 +544,7 @@ const sendPendingTaskReminders = async () => {
     const oneHourFromNow = new Date(now.getTime() + 60 * 60 * 1000);
     const tasks = await Task.find({
       isActive: true,
-      dueDateTime: {$gt: now, $lte: oneHourFromNow},
+      dueDateTime: { $gt: now, $lte: oneHourFromNow },
       'statusByUser.status': 'pending',
     })
       .populate('assignedUsers', 'name email')
@@ -579,7 +579,7 @@ const sendPendingTaskReminders = async () => {
             type: 'task_pending_reminder',
             title: 'Pending Task Reminder',
             message: `Your task "${task.title}" is still pending. Please complete it before the due time.`,
-            data: {taskId: task._id, taskTitle: task.title, dueDateTime: task.dueDateTime},
+            data: { taskId: task._id, taskTitle: task.title, dueDateTime: task.dueDateTime },
             priority: 'high',
           });
 
@@ -611,7 +611,7 @@ const sendPendingTaskReminders = async () => {
     }
   } catch (error) {
     if (isTransientMongoError(error)) throw error;
-    console.error('❌ Pending task reminder failed:'  , error.message);
+    console.error('❌ Pending task reminder failed:', error.message);
   }
 };
 
@@ -663,7 +663,7 @@ const sendConfiguredTaskReminders = async () => {
     const now = new Date();
     const tasks = await Task.find({
       isActive: true,
-      dueDateTime: {$gt: now},
+      dueDateTime: { $gt: now },
       'reminderSettings.enabled': true,
       overallStatus: { $nin: ['completed', 'approved', 'rejected', 'cancelled', 'overdue', 'onhold'] },
     })
@@ -705,8 +705,8 @@ const sendConfiguredTaskReminders = async () => {
     }
 
     const clientTasks = await ClientTask.find({
-      dueDate: {$gt: now},
-      completed: {$ne: true},
+      dueDate: { $gt: now },
+      completed: { $ne: true },
       status: { $nin: ['completed', 'overdue', 'onhold'] },
       'reminderSettings.enabled': true,
     })
@@ -737,7 +737,7 @@ const sendConfiguredTaskReminders = async () => {
 
     const projects = await Project.find({
       'tasks.reminderSettings.enabled': true,
-      'tasks.dueDate': {$gt: now},
+      'tasks.dueDate': { $gt: now },
     })
       .populate('tasks.assignedUsers', 'name email')
       .populate('tasks.assignedTo', 'name email')
@@ -787,7 +787,7 @@ const sendTomorrowHolidayReminders = async () => {
 
     const holidays = await Holiday.find({
       isActive: true,
-      date: {$gte: start, $lte: end},
+      date: { $gte: start, $lte: end },
     });
 
     for (const holiday of holidays) {
@@ -823,28 +823,28 @@ const attendanceController = require("./HR-CDS/controllers/AttendanceController"
 const dailyOverdueSummary = async () => {
   try {
     void 0;
-    
+
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
     yesterday.setHours(0, 0, 0, 0);
-    
+
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    
+
     const overdueTasks = await Task.find({
       markedOverdueAt: { $gte: yesterday, $lt: today },
       isActive: true
     })
-    .populate('assignedUsers', 'name email')
-    .limit(MAX_CRON_TASK_BATCH_SIZE)
-    .lean();
-    
+      .populate('assignedUsers', 'name email')
+      .limit(MAX_CRON_TASK_BATCH_SIZE)
+      .lean();
+
     if (overdueTasks.length > 0) {
       void 0;
     } else {
       void 0;
     }
-    
+
   } catch (error) {
     if (isTransientMongoError(error)) throw error;
     console.error('❌ Error in daily summary cron job:', error);
@@ -1017,8 +1017,8 @@ if (scheduledJobsEnabled()) setTimeout(async () => {
     await runDbJobOnce('Initial past absent records check', markPastAbsentRecords);
     await runDbJobOnce('Initial auto clock-out sweep', runAutoClockOutSweep);
     await runDbJobOnce('Initial auto reject expired leaves', autoRejectExpiredLeaves);
-    
-    
+
+
     try {
       const backfillBranchSupport = require("./scripts/backfillBranchSupport");
       await runDbJobOnce('Multi-branch database backfill migration', backfillBranchSupport);
@@ -1135,14 +1135,14 @@ uploadStaticDirs.forEach(uploadDir => {
 app.use("/api/uploads/chat", express.static(path.join(__dirname, "..", "uploads", "chat"), staticCacheOptions));
 app.use("/uploads/chat", express.static(path.join(__dirname, "..", "uploads", "chat"), staticCacheOptions));
 app.use(
-    "/uploads",
-    express.static(
-        path.join(
-            __dirname,
-            "uploads"
-        ),
-        staticCacheOptions
-    )
+  "/uploads",
+  express.static(
+    path.join(
+      __dirname,
+      "uploads"
+    ),
+    staticCacheOptions
+  )
 );
 
 
@@ -1273,7 +1273,7 @@ app.use('/api/superAdmin/company/:id/view', require('./routes/superAdminCompanyV
 app.use('/api/superAdmin', require("./routes/superAdmin.js"));
 app.use("/api/meetings", require("./HR-CDS/routes/meetingRoutes.js"));
 app.use('/api/cmeeting', require("./HR-CDS/routes/clientMeetingRoutes.js"));
-app.use('/api/sidebar', require("./routes/sidebarConfigs.js")); 
+app.use('/api/sidebar', require("./routes/sidebarConfigs.js"));
 app.use('/api/company-assets', require('./routes/companyAssetRoutes'));
 app.use("/api/holidays", require("./HR-CDS/routes/Holiday.js"));
 app.use("/api/client-documents", require("./HR-CDS/routes/clientDocumentRoutes.js"));
@@ -1305,7 +1305,7 @@ app.get("/", (req, res) => {
 
 
 app.get("/api", (req, res) => {
-  res.json({ 
+  res.json({
     message: "✅ API is live",
     status: "running",
     socket: global.io ? "connected" : "disconnected",
@@ -1329,7 +1329,7 @@ app.get("/api/socket-status", protect, restrictTo("super_admin"), sensitiveActio
       rooms: global.io?.sockets?.adapter?.rooms?.size || 0,
       redis: getRedis() ? "connected" : "off"
     };
-    
+
     res.json({
       success: true,
       data: socketStatus,
@@ -1348,15 +1348,15 @@ app.get("/api/manual-overdue-check", protect, restrictTo("super_admin"), sensiti
   try {
     void 0;
     await checkAndMarkOverdueTasks();
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: "Manual overdue check completed",
       timestamp: new Date().toISOString()
     });
   } catch (error) {
     console.error('❌ Error in manual overdue check:', error);
     res.status(500).json({ error: "Manual overdue check failed" });
-  } 
+  }
 });
 
 
@@ -1364,8 +1364,8 @@ app.get("/api/manual-attendance-check", protect, restrictTo("super_admin"), sens
   try {
     void 0;
     await markDailyAbsent();
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: "Manual attendance check completed",
       timestamp: new Date().toISOString()
     });
@@ -1397,7 +1397,7 @@ app.get("/api/tasks/test", (req, res) => {
 
 app.use((req, res) => {
   void 0;
-  res.status(404).json({ 
+  res.status(404).json({
     message: "Route not found",
     requested: `${req.method} ${req.originalUrl}`,
     available: "/api",
@@ -1413,8 +1413,8 @@ app.use((err, req, res, next) => {
     url: req.originalUrl,
     method: req.method
   });
-  
-  res.status(err.status || 500).json({ 
+
+  res.status(err.status || 500).json({
     error: "Internal server error",
     message: process.env.NODE_ENV === 'development' ? err.message : undefined,
     timestamp: new Date().toISOString()
@@ -1443,29 +1443,29 @@ const startServer = async () => {
 
   server.listen(PORT, async () => {
 
-  // Temporarily enabled for work-anniversary email template testing.
-  if (scheduledJobsEnabled()) try {
-    const anniversarySummary = await runWorkAnniversaryEmails();
-    console.log("Startup work anniversary test completed:", anniversarySummary);
-  } catch (err) {
-    console.error("Startup work anniversary test failed:", err);
-  }
+    // Temporarily enabled for work-anniversary email template testing.
+    if (scheduledJobsEnabled()) try {
+      const anniversarySummary = await runWorkAnniversaryEmails();
+      console.log("Startup work anniversary test completed:", anniversarySummary);
+    } catch (err) {
+      console.error("Startup work anniversary test failed:", err);
+    }
 
-  try {
-    const migrateTenantIndexes = require("./utils/tenantIndexMigration");
-    await migrateTenantIndexes();
-  } catch (err) {
-    console.error("Failed to migrate tenant indexes:", err);
-  }
+    try {
+      const migrateTenantIndexes = require("./utils/tenantIndexMigration");
+      await migrateTenantIndexes();
+    } catch (err) {
+      console.error("Failed to migrate tenant indexes:", err);
+    }
 
-  
-  // Re-schedules reminders for every upcoming meeting; only the instance that runs scheduled jobs does this.
-  if (scheduledJobsEnabled()) try {
-    const { initMeetingScheduler } = require("./services/meetingSchedulerService");
-    initMeetingScheduler();
-  } catch (err) {
-    console.error("Failed to initialize meeting scheduler:", err);
-  }
+
+    // Re-schedules reminders for every upcoming meeting; only the instance that runs scheduled jobs does this.
+    if (scheduledJobsEnabled()) try {
+      const { initMeetingScheduler } = require("./services/meetingSchedulerService");
+      initMeetingScheduler();
+    } catch (err) {
+      console.error("Failed to initialize meeting scheduler:", err);
+    }
 
     void 0;
   });
