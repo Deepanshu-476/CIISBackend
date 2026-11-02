@@ -222,6 +222,24 @@ const typedActionSchema = z.discriminatedUnion('type', [
     assigneeId: z.string().optional(),
     department: z.string().optional(),
   }),
+  z.object({
+    type: z.literal('finish_more_details'),
+  }),
+  z.object({
+    type: z.literal('select_details_group'),
+    group: z.string().optional(),
+    value: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal('finish_details_group'),
+    group: z.string().optional(),
+    value: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal('skip_client_field'),
+    field: z.string().optional(),
+    value: z.string().optional(),
+  }),
 ]);
 
 const objectActionSchema = z.object({
