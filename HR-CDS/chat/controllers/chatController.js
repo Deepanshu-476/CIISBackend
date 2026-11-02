@@ -676,33 +676,6 @@ exports.getMessages = async (req, res) => {
       })
       .filter(Boolean);
 
-    // Time taken before marking so a message arriving meanwhile stays unread.
-    const readAt = new Date();
-    await recordConversationRead(
-      {
-        conversationId: req.params.id,
-        companyId: req.user.company,
-        sender: {$ne: userId},
-        ...activeMessageFilter(),
-      },
-      userId,
-      readAt
-    );
-    await setReadMark(conversation._id, userId, readAt);
-    conversation.readState = (await Conversation.findById(conversation._id).select("readState").lean())?.readState || [];
-
-    await emitUnreadCounts(conversation, userId, {onlyUserId: userId});
-
-    if (global.io) {
-      newlySeenMessages.forEach(message => {
-        global.io.to(`user:${message.senderId}`).emit("chat:message-seen", {
-          messageId: message.messageId,
-          conversationId: conversation._id,
-          seenBy: userId,
-        });
-      });
-    }
-
     res.status(200).json({
       success: true,
       messages: normalizedMessages,
@@ -713,6 +686,37 @@ exports.getMessages = async (req, res) => {
         nextAfter: normalizedMessages.length ? normalizedMessages[normalizedMessages.length - 1].createdAt : null,
       },
     });
+
+    // Marking the thread read (receipts, read mark, unread counts, seen events) used to run
+    // before the response, so every chat open waited on it. The reader gets the page first.
+    (async () => {
+      // Time taken before marking so a message arriving meanwhile stays unread.
+      const readAt = new Date();
+      await recordConversationRead(
+        {
+          conversationId: req.params.id,
+          companyId: req.user.company,
+          sender: {$ne: userId},
+          ...activeMessageFilter(),
+        },
+        userId,
+        readAt
+      );
+      await setReadMark(conversation._id, userId, readAt);
+      conversation.readState = (await Conversation.findById(conversation._id).select("readState").lean())?.readState || [];
+
+      await emitUnreadCounts(conversation, userId, {onlyUserId: userId});
+
+      if (global.io) {
+        newlySeenMessages.forEach(message => {
+          global.io.to(`user:${message.senderId}`).emit("chat:message-seen", {
+            messageId: message.messageId,
+            conversationId: conversation._id,
+            seenBy: userId,
+          });
+        });
+      }
+    })().catch(error => console.error("[chat] mark read failed:", error.message));
   } catch (error) {
     res.status(500).json({success: false, message: error.message});
   }
