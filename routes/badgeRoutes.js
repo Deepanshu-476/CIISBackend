@@ -9,12 +9,40 @@ const { getOrSetCached, setCached } = require('../utils/inMemoryCache');
 const routers = {
   selfTasks: require('../HR-CDS/routes/selfTaskRoute.js'),
   assignedTasks: require('../HR-CDS/routes/assignedTaskRoute.js'),
-  assets: require('../HR-CDS/routes/assetRequestRoutes.js'),
-  meetings: require('../HR-CDS/routes/meetingRoutes.js'),
   alerts: require('../HR-CDS/routes/alertRoutes.js'),
-  leaves: require('../HR-CDS/routes/LeaveRoutes.js'),
   crmAdmin: require('./adminCallRoutes.js'),
 };
+const AssetRequest = require('../HR-CDS/models/AssetRequest');
+const Leave = require('../HR-CDS/models/Leave');
+const Meeting = require('../HR-CDS/models/Meeting');
+const { autoRejectExpiredLeaves } = require('../HR-CDS/controllers/LeaveController');
+
+// Assets, leaves and meetings used to load the user's full lists (with populates) only to
+// count them. These count the same records directly: the user's own pending asset requests,
+// their pending leaves (after expiring old ones, as the leave list does) and the meetings
+// they attend that have not started yet. The leave and meeting lists were also capped at one
+// page, so users with many records got too-low counts.
+const countOrNull = promise => promise.catch(error => {
+  console.error('Badge count failed:', error.message);
+  return null;
+});
+
+const countPendingAssets = req => countOrNull(AssetRequest.countDocuments({
+  user: req.user._id,
+  companyCode: req.user.companyCode,
+  status: /^pending$/i,
+}));
+
+const countPendingLeaves = req => countOrNull((async () => {
+  await autoRejectExpiredLeaves({ user: req.user._id });
+  return Leave.countDocuments({ user: req.user._id, status: /^pending$/i });
+})());
+
+const countUpcomingMeetings = (req, userId) => countOrNull(Meeting.countDocuments({
+  attendees: userId,
+  companyCode: req.user?.companyCode || req.user?.company?.companyCode || '',
+  date: { $gte: new Date() },
+}));
 
 const BADGE_TTL_MS = 30 * 1000;
 
@@ -26,11 +54,6 @@ const pendingFromStats = body => {
   return null;
 };
 
-const records = (body, keys = []) => {
-  const candidates = [body, body?.data, ...keys.flatMap(key => [body?.[key], body?.data?.[key]])];
-  return candidates.find(Array.isArray) || [];
-};
-
 const ok = result => result && result.status < 400 && result.body !== undefined;
 
 const buildCounts = async (req, includeCrm) => {
@@ -38,10 +61,10 @@ const buildCounts = async (req, includeCrm) => {
   const [selfTasks, assignedTasks, assets, meetings, alerts, leaves, crm] = await Promise.all([
     internalGet(routers.selfTasks, req, '/stats'),
     internalGet(routers.assignedTasks, req, '/to-me/stats'),
-    internalGet(routers.assets, req, '/my-requests'),
-    internalGet(routers.meetings, req, `/user/${userId}?page=1&limit=100`),
+    countPendingAssets(req),
+    countUpcomingMeetings(req, userId),
     internalGet(routers.alerts, req, '/unread/count?mine=1'),
-    internalGet(routers.leaves, req, '/status'),
+    countPendingLeaves(req),
     includeCrm ? internalGet(routers.crmAdmin, req, '/dashboard') : Promise.resolve(null),
   ]);
 
@@ -51,22 +74,9 @@ const buildCounts = async (req, includeCrm) => {
   if (selfPending !== null || assignedPending !== null) {
     counts.tasks = Math.max(0, selfPending || 0) + Math.max(0, assignedPending || 0);
   }
-  if (ok(assets)) {
-    counts.assets = records(assets.body, ['requests']).filter(item => String(item?.status || '').toLowerCase() === 'pending').length;
-  }
-  if (ok(leaves)) {
-    counts.leaves = records(leaves.body, ['leaves']).filter(item => String(item?.status || '').toLowerCase() === 'pending').length;
-  }
-  if (ok(meetings)) {
-    const now = Date.now();
-    counts.meetings = records(meetings.body, ['meetings']).filter(meeting => {
-      const status = String(meeting?.status || '').toLowerCase();
-      if (['completed', 'closed', 'cancelled', 'canceled'].includes(status)) return false;
-      const dateValue = meeting?.meetingDate || meeting?.date || meeting?.startDate || meeting?.scheduledAt;
-      const timestamp = dateValue ? new Date(dateValue).getTime() : NaN;
-      return Number.isNaN(timestamp) || timestamp >= now;
-    }).length;
-  }
+  if (typeof assets === 'number') counts.assets = assets;
+  if (typeof leaves === 'number') counts.leaves = leaves;
+  if (typeof meetings === 'number') counts.meetings = meetings;
   if (ok(alerts) && typeof alerts.body?.count === 'number') counts.alerts = alerts.body.count;
   if (crm && ok(crm)) {
     const metrics = crm.body?.metrics || {};

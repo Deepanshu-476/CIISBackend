@@ -48,6 +48,9 @@ const authSocket = async (socket, next) => {
     socket.user = user;
     socket.userId = user._id.toString();
     socket.companyId = user.company?._id?.toString() || user.company?.toString() || user.companyId?.toString();
+    socket.data.userId = socket.userId;
+    socket.data.companyId = socket.companyId;
+    socket.data.user = { _id: socket.userId, name: user.name, avatar: user.avatar || user.profileImage || '' };
     next();
   } catch (error) {
     console.error('❌ Socket auth error:', error.message);
