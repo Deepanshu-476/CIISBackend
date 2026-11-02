@@ -155,6 +155,9 @@ async function parseTaskRequest({
     team: Array.isArray(draft?.team) ? [...draft.team] : [],
     moreDetailsDone: Boolean(draft?.moreDetailsDone),
     activeDetailsGroup: draft?.activeDetailsGroup ?? null,
+    activeGroupField: draft?.activeGroupField ?? null,
+    completedDetailsGroups: Array.isArray(draft?.completedDetailsGroups) ? [...draft.completedDetailsGroups] : [],
+    skippedDetailsFields: Array.isArray(draft?.skippedDetailsFields) ? [...draft.skippedDetailsFields] : [],
     industry: draft?.industry ?? null,
     gst: draft?.gst ?? null,
     pan: draft?.pan ?? null,
@@ -164,6 +167,9 @@ async function parseTaskRequest({
     country: draft?.country ?? null,
     pincode: draft?.pincode ?? null,
     notes: draft?.notes ?? null,
+    _lastReply: draft?._lastReply ?? null,
+    _lastChipsKey: draft?._lastChipsKey ?? null,
+    _lastUserMsg: draft?._lastUserMsg ?? null,
   };
 
   // Snapshot initially filled fields before turn execution
@@ -184,6 +190,23 @@ async function parseTaskRequest({
     startDate: Boolean(draft?.startDate),
     endDate: Boolean(draft?.endDate),
     members: Boolean(Array.isArray(draft?.members) && draft.members.length > 0),
+    client: Boolean(draft?.client && String(draft.client).trim()),
+    company: Boolean(draft?.company && String(draft.company).trim()),
+    city: Boolean(draft?.city && String(draft.city).trim()),
+    projectManager: Boolean((Array.isArray(draft?.projectManager) && draft.projectManager.length > 0) || (Array.isArray(draft?.team) && draft.team.length > 0)),
+    team: Boolean((Array.isArray(draft?.team) && draft.team.length > 0) || (Array.isArray(draft?.projectManager) && draft.projectManager.length > 0)),
+    email: Boolean(draft?.email && String(draft.email).trim()),
+    phone: Boolean(draft?.phone && String(draft.phone).trim()),
+    industry: Boolean(draft?.industry && String(draft.industry).trim()),
+    gst: Boolean(draft?.gst && String(draft.gst).trim()),
+    pan: Boolean(draft?.pan && String(draft.pan).trim()),
+    website: Boolean(draft?.website && String(draft.website).trim()),
+    address: Boolean(draft?.address && String(draft.address).trim()),
+    state: Boolean(draft?.state && String(draft.state).trim()),
+    country: Boolean(draft?.country && String(draft.country).trim()),
+    pincode: Boolean(draft?.pincode && String(draft.pincode).trim()),
+    notes: Boolean(draft?.notes && String(draft.notes).trim()),
+    description_client: Boolean(draft?.description && String(draft.description).trim()),
   };
 
   const initialValues = {
@@ -396,6 +419,46 @@ async function parseTaskRequest({
         actionHandled = true;
         break;
       }
+      case 'finish_more_details': {
+        currentDraft.moreDetailsDone = true;
+        currentDraft.activeDetailsGroup = null;
+        currentDraft.activeGroupField = null;
+        actionHandled = true;
+        break;
+      }
+      case 'select_details_group': {
+        const pickedGroup = action.group || action.value;
+        if (pickedGroup) {
+          currentDraft.activeDetailsGroup = pickedGroup;
+          currentDraft.activeGroupField = null;
+        }
+        actionHandled = true;
+        break;
+      }
+      case 'finish_details_group': {
+        if (!Array.isArray(currentDraft.completedDetailsGroups)) {
+          currentDraft.completedDetailsGroups = [];
+        }
+        const groupToFinish = action.group || currentDraft.activeDetailsGroup;
+        if (groupToFinish && !currentDraft.completedDetailsGroups.includes(groupToFinish)) {
+          currentDraft.completedDetailsGroups.push(groupToFinish);
+        }
+        currentDraft.activeDetailsGroup = null;
+        currentDraft.activeGroupField = null;
+        actionHandled = true;
+        break;
+      }
+      case 'skip_client_field': {
+        if (!Array.isArray(currentDraft.skippedDetailsFields)) {
+          currentDraft.skippedDetailsFields = [];
+        }
+        const f = action.field || currentDraft.activeGroupField;
+        if (f && !currentDraft.skippedDetailsFields.includes(f)) {
+          currentDraft.skippedDetailsFields.push(f);
+        }
+        actionHandled = true;
+        break;
+      }
       case 'set':
         if (action.field === 'taskFor') {
           if (action.value === 'project') {
@@ -545,6 +608,21 @@ async function parseTaskRequest({
         break;
       case 'skip': {
         const targetField = action.field || lastAskedField;
+        if (targetField === 'more_details') {
+          currentDraft.moreDetailsDone = true;
+          currentDraft.activeDetailsGroup = null;
+          currentDraft.activeGroupField = null;
+          actionHandled = true;
+          break;
+        }
+        if (currentDraft.activeGroupField && (targetField === currentDraft.activeGroupField || targetField === 'skip')) {
+          if (!Array.isArray(currentDraft.skippedDetailsFields)) currentDraft.skippedDetailsFields = [];
+          if (!currentDraft.skippedDetailsFields.includes(currentDraft.activeGroupField)) {
+            currentDraft.skippedDetailsFields.push(currentDraft.activeGroupField);
+          }
+          actionHandled = true;
+          break;
+        }
         if (targetField) {
           if (targetField === 'title') {
             currentDraft.title = null;
@@ -745,11 +823,26 @@ async function parseTaskRequest({
   });
 
   if (detectedIntentResult.isAmbiguous) {
+    let rep = detectedIntentResult.question;
+    const chipsKey = (detectedIntentResult.chips || []).map((c) => c.label).sort().join('|');
+    if (
+      currentDraft._lastReply === rep &&
+      currentDraft._lastChipsKey === chipsKey &&
+      rawMessage &&
+      currentDraft._lastUserMsg &&
+      rawMessage.trim().toLowerCase() !== currentDraft._lastUserMsg.trim().toLowerCase()
+    ) {
+      rep = `Mujhe samajh nahi aaya. ${rep}`;
+    }
+    currentDraft._lastReply = rep;
+    currentDraft._lastChipsKey = chipsKey;
+    currentDraft._lastUserMsg = rawMessage ? rawMessage.trim() : '';
+
     return {
       success: true,
       status: 'needs_input',
       field: 'intent',
-      reply: detectedIntentResult.question,
+      reply: rep,
       speech: 'क्या यह टास्क किसी प्रोजेक्ट के अंदर बनाना है या सामान्य टास्क?',
       speakText: 'Kya yeh task kisi project ke andar banana hai ya normal task?',
       draft: currentDraft,
@@ -1315,69 +1408,135 @@ async function parseTaskRequest({
               if (!currentDraft.asked.includes('projectManager')) currentDraft.asked.push('projectManager');
             }
           }
-        } else if (lastAskedField === 'more_details') {
-          if (/^(?:nahi|bas|no|nahi\s*bas|nahi\s*dena|done|khatam|skip|chhod\s*do)/i.test(trimmedMessage)) {
+        } else if (lastAskedField === 'more_details' || currentDraft.activeDetailsGroup) {
+          const isFinishDetailsMsg = /^(?:nahi[\s,]*bas|bas|nahi|nahin|nahin[\s,]*bas|koi\s*nahi|done|khatam|no|नहीं[\s,]*बस|बस|नहीं|कोई\s*नहीं|हो\s*गया)$/i.test(trimmedMessage);
+          if (isFinishDetailsMsg) {
             currentDraft.moreDetailsDone = true;
-            actionHandled = true;
-          } else if (/contact/i.test(trimmedMessage)) {
-            currentDraft.activeDetailsGroup = 'contact';
-            actionHandled = true;
-          } else if (/business/i.test(trimmedMessage)) {
-            currentDraft.activeDetailsGroup = 'business';
-            actionHandled = true;
-          } else if (/address/i.test(trimmedMessage)) {
-            currentDraft.activeDetailsGroup = 'address';
-            actionHandled = true;
-          } else if (/notes/i.test(trimmedMessage)) {
-            currentDraft.activeDetailsGroup = 'notes';
-            actionHandled = true;
-          }
-        } else if (currentDraft.activeDetailsGroup) {
-          // Answering active details group
-          if (/^(?:chhod\s*do|skip|nahi|bas)/i.test(trimmedMessage)) {
             currentDraft.activeDetailsGroup = null;
+            currentDraft.activeGroupField = null;
             actionHandled = true;
-          } else {
-            const cSlots = extractCreateClientSlots(trimmedMessage);
-            if (currentDraft.activeDetailsGroup === 'contact') {
-              if (cSlots.email) {
-                if (isValidEmail(cSlots.email)) currentDraft.email = cSlots.email;
-                else notices.push('Email format galat hai. Udaharan: name@example.com.');
-              }
-              if (cSlots.phone) {
-                if (isValidPhone(cSlots.phone)) currentDraft.phone = cleanPhone(cSlots.phone);
-                else notices.push('Phone number 10 digits ka hona chahiye (udaharan: 9876543210).');
-              }
+          } else if (!currentDraft.activeDetailsGroup && /\b(?:contact|sampark|सम्पर्क|संपर्क)\b/i.test(trimmedMessage)) {
+            currentDraft.activeDetailsGroup = 'contact';
+            currentDraft.activeGroupField = null;
+            actionHandled = true;
+          } else if (!currentDraft.activeDetailsGroup && /\b(?:business|vyapar|व्यापार|बिज़नेस|बिजनेस)\b/i.test(trimmedMessage)) {
+            currentDraft.activeDetailsGroup = 'business';
+            currentDraft.activeGroupField = null;
+            actionHandled = true;
+          } else if (!currentDraft.activeDetailsGroup && /\b(?:address|pata|पता|एड्रेस)\b/i.test(trimmedMessage)) {
+            currentDraft.activeDetailsGroup = 'address';
+            currentDraft.activeGroupField = null;
+            actionHandled = true;
+          } else if (!currentDraft.activeDetailsGroup && /\b(?:notes?|description|विवरण|नोट्स)\b/i.test(trimmedMessage)) {
+            currentDraft.activeDetailsGroup = 'notes';
+            currentDraft.activeGroupField = null;
+            actionHandled = true;
+          } else if (currentDraft.activeDetailsGroup) {
+            const group = currentDraft.activeDetailsGroup;
+            const field = currentDraft.activeGroupField;
+            if (/^(?:chhod\s*do|chhod|leave|khatam)/i.test(trimmedMessage)) {
+              if (!Array.isArray(currentDraft.completedDetailsGroups)) currentDraft.completedDetailsGroups = [];
+              if (!currentDraft.completedDetailsGroups.includes(group)) currentDraft.completedDetailsGroups.push(group);
               currentDraft.activeDetailsGroup = null;
+              currentDraft.activeGroupField = null;
               actionHandled = true;
-            } else if (currentDraft.activeDetailsGroup === 'business') {
-              if (cSlots.industry) currentDraft.industry = cSlots.industry;
-              if (cSlots.gst) {
-                if (isValidGST(cSlots.gst)) currentDraft.gst = cSlots.gst.toUpperCase();
+            } else if (/^(?:skip|skip\s*karo|chhod\s*do|next)/i.test(trimmedMessage)) {
+              if (!Array.isArray(currentDraft.skippedDetailsFields)) currentDraft.skippedDetailsFields = [];
+              if (field && !currentDraft.skippedDetailsFields.includes(field)) currentDraft.skippedDetailsFields.push(field);
+              actionHandled = true;
+            } else {
+              const cSlots = extractCreateClientSlots(trimmedMessage);
+
+              if (field === 'email' || cSlots.email) {
+                const targetEmail = cSlots.email || (isValidEmail(trimmedMessage) ? trimmedMessage : null);
+                if (targetEmail) {
+                  if (isValidEmail(targetEmail)) currentDraft.email = targetEmail;
+                  else notices.push('Email format galat hai. Udaharan: name@example.com.');
+                }
+              }
+              if (field === 'phone' || cSlots.phone) {
+                const rawPhone = cSlots.phone || cleanPhone(trimmedMessage);
+                if (rawPhone && rawPhone.length === 10) {
+                  if (isValidPhone(rawPhone)) currentDraft.phone = rawPhone;
+                  else notices.push('Phone number 10 digits ka hona chahiye (udaharan: 9876543210).');
+                } else if (field === 'phone') {
+                  notices.push('Phone number 10 digits ka hona chahiye (udaharan: 9876543210).');
+                }
+              }
+              if (field === 'industry' || cSlots.industry) {
+                currentDraft.industry = cSlots.industry || trimmedMessage;
+              }
+              if (field === 'gst' || cSlots.gst) {
+                const rawGst = cSlots.gst || trimmedMessage.trim();
+                if (isValidGST(rawGst)) currentDraft.gst = rawGst.toUpperCase();
                 else notices.push('GST format galat hai (udaharan: 22AAAAA0000A1Z5).');
               }
-              if (cSlots.pan) {
-                if (isValidPAN(cSlots.pan)) currentDraft.pan = cSlots.pan.toUpperCase();
+              if (field === 'pan' || cSlots.pan) {
+                const rawPan = cSlots.pan || trimmedMessage.trim();
+                if (isValidPAN(rawPan)) currentDraft.pan = rawPan.toUpperCase();
                 else notices.push('PAN format galat hai (udaharan: ABCDE1234F).');
               }
-              if (cSlots.website) currentDraft.website = cSlots.website;
-              currentDraft.activeDetailsGroup = null;
-              actionHandled = true;
-            } else if (currentDraft.activeDetailsGroup === 'address') {
-              if (cSlots.address) currentDraft.address = cSlots.address;
-              if (cSlots.state) currentDraft.state = cSlots.state;
-              if (cSlots.pincode) {
-                if (isValidPincode(cSlots.pincode)) currentDraft.pincode = cSlots.pincode;
+              if (field === 'website' || cSlots.website) {
+                currentDraft.website = cSlots.website || trimmedMessage;
+              }
+              if (field === 'address' || cSlots.address) {
+                currentDraft.address = cSlots.address || trimmedMessage;
+              }
+              if (field === 'state' || cSlots.state) {
+                currentDraft.state = cSlots.state || trimmedMessage;
+              }
+              if (field === 'country' || cSlots.country) {
+                currentDraft.country = cSlots.country || trimmedMessage;
+              }
+              if (field === 'pincode' || cSlots.pincode) {
+                const rawPin = cSlots.pincode || trimmedMessage.trim();
+                if (isValidPincode(rawPin)) currentDraft.pincode = rawPin;
                 else notices.push('Pincode 6 digits ka hona chahiye (udaharan: 110001).');
               }
-              currentDraft.activeDetailsGroup = null;
-              actionHandled = true;
-            } else if (currentDraft.activeDetailsGroup === 'notes') {
-              if (cSlots.description) currentDraft.description = cSlots.description;
-              if (cSlots.notes) currentDraft.notes = cSlots.notes;
-              currentDraft.activeDetailsGroup = null;
+              if (field === 'description' || cSlots.description) {
+                currentDraft.description = cSlots.description || trimmedMessage;
+              }
+              if (field === 'notes' || cSlots.notes) {
+                currentDraft.notes = cSlots.notes || trimmedMessage;
+              }
+
+              if (cSlots.client && !currentDraft.client) currentDraft.client = cSlots.client;
+              if (cSlots.company && !currentDraft.company) currentDraft.company = cSlots.company;
+              if (cSlots.city && !currentDraft.city) currentDraft.city = cSlots.city;
+
               actionHandled = true;
             }
+
+            const groupFieldsMap = {
+              contact: ['email', 'phone'],
+              business: ['industry', 'gst', 'pan', 'website'],
+              address: ['address', 'state', 'country', 'pincode'],
+              notes: ['description', 'notes'],
+            };
+            const gFields = groupFieldsMap[group] || [];
+            const skipped = Array.isArray(currentDraft.skippedDetailsFields) ? currentDraft.skippedDetailsFields : [];
+            const remaining = gFields.filter(f => !currentDraft[f] && !skipped.includes(f));
+            if (remaining.length === 0) {
+              if (!Array.isArray(currentDraft.completedDetailsGroups)) currentDraft.completedDetailsGroups = [];
+              if (!currentDraft.completedDetailsGroups.includes(group)) currentDraft.completedDetailsGroups.push(group);
+              currentDraft.activeDetailsGroup = null;
+              currentDraft.activeGroupField = null;
+            }
+          } else {
+            const cSlots = extractCreateClientSlots(trimmedMessage);
+            if (cSlots.email && isValidEmail(cSlots.email)) currentDraft.email = cSlots.email;
+            if (cSlots.phone && isValidPhone(cSlots.phone)) currentDraft.phone = cleanPhone(cSlots.phone);
+            if (cSlots.industry) currentDraft.industry = cSlots.industry;
+            if (cSlots.gst && isValidGST(cSlots.gst)) currentDraft.gst = cSlots.gst.toUpperCase();
+            if (cSlots.pan && isValidPAN(cSlots.pan)) currentDraft.pan = cSlots.pan.toUpperCase();
+            if (cSlots.website) currentDraft.website = cSlots.website;
+            if (cSlots.address) currentDraft.address = cSlots.address;
+            if (cSlots.state) currentDraft.state = cSlots.state;
+            if (cSlots.country) currentDraft.country = cSlots.country;
+            if (cSlots.pincode && isValidPincode(cSlots.pincode)) currentDraft.pincode = cSlots.pincode;
+            if (cSlots.description) currentDraft.description = cSlots.description;
+            if (cSlots.notes) currentDraft.notes = cSlots.notes;
+            actionHandled = true;
           }
         } else {
           // Conversational or one-shot input
@@ -1928,13 +2087,28 @@ async function parseTaskRequest({
         currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'project');
       } else if (projRes.status === 'multiple') {
         if (!currentDraft.asked.includes('project')) currentDraft.asked.push('project');
+        let rep = projRes.reply;
+        const chipsKey = (projRes.chips || []).map((c) => c.label).sort().join('|');
+        if (
+          currentDraft._lastReply === rep &&
+          currentDraft._lastChipsKey === chipsKey &&
+          rawMessage &&
+          currentDraft._lastUserMsg &&
+          rawMessage.trim().toLowerCase() !== currentDraft._lastUserMsg.trim().toLowerCase()
+        ) {
+          rep = `Mujhe samajh nahi aaya. ${rep}`;
+        }
+        currentDraft._lastReply = rep;
+        currentDraft._lastChipsKey = chipsKey;
+        currentDraft._lastUserMsg = rawMessage ? rawMessage.trim() : '';
+
         return {
           success: true,
           status: 'needs_disambiguation',
           field: 'project',
-          reply: projRes.reply,
+          reply: rep,
           speech: projRes.speech,
-          speakText: projRes.speech || projRes.reply,
+          speakText: projRes.speech || rep,
           draft: currentDraft,
           missing: ['projectId'],
           chips: projRes.chips,
@@ -1946,13 +2120,28 @@ async function parseTaskRequest({
         };
       } else {
         if (!currentDraft.asked.includes('project')) currentDraft.asked.push('project');
+        let rep = projRes.reply;
+        const chipsKey = (projRes.chips || []).map((c) => c.label).sort().join('|');
+        if (
+          currentDraft._lastReply === rep &&
+          currentDraft._lastChipsKey === chipsKey &&
+          rawMessage &&
+          currentDraft._lastUserMsg &&
+          rawMessage.trim().toLowerCase() !== currentDraft._lastUserMsg.trim().toLowerCase()
+        ) {
+          rep = `Mujhe samajh nahi aaya. ${rep}`;
+        }
+        currentDraft._lastReply = rep;
+        currentDraft._lastChipsKey = chipsKey;
+        currentDraft._lastUserMsg = rawMessage ? rawMessage.trim() : '';
+
         return {
           success: true,
           status: 'needs_input',
           field: 'project',
-          reply: projRes.reply,
+          reply: rep,
           speech: projRes.speech,
-          speakText: projRes.speech || projRes.reply,
+          speakText: projRes.speech || rep,
           draft: currentDraft,
           missing: ['projectId'],
           chips: projRes.chips,
@@ -2846,32 +3035,154 @@ async function parseTaskRequest({
         speechText = 'टीम मेंबर का नाम बताएं जो इस क्लाइंट को मैनेज करेंगे:';
         chipsList = [{ label: 'Cancel', action: { type: 'cancel' } }];
       } else if (nextFieldKey === 'more_details') {
-        if (currentDraft.activeDetailsGroup === 'contact') {
-          replyText = ackPrefix + 'Email aur phone number batayein (optional):';
-          speechText = 'ईमेल और फ़ोन नंबर बताएं:';
-          chipsList = [{ label: 'Chhod do', action: { type: 'finish_details_group' } }, { label: 'Nahi, bas', action: { type: 'finish_more_details' } }];
-        } else if (currentDraft.activeDetailsGroup === 'business') {
-          replyText = ackPrefix + 'Industry, GST, PAN aur website batayein (optional):';
-          speechText = 'इंडस्ट्री, जीएसटी, पैन और वेबसाइट बताएं:';
-          chipsList = [{ label: 'Chhod do', action: { type: 'finish_details_group' } }, { label: 'Nahi, bas', action: { type: 'finish_more_details' } }];
-        } else if (currentDraft.activeDetailsGroup === 'address') {
-          replyText = ackPrefix + 'Address, state aur pincode batayein (optional):';
-          speechText = 'एड्रेस, स्टेट और पिनकोड बताएं:';
-          chipsList = [{ label: 'Chhod do', action: { type: 'finish_details_group' } }, { label: 'Nahi, bas', action: { type: 'finish_more_details' } }];
-        } else if (currentDraft.activeDetailsGroup === 'notes') {
-          replyText = ackPrefix + 'Description ya notes batayein (optional):';
-          speechText = 'डिस्क्रिप्शन या नोट्स बताएं:';
-          chipsList = [{ label: 'Chhod do', action: { type: 'finish_details_group' } }, { label: 'Nahi, bas', action: { type: 'finish_more_details' } }];
-        } else {
-          replyText = ackPrefix + 'Aur details dena hain?';
-          speechText = 'और डिटेल्स देना हैं?';
-          chipsList = [
-            { label: 'Contact', action: { type: 'select_details_group', group: 'contact' } },
-            { label: 'Business', action: { type: 'select_details_group', group: 'business' } },
-            { label: 'Address', action: { type: 'select_details_group', group: 'address' } },
-            { label: 'Notes', action: { type: 'select_details_group', group: 'notes' } },
-            { label: 'Nahi, bas', action: { type: 'finish_more_details' } },
-          ];
+        const completedGroups = Array.isArray(currentDraft.completedDetailsGroups) ? currentDraft.completedDetailsGroups : [];
+        const allGroups = ['contact', 'business', 'address', 'notes'];
+        const remainingGroups = allGroups.filter((g) => !completedGroups.includes(g));
+
+        if (currentDraft.activeDetailsGroup) {
+          const group = currentDraft.activeDetailsGroup;
+          const skippedFields = Array.isArray(currentDraft.skippedDetailsFields) ? currentDraft.skippedDetailsFields : [];
+
+          if (group === 'contact') {
+            if (!currentDraft.email && !skippedFields.includes('email')) {
+              currentDraft.activeGroupField = 'email';
+              replyText = ackPrefix + 'Client ka email batayein (optional):';
+              speechText = 'क्लाइंट का ईमेल बताएं:';
+              chipsList = [
+                { label: 'Skip', action: { type: 'skip_client_field', field: 'email' } },
+                { label: 'Chhod do', action: { type: 'finish_details_group', group: 'contact' } },
+                { label: 'Nahi, bas', action: { type: 'finish_more_details' } },
+              ];
+            } else if (!currentDraft.phone && !skippedFields.includes('phone')) {
+              currentDraft.activeGroupField = 'phone';
+              replyText = ackPrefix + 'Client ka phone number batayein (optional):';
+              speechText = 'फ़ोन नंबर बताएं:';
+              chipsList = [
+                { label: 'Skip', action: { type: 'skip_client_field', field: 'phone' } },
+                { label: 'Chhod do', action: { type: 'finish_details_group', group: 'contact' } },
+                { label: 'Nahi, bas', action: { type: 'finish_more_details' } },
+              ];
+            }
+          } else if (group === 'business') {
+            if (!currentDraft.industry && !skippedFields.includes('industry')) {
+              currentDraft.activeGroupField = 'industry';
+              replyText = ackPrefix + 'Industry batayein (optional):';
+              speechText = 'इंडस्ट्री बताएं:';
+              chipsList = [
+                { label: 'Skip', action: { type: 'skip_client_field', field: 'industry' } },
+                { label: 'Chhod do', action: { type: 'finish_details_group', group: 'business' } },
+                { label: 'Nahi, bas', action: { type: 'finish_more_details' } },
+              ];
+            } else if (!currentDraft.gst && !skippedFields.includes('gst')) {
+              currentDraft.activeGroupField = 'gst';
+              replyText = ackPrefix + 'GST number batayein (optional):';
+              speechText = 'जीएसटी नंबर बताएं:';
+              chipsList = [
+                { label: 'Skip', action: { type: 'skip_client_field', field: 'gst' } },
+                { label: 'Chhod do', action: { type: 'finish_details_group', group: 'business' } },
+                { label: 'Nahi, bas', action: { type: 'finish_more_details' } },
+              ];
+            } else if (!currentDraft.pan && !skippedFields.includes('pan')) {
+              currentDraft.activeGroupField = 'pan';
+              replyText = ackPrefix + 'PAN number batayein (optional):';
+              speechText = 'पैन नंबर बताएं:';
+              chipsList = [
+                { label: 'Skip', action: { type: 'skip_client_field', field: 'pan' } },
+                { label: 'Chhod do', action: { type: 'finish_details_group', group: 'business' } },
+                { label: 'Nahi, bas', action: { type: 'finish_more_details' } },
+              ];
+            } else if (!currentDraft.website && !skippedFields.includes('website')) {
+              currentDraft.activeGroupField = 'website';
+              replyText = ackPrefix + 'Website batayein (optional):';
+              speechText = 'वेबसाइट बताएं:';
+              chipsList = [
+                { label: 'Skip', action: { type: 'skip_client_field', field: 'website' } },
+                { label: 'Chhod do', action: { type: 'finish_details_group', group: 'business' } },
+                { label: 'Nahi, bas', action: { type: 'finish_more_details' } },
+              ];
+            }
+          } else if (group === 'address') {
+            if (!currentDraft.address && !skippedFields.includes('address')) {
+              currentDraft.activeGroupField = 'address';
+              replyText = ackPrefix + 'Office address batayein (optional):';
+              speechText = 'ऑफिस एड्रेस बताएं:';
+              chipsList = [
+                { label: 'Skip', action: { type: 'skip_client_field', field: 'address' } },
+                { label: 'Chhod do', action: { type: 'finish_details_group', group: 'address' } },
+                { label: 'Nahi, bas', action: { type: 'finish_more_details' } },
+              ];
+            } else if (!currentDraft.state && !skippedFields.includes('state')) {
+              currentDraft.activeGroupField = 'state';
+              replyText = ackPrefix + 'State batayein (optional):';
+              speechText = 'स्टेट बताएं:';
+              chipsList = [
+                { label: 'Skip', action: { type: 'skip_client_field', field: 'state' } },
+                { label: 'Chhod do', action: { type: 'finish_details_group', group: 'address' } },
+                { label: 'Nahi, bas', action: { type: 'finish_more_details' } },
+              ];
+            } else if (!currentDraft.country && !skippedFields.includes('country')) {
+              currentDraft.activeGroupField = 'country';
+              replyText = ackPrefix + 'Country batayein (optional):';
+              speechText = 'कंट्री बताएं:';
+              chipsList = [
+                { label: 'Skip', action: { type: 'skip_client_field', field: 'country' } },
+                { label: 'Chhod do', action: { type: 'finish_details_group', group: 'address' } },
+                { label: 'Nahi, bas', action: { type: 'finish_more_details' } },
+              ];
+            } else if (!currentDraft.pincode && !skippedFields.includes('pincode')) {
+              currentDraft.activeGroupField = 'pincode';
+              replyText = ackPrefix + 'Pincode batayein (optional):';
+              speechText = 'पिनकोड बताएं:';
+              chipsList = [
+                { label: 'Skip', action: { type: 'skip_client_field', field: 'pincode' } },
+                { label: 'Chhod do', action: { type: 'finish_details_group', group: 'address' } },
+                { label: 'Nahi, bas', action: { type: 'finish_more_details' } },
+              ];
+            }
+          } else if (group === 'notes') {
+            if (!currentDraft.description && !skippedFields.includes('description')) {
+              currentDraft.activeGroupField = 'description';
+              replyText = ackPrefix + 'Description batayein (optional):';
+              speechText = 'डिस्क्रिप्शन बताएं:';
+              chipsList = [
+                { label: 'Skip', action: { type: 'skip_client_field', field: 'description' } },
+                { label: 'Chhod do', action: { type: 'finish_details_group', group: 'notes' } },
+                { label: 'Nahi, bas', action: { type: 'finish_more_details' } },
+              ];
+            } else if (!currentDraft.notes && !skippedFields.includes('notes')) {
+              currentDraft.activeGroupField = 'notes';
+              replyText = ackPrefix + 'Notes batayein (optional):';
+              speechText = 'नोट्स बताएं:';
+              chipsList = [
+                { label: 'Skip', action: { type: 'skip_client_field', field: 'notes' } },
+                { label: 'Chhod do', action: { type: 'finish_details_group', group: 'notes' } },
+                { label: 'Nahi, bas', action: { type: 'finish_more_details' } },
+              ];
+            }
+          }
+        }
+
+        if (!currentDraft.activeGroupField || !chipsList.length) {
+          const hasAnyDetails = completedGroups.length > 0 || Boolean(
+            currentDraft.email || currentDraft.phone || currentDraft.industry ||
+            currentDraft.gst || currentDraft.pan || currentDraft.website ||
+            currentDraft.address || currentDraft.state || currentDraft.pincode ||
+            currentDraft.notes || currentDraft.description
+          );
+
+          if (completedGroups.length > 0) {
+            replyText = ackPrefix + 'Aur kuch dena hai?';
+            speechText = 'और कुछ देना है?';
+          } else {
+            replyText = ackPrefix + 'Aur details dena hain?';
+            speechText = 'और डिटेल्स देना हैं?';
+          }
+
+          chipsList = remainingGroups.map((g) => {
+            const labelMap = { contact: 'Contact', business: 'Business', address: 'Address', notes: 'Notes' };
+            return { label: labelMap[g] || g, action: { type: 'select_details_group', group: g } };
+          });
+          chipsList.push({ label: 'Nahi, bas', action: { type: 'finish_more_details' } });
         }
       }
     } else if (activeIntent === 'create_project') {
@@ -2989,23 +3300,50 @@ async function parseTaskRequest({
       replyText = notices.join(' ') + '\n\n' + replyText;
     }
 
-    return {
-      success: true,
-      status: 'needs_input',
-      field: nextFieldKey,
-      reply: replyText,
-      speech: speechText,
-      speakText: speechText || replyText,
-      draft: currentDraft,
-      missing: [nextFieldKey],
-      chips: chipsList,
-      candidates,
-      notices,
-      progress: { done, total },
-      canAssignOthers,
-      intent: detectedIntent ? { type: detectedIntent.type, field: detectedIntent.field } : null,
-      meta: { model: modelName },
-    };
+    // Invariant Loop Guard: agent must NEVER return the exact same reply and exact same chips twice in a row for two different user inputs (except validation re-ask)
+    const currentChipsKey = (chipsList || []).map((c) => c.label).sort().join('|');
+    const isValidationReAsk = notices.some((n) => n.includes('format galat') || n.includes('digits ka hona chahiye') || n.includes('zaroori hai'));
+    if (
+      !isValidationReAsk &&
+      currentDraft._lastReply === replyText &&
+      currentDraft._lastChipsKey === currentChipsKey &&
+      rawMessage &&
+      currentDraft._lastUserMsg &&
+      rawMessage.trim().toLowerCase() !== currentDraft._lastUserMsg.trim().toLowerCase()
+    ) {
+      if (currentDraft.intent === 'create_client' && nextFieldKey === 'more_details') {
+        currentDraft.moreDetailsDone = true;
+        currentDraft.activeDetailsGroup = null;
+        currentDraft.activeGroupField = null;
+        nextFieldKey = null;
+      } else {
+        replyText = `Mujhe samajh nahi aaya. ${replyText}`;
+      }
+    }
+
+    if (nextFieldKey) {
+      currentDraft._lastReply = replyText;
+      currentDraft._lastChipsKey = currentChipsKey;
+      currentDraft._lastUserMsg = rawMessage ? rawMessage.trim() : '';
+
+      return {
+        success: true,
+        status: 'needs_input',
+        field: nextFieldKey,
+        reply: replyText,
+        speech: speechText,
+        speakText: speechText || replyText,
+        draft: currentDraft,
+        missing: [nextFieldKey],
+        chips: chipsList,
+        candidates,
+        notices,
+        progress: { done, total },
+        canAssignOthers,
+        intent: detectedIntent ? { type: detectedIntent.type, field: detectedIntent.field } : null,
+        meta: { model: modelName },
+      };
+    }
   }
 
   // Strict Draft Validation via Form Registry before declaring READY
@@ -3299,6 +3637,10 @@ async function parseTaskRequest({
     finalReply = notices.join(' ') + '\n\n' + finalReply;
   }
 
+  currentDraft._lastReply = finalReply;
+  currentDraft._lastChipsKey = (readyChips || []).map((c) => c.label).sort().join('|');
+  currentDraft._lastUserMsg = rawMessage ? rawMessage.trim() : '';
+
   return {
     success: true,
     status: 'ready',
@@ -3308,7 +3650,7 @@ async function parseTaskRequest({
     speakText: finalSpeech || finalReply,
     draft: currentDraft,
     missing: [],
-    chips: typeof readyConfig.chips === 'function' ? readyConfig.chips() : [],
+    chips: (readyChips && readyChips.length > 0) ? readyChips : (typeof readyConfig.chips === 'function' ? readyConfig.chips() : []),
     candidates: [],
     notices,
     progress: { done: total, total },

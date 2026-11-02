@@ -77,7 +77,7 @@ router.get('/dashboard-stats/:clientId', getClientDashboardStats);
 
 router.get('/company/:companyCode', getClientsByCompany);
 router.get('/', getAllClients);
-router.post('/', addClient);
+router.post('/', uploadReceipt.none(), addClient);
 router.post('/:clientId/companies', addClientCompany);
 router.get('/:clientId/companies', getClientCompanies);
 router.get('/companies/:companyId', getCompanyById);

@@ -502,4 +502,140 @@ describe('AI Create Client (Part A) Integration & Proof Suite', () => {
     assert.equal(payload.fields.notes, 'High priority lead');
     assert.deepEqual(payload.fields.projectManager, ['Kanika Owner']);
   });
+
+  // 12. EXACT REPLAY TEST: NO REPETITION OF RECAP ON "Nahi, bas"
+  it('12. Replay test: User says "Naya client banao ZZ AI Client, company ZZ Tech, city Mohali, team Vansh" -> Agent asks "Aur details dena hain?" -> User answers "Nahi, bas" -> advances directly to preview card without repeating recap', async () => {
+    // Turn 1: User provides required slots in one shot
+    const t1 = await parseTaskRequest({
+      req: mockReq,
+      message: 'Naya client banao ZZ AI Client, company ZZ Tech, city Mohali, team Vansh',
+    }, deps);
+    assert.equal(t1.draft.intent, 'create_client');
+    assert.equal(t1.draft.client, 'ZZ AI Client');
+    assert.equal(t1.draft.company, 'ZZ Tech');
+    assert.equal(t1.draft.city, 'Mohali');
+    assert.ok(t1.reply.includes('Aur details dena hain?'));
+    assert.ok(t1.chips.some(c => c.label === 'Nahi, bas'));
+
+    // Turn 2: User answers "Nahi, bas" via chip or text
+    const t2 = await parseTaskRequest({
+      req: mockReq,
+      message: 'Nahi, bas',
+      action: { type: 'finish_more_details' },
+      draft: t1.draft,
+    }, deps);
+
+    // Assert: must NOT repeat "Samajh gaya: client, company aur city mil gaye"
+    assert.equal(t2.reply.includes('Samajh gaya: client, company aur city mil gaye'), false, 'Recap must not be repeated on finish details');
+    // Assert: must show ready draft / preview card
+    assert.equal(t2.status, 'ready');
+    assert.ok(t2.reply.includes('ZZ AI Client'));
+    assert.ok(t2.chips.some(c => c.label === 'Create karo'));
+  });
+
+  // 13. DETAILS GROUP PROGRESSION TEST
+  it('13. Details group progression: Group selection Address -> asks address -> state -> country -> pincode -> asks "Aur kuch dena hai?" with remaining groups', async () => {
+    const draftRequired = {
+      intent: 'create_client',
+      client: 'Beta Corp',
+      company: 'Beta Tech',
+      city: 'Delhi',
+      projectManager: ['Kanika Owner'],
+      team: [ownerUser._id.toString()],
+      status: 'Active',
+      asked: ['client', 'company', 'city', 'projectManager'],
+      skipped: [],
+    };
+
+    // User chooses "Address" group
+    const t1 = await parseTaskRequest({
+      req: mockReq,
+      message: 'Address',
+      action: { type: 'select_details_group', group: 'address' },
+      draft: draftRequired,
+    }, deps);
+    assert.equal(t1.status, 'needs_input');
+    assert.ok(t1.reply.includes('address') || t1.reply.includes('Address'));
+    assert.ok(t1.chips.some(c => c.label === 'Skip'));
+
+    // User provides address
+    const t2 = await parseTaskRequest({
+      req: mockReq,
+      message: '123 Tech Park',
+      draft: t1.draft,
+    }, deps);
+    assert.equal(t2.draft.address, '123 Tech Park');
+    assert.ok(t2.reply.includes('State') || t2.reply.includes('state'));
+
+    // User skips state
+    const t3 = await parseTaskRequest({
+      req: mockReq,
+      message: 'skip',
+      action: { type: 'skip_client_field', field: 'state' },
+      draft: t2.draft,
+    }, deps);
+    assert.ok(t3.reply.includes('Country') || t3.reply.includes('country'));
+
+    // User provides country
+    const t4 = await parseTaskRequest({
+      req: mockReq,
+      message: 'India',
+      draft: t3.draft,
+    }, deps);
+    assert.equal(t4.draft.country, 'India');
+    assert.ok(t4.reply.includes('Pincode') || t4.reply.includes('pincode'));
+
+    // User provides pincode
+    const t5 = await parseTaskRequest({
+      req: mockReq,
+      message: '110001',
+      draft: t4.draft,
+    }, deps);
+    assert.equal(t5.draft.pincode, '110001');
+    // Group completed -> asks "Aur kuch dena hai?" with remaining groups
+    assert.ok(t5.reply.includes('Aur kuch dena hai?'));
+    assert.ok(t5.chips.some(c => c.label === 'Contact'));
+    assert.ok(t5.chips.some(c => c.label === 'Business'));
+    assert.ok(t5.chips.some(c => c.label === 'Notes'));
+    assert.equal(t5.chips.some(c => c.label === 'Address'), false, 'Address group already completed, not in remaining');
+    assert.ok(t5.chips.some(c => c.label === 'Nahi, bas'));
+  });
+
+  // 14. INVARIANT LOOP GUARD TEST ACROSS ALL 5 FLOWS
+  it('14. INVARIANT test over all 5 flows: agent never returns the same reply and same chips twice in a row for two different user inputs', async () => {
+    const flows = [
+      { intent: 'self_task', initialMsg: 'mujhe kal report banani hai' },
+      { intent: 'task_assigned_user', initialMsg: 'Vansh ko task assign karo kal tak' },
+      { intent: 'task_project', initialMsg: 'Project task banao' },
+      { intent: 'create_project', initialMsg: 'naya project banao' },
+      { intent: 'create_client', initialMsg: 'naya client banao' },
+    ];
+
+    for (const flow of flows) {
+      const res1 = await parseTaskRequest({
+        req: mockReq,
+        message: flow.initialMsg,
+      }, deps);
+
+      const diffInputs = ['aur kuch', 'nahi pata', 'help'];
+      let prevRes = res1;
+      for (const input of diffInputs) {
+        const nextRes = await parseTaskRequest({
+          req: mockReq,
+          message: input,
+          draft: prevRes.draft,
+        }, deps);
+
+        const prevChips = (prevRes.chips || []).map(c => c.label).sort().join('|');
+        const nextChips = (nextRes.chips || []).map(c => c.label).sort().join('|');
+        const isValidationReAsk = (nextRes.notices || []).some(n => n.includes('format galat') || n.includes('zaroori hai'));
+
+        if (!isValidationReAsk) {
+          const isIdentical = prevRes.reply === nextRes.reply && prevChips === nextChips;
+          assert.equal(isIdentical, false, `Flow ${flow.intent} returned identical reply and chips twice for different user inputs "${input}"`);
+        }
+        prevRes = nextRes;
+      }
+    }
+  });
 });
