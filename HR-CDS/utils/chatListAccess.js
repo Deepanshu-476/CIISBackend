@@ -55,11 +55,24 @@ async function chatListAccess(companyId, userId) {
   };
 }
 
+// Each read loads every client and active user of the company, and chat lists are refetched on
+// every chat socket event. Keep a user's result for 20s (auth itself caches the user for 10s), so
+// access changes apply within 20s instead of costing two company-wide scans per list request.
+const ACCESS_TTL_MS = 20 * 1000;
+const recentAccess = new Map();
 const pendingAccessReads = new Map();
 module.exports = function readAccess(companyId, userId) {
   const key = `${id(companyId)}:${id(userId)}`;
+  const cached = recentAccess.get(key);
+  if (cached && Date.now() < cached.expiresAt) return Promise.resolve(cached.value);
   if (pendingAccessReads.has(key)) return pendingAccessReads.get(key);
-  const request = chatListAccess(companyId, userId).finally(() => pendingAccessReads.delete(key));
+  const request = chatListAccess(companyId, userId)
+    .then(value => {
+      if (recentAccess.size > 5000) recentAccess.clear();
+      recentAccess.set(key, {value, expiresAt: Date.now() + ACCESS_TTL_MS});
+      return value;
+    })
+    .finally(() => pendingAccessReads.delete(key));
   pendingAccessReads.set(key, request);
   return request;
 };

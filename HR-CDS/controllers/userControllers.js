@@ -2479,12 +2479,19 @@ exports.getCompanyUsers = async (req, res) => {
     if (!shouldIncludeInactiveUsers(req.query)) {
       filter.isActive = { $ne: false };
     }
+    // ?userId= returns one employee; the directory loads family/bank details this way only
+    // when one is opened, instead of for the whole company with the list.
+    if (req.query.userId && mongoose.Types.ObjectId.isValid(String(req.query.userId))) {
+      filter._id = String(req.query.userId);
+    }
     applyBranchAccessFilter(filter, req);
 
     const taskOverviewView = String(req.query.view || '').toLowerCase() === 'task-overview';
     const userProjection = taskOverviewView
       ? 'name email phone role companyRole jobRole employeeType employeeId company companyCode department branch assignedBranches isActive status createdAt'
-      : '-password -resetToken -resetTokenExpiry';
+      // Lists never show the registration review, chat/notification settings (each user loads
+      // their own from the profile) or account-security fields; verificationToken must not leak.
+      : '-password -resetToken -resetTokenExpiry -verificationToken -loginAttempts -lockUntil -registrationVerification -chatSettings -notificationPreferences';
 
     const users = await User.find(filter)
       .select(userProjection)

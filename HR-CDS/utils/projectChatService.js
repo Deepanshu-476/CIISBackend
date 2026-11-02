@@ -71,7 +71,9 @@ async function syncProject(project) {
   return conversation;
 }
 
-async function refreshConversation(conversationId, companyId) {
+// maxAgeMs: read paths (opening a chat, socket packets, joining rooms) skip a client group's full
+// re-sync when it was synced that recently; client and task writes still sync right away.
+async function refreshConversation(conversationId, companyId, { maxAgeMs } = {}) {
   if (!conversationId || !companyId || !mongoose.isValidObjectId(conversationId) || !mongoose.isValidObjectId(companyId)) return null;
   const conversation = await Conversation.findOne({ _id: conversationId, companyId });
   if (!conversation) return null;
@@ -81,6 +83,8 @@ async function refreshConversation(conversationId, companyId) {
   }
   if (conversation.clientId) {
     if (!mongoose.isValidObjectId(conversation.clientId)) return null;
+    const syncedAt = conversation.clientSyncedAt ? new Date(conversation.clientSyncedAt).getTime() : 0;
+    if (maxAgeMs && Date.now() - syncedAt < maxAgeMs) return conversation;
     const client = await require('../models/Client').findById(conversation.clientId).lean();
     const company = client && await require('./clientChatService').companyFor(client);
     if (!client || id(company) !== id(companyId)) {

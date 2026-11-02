@@ -1206,6 +1206,20 @@ app.use("/api/overtime", require("./HR-CDS/routes/overtimeRoutes.js"));
 app.use("/overtime", require("./HR-CDS/routes/overtimeRoutes.js"));
 app.use("/api/leaves", require("./HR-CDS/routes/LeaveRoutes.js"));
 app.use("/api/asset-requests", require("./HR-CDS/routes/assetRequestRoutes.js"));
+// Any write that can change a task (task, project, client and client-task routes) clears the
+// cached merged task lists behind /api/tasks/all, so the writer sees the change at once.
+{
+  const { invalidateTaskListCache } = require("./HR-CDS/controllers/allTaskController");
+  const clearTaskListsAfterWrite = (req, res, next) => {
+    if (req.method !== "GET" && req.method !== "HEAD" && req.method !== "OPTIONS") {
+      res.on("finish", () => {
+        if (res.statusCode < 400) invalidateTaskListCache();
+      });
+    }
+    next();
+  };
+  app.use(["/api/task", "/task", "/api/tasks", "/api/projects", "/api/clientsservice", "/api/client-tasks"], clearTaskListsAfterWrite);
+}
 app.use("/api/task", require("./HR-CDS/routes/taskRoute.js"));
 app.use("/task", require("./HR-CDS/routes/taskRoute.js"));
 app.use("/api/users/profile", require("./HR-CDS/routes/profileRoute.js"));
