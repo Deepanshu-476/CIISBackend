@@ -2,7 +2,7 @@ const Conversation = require("../models/Conversation");
 const Message = require("../models/Message");
 const { getCompanyOnlineUsers } = require("../../socket/presence");
 const { getUnreadCount } = require("../utils/unreadCount");
-const { recordSeen, recordDelivered } = require("../utils/messageReceipts");
+const { recordSeen, recordDelivered, seenByAllOthers } = require("../utils/messageReceipts");
 
 // onlyUserId: marking a message seen changes only that user's count.
 const emitUnreadCounts = async (io, conversation, senderId, {onlyUserId} = {}) => {
@@ -231,6 +231,7 @@ socket.on(
 
         await recordSeen(message, socket.userId);
         await emitUnreadCounts(io, conversation, socket.userId, {onlyUserId: socket.userId});
+        const fresh = await Message.findById(message._id).select("seenBy").lean();
 
         io.to(
             `user:${message.sender}`
@@ -239,7 +240,8 @@ socket.on(
             {
                 messageId: data.messageId,
                 conversationId: conversation._id,
-                seenBy: socket.userId
+                seenBy: socket.userId,
+                allSeen: seenByAllOthers(conversation.members, message.sender, fresh?.seenBy)
             }
         );
     }

@@ -132,6 +132,9 @@ function emitMembers(conversation, event, payload) {
   global.io.to(conversation.members.map(member => `user:${id(member)}`)).emit(event, payload);
 }
 
+// Whole-subscription summaries that list task names instead of pointing at one task.
+const SUBSCRIPTION_TASK_EVENTS = new Set(['subscription_expired', 'plan_tasks_created']);
+
 async function deliverEvent(project, conversation, event) {
   if (!project?._id || !conversation?._id || !event) return;
   const isClient = project.chatEntity === 'client';
@@ -178,6 +181,16 @@ async function deliverEvent(project, conversation, event) {
   if (event.type === 'task_file_added') text = `${actor} attached “${event.file}” to ‘${event.title}’.`;
   if (event.type === 'task_file_removed') text = `${actor} removed the attachment “${event.file}” from ‘${event.title}’.`;
   if (event.type === 'task_deleted') text = `${actor} deleted task ‘${event.title}’.`;
+  if (SUBSCRIPTION_TASK_EVENTS.has(event.type)) {
+    const titles = event.titles || [];
+    const more = Math.max(0, (event.count || titles.length) - titles.length);
+    const name = `Subscription ${event.subscriptionNo || ''}${event.planName ? ` (${event.planName})` : ''}`.replace(/ +/g, ' ').trim();
+    const tasks = `${event.count} ${event.type === 'subscription_expired' ? 'pending ' : ''}task${event.count === 1 ? '' : 's'}`;
+    const headline = event.type === 'subscription_expired'
+      ? `${name} has expired. ${tasks} moved to Overdue:`
+      : `${name} started. ${tasks} created from the plan:`;
+    text = [headline, ...titles.map(title => `• ${title}`), ...(more ? [`…and ${more} more`] : [])].join('\n');
+  }
   if (isUserStatusMessage) text = statusMessageText(event);
   if (!text) return;
   const image = isUserStatusMessage && event.image
@@ -196,6 +209,10 @@ async function deliverEvent(project, conversation, event) {
     const count = await unreadCountService.getUnreadCount(conversation._id, member, conversation.companyId, conversation.readState || []);
     global.io?.to(`user:${id(member)}`).emit('chat:unread-update', { conversationId: conversation._id, senderId: event.actor, count });
   }
+  // The expiry list can be long; the pop-up names a few tasks and the chat has them all.
+  const notificationText = SUBSCRIPTION_TASK_EVENTS.has(event.type)
+    ? `${text.split('\n')[0]} ${(event.titles || []).slice(0, 3).map(title => `‘${title}’`).join(', ')}${(event.count || 0) > 3 ? '…' : ''}`
+    : text;
   for (const recipient of conversation.members) {
     if (id(recipient) === id(event.actor)) continue;
     const isMention = id(recipient) === id(event.mentioned);
@@ -205,7 +222,7 @@ async function deliverEvent(project, conversation, event) {
     const notification = await Notification.findOneAndUpdate({ eventKey: event.key, recipient }, { $setOnInsert: {
       eventKey: event.key, recipient, company: conversation.companyId, actor: event.actor,
       type: isMention ? (isClient ? 'client_task_mention' : 'project_task_mention') : 'group_chat_message', title: isMention ? 'Task mention' : `Update in ${conversation.groupName}`,
-      message: isUserStatusMessage ? `${actor}: ${text}` : text, targetPath: '/ciisUser/chat',
+      message: isUserStatusMessage ? `${actor}: ${text}` : notificationText, targetPath: '/ciisUser/chat',
       data: { conversationId: conversation._id, ...navigation, taskId: event.task, messageId: message._id },
     } }, { upsert: true, new: true, setDefaultsOnInsert: true });
     global.io?.to(`user:${id(recipient)}`).emit('notification:new', notification);

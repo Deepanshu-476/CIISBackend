@@ -1070,6 +1070,13 @@ const uploadStaticDirs = [
   path.join(__dirname, "..", "uploads"),
   path.join(__dirname, "uploads"),
   path.join(__dirname, "HR-CDS", "uploads"),
+  // The web and app backends run from separate folders, so a file uploaded through one was a 404
+  // on the others. SHARED_UPLOAD_DIRS (comma-separated) lists the other backends' uploads folders
+  // to serve as read-only fallbacks.
+  ...String(process.env.SHARED_UPLOAD_DIRS || "")
+    .split(",")
+    .map(dir => dir.trim())
+    .filter(Boolean),
 ];
 
 const embeddableStaticHeaders = (req, res, next) => {
