@@ -143,7 +143,9 @@ test('expiry moves only the ended subscription tasks to overdue and posts one su
 });
 
 test('every new subscription gets a number and its own plan tasks; remove takes only the latest', async () => {
-  clientChatService.syncClient = async () => null;
+  const companyId = oid();
+  const members = [oid(), oid()];
+  await User.collection.insertMany(members.map((_id, index) => ({ _id, name: `Plan Member ${index + 1}`, email: `zztest-plan${index + 1}@example.com`, company: companyId })));
   const plan = await ClientPlan.create({
     companyCode: 'TEST01', name: 'ZZTEST Plan', price: 1000, months: 1,
     services: [
@@ -162,6 +164,17 @@ test('every new subscription gets a number and its own plan tasks; remove takes 
     paymentReceipts: [{ _id: receiptId, amount: 750, status: 'Pending' }],
   });
   const tasksOf = subscriptionId => ClientTask.find({ subscriptionId }).lean();
+  const conversation = await Conversation.create({ companyId, clientId, isGroup: true, groupName: 'ZZTEST Plan Client', members });
+  clientChatService.syncClient = async () => conversation.toObject();
+  // The summary is posted after the response; wait for it.
+  const planMessages = async expected => {
+    for (let i = 0; i < 50; i += 1) {
+      const found = await Message.find({ conversationId: conversation._id }).lean();
+      if (found.length >= expected) return found;
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    return Message.find({ conversationId: conversation._id }).lean();
+  };
 
   // Extend: no plan in the request, so the client's active plan is used.
   const extended = await call(clientController.extendClientSubscription, { params: { id: String(clientId) }, body: { days: 30, price: 100 } });
@@ -175,6 +188,18 @@ test('every new subscription gets a number and its own plan tasks; remove takes 
   assert.deepEqual(sub2Tasks.map(task => task.name).sort(), ['Audit', 'Campaign', 'Report Day 5']);
   assert.equal(sub2Tasks.find(task => task.name === 'Audit').dueDate.getTime(), subscriptionExpiresAt(sub2).getTime());
   assert.equal(sub2Tasks.find(task => task.name === 'Report Day 5').dueDate.getTime(), planTaskDueDate(sub2, 5).getTime());
+
+  // One summary for the whole plan, not a "created task" message per task.
+  let messages = await planMessages(1);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].systemEvent.type, 'plan_tasks_created');
+  assert.match(messages[0].text, /^Subscription 2 \(ZZTEST Plan\) started\. 3 tasks created from the plan:\n• /);
+  let notified = 0;
+  for (let i = 0; i < 50 && notified < 2; i += 1) {
+    notified = await Notification.countDocuments({ 'data.messageId': messages[0]._id });
+    if (notified < 2) await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.equal(notified, 2);
 
   // Payment approval activates a subscription the same way.
   const approved = await call(clientController.updateClientReceiptStatus, {
@@ -208,6 +233,9 @@ test('every new subscription gets a number and its own plan tasks; remove takes 
   const renewedSub = client.subscription.at(-1);
   assert.equal(renewedSub.subscriptionNo, 3);
   assert.equal((await tasksOf(renewedSub._id)).length, 3);
+  messages = await planMessages(3);
+  assert.equal(messages.length, 3);
+  assert.ok(messages.every(message => message.systemEvent.type === 'plan_tasks_created'));
   // Older subscriptions' tasks are not carried into the renewal.
   assert.equal((await tasksOf(sub2._id)).every(task => task.dueDate.getTime() <= subscriptionExpiresAt(sub2).getTime()), true);
 });

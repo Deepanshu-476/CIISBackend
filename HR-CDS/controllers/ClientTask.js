@@ -1,7 +1,6 @@
 const Task = require('../models/ClientTask');
 const Client = require('../models/Client');
 const mongoose = require('mongoose');
-const { createHash } = require('node:crypto');
 const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
@@ -13,8 +12,7 @@ const { sendEmail } = require('../../utils/sendEmail');
 const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
 const { normalizeTaskReminderSettings } = require('../utils/taskReminderSettings');
 const { subscriptionExpiresAt } = require('../utils/subscriptionDates');
-
-const SYSTEM_USER_ID = '000000000000000000000001';
+const { postSubscriptionTasksMessage } = require('../utils/subscriptionChat');
 
 void 0;
 
@@ -258,25 +256,8 @@ const syncExpiredSubscriptionClientTasks = async (clientIds = [], { throttle = f
   return { matchedCount, modifiedCount };
 };
 
-const SUBSCRIPTION_EXPIRY_LISTED_TASKS = 15;
-
-// One group message (and one notification per member) for an expired subscription,
-// listing the pending tasks that moved to overdue.
-const postSubscriptionExpiredMessage = async (clientId, subscription, tasks) => {
-  const { syncClient } = require('../utils/clientChatService');
-  const { deliverEvent } = require('../utils/projectChatService');
-  const conversation = await syncClient(clientId);
-  if (!conversation?.members?.length) return;
-  await deliverEvent({ _id: clientId, chatEntity: 'client' }, conversation, {
-    key: createHash('sha256').update(`${clientId}:${subscription._id}:subscription_expired`).digest('hex'),
-    type: 'subscription_expired',
-    actor: SYSTEM_USER_ID,
-    subscriptionNo: subscription.subscriptionNo || null,
-    planName: subscription.planName || '',
-    count: tasks.length,
-    titles: tasks.slice(0, SUBSCRIPTION_EXPIRY_LISTED_TASKS).map(task => task.name || 'Untitled task')
-  });
-};
+const postSubscriptionExpiredMessage = (clientId, subscription, tasks) =>
+  postSubscriptionTasksMessage('subscription_expired', clientId, subscription, tasks);
 
 const applyClientTaskHoldTransition = (task, previousStatus, targetStatus, now = new Date()) => {
   const oldStatus = String(previousStatus || 'pending').trim().toLowerCase();
