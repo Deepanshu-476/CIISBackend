@@ -5,6 +5,7 @@ const User = require("../../../models/User");
 const Group = require("../../models/Group");
 const {notifyDirectUsers} = require("../../utils/systemNotificationService");
 const {deliveryReceiptsFor, recordSeen, recordConversationRead} = require("../utils/messageReceipts");
+const {getCompanyOnlineUsers} = require("../../socket/presence");
 
 const getUserId = req => req.user._id?.toString() || req.user.id?.toString();
 
@@ -152,7 +153,7 @@ const getSocketOnlineUserIds = (companyId) => {
   if (!global.io?.sockets?.sockets) return onlineIds;
 
   global.io.sockets.sockets.forEach(socket => {
-    const socketUserId = socket.userId?.toString();
+    const socketUserId = (socket.userId || socket.data?.userId)?.toString();
     const socketCompanyId = getRawCompanyId(socket.companyId);
 
     if (!socketUserId) return;
@@ -191,16 +192,6 @@ const emitMessageToConversationMembers = (conversation, eventName, payload) => {
     if (memberId) target = target.to(`user:${memberId}`);
   });
   target.emit(eventName, payload);
-};
-
-const isRecentlyOnlineInDb = (user) => {
-  if (!user?.isOnline) return false;
-  if (!user.lastSeen) return true;
-
-  const lastSeenTime = new Date(user.lastSeen).getTime();
-  if (Number.isNaN(lastSeenTime)) return true;
-
-  return Date.now() - lastSeenTime < 10 * 60 * 1000;
 };
 
 exports.createConversation = async (req, res) => {
@@ -875,15 +866,8 @@ exports.getCompanyUsers = async (req, res) => {
   try {
     const requesterId = getUserId(req);
     const companyId = getRawCompanyId(req.user.company);
-    const socketOnlineIds = getSocketOnlineUserIds(companyId);
-
-    // Keep requester's own presence fresh in database
-    if (requesterId) {
-      User.findByIdAndUpdate(requesterId, {
-        isOnline: true,
-        lastSeen: new Date(),
-      }).catch(() => {});
-    }
+    const onlineList = global.io ? await getCompanyOnlineUsers(global.io, companyId) : [];
+    const socketOnlineIds = new Set(onlineList.map(String));
 
     const users = await User.find({
       company: req.user.company?._id || req.user.company || companyId,
@@ -898,7 +882,7 @@ exports.getCompanyUsers = async (req, res) => {
         ...user,
         profileImage: avatarValue,
         avatar: avatarValue,
-        isOnline: socketOnlineIds.has(user._id.toString()) || isRecentlyOnlineInDb(user),
+        isOnline: socketOnlineIds.has(user._id.toString()),
       };
     });
 

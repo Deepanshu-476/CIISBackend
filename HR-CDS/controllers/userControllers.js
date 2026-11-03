@@ -35,16 +35,6 @@ const getSocketOnlineUserIds = (companyId) => {
   return onlineIds;
 };
 
-const isRecentlyOnlineInDb = (user) => {
-  if (!user?.isOnline) return false;
-  if (!user.lastSeen) return true;
-
-  const lastSeenTime = new Date(user.lastSeen).getTime();
-  if (Number.isNaN(lastSeenTime)) return true;
-
-  return Date.now() - lastSeenTime < 30 * 1000;
-};
-
 const validateAssignableDepartment = async (departmentId, companyId) => {
   const department = await Department.findById(departmentId);
 
@@ -108,7 +98,7 @@ const getUserPresence = (user, socketOnlineIds) => {
   const userId = user?._id?.toString() || user?.id?.toString();
 
   return {
-    isOnline: Boolean(userId && socketOnlineIds.has(userId)) || isRecentlyOnlineInDb(user),
+    isOnline: Boolean(userId && socketOnlineIds.has(userId)),
     lastSeen: user?.lastSeen || null,
   };
 };

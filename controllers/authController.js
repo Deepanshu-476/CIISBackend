@@ -3053,6 +3053,14 @@ exports.refreshToken = async (req, res) => {
 
 exports.logout = async (req, res) => {
   try {
+    const { deviceToken } = req.body || {};
+    if (deviceToken) {
+      const Device = require('../models/Device');
+      await Device.deleteMany({ deviceToken }).catch(err =>
+        console.warn('Device removal on logout failed:', err.message)
+      );
+    }
+
     res.clearCookie('auth_token');
     res.clearCookie('access_token');
     res.clearCookie('refresh_token');
