@@ -17,6 +17,7 @@ const path = require('path');
 const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
 const { isSuperAdminUser } = require('../../middleware/authMiddleware');
 const { syncClient } = require('../utils/clientChatService');
+const { subscriptionExpiresAt, planTaskDueDate, latestSubscription, nextSubscriptionNo } = require('../utils/subscriptionDates');
 
 
 const DEFAULT_CLIENT_DEPARTMENT_ID = '69ae555c9a1e47e80a40204c';
@@ -233,13 +234,6 @@ const toCompanyCard = (client, taskSummary = {}) => {
     } : null,
     client
   };
-};
-
-const getSubscriptionTaskDueDate = subscription => {
-  if (!subscription?.endDate) return null;
-  const dueDate = new Date(subscription.endDate);
-  if (Number.isNaN(dueDate.getTime())) return null;
-  return dueDate;
 };
 
 const normalizeMatchValue = value => String(value || '').trim().toLowerCase();
@@ -504,7 +498,6 @@ const createRenewalDueInvoice = ({ subscription, plan = null }) => {
 const generateTasksForSubscription = async ({ client, subscription, plan, session }) => {
   if (!plan || !subscription?._id) return [];
   const createdTaskIds = [];
-  const subscriptionDueDate = getSubscriptionTaskDueDate(subscription);
 
   for (const serviceTemplate of plan.services || []) {
     for (const taskTemplate of serviceTemplate.tasks || []) {
@@ -519,7 +512,7 @@ const generateTasksForSubscription = async ({ client, subscription, plan, sessio
         service: serviceTemplate.service,
         name: taskTemplate.name,
         description: taskTemplate.description || taskTemplate.name,
-        dueDate: subscriptionDueDate,
+        dueDate: planTaskDueDate(subscription, taskTemplate.dueInDays, Number(plan.months) || 0),
         dueDateSource: 'subscription',
         priority: taskTemplate.priority || 'Medium',
         status: 'pending',
@@ -547,55 +540,79 @@ const generateTasksForSubscription = async ({ client, subscription, plan, sessio
   return createdTaskIds;
 };
 
-const extendOverdueClientTasksToSubscriptionEnd = async ({ clientId, subscription, session = null }) => {
-  const subscriptionDueDate = getSubscriptionTaskDueDate(subscription);
-  if (!clientId || !subscriptionDueDate) {
-    return { matchedCount: 0, modifiedCount: 0 };
+
+// The edit form sends the subscriptions back, often only the latest one without its _id.
+// Keep each stored subscription (its _id, number, plan and generated tasks) and only
+// apply the edited dates and price, so tasks stay linked to their subscription.
+const mergeEditedSubscriptions = (existing = [], incoming = []) => {
+  const stored = existing.map(sub => (typeof sub?.toObject === 'function' ? sub.toObject() : { ...sub }));
+  const edit = (base, sub) => ({
+    ...base,
+    startDate: sub.startDate ? new Date(sub.startDate) : base.startDate || null,
+    endDate: sub.endDate ? new Date(sub.endDate) : base.endDate || null,
+    price: sub.price !== undefined && sub.price !== '' ? Number(sub.price) || 0 : base.price || 0,
+    status: sub.status || base.status || 'Active'
+  });
+  const byId = new Map(stored.map(sub => [String(sub._id), sub]));
+  if (incoming.length === 1 && !incoming[0]?._id && stored.length) {
+    const latest = latestSubscription(stored);
+    return stored.map(sub => (sub === latest ? edit(sub, incoming[0]) : sub));
   }
-
-  const now = new Date();
-  const overdueOpenTaskFilter = {
-    clientId,
-    completed: { $ne: true },
-    status: { $nin: ['completed', 'onhold'] },
-    $or: [
-      { status: 'overdue' },
-      { dueDate: { $lt: now } }
-    ]
-  };
-  const updateOptions = session ? { session } : {};
-  const activityLog = {
-    action: 'subscription_renewed_due_date_extended',
-    userName: 'System',
-    description: `Due date extended to subscription expiry ${subscriptionDueDate.toISOString()}`,
-    oldValues: { overdueBefore: now },
-    newValues: {
-      dueDate: subscriptionDueDate,
-      subscriptionNo: subscription.subscriptionNo || null,
-      subscriptionId: subscription._id || null
-    },
-    createdAt: now
-  };
-
-  const result = await ClientTask.updateMany(
-    overdueOpenTaskFilter,
-    {
-      $set: {
-        dueDate: subscriptionDueDate,
-        dueDateSource: 'subscription',
-        status: 'pending'
-      },
-      $push: { activityLogs: activityLog }
-    },
-    updateOptions
-  );
-
-  return {
-    matchedCount: result.matchedCount || result.n || 0,
-    modifiedCount: result.modifiedCount || result.nModified || 0
-  };
+  return incoming.map((sub, index) => {
+    const base = sub?._id ? byId.get(String(sub._id)) : null;
+    return edit(base || { subscriptionNo: index + 1 }, sub || {});
+  });
 };
 
+const getSubscriptionEndDateChanges = (existing = [], next = []) => {
+  const before = new Map(existing.map(sub => [String(sub._id), sub]));
+  return next
+    .filter(sub => sub?._id && before.has(String(sub._id)) && sub.endDate)
+    .filter(sub => new Date(before.get(String(sub._id)).endDate || 0).getTime() !== new Date(sub.endDate).getTime())
+    .map(sub => ({
+      subscriptionId: sub._id, subscriptionNo: sub.subscriptionNo || null,
+      previousEndDate: before.get(String(sub._id)).endDate, endDate: new Date(sub.endDate)
+    }));
+};
+
+// Tasks due on a subscription's last day move with it when that date is edited (tasks with
+// their own plan day keep it), and tasks that went overdue only because it ended are open
+// again if it now ends later.
+const moveSubscriptionTasksToEndDate = async ({ clientId, subscriptionId, subscriptionNo, previousEndDate, endDate }) => {
+  const dueDate = subscriptionExpiresAt({ endDate });
+  if (!clientId || !subscriptionId || !dueDate) return;
+  const now = new Date();
+  const filter = {
+    clientId: new mongoose.Types.ObjectId(String(clientId)),
+    subscriptionId,
+    completed: { $ne: true },
+    status: { $nin: ['completed', 'onhold', 'on hold', 'cancelled'] },
+    dueDateSource: { $ne: 'manual' }
+  };
+  // Older tasks hold the raw end date; newer ones its end of day.
+  const previousDueDates = previousEndDate
+    ? [new Date(previousEndDate), subscriptionExpiresAt({ endDate: previousEndDate })].filter(Boolean)
+    : [];
+  const log = {
+    action: 'subscription_end_date_changed',
+    userName: 'System',
+    description: `Due date moved to subscription end ${dueDate.toISOString()}`,
+    newValues: { dueDate, subscriptionNo, subscriptionId },
+    createdAt: now
+  };
+  // Raw writes: an admin date edit should not post one chat message per task.
+  const tasks = ClientTask.collection;
+  await tasks.updateMany(
+    { ...filter, ...(previousDueDates.length ? { dueDate: { $in: previousDueDates } } : {}) },
+    { $set: { dueDate, updatedAt: now }, $inc: { __v: 1 }, $push: { activityLogs: { ...log, _id: new mongoose.Types.ObjectId() } } }
+  );
+  if (dueDate > now) {
+    await tasks.updateMany(
+      { ...filter, status: 'overdue', 'activityLogs.action': 'subscription_expired_task_overdue' },
+      { $set: { status: 'pending', updatedAt: now }, $inc: { __v: 1 } }
+    );
+  }
+};
 
 const getWelcomeEmailTemplate = (name, company, email, password, loginUrl) => {
   const currentYear = new Date().getFullYear();
@@ -1157,7 +1174,7 @@ const getAllClients = async (req, res) => {
         const latestSubscription = getLatestSubscription(companyClient);
         const revenue = getClientRevenueTotal(companyClient);
         const isExpired = latestSubscription?.endDate
-          ? new Date(latestSubscription.endDate) < new Date()
+          ? subscriptionExpiresAt(latestSubscription) < new Date()
           : companyClient.status !== 'Active';
 
         if (!groupedMap.has(key)) {
@@ -2248,18 +2265,12 @@ const updateClient = async (req, res) => {
     if (description !== undefined) updateData.description = description.trim();
     if (notes !== undefined) updateData.notes = notes.trim();
     
+    let subscriptionDateChanges = [];
     if (subscription !== undefined) {
-      void 0;
       
       if (Array.isArray(subscription) && subscription.length > 0) {
-        const formattedSubscription = subscription.map(sub => ({
-          startDate: sub.startDate ? new Date(sub.startDate) : null,
-          endDate: sub.endDate ? new Date(sub.endDate) : null,
-          price: sub.price || 0,
-          status: sub.status || 'Active'
-        }));
-        updateData.subscription = formattedSubscription;
-        void 0;
+        updateData.subscription = mergeEditedSubscriptions(existingClient.subscription || [], subscription);
+        subscriptionDateChanges = getSubscriptionEndDateChanges(existingClient.subscription || [], updateData.subscription);
       } else if (subscription !== null && subscription.length === 0) {
         updateData.subscription = [];
         void 0;
@@ -2271,6 +2282,9 @@ const updateClient = async (req, res) => {
       updateData,
       { new: true, runValidators: true }
     );
+    for (const change of subscriptionDateChanges) {
+      await moveSubscriptionTasksToEndDate({ clientId: id, ...change });
+    }
 
     if ((branch !== undefined || branchId !== undefined) && updatedClient?.userId) {
       const requestedBranchId = branch || branchId;
@@ -2596,6 +2610,12 @@ const getClientsByCompany = async (req, res) => {
   }
 };
 
+// Subscriptions added without choosing a plan (extend, payment approval) use the client's
+// active plan, so the new period gets its own number and plan tasks like a renewal does.
+const loadActiveClientPlan = async client => (client.activeClientPlan
+  ? ClientPlan.findOne({ _id: client.activeClientPlan, companyCode: client.companyCode, isActive: true })
+  : null);
+
 const extendClientSubscription = async (req, res) => {
   try {
     const { id } = req.params;
@@ -2622,11 +2642,10 @@ const extendClientSubscription = async (req, res) => {
     const endDate = new Date(startDate);
     endDate.setDate(endDate.getDate() + days);
 
+    const plan = await loadActiveClientPlan(client);
     client.subscription.push({
-      startDate,
-      endDate,
-      price: price,
-      status: 'Active'
+      ...createSubscriptionFromInput({ sub: { startDate, endDate, status: 'Active' }, plan, fallbackNo: nextSubscriptionNo(client.subscription) }),
+      price: Number(price) || 0
     });
     client.reminder5DaysSent = false;
     client.reminder3DaysSent = false;
@@ -2634,17 +2653,14 @@ const extendClientSubscription = async (req, res) => {
     client.expiredReminderLastSentAt = null;
 
     await client.save();
-    const createdSub = client.subscription[client.subscription.length - 1];
-    const overdueTaskExtension = await extendOverdueClientTasksToSubscriptionEnd({
-      clientId: client._id,
-      subscription: createdSub
-    });
+    if (plan) {
+      await generateTasksForSubscription({ client, subscription: client.subscription[client.subscription.length - 1], plan });
+    }
 
     res.json({
       success: true,
       message: "Subscription extended successfully",
-      data: client,
-      overdueTaskExtension
+      data: client
     });
 
   } catch (error) {
@@ -2687,7 +2703,7 @@ const renewClientSubscription = async (req, res) => {
     client.expiredMailSent = false;
     client.expiredReminderLastSentAt = null;
 
-    const subscriptionNo = (client.subscription?.length || 0) + 1;
+    const subscriptionNo = nextSubscriptionNo(client.subscription);
     const nextSub = createSubscriptionFromInput({
       sub: { startDate, endDate, price, status: 'Active', extraTasks, benefits },
       plan: selectedClientPlan,
@@ -2703,11 +2719,6 @@ const renewClientSubscription = async (req, res) => {
 
     await client.save({ session });
     const createdSub = client.subscription[client.subscription.length - 1];
-    const overdueTaskExtension = await extendOverdueClientTasksToSubscriptionEnd({
-      clientId: client._id,
-      subscription: createdSub,
-      session
-    });
 
     if (selectedClientPlan) {
       await generateTasksForSubscription({
@@ -2724,8 +2735,7 @@ const renewClientSubscription = async (req, res) => {
     res.json({
       success: true,
       message: "Subscription renewed successfully",
-      data: updatedClient,
-      overdueTaskExtension
+      data: updatedClient
     });
 
   } catch (error) {
@@ -2794,13 +2804,30 @@ const removeClientSubscription = async (req, res) => {
       return res.status(404).json({ success: false, message: "Client not found" });
     }
 
-    client.subscription = [];
+    // Only the latest subscription is removed; older ones are the client's history.
+    const latest = latestSubscription(client.subscription);
+    if (!latest) {
+      return res.status(404).json({ success: false, message: "Client has no subscription to remove" });
+    }
+    const subscriptionId = latest._id;
+    client.subscription.pull(subscriptionId);
     await client.save();
+
+    // Its unfinished tasks go with it; completed work stays. Raw delete: one removal should
+    // not post a chat message per task.
+    const removed = await ClientTask.collection.deleteMany({
+      clientId: client._id,
+      subscriptionId,
+      completed: { $ne: true },
+      status: { $ne: 'completed' }
+    });
+    syncClient(client._id).catch(err => console.error('Error syncing client chat on removeClientSubscription:', err));
 
     res.json({
       success: true,
-      message: "Subscription removed successfully",
-      data: client
+      message: `Subscription ${latest.subscriptionNo || ''} removed successfully`.replace(/ +/g, ' '),
+      data: client,
+      removedTasks: removed.deletedCount || 0
     });
   } catch (error) {
     console.error('Error removing subscription:', error);
@@ -2898,7 +2925,8 @@ const updateClientReceiptStatus = async (req, res) => {
       linkedDue.clearedAt = cleanStatus === 'Approved' ? new Date() : undefined;
     }
 
-    let activatedSubscription = null;
+    let activatedPlan = null;
+    let activatedSubscriptionId = null;
     if (cleanStatus === 'Approved' && activateClient) {
       const subStart = startDate ? new Date(startDate) : new Date();
       const subEnd = endDate ? new Date(endDate) : null;
@@ -2908,15 +2936,22 @@ const updateClientReceiptStatus = async (req, res) => {
         : new Date(subStart.getTime() + 30 * 24 * 60 * 60 * 1000);
 
       client.status = 'Active';
+      activatedPlan = await loadActiveClientPlan(client);
       client.subscription.push({
-        startDate: Number.isNaN(subStart.getTime()) ? new Date() : subStart,
-        endDate: subEnd && !Number.isNaN(subEnd.getTime()) ? subEnd : fallbackEnd,
-        price: Number(receipt.amount || linkedDue?.amount || 0),
-        status: 'Active',
-        extraTasks: 0,
-        benefits: 'Activated after payment verification'
+        ...createSubscriptionFromInput({
+          sub: {
+            startDate: Number.isNaN(subStart.getTime()) ? new Date() : subStart,
+            endDate: subEnd && !Number.isNaN(subEnd.getTime()) ? subEnd : fallbackEnd,
+            status: 'Active',
+            extraTasks: 0,
+            benefits: 'Activated after payment verification'
+          },
+          plan: activatedPlan,
+          fallbackNo: nextSubscriptionNo(client.subscription)
+        }),
+        price: Number(receipt.amount || linkedDue?.amount || 0)
       });
-      activatedSubscription = client.subscription[client.subscription.length - 1];
+      activatedSubscriptionId = client.subscription[client.subscription.length - 1]._id;
       client.reminder5DaysSent = false;
       client.reminder3DaysSent = false;
       client.expiredMailSent = false;
@@ -2924,18 +2959,14 @@ const updateClientReceiptStatus = async (req, res) => {
     }
 
     await client.save();
-    const overdueTaskExtension = activatedSubscription
-      ? await extendOverdueClientTasksToSubscriptionEnd({
-        clientId: client._id,
-        subscription: activatedSubscription
-      })
-      : { matchedCount: 0, modifiedCount: 0 };
+    if (activatedPlan && activatedSubscriptionId) {
+      await generateTasksForSubscription({ client, subscription: client.subscription.id(activatedSubscriptionId), plan: activatedPlan });
+    }
 
     res.json({
       success: true,
       message: `Receipt ${cleanStatus.toLowerCase()} successfully`,
-      data: client,
-      overdueTaskExtension
+      data: client
     });
   } catch (error) {
     console.error('Error updating receipt status:', error);
@@ -3037,3 +3068,4 @@ for (const [key, handler] of Object.entries(module.exports)) {
     return require('../utils/projectChatEvents').context.run({ actor: req.user.id || req.user._id }, () => handler(...args));
   };
 }
+module.exports.internal = { mergeEditedSubscriptions, moveSubscriptionTasksToEndDate };

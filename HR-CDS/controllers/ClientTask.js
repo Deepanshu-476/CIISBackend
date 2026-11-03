@@ -1,6 +1,7 @@
 const Task = require('../models/ClientTask');
 const Client = require('../models/Client');
 const mongoose = require('mongoose');
+const { createHash } = require('node:crypto');
 const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
@@ -11,6 +12,9 @@ const { enqueueCompletionJob, enqueueBackgroundJob } = require('../utils/backgro
 const { sendEmail } = require('../../utils/sendEmail');
 const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
 const { normalizeTaskReminderSettings } = require('../utils/taskReminderSettings');
+const { subscriptionExpiresAt } = require('../utils/subscriptionDates');
+
+const SYSTEM_USER_ID = '000000000000000000000001';
 
 void 0;
 
@@ -150,17 +154,6 @@ const parseTaskCheckpoints = value => {
     .filter(Boolean);
 };
 
-const getLatestSubscription = client => {
-  const subscriptions = Array.isArray(client?.subscription) ? client.subscription : [];
-  if (!subscriptions.length) return null;
-
-  return [...subscriptions].sort((a, b) => {
-    const noDiff = Number(b?.subscriptionNo || 0) - Number(a?.subscriptionNo || 0);
-    if (noDiff) return noDiff;
-    return new Date(b?.endDate || 0) - new Date(a?.endDate || 0);
-  })[0];
-};
-
 // The no-argument form scans every company's clients and is called from list endpoints on each request.
 // Run that global pass at most once a minute per process; client-specific calls still run immediately.
 const GLOBAL_SUBSCRIPTION_SYNC_INTERVAL_MS = 60000;
@@ -190,28 +183,52 @@ const syncExpiredSubscriptionClientTasks = async (clientIds = [], { throttle = f
   }
   const now = new Date();
   const clientFilter = normalizedClientIds.length ? { _id: { $in: normalizedClientIds } } : {};
-  // Only the latest subscription's number and end date are needed, not the history.
-  const clients = await Client.find(clientFilter).select('_id subscription._id subscription.subscriptionNo subscription.endDate').lean();
-  const bulkOps = [];
+  const clients = await Client.find(clientFilter)
+    .select('_id subscription._id subscription.subscriptionNo subscription.endDate subscription.planName')
+    .lean();
+  // Plan tasks live only as long as their own subscription: when it ends, only its
+  // still-open tasks go overdue. Tasks of other subscriptions, tasks without one and
+  // tasks with a manual due date are left alone.
+  const expired = new Map();
+  clients.forEach(client => (client.subscription || []).forEach(subscription => {
+    // Valid through its last day (IST); it expires once that day is over.
+    const subscriptionEnd = subscriptionExpiresAt(subscription);
+    if (!subscription?._id || !subscriptionEnd || subscriptionEnd >= now) return;
+    expired.set(String(subscription._id), { clientId: client._id, subscription, subscriptionEnd });
+  }));
+  if (!expired.size) return { matchedCount: 0, modifiedCount: 0 };
 
-  clients.forEach(client => {
-    const latestSubscription = getLatestSubscription(client);
-    const subscriptionEnd = latestSubscription?.endDate ? new Date(latestSubscription.endDate) : null;
-    if (!subscriptionEnd || Number.isNaN(subscriptionEnd.getTime()) || subscriptionEnd >= now) return;
+  const openTaskFilter = {
+    completed: { $ne: true },
+    status: { $nin: ['completed', 'onhold', 'on hold', 'overdue', 'cancelled'] },
+    dueDateSource: { $ne: 'manual' }
+  };
+  const tasks = await Task.find({
+    ...openTaskFilter,
+    $or: [...expired.values()].map(({ clientId, subscription }) => ({ clientId, subscriptionId: subscription._id }))
+  }).select('_id clientId subscriptionId name').lean();
+  const tasksBySubscription = new Map();
+  tasks.forEach(task => {
+    const key = String(task.subscriptionId);
+    // The client must still own the subscription the task was made for.
+    if (String(expired.get(key)?.clientId) !== String(task.clientId)) return;
+    tasksBySubscription.set(key, [...(tasksBySubscription.get(key) || []), task]);
+  });
 
-    bulkOps.push({
-      updateMany: {
-        filter: {
-          clientId: client._id,
-          completed: { $ne: true },
-          status: { $nin: ['completed', 'onhold', 'on hold', 'overdue'] }
-        },
+  let matchedCount = 0;
+  let modifiedCount = 0;
+  for (const [key, subscriptionTasks] of tasksBySubscription) {
+    const { clientId, subscription, subscriptionEnd } = expired.get(key);
+    // Raw writes skip the per-task chat events; the whole expiry is posted once below.
+    const result = await Task.collection.bulkWrite(subscriptionTasks.map(task => ({
+      updateOne: {
+        filter: { ...openTaskFilter, _id: task._id },
         update: {
-          $set: {
-            status: 'overdue'
-          },
+          $set: { status: 'overdue', updatedAt: now },
+          $inc: { __v: 1 },
           $push: {
             activityLogs: {
+              _id: new mongoose.Types.ObjectId(),
               action: 'subscription_expired_task_overdue',
               userName: 'System',
               description: `Subscription expired on ${subscriptionEnd.toISOString()}`,
@@ -219,26 +236,46 @@ const syncExpiredSubscriptionClientTasks = async (clientIds = [], { throttle = f
               newValues: {
                 status: 'overdue',
                 subscriptionEndDate: subscriptionEnd,
-                subscriptionNo: latestSubscription.subscriptionNo || null,
-                subscriptionId: latestSubscription._id || null
+                subscriptionNo: subscription.subscriptionNo || null,
+                subscriptionId: subscription._id
               },
               createdAt: now
             }
           }
         }
       }
-    });
-  });
+    })), { ordered: false });
+    matchedCount += result.matchedCount || 0;
+    modifiedCount += result.modifiedCount || 0;
 
-  if (!bulkOps.length) {
-    return { matchedCount: 0, modifiedCount: 0 };
+    // Another instance may have run the same sweep a moment earlier; it posts the message.
+    if (result.modifiedCount) {
+      await postSubscriptionExpiredMessage(clientId, subscription, subscriptionTasks)
+        .catch(error => console.error('[client-chat] subscription expiry message', String(clientId), error.message));
+    }
   }
 
-  const result = await Task.bulkWrite(bulkOps);
-  return {
-    matchedCount: result.matchedCount || 0,
-    modifiedCount: result.modifiedCount || 0
-  };
+  return { matchedCount, modifiedCount };
+};
+
+const SUBSCRIPTION_EXPIRY_LISTED_TASKS = 15;
+
+// One group message (and one notification per member) for an expired subscription,
+// listing the pending tasks that moved to overdue.
+const postSubscriptionExpiredMessage = async (clientId, subscription, tasks) => {
+  const { syncClient } = require('../utils/clientChatService');
+  const { deliverEvent } = require('../utils/projectChatService');
+  const conversation = await syncClient(clientId);
+  if (!conversation?.members?.length) return;
+  await deliverEvent({ _id: clientId, chatEntity: 'client' }, conversation, {
+    key: createHash('sha256').update(`${clientId}:${subscription._id}:subscription_expired`).digest('hex'),
+    type: 'subscription_expired',
+    actor: SYSTEM_USER_ID,
+    subscriptionNo: subscription.subscriptionNo || null,
+    planName: subscription.planName || '',
+    count: tasks.length,
+    titles: tasks.slice(0, SUBSCRIPTION_EXPIRY_LISTED_TASKS).map(task => task.name || 'Untitled task')
+  });
 };
 
 const applyClientTaskHoldTransition = (task, previousStatus, targetStatus, now = new Date()) => {
@@ -280,12 +317,8 @@ const parseClientDueDate = value => {
   return Number.isNaN(date.getTime()) ? null : date;
 };
 
-const getSubscriptionTaskDueDate = subscription => {
-  if (!subscription?.endDate) return null;
-  const dueDate = new Date(subscription.endDate);
-  if (Number.isNaN(dueDate.getTime())) return null;
-  return dueDate;
-};
+// Without its own date, a task is due on the last day of its subscription.
+const getSubscriptionTaskDueDate = subscriptionExpiresAt;
 
 const getClientTaskDueDateRange = period => {
   if (!period || period === 'all') return null;
@@ -3176,6 +3209,7 @@ for (const [key, handler] of Object.entries(module.exports)) {
     return require('../utils/projectChatEvents').context.run({ actor: req.user.id || req.user._id }, () => handler(...args));
   };
 }
+module.exports.internal = { syncExpiredSubscriptionClientTasks };
 
 function parseChatMentionIds(raw) {
   let value = raw || [];
