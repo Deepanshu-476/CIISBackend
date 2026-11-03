@@ -6,7 +6,7 @@ const callStore = require("./callStore");
 
 const ringTimers = new Map();
 const socketDisconnectTimers = new Map();
-const CALL_RING_TIMEOUT_MS = 45 * 1000;
+const CALL_RING_TIMEOUT_MS = Number(process.env.CALL_RING_TIMEOUT_MS) || 45 * 1000;
 const CALL_DISCONNECT_GRACE_MS = 15 * 1000;
 
 const clearLocalRingTimer = (callId) => {
@@ -106,6 +106,15 @@ const incomingPayload = (room, userId) => ({
     answeredAt: room.answeredAt || null,
 });
 
+// FCM data payloads are limited to 4KB on Android. A base64 profile photo in fromUser made every
+// call:incoming push fail with messaging/invalid-argument, so a backgrounded phone never rang.
+const pushSafeUser = (user = {}) => {
+    const avatar = typeof user.avatar === "string" && !user.avatar.startsWith("data:") && user.avatar.length <= 500
+        ? user.avatar
+        : "";
+    return { _id: user._id, id: user.id || user._id, name: user.name, avatar, profileImage: avatar };
+};
+
 const clearCallPush = (userIds, callId) => {
     if (!userIds || !userIds.length) return;
     sendPushToUsers({userIds, data: {type: "call:cancelled", callId}}).catch(() => {});
@@ -165,6 +174,75 @@ const maybeCloseRoom = async (callId) => {
     if (!hasActiveParticipant) {
         await closeCallRoom(callId);
     }
+};
+
+// ---- Group call roster -------------------------------------------------------------------
+// Everyone in the call sees who was added (and by whom), who is ringing, who joined, who did not
+// answer, who left, and who was removed (and by whom).
+const invitedTimers = new Map();
+
+const rosterOf = (room) => Object.entries(room?.participants || {}).map(([userId, participant]) => ({
+    userId,
+    status: participant.status,
+    user: participant.user || participant.invitedUser || { _id: userId, name: "Participant" },
+    addedBy: participant.addedBy || null,
+    addedByName: participant.addedByName || "",
+    removedBy: participant.removedBy || null,
+    removedByName: participant.removedByName || "",
+    expiresAt: participant.status === "invited" ? (participant.expiresAt || room.expiresAt) : null,
+}));
+
+const broadcastRoster = (io, room) => {
+    if (!room?.callId) return;
+    emitToJoinedParticipants(io, room, "call:roster", {
+        callId: room.callId,
+        hostUserId: room.hostUserId,
+        participants: rosterOf(room),
+    });
+};
+
+const emitCallNotice = (io, room, notice) => {
+    if (!room?.callId) return;
+    emitToJoinedParticipants(io, room, "call:notice", { callId: room.callId, at: Date.now(), ...notice });
+};
+
+const nameOf = (room, userId) => {
+    const participant = room?.participants?.[userId];
+    return participant?.user?.name || participant?.invitedUser?.name || "Someone";
+};
+
+// Names for people who are only ringing, so the roster can show them before they join.
+const lookupInvitedUsers = async (ids) => {
+    if (!ids.length) return {};
+    try {
+        const users = await User.find({ _id: { $in: ids } }).select("name email avatar profileImage image").lean();
+        return users.reduce((acc, user) => {
+            acc[String(user._id)] = pushSafeUser(getPublicUser(user) || {});
+            return acc;
+        }, {});
+    } catch (_) { return {}; }
+};
+
+// When one invitee's ringing runs out, mark only them as "missed" (the call itself goes on).
+const scheduleInviteTimeout = (io, callId, userId, expiresAt) => {
+    const key = `${callId}:${userId}`;
+    clearTimeout(invitedTimers.get(key));
+    const delay = Math.max(1000, Number(expiresAt || 0) - Date.now() + 500);
+    invitedTimers.set(key, setTimeout(async () => {
+        invitedTimers.delete(key);
+        await callStore.withCallLock(callId, async () => {
+            const room = await callStore.get(callId);
+            const participant = room?.participants?.[userId];
+            if (!room || participant?.status !== "invited") return;
+            room.participants[userId] = { ...participant, status: "missed" };
+            await callStore.save(room);
+            clearCallPush([userId], callId);
+            io.to(`user:${userId}`).emit("call:missed", { callId, fromUserId: room.hostUserId, reason: "No answer" });
+            broadcastRoster(io, room);
+            emitCallNotice(io, room, { type: "missed", targetUserId: userId, text: `${nameOf(room, userId)} didn't answer` });
+            await maybeCloseRoom(callId);
+        });
+    }, delay));
 };
 
 const callSocket = (io, socket) => {
@@ -260,16 +338,24 @@ const callSocket = (io, socket) => {
             };
 
             // Invited participants have socketId = null until they accept
+            const invitedUsers = await lookupInvitedUsers(targetParticipantIds);
             targetParticipantIds.forEach(userId => {
                 room.participants[userId] = {
                     status: "invited",
                     expiresAt: room.expiresAt,
                     user: null,
+                    invitedUser: invitedUsers[userId] || null,
+                    addedBy: socket.userId,
+                    addedByName: callerUser.name || "",
                     socketId: null,
                 };
             });
 
             await callStore.save(room);
+            if (isGroupCall) {
+                targetParticipantIds.forEach(userId => scheduleInviteTimeout(io, callId, userId, room.expiresAt));
+            }
+            broadcastRoster(io, room);
             callHistory.recordCallStarted(room);
 
             // Ring timeout stored in server local ringTimers
@@ -318,7 +404,7 @@ const callSocket = (io, socket) => {
                         callType,
                         fromUserId: socket.userId,
                         title: callTitle,
-                        fromUser: callerUser,
+                        fromUser: pushSafeUser(callerUser),
                         conversationId: data.conversationId,
                         participantIds: [socket.userId, ...targetParticipantIds],
                         isGroupCall,
@@ -412,6 +498,11 @@ const callSocket = (io, socket) => {
                 callType: room.callType,
                 answeredAt: room.answeredAt,
             }, socket.userId);
+            clearTimeout(invitedTimers.get(`${callId}:${socket.userId}`));
+            broadcastRoster(io, room);
+            if (room.isGroupCall) {
+                emitCallNotice(io, room, { type: "joined", targetUserId: socket.userId, text: `${participantUser?.name || "Someone"} joined the call` });
+            }
         });
     });
 
@@ -426,8 +517,9 @@ const callSocket = (io, socket) => {
                 return;
             }
 
+            // People who missed, declined, left or were removed can be added again.
             const requestedIds = getParticipantIds(data)
-                .filter(userId => userId !== socket.userId && !room.participants[userId]);
+                .filter(userId => userId !== socket.userId && !["joined", "invited"].includes(room.participants[userId]?.status));
 
             if (requestedIds.length === 0) {
                 socket.emit("call:ringing", {
@@ -463,16 +555,29 @@ const callSocket = (io, socket) => {
             room.title = callTitle;
             callHistory.recordParticipantsAdded(callId, targetParticipantIds);
 
+            const invitedUsers = await lookupInvitedUsers(targetParticipantIds);
+            const inviteExpiresAt = Date.now() + CALL_RING_TIMEOUT_MS;
             targetParticipantIds.forEach(userId => {
                 room.participants[userId] = {
                     status: "invited",
-                    expiresAt: Date.now() + CALL_RING_TIMEOUT_MS,
+                    expiresAt: inviteExpiresAt,
                     user: null,
+                    invitedUser: invitedUsers[userId] || room.participants[userId]?.user || null,
+                    addedBy: socket.userId,
+                    addedByName: inviterUser.name || "",
                     socketId: null,
                 };
             });
 
             await callStore.save(room);
+            targetParticipantIds.forEach(userId => scheduleInviteTimeout(io, callId, userId, inviteExpiresAt));
+            broadcastRoster(io, room);
+            emitCallNotice(io, room, {
+                type: "added",
+                byUserId: socket.userId,
+                targetUserIds: targetParticipantIds,
+                text: `${inviterUser.name || "Someone"} added ${targetParticipantIds.map(id => invitedUsers[id]?.name || "a participant").join(", ")}`,
+            });
 
             targetParticipantIds.forEach(userId => {
                 io.to(`user:${userId}`).emit("call:incoming", {
@@ -500,7 +605,7 @@ const callSocket = (io, socket) => {
                         callType: room.callType,
                         fromUserId: socket.userId,
                         title: callTitle,
-                        fromUser: inviterUser,
+                        fromUser: pushSafeUser(inviterUser),
                         conversationId: room.conversationId,
                         participantIds: [...joinedIds, ...targetParticipantIds],
                         isGroupCall: true,
@@ -553,6 +658,11 @@ const callSocket = (io, socket) => {
                 callId,
                 fromUserId: socket.userId,
             }, socket.userId);
+            clearTimeout(invitedTimers.get(`${callId}:${socket.userId}`));
+            broadcastRoster(io, room);
+            if (room.isGroupCall) {
+                emitCallNotice(io, room, { type: "declined", targetUserId: socket.userId, text: `${getPublicUser(socket.user)?.name || "Someone"} declined the call` });
+            }
 
             if (data.toUserId) {
                 emitToParticipant(io, room, data.toUserId?.toString(), "call:rejected", {
@@ -643,8 +753,68 @@ const callSocket = (io, socket) => {
                 callId,
                 fromUserId: socket.userId,
             }, socket.userId);
+            broadcastRoster(io, room);
+            if (room.isGroupCall) {
+                emitCallNotice(io, room, { type: "left", targetUserId: socket.userId, text: `${getPublicUser(socket.user)?.name || "Someone"} left the call` });
+            }
             await maybeCloseRoom(callId);
         });
+    });
+
+    // Anyone in a call can end another participant's call (or stop someone's ringing); everyone
+    // left in the call is told who removed whom.
+    socket.on("call:remove-participant", async (data = {}) => {
+        const callId = data.callId?.toString();
+        const targetUserId = getUserId(data.userId || data.targetUserId);
+        if (!callId || !targetUserId || targetUserId === socket.userId) return;
+
+        await callStore.withCallLock(callId, async () => {
+            const room = await callStore.get(callId);
+            const me = room?.participants?.[socket.userId];
+            const target = room?.participants?.[targetUserId];
+            if (!room || me?.status !== "joined" || !target || !["joined", "invited"].includes(target.status)) return;
+
+            const remover = getPublicUser(socket.user) || {};
+            const targetName = nameOf(room, targetUserId);
+            clearTimeout(invitedTimers.get(`${callId}:${targetUserId}`));
+            room.participants[targetUserId] = {
+                ...target,
+                status: "removed",
+                removedBy: socket.userId,
+                removedByName: remover.name || "",
+            };
+            await callStore.save(room);
+            clearCallPush([targetUserId], callId);
+
+            // The removed person's devices end the call (ringing ones stop ringing).
+            io.to(`user:${targetUserId}`).emit("call:removed", {
+                callId, byUserId: socket.userId, byUser: pushSafeUser(remover), reason: `${remover.name || "Someone"} removed you from the call`,
+            });
+            if (target.status === "invited") {
+                io.to(`user:${targetUserId}`).emit("call:missed", { callId, fromUserId: socket.userId, reason: "Removed" });
+            }
+            // Everyone else drops the removed person's connection.
+            emitToJoinedParticipants(io, room, "call:ended", {
+                callId, fromUserId: targetUserId, status: "removed",
+            }, targetUserId);
+            broadcastRoster(io, room);
+            emitCallNotice(io, room, {
+                type: "removed",
+                byUserId: socket.userId,
+                targetUserId,
+                text: `${remover.name || "Someone"} ended ${targetName}'s call`,
+            });
+            await maybeCloseRoom(callId);
+        });
+    });
+
+    socket.on("call:get-roster", async (data = {}, callback) => {
+        const room = await callStore.get(data.callId?.toString());
+        const payload = room?.participants?.[socket.userId]
+            ? { callId: room.callId, hostUserId: room.hostUserId, participants: rosterOf(room) }
+            : null;
+        if (typeof callback === "function") callback(payload);
+        else if (payload) socket.emit("call:roster", payload);
     });
 
     socket.on("disconnect", () => {
@@ -680,6 +850,10 @@ const callSocket = (io, socket) => {
                                     status: "ended",
                                     reason: "Disconnected",
                                 }, socket.userId);
+                                broadcastRoster(io, latestRoom);
+                                if (latestRoom.isGroupCall) {
+                                    emitCallNotice(io, latestRoom, { type: "left", targetUserId: socket.userId, text: `${getPublicUser(socket.user)?.name || "Someone"} disconnected` });
+                                }
                                 await maybeCloseRoom(latestRoom.callId);
                             }
                         }

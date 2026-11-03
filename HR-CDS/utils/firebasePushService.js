@@ -305,12 +305,15 @@ exports.sendPushToUsers = async ({userIds, title, body, data = {}}) => {
         // the APNs key in Firebase is missing or wrong) were otherwise invisible.
         if (response.failureCount) {
           const failures = {};
+          const reasons = {};
           (response.responses || []).forEach((result, index) => {
             if (result.success) return;
             const key = `${platformByToken.get(batchTokens[index]) || 'unknown'}:${result.error?.code || 'error'}`;
             failures[key] = (failures[key] || 0) + 1;
+            // invalid-argument covers both a bad token and an oversized payload; keep FCM's own message.
+            if (!reasons[key]) reasons[key] = String(result.error?.message || '').slice(0, 160);
           });
-          console.warn('[FCM] delivery failures', JSON.stringify({ type: data.type || '', failures }));
+          console.warn('[FCM] delivery failures', JSON.stringify({ type: data.type || '', failures, reasons }));
         }
 
         logPushDebug('firebase:batch-result', {
@@ -330,9 +333,11 @@ exports.sendPushToUsers = async ({userIds, title, body, data = {}}) => {
         (response.responses || []).forEach((result, index) => {
           if (!result.success) {
             const code = result.error?.code || '';
+            const message = String(result.error?.message || '').toLowerCase();
             if (
               code.includes('registration-token-not-registered') ||
-              code.includes('invalid-registration-token')
+              code.includes('invalid-registration-token') ||
+              (code.includes('invalid-argument') && message.includes('registration token'))
             ) {
               tokensToRemove.add(batchTokens[index]);
             }

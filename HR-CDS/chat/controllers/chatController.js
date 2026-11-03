@@ -4,7 +4,7 @@ const Message = require("../models/Message");
 const User = require("../../../models/User");
 const Group = require("../../models/Group");
 const {notifyDirectUsers} = require("../../utils/systemNotificationService");
-const {deliveryReceiptsFor, recordSeen, recordConversationRead} = require("../utils/messageReceipts");
+const {deliveryReceiptsFor, recordSeen, recordConversationRead, seenByAllOthers} = require("../utils/messageReceipts");
 const {getCompanyOnlineUsers} = require("../../socket/presence");
 
 const getUserId = req => req.user._id?.toString() || req.user.id?.toString();
@@ -146,27 +146,14 @@ const getRawCompanyId = company => {
   return company.toString();
 };
 
-const getSocketOnlineUserIds = (companyId) => {
-  const onlineIds = new Set();
-  const companyKey = getRawCompanyId(companyId);
-
-  if (!global.io?.sockets?.sockets) return onlineIds;
-
-  global.io.sockets.sockets.forEach(socket => {
-    const socketUserId = (socket.userId || socket.data?.userId)?.toString();
-    const socketCompanyId = getRawCompanyId(socket.companyId);
-
-    if (!socketUserId) return;
-    if (companyKey && socketCompanyId && socketCompanyId !== companyKey) return;
-
-    onlineIds.add(socketUserId);
-  });
-
-  return onlineIds;
+// Cluster-wide (via the Redis adapter): app and web users connect to different backend processes.
+const getSocketOnlineUserIds = async (companyId) => {
+  if (!global.io) return new Set();
+  return new Set((await getCompanyOnlineUsers(global.io, getRawCompanyId(companyId))).map(String));
 };
 
-const getDeliveredMemberIds = (conversation, senderId) => {
-  const onlineIds = getSocketOnlineUserIds(conversation.companyId);
+const getDeliveredMemberIds = async (conversation, senderId) => {
+  const onlineIds = await getSocketOnlineUserIds(conversation.companyId);
   return (conversation.members || [])
     .map(member => member.toString())
     .filter(memberId => memberId !== senderId)
@@ -522,7 +509,7 @@ exports.sendMessage = async (req, res) => {
 
     const duration = DISAPPEARING_DURATIONS[conversation.disappearingMode];
     const expiresAt = duration ? new Date(Date.now() + duration) : null;
-    const deliveredTo = getDeliveredMemberIds(conversation, senderId);
+    const deliveredTo = await getDeliveredMemberIds(conversation, senderId);
 
     const message = await Message.create({
       companyId: req.user.company,
@@ -661,7 +648,7 @@ exports.getMessages = async (req, res) => {
           ? deliveredTo.some(memberId => memberId !== userId)
           : deliveredTo.includes(userId),
         seen: senderId === userId
-          ? seenBy.some(memberId => memberId !== userId)
+          ? seenByAllOthers(conversation.members, userId, seenBy)
           : seenBy.includes(userId),
       };
     });
@@ -671,37 +658,10 @@ exports.getMessages = async (req, res) => {
         const senderId = message.sender?._id?.toString() || message.sender?.toString();
         const seenBy = (message.seenBy || []).map(member => member.toString());
         return senderId !== userId && !seenBy.includes(userId)
-          ? {messageId: message._id, senderId}
+          ? {messageId: message._id, senderId, allSeen: seenByAllOthers(conversation.members, senderId, [...seenBy, userId])}
           : null;
       })
       .filter(Boolean);
-
-    // Time taken before marking so a message arriving meanwhile stays unread.
-    const readAt = new Date();
-    await recordConversationRead(
-      {
-        conversationId: req.params.id,
-        companyId: req.user.company,
-        sender: {$ne: userId},
-        ...activeMessageFilter(),
-      },
-      userId,
-      readAt
-    );
-    await setReadMark(conversation._id, userId, readAt);
-    conversation.readState = (await Conversation.findById(conversation._id).select("readState").lean())?.readState || [];
-
-    await emitUnreadCounts(conversation, userId, {onlyUserId: userId});
-
-    if (global.io) {
-      newlySeenMessages.forEach(message => {
-        global.io.to(`user:${message.senderId}`).emit("chat:message-seen", {
-          messageId: message.messageId,
-          conversationId: conversation._id,
-          seenBy: userId,
-        });
-      });
-    }
 
     res.status(200).json({
       success: true,
@@ -713,6 +673,38 @@ exports.getMessages = async (req, res) => {
         nextAfter: normalizedMessages.length ? normalizedMessages[normalizedMessages.length - 1].createdAt : null,
       },
     });
+
+    // Marking the thread read (receipts, read mark, unread counts, seen events) used to run
+    // before the response, so every chat open waited on it. The reader gets the page first.
+    (async () => {
+      // Time taken before marking so a message arriving meanwhile stays unread.
+      const readAt = new Date();
+      await recordConversationRead(
+        {
+          conversationId: req.params.id,
+          companyId: req.user.company,
+          sender: {$ne: userId},
+          ...activeMessageFilter(),
+        },
+        userId,
+        readAt
+      );
+      await setReadMark(conversation._id, userId, readAt);
+      conversation.readState = (await Conversation.findById(conversation._id).select("readState").lean())?.readState || [];
+
+      await emitUnreadCounts(conversation, userId, {onlyUserId: userId});
+
+      if (global.io) {
+        newlySeenMessages.forEach(message => {
+          global.io.to(`user:${message.senderId}`).emit("chat:message-seen", {
+            messageId: message.messageId,
+            conversationId: conversation._id,
+            seenBy: userId,
+            allSeen: message.allSeen,
+          });
+        });
+      }
+    })().catch(error => console.error("[chat] mark read failed:", error.message));
   } catch (error) {
     res.status(500).json({success: false, message: error.message});
   }
@@ -1033,7 +1025,7 @@ exports.forwardMessage = async (req, res) => {
         });
       }
 
-      const deliveredTo = getDeliveredMemberIds(conversation, userId);
+      const deliveredTo = await getDeliveredMemberIds(conversation, userId);
 
       const message = await Message.create({
         companyId: req.user.company,
@@ -1170,10 +1162,12 @@ exports.markMessageSeen = async (req, res) => {
     await emitUnreadCounts(conversation, userId, {onlyUserId: userId});
 
     if (global.io) {
+      const fresh = await Message.findById(message._id).select("seenBy").lean();
       global.io.to(`user:${message.sender}`).emit("chat:message-seen", {
         messageId: message._id,
         conversationId: conversation._id,
         seenBy: userId,
+        allSeen: seenByAllOthers(conversation.members, message.sender, fresh?.seenBy),
       });
     }
 
