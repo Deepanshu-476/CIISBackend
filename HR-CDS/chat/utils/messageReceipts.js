@@ -104,4 +104,12 @@ const recordPendingDeliveries = async (io, userId, companyId) => {
   });
 };
 
-module.exports = {deliveryReceiptsFor, recordSeen, recordConversationRead, recordDelivered, recordPendingDeliveries};
+// Blue ticks mean every other member has read the message (in a group, not just the first reader).
+const seenByAllOthers = (members, senderId, seenBy) => {
+  const sender = String(senderId || "");
+  const readers = new Set((seenBy || []).map(String));
+  const others = (members || []).map(String).filter(id => id && id !== sender);
+  return others.length > 0 && others.every(id => readers.has(id));
+};
+
+module.exports = {deliveryReceiptsFor, recordSeen, recordConversationRead, recordDelivered, recordPendingDeliveries, seenByAllOthers};

@@ -16,23 +16,11 @@ try {
   if (typeof cascade.cascadeUserUpdate === 'function') cascadeUserUpdate = cascade.cascadeUserUpdate;
 } catch (e) {}
 
-const getSocketOnlineUserIds = (companyId) => {
-  const onlineIds = new Set();
-  const companyKey = companyId?.toString();
-
-  if (!global.io?.sockets?.sockets) return onlineIds;
-
-  global.io.sockets.sockets.forEach(socket => {
-    const socketUserId = socket.userId?.toString();
-    const socketCompanyId = socket.companyId?.toString();
-
-    if (!socketUserId) return;
-    if (companyKey && socketCompanyId !== companyKey) return;
-
-    onlineIds.add(socketUserId);
-  });
-
-  return onlineIds;
+// Cluster-wide (via the Redis adapter): app and web users connect to different backend processes.
+const getSocketOnlineUserIds = async (companyId) => {
+  if (!global.io || !companyId) return new Set();
+  const { getCompanyOnlineUsers } = require('../socket/presence');
+  return new Set((await getCompanyOnlineUsers(global.io, companyId.toString())).map(String));
 };
 
 const validateAssignableDepartment = async (departmentId, companyId) => {
@@ -2381,7 +2369,7 @@ exports.getCompanydepartmentUsers = async (req, res) => {
       .lean(),
       User.countDocuments(filter)
     ]);
-    const socketOnlineIds = getSocketOnlineUserIds(companyId);
+    const socketOnlineIds = await getSocketOnlineUserIds(companyId);
     
     void 0;
     
@@ -2490,7 +2478,7 @@ exports.getCompanyUsers = async (req, res) => {
       .populate("assignedBranches", "name branchCode")
       .populate("company", "name companyName companyCode")
       .lean();
-    const socketOnlineIds = getSocketOnlineUserIds(companyId);
+    const socketOnlineIds = await getSocketOnlineUserIds(companyId);
 
     const includeStats = req.query.includeStats === 'true';
     let statsByUser = new Map();
