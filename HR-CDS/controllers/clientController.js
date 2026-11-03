@@ -18,6 +18,7 @@ const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagin
 const { isSuperAdminUser } = require('../../middleware/authMiddleware');
 const { syncClient } = require('../utils/clientChatService');
 const { subscriptionExpiresAt, planTaskDueDate, latestSubscription, nextSubscriptionNo } = require('../utils/subscriptionDates');
+const { postSubscriptionTasksMessage } = require('../utils/subscriptionChat');
 
 
 const DEFAULT_CLIENT_DEPARTMENT_ID = '69ae555c9a1e47e80a40204c';
@@ -495,51 +496,49 @@ const createRenewalDueInvoice = ({ subscription, plan = null }) => {
   };
 };
 
+// All of a subscription's plan tasks are inserted at once: insertMany skips the per-task chat
+// events, so the group gets one summary (announcePlanTasks, once the write is committed)
+// instead of one "created task" message per task.
 const generateTasksForSubscription = async ({ client, subscription, plan, session }) => {
   if (!plan || !subscription?._id) return [];
-  const createdTaskIds = [];
+  const now = new Date();
+  const docs = (plan.services || []).flatMap(serviceTemplate => (serviceTemplate.tasks || []).map(taskTemplate => ({
+    clientId: client._id,
+    subscriptionId: subscription._id,
+    subscriptionNo: subscription.subscriptionNo,
+    planId: plan._id,
+    planName: plan.name,
+    templateTaskId: taskTemplate._id,
+    isPlanTask: true,
+    service: serviceTemplate.service,
+    name: taskTemplate.name,
+    description: taskTemplate.description || taskTemplate.name,
+    dueDate: planTaskDueDate(subscription, taskTemplate.dueInDays, Number(plan.months) || 0),
+    dueDateSource: 'subscription',
+    priority: taskTemplate.priority || 'Medium',
+    status: 'pending',
+    completed: false,
+    activityLogs: [{
+      action: 'created_from_plan',
+      userName: 'System',
+      description: `Generated from ${plan.name} / Subscription ${subscription.subscriptionNo}`,
+      createdAt: now
+    }]
+  })));
+  if (!docs.length) return [];
 
-  for (const serviceTemplate of plan.services || []) {
-    for (const taskTemplate of serviceTemplate.tasks || []) {
-      const [task] = await ClientTask.create([{
-        clientId: client._id,
-        subscriptionId: subscription._id,
-        subscriptionNo: subscription.subscriptionNo,
-        planId: plan._id,
-        planName: plan.name,
-        templateTaskId: taskTemplate._id,
-        isPlanTask: true,
-        service: serviceTemplate.service,
-        name: taskTemplate.name,
-        description: taskTemplate.description || taskTemplate.name,
-        dueDate: planTaskDueDate(subscription, taskTemplate.dueInDays, Number(plan.months) || 0),
-        dueDateSource: 'subscription',
-        priority: taskTemplate.priority || 'Medium',
-        status: 'pending',
-        completed: false,
-        activityLogs: [{
-          action: 'created_from_plan',
-          userName: 'System',
-          description: `Generated from ${plan.name} / Subscription ${subscription.subscriptionNo}`,
-          createdAt: new Date()
-        }]
-      }], { session });
-
-      createdTaskIds.push(task._id);
-    }
-  }
-
-  if (createdTaskIds.length) {
-    await Client.updateOne(
-      { _id: client._id, 'subscription._id': subscription._id },
-      { $set: { 'subscription.$.generatedTaskIds': createdTaskIds } },
-      { session }
-    );
-  }
-
-  return createdTaskIds;
+  const tasks = await ClientTask.insertMany(docs, { session });
+  await Client.updateOne(
+    { _id: client._id, 'subscription._id': subscription._id },
+    { $set: { 'subscription.$.generatedTaskIds': tasks.map(task => task._id) } },
+    { session }
+  );
+  return tasks;
 };
 
+const announcePlanTasks = (clientId, subscription, tasks) =>
+  postSubscriptionTasksMessage('plan_tasks_created', clientId, subscription, tasks)
+    .catch(error => console.error('[client-chat] plan tasks message', String(clientId), error.message));
 
 // The edit form sends the subscriptions back, often only the latest one without its _id.
 // Keep each stored subscription (its _id, number, plan and generated tasks) and only
@@ -1958,8 +1957,9 @@ const addClient = async (req, res) => {
     });
 
     await newClient.save({ session });
+    let planTasks = [];
     if (selectedClientPlan && newClient.subscription.length > 0) {
-      await generateTasksForSubscription({
+      planTasks = await generateTasksForSubscription({
         client: newClient,
         subscription: newClient.subscription[newClient.subscription.length - 1],
         plan: selectedClientPlan,
@@ -1999,6 +1999,7 @@ const addClient = async (req, res) => {
 
     await session.commitTransaction();
     syncClient(newClient._id).catch(err => console.error('Error syncing client chat on addClient:', err));
+    announcePlanTasks(newClient._id, newClient.subscription[newClient.subscription.length - 1], planTasks);
     if (!reusableClientUser && req.body?.sendWelcomeEmail !== false) {
       sendWelcomeEmail(cleanEmail, cleanClientName, cleanCompanyName, autoPassword, cleanCompanyCode)
         .then(result => {
@@ -2654,7 +2655,8 @@ const extendClientSubscription = async (req, res) => {
 
     await client.save();
     if (plan) {
-      await generateTasksForSubscription({ client, subscription: client.subscription[client.subscription.length - 1], plan });
+      const subscription = client.subscription[client.subscription.length - 1];
+      announcePlanTasks(client._id, subscription, await generateTasksForSubscription({ client, subscription, plan }));
     }
 
     res.json({
@@ -2720,16 +2722,12 @@ const renewClientSubscription = async (req, res) => {
     await client.save({ session });
     const createdSub = client.subscription[client.subscription.length - 1];
 
-    if (selectedClientPlan) {
-      await generateTasksForSubscription({
-        client,
-        subscription: createdSub,
-        plan: selectedClientPlan,
-        session
-      });
-    }
+    const planTasks = selectedClientPlan
+      ? await generateTasksForSubscription({ client, subscription: createdSub, plan: selectedClientPlan, session })
+      : [];
 
     await session.commitTransaction();
+    announcePlanTasks(client._id, createdSub, planTasks);
     const updatedClient = await Client.findById(id).lean();
 
     res.json({
@@ -2960,7 +2958,8 @@ const updateClientReceiptStatus = async (req, res) => {
 
     await client.save();
     if (activatedPlan && activatedSubscriptionId) {
-      await generateTasksForSubscription({ client, subscription: client.subscription.id(activatedSubscriptionId), plan: activatedPlan });
+      const subscription = client.subscription.id(activatedSubscriptionId);
+      announcePlanTasks(client._id, subscription, await generateTasksForSubscription({ client, subscription, plan: activatedPlan }));
     }
 
     res.json({
