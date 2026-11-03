@@ -1,6 +1,7 @@
 const cron = require('node-cron');
 
 const Client = require('../HR-CDS/models/Client');
+const { istDaysUntil } = require('../HR-CDS/utils/subscriptionDates');
 const emailService = require('../services/emailService');
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -48,7 +49,8 @@ if (require('../utils/scheduledJobs').scheduledJobsEnabled()) cron.schedule('0 9
       const endDate = new Date(latestSubscription.endDate);
       if (Number.isNaN(endDate.getTime())) continue;
 
-      const daysRemaining = Math.ceil((endDate - now) / ONE_DAY_MS);
+      // In IST calendar days: a subscription ending 3 Nov is valid through 3 Nov.
+      const daysRemaining = istDaysUntil(endDate, now);
       let changed = false;
 
       if (daysRemaining === 5 && !client.reminder5DaysSent) {

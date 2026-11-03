@@ -1762,11 +1762,12 @@ exports.addTask = async (req, res) => {
 
       const { id } = req.params;
       const { title, description, assignedTo, dueDate, priority, status, checkpoints } = req.body;
-      void 0;
-      void 0;
-      void 0;
 
-      const project = await Project.findById(id);
+      // Only what the access check and the response need: a big project (hundreds of tasks,
+      // thousands of notifications) is megabytes, and reading all of it took ~16s per request.
+      const project = await Project.findById(id)
+        .select('projectName users createdBy managers company companyCode tasks.assignedTo tasks.assignedUsers')
+        .lean();
       if (!project) {
         return res.status(404).json({
           success: false,
