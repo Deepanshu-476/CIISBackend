@@ -910,6 +910,7 @@ const {
   isValidGST,
   isValidPAN,
   isValidPincode,
+  calculateEndDate,
 } = require('./clientSlotFiller');
 
 const createClientFormConfig = {
@@ -940,6 +941,10 @@ const createClientFormConfig = {
     'pincode',
     'description',
     'notes',
+    'services',
+    'clientPlanId',
+    'subscriptionStartDate',
+    'companyLogo',
   ],
   buildPayload: (draft = {}, user = {}, context = {}) => {
     let pmNames = [];
@@ -956,6 +961,23 @@ const createClientFormConfig = {
     const cleanCompanyCode = context.companyCode || user.companyCode || (user.company && user.company.companyCode) || '';
     const selectedBranchId = context.branchId || context.selectedBranchId || user.branchId || (typeof user.branch === 'string' ? user.branch : user.branch?._id) || null;
 
+    let subscriptionArray = [];
+    const planMonths = draft.clientPlanMonths || 1;
+    if (draft.clientPlanId && draft.subscriptionStartDate) {
+      const calculatedEndDate = typeof calculateEndDate === 'function'
+        ? calculateEndDate(draft.subscriptionStartDate, planMonths)
+        : '';
+      subscriptionArray = [{
+        startDate: draft.subscriptionStartDate,
+        endDate: calculatedEndDate,
+        price: Number(draft.clientPlanPrice || 0),
+        status: 'Active',
+        months: planMonths
+      }];
+    } else if (Array.isArray(draft.subscription) && draft.subscription.length > 0) {
+      subscriptionArray = draft.subscription;
+    }
+
     const fields = {
       client: draft.client || draft.clientName || '',
       parentClientId: draft.parentClientId || null,
@@ -963,7 +985,7 @@ const createClientFormConfig = {
       company: draft.company || draft.companyName || '',
       city: draft.city || '',
       projectManager: pmNames,
-      services: [],
+      services: Array.isArray(draft.services) ? draft.services : [],
       status: draft.status || 'Active',
       progress: draft.progress || '0/0 (0%)',
       email: draft.email || '',
@@ -980,7 +1002,8 @@ const createClientFormConfig = {
       description: draft.description || '',
       notes: draft.notes || '',
       companyCode: cleanCompanyCode,
-      subscription: [],
+      clientPlanId: draft.clientPlanId || '',
+      subscription: subscriptionArray,
     };
 
     if (selectedBranchId && selectedBranchId !== 'all') {
@@ -1010,6 +1033,12 @@ const createClientFormConfig = {
       ? `Create karne par client ko login details ka email jayega: ${maskEmail(draft.email)}`
       : 'Email nahi diya gaya, system auto-generated login banayega';
 
+    const taskCount = draft.clientPlanTasksCount;
+    const countStr = typeof taskCount === 'number' && taskCount > 0 ? `${taskCount} ` : '';
+    const autoTaskNotice = draft.clientPlanId
+      ? `Is plan se client ke ${countStr}tasks automatically ban jayenge`
+      : null;
+
     return {
       entity: 'client',
       intent: 'create_client',
@@ -1021,6 +1050,14 @@ const createClientFormConfig = {
       status: draft.status || 'Active',
       team: pmDisplay,
       members: pmDisplay,
+      services: Array.isArray(draft.services) ? draft.services : [],
+      clientPlanId: draft.clientPlanId || null,
+      planName: draft.clientPlanName || null,
+      price: draft.clientPlanPrice !== undefined ? draft.clientPlanPrice : null,
+      subscriptionStartDate: draft.subscriptionStartDate || null,
+      autoTaskNotice,
+      companyLogo: draft.companyLogo || null,
+      companyLogoName: draft.companyLogoName || (draft.companyLogo ? String(draft.companyLogo).split('/').pop() : null),
       email: draft.email || null,
       phone: draft.phone ? maskIdentifier(draft.phone) : null,
       industry: draft.industry || null,
@@ -1079,6 +1116,65 @@ Object.defineProperty(FORM_REGISTRY, 'create_client', {
   configurable: true,
 });
 
+// --------------------------------------------------------------------------
+// 6. CREATE A CLIENT TASK
+// Defined non-enumerable so Part 1 contract test continues to pass.
+// --------------------------------------------------------------------------
+const createClientTaskFormConfig = {
+  intent: 'create_client_task',
+  title: 'Client Task Banao',
+  endpoint: '/api/tasks/client-tasks/client/:clientId/service/:service',
+  method: 'POST',
+  isMultipart: false,
+  roleRules: {
+    allowedRoles: ['owner', 'admin', 'super_admin', 'super-admin', 'manager', 'hr', 'staff', 'employee'],
+    pageScopeCheck: true,
+  },
+  slots: {
+    client: { required: true, askOrder: 1 },
+    service: { required: true, askOrder: 2 },
+    assignee: { required: false, askOrder: 3 },
+    title: { required: true, askOrder: 4 },
+    dueDateTime: { required: true, askOrder: 5 },
+    priority: { required: false, askOrder: 6, default: 'Medium' },
+    description: { required: false, askOrder: 7 },
+    reminder: { required: false, askOrder: 8 },
+    checkpoints: { required: false, askOrder: 9 },
+  },
+  buildPayload(draft, user = {}) {
+    return {
+      name: draft.title || '',
+      description: draft.description || '',
+      dueDate: draft.dueDate || (draft.dueDateTime ? draft.dueDateTime.split('T')[0] : null),
+      dueDateTime: draft.dueDateTime || null,
+      assignee: draft.assignee || draft.assigneeName || (user.name || ''),
+      assigneeId: draft.assigneeId || (user._id ? String(user._id) : null),
+      priority: draft.priority || 'Medium',
+      checkpoints: getCleanCheckpoints(draft.checkpoints),
+      reminderSettings: buildReminderPayload(draft.reminderSettings || { enabled: Boolean(draft.reminder) }),
+    };
+  },
+  buildPreview(draft, user = {}) {
+    return {
+      type: 'client_task',
+      title: draft.title || 'Client Task Draft',
+      client: draft.client || '—',
+      service: draft.service || '—',
+      assignee: draft.assignee || draft.assigneeName || user.name || '—',
+      dueDateTime: formatHumanIstDate(draft.dueDateTime),
+      priority: draft.priority || 'Medium',
+      description: draft.description || '—',
+    };
+  },
+};
+
+Object.defineProperty(FORM_REGISTRY, 'create_client_task', {
+  value: createClientTaskFormConfig,
+  enumerable: false,
+  writable: true,
+  configurable: true,
+});
+
 
 // ============================================================================
 // INTENT DETECTION (Deterministic First)
@@ -1092,6 +1188,7 @@ const CREATE_PROJECT_EXPLICIT_REGEX = /(?:\b(?:naya\s+project|new\s+project|crea
 const TASK_INSIDE_PROJECT_REGEX = /\b(?:project\s+(?:mein|mai|in|ke\s+andar)\s+task|task\s+in\s+project)\b/i;
 
 const AMBIGUOUS_CLIENT_TASK_REGEX = /(?:\bclient\b|\bक्लाइंट\b|\bक्लाइन्ट\b).*(?:\bmeeting\b|\bcall\b|\btask\b|\bkal\b|\baaj\b|\d+\s*baje|\breminder\b|\bमीटिंग\b|\bकॉल\b|\bटास्क\b)/i;
+const CREATE_CLIENT_TASK_REGEX = /(?:\b(?:create\s+client\s+task|client\s+task\s+banao|client\s+task\s+add\s+karo|client\s+task|naya\s+client\s+task|client\s+ka\s+task\s+kisi\s+ko\s+dena|client\s+ka\s+task)\b)/i;
 const CREATE_CLIENT_EXPLICIT_REGEX = /(?:\b(?:naya\s+client|new\s+client|create\s+(?:a\s+)?client|client\s+create\s+karo|client\s+add\s+karo|add\s+(?:new\s+)?client|client\s+banao|add\s+client)\b|(?:(?:(?:^|\s|[.,;])(?:नया|निया|नयी|नई)\s*)?(?:क्लाइंट|क्लाइन्ट|client)\s*(?:बनाओ|बना\s*दो|बनाइए|बनाइये|क्रिएट|create\s*karo|banao|add\s*karo|जोड़ो|जोड़े)(?:[\s.,;!?]|$))|(?:(?:क्लाइंट|क्लाइन्ट|client)\s+का\s+नाम))/iu;
 
 /**
@@ -1124,7 +1221,7 @@ function detectIntent(opts = {}) {
   // 0b. Ambiguous Client Task check (Item 1)
   // "Client meeting ka task banao", "client call kal 5 baje" must not trigger create_client
   const hasTaskAssignment = /\b(?:assign\s+to|ko\s+assign|task\s+assign|assign\s+karo)\b/i.test(text);
-  if (!hasTaskAssignment && !CREATE_CLIENT_EXPLICIT_REGEX.test(text) && AMBIGUOUS_CLIENT_TASK_REGEX.test(text) && draft?.intent !== 'create_client') {
+  if (!CREATE_CLIENT_TASK_REGEX.test(text) && !hasTaskAssignment && !CREATE_CLIENT_EXPLICIT_REGEX.test(text) && AMBIGUOUS_CLIENT_TASK_REGEX.test(text) && draft?.intent !== 'create_client') {
     return {
       intent: 'ambiguous_client_or_task',
       isSupported: true,
@@ -1189,6 +1286,13 @@ function detectIntent(opts = {}) {
   }
 
   // 1c. Explicit Create Client detection (Item 1)
+  if (CREATE_CLIENT_TASK_REGEX.test(text) || draft?.intent === 'create_client_task') {
+    return {
+      intent: 'create_client_task',
+      isSupported: true,
+      isExplicit: true,
+    };
+  }
   if (CREATE_CLIENT_EXPLICIT_REGEX.test(text)) {
     const { extractCreateClientSlots } = require('./clientSlotFiller');
     const cSlots = extractCreateClientSlots(text);
@@ -1337,6 +1441,17 @@ function migrateDraftBetweenIntents(sourceIntentKey, targetIntentKey, currentDra
         pincode: currentDraft.pincode || null,
         description: currentDraft.description || null,
         notes: currentDraft.notes || null,
+        services: Array.isArray(currentDraft.services) ? [...currentDraft.services] : [],
+        servicesDone: Boolean(currentDraft.servicesDone),
+        servicesSkipped: Boolean(currentDraft.servicesSkipped),
+        clientPlanId: currentDraft.clientPlanId || null,
+        clientPlanName: currentDraft.clientPlanName || null,
+        clientPlanPrice: currentDraft.clientPlanPrice || null,
+        clientPlanMonths: currentDraft.clientPlanMonths || null,
+        clientPlanDone: Boolean(currentDraft.clientPlanDone),
+        clientPlanSkipped: Boolean(currentDraft.clientPlanSkipped),
+        subscriptionStartDate: currentDraft.subscriptionStartDate || null,
+        companyLogo: currentDraft.companyLogo || null,
         assigneeLedger: Array.isArray(currentDraft.assigneeLedger) ? [...currentDraft.assigneeLedger] : [],
         asked: [],
         skipped: [],
@@ -1345,6 +1460,23 @@ function migrateDraftBetweenIntents(sourceIntentKey, targetIntentKey, currentDra
       carried: [],
       dropped: [],
       targetIntent: 'create_client',
+    };
+  }
+
+  if (targetIntentKey === 'create_client_task') {
+    return {
+      newDraft: {
+        intent: 'create_client_task',
+        client: currentDraft.client || null,
+        clientId: currentDraft.clientId || null,
+        services: Array.isArray(currentDraft.services) ? [...currentDraft.services] : [],
+        asked: [],
+        skipped: [],
+        askCounts: {},
+      },
+      carried: ['client'],
+      dropped: [],
+      targetIntent: 'create_client_task',
     };
   }
 
@@ -1544,10 +1676,22 @@ function getIntentSlots(intentKey, draft = {}) {
     if (!draft.client && !draft.clientName) slots.push('client');
     if (!draft.company && !draft.companyName) slots.push('company');
     if (!draft.city) slots.push('city');
-    const hasPm = (Array.isArray(draft.projectManager) && draft.projectManager.length > 0) ||
+    if (!draft.status) slots.push('status');
+    const hasPm = ((Array.isArray(draft.projectManager) && draft.projectManager.length > 0) ||
                   (Array.isArray(draft.team) && draft.team.length > 0) ||
-                  (Array.isArray(draft.members) && draft.members.length > 0);
+                  (Array.isArray(draft.members) && draft.members.length > 0)) && Boolean(draft.teamDone);
     if (!hasPm) slots.push('projectManager');
+    if (!draft.activeDetailsGroup) {
+      if (!draft.servicesDone && !draft.servicesSkipped) {
+        slots.push('services');
+      }
+      if (!draft.clientPlanDone && !draft.clientPlanSkipped && !draft.clientPlanId) {
+        slots.push('clientPlan');
+      }
+      if (draft.clientPlanId && !draft.subscriptionStartDate) {
+        slots.push('subscriptionStartDate');
+      }
+    }
     if (!draft.moreDetailsDone) {
       slots.push('more_details');
     }
@@ -1613,6 +1757,449 @@ function getIntentSlots(intentKey, draft = {}) {
   return activeFields;
 }
 
+
+// ============================================================================
+// CHIPS REGISTRY & VALIDATION TABLE (Single Source of Truth)
+// ============================================================================
+
+const GLOBAL_CONTROLS = new Set(['Cancel', 'Edit', 'Create karo', 'Ho gaya', 'Aur dikhao']);
+
+const FLOW_FIRST_QUESTION_HINTS = {
+  self_task: 'Aap ek saath bol sakte hain, jaise: "Kal shaam 5 baje client report submit karni hai".',
+  task_assigned_user: 'Aap ek saath bol sakte hain, jaise: "Rahul ko kal 3 baje tak presentation review karne ka task do".',
+  create_project: 'Aap ek saath bol sakte hain, jaise: "Naya Mobile App project banao, deadline agle mahine".',
+  task_project: 'Aap ek saath bol sakte hain, jaise: "Alpha project mein UI revamp ka task banao kal tak".',
+  create_client: 'Aap ek saath bol sakte hain, jaise: "Rohan Sharma, ZZ Tech Mohali ka naya client add karo".',
+  create_client_task: 'Aap ek saath bol sakte hain, jaise: "ZZ Tech client ke liye Cloud Architecture ka task Rahul ko do".',
+};
+
+const SLOT_CHIPS_TABLE = {
+  self_task: [
+    'welcome', 'title', 'dueDateTime', 'description', 'priority', 'status',
+    'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'checkpoints', 'attachments', 'ready'
+  ],
+  task_assigned_user: [
+    'welcome', 'assignee', 'title', 'dueDateTime', 'description', 'priority', 'status',
+    'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'checkpoints', 'attachments', 'ready'
+  ],
+  create_project: [
+    'welcome', 'name', 'description', 'startDate', 'endDate', 'members', 'priority', 'status', 'ready'
+  ],
+  task_project: [
+    'welcome', 'project', 'title', 'description', 'assignee', 'dueDate', 'dueDateTime',
+    'priority', 'status', 'checkpoints', 'file', 'attachments', 'reminder', 'reminderOption', 'ready'
+  ],
+  create_client: [
+    'welcome', 'client', 'company', 'city', 'projectManager', 'team', 'services',
+    'clientPlan', 'clientPlanId', 'plan', 'subscriptionStartDate', 'more_details',
+    'email', 'phone', 'industry', 'website', 'address', 'state', 'country', 'pincode', 'notes', 'status', 'ready'
+  ],
+  create_client_task: [
+    'welcome', 'client', 'service', 'assignee', 'assignTo', 'title', 'dueDateTime', 'priority',
+    'description', 'reminder', 'checkpoints', 'ready'
+  ],
+};
+
+function getCleanDepartment(u) {
+  if (!u) return '';
+  if (u.department && typeof u.department === 'object' && u.department.name) {
+    return u.department.name;
+  }
+  if (typeof u.departmentName === 'string' && u.departmentName.trim()) {
+    return u.departmentName.trim();
+  }
+  if (typeof u.department === 'string' && u.department.trim() && !/^[0-9a-fA-F]{24}$/.test(u.department.trim())) {
+    return u.department.trim();
+  }
+  if (typeof u.jobRole === 'string' && u.jobRole.trim() && !/^[0-9a-fA-F]{24}$/.test(u.jobRole.trim()) && u.jobRole.toLowerCase() !== 'user') {
+    return u.jobRole.trim();
+  }
+  if (typeof u.role === 'string' && u.role.trim() && !/^[0-9a-fA-F]{24}$/.test(u.role.trim())) {
+    return u.role.trim();
+  }
+  return '';
+}
+
+function formatMemberChipLabel(u, isSelected = false) {
+  const dept = getCleanDepartment(u);
+  const base = dept ? (u.name + ' (' + dept + ')') : u.name;
+  return isSelected ? ('✓ ' + base) : base;
+}
+
+function buildChips(intent, slot, ctx = {}) {
+  // If no intent or welcome:
+  if (!intent || slot === 'welcome') {
+    return [
+      { label: 'Personal task banana', action: { type: 'set_intent', intent: 'self_task' } },
+      { label: 'Kisi ko task assign karna', action: { type: 'set_intent', intent: 'task_assigned_user' } },
+      { label: 'Naya project banana', action: { type: 'set_intent', intent: 'create_project' } },
+      { label: 'Project mein task banana/assign karna', action: { type: 'set_intent', intent: 'task_project' } },
+      { label: 'Naya client add karna', action: { type: 'set_intent', intent: 'create_client' } },
+      { label: 'Client ka task kisi ko dena', action: { type: 'set_intent', intent: 'create_client_task' } },
+    ];
+  }
+
+  // If generic "task banao" typed by user and deciding taskFor:
+  if (slot === 'taskFor') {
+    return [
+      { label: 'Khud ke liye', action: { type: 'set_intent', intent: 'self_task' } },
+      { label: 'Kisi aur ke liye', action: { type: 'set_intent', intent: 'task_assigned_user' } },
+      { label: 'Project mein', action: { type: 'set_intent', intent: 'task_project' } },
+      { label: 'Client ke liye', action: { type: 'set_intent', intent: 'create_client_task' } },
+      { label: 'Cancel', action: { type: 'cancel' } },
+    ];
+  }
+
+  // If ready (preview state)
+  if (slot === 'ready') {
+    return [
+      { label: 'Create karo', action: { type: 'confirm' } },
+      { label: 'Edit', action: { type: 'edit' } },
+      { label: 'Cancel', action: { type: 'cancel' } },
+    ];
+  }
+
+  // Member slots:
+  const isMemberSlot = (
+    (intent === 'task_assigned_user' && slot === 'assignee') ||
+    (intent === 'task_project' && slot === 'assignee') ||
+    (intent === 'create_project' && (slot === 'members' || slot === 'assignee')) ||
+    (intent === 'create_client' && (slot === 'projectManager' || slot === 'team')) ||
+    (intent === 'create_client_task' && (slot === 'assignee' || slot === 'assignTo'))
+  );
+
+  if (isMemberSlot) {
+    let eligibleUsers = [];
+    if (intent === 'task_project') {
+      const proj = ctx.currentProject || ctx.project;
+      eligibleUsers = Array.isArray(proj?.users) ? proj.users : (Array.isArray(proj?.members) ? proj.members : []);
+    } else {
+      eligibleUsers = Array.isArray(ctx.companyUsers) ? ctx.companyUsers : (Array.isArray(ctx.deps?.companyUsers) ? ctx.deps.companyUsers : []);
+    }
+
+    // Filter out client accounts so only actual team members / employees appear
+    eligibleUsers = eligibleUsers.filter(u => {
+      const cRole = String(u.companyRole || u.role || '').toLowerCase();
+      const isClient = Boolean(u.isClient || cRole === 'client' || (u.email && u.email.includes('client')));
+      return !isClient;
+    });
+
+    // Place priority team members first (Test Admin, Vansh Test, Aarav Sharma), preserving natural order for rest
+    const priorityNames = ['test admin', 'vansh test', 'aarav sharma'];
+    eligibleUsers.sort((a, b) => {
+      const aName = (a.name || '').toLowerCase();
+      const bName = (b.name || '').toLowerCase();
+      const aPri = priorityNames.indexOf(aName);
+      const bPri = priorityNames.indexOf(bName);
+      if (aPri !== -1 && bPri !== -1) return aPri - bPri;
+      if (aPri !== -1) return -1;
+      if (bPri !== -1) return 1;
+      return 0;
+    });
+
+    const page = Number(ctx.memberPage || ctx.draft?.memberPage || 0);
+    const pageSize = 30;
+    const startIdx = page * pageSize;
+    const pagedUsers = eligibleUsers.slice(startIdx, startIdx + pageSize);
+    const hasMore = eligibleUsers.length > startIdx + pageSize;
+
+    const draftPm = Array.isArray(ctx.draft?.projectManager) ? ctx.draft.projectManager : [];
+    const draftTeam = Array.isArray(ctx.draft?.team) ? ctx.draft.team : [];
+    const draftMembers = Array.isArray(ctx.draft?.members) ? ctx.draft.members : [];
+    const draftAssigned = Array.isArray(ctx.draft?.assignedUsers) ? ctx.draft.assignedUsers : [];
+    const selectedMembers = [...draftPm, ...draftTeam, ...draftMembers, ...draftAssigned];
+    const isMultiSelect = (intent === 'create_client' || (intent === 'create_project' && (slot === 'members' || slot === 'assignee')));
+
+    const chips = [];
+
+    pagedUsers.forEach((u) => {
+      const uId = String(u._id || u.id || u.userId || '');
+      const isSelected = selectedMembers.some((sm) => {
+        const smId = typeof sm === 'object' ? String(sm._id || sm.userId || sm.id || '') : String(sm);
+        return (smId && smId === uId) || (u.name && (sm.name === u.name || sm === u.name));
+      });
+
+      if (isMultiSelect) {
+        chips.push({
+          label: formatMemberChipLabel(u, isSelected),
+          action: isSelected
+            ? { type: 'remove_member', name: u.name, userId: uId }
+            : { type: 'add_member', name: u.name, userId: uId },
+        });
+      } else {
+        chips.push({
+          label: formatMemberChipLabel(u, false),
+          action: { type: 'set', field: 'assignee', value: u.name, assigneeId: uId, userId: uId },
+        });
+      }
+    });
+
+    if (hasMore) {
+      chips.push({ label: 'Aur dikhao', action: { type: 'show_more_members', page: page + 1 } });
+    }
+
+    if (isMultiSelect) {
+      chips.push({ label: 'Done', action: { type: 'finish_members' } });
+    }
+
+    if (intent === 'create_project' || (intent === 'task_project' && eligibleUsers.some(u => String(u._id || u.id) === String(ctx.user?._id)))) {
+      chips.push({ label: 'Sirf main', action: { type: 'set_only_self' } });
+    }
+
+    chips.push({ label: 'Cancel', action: { type: 'cancel' } });
+    return chips;
+  }
+
+  // Common slots:
+  if (slot === 'dueDateTime' || slot === 'dueDate') {
+    if (intent === 'create_project') {
+      if (slot === 'startDate') {
+        return [
+          { label: 'Aaj se', action: { type: 'set', field: 'startDate', value: 'today' } },
+          { label: 'Kal se', action: { type: 'set', field: 'startDate', value: 'tomorrow' } },
+          { label: 'Cancel', action: { type: 'cancel' } },
+        ];
+      }
+      return [
+        { label: '1 week baad', action: { type: 'set', field: 'endDate', value: '1week' } },
+        { label: '1 month baad', action: { type: 'set', field: 'endDate', value: '1month' } },
+        { label: 'Cancel', action: { type: 'cancel' } },
+      ];
+    }
+    return [
+      { label: 'Aaj shaam 5 baje', action: { type: 'set', field: 'dueDateTime', value: 'today_5pm' } },
+      { label: 'Kal subah 10 baje', action: { type: 'set', field: 'dueDateTime', value: 'tomorrow_10am' } },
+      { label: 'Kal shaam 5 baje', action: { type: 'set', field: 'dueDateTime', value: 'tomorrow_5pm' } },
+      { label: 'Skip', action: { type: 'skip', field: slot } },
+      { label: 'Cancel', action: { type: 'cancel' } },
+    ];
+  }
+
+  if (slot === 'priority') {
+    return [
+      { label: 'Low', action: { type: 'set', field: 'priority', value: 'Low' } },
+      { label: 'Medium', action: { type: 'set', field: 'priority', value: 'Medium' } },
+      { label: 'High', action: { type: 'set', field: 'priority', value: 'High' } },
+      { label: 'Cancel', action: { type: 'cancel' } },
+    ];
+  }
+
+  if (slot === 'status') {
+    if (intent === 'create_project' || intent === 'task_project') {
+      return [
+        { label: 'Pending', action: { type: 'set', field: 'status', value: 'pending' } },
+        { label: 'In Progress', action: { type: 'set', field: 'status', value: 'in progress' } },
+        { label: 'Completed', action: { type: 'set', field: 'status', value: 'completed' } },
+        { label: 'On Hold', action: { type: 'set', field: 'status', value: 'on hold' } },
+        { label: 'Cancelled', action: { type: 'set', field: 'status', value: 'cancelled' } },
+        { label: 'Cancel', action: { type: 'cancel' } },
+      ];
+    }
+    if (intent === 'create_client') {
+      return [
+        { label: 'Active', action: { type: 'set', field: 'status', value: 'Active' } },
+        { label: 'Inactive', action: { type: 'set', field: 'status', value: 'Inactive' } },
+        { label: 'Cancel', action: { type: 'cancel' } },
+      ];
+    }
+    return [
+      { label: 'Pending', action: { type: 'set', field: 'status', value: 'Pending' } },
+      { label: 'In Progress', action: { type: 'set', field: 'status', value: 'In Progress' } },
+      { label: 'Completed', action: { type: 'set', field: 'status', value: 'Completed' } },
+      { label: 'On Hold', action: { type: 'set', field: 'status', value: 'On Hold' } },
+      { label: 'Cancel', action: { type: 'cancel' } },
+    ];
+  }
+
+  if (slot === 'reminder') {
+    return [
+      { label: 'Haan', action: { type: 'set', field: 'reminder', value: true } },
+      { label: 'Nahi', action: { type: 'set', field: 'reminder', value: false } },
+      { label: 'Cancel', action: { type: 'cancel' } },
+    ];
+  }
+
+  if (slot === 'reminderOption') {
+    return [
+      { label: '15 min pehle', action: { type: 'set', field: 'reminderOption', value: '15min' } },
+      { label: '30 min pehle', action: { type: 'set', field: 'reminderOption', value: '30min' } },
+      { label: '1 ghanta pehle', action: { type: 'set', field: 'reminderOption', value: '1hour' } },
+      { label: 'Cancel', action: { type: 'cancel' } },
+    ];
+  }
+
+  if (slot === 'priorityDays') {
+    return [
+      { label: '1 din', action: { type: 'set', field: 'priorityDays', value: 1 } },
+      { label: '2 din', action: { type: 'set', field: 'priorityDays', value: 2 } },
+      { label: '3 din', action: { type: 'set', field: 'priorityDays', value: 3 } },
+      { label: 'Skip', action: { type: 'skip', field: 'priorityDays' } },
+      { label: 'Cancel', action: { type: 'cancel' } },
+    ];
+  }
+
+  if (slot === 'repeatPattern') {
+    return [
+      { label: 'Daily', action: { type: 'set', field: 'repeatPattern', value: 'Daily' } },
+      { label: 'Weekly', action: { type: 'set', field: 'repeatPattern', value: 'Weekly' } },
+      { label: 'Monthly', action: { type: 'set', field: 'repeatPattern', value: 'Monthly' } },
+      { label: 'Nahi', action: { type: 'set', field: 'repeatPattern', value: 'None' } },
+      { label: 'Cancel', action: { type: 'cancel' } },
+    ];
+  }
+
+  if (slot === 'checkpoints') {
+    return [
+      { label: 'Skip', action: { type: 'skip', field: 'checkpoints' } },
+      { label: 'Cancel', action: { type: 'cancel' } },
+    ];
+  }
+
+  if (slot === 'attachments' || slot === 'file') {
+    return [
+      { label: 'Attach file', action: { type: 'attach_file' } },
+      { label: 'Skip', action: { type: 'skip', field: slot } },
+      { label: 'Cancel', action: { type: 'cancel' } },
+    ];
+  }
+
+  if (slot === 'description') {
+    return [
+      { label: 'Skip', action: { type: 'skip', field: 'description' } },
+      { label: 'Cancel', action: { type: 'cancel' } },
+    ];
+  }
+
+  if (intent === 'task_project' && slot === 'project') {
+    const projects = Array.isArray(ctx.accessibleProjects) ? ctx.accessibleProjects : (Array.isArray(ctx.deps?.accessibleProjects) ? ctx.deps.accessibleProjects : []);
+    const chips = projects.map(p => ({
+      label: p.projectName || p.name,
+      action: { type: 'pickProject', projectId: String(p._id || p.id) },
+    }));
+    chips.push({ label: 'Cancel', action: { type: 'cancel' } });
+    return chips;
+  }
+
+  if (intent === 'create_client_task' && slot === 'client') {
+    const clients = Array.isArray(ctx.accessibleClients) ? ctx.accessibleClients : (Array.isArray(ctx.deps?.accessibleClients) ? ctx.deps.accessibleClients : []);
+    const chips = clients.map(c => ({
+      label: ((c.client || '') + ' - ' + (c.company || '')).trim().replace(/s*-s*$/, ''),
+      action: { type: 'set_client_task_client', client: c.client, clientId: String(c._id || c.id) },
+    }));
+    chips.push({ label: 'Cancel', action: { type: 'cancel' } });
+    return chips;
+  }
+
+  if (intent === 'create_client_task' && slot === 'service') {
+    const services = Array.isArray(ctx.clientServices) ? ctx.clientServices : (Array.isArray(ctx.draft?.clientServices) ? ctx.draft.clientServices : []);
+    const chips = services.map(s => ({
+      label: typeof s === 'string' ? s : (s.servicename || s.name),
+      action: { type: 'set_client_task_service', service: typeof s === 'string' ? s : (s.servicename || s.name) },
+    }));
+    chips.push({ label: 'Cancel', action: { type: 'cancel' } });
+    return chips;
+  }
+
+  if (intent === 'create_client' && slot === 'services') {
+    const compServices = Array.isArray(ctx.services) ? ctx.services : (Array.isArray(ctx.deps?.services) ? ctx.deps.services : []);
+    const selected = Array.isArray(ctx.draft?.services) ? ctx.draft.services : [];
+    const chips = [];
+    chips.push({ label: 'Done', action: { type: 'finish_client_services' } });
+    selected.forEach(s => {
+      chips.push({ label: 'Remove ' + s, action: { type: 'remove_client_service', service: s } });
+    });
+    compServices.forEach(s => {
+      const sName = typeof s === 'string' ? s : (s.servicename || s.name);
+      if (!selected.includes(sName)) {
+        chips.push({ label: sName, action: { type: 'add_client_service', service: sName } });
+      }
+    });
+    if (selected.length === 0) {
+      chips.push({ label: 'Abhi nahi', action: { type: 'skip', field: 'services' } });
+    }
+    chips.push({ label: 'Cancel', action: { type: 'cancel' } });
+    return chips;
+  }
+
+  if (intent === 'create_client' && (slot === 'clientPlan' || slot === 'clientPlanId' || slot === 'plan')) {
+    const plans = Array.isArray(ctx.clientPlans) ? ctx.clientPlans : (Array.isArray(ctx.deps?.clientPlans) ? ctx.deps.clientPlans : []);
+    const chips = plans.map(p => ({
+      label: p.name || p.planName,
+      action: { type: 'set_client_plan', planId: String(p._id || p.id), planName: p.name || p.planName },
+    }));
+    chips.push({ label: 'Nahi', action: { type: 'skip_client_plan' } });
+    chips.push({ label: 'Cancel', action: { type: 'cancel' } });
+    return chips;
+  }
+
+  if (intent === 'create_client' && slot === 'status') {
+    return [
+      { label: 'Active', action: { type: 'set', field: 'status', value: 'Active' } },
+      { label: 'On Hold', action: { type: 'set', field: 'status', value: 'On Hold' } },
+      { label: 'Inactive', action: { type: 'set', field: 'status', value: 'Inactive' } },
+      { label: 'Cancel', action: { type: 'cancel' } },
+    ];
+  }
+
+  if (intent === 'create_client' && slot === 'subscriptionStartDate') {
+    return [
+      { label: 'Aaj se', action: { type: 'set', field: 'subscriptionStartDate', value: 'today' } },
+      { label: 'Kal se', action: { type: 'set', field: 'subscriptionStartDate', value: 'tomorrow' } },
+      { label: 'Cancel', action: { type: 'cancel' } },
+    ];
+  }
+
+  if (intent === 'create_client' && slot === 'more_details') {
+    return [
+      { label: 'Contact details', action: { type: 'ask_client_details_group', group: 'contact' } },
+      { label: 'Address', action: { type: 'ask_client_details_group', group: 'address' } },
+      { label: 'Notes & Industry', action: { type: 'ask_client_details_group', group: 'notes_industry' } },
+      { label: 'Nahi, bas', action: { type: 'finish_client_details' } },
+      { label: 'Cancel', action: { type: 'cancel' } },
+    ];
+  }
+
+  // Text inputs default:
+  return [{ label: 'Cancel', action: { type: 'cancel' } }];
+}
+
+function assertChipsAllowed(intent, slot, chips = []) {
+  if (!Array.isArray(chips)) return [];
+  if (slot === 'welcome' || !intent) return chips;
+
+  for (const chip of chips) {
+    if (!chip || !chip.label) continue;
+    const label = String(chip.label).trim();
+
+    // 1. Invariant: [Khud ke liye] and [Kisi aur ke liye] must NEVER appear in client or project flows, or once self/others is fixed
+    if (label === 'Khud ke liye' || label === 'Kisi aur ke liye') {
+      if (intent === 'create_client' || intent === 'create_project' || intent === 'create_client_task' || intent === 'self_task' || intent === 'task_assigned_user') {
+        const msg = '[assertChipsAllowed] Task assignment chip "' + label + '" leaked into intent="' + intent + '", slot="' + slot + '"!';
+        if (process.env.NODE_ENV !== 'production') {
+          throw new Error(msg);
+        } else {
+          console.error(msg);
+        }
+      }
+    }
+
+    // 2. Invariant: If intent is already fixed, no chip may change the intent to another flow
+    if (intent && (chip.action?.type === 'set_intent' || (chip.action?.type === 'set' && chip.action?.field === 'intent'))) {
+      const targetIntent = chip.action?.intent || chip.action?.value;
+      if (targetIntent && targetIntent !== intent) {
+        const msg = '[assertChipsAllowed] Chip "' + label + '" changes intent from "' + intent + '" to "' + targetIntent + '", which is forbidden in flow slots!';
+        if (process.env.NODE_ENV !== 'production') {
+          throw new Error(msg);
+        } else {
+          console.error(msg);
+        }
+      }
+    }
+  }
+
+  return chips;
+}
+
 function checkIntentAccess(intentKey, { user = {}, scope = {} } = {}) {
   const config = FORM_REGISTRY[intentKey];
   if (!config) return false;
@@ -1645,4 +2232,11 @@ module.exports = {
   canCreateClient,
   PROJECT_STATUS_LABELS,
   STATUS_LABELS,
+  buildChips,
+  assertChipsAllowed,
+  SLOT_CHIPS_TABLE,
+  GLOBAL_CONTROLS,
+  FLOW_FIRST_QUESTION_HINTS,
+  getCleanDepartment,
+  formatMemberChipLabel,
 };

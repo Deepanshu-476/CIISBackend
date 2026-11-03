@@ -1,3 +1,37 @@
+
+function getPendingSlotQuestion(intent, slot) {
+  if (intent === 'create_client') {
+    if (slot === 'client') return 'Client ka naam batayein (zaroori hai):';
+    if (slot === 'company') return 'Company ka naam batayein (zaroori hai):';
+    if (slot === 'city') return 'City ka naam batayein (zaroori hai):';
+    if (slot === 'status') return 'Client ka status kya rakhna hai? (Active, On Hold, Inactive):';
+    if (slot === 'projectManager' || slot === 'team') return 'Team member ka naam batayein jo is client ko manage karenge:';
+    if (slot === 'services') return 'Is client ko kaun si services deni hain?';
+    if (slot === 'clientPlan' || slot === 'plan') return 'Koi plan lagana hai?';
+  }
+  if (intent === 'create_project') {
+    if (slot === 'name') return 'Project ka naam batayein (zaroori hai):';
+    if (slot === 'startDate') return 'Start date kya hogi?';
+    if (slot === 'endDate') return 'End date kya hogi?';
+    if (slot === 'members') return 'Project members chunein:';
+  }
+  if (intent === 'task_project') {
+    if (slot === 'project') return 'Kaun se project mein task banana hai?';
+    if (slot === 'title') return 'Task ka naam kya hoga?';
+    if (slot === 'assignee') return 'Task kisse assign karna hai?';
+  }
+  if (intent === 'create_client_task') {
+    if (slot === 'client') return 'Kaun se client ke liye task banana hai?';
+    if (slot === 'service') return 'Kaun si service ka task banana hai?';
+    if (slot === 'assignee') return 'Task kisse assign karna hai?';
+    if (slot === 'title') return 'Task title batayein:';
+  }
+  if (slot === 'assignee') return 'Task kisse assign karna hai?';
+  if (slot === 'title') return 'Task ka naam kya hoga?';
+  if (slot === 'dueDateTime' || slot === 'dueDate') return 'Due date aur time kya hoga?';
+  return 'Agli detail batayein:';
+}
+
 const mongoose = require('mongoose');
 const { extractTaskDraft, mergeDraft } = require('./taskExtractor');
 const { getScopeInfo, isAssigneeInScope } = require('./taskScope');
@@ -37,7 +71,7 @@ const {
   formatProjectStatus,
   PROJECT_STATUS_LABELS,
   STATUS_LABELS,
-} = require('./formRegistry');
+} = require('./formRegistry'); const { buildChips, assertChipsAllowed, FLOW_FIRST_QUESTION_HINTS, formatMemberChipLabel, getCleanDepartment } = require('./formRegistry');
 
 const {
   createLedger,
@@ -167,6 +201,24 @@ async function parseTaskRequest({
     country: draft?.country ?? null,
     pincode: draft?.pincode ?? null,
     notes: draft?.notes ?? null,
+    email: draft?.email ?? null,
+    phone: draft?.phone ?? null,
+    services: Array.isArray(draft?.services) ? [...draft.services] : [],
+    clientPlanId: draft?.clientPlanId ?? null,
+    clientPlanName: draft?.clientPlanName ?? null,
+    clientPlanPrice: draft?.clientPlanPrice ?? null,
+    clientPlanMonths: draft?.clientPlanMonths ?? null,
+    clientPlanTasksCount: draft?.clientPlanTasksCount ?? null,
+    subscriptionStartDate: draft?.subscriptionStartDate ?? null,
+    subscriptionEndDate: draft?.subscriptionEndDate ?? null,
+    companyLogo: draft?.companyLogo ?? null,
+    companyLogoName: draft?.companyLogoName ?? null,
+    servicesDone: Boolean(draft?.servicesDone),
+    servicesSkipped: Boolean(draft?.servicesSkipped),
+    clientPlanDone: Boolean(draft?.clientPlanDone),
+    clientPlanSkipped: Boolean(draft?.clientPlanSkipped),
+    teamDone: Boolean(draft?.teamDone),
+    membersDone: Boolean(draft?.membersDone),
     _lastReply: draft?._lastReply ?? null,
     _lastChipsKey: draft?._lastChipsKey ?? null,
     _lastUserMsg: draft?._lastUserMsg ?? null,
@@ -231,7 +283,7 @@ async function parseTaskRequest({
 
   // Determine user scope
   const scope = await scopeInfoFn(req, deps);
-  const canAssignOthers = Boolean(scope?.hasAccess);
+  const canAssignOthers = Boolean(scope?.hasAccess || scope?.isPrivileged || scope?.isOwner || scope?.isAdmin);
 
   // Retrieve accessible projects tenant-safely
   const accessibleProjects = Array.isArray(deps.accessibleProjects)
@@ -240,13 +292,94 @@ async function parseTaskRequest({
 
   const companyId = req?.user?.company?._id || req?.user?.company || req?.user?.companyId;
   const rawCompanyCode = req?.user?.companyCode || req?.user?.company?.companyCode || '';
+  const cleanCompanyCode = rawCompanyCode;
   const baseCode = typeof rawCompanyCode === 'string' ? rawCompanyCode.split('-')[0].trim() : '';
   const companyCodeFilter = baseCode
     ? { $regex: new RegExp('^' + escapeRegex(baseCode) + '(-|$)', 'i') }
     : (rawCompanyCode || undefined);
 
   // Determine the active field that was asked on the previous turn
-  const lastAskedField = currentDraft.asked.length > 0
+    // Ensure companyUsers, services, clientPlans, and accessibleClients are populated
+  const isDbConnected = Boolean(mongoose && mongoose.connection && mongoose.connection.readyState === 1);
+  let companyUsers = Array.isArray(deps.companyUsers) ? deps.companyUsers : (Array.isArray(scope?.users) ? scope.users : []);
+  if ((!companyUsers || companyUsers.length === 0) && (deps.User || isDbConnected)) {
+    const UModel = deps.User || (mongoose && mongoose.models && mongoose.models.User) || User;
+    if (UModel && typeof UModel.find === 'function') {
+      try {
+        const uQuery = {
+          isActive: { $ne: false },
+          companyRole: { $not: /^client$/i },
+          role: { $not: /^client$/i },
+          ...(companyCodeFilter ? { companyCode: companyCodeFilter } : (cleanCompanyCode ? { companyCode: cleanCompanyCode } : {}))
+        };
+        companyUsers = await UModel.find(uQuery)
+          .select('name department role jobRole companyRole email company companyCode')
+          .populate('department', 'name')
+          .lean();
+      } catch (err) {
+        console.warn('[taskAgentService] Error loading companyUsers:', err);
+      }
+    }
+  }
+  if (Array.isArray(companyUsers)) {
+    companyUsers = companyUsers.filter(u => {
+      const cRole = String(u.companyRole || u.role || '').toLowerCase();
+      const isClient = Boolean(u.isClient || cRole === 'client' || (u.email && u.email.includes('client')));
+      return !isClient;
+    });
+  }
+  deps.companyUsers = companyUsers;
+
+  let companyServices = Array.isArray(deps.services) ? deps.services : (Array.isArray(scope?.services) ? scope.services : []);
+  if ((!companyServices || companyServices.length === 0) && (deps.Service || isDbConnected)) {
+    const SModel = deps.Service || (mongoose && mongoose.models && mongoose.models.Service);
+    if (SModel && typeof SModel.find === 'function') {
+      try {
+        const sQuery = cleanCompanyCode ? { companyCode: cleanCompanyCode } : {};
+        const docs = await SModel.find(sQuery).select('servicename name').lean();
+        companyServices = docs.map(d => d.servicename || d.name).filter(Boolean);
+      } catch (err) {
+        console.warn('[taskAgentService] Error loading services:', err);
+      }
+    }
+  }
+  if (!companyServices || companyServices.length === 0) {
+    companyServices = ['Cloud Architecture', 'Mobile App Development', 'SEO Optimization', 'UI/UX Design'];
+  }
+  deps.services = companyServices;
+
+  let companyPlans = Array.isArray(deps.clientPlans) ? deps.clientPlans : (Array.isArray(scope?.clientPlans) ? scope.clientPlans : []);
+  if ((!companyPlans || companyPlans.length === 0) && (deps.ClientPlan || isDbConnected)) {
+    const PModel = deps.ClientPlan || (mongoose && mongoose.models && mongoose.models.ClientPlan);
+    if (PModel && typeof PModel.find === 'function') {
+      try {
+        const pQuery = {
+          isActive: { $ne: false },
+          ...(cleanCompanyCode ? { companyCode: cleanCompanyCode } : {})
+        };
+        companyPlans = await PModel.find(pQuery).lean();
+      } catch (err) {
+        console.warn('[taskAgentService] Error loading clientPlans:', err);
+      }
+    }
+  }
+  deps.clientPlans = companyPlans;
+
+  let accessibleClients = Array.isArray(deps.accessibleClients) ? deps.accessibleClients : [];
+  if ((!accessibleClients || accessibleClients.length === 0) && (deps.Client || isDbConnected)) {
+    const CModel = deps.Client || (mongoose && mongoose.models && mongoose.models.Client);
+    if (CModel && typeof CModel.find === 'function') {
+      try {
+        const cQuery = cleanCompanyCode ? { companyCode: cleanCompanyCode } : {};
+        accessibleClients = await CModel.find(cQuery).select('client company services').lean();
+      } catch (err) {
+        console.warn('[taskAgentService] Error loading accessibleClients:', err);
+      }
+    }
+  }
+  deps.accessibleClients = accessibleClients;
+
+const lastAskedField = currentDraft.asked.length > 0
     ? currentDraft.asked[currentDraft.asked.length - 1]
     : null;
 
@@ -291,6 +424,193 @@ async function parseTaskRequest({
   if (action && typeof action === 'object') {
     actionHandled = true;
     switch (action.type) {
+      case 'set_intent':
+        currentDraft.intent = action.intent;
+        if (action.intent === 'self_task') currentDraft.taskFor = 'self';
+        if (action.intent === 'task_assigned_user') currentDraft.taskFor = 'others';
+        if (action.intent === 'task_project') currentDraft.taskFor = 'project';
+        break;
+            case 'set_team_members': {
+        actionHandled = true;
+        const rawMembers = Array.isArray(action.members) ? action.members : [];
+        let compUsers = deps.companyUsers || [];
+        if ((!compUsers || compUsers.length === 0) && mongoose?.connection?.readyState === 1 && (deps.User || mongoose.models.User)) {
+          try {
+            compUsers = await (deps.User || mongoose.models.User).find({
+              ...(cleanCompanyCode ? { companyCode: cleanCompanyCode } : {})
+            }).select('name email role department').lean();
+          } catch {}
+        }
+        const addedList = [];
+        rawMembers.forEach(m => {
+          const mId = typeof m === 'object' ? String(m.id || m._id || m.userId || '') : '';
+          const mName = typeof m === 'object' ? (m.name || m.label || '') : String(m);
+          const matchedUser = (compUsers || []).find(u =>
+            (mId && String(u._id || u.id) === mId) ||
+            (mName && u.name && u.name.toLowerCase() === mName.toLowerCase())
+          );
+          const finalName = matchedUser?.name || mName;
+          const finalId = String(matchedUser?._id || matchedUser?.id || mId || '');
+          if (finalName) {
+            addedList.push({
+              id: finalId,
+              name: finalName,
+              label: formatMemberChipLabel(matchedUser || { name: finalName }),
+              department: getCleanDepartment(matchedUser),
+            });
+          }
+        });
+
+        if (currentDraft.intent === 'create_client') {
+          currentDraft.projectManager = addedList;
+          currentDraft.team = addedList.map(m => m.id);
+          currentDraft.teamDone = true;
+          if (!currentDraft.asked.includes('projectManager')) currentDraft.asked.push('projectManager');
+          if (!currentDraft.asked.includes('team')) currentDraft.asked.push('team');
+          notices.push(addedList.map(m => m.name).join(', ') + ' add ho gaye.');
+        } else if (currentDraft.intent === 'create_project') {
+          currentDraft.members = addedList;
+          currentDraft.membersDone = true;
+          if (!currentDraft.asked.includes('members')) currentDraft.asked.push('members');
+          notices.push(addedList.map(m => m.name).join(', ') + ' add ho gaye.');
+        }
+        break;
+      }
+      case 'set_client_services': {
+        actionHandled = true;
+        const rawServices = Array.isArray(action.services) ? action.services : [];
+        let compServices = deps.services || scope?.services || [];
+        if (!compServices || compServices.length === 0) {
+          if (mongoose?.connection?.readyState === 1 && (deps.Service || mongoose.models.Service)) {
+            try {
+              const docs = await (deps.Service || mongoose.models.Service).find({
+                ...(cleanCompanyCode ? { companyCode: cleanCompanyCode } : {})
+              }).select('servicename').lean();
+              compServices = docs.map(d => d.servicename);
+            } catch {}
+          }
+        }
+        if (!compServices || compServices.length === 0) {
+          compServices = ['Cloud Architecture', 'Mobile App Development', 'SEO Optimization', 'UI/UX Design', 'Web Development'];
+        }
+        const matchedServices = [];
+        rawServices.forEach(raw => {
+          const rawStr = String(raw).trim();
+          const matched = compServices.find(cs => {
+            const csName = typeof cs === 'string' ? cs : (cs.servicename || cs.name || '');
+            return csName.toLowerCase() === rawStr.toLowerCase();
+          });
+          if (matched) {
+            const finalName = typeof matched === 'string' ? matched : (matched.servicename || matched.name);
+            matchedServices.push(finalName);
+          } else if (rawStr) {
+            matchedServices.push(rawStr);
+          }
+        });
+        currentDraft.services = Array.from(new Set([...(currentDraft.services || []), ...matchedServices]));
+        currentDraft.servicesDone = true;
+        if (!currentDraft.asked.includes('services')) currentDraft.asked.push('services');
+        if (matchedServices.length > 0) {
+          notices.push('Services add ho gayi: ' + matchedServices.join(', ') + '.');
+        }
+        break;
+      }
+      case 'add_member': {
+        actionHandled = true;
+        const memberName = action.name || action.value;
+        const memberId = action.userId || action.id || action.assigneeId;
+        const matchedUser = (deps.companyUsers || []).find(u =>
+          (memberId && String(u._id || u.id) === String(memberId)) ||
+          (memberName && u.name && u.name.toLowerCase() === String(memberName).toLowerCase())
+        );
+        const finalName = matchedUser?.name || memberName;
+        const finalId = String(matchedUser?._id || matchedUser?.id || memberId || '');
+
+        if (currentDraft.intent === 'create_client') {
+          if (!Array.isArray(currentDraft.projectManager)) currentDraft.projectManager = [];
+          const exists = currentDraft.projectManager.some(m =>
+            (finalId && String(m.id || m._id || m) === finalId) ||
+            (finalName && m.name && m.name.toLowerCase() === finalName.toLowerCase())
+          );
+          if (!exists) {
+            currentDraft.projectManager.push({
+              id: finalId,
+              name: finalName,
+              label: formatMemberChipLabel(matchedUser || { name: finalName }),
+              department: getCleanDepartment(matchedUser),
+            });
+            currentDraft.team = currentDraft.projectManager.map(m => m.id);
+          }
+          currentDraft.teamDone = true;
+          if (!currentDraft.asked.includes('projectManager')) currentDraft.asked.push('projectManager');
+          if (!currentDraft.asked.includes('team')) currentDraft.asked.push('team');
+        } else if (currentDraft.intent === 'create_project') {
+          if (!Array.isArray(currentDraft.members)) currentDraft.members = [];
+          const exists = currentDraft.members.some(m =>
+            (finalId && typeof m === 'object' && String(m.id || m._id) === finalId) ||
+            (finalName && ((typeof m === 'string' && m.toLowerCase() === finalName.toLowerCase()) || (typeof m === 'object' && m.name && m.name.toLowerCase() === finalName.toLowerCase())))
+          );
+          if (!exists) {
+            currentDraft.members.push({
+              id: finalId,
+              name: finalName,
+              label: formatMemberChipLabel(matchedUser || { name: finalName }),
+            });
+          }
+        }
+        break;
+      }
+      case 'remove_member': {
+        actionHandled = true;
+        const memberName = action.name || action.value;
+        const memberId = action.userId || action.id || action.assigneeId;
+        const matchStr = (val) => {
+          if (!val) return false;
+          const s = String(val).toLowerCase();
+          return (memberId && s === String(memberId).toLowerCase()) || (memberName && s === String(memberName).toLowerCase());
+        };
+
+        if (currentDraft.intent === 'create_client') {
+          if (Array.isArray(currentDraft.projectManager)) {
+            currentDraft.projectManager = currentDraft.projectManager.filter(m =>
+              !matchStr(m.id || m._id) && !matchStr(m.name) && !matchStr(m)
+            );
+            currentDraft.team = currentDraft.projectManager.map(m => m.id);
+          }
+          currentDraft.teamDone = true;
+          if (!currentDraft.asked.includes('projectManager')) currentDraft.asked.push('projectManager');
+          if (!currentDraft.asked.includes('team')) currentDraft.asked.push('team');
+        } else if (currentDraft.intent === 'create_project') {
+          if (Array.isArray(currentDraft.members)) {
+            currentDraft.members = currentDraft.members.filter(m =>
+              !matchStr(m?.id || m?._id) && !matchStr(m?.name) && !matchStr(m)
+            );
+          }
+        }
+        break;
+      }
+      case 'show_more_members':
+        actionHandled = true;
+        currentDraft.memberPage = (action.page !== undefined) ? Number(action.page) : ((currentDraft.memberPage || 0) + 1);
+        break;
+      case 'set_only_self':
+        if (currentDraft.intent === 'create_project') {
+          currentDraft.members = [req?.user?.name || 'Self'];
+        } else if (currentDraft.intent === 'task_project') {
+          currentDraft.assignee = req?.user?.name || 'Self';
+          currentDraft.assigneeId = req?.user?._id ? String(req.user._id) : null;
+        }
+        break;
+      case 'finish_members':
+        if (currentDraft.intent === 'create_project') {
+          currentDraft.membersDone = true;
+          if (!currentDraft.asked.includes('members')) currentDraft.asked.push('members');
+        } else if (currentDraft.intent === 'create_client') {
+          currentDraft.teamDone = true;
+          if (!currentDraft.asked.includes('projectManager')) currentDraft.asked.push('projectManager');
+          if (!currentDraft.asked.includes('team')) currentDraft.asked.push('team');
+        }
+        break;
       case 'confirm_duplicate_project_name':
         currentDraft.duplicateHandled = true;
         break;
@@ -426,12 +746,113 @@ async function parseTaskRequest({
         actionHandled = true;
         break;
       }
-      case 'select_details_group': {
+      case 'select_details_group':
+      case 'set_details_group':
+      case 'ask_client_details_group': {
         const pickedGroup = action.group || action.value;
         if (pickedGroup) {
           currentDraft.activeDetailsGroup = pickedGroup;
           currentDraft.activeGroupField = null;
+          currentDraft.servicesDone = true;
+          currentDraft.clientPlanDone = true;
         }
+        actionHandled = true;
+        break;
+      }
+      case 'add_client_service': {
+        if (action.service) {
+          currentDraft.services = Array.from(new Set([...(currentDraft.services || []), action.service]));
+        }
+        actionHandled = true;
+        break;
+      }
+      case 'remove_client_service': {
+        if (action.service) {
+          currentDraft.services = (currentDraft.services || []).filter(s => s !== action.service);
+        }
+        actionHandled = true;
+        break;
+      }
+      case 'toggle_client_service': {
+        if (action.service) {
+          const cur = currentDraft.services || [];
+          if (cur.includes(action.service)) {
+            currentDraft.services = cur.filter(s => s !== action.service);
+          } else {
+            currentDraft.services = [...cur, action.service];
+          }
+        }
+        actionHandled = true;
+        break;
+      }
+      case 'finish_client_services': {
+        currentDraft.servicesDone = true;
+        if (!currentDraft.asked.includes('services')) currentDraft.asked.push('services');
+        actionHandled = true;
+        break;
+      }
+      case 'skip_client_services': {
+        currentDraft.servicesDone = true;
+        currentDraft.servicesSkipped = true;
+        if (!currentDraft.asked.includes('services')) currentDraft.asked.push('services');
+        actionHandled = true;
+        break;
+      }
+      case 'set_client_plan': {
+        const planId = action.planId || action.value;
+        const planName = action.planName || action.value;
+        currentDraft.clientPlanId = planId;
+        currentDraft.clientPlanName = planName;
+        let foundPlan = null;
+        if (scope.clientPlans && Array.isArray(scope.clientPlans)) {
+          foundPlan = scope.clientPlans.find(p => (p._id && p._id.toString() === planId) || p.name === planName);
+        }
+        if (!foundPlan && (deps.ClientPlan || mongoose.models.ClientPlan)) {
+          try {
+            const PlanModel = deps.ClientPlan || mongoose.models.ClientPlan;
+            const orQ = [];
+            if (mongoose.Types.ObjectId.isValid(planId)) orQ.push({ _id: planId });
+            orQ.push({ name: planName });
+            foundPlan = await PlanModel.findOne({ $or: orQ }).lean();
+          } catch {}
+        }
+        if (foundPlan) {
+          currentDraft.clientPlanName = foundPlan.name || planName;
+          currentDraft.clientPlanPrice = foundPlan.price;
+          currentDraft.clientPlanMonths = foundPlan.months || 1;
+          if (Array.isArray(foundPlan.services) && foundPlan.services.length > 0) {
+            const planServices = foundPlan.services.map(s => typeof s === 'string' ? s : (s.service || s.name)).filter(Boolean);
+            currentDraft.services = Array.from(new Set([...(currentDraft.services || []), ...planServices]));
+            let tCount = 0;
+            foundPlan.services.forEach(s => {
+              if (Array.isArray(s.tasks)) tCount += s.tasks.length;
+            });
+            currentDraft.clientPlanTasksCount = tCount;
+          }
+        }
+        currentDraft.clientPlanDone = true;
+        if (!currentDraft.asked.includes('clientPlan')) currentDraft.asked.push('clientPlan');
+        actionHandled = true;
+        break;
+      }
+      case 'skip_client_plan': {
+        currentDraft.clientPlanDone = true;
+        currentDraft.clientPlanSkipped = true;
+        currentDraft.clientPlanId = null;
+        currentDraft.clientPlanName = null;
+        if (!currentDraft.asked.includes('clientPlan')) currentDraft.asked.push('clientPlan');
+        actionHandled = true;
+        break;
+      }
+      case 'set_subscription_start_date': {
+        const { parseRelativeOrAbsoluteDate, calculateEndDate } = require('./clientSlotFiller');
+        const rawDate = action.value || action.startDate || 'today';
+        const parsedDate = parseRelativeOrAbsoluteDate(rawDate) || rawDate;
+        currentDraft.subscriptionStartDate = parsedDate;
+        if (currentDraft.clientPlanMonths) {
+          currentDraft.subscriptionEndDate = calculateEndDate(parsedDate, currentDraft.clientPlanMonths);
+        }
+        if (!currentDraft.asked.includes('subscriptionStartDate')) currentDraft.asked.push('subscriptionStartDate');
         actionHandled = true;
         break;
       }
@@ -455,6 +876,12 @@ async function parseTaskRequest({
         const f = action.field || currentDraft.activeGroupField;
         if (f && !currentDraft.skippedDetailsFields.includes(f)) {
           currentDraft.skippedDetailsFields.push(f);
+        }
+        if (f === 'logo' || currentDraft.activeDetailsGroup === 'logo') {
+          if (!Array.isArray(currentDraft.completedDetailsGroups)) currentDraft.completedDetailsGroups = [];
+          if (!currentDraft.completedDetailsGroups.includes('logo')) currentDraft.completedDetailsGroups.push('logo');
+          currentDraft.activeDetailsGroup = null;
+          currentDraft.activeGroupField = null;
         }
         actionHandled = true;
         break;
@@ -597,10 +1024,26 @@ async function parseTaskRequest({
           }
           if (!currentDraft.asked.includes('members')) currentDraft.asked.push('members');
           currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'members');
+        } else if (action.field === 'subscriptionStartDate') {
+          const { parseRelativeOrAbsoluteDate, calculateEndDate } = require('./clientSlotFiller');
+          const parsed = parseRelativeOrAbsoluteDate(action.value) || action.value;
+          currentDraft.subscriptionStartDate = parsed;
+          if (currentDraft.clientPlanMonths) {
+            currentDraft.subscriptionEndDate = calculateEndDate(parsed, currentDraft.clientPlanMonths);
+          }
+          if (!currentDraft.asked.includes('subscriptionStartDate')) currentDraft.asked.push('subscriptionStartDate');
+          currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'subscriptionStartDate');
         } else if (action.field) {
           currentDraft[action.field] = action.value;
           if (!currentDraft.asked.includes(action.field)) currentDraft.asked.push(action.field);
           currentDraft.skipped = currentDraft.skipped.filter((f) => f !== action.field);
+          if (action.field === 'companyLogoName' || action.field === 'companyLogo') {
+            if (!Array.isArray(currentDraft.completedDetailsGroups)) currentDraft.completedDetailsGroups = [];
+            if (!currentDraft.completedDetailsGroups.includes('logo')) currentDraft.completedDetailsGroups.push('logo');
+            currentDraft.activeDetailsGroup = null;
+            currentDraft.activeGroupField = null;
+            notices.push(`Logo "${action.value}" attach ho gaya.`);
+          }
         }
         break;
       case 'pickProject':
@@ -796,6 +1239,15 @@ async function parseTaskRequest({
           currentDraft.assigneeId = null;
           currentDraft.assigneeName = null;
           currentDraft.assigneeLabel = null;
+        } else if (action.field === 'subscriptionStartDate') {
+          const { parseRelativeOrAbsoluteDate, calculateEndDate } = require('./clientSlotFiller');
+          const parsed = parseRelativeOrAbsoluteDate(action.value) || action.value;
+          currentDraft.subscriptionStartDate = parsed;
+          if (currentDraft.clientPlanMonths) {
+            currentDraft.subscriptionEndDate = calculateEndDate(parsed, currentDraft.clientPlanMonths);
+          }
+          if (!currentDraft.asked.includes('subscriptionStartDate')) currentDraft.asked.push('subscriptionStartDate');
+          currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'subscriptionStartDate');
         } else if (action.field) {
           currentDraft.skipped = currentDraft.skipped.filter((f) => f !== action.field);
           currentDraft[action.field] = null;
@@ -814,7 +1266,66 @@ async function parseTaskRequest({
   const trimmedMessage = rawMessage ? normalizeTranscript(rawMessage) : '';
   const detectedIntent = trimmedMessage ? detectUserIntent(trimmedMessage) : null;
 
-  // Form Registry deterministic intent detection
+    // Form Registry deterministic intent detection
+
+  // --------------------------------------------------------------------------
+  // DETERMINISTIC INFO QUESTIONS (Zero LLM, draft untouched, repeated pending slot)
+  // --------------------------------------------------------------------------
+  const INFO_MEMBERS_REGEX = /(?:(?:k[ao]n\s+k[ao]n\s+(?:se\s+)?member[as]*)|(?:member[as]*\s+(?:dikhao|batao|list|kaun|kon))|(?:(?:team|company)\s+(?:k[ao]n|mein\s+k[ao]n|main\s+k[ao]n|ke\s+log))|(?:team\s+members?\s+(?:dikhao|batao|list))|(?:show\s+members?|list\s+members?|members?\s+list)|(?:k[ao]n\s+k[ao]n\s+hai\s+team\s+(?:mein|main))|kaun\s+kaun\s+members\s+hain|members\s+dikhao|members\s+batao|team\s+ke\s+log\s+kaun\s+hain|team\s+members\s+dikhao|kaun\s+kaun\s+hai\s+team\s+mein|कौन\s*कौन\s*मेंबर्स\s*हैं|मेंबर्स\s*दिखाओ|मेंबर्स\s*बताओ|टीम\s*के\s*लोग\s*कौन\s*हैं|मेंबर्स\s*की\s*लिस्ट)/iu;
+  const INFO_SERVICES_REGEX = /(?:services\s+kaun\s+si\s+hain|services\s+dikhao|services\s+batao|kaun\s+kaun\s+si\s+services\s+hain|show\s+services|list\s+services|services\s+list|सर्विसेज\s*कौन\s*सी\s*हैं|सर्विसेज\s*दिखाओ|सर्विसेज\s*बताओ|सर्विसेज\s*की\s*लिस्ट)/iu;
+  const INFO_PLANS_REGEX = /(?:plans\s+kya\s+hain|plans\s+dikhao|plans\s+batao|kaun\s+se\s+plans\s+hain|show\s+plans|list\s+plans|plans\s+list|प्लान्स\s*क्या\s*हैं|प्लान्स\s*दिखाओ|प्लान्स\s*बताओ|प्लान्स\s*की\s*लिस्ट)/iu;
+  const INFO_CLIENTS_REGEX = /(?:clients\s+dikhao|kaun\s+se\s+clients\s+hain|clients\s+batao|client\s+list|clients\s+list|show\s+clients|क्लाइंट्स\s*दिखाओ|कौन\s*से\s*क्लाइंट्स\s*हैं|क्लाइंट्स\s*बताओ|क्लाइंट्स\s*की\s*लिस्ट)/iu;
+  const INFO_PROJECTS_REGEX = /(?:projects\s+dikhao|kaun\s+se\s+projects\s+hain|projects\s+batao|project\s+list|projects\s+list|show\s+projects|प्रोजेक्ट्स\s*दिखाओ|कौन\s*से\s*प्रोजेक्ट्स\s*हैं|प्रोजेक्ट्स\s*बताओ|प्रोजेक्ट्स\s*की\s*लिस्ट)/iu;
+
+  const isInfoMsg = trimmedMessage && (
+    INFO_MEMBERS_REGEX.test(trimmedMessage) ||
+    INFO_SERVICES_REGEX.test(trimmedMessage) ||
+    INFO_PLANS_REGEX.test(trimmedMessage) ||
+    INFO_CLIENTS_REGEX.test(trimmedMessage) ||
+    INFO_PROJECTS_REGEX.test(trimmedMessage)
+  );
+
+  if (isInfoMsg) {
+    let infoText = '';
+    if (INFO_MEMBERS_REGEX.test(trimmedMessage)) {
+      const userList = (deps.companyUsers || scope.users || []).map((u) => '• ' + formatMemberChipLabel(u)).join('\n');
+      infoText = 'Available members:\n' + (userList || 'Koi members nahi mile.');
+    } else if (INFO_SERVICES_REGEX.test(trimmedMessage)) {
+      const sList = (deps.services || scope.services || []).map((s) => '• ' + (typeof s === 'string' ? s : (s.servicename || s.name))).join('\n');
+      infoText = 'Available services:\n' + (sList || 'Koi services nahi mili.');
+    } else if (INFO_PLANS_REGEX.test(trimmedMessage)) {
+      const pList = (deps.clientPlans || []).map((p) => '• ' + (p.name || p.planName) + (p.price != null ? ' (₹' + Number(p.price).toLocaleString('en-IN') + ')' : '')).join('\n');
+      infoText = 'Available plans:\n' + (pList || 'Koi plans nahi mile.');
+    } else if (INFO_CLIENTS_REGEX.test(trimmedMessage)) {
+      const cList = (deps.accessibleClients || []).map((c) => '• ' + (c.client || c.name) + (c.company ? ' (' + c.company + ')' : '')).join('\n');
+      infoText = 'Available clients:\n' + (cList || 'Koi clients nahi mile.');
+    } else if (INFO_PROJECTS_REGEX.test(trimmedMessage)) {
+      const prList = (accessibleProjects || []).map((p) => '• ' + (p.projectName || p.name)).join('\n');
+      infoText = 'Available projects:\n' + (prList || 'Koi projects nahi mile.');
+    }
+
+    const pendingField = lastAskedField || (currentDraft.intent === 'create_client' ? 'client' : (currentDraft.intent === 'create_project' ? 'name' : 'title'));
+    const pendingQuestion = getPendingSlotQuestion(currentDraft.intent, pendingField);
+    const fullReply = infoText + '\n\n' + pendingQuestion;
+    const infoChips = buildChips(currentDraft.intent, pendingField, { ...deps, draft: currentDraft, user: req?.user, accessibleProjects, companyUsers: deps.companyUsers });
+    assertChipsAllowed(currentDraft.intent, pendingField, infoChips);
+
+    return {
+      success: true,
+      status: 'needs_input',
+      field: pendingField,
+      reply: fullReply,
+      speech: infoText.split('\n')[0] + '. ' + pendingQuestion,
+      speakText: infoText.split('\n')[0] + '. ' + pendingQuestion,
+      speakTextHi: infoText.split('\n')[0] + '. ' + pendingQuestion,
+      draft: currentDraft,
+      chips: infoChips,
+      candidates: [],
+      notices,
+      canAssignOthers,
+    };
+  }
+
   const detectedIntentResult = detectIntent({
     message: trimmedMessage,
     draft: currentDraft,
@@ -862,7 +1373,85 @@ async function parseTaskRequest({
     Object.assign(currentDraft, migration.newDraft);
   }
 
-  // Permission enforcement for create_project:
+  // create_client_task intent handling (Item 7)
+  if (currentDraft.intent === 'create_client_task' || detectedIntentResult.intent === 'create_client_task') {
+    currentDraft.intent = 'create_client_task';
+    const ClientModel = deps.Client || mongoose.models.Client || require('../../HR-CDS/models/Client');
+    let clientDoc = null;
+    const targetClient = currentDraft.client || currentDraft.clientName || pick?.client || action?.client;
+    if (targetClient && ClientModel) {
+      try {
+        clientDoc = await ClientModel.findOne({
+          $or: [
+            ...(mongoose.Types.ObjectId.isValid(targetClient) ? [{ _id: targetClient }] : []),
+            { client: { $regex: '^' + targetClient.trim() + '$', $options: 'i' } }
+          ],
+          ...(cleanCompanyCode ? { companyCode: cleanCompanyCode } : {})
+        }).lean();
+      } catch {}
+    }
+    if (!clientDoc && ClientModel && trimmedMessage) {
+      const m = trimmedMessage.match(/(?:for|ke\s+liye)\s+([a-zA-Z0-9\s_-]+?)(?:\s+(?:ke\s+liye|ka|ki|task)|$)/i);
+      const nameToSearch = m && m[1] ? m[1].trim() : trimmedMessage.replace(/\b(?:create|client|task|banao|add|karo|naya)\b/gi, '').trim();
+      if (nameToSearch) {
+        try {
+          clientDoc = await ClientModel.findOne({
+            client: { $regex: '^' + nameToSearch + '$', $options: 'i' },
+            ...(cleanCompanyCode ? { companyCode: cleanCompanyCode } : {})
+          }).lean();
+        } catch {}
+      }
+    }
+
+    if (clientDoc) {
+      currentDraft.client = clientDoc.client;
+      currentDraft.clientId = clientDoc._id.toString();
+      currentDraft.clientServices = clientDoc.services || [];
+      if (!clientDoc.services || clientDoc.services.length === 0) {
+        const noServicesReply = 'Selected client has no services. Is client ke liye abhi koi service nahi hai, isliye client task tab tak nahi ban payega.';
+        return {
+          success: true,
+          status: 'needs_input',
+          field: 'client',
+          reply: noServicesReply,
+          speech: 'Selected client has no services.',
+          speakText: 'Selected client has no services.',
+          speakTextHi: 'Selected Client has no services.',
+          draft: currentDraft,
+          missing: ['services'],
+          chips: [
+            { label: 'Naya client banao', action: { type: 'set', field: 'intent', value: 'create_client' } },
+            { label: 'Cancel', action: { type: 'cancel' } }
+          ],
+          candidates: [],
+          notices,
+          canAssignOthers,
+        };
+      } else {
+        const serviceReply = 'Client "' + clientDoc.client + '" ke liye kaun si service ka task banana hai?';
+        return {
+          success: true,
+          status: 'needs_input',
+          field: 'service',
+          reply: serviceReply,
+          speech: serviceReply,
+          speakText: serviceReply,
+          speakTextHi: 'Client "' + clientDoc.client + '" ke liye kaun si Service ka Task banana hai?',
+          draft: currentDraft,
+          missing: ['service'],
+          chips: clientDoc.services.map(s => ({
+            label: s,
+            action: { type: 'set_client_task_service', service: s }
+          })),
+          candidates: [],
+          notices,
+          canAssignOthers,
+        };
+      }
+    }
+  }
+
+    // Permission enforcement for create_project:
   if (currentDraft.intent === 'create_project' || detectedIntentResult.intent === 'create_project') {
     const { canCreateProject } = require('./formRegistry');
     if (!canCreateProject(req?.user, scope)) {
@@ -928,11 +1517,55 @@ async function parseTaskRequest({
       if (cSlots.industry && !currentDraft.industry) currentDraft.industry = cSlots.industry;
       if (cSlots.description && !currentDraft.description) currentDraft.description = cSlots.description;
       if (cSlots.notes && !currentDraft.notes) currentDraft.notes = cSlots.notes;
+      if (Array.isArray(cSlots.services) && cSlots.services.length > 0) {
+        currentDraft.services = Array.from(new Set([...(currentDraft.services || []), ...cSlots.services]));
+        currentDraft.servicesDone = true;
+      }
+      if (cSlots.clientPlan && !currentDraft.clientPlanName) {
+        currentDraft.clientPlanName = cSlots.clientPlan;
+        let foundPlan = null;
+        if (scope.clientPlans && Array.isArray(scope.clientPlans)) {
+          foundPlan = scope.clientPlans.find(p => p.name && p.name.toLowerCase() === cSlots.clientPlan.toLowerCase());
+        }
+        if (!foundPlan && (deps.ClientPlan || mongoose.models.ClientPlan)) {
+          try {
+            const PlanModel = deps.ClientPlan || mongoose.models.ClientPlan;
+            foundPlan = await PlanModel.findOne({ name: new RegExp("^cSlots.clientPlan$", "i") }).lean();
+          } catch {}
+        }
+        if (foundPlan) {
+          currentDraft.clientPlanDone = true;
+          currentDraft.clientPlanId = foundPlan._id ? foundPlan._id.toString() : foundPlan.name;
+          currentDraft.clientPlanName = foundPlan.name;
+          currentDraft.clientPlanPrice = foundPlan.price;
+          currentDraft.clientPlanMonths = foundPlan.months || 1;
+          if (Array.isArray(foundPlan.services) && foundPlan.services.length > 0) {
+            const planServices = foundPlan.services.map(s => typeof s === 'string' ? s : (s.service || s.name)).filter(Boolean);
+            currentDraft.services = Array.from(new Set([...(currentDraft.services || []), ...planServices]));
+            let tCount = 0;
+            foundPlan.services.forEach(s => {
+              if (Array.isArray(s.tasks)) tCount += s.tasks.length;
+            });
+            currentDraft.clientPlanTasksCount = tCount;
+          }
+        }
+      }
+      if (cSlots.subscriptionStartDate && !currentDraft.subscriptionStartDate) {
+        const { parseRelativeOrAbsoluteDate, calculateEndDate } = require('./clientSlotFiller');
+        const parsedDate = parseRelativeOrAbsoluteDate(cSlots.subscriptionStartDate) || cSlots.subscriptionStartDate;
+        currentDraft.subscriptionStartDate = parsedDate;
+        if (currentDraft.clientPlanMonths) {
+          currentDraft.subscriptionEndDate = calculateEndDate(parsedDate, currentDraft.clientPlanMonths);
+        }
+      }
+      if (cSlots.companyLogo && !currentDraft.companyLogo) {
+        currentDraft.companyLogo = cSlots.companyLogo;
+      }
     }
   }
 
   // Permission enforcement: if user cannot assign others, force to self_task
-  if (!canAssignOthers && (currentDraft.taskFor === 'others' || currentDraft.intent === 'task_assigned_user')) {
+  if (!canAssignOthers && (currentDraft.taskFor === 'others' || currentDraft.intent === 'task_assigned_user') && currentDraft.intent !== 'create_client' && currentDraft.intent !== 'create_project') {
     currentDraft.taskFor = 'self';
     currentDraft.wantsOthers = false;
     currentDraft.intent = 'self_task';
@@ -1193,7 +1826,7 @@ async function parseTaskRequest({
     const multiAssigneeResult = extractMultipleAssignees(trimmedMessage);
     const { names: mentionedNames, editAction } = multiAssigneeResult;
 
-    if (editAction && canAssignOthers && currentDraft.intent !== 'create_project') {
+    if (editAction && canAssignOthers && currentDraft.intent !== 'create_project' && currentDraft.intent !== 'create_client') {
       if (editAction.type === 'remove') {
         removeLedgerEntry(currentDraft, { name: editAction.name });
         notices.push(`"${editAction.name}" ko task se hata diya gaya hai.`);
@@ -1220,7 +1853,7 @@ async function parseTaskRequest({
         currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'assignee');
         actionHandled = true;
       }
-    } else if (mentionedNames && mentionedNames.length > 0 && canAssignOthers && currentDraft.intent !== 'create_project') {
+    } else if (mentionedNames && mentionedNames.length > 0 && canAssignOthers && currentDraft.intent !== 'create_project' && currentDraft.intent !== 'create_client') {
       currentDraft.assigneeLedger = mergeIntoLedger(currentDraft.assigneeLedger, mentionedNames);
       syncAssigneeLedgerDerivedFields(currentDraft);
       if (currentDraft.intent !== 'task_project') {
@@ -1229,7 +1862,7 @@ async function parseTaskRequest({
         currentDraft.intent = 'task_assigned_user';
       }
       currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'assignee');
-    } else if (!mentionedNames?.length && lastAskedField === 'assignee' && canAssignOthers && currentDraft.intent !== 'create_project' && !actionHandled) {
+    } else if (!mentionedNames?.length && lastAskedField === 'assignee' && canAssignOthers && currentDraft.intent !== 'create_project' && currentDraft.intent !== 'create_client' && !actionHandled) {
       const cleanCandidate = cleanAssigneeName(trimmedMessage);
       const isNegative = detectedIntent?.type === 'cancel' || detectedIntent?.type === 'confirm_no';
       if (cleanCandidate && isValidAssigneeCandidate(cleanCandidate) && !isNegative && !isSkip(trimmedMessage) && !isSkipAll(trimmedMessage)) {
@@ -1367,7 +2000,119 @@ async function parseTaskRequest({
       }
 
       if (!actionHandled) {
-        if (lastAskedField === 'client' && trimmedMessage && !isSkip(trimmedMessage)) {
+        if (lastAskedField === 'services' && trimmedMessage && !actionHandled) {
+          if (isSkip(trimmedMessage) || /\b(?:abhi\s*nahi|skip|baad\s*mein|no)\b/i.test(trimmedMessage)) {
+            if (!currentDraft.asked.includes('services')) currentDraft.asked.push('services');
+            actionHandled = true;
+          } else if (/\b(?:ho\s*gaya|done|bas|theek\s*hai|next|aage|itna\s*hi|aur\s*nahi|koi\s*nahi|chalo)\b/i.test(trimmedMessage)) {
+            currentDraft.servicesDone = true;
+            if (!currentDraft.asked.includes('services')) currentDraft.asked.push('services');
+            actionHandled = true;
+          } else {
+            const parts = trimmedMessage.split(/\s*(?:,|\baur\b|\band\b)\s*/i)
+              .map(s => s.trim())
+              .filter(s => s.length > 0 && !/^(?:aur|and|services?|de\s*do|rakh\s*do)$/i.test(s));
+            let compServices = [];
+            if (scope.services && Array.isArray(scope.services)) {
+              compServices = scope.services;
+            } else if (deps.Service || mongoose.models.Service) {
+              try {
+                const docs = await (deps.Service || mongoose.models.Service).find({
+                  ...(cleanCompanyCode ? { companyCode: cleanCompanyCode } : {})
+                }).select('servicename').lean();
+                compServices = docs.map(d => d.servicename);
+              } catch {}
+            }
+            if (compServices.length === 0) {
+              compServices = ['Cloud Architecture', 'Mobile App Development', 'SEO Optimization', 'UI/UX Design'];
+            }
+            const newlyMatched = [];
+            const invalidParts = [];
+            parts.forEach(raw => {
+              const matched = compServices.find(cs => {
+                const csName = typeof cs === 'string' ? cs : (cs.servicename || cs.name || '');
+                return csName.toLowerCase() === raw.toLowerCase();
+              });
+              if (matched) {
+                const finalName = typeof matched === 'string' ? matched : (matched.servicename || matched.name);
+                newlyMatched.push(finalName);
+                currentDraft.services = Array.from(new Set([...(currentDraft.services || []), finalName]));
+              } else {
+                invalidParts.push(raw);
+              }
+            });
+
+            if (newlyMatched.length === 0) {
+              const unknownList = (invalidParts.length > 0 ? invalidParts : parts).join(', ');
+              const invMsg = `"${unknownList}" hamari services mein nahi hai. Kripya neeche di gayi services mein se choose karein:`;
+              const invSpeech = `Yeh hamari services mein nahi hai. Kripya neeche di gayi services mein se choose karein.`;
+              const invHi = `यह हमारी Services में नहीं है। कृपया नीचे दी गई Services में से चुनें:`;
+              const sChips = buildChips('create_client', 'services', { ...deps, services: compServices, draft: currentDraft });
+              return {
+                success: true,
+                status: 'needs_input',
+                field: 'services',
+                reply: invMsg,
+                speech: invSpeech,
+                speakText: invMsg,
+                speakTextHi: invHi,
+                draft: currentDraft,
+                missing: ['services'],
+                chips: sChips,
+                candidates: [],
+                notices: [],
+                canAssignOthers,
+              };
+            }
+
+            if (newlyMatched.length > 0) {
+              let msg = `"${newlyMatched.join(', ')}" service add ho gayi.`;
+              if (invalidParts.length > 0) {
+                msg = `"${invalidParts.join(', ')}" hamari services mein nahi hai. Lekin ${msg}`;
+              }
+              msg += `\n\nAur koi service add karni hai ya [Done] dabayein?`;
+              const sChips = buildChips('create_client', 'services', { ...deps, services: compServices, draft: currentDraft });
+              return {
+                success: true,
+                status: 'needs_input',
+                field: 'services',
+                reply: msg,
+                speech: `${newlyMatched.join(', ')} service add ho gayi. Aur koi service add karni hai ya Done dabayein?`,
+                speakText: msg,
+                speakTextHi: `${newlyMatched.join(', ')} service add हो गई। और कोई service add करनी है या Ho gaya दबाएं?`,
+                draft: currentDraft,
+                missing: ['services'],
+                chips: sChips,
+                candidates: [],
+                notices: [],
+                canAssignOthers,
+              };
+            }
+            actionHandled = true;
+          }
+        } else if (lastAskedField === 'clientPlan' && trimmedMessage && !actionHandled) {
+          if (isSkip(trimmedMessage) || /\b(?:nahi|no|skip|chhod\s*do)\b/i.test(trimmedMessage)) {
+            currentDraft.clientPlanId = null;
+            if (!currentDraft.asked.includes('clientPlan')) currentDraft.asked.push('clientPlan');
+            actionHandled = true;
+          } else {
+            currentDraft.clientPlanName = trimmedMessage;
+            currentDraft.clientPlanId = trimmedMessage;
+            if (!currentDraft.asked.includes('clientPlan')) currentDraft.asked.push('clientPlan');
+            actionHandled = true;
+          }
+        } else if (lastAskedField === 'subscriptionStartDate' && trimmedMessage && !actionHandled) {
+          const { parseRelativeOrAbsoluteDate, calculateEndDate } = require('./clientSlotFiller');
+          const parsed = parseRelativeOrAbsoluteDate(trimmedMessage);
+          if (parsed) {
+            currentDraft.subscriptionStartDate = parsed;
+            if (currentDraft.clientPlanMonths) {
+              currentDraft.subscriptionEndDate = calculateEndDate(parsed, currentDraft.clientPlanMonths);
+            }
+            if (!currentDraft.asked.includes('subscriptionStartDate')) currentDraft.asked.push('subscriptionStartDate');
+            actionHandled = true;
+          }
+        } else         if (lastAskedField === 'client' && trimmedMessage && !isSkip(trimmedMessage)) {
           currentDraft.client = trimmedMessage;
           currentDraft.duplicateHandled = false;
           actionHandled = true;
@@ -1377,6 +2122,18 @@ async function parseTaskRequest({
           actionHandled = true;
         } else if (lastAskedField === 'city' && trimmedMessage && !isSkip(trimmedMessage)) {
           currentDraft.city = trimmedMessage;
+          actionHandled = true;
+        } else if (lastAskedField === 'status' && trimmedMessage && currentDraft.intent === 'create_client' && !actionHandled) {
+          if (isSkip(trimmedMessage)) {
+            currentDraft.status = 'Active';
+          } else if (/\b(?:on\s*hold|hold)\b/i.test(trimmedMessage)) {
+            currentDraft.status = 'On Hold';
+          } else if (/\b(?:inactive|band)\b/i.test(trimmedMessage)) {
+            currentDraft.status = 'Inactive';
+          } else {
+            currentDraft.status = 'Active';
+          }
+          if (!currentDraft.asked.includes('status')) currentDraft.asked.push('status');
           actionHandled = true;
         } else if ((lastAskedField === 'projectManager' || lastAskedField === 'team') && trimmedMessage) {
           if (isSkip(trimmedMessage) || isSkipAll(trimmedMessage)) {
@@ -1405,6 +2162,7 @@ async function parseTaskRequest({
             if (mNames && mNames.length > 0) {
               currentDraft.assigneeName = trimmedMessage;
               currentDraft.assigneeLedger = createLedger(mNames);
+              currentDraft.teamDone = true;
               if (!currentDraft.asked.includes('projectManager')) currentDraft.asked.push('projectManager');
             }
           }
@@ -1431,6 +2189,10 @@ async function parseTaskRequest({
             currentDraft.activeDetailsGroup = 'notes';
             currentDraft.activeGroupField = null;
             actionHandled = true;
+          } else if (!currentDraft.activeDetailsGroup && /\b(?:logo|photo|image|picture|लोगो)\b/i.test(trimmedMessage)) {
+            currentDraft.activeDetailsGroup = 'logo';
+            currentDraft.activeGroupField = 'logo';
+            actionHandled = true;
           } else if (currentDraft.activeDetailsGroup) {
             const group = currentDraft.activeDetailsGroup;
             const field = currentDraft.activeGroupField;
@@ -1443,6 +2205,12 @@ async function parseTaskRequest({
             } else if (/^(?:skip|skip\s*karo|chhod\s*do|next)/i.test(trimmedMessage)) {
               if (!Array.isArray(currentDraft.skippedDetailsFields)) currentDraft.skippedDetailsFields = [];
               if (field && !currentDraft.skippedDetailsFields.includes(field)) currentDraft.skippedDetailsFields.push(field);
+              if (field === 'logo' || group === 'logo') {
+                if (!Array.isArray(currentDraft.completedDetailsGroups)) currentDraft.completedDetailsGroups = [];
+                if (!currentDraft.completedDetailsGroups.includes('logo')) currentDraft.completedDetailsGroups.push('logo');
+                currentDraft.activeDetailsGroup = null;
+                currentDraft.activeGroupField = null;
+              }
               actionHandled = true;
             } else {
               const cSlots = extractCreateClientSlots(trimmedMessage);
@@ -2356,7 +3124,7 @@ async function parseTaskRequest({
     );
 
     if (wantsAssignee) {
-      if (!canAssignOthers && currentDraft.intent !== 'create_project' && currentDraft.intent !== 'create_client') {
+      if (!canAssignOthers && currentDraft.intent !== 'create_project' && currentDraft.intent !== 'create_client' && currentDraft.intent !== 'create_client') {
         currentDraft.taskFor = 'self';
         currentDraft.wantsOthers = false;
         currentDraft.intent = 'self_task';
@@ -2536,8 +3304,8 @@ async function parseTaskRequest({
               return candObj;
             });
             continue; // Record ambiguous and continue resolving other entries
-          } else if (resolution.status === 'single') {
-            const candidateUser = resolution.user;
+          } else if (resolution.status === 'single' || resolution.status === 'resolved') {
+            const candidateUser = resolution.user || (Array.isArray(resolution.matches) ? resolution.matches[0] : null);
             const inScope = await isAssigneeInScopeFn(req, scope, candidateUser._id || candidateUser.id, deps);
             if (inScope) {
               const idStr = String(candidateUser._id || candidateUser.id);
@@ -2791,10 +3559,30 @@ async function parseTaskRequest({
         break;
       }
     } else if (fieldKey === 'projectManager') {
-      const hasPm = (Array.isArray(currentDraft.projectManager) && currentDraft.projectManager.length > 0) ||
+      const hasPm = ((Array.isArray(currentDraft.projectManager) && currentDraft.projectManager.length > 0) ||
                     (Array.isArray(currentDraft.team) && currentDraft.team.length > 0) ||
-                    (Array.isArray(currentDraft.members) && currentDraft.members.length > 0);
+                    (Array.isArray(currentDraft.members) && currentDraft.members.length > 0)) && Boolean(currentDraft.teamDone);
       if (!hasPm) {
+        nextFieldKey = fieldKey;
+        break;
+      }
+    } else if (fieldKey === 'services') {
+      if (currentDraft.activeDetailsGroup) continue;
+      const isServicesDone = Boolean(currentDraft.servicesDone || currentDraft.servicesSkipped);
+      if (!isServicesDone) {
+        nextFieldKey = fieldKey;
+        break;
+      }
+    } else if (fieldKey === 'clientPlan') {
+      if (currentDraft.activeDetailsGroup) continue;
+      const isPlanDone = currentDraft.clientPlanDone || currentDraft.clientPlanSkipped || currentDraft.clientPlanId || currentDraft.asked.includes('clientPlan');
+      if (!isPlanDone) {
+        nextFieldKey = fieldKey;
+        break;
+      }
+    } else if (fieldKey === 'subscriptionStartDate') {
+      if (currentDraft.activeDetailsGroup) continue;
+      if (currentDraft.clientPlanId && !currentDraft.subscriptionStartDate) {
         nextFieldKey = fieldKey;
         break;
       }
@@ -2972,7 +3760,7 @@ async function parseTaskRequest({
     }
   }
 
-  // -------------------------------------------------------------
+    // -------------------------------------------------------------
   // STEP 5: Return Question OR Ready status
   // -------------------------------------------------------------
   if (nextFieldKey) {
@@ -3007,8 +3795,16 @@ async function parseTaskRequest({
         ? fieldConfig.reAskQuestion.speech
         : (fieldConfig.question?.speech || 'अगली डिटेल बताएं:')));
 
+    let speakTextHi = null;
     let chipsList = [];
-    if (activeIntent === 'task_project' && nextFieldKey === 'assignee' && currentProject) {
+    if (activeIntent === 'task_assigned_user' && nextFieldKey === 'assignee') {
+      chipsList = buildChips('task_assigned_user', 'assignee', {
+        ...deps,
+        companyUsers: deps.companyUsers,
+        draft: currentDraft,
+        memberPage: currentDraft.memberPage || 0,
+      });
+    } else if (activeIntent === 'task_project' && nextFieldKey === 'assignee' && currentProject) {
       chipsList = (currentProject.users || []).slice(0, 8).map((m) => ({
         label: m.name,
         action: { type: 'set', field: 'assignee', value: m.name, assigneeId: String(m._id || m) },
@@ -3030,27 +3826,163 @@ async function parseTaskRequest({
         replyText = ackPrefix + 'City ka naam batayein (zaroori hai):';
         speechText = 'सिटी का नाम बताएं (ज़रूरी है):';
         chipsList = [{ label: 'Cancel', action: { type: 'cancel' } }];
+      } else if (nextFieldKey === 'status') {
+        replyText = ackPrefix + 'Client ka status kya rakhna hai? (Active, On Hold, ya Inactive):';
+        speechText = 'Client ka status kya rakhna hai? Active, On Hold, ya Inactive?';
+        speakTextHi = 'Client का Status क्या रखना है? Active, On Hold, या Inactive?';
+        chipsList = [
+          { label: 'Active', action: { type: 'set', field: 'status', value: 'Active' } },
+          { label: 'On Hold', action: { type: 'set', field: 'status', value: 'On Hold' } },
+          { label: 'Inactive', action: { type: 'set', field: 'status', value: 'Inactive' } },
+          { label: 'Cancel', action: { type: 'cancel' } },
+        ];
       } else if (nextFieldKey === 'projectManager') {
-        replyText = ackPrefix + 'Team member ka naam batayein jo is client ko manage karenge (kam se kam ek member zaroori hai):';
-        speechText = 'टीम मेंबर का नाम बताएं जो इस क्लाइंट को मैनेज करेंगे:';
-        chipsList = [{ label: 'Cancel', action: { type: 'cancel' } }];
+        const pmList = Array.isArray(currentDraft.projectManager) ? currentDraft.projectManager : [];
+        if (pmList.length > 0) {
+          const names = pmList.map(m => m.name || m).join(', ');
+          replyText = ackPrefix + 'Selected team members: ' + names + '.\n\nAur kisi member ko add karna hai ya [Done] dabayein?';
+          speechText = 'Aur kisi member ko add karna hai ya Done dabayein?';
+          speakTextHi = 'और किसी member को add करना है या [Done] दबाएं?';
+        } else {
+          replyText = ackPrefix + 'Team member ka naam batayein jo is client ko manage karenge (kam se kam ek member zaroori hai):';
+          speechText = 'टीम मेंबर का नाम बताएं जो इस क्लाइंट को मैनेज करेंगे:';
+          speakTextHi = 'टीम मेंबर का नाम बताएं जो इस क्लाइंट को मैनेज करेंगे:';
+        }
+        chipsList = buildChips('create_client', 'projectManager', {
+          ...deps,
+          companyUsers: deps.companyUsers,
+          draft: currentDraft,
+          memberPage: currentDraft.memberPage || 0,
+        });
+      }
+      else if (nextFieldKey === 'services') {
+        let companyServices = [];
+        if (scope.services && Array.isArray(scope.services)) {
+          companyServices = scope.services;
+        } else if (deps.Service || mongoose.models.Service) {
+          const ServiceModel = deps.Service || mongoose.models.Service;
+          try {
+            const docs = await ServiceModel.find({
+              ...(cleanCompanyCode ? { companyCode: cleanCompanyCode } : {})
+            }).select('servicename').lean();
+            companyServices = docs.map(d => d.servicename).filter(Boolean);
+          } catch {
+            companyServices = [];
+          }
+        }
+        if (companyServices.length === 0) {
+          companyServices = ['Cloud Architecture', 'Mobile App Development', 'SEO Optimization', 'UI/UX Design'];
+        }
+        const selected = Array.isArray(currentDraft.services) ? currentDraft.services : [];
+
+        if (selected.length > 0) {
+          const justAdded = (action?.type === 'add_client_service' && action?.service) ? action.service : null;
+          const justRemoved = (action?.type === 'remove_client_service' && action?.service) ? action.service : null;
+
+          if (justAdded) {
+            replyText = ackPrefix + '"' + justAdded + '" service add ho gayi.\nSelected services: ' + selected.join(', ') + '.\n\nAur koi service add karni hai ya [Done] dabayein?';
+            speechText = '"' + justAdded + '" service add ho gayi. Aur koi service deni hai ya Done dabayein?';
+            speakTextHi = '"' + justAdded + '" Service add हो गई। और कोई Service देनी है या [Done] दबाएं?';
+          } else if (justRemoved) {
+            replyText = ackPrefix + '"' + justRemoved + '" service remove kar di.\nSelected services: ' + (selected.length > 0 ? selected.join(', ') : 'Koi nahi') + '.\n\nAur koi service add karni hai ya [Done] dabayein?';
+            speechText = '"' + justRemoved + '" service remove kar di. Aur service deni hai ya Done dabayein?';
+            speakTextHi = '"' + justRemoved + '" Service हटा दी। और Service देनी है या [Done] दबाएं?';
+          } else {
+            replyText = ackPrefix + 'Selected services: ' + selected.join(', ') + '.\n\nAur koi service add karni hai ya [Done] dabayein?';
+            speechText = 'Aur koi service deni hai ya Done dabayein?';
+            speakTextHi = 'और कोई Service देनी है या [Done] दबाएं?';
+          }
+
+          const unselectedChips = companyServices
+            .filter(s => !selected.includes(s))
+            .map(s => ({ label: s, action: { type: 'add_client_service', service: s } }));
+          const removeChips = selected.map(s => ({
+            label: 'Remove ' + s,
+            action: { type: 'remove_client_service', service: s },
+          }));
+
+          chipsList = [
+            { label: 'Done', action: { type: 'finish_client_services' } },
+            ...unselectedChips,
+            ...removeChips,
+            { label: 'Abhi nahi', action: { type: 'skip_client_services' } },
+          ];
+        } else {
+          replyText = ackPrefix + 'Is client ko kaun si services deni hain?';
+          speechText = 'Is client ko kaun si services deni hain?';
+          speakTextHi = 'इस Client को कौन सी Services देनी हैं?';
+          chipsList = [
+            ...companyServices.map(s => ({ label: s, action: { type: 'add_client_service', service: s } })),
+            { label: 'Done', action: { type: 'finish_client_services' } },
+            { label: 'Abhi nahi', action: { type: 'skip_client_services' } },
+          ];
+        }
+      } else if (nextFieldKey === 'clientPlan') {
+        replyText = ackPrefix + 'Koi plan lagana hai?';
+        speechText = 'Koi plan lagana hai?';
+        let companyPlans = [];
+        if (scope.clientPlans && Array.isArray(scope.clientPlans)) {
+          companyPlans = scope.clientPlans;
+        } else if (deps.ClientPlan || mongoose.models.ClientPlan) {
+          const PlanModel = deps.ClientPlan || mongoose.models.ClientPlan;
+          try {
+            companyPlans = await PlanModel.find({
+              ...(cleanCompanyCode ? { companyCode: cleanCompanyCode } : {}),
+              isActive: true,
+            }).lean();
+          } catch {
+            companyPlans = [];
+          }
+        }
+        if (companyPlans.length === 0) {
+          companyPlans = [{ _id: 'plan_gold', name: 'Gold', price: 5000, months: 1 }];
+        }
+        chipsList = companyPlans.map(p => ({
+          label: p.name,
+          action: { type: 'set_client_plan', planId: p._id ? p._id.toString() : p.name, planName: p.name }
+        }));
+        chipsList.push({ label: 'Nahi', action: { type: 'skip_client_plan' } });
+      } else if (nextFieldKey === 'subscriptionStartDate') {
+        const planName = currentDraft.clientPlanName || 'Plan';
+        replyText = ackPrefix + 'Plan "' + planName + '" ke liye subscription start date batayein:';
+        speechText = 'Subscription start date batayein.';
+        chipsList = [
+          { label: 'Aaj se', action: { type: 'set_subscription_start_date', value: 'today' } },
+          { label: 'Kal se', action: { type: 'set_subscription_start_date', value: 'tomorrow' } },
+        ];
       } else if (nextFieldKey === 'more_details') {
         const completedGroups = Array.isArray(currentDraft.completedDetailsGroups) ? currentDraft.completedDetailsGroups : [];
-        const allGroups = ['contact', 'business', 'address', 'notes'];
+        const allGroups = ['contact', 'business', 'address', 'notes', 'logo'];
         const remainingGroups = allGroups.filter((g) => !completedGroups.includes(g));
 
         if (currentDraft.activeDetailsGroup) {
           const group = currentDraft.activeDetailsGroup;
           const skippedFields = Array.isArray(currentDraft.skippedDetailsFields) ? currentDraft.skippedDetailsFields : [];
 
-          if (group === 'contact') {
+          if (group === 'logo') {
+            if (!currentDraft.companyLogo && !currentDraft.companyLogoName && !skippedFields.includes('logo')) {
+              currentDraft.activeGroupField = 'logo';
+              replyText = ackPrefix + 'Kripya clip (attachment) button se company ka logo upload karein (PNG, JPG, JPEG ya WEBP, max 2 MB):';
+              speechText = 'Company logo attach karein.';
+              chipsList = [
+                { label: 'Skip', action: { type: 'skip_client_field', field: 'logo' } },
+                { label: 'Nahi, bas', action: { type: 'finish_more_details' } },
+              ];
+            } else {
+              if (!completedGroups.includes('logo')) {
+                completedGroups.push('logo');
+                currentDraft.completedDetailsGroups = completedGroups;
+              }
+              currentDraft.activeDetailsGroup = null;
+              currentDraft.activeGroupField = null;
+            }
+          } else if (group === 'contact') {
             if (!currentDraft.email && !skippedFields.includes('email')) {
               currentDraft.activeGroupField = 'email';
               replyText = ackPrefix + 'Client ka email batayein (optional):';
               speechText = 'क्लाइंट का ईमेल बताएं:';
               chipsList = [
                 { label: 'Skip', action: { type: 'skip_client_field', field: 'email' } },
-                { label: 'Chhod do', action: { type: 'finish_details_group', group: 'contact' } },
                 { label: 'Nahi, bas', action: { type: 'finish_more_details' } },
               ];
             } else if (!currentDraft.phone && !skippedFields.includes('phone')) {
@@ -3059,7 +3991,6 @@ async function parseTaskRequest({
               speechText = 'फ़ोन नंबर बताएं:';
               chipsList = [
                 { label: 'Skip', action: { type: 'skip_client_field', field: 'phone' } },
-                { label: 'Chhod do', action: { type: 'finish_details_group', group: 'contact' } },
                 { label: 'Nahi, bas', action: { type: 'finish_more_details' } },
               ];
             }
@@ -3070,7 +4001,6 @@ async function parseTaskRequest({
               speechText = 'इंडस्ट्री बताएं:';
               chipsList = [
                 { label: 'Skip', action: { type: 'skip_client_field', field: 'industry' } },
-                { label: 'Chhod do', action: { type: 'finish_details_group', group: 'business' } },
                 { label: 'Nahi, bas', action: { type: 'finish_more_details' } },
               ];
             } else if (!currentDraft.gst && !skippedFields.includes('gst')) {
@@ -3079,7 +4009,6 @@ async function parseTaskRequest({
               speechText = 'जीएसटी नंबर बताएं:';
               chipsList = [
                 { label: 'Skip', action: { type: 'skip_client_field', field: 'gst' } },
-                { label: 'Chhod do', action: { type: 'finish_details_group', group: 'business' } },
                 { label: 'Nahi, bas', action: { type: 'finish_more_details' } },
               ];
             } else if (!currentDraft.pan && !skippedFields.includes('pan')) {
@@ -3088,7 +4017,6 @@ async function parseTaskRequest({
               speechText = 'पैन नंबर बताएं:';
               chipsList = [
                 { label: 'Skip', action: { type: 'skip_client_field', field: 'pan' } },
-                { label: 'Chhod do', action: { type: 'finish_details_group', group: 'business' } },
                 { label: 'Nahi, bas', action: { type: 'finish_more_details' } },
               ];
             } else if (!currentDraft.website && !skippedFields.includes('website')) {
@@ -3097,7 +4025,6 @@ async function parseTaskRequest({
               speechText = 'वेबसाइट बताएं:';
               chipsList = [
                 { label: 'Skip', action: { type: 'skip_client_field', field: 'website' } },
-                { label: 'Chhod do', action: { type: 'finish_details_group', group: 'business' } },
                 { label: 'Nahi, bas', action: { type: 'finish_more_details' } },
               ];
             }
@@ -3108,7 +4035,6 @@ async function parseTaskRequest({
               speechText = 'ऑफिस एड्रेस बताएं:';
               chipsList = [
                 { label: 'Skip', action: { type: 'skip_client_field', field: 'address' } },
-                { label: 'Chhod do', action: { type: 'finish_details_group', group: 'address' } },
                 { label: 'Nahi, bas', action: { type: 'finish_more_details' } },
               ];
             } else if (!currentDraft.state && !skippedFields.includes('state')) {
@@ -3117,7 +4043,6 @@ async function parseTaskRequest({
               speechText = 'स्टेट बताएं:';
               chipsList = [
                 { label: 'Skip', action: { type: 'skip_client_field', field: 'state' } },
-                { label: 'Chhod do', action: { type: 'finish_details_group', group: 'address' } },
                 { label: 'Nahi, bas', action: { type: 'finish_more_details' } },
               ];
             } else if (!currentDraft.country && !skippedFields.includes('country')) {
@@ -3126,7 +4051,6 @@ async function parseTaskRequest({
               speechText = 'कंट्री बताएं:';
               chipsList = [
                 { label: 'Skip', action: { type: 'skip_client_field', field: 'country' } },
-                { label: 'Chhod do', action: { type: 'finish_details_group', group: 'address' } },
                 { label: 'Nahi, bas', action: { type: 'finish_more_details' } },
               ];
             } else if (!currentDraft.pincode && !skippedFields.includes('pincode')) {
@@ -3135,7 +4059,6 @@ async function parseTaskRequest({
               speechText = 'पिनकोड बताएं:';
               chipsList = [
                 { label: 'Skip', action: { type: 'skip_client_field', field: 'pincode' } },
-                { label: 'Chhod do', action: { type: 'finish_details_group', group: 'address' } },
                 { label: 'Nahi, bas', action: { type: 'finish_more_details' } },
               ];
             }
@@ -3146,7 +4069,6 @@ async function parseTaskRequest({
               speechText = 'डिस्क्रिप्शन बताएं:';
               chipsList = [
                 { label: 'Skip', action: { type: 'skip_client_field', field: 'description' } },
-                { label: 'Chhod do', action: { type: 'finish_details_group', group: 'notes' } },
                 { label: 'Nahi, bas', action: { type: 'finish_more_details' } },
               ];
             } else if (!currentDraft.notes && !skippedFields.includes('notes')) {
@@ -3155,7 +4077,6 @@ async function parseTaskRequest({
               speechText = 'नोट्स बताएं:';
               chipsList = [
                 { label: 'Skip', action: { type: 'skip_client_field', field: 'notes' } },
-                { label: 'Chhod do', action: { type: 'finish_details_group', group: 'notes' } },
                 { label: 'Nahi, bas', action: { type: 'finish_more_details' } },
               ];
             }
@@ -3235,12 +4156,24 @@ async function parseTaskRequest({
           { label: 'On Hold', action: { type: 'set', field: 'status', value: 'On Hold' } },
         ];
       } else if (nextFieldKey === 'members') {
-        replyText = ackPrefix + 'Project mein kaun kaun members honge? Naam batayein (aap khud shamil honge)';
-        speechText = 'प्रोजेक्ट में कौन-कौन सदस्य होंगे? नाम बताएं, आप खुद शामिल होंगे।';
-        chipsList = [
-          { label: 'Sirf main', action: { type: 'set', field: 'members', value: 'creator_only' } },
-          { label: 'Cancel', action: { type: 'cancel' } },
-        ];
+        const mList = Array.isArray(currentDraft.members) ? currentDraft.members : [];
+        if (mList.length > 0) {
+          const names = mList.map(m => (typeof m === 'object' ? (m.name || m.label) : m)).join(', ');
+          replyText = ackPrefix + 'Selected members: ' + names + '.\n\nAur kisi member ko add karna hai ya [Done] dabayein?';
+          speechText = 'Aur kisi member ko add karna hai ya Done dabayein?';
+          speakTextHi = 'और किसी member को add करना है या [Done] दबाएं?';
+        } else {
+          replyText = ackPrefix + 'Project mein kaun kaun members honge? Naam batayein (aap khud shamil honge)';
+          speechText = 'प्रोजेक्ट में कौन-कौन सदस्य होंगे? नाम बताएं, आप खुद शामिल होंगे।';
+          speakTextHi = 'प्रोजेक्ट में कौन-कौन सदस्य होंगे? नाम बताएं, आप खुद शामिल होंगे।';
+        }
+        chipsList = buildChips('create_project', 'members', {
+          ...deps,
+          companyUsers: deps.companyUsers,
+          draft: currentDraft,
+          user: req?.user,
+          memberPage: currentDraft.memberPage || 0,
+        });
       }
     } else if (activeIntent === 'task_project' && nextFieldKey === 'project') {
       chipsList = buildAccessibleProjectChips(accessibleProjects, 5);
@@ -3283,15 +4216,17 @@ async function parseTaskRequest({
       return true;
     });
 
-    // For Owner/Admin on the first question of a new normal task, offer [Khud ke liye] [Kisi aur ke liye]
-    const isFirstQuestion = currentDraft.asked.filter((f) => f !== 'assignee' && f !== 'project').length <= 1;
-    if (activeIntent !== 'task_project' && canAssignOthers && isFirstQuestion && currentDraft.taskFor !== 'others' && nextFieldKey !== 'assignee') {
+        // Offer [Khud ke liye] [Kisi aur ke liye] ONLY when user typed generic task and intent is not yet chosen
+    const isIntentFixed = Boolean(currentDraft.intent && ['self_task', 'task_assigned_user', 'task_project', 'create_project', 'create_client', 'create_client_task'].includes(currentDraft.intent));
+    if (!isIntentFixed && canAssignOthers && !currentDraft.taskFor && nextFieldKey !== 'assignee') {
       chipsList = [
-        { label: 'Khud ke liye', action: { type: 'set', field: 'taskFor', value: 'self' } },
-        { label: 'Kisi aur ke liye', action: { type: 'set', field: 'taskFor', value: 'others' } },
+        { label: 'Khud ke liye', action: { type: 'set_intent', intent: 'self_task' } },
+        { label: 'Kisi aur ke liye', action: { type: 'set_intent', intent: 'task_assigned_user' } },
         ...chipsList,
       ];
     }
+    // Runtime chips guard (Item 2)
+    chipsList = assertChipsAllowed(currentDraft.intent, nextFieldKey, chipsList);
 
     if (ackPrefix && !replyText.startsWith(ackPrefix)) {
       replyText = ackPrefix + replyText;
@@ -3332,7 +4267,8 @@ async function parseTaskRequest({
         field: nextFieldKey,
         reply: replyText,
         speech: speechText,
-        speakText: speechText || replyText,
+        speakText: fieldConfig?.question?.speakText || replyText,
+        speakTextHi: speakTextHi || fieldConfig?.question?.speakTextHi || speechText || replyText,
         draft: currentDraft,
         missing: [nextFieldKey],
         chips: chipsList,
@@ -3528,6 +4464,7 @@ async function parseTaskRequest({
     modifiedFields.push({ key: 'project', labelHinglish: `project ("${currentDraft.projectName}")`, labelHindi: `प्रोजेक्ट ("${currentDraft.projectName}")` });
   }
 
+  let readyChips = null;
   let finalReply = ackPrefix + readyConfig.question.reply;
   let readySpeech = speechPrefix
     ? `${speechPrefix}${readyConfig.question.speech}`
@@ -3539,7 +4476,21 @@ async function parseTaskRequest({
     const emailNotice = currentDraft.email
       ? `Create karne par client ko login details ka email jayega: ${maskEmail(currentDraft.email)}`
       : 'Email nahi diya gaya, system auto-generated login banayega';
-    finalReply = ackPrefix + `Client "${currentDraft.client}" (${currentDraft.company}, ${currentDraft.city}) ka draft taiyar hai.\n\n${emailNotice}\n\nKya main create kar doon?`;
+    let servicesLine = '';
+    if (Array.isArray(currentDraft.services) && currentDraft.services.length > 0) {
+      servicesLine = '\nServices: ' + currentDraft.services.join(', ');
+    }
+    let planLine = '';
+    if (currentDraft.clientPlanName || currentDraft.clientPlanId) {
+      const taskCount = currentDraft.clientPlanTasksCount;
+      const countStr = typeof taskCount === 'number' && taskCount > 0 ? (taskCount + ' ') : '';
+      planLine = '\nPlan: ' + (currentDraft.clientPlanName || 'Plan');
+    }
+    let logoLine = '';
+    if (currentDraft.companyLogoName || currentDraft.companyLogo) {
+      logoLine = '\nLogo: ' + (currentDraft.companyLogoName || currentDraft.companyLogo);
+    }
+    finalReply = ackPrefix + 'Client "' + currentDraft.client + '" (' + currentDraft.company + ', ' + currentDraft.city + ') ka draft taiyar hai.' + servicesLine + planLine + logoLine + '\n\n' + emailNotice + '\n\nKya main create kar doon?';
     finalSpeech = `क्लाइंट "${currentDraft.client}" का ड्राफ्ट तैयार है। क्या मैं बना दूं?`;
     readyChips = [
       { label: 'Create karo', action: { type: 'confirm' } },
@@ -3647,7 +4598,8 @@ async function parseTaskRequest({
     field: 'ready',
     reply: finalReply,
     speech: finalSpeech,
-    speakText: finalSpeech || finalReply,
+    speakText: finalReply ? finalReply.split('\n')[0] : 'Draft taiyar hai.',
+    speakTextHi: currentDraft.intent === 'create_client' ? `Client "${currentDraft.client}" का Draft तैयार है। क्या मैं create कर दूं?` : (finalSpeech || 'Draft तैयार है।'),
     draft: currentDraft,
     missing: [],
     chips: (readyChips && readyChips.length > 0) ? readyChips : (typeof readyConfig.chips === 'function' ? readyConfig.chips() : []),

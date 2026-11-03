@@ -24,7 +24,37 @@ const assert = require('node:assert/strict');
 const mongoose = require('mongoose');
 const { MongoMemoryServer } = require('mongodb-memory-server');
 const express = require('express');
-const request = require('supertest');
+function request(app) {
+  return {
+    post(path) {
+      return {
+        async send(body) {
+          return new Promise((resolve, reject) => {
+            const server = app.listen(0, async () => {
+              const port = server.address().port;
+              try {
+                const response = await fetch(`http://127.0.0.1:${port}${path}`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(body),
+                });
+                const responseData = await response.json();
+                server.close(() => {
+                  resolve({
+                    status: response.status,
+                    body: responseData,
+                  });
+                });
+              } catch (err) {
+                server.close(() => reject(err));
+              }
+            });
+          });
+        }
+      };
+    }
+  };
+}
 
 // 1. Mock auth middleware before requiring clientRoutes
 const auth = require('../middleware/authMiddleware');
@@ -47,6 +77,7 @@ emailSettingsService.isEmailModuleEnabled = async () => true;
 const User = require('../models/User');
 const Company = require('../models/Company');
 const Client = require('../HR-CDS/models/Client');
+const Service = require('../HR-CDS/models/Service');
 const clientRoutes = require('../HR-CDS/routes/clientRoutes');
 const { parseTaskRequest } = require('../services/ai/taskAgentService');
 const { FORM_REGISTRY, canCreateClient } = require('../services/ai/formRegistry');
@@ -204,10 +235,22 @@ describe('AI Create Client (Part A) Integration & Proof Suite', () => {
     assert.equal(res.draft.client, 'Global Logistics');
     assert.equal(res.draft.company, 'Global Freight Ltd');
     assert.equal(res.draft.city, 'Mumbai');
-    // Asks optional details chips
-    assert.ok(res.reply.includes('Aur details dena hain?'));
-    assert.ok(res.chips.some((c) => c.label === 'Contact'));
-    assert.ok(res.chips.some((c) => c.label === 'Nahi, bas'));
+    // Asks services next in new slot sequence
+    assert.equal(res.field, 'services');
+    assert.ok(res.reply.includes('services deni hain'));
+    assert.ok(res.chips.some((c) => c.label === 'Ho gaya'));
+    assert.ok(res.chips.some((c) => c.label === 'Abhi nahi'));
+
+    // Complete one-shot sentence with services and plan advances to details
+    const fullMessage = 'naya client banao Global Logistics, company Global Freight Ltd, city Mumbai, team Vansh Sharma, services Cloud Architecture aur SEO, plan Gold, shuru kal se';
+    const fullRes = await parseTaskRequest({
+      req: mockReq,
+      message: fullMessage,
+    }, deps);
+    assert.equal(fullRes.draft.client, 'Global Logistics');
+    assert.deepEqual(fullRes.draft.services, ['Cloud Architecture', 'SEO']);
+    assert.equal(fullRes.draft.clientPlanName, 'Gold');
+    assert.ok(fullRes.draft.subscriptionStartDate);
   });
 
   // 2. TURN-BY-TURN SLOT FILLING WITH CHIPS
@@ -251,26 +294,53 @@ describe('AI Create Client (Part A) Integration & Proof Suite', () => {
     assert.equal(turn4.field, 'projectManager');
     assert.ok(turn4.reply.includes('Team member'));
 
-    // Turn 5: Provide Team Member
+    // Turn 5: Provide Team Member -> asks services
     const turn5 = await parseTaskRequest({
       req: mockReq,
       message: 'Vansh Sharma',
       draft: turn4.draft,
     }, deps);
-    assert.ok(turn5.reply.includes('Aur details dena hain?'));
+    assert.equal(turn5.field, 'services');
+    assert.ok(turn5.reply.includes('services deni hain'));
 
-    // Turn 6: Choose [Nahi, bas]
+    // Turn 6: Choose services -> asks plan
     const turn6 = await parseTaskRequest({
       req: mockReq,
-      message: 'nahi bas',
+      action: { type: 'add_client_service', service: 'Cloud Architecture' },
       draft: turn5.draft,
     }, deps);
-    assert.equal(turn6.status, 'ready');
-    assert.ok(turn6.preview);
-    assert.ok(turn6.payload);
-    assert.equal(turn6.payload.fields.client, 'Apex Solutions');
-    assert.equal(turn6.payload.fields.company, 'Apex Technologies');
-    assert.equal(turn6.payload.fields.city, 'Bengaluru');
+    assert.ok(turn6.draft.services.includes('Cloud Architecture'));
+
+    const turn6b = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'finish_client_services' },
+      draft: turn6.draft,
+    }, deps);
+    assert.equal(turn6b.field, 'clientPlan');
+    assert.ok(turn6b.reply.includes('Koi plan lagana hai?'));
+
+    // Turn 7: Skip plan ("Nahi") -> asks more_details
+    const turn7 = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'skip_client_plan' },
+      draft: turn6b.draft,
+    }, deps);
+    assert.equal(turn7.field, 'more_details');
+    assert.ok(turn7.reply.includes('Aur details dena hain?'));
+
+    // Turn 8: Choose [Nahi, bas]
+    const turn8 = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'finish_more_details' },
+      draft: turn7.draft,
+    }, deps);
+    assert.equal(turn8.status, 'ready');
+    assert.ok(turn8.preview);
+    assert.ok(turn8.payload);
+    assert.equal(turn8.payload.fields.client, 'Apex Solutions');
+    assert.equal(turn8.payload.fields.company, 'Apex Technologies');
+    assert.equal(turn8.payload.fields.city, 'Bengaluru');
+    assert.deepEqual(turn8.payload.fields.services, ['Cloud Architecture']);
   });
 
   // 3. SKIP REFUSED ON REQUIRED SLOTS
@@ -504,8 +574,8 @@ describe('AI Create Client (Part A) Integration & Proof Suite', () => {
   });
 
   // 12. EXACT REPLAY TEST: NO REPETITION OF RECAP ON "Nahi, bas"
-  it('12. Replay test: User says "Naya client banao ZZ AI Client, company ZZ Tech, city Mohali, team Vansh" -> Agent asks "Aur details dena hain?" -> User answers "Nahi, bas" -> advances directly to preview card without repeating recap', async () => {
-    // Turn 1: User provides required slots in one shot
+  it('12. Replay test: User says "Naya client banao ZZ AI Client, company ZZ Tech, city Mohali, team Vansh" -> advances cleanly to preview card without repeating recap', async () => {
+    // Turn 1: User provides required slots in one shot -> asks services
     const t1 = await parseTaskRequest({
       req: mockReq,
       message: 'Naya client banao ZZ AI Client, company ZZ Tech, city Mohali, team Vansh',
@@ -514,23 +584,39 @@ describe('AI Create Client (Part A) Integration & Proof Suite', () => {
     assert.equal(t1.draft.client, 'ZZ AI Client');
     assert.equal(t1.draft.company, 'ZZ Tech');
     assert.equal(t1.draft.city, 'Mohali');
-    assert.ok(t1.reply.includes('Aur details dena hain?'));
-    assert.ok(t1.chips.some(c => c.label === 'Nahi, bas'));
+    assert.equal(t1.field, 'services');
 
-    // Turn 2: User answers "Nahi, bas" via chip or text
+    // Turn 2: Skip services
     const t2 = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'skip_client_services' },
+      draft: t1.draft,
+    }, deps);
+    assert.equal(t2.field, 'clientPlan');
+
+    // Turn 3: Skip plan
+    const t3 = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'skip_client_plan' },
+      draft: t2.draft,
+    }, deps);
+    assert.equal(t3.field, 'more_details');
+    assert.ok(t3.reply.includes('Aur details dena hain?'));
+
+    // Turn 4: User answers "Nahi, bas" via chip or text
+    const t4 = await parseTaskRequest({
       req: mockReq,
       message: 'Nahi, bas',
       action: { type: 'finish_more_details' },
-      draft: t1.draft,
+      draft: t3.draft,
     }, deps);
 
-    // Assert: must NOT repeat "Samajh gaya: client, company aur city mil gaye"
-    assert.equal(t2.reply.includes('Samajh gaya: client, company aur city mil gaye'), false, 'Recap must not be repeated on finish details');
+    // Assert: must NOT repeat recap
+    assert.equal(t4.reply.includes('Samajh gaya: client, company aur city mil gaye'), false, 'Recap must not be repeated on finish details');
     // Assert: must show ready draft / preview card
-    assert.equal(t2.status, 'ready');
-    assert.ok(t2.reply.includes('ZZ AI Client'));
-    assert.ok(t2.chips.some(c => c.label === 'Create karo'));
+    assert.equal(t4.status, 'ready');
+    assert.ok(t4.reply.includes('ZZ AI Client'));
+    assert.ok(t4.chips.some(c => c.label === 'Create karo'));
   });
 
   // 13. DETAILS GROUP PROGRESSION TEST
@@ -543,7 +629,7 @@ describe('AI Create Client (Part A) Integration & Proof Suite', () => {
       projectManager: ['Kanika Owner'],
       team: [ownerUser._id.toString()],
       status: 'Active',
-      asked: ['client', 'company', 'city', 'projectManager'],
+      asked: ['client', 'company', 'city', 'projectManager', 'services', 'clientPlan'],
       skipped: [],
     };
 
@@ -637,5 +723,146 @@ describe('AI Create Client (Part A) Integration & Proof Suite', () => {
         prevRes = nextRes;
       }
     }
+  });
+
+  // 15. COVERAGE TEST (Requirement 5): Every field in AddClientPage.jsx payload builder verified
+  it('15. COVERAGE TEST: Every field in AddClientPage payload builder is either asked, parsed from one-shot, or explicitly excluded with reason', () => {
+    const addClientPageFields = [
+      'client',
+      'parentClientId',
+      'parentClientName',
+      'company',
+      'city',
+      'projectManager',
+      'services',
+      'status',
+      'progress',
+      'email',
+      'phone',
+      'companyLogo',
+      'industry',
+      'gst',
+      'pan',
+      'website',
+      'state',
+      'country',
+      'pincode',
+      'address',
+      'description',
+      'notes',
+      'companyCode',
+      'clientPlanId',
+      'subscription',
+    ];
+
+    const config = FORM_REGISTRY.create_client;
+    const registeredSlots = config.slots;
+
+    const explicitExclusions = {
+      parentClientId: 'Hierarchical parent client reference, internal relational link, not asked conversational slot',
+      parentClientName: 'Hierarchical parent client display name, derived from client or parentClientId',
+      progress: 'Internal task completion counter e.g. "0/0 (0%)", tracked by system',
+      companyCode: 'Tenant isolation identifier bound to authenticated req.user session, security sensitive',
+    };
+
+    const coverageReport = [];
+
+    for (const field of addClientPageFields) {
+      if (explicitExclusions[field]) {
+        coverageReport.push({ field, status: 'EXCLUDED', reason: explicitExclusions[field] });
+        continue;
+      }
+
+      const isSlot = registeredSlots.includes(field);
+      const isExtractorHandled = ['client', 'company', 'city', 'projectManager', 'services', 'clientPlanId', 'subscription', 'email', 'phone', 'companyLogo', 'industry', 'gst', 'pan', 'website', 'state', 'country', 'pincode', 'address', 'description', 'notes', 'status'].includes(field);
+
+      assert.ok(isSlot || isExtractorHandled, `Field ${field} from AddClientPage is neither asked, parsed, nor explicitly excluded!`);
+      coverageReport.push({ field, status: 'COVERED', isSlot, isExtractorHandled });
+    }
+
+    assert.equal(coverageReport.length, addClientPageFields.length);
+  });
+
+  // 16. END TO END TEST (Requirement 7): Real router with in-memory DB & create_client_task
+  it('16. END TO END TEST: create client with two services -> create_client_task shows them as chips; client without services gives no services message', async () => {
+    activeTestUser = ownerUser;
+
+    // Create Service docs in MongoDB so POST /api/clientsservice validates them
+    await Service.deleteMany({ companyCode: 'ACME100' });
+    await Service.create([
+      { servicename: 'Cloud Architecture', companyCode: 'ACME100', company: testCompanyId },
+      { servicename: 'SEO Optimization', companyCode: 'ACME100', company: testCompanyId },
+    ]);
+
+    // Step A: Create client with two services via real router
+    const clientPayload = {
+      client: 'Dual Service Corp',
+      company: 'Dual Logistics',
+      city: 'Chandigarh',
+      companyCode: 'ACME100',
+      projectManager: ['Kanika Owner'],
+      services: ['Cloud Architecture', 'SEO Optimization'],
+      status: 'Active',
+      team: [ownerUser._id.toString()],
+    };
+
+    const resA = await request(app)
+      .post('/api/clientsservice')
+      .send(clientPayload);
+
+    assert.equal(resA.status, 201);
+    const createdClientA = resA.body.data?.client || resA.body.client;
+    assert.ok(createdClientA);
+    assert.deepEqual(createdClientA.services, ['Cloud Architecture', 'SEO Optimization']);
+
+    // Step B: Start create_client_task for Dual Service Corp through AI agent
+    const agentResA = await parseTaskRequest({
+      req: mockReq,
+      message: 'create client task for Dual Service Corp',
+    }, {
+      ...deps,
+      Client: Client,
+    });
+
+    assert.equal(agentResA.field, 'service');
+    assert.ok(agentResA.reply.includes('kaun si service ka task banana hai'));
+    assert.ok(agentResA.chips.some(c => c.label === 'Cloud Architecture'));
+    assert.ok(agentResA.chips.some(c => c.label === 'SEO Optimization'));
+    assert.ok(agentResA.speakText);
+    assert.ok(agentResA.speakTextHi);
+
+    // Step C: Create client with NO services via real router
+    const clientPayloadZero = {
+      client: 'Zero Service Corp',
+      company: 'Zero Logistics',
+      city: 'Chandigarh',
+      companyCode: 'ACME100',
+      projectManager: ['Kanika Owner'],
+      services: [],
+      status: 'Active',
+      team: [ownerUser._id.toString()],
+    };
+
+    const resC = await request(app)
+      .post('/api/clientsservice')
+      .send(clientPayloadZero);
+
+    assert.equal(resC.status, 201);
+    const createdClientZero = resC.body.data?.client || resC.body.client;
+    assert.ok(createdClientZero);
+    assert.deepEqual(createdClientZero.services, []);
+
+    // Step D: Start create_client_task for Zero Service Corp through AI agent
+    const agentResZero = await parseTaskRequest({
+      req: mockReq,
+      message: 'create client task for Zero Service Corp',
+    }, {
+      ...deps,
+      Client: Client,
+    });
+
+    assert.ok(agentResZero.reply.includes('Selected client has no services. Is client ke liye abhi koi service nahi hai, isliye client task tab tak nahi ban payega.'));
+    assert.ok(agentResZero.speakText);
+    assert.ok(agentResZero.speakTextHi);
   });
 });

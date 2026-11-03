@@ -10,6 +10,7 @@ const socketIo = require('socket.io');
 const mongoose = require('mongoose');
 const { protect, restrictTo, invalidateAuthUser } = require("./middleware/authMiddleware");
 
+dotenv.config({ path: path.join(__dirname, ".env") });
 dotenv.config();
 
 const requiredEnvVars = ["JWT_SECRET"];

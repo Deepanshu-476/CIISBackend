@@ -240,6 +240,25 @@ const typedActionSchema = z.discriminatedUnion('type', [
     field: z.string().optional(),
     value: z.string().optional(),
   }),
+
+  z.object({ type: z.literal('toggle_client_service'), service: z.string().optional(), value: z.any().optional() }),
+  z.object({ type: z.literal('add_client_service'), service: z.string().optional(), value: z.any().optional() }),
+  z.object({ type: z.literal('remove_client_service'), service: z.string().optional(), value: z.any().optional() }),
+  z.object({ type: z.literal('finish_client_services') }),
+  z.object({ type: z.literal('skip_client_services') }),
+  z.object({ type: z.literal('set_client_plan'), planId: z.string().optional(), planName: z.string().optional(), value: z.any().optional() }),
+  z.object({ type: z.literal('skip_client_plan') }),
+  z.object({ type: z.literal('set_subscription_start_date'), value: z.any().optional() }),
+  z.object({ type: z.literal('set_client_task_service'), service: z.string().optional(), value: z.any().optional() }),
+  z.object({ type: z.literal('create_client_task'), client: z.string().optional(), value: z.any().optional() }),
+  z.object({ type: z.literal('set_intent'), intent: z.string().optional(), value: z.any().optional() }),
+  z.object({ type: z.literal('add_member'), name: z.string().optional(), userId: z.string().optional() }),
+  z.object({ type: z.literal('set_team_members'), members: z.array(z.any()).optional(), value: z.any().optional() }),
+  z.object({ type: z.literal('set_client_services'), services: z.array(z.string()).optional(), value: z.any().optional() }),
+  z.object({ type: z.literal('remove_member'), name: z.string().optional(), userId: z.string().optional() }),
+  z.object({ type: z.literal('show_more_members'), page: z.number().optional() }),
+  z.object({ type: z.literal('set_only_self') }),
+  z.object({ type: z.literal('finish_members') }),
 ]);
 
 const objectActionSchema = z.object({
@@ -248,7 +267,7 @@ const objectActionSchema = z.object({
   }).optional(),
 });
 
-const actionSchema = z.union([typedActionSchema, objectActionSchema]);
+const actionSchema = z.union([typedActionSchema, objectActionSchema, z.record(z.string(), z.any())]);
 
 const pickInputSchema = z.union([
   z.object({
