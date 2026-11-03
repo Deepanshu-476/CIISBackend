@@ -127,6 +127,190 @@ function isValidWebsite(website) {
 /**
  * Extracts slot values from one-shot text or conversational input.
  */
+
+const INDIA_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+function getIstNow(now = new Date()) {
+  return new Date(now.getTime() + INDIA_OFFSET_MS);
+}
+
+function formatYmd(year, month, day) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${year}-${pad(month)}-${pad(day)}`;
+}
+
+function getIstToday(now = new Date()) {
+  const ist = getIstNow(now);
+  return formatYmd(ist.getUTCFullYear(), ist.getUTCMonth() + 1, ist.getUTCDate());
+}
+
+function getIstTomorrow(now = new Date()) {
+  const ist = new Date(now.getTime() + INDIA_OFFSET_MS + 24 * 60 * 60 * 1000);
+  return formatYmd(ist.getUTCFullYear(), ist.getUTCMonth() + 1, ist.getUTCDate());
+}
+
+function calculateEndDate(startDate, months = 1) {
+  if (!startDate) return '';
+  const m = String(startDate).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) {
+    let year = parseInt(m[1], 10);
+    let month = parseInt(m[2], 10);
+    const day = parseInt(m[3], 10);
+    month += parseInt(months, 10);
+    while (month > 12) {
+      month -= 12;
+      year += 1;
+    }
+    const pad = (n) => String(n).padStart(2, '0');
+    const maxDays = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const safeDay = Math.min(day, maxDays);
+    return `${year}-${pad(month)}-${pad(safeDay)}`;
+  }
+  const d = new Date(startDate);
+  d.setMonth(d.getMonth() + parseInt(months, 10));
+  return d.toISOString().split('T')[0];
+}
+
+const MONTH_MAP = {
+  january: 1, jan: 1, 'जनवरी': 1,
+  february: 2, feb: 2, 'फ़रवरी': 2, 'फरवरी': 2,
+  march: 3, mar: 3, 'मार्च': 3,
+  april: 4, apr: 4, 'अप्रैल': 4,
+  may: 5, 'मई': 5,
+  june: 6, jun: 6, 'जून': 6,
+  july: 7, jul: 7, 'जुलाई': 7,
+  august: 8, aug: 8, 'अगस्त': 8,
+  september: 9, sep: 9, sept: 9, 'सितंबर': 9, 'सितम्बर': 9,
+  october: 10, oct: 10, 'अक्टूबर': 10,
+  november: 11, nov: 11, 'नवंबर': 11, 'नवम्बर': 11,
+  december: 12, dec: 12, 'दिसंबर': 12, 'दिसम्बर': 12,
+};
+
+function normalizeDevanagariDigits(str) {
+  return String(str || '').replace(/[०-९]/g, (d) => String(d.charCodeAt(0) - 0x0966));
+}
+
+function parseRelativeOrAbsoluteDate(raw, now = new Date()) {
+  if (!raw || typeof raw !== 'string') return '';
+  let str = normalizeDevanagariDigits(raw.trim().toLowerCase());
+
+  // Strip prefixes / noise like "se", "ko", "date", "start date"
+  str = str.replace(/^(?:date|start\s*date|tarikh|tareekh|from)\s*[:=]?\s*/i, '');
+
+  const ist = getIstNow(now);
+  const curYear = ist.getUTCFullYear();
+  const curMonth = ist.getUTCMonth() + 1;
+  const curDay = ist.getUTCDate();
+
+  // 1. Relative keywords
+  if (/\b(?:aaj|today|abhi)\b/i.test(str)) {
+    return formatYmd(curYear, curMonth, curDay);
+  }
+  if (/\b(?:kal|tomorrow)\b/i.test(str) && !/\b(?:beeta|pehle|yesterday)\b/i.test(str)) {
+    return getIstTomorrow(now);
+  }
+  if (/\b(?:parso|parson|day\s+after\s+tomorrow)\b/i.test(str)) {
+    const d = new Date(now.getTime() + INDIA_OFFSET_MS + 2 * 24 * 60 * 60 * 1000);
+    return formatYmd(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate());
+  }
+  if (/\b(?:tarso|tarson)\b/i.test(str)) {
+    const d = new Date(now.getTime() + INDIA_OFFSET_MS + 3 * 24 * 60 * 60 * 1000);
+    return formatYmd(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate());
+  }
+
+  // "N din baad / N days later"
+  const daysMatch = str.match(/\b(\d+)\s*(?:din|days?)\s*(?:baad|bad|after|later)\b/i);
+  if (daysMatch) {
+    const n = parseInt(daysMatch[1], 10);
+    const d = new Date(now.getTime() + INDIA_OFFSET_MS + n * 24 * 60 * 60 * 1000);
+    return formatYmd(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate());
+  }
+
+  // "N hafte baad / N weeks later" or "next week / agle hafte"
+  if (/\b(?:next\s*week|agle?\s*hafte)\b/i.test(str)) {
+    const d = new Date(now.getTime() + INDIA_OFFSET_MS + 7 * 24 * 60 * 60 * 1000);
+    return formatYmd(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate());
+  }
+  const weeksMatch = str.match(/\b(\d+)\s*(?:hafte|hafta|weeks?)\s*(?:baad|bad|after|later)\b/i);
+  if (weeksMatch) {
+    const n = parseInt(weeksMatch[1], 10);
+    const d = new Date(now.getTime() + INDIA_OFFSET_MS + n * 7 * 24 * 60 * 60 * 1000);
+    return formatYmd(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate());
+  }
+
+  // "N mahine baad / N months later" or "next month / agle mahine"
+  if (/\b(?:next\s*month|agle?\s*mahine)\b/i.test(str)) {
+    let y = curYear;
+    let m = curMonth + 1;
+    if (m > 12) { m -= 12; y += 1; }
+    const maxDays = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    return formatYmd(y, m, Math.min(curDay, maxDays));
+  }
+
+  // 2. ISO format YYYY-MM-DD or YYYY/MM/DD
+  const isoMatch = str.match(/\b(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})\b/);
+  if (isoMatch) {
+    const y = parseInt(isoMatch[1], 10);
+    const m = parseInt(isoMatch[2], 10);
+    const d = parseInt(isoMatch[3], 10);
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      return formatYmd(y, m, d);
+    }
+  }
+
+  // 3. DD-MM-YYYY or DD/MM/YYYY or DD.MM.YYYY
+  const ddmmyyyy = str.match(/\b(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})\b/);
+  if (ddmmyyyy) {
+    let y = parseInt(ddmmyyyy[3], 10);
+    if (y < 100) y += 2000;
+    const m = parseInt(ddmmyyyy[2], 10);
+    const d = parseInt(ddmmyyyy[1], 10);
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      return formatYmd(y, m, d);
+    }
+  }
+
+  // 4. Textual month dates: "4 november 2026", "4th nov 2026", "4 nov", "4 नवंबर 2026"
+  // Day Month Year pattern
+  const dayMonthPattern = /\b(\d{1,2})(?:st|nd|rd|th)?(?:\s+(?:of\s+)?|[./-])([a-zA-Z\u0900-\u097F]+)(?:(?:\s+|[./,-]+)(\d{2,4}))?\b/i;
+  const dmMatch = str.match(dayMonthPattern);
+  if (dmMatch) {
+    const day = parseInt(dmMatch[1], 10);
+    const monthKey = dmMatch[2].toLowerCase();
+    const month = MONTH_MAP[monthKey];
+    if (month && day >= 1 && day <= 31) {
+      let year = dmMatch[3] ? parseInt(dmMatch[3], 10) : curYear;
+      if (year < 100) year += 2000;
+      return formatYmd(year, month, day);
+    }
+  }
+
+  // Month Day Year pattern: "november 4 2026", "nov 4th, 2026", "nov 4"
+  const monthDayPattern = /\b([a-zA-Z\u0900-\u097F]+)(?:\s+)(\d{1,2})(?:st|nd|rd|th)?(?:(?:\s*,?\s*|[./,-]+)(\d{2,4}))?\b/i;
+  const mdMatch = str.match(monthDayPattern);
+  if (mdMatch) {
+    const monthKey = mdMatch[1].toLowerCase();
+    const month = MONTH_MAP[monthKey];
+    const day = parseInt(mdMatch[2], 10);
+    if (month && day >= 1 && day <= 31) {
+      let year = mdMatch[3] ? parseInt(mdMatch[3], 10) : curYear;
+      if (year < 100) year += 2000;
+      return formatYmd(year, month, day);
+    }
+  }
+
+  // 5. Native Date fallback for other English dates
+  try {
+    const parsed = Date.parse(str);
+    if (!isNaN(parsed)) {
+      const d = new Date(parsed);
+      return formatYmd(d.getFullYear(), d.getMonth() + 1, d.getDate());
+    }
+  } catch {}
+
+  return '';
+}
+
 function extractCreateClientSlots(text, piiMap = {}) {
   const extracted = {};
   const clean = String(text || '').trim();
@@ -192,6 +376,15 @@ function extractCreateClientSlots(text, piiMap = {}) {
     }
   }
 
+  // 3b. Status extraction
+  const statusMatch = clean.match(/(?:client\s+)?status\s*(?:is|hai|:)?\s*(active|on\s*hold|inactive)/iu);
+  if (statusMatch && statusMatch[1]) {
+    const s = statusMatch[1].trim().toLowerCase();
+    if (s.includes('hold')) extracted.status = 'On Hold';
+    else if (s.includes('inactive')) extracted.status = 'Inactive';
+    else extracted.status = 'Active';
+  }
+
   // 4. Team / Project Manager extraction
   const teamMatch = clean.match(/(?:team\s*members?|team|manager|project\s*manager|managed\s+by|मेंबर्स|टीम)\s*(?:honge|mein|me|ko|hai|hain|:)?\s*([^\n\r,;]+?)(?=\s*(?:email|phone|gst|pan|city|status|$))/iu);
   if (teamMatch && teamMatch[1]) {
@@ -231,6 +424,48 @@ function extractCreateClientSlots(text, piiMap = {}) {
   const notesMatch = clean.match(/(?:notes?|टिप्पणी)\s*(?:is|hai|:)?\s*([^\n\r]+)/iu);
   if (notesMatch && notesMatch[1]) {
     extracted.notes = notesMatch[1].trim();
+  }
+
+
+  // 9. Services
+  const servMatch = clean.match(/(?:services?|service)\s*[:=]?\s*([^,;\n]+?)(?=\s*(?:,|$|\b(?:plan|shuru|start|team|city|company|industry|email|phone)\b))/iu);
+  if (servMatch && servMatch[1]) {
+    const rawServ = servMatch[1].trim();
+    if (!/^(?:kal|aaj|active|banao|karo|nahi|done)/i.test(rawServ)) {
+      extracted.servicesText = rawServ;
+      const parts = rawServ.split(/\s*(?:,|\baur\b|\band\b)\s*/i)
+        .map(s => s.trim())
+        .filter(s => s.length > 0 && !/^(?:aur|and|services?|de\s*do|rakh\s*do)$/i.test(s));
+      if (parts.length > 0) extracted.services = parts;
+    }
+  }
+
+  // 10. Client Plan
+  const planMatch = clean.match(/(?:(?:client\s+)?plan\s*[:=]?\s*([a-zA-Z0-9_-]+)|([a-zA-Z0-9_-]+)\s+plan)/iu);
+  if (planMatch) {
+    const rawPlan = (planMatch[1] || planMatch[2]).trim();
+    if (!/^(?:nahi|no|none|cancel)$/i.test(rawPlan)) {
+      extracted.clientPlan = rawPlan;
+    } else {
+      extracted.clientPlan = 'none';
+    }
+  }
+
+  // 11. Subscription Start Date
+  const startMatch = clean.match(/(?:(?:subscription\s+)?(?:start\s+date|shuru|start)\s*(?:tarikh|date)?\s*(?:is|hai|:)?\s*([^\n\r,;]+))/iu);
+  if (startMatch && startMatch[1]) {
+    const rawDate = startMatch[1].trim();
+    const parsedDate = parseRelativeOrAbsoluteDate(rawDate);
+    if (parsedDate) {
+      extracted.subscriptionStartDate = parsedDate;
+      extracted.subscriptionStartDateRaw = rawDate;
+    }
+  }
+
+  // 12. Company Logo
+  const logoMatch = clean.match(/(?:logo|company\s+logo)\s*(?:is|hai|:)?\s*([a-zA-Z0-9_.-]+\.(?:png|jpg|jpeg|webp))/iu);
+  if (logoMatch && logoMatch[1]) {
+    extracted.companyLogo = logoMatch[1].trim();
   }
 
   return extracted;
@@ -285,6 +520,10 @@ module.exports = {
   isValidPincode,
   isValidWebsite,
   cleanPhone,
+  calculateEndDate,
+  parseRelativeOrAbsoluteDate,
+  getIstToday,
+  getIstTomorrow,
   extractCreateClientSlots,
   findDuplicateClient,
 };

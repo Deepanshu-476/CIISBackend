@@ -73,10 +73,14 @@ const TASK_FIELDS = {
     question: {
       reply: 'Kis project mein task add karna hai? Project ka naam batayein.',
       speech: 'किस प्रोजेक्ट में टास्क जोड़ना है? प्रोजेक्ट का नाम बताएं।',
+      speakText: 'Kis project mein task add karna hai? Project ka naam batayein.',
+      speakTextHi: 'किस Project में Task जोड़ना है? Project का नाम बताएं।',
     },
     reAskQuestion: {
       reply: 'Kripya project ka sahi naam batayein ya options se chun lein.',
       speech: 'कृपया प्रोजेक्ट का सही नाम बताएं।',
+      speakText: 'Kripya project ka sahi naam batayein.',
+      speakTextHi: 'कृपया Project का सही नाम बताएं।',
     },
     chips: () => [],
     default: null,
@@ -89,10 +93,14 @@ const TASK_FIELDS = {
     question: {
       reply: 'Kiske liye task banana hai? Employee ka naam batayein.',
       speech: 'किसके लिए टास्क बनाना है? कर्मचारी का नाम बताएं।',
+      speakText: 'Kiske liye task banana hai? Employee ka naam batayein.',
+      speakTextHi: 'किसके लिए Task बनाना है? Employee का नाम बताएं।',
     },
     reAskQuestion: {
       reply: 'Kripya employee ka naam sahi se batayein, ya "khud ke liye" chun lein.',
       speech: 'कृपया कर्मचारी का नाम सही से बताएं, या खुद के लिए चुन लें।',
+      speakText: 'Kripya employee ka naam batayein ya khud ke liye chun lein.',
+      speakTextHi: 'कृपया employee का नाम बताएं या खुद के लिए चुन लें।',
     },
     chips: () => [],
     reAskChips: () => [
@@ -111,10 +119,14 @@ const TASK_FIELDS = {
     question: {
       reply: 'Task ka naam kya rakhna hai?',
       speech: 'टास्क का नाम क्या रखना है?',
+      speakText: 'Task ka naam kya rakhna hai?',
+      speakTextHi: 'Task का नाम क्या रखना है?',
     },
     reAskQuestion: {
       reply: 'Task ka naam 2-3 shabdon mein seedhe likh dein (jaise "Client meeting" ya "Bug fix").',
       speech: 'टास्क का नाम सीधे लिख दें, जैसे क्लाइंट मीटिंग या बग फिक्स।',
+      speakText: 'Task ka naam seedhe likh dein, jaise Client meeting ya Bug fix.',
+      speakTextHi: 'Task का नाम सीधे लिख दें, जैसे Client meeting या Bug fix।',
     },
     chips: () => [],
     reAskChips: () => [
@@ -134,10 +146,14 @@ const TASK_FIELDS = {
     question: {
       reply: "Description kya likhna hai? Agar nahi hai to 'koi nahi' bol dein.",
       speech: 'Description क्या लिखना है? अगर नहीं है तो कोई नहीं बोल दें।',
+      speakText: 'Description kya likhna hai? Agar nahi to skip bol dein.',
+      speakTextHi: 'Description क्या लिखना है? अगर नहीं है तो skip बोल दें।',
     },
     reAskQuestion: {
       reply: "Description optional hai. Kuch nahi likhna to 'Skip' dabayein.",
       speech: 'Description जरूरी नहीं है। कुछ नहीं लिखना तो स्किप दबाएं।',
+      speakText: 'Description optional hai. Kuch nahi likhna to Skip dabayein.',
+      speakTextHi: 'Description optional है। कुछ नहीं लिखना तो Skip दबाएं।',
     },
     chips: () => [
       { label: 'Koi nahi / Skip', action: { type: 'skip', field: 'description' } },
@@ -159,10 +175,14 @@ const TASK_FIELDS = {
     question: {
       reply: 'Ye task kab tak complete hona chahiye? Date aur time batayein.',
       speech: 'यह टास्क कब तक पूरा होना चाहिए? तारीख और समय बताएं।',
+      speakText: 'Ye task kab tak complete hona chahiye? Due date aur time batayein.',
+      speakTextHi: 'यह Task कब तक complete होना चाहिए? Due date और समय बताएं।',
     },
     reAskQuestion: {
       reply: 'Kripya niche diye options se direct date aur time chun lein.',
       speech: 'कृपया नीचे दिए विकल्पों से तारीख और समय चुन लें।',
+      speakText: 'Kripya niche diye options se direct Due date chun lein.',
+      speakTextHi: 'कृपया नीचे दिए विकल्पों से Due date चुन लें।',
     },
     chips: buildDateChips,
     reAskChips: buildDateChips,
@@ -183,10 +203,14 @@ const TASK_FIELDS = {
     question: {
       reply: 'Priority kya rakhein? Low, Medium ya High?',
       speech: 'Priority क्या रखें? Low, Medium ya High?',
+      speakText: 'Priority kya rakhein? Low, Medium ya High?',
+      speakTextHi: 'Priority क्या रखें? Low, Medium या High?',
     },
     reAskQuestion: {
       reply: 'Kripya inme se ek priority chun lein: Low, Medium ya High.',
       speech: 'कृपया इनमें से एक Priority चुनें: Low, Medium ya High।',
+      speakText: 'Inme se ek Priority chun lein: Low, Medium ya High.',
+      speakTextHi: 'इनमें से एक Priority चुन लें: Low, Medium या High।',
     },
     chips: () => [
       { label: 'Low', action: { type: 'set', field: 'priority', value: 'low' } },
@@ -220,10 +244,14 @@ const TASK_FIELDS = {
     question: {
       reply: 'Task ka status kya rakhna hai? Pending, In Progress, On Hold, ya Completed?',
       speech: 'टास्क का स्टेटस क्या रखना है? पेंडिंग, इन प्रोग्रेस, ऑन होल्ड, या कम्प्लीटेड?',
+      speakText: 'Task ka status kya rakhna hai? Pending, In Progress, On Hold, ya Completed?',
+      speakTextHi: 'Task का status क्या रखना है? Pending, In Progress, On Hold, या Completed?',
     },
     reAskQuestion: {
       reply: 'Status chun lein (jaise Pending, In Progress, On Hold, Completed). Default Pending rahega.',
       speech: 'स्टेटस चुन लें, जैसे पेंडिंग, इन प्रोग्रेस, ऑन होल्ड, या कम्प्लीटेड। डिफॉल्ट पेंडिंग रहेगा।',
+      speakText: 'Status chun lein, default Pending rahega.',
+      speakTextHi: 'Status चुन लें, default Pending रहेगा।',
     },
     chips: () => [
       { label: 'Pending', action: { type: 'set', field: 'status', value: 'pending' } },
@@ -263,10 +291,14 @@ const TASK_FIELDS = {
     question: {
       reply: 'Reminder on karna hai? Haan ya nahi? (Jaise har 10 min, har 30 min, 1 ghante pehle)',
       speech: 'रिमाइंडर ऑन करना है? हाँ या नहीं?',
+      speakText: 'Reminder on karna hai? Haan ya nahi?',
+      speakTextHi: 'Reminder on करना है? हाँ या नहीं?',
     },
     reAskQuestion: {
       reply: 'Reminder lagana hai ya nahi? Niche diye button par tap karein.',
       speech: 'रिमाइंडर लगाना है या नहीं? नीचे दिए बटन पर टैप करें।',
+      speakText: 'Reminder lagana hai ya nahi?',
+      speakTextHi: 'Reminder लगाना है या नहीं?',
     },
     chips: () => [
       { label: 'Haan', action: { type: 'set', field: 'reminder', value: true } },
@@ -302,10 +334,14 @@ const TASK_FIELDS = {
     question: {
       reply: 'Reminder kab bhejein? Har 10 min me, har 30 min me, har 1 ghante me, ya 1 ghante pehle?',
       speech: 'रिमाइंडर कब भेजें? हर दस मिनट में, हर तीस मिनट में, हर एक घंटे में, या एक घंटे पहले?',
+      speakText: 'Reminder kab bhejein? Jaise har 10 min ya 1 ghanta pehle.',
+      speakTextHi: 'Reminder कब भेजें? जैसे हर 10 मिनट या 1 घंटा पहले।',
     },
     reAskQuestion: {
       reply: 'Kripya reminder timing option chun lein (jaise har 10 min, har 30 min, 1 ghante pehle).',
       speech: 'कृपया रिमाइंडर टाइमिंग ऑप्शन चुन लें।',
+      speakText: 'Reminder ka time chun lein.',
+      speakTextHi: 'Reminder का समय चुन लें।',
     },
     chips: () => [
       { label: 'Every 10 min', action: { type: 'set', field: 'repeatIntervalMinutes', value: 10 } },
@@ -344,10 +380,14 @@ const TASK_FIELDS = {
     question: {
       reply: 'Priority Days kitne rakhein? (default 1)',
       speech: 'प्रायोरिटी डेज कितने रखें? (डिफ़ॉल्ट एक)',
+      speakText: 'Priority days kitne rakhne hain? Jaise 1, 2 ya 3 din.',
+      speakTextHi: 'Priority days कितने रखने हैं? जैसे 1, 2, या 3 दिन।',
     },
     reAskQuestion: {
       reply: 'Priority days kitne din rakhne hain? Niche se chun lein.',
       speech: 'प्रायोरिटी डेज नीचे से चुन लें।',
+      speakText: 'Priority days niche se chun lein.',
+      speakTextHi: 'Priority days नीचे से चुन लें।',
     },
     chips: () => [
       { label: '1 (Default)', action: { type: 'set', field: 'priorityDays', value: '1' } },
@@ -375,10 +415,14 @@ const TASK_FIELDS = {
     question: {
       reply: 'Kya ye task repeat karna hai? (No repeat / Repeat Task)',
       speech: 'क्या यह टास्क रिपीट करना है?',
+      speakText: 'Kya yeh task repeat karna hai?',
+      speakTextHi: 'क्या यह Task repeat करना है?',
     },
     reAskQuestion: {
       reply: 'Task repeat karna hai ya nahi? Niche option chunein.',
       speech: 'टास्क रिपीट करना है या नहीं? नीचे विकल्प चुनें।',
+      speakText: 'Task repeat karna hai ya nahi?',
+      speakTextHi: 'Task repeat करना है या नहीं?',
     },
     chips: () => [
       { label: 'No repeat', action: { type: 'set', field: 'repeatPattern', value: 'none' } },
@@ -406,10 +450,14 @@ const TASK_FIELDS = {
     question: {
       reply: "Koi checkpoints add karne hain? Ek ek bol dein, ya 'koi nahi' bol dein.",
       speech: 'कोई चेकपॉइंट्स जोड़ने हैं? एक-एक बोल दें, या कोई नहीं बोल दें।',
+      speakText: 'Checkpoints add karne hain? Ek ek bol dein, ya skip bol dein.',
+      speakTextHi: 'कोई Checkpoints add करने हैं? एक-एक बोल दें, या skip बोल दें।',
     },
     reAskQuestion: {
       reply: "Checkpoints add nahi karne to 'Skip' par tap karein.",
       speech: 'चेकपॉइंट्स नहीं जोड़ने तो स्किप पर टैप करें।',
+      speakText: 'Checkpoints add nahi karne to Skip par tap karein.',
+      speakTextHi: 'Checkpoints नहीं जोड़ने तो Skip पर tap करें।',
     },
     chips: () => [
       { label: 'Koi nahi / Skip', action: { type: 'skip', field: 'checkpoints' } },
@@ -445,10 +493,16 @@ const TASK_FIELDS = {
     question: {
       reply: "Koi photo ya file attach karni hai? Clip button se upload karein, ya 'nahi' bol dein.",
       speech: 'कोई फोटो या फाइल अटैच करनी है? क्लिप बटन से अपलोड करें, या नहीं बोल दें।',
+      speakText: 'Koi photo ya file attach karni hai? Nahi to skip bol dein.',
+      speakTextHi: 'कोई photo या file attach करनी है? नहीं तो skip बोल दें।',
     },
     reAskQuestion: {
       reply: "File attach nahi karni to 'Nahi' dabayein, task ready ho jayega.",
-      speech: 'फाइल अटैच नहीं करनी तो नहीं दबाएं।',
+      speech: 'File attach नहीं करनी तो नहीं दबाएं।',
+      speakText: 'File attach nahi karni to Nahi dabayein.',
+      speakTextHi: 'File attach नहीं करनी तो नहीं दबाएं।',
+      speakText: 'File attach nahi karni to Nahi dabayein.',
+      speakTextHi: 'File attach नहीं करनी तो नहीं दबाएं।',
     },
     chips: () => [
       { label: 'Haan, attach karta hoon', action: { type: 'set', field: 'attachments', value: true } },
@@ -471,10 +525,14 @@ const TASK_FIELDS = {
     question: {
       reply: 'Task ki due date kya rakhni hai? (Jaise Aaj shaam 6 PM, Kal subah 10 AM)',
       speech: 'टास्क की ड्यू डेट क्या रखनी है?',
+      speakText: 'Task ki due date kya rakhni hai?',
+      speakTextHi: 'Task की Due date क्या रखनी है?',
     },
     reAskQuestion: {
       reply: 'Kripya due date batayein ya "koi nahi" bolkar skip karein.',
       speech: 'कृपया ड्यू डेट बताएं या स्किप करें।',
+      speakText: 'Kripya due date batayein ya skip karein.',
+      speakTextHi: 'कृपया Due date बताएं या skip करें।',
     },
     chips: buildDateChips,
     reAskChips: buildDateChips,
@@ -494,11 +552,15 @@ const TASK_FIELDS = {
     askOrder: 9.5,
     question: {
       reply: "Koi document ya photo attach karni hai? (Ek PDF ya image file, ya 'nahi' bol dein)",
-      speech: 'कोई डॉक्यूमेंट या फोटो अटैच करनी है?',
+      speech: 'कोई document या photo attach करनी है?',
+      speakText: 'Koi document ya photo attach karni hai? Ya nahi bol dein.',
+      speakTextHi: 'कोई document या photo attach करनी है? या नहीं बोल दें।',
     },
     reAskQuestion: {
       reply: "File attach nahi karni to 'Nahi' dabayein, task ready ho jayega.",
-      speech: 'फाइल अटैच नहीं करनी तो नहीं दबाएं।',
+      speech: 'File attach नहीं करनी तो नहीं दबाएं।',
+      speakText: 'File attach nahi karni to Nahi dabayein.',
+      speakTextHi: 'File attach नहीं करनी तो नहीं दबाएं।',
     },
     chips: () => [
       { label: 'Haan, attach karta hoon', action: { type: 'set', field: 'attachments', value: true } },
@@ -520,7 +582,9 @@ const TASK_FIELDS = {
     askOrder: 12,
     question: {
       reply: 'Sab details ready hain. Kya ise create kar doon?',
-      speech: 'सब डिटेल्स तैयार हैं। क्या इसे बना दूँ?',
+      speech: 'सब details ready हैं। क्या इसे create कर दूं?',
+      speakText: 'Sab details ready hain. Kya ise create kar doon?',
+      speakTextHi: 'सब details ready हैं। क्या इसे create कर दूं?',
     },
     chips: () => [
       { label: 'Haan, create karo', action: { type: 'confirm' } },
