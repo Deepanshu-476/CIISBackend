@@ -60,12 +60,14 @@ function createLedger(names = []) {
   for (const name of names) {
     const raw = String(name || '').trim();
     if (!raw) continue;
-    const norm = normalizeToken(raw);
+    const clean = cleanAssigneeName(raw);
+    if (!clean || !isValidAssigneeCandidate(clean)) continue;
+    const norm = normalizeToken(clean);
     if (!norm) continue;
     if (!ledger.some((e) => normalizeToken(e.rawName) === norm)) {
-      const display = raw.charAt(0).toUpperCase() + raw.slice(1);
+      const display = clean.charAt(0).toUpperCase() + clean.slice(1);
       ledger.push({
-        rawName: raw,
+        rawName: clean,
         displayName: display,
         status: 'open',
         userId: null,
@@ -89,13 +91,15 @@ function mergeIntoLedger(existingLedger = [], newNames = []) {
   for (const name of newNames) {
     const raw = String(name || '').trim();
     if (!raw) continue;
-    const norm = normalizeToken(raw);
+    const clean = cleanAssigneeName(raw);
+    if (!clean || !isValidAssigneeCandidate(clean)) continue;
+    const norm = normalizeToken(clean);
     if (!norm) continue;
     const existing = ledger.find((e) => normalizeToken(e.rawName) === norm);
     if (!existing) {
-      const display = raw.charAt(0).toUpperCase() + raw.slice(1);
+      const display = clean.charAt(0).toUpperCase() + clean.slice(1);
       ledger.push({
-        rawName: raw,
+        rawName: clean,
         displayName: display,
         status: 'open',
         userId: null,

@@ -44,17 +44,32 @@ async function isAssigneeInScope(req, scope, userId, deps = {}) {
 
   if (!scope || !scope.hasAccess) return false;
 
-  const companyId = req?.user?.company?._id || req?.user?.company || req?.companyId;
+  if (Array.isArray(deps.companyUsers) && deps.companyUsers.some(u => String(u._id || u.id) === String(userId))) {
+    return true;
+  }
+
+  const companyId = req?.user?.company?._id || req?.user?.company || req?.companyId || req?.user?.companyCode;
   if (!companyId) return false; // fail-closed
 
   const isInCompany = async () => {
     if (!mongoose.Types.ObjectId.isValid(userId)) {
       return Boolean(scope.hasAccess || scope.isOwner);
     }
-    const found = await UserModel.findOne({ _id: userId, company: companyId })
-      .select('_id')
-      .lean();
-    return Boolean(found);
+    const orConds = [];
+    if (mongoose.Types.ObjectId.isValid(companyId)) {
+      orConds.push({ company: companyId });
+    }
+    const cCode = req?.user?.companyCode || req?.user?.company?.companyCode || (typeof companyId === 'string' && !mongoose.Types.ObjectId.isValid(companyId) ? companyId : null);
+    if (cCode) {
+      orConds.push({ companyCode: cCode });
+    }
+    const query = orConds.length > 0 ? { _id: userId, $or: orConds } : { _id: userId };
+    try {
+      const found = await UserModel.findOne(query).select('_id').lean();
+      return Boolean(found);
+    } catch {
+      return Boolean(scope.hasAccess || scope.isOwner);
+    }
   };
 
   if (scope.isOwner) return isInCompany();

@@ -20,6 +20,7 @@ describe('Chips per Flow, Form Registry, Member Chips & Info Questions Suite', (
     const intents = Object.keys(SLOT_CHIPS_TABLE);
     assert.deepEqual(intents.sort(), [
       'create_client',
+      'create_client_plan',
       'create_client_task',
       'create_project',
       'self_task',
@@ -79,7 +80,7 @@ describe('Chips per Flow, Form Registry, Member Chips & Info Questions Suite', (
       { label: 'Naya project banana', intent: 'create_project' },
       { label: 'Project mein task banana/assign karna', intent: 'task_project' },
       { label: 'Naya client add karna', intent: 'create_client' },
-      { label: 'Client ka task kisi ko dena', intent: 'create_client_task' },
+      { label: 'Client plan banana', intent: 'create_client_plan' },
     ];
 
     expected.forEach((exp, idx) => {
@@ -303,7 +304,8 @@ describe('Chips per Flow, Form Registry, Member Chips & Info Questions Suite', (
         company: 'ZZ Tech',
         city: 'Mohali',
         status: 'Active',
-        asked: ['client', 'company', 'city', 'status'],
+        email: 'client@example.com',
+        asked: ['client', 'company', 'city', 'status', 'email'],
       },
     }, deps);
 
@@ -339,9 +341,19 @@ describe('Chips per Flow, Form Registry, Member Chips & Info Questions Suite', (
       draft: resPm.draft,
     }, deps);
 
-    assert.equal(resAdded.field, 'services');
-    assert.match(resAdded.reply, /services deni hain/i);
-    const serviceChipLabels = resAdded.chips.map(c => c.label);
+    assert.equal(resAdded.field, 'clientPlan');
+    assert.match(resAdded.reply, /plan lagana hai/i);
+
+    // Skip plan to move to services
+    const resServices = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'skip_client_plan' },
+      draft: resAdded.draft,
+    }, deps);
+
+    assert.equal(resServices.field, 'services');
+    assert.match(resServices.reply, /services deni hain/i);
+    const serviceChipLabels = resServices.chips.map(c => c.label);
     assert.ok(serviceChipLabels.includes('Cloud Architecture'), 'Should include Cloud Architecture');
     assert.ok(serviceChipLabels.includes('SEO Optimization'), 'Should include SEO Optimization');
     assert.ok(serviceChipLabels.includes('Done') || serviceChipLabels.includes('Ho gaya'), 'Should include Done');
@@ -380,24 +392,33 @@ describe('Chips per Flow, Form Registry, Member Chips & Info Questions Suite', (
         company: 'ZZ Tech',
         city: 'Mohali',
         status: 'Active',
-        asked: ['client', 'company', 'city', 'status'],
+        email: 'client@example.com',
+        asked: ['client', 'company', 'city', 'status', 'email'],
       },
     }, deps);
 
-    assert.equal(resMultiMembers.field, 'services', 'After selecting multiple members, moves directly to services');
+    assert.equal(resMultiMembers.field, 'clientPlan', 'After selecting multiple members, moves to clientPlan');
     assert.equal(resMultiMembers.draft.team.length, 3, 'All 3 members must be stored');
+
+    // Skip plan to move to free services
+    const resFree = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'skip_client_plan' },
+      draft: resMultiMembers.draft,
+    }, deps);
+    assert.equal(resFree.field, 'services');
 
     // Add 3: When asked for services and user types unknown service (e.g. "Thank you."), agent must stay on services and re-ask
     const resUnknown = await parseTaskRequest({
       req: mockReq,
       message: 'Thank you.',
-      draft: resMultiMembers.draft,
+      draft: resFree.draft,
     }, deps);
 
     assert.equal(resUnknown.field, 'services', 'Must stay on services slot');
     assert.match(resUnknown.reply, /hamari services mein nahi hai/i, 'Must explicitly tell user that the service is not in company services');
     assert.ok(resUnknown.chips.some(c => c.label === 'Cloud Architecture'), 'Must show available service chips');
-    assert.notEqual(resUnknown.field, 'clientPlan', 'Must NOT advance to clientPlan');
+    assert.equal(resUnknown.field, 'services', 'Must stay on services');
 
     // Add 2: Multi-select service chips via set_client_services
     const resMultiServices = await parseTaskRequest({
@@ -409,7 +430,7 @@ describe('Chips per Flow, Form Registry, Member Chips & Info Questions Suite', (
       draft: resMultiMembers.draft,
     }, deps);
 
-    assert.equal(resMultiServices.field, 'clientPlan', 'After submitting multiple services, moves to clientPlan');
+    assert.equal(resMultiServices.field, 'more_details', 'After submitting services in create_client, moves directly to more_details (tasks are added in Client Details)');
     assert.deepEqual(resMultiServices.draft.services, ['Cloud Architecture', 'Web Development'], 'Both services must be saved');
   });
   test('11. Issue 1, 2, 3, 4: Team members include Test Admin, Vansh Test, Aarav Sharma together without split, Done chip, and logo upload/skip never loops', async () => {
@@ -440,7 +461,8 @@ describe('Chips per Flow, Form Registry, Member Chips & Info Questions Suite', (
         company: 'ZZ Tech',
         city: 'Mohali',
         status: 'Active',
-        asked: ['client', 'company', 'city', 'status'],
+        email: 'client@example.com',
+        asked: ['client', 'company', 'city', 'status', 'email'],
       },
     }, deps);
 
@@ -461,6 +483,7 @@ describe('Chips per Flow, Form Registry, Member Chips & Info Questions Suite', (
         client: 'AI Client',
         company: 'ZZ Tech',
         city: 'Mohali',
+        email: 'test@example.com',
         projectManager: ['Test Admin'],
         team: ['u1'],
         teamDone: true,
@@ -470,6 +493,7 @@ describe('Chips per Flow, Form Registry, Member Chips & Info Questions Suite', (
         clientPlanDone: true,
         status: 'Active',
         subscriptionStartDate: '2026-11-03',
+        serviceTasksDone: true,
         asked: ['client', 'company', 'city', 'status', 'projectManager', 'services', 'clientPlan', 'subscriptionStartDate'],
       },
     }, deps);
@@ -566,13 +590,15 @@ describe('Chips per Flow, Form Registry, Member Chips & Info Questions Suite', (
     const chipLabels = resStatus.chips.map(c => c.label);
     assert.deepEqual(chipLabels, ['Active', 'On Hold', 'Inactive', 'Cancel']);
 
-    // 2. Setting status via chip or text
+    // 2. Setting status via chip or text -> advances to required email slot
     const resStatusAnswered = await parseTaskRequest({
       req: mockReq,
       action: { type: 'set', field: 'status', value: 'Active' },
       draft: resStatus.draft,
     }, deps);
     assert.equal(resStatusAnswered.draft.status, 'Active');
+    assert.equal(resStatusAnswered.field, 'email');
+    assert.match(resStatusAnswered.reply, /email address batayein \(zaroori hai\)/i);
 
     // 3. Optional details (e.g. address) NEVER include "Chhod do"
     const resAddr = await parseTaskRequest({
@@ -584,6 +610,7 @@ describe('Chips per Flow, Form Registry, Member Chips & Info Questions Suite', (
         company: 'CIIS',
         city: 'Mohali',
         status: 'Active',
+        email: 'test@example.com',
         teamDone: true,
         projectManager: ['Test Admin'],
         team: ['u1'],
@@ -600,9 +627,485 @@ describe('Chips per Flow, Form Registry, Member Chips & Info Questions Suite', (
     assert.ok(addrChipLabels.includes('Nahi, bas'), 'Nahi, bas must be present');
   });
 
+  test('14. task_assigned_user: starts with assignee, multi-select chips, no reminder/repeat/status mismatch', async () => {
+    const mockReq = { user: { role: 'Company Owner', companyCode: 'ACME100', permissions: [] } };
+    const compUsers = [
+      { _id: 'u1', id: 'u1', name: 'Vansh Test', department: 'IT DEPARTMENT' },
+      { _id: 'u2', id: 'u2', name: 'Aarav Sharma', department: 'SALES DEPARTMENT' },
+      { _id: 'u3', id: 'u3', name: 'Diya Patel', department: 'IT DEPARTMENT' },
+    ];
+    const deps = {
+      accessibleProjects: [],
+      accessibleClients: [],
+      companyUsers: compUsers,
+      services: [],
+      clientPlans: [],
+    };
+
+    // Step 1: User clicks "Kisi ko task assign karna"
+    const step1 = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'set_intent', intent: 'task_assigned_user' },
+      draft: {},
+    }, deps);
+
+    // Intent must stay task_assigned_user (never forced to self_task)
+    assert.equal(step1.draft.intent, 'task_assigned_user');
+    assert.equal(step1.draft.taskFor, 'others');
+    assert.equal(step1.field, 'assignee');
+    assert.match(step1.reply, /Task kisse assign karna hai/i);
+
+    // Member chips should have Vansh Test, Aarav Sharma, Diya Patel + Done + Cancel
+    const chipLabels = step1.chips.map(c => c.label);
+    assert.ok(chipLabels.some(l => l.includes('Vansh Test')));
+    assert.ok(chipLabels.some(l => l.includes('Aarav Sharma')));
+    assert.ok(chipLabels.includes('Done'));
+
+    // Step 2: User selects Vansh Test chip directly (immediately advances to title)
+    const step2 = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'add_member', name: 'Vansh Test', userId: 'u1' },
+      draft: step1.draft,
+    }, deps);
+
+    assert.equal(step2.draft.intent, 'task_assigned_user');
+    assert.equal(step2.draft.assignees.length, 1);
+    assert.equal(step2.draft.assignees[0].name, 'Vansh Test');
+    assert.equal(step2.field, 'title');
+    assert.match(step2.reply, /Task ka naam/i);
+
+    // Step 3: Multi-select via set_team_members also works and advances to title
+    const step3 = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'set_team_members', members: ['Vansh Test', 'Aarav Sharma'], userIds: ['u1', 'u2'] },
+      draft: step1.draft,
+    }, deps);
+
+    assert.equal(step3.draft.intent, 'task_assigned_user');
+    assert.equal(step3.draft.assignees.length, 2);
+    assert.equal(step3.field, 'title');
+    assert.match(step3.reply, /Task ka naam/i);
+
+    // Step 4: Verify slots in task_assigned_user do NOT contain reminder or repeat
+    const slots = FORM_REGISTRY.task_assigned_user.slots;
+    assert.ok(!slots.includes('reminder'), 'reminder should not be in slots');
+    assert.ok(!slots.includes('repeatPattern'), 'repeatPattern should not be in slots');
+    assert.ok(!slots.includes('status'), 'status should not be in slots');
+
+    // Step 5: Test preview output
+    const preview = FORM_REGISTRY.task_assigned_user.buildPreview({
+      title: 'Fix auth bug',
+      description: 'Fix the login auth issue',
+      dueDateTime: '2026-11-05T18:00:00.000Z',
+      priority: 'high',
+      assignees: [{ id: 'u1', name: 'Vansh Test', department: 'IT DEPARTMENT' }],
+      checkpoints: ['Check logs', 'Deploy patch'],
+    });
+
+    assert.equal(preview.taskFor, 'others');
+    assert.equal(preview.assignees.length, 1);
+    assert.equal(preview.assignees[0].name, 'Vansh Test');
+    assert.equal(preview.reminder, null);
+    assert.equal(preview.repeat, null);
+  });
+
   after(() => {
     setTimeout(() => {
       process.exit(0);
     }, 100).unref();
   });
+
+  test('15. Required Email, Plan-driven services filtering & Manual Plan creation subflow', async () => {
+    const mockReq = { user: { role: 'Company Owner', companyCode: 'ACME100', permissions: [] } };
+    const deps = {
+      accessibleProjects: [],
+      accessibleClients: [],
+      companyUsers: [{ _id: 'u1', id: 'u1', name: 'Test Admin' }],
+      services: ['Cloud Architecture', 'Mobile App Development', 'SEO Optimization', 'UI/UX Design', 'Web Development'],
+      clientPlans: [
+        {
+          _id: 'plan_test_1000',
+          name: 'Test 1000',
+          price: 1000,
+          months: 1,
+          services: [
+            { service: 'Mobile App Development' },
+            { service: 'SEO Optimization' },
+            { service: 'Web Development' }
+          ]
+        }
+      ]
+    };
+
+    // Part A: Email is strictly required and cannot be skipped
+    const stepEmail = await parseTaskRequest({
+      req: mockReq,
+      draft: {
+        intent: 'create_client',
+        client: 'Kanika Client',
+        company: 'CIIS',
+        city: 'Mohali',
+        status: 'Active',
+        asked: ['client', 'company', 'city', 'status']
+      }
+    }, deps);
+    assert.equal(stepEmail.field, 'email');
+    assert.match(stepEmail.reply, /email address batayein \(zaroori hai\)/i);
+
+    // Try skipping email
+    const stepSkipEmail = await parseTaskRequest({
+      req: mockReq,
+      message: 'Skip',
+      draft: stepEmail.draft
+    }, deps);
+    assert.equal(stepSkipEmail.field, 'email');
+    assert.match(stepSkipEmail.reply, /email address zaroori hai, isko skip nahi kar sakte/i);
+
+    // Enter invalid email
+    const stepInvalidEmail = await parseTaskRequest({
+      req: mockReq,
+      message: 'kanika_at_ciis',
+      draft: stepEmail.draft
+    }, deps);
+    assert.equal(stepInvalidEmail.field, 'email');
+    assert.match(stepInvalidEmail.reply, /Email format galat hai/i);
+
+    // Enter valid email -> advances to projectManager
+    const stepValidEmail = await parseTaskRequest({
+      req: mockReq,
+      message: 'kanika@ciisnetwork.com',
+      draft: stepEmail.draft
+    }, deps);
+    assert.equal(stepValidEmail.draft.email, 'kanika@ciisnetwork.com');
+    assert.equal(stepValidEmail.field, 'projectManager');
+
+    // Select team member -> advances to clientPlan
+    const stepPlan = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'set_team_members', members: ['Test Admin'], userIds: ['u1'] },
+      draft: stepValidEmail.draft
+    }, deps);
+    assert.equal(stepPlan.field, 'clientPlan');
+    assert.match(stepPlan.reply, /kaun sa plan lagana hai/i);
+    const planChipLabels = stepPlan.chips.map(c => c.label);
+    assert.ok(planChipLabels.some(l => l.includes('Test 1000')), 'Test 1000 plan chip must be present');
+    assert.ok(!planChipLabels.includes('Select plan manually'), 'Select plan manually chip must NOT be present in create_client');
+    assert.ok(planChipLabels.includes('Bina plan ke (Free)'), 'Bina plan ke (Free) chip must be present');
+
+    // Part B: Select plan "Test 1000" -> auto-sets plan services and moves directly to subscriptionStartDate
+    const stepSelectedPlan = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'set_client_plan', planId: 'plan_test_1000', planName: 'Test 1000' },
+      draft: stepPlan.draft
+    }, deps);
+    assert.equal(stepSelectedPlan.field, 'subscriptionStartDate');
+    assert.deepEqual(stepSelectedPlan.draft.services, ['Mobile App Development', 'SEO Optimization', 'Web Development'], 'Plan services auto-populated');
+
+    // Part C: Manual Plan Creation Subflow (Image 2)
+    const stepManualStart = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'start_manual_plan' },
+      draft: stepPlan.draft
+    }, deps);
+    assert.equal(stepManualStart.field, 'manual_plan_name');
+    assert.match(stepManualStart.reply, /Plan ka naam batayein/i);
+
+    // Step 1: Name
+    const stepManualName = await parseTaskRequest({
+      req: mockReq,
+      message: 'Growth Custom Plan',
+      draft: stepManualStart.draft
+    }, deps);
+    assert.equal(stepManualName.field, 'manual_plan_price');
+    assert.match(stepManualName.reply, /price.*kitna hoga/i);
+
+    // Step 2: Price
+    const stepManualPrice = await parseTaskRequest({
+      req: mockReq,
+      message: '15000',
+      draft: stepManualName.draft
+    }, deps);
+    assert.equal(stepManualPrice.field, 'manual_plan_months');
+    assert.match(stepManualPrice.reply, /Plan duration kitne months/i);
+
+    // Step 3: Duration
+    const stepManualMonths = await parseTaskRequest({
+      req: mockReq,
+      message: '3 months',
+      draft: stepManualPrice.draft
+    }, deps);
+    assert.equal(stepManualMonths.field, 'manual_plan_status');
+    assert.match(stepManualMonths.reply, /Plan status kya rakhna hai/i);
+
+    // Step 4: Status
+    const stepManualStatus = await parseTaskRequest({
+      req: mockReq,
+      message: 'Active',
+      draft: stepManualMonths.draft
+    }, deps);
+    assert.equal(stepManualStatus.field, 'manual_plan_description');
+    assert.match(stepManualStatus.reply, /description/i);
+
+    // Step 5: Description
+    const stepManualDesc = await parseTaskRequest({
+      req: mockReq,
+      message: 'Custom full suite for client',
+      draft: stepManualStatus.draft
+    }, deps);
+    assert.equal(stepManualDesc.field, 'manual_plan_services');
+    assert.match(stepManualDesc.reply, /services include karni hain/i);
+
+    // Step 6: Select Services & Finish
+    const stepManualSvc = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'add_manual_plan_service', service: 'Mobile App Development' },
+      draft: stepManualDesc.draft
+    }, deps);
+    const stepManualReady = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'finish_manual_plan_services' },
+      draft: stepManualSvc.draft
+    }, deps);
+    assert.equal(stepManualReady.field, 'manual_plan_ready');
+    assert.match(stepManualReady.reply, /Client Plan Preview/i);
+    const readyChips = stepManualReady.chips.map(c => c.label);
+    assert.ok(readyChips.includes('Save and use plan'), 'Must have Save and use plan chip');
+    assert.ok(readyChips.includes('Edit'), 'Must have Edit chip');
+    assert.ok(readyChips.includes('Cancel'), 'Must have Cancel chip');
+
+    // Step 7: Click Save and use plan -> sets plan and services on client and proceeds to next client slot
+    const stepSavedAndUsed = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'save_and_use_plan' },
+      draft: stepManualReady.draft
+    }, deps);
+    assert.equal(stepSavedAndUsed.draft.clientPlanName, 'Growth Custom Plan');
+    assert.equal(stepSavedAndUsed.draft.clientPlanPrice, 15000);
+    assert.equal(stepSavedAndUsed.draft.clientPlanMonths, 3);
+    assert.deepEqual(stepSavedAndUsed.draft.services, ['Mobile App Development']);
+    assert.equal(stepSavedAndUsed.field, 'subscriptionStartDate');
+    assert.match(stepSavedAndUsed.reply, /subscription start date batayein/i);
+
+    // Part D: Standalone create_client_plan flow & Reflection in create_client
+    const stepPlanInit = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'set_intent', intent: 'create_client_plan' },
+      draft: {}
+    }, deps);
+    assert.equal(stepPlanInit.draft.intent, 'create_client_plan');
+    assert.equal(stepPlanInit.field, 'name');
+    assert.match(stepPlanInit.reply, /Plan ka naam kya rakhna hai/i);
+
+    // 1. Name
+    const stepPlanName = await parseTaskRequest({
+      req: mockReq,
+      message: 'Diamond Ultra Plan',
+      draft: stepPlanInit.draft
+    }, deps);
+    assert.equal(stepPlanName.field, 'price');
+    assert.match(stepPlanName.reply, /Plan ka price.*kitna hoga/i);
+
+    // 2. Price
+    const stepPlanPrice = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'set', field: 'price', value: 12000 },
+      draft: stepPlanName.draft
+    }, deps);
+    assert.equal(stepPlanPrice.field, 'months');
+    assert.match(stepPlanPrice.reply, /Plan ki duration kitne mahine/i);
+
+    // 3. Duration
+    const stepPlanMonths = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'set', field: 'months', value: 6 },
+      draft: stepPlanPrice.draft
+    }, deps);
+    assert.equal(stepPlanMonths.field, 'status');
+    assert.match(stepPlanMonths.reply, /Plan ka status kya rakhna hai/i);
+
+    // 4. Status
+    const stepPlanStatus = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'set', field: 'status', value: 'Active' },
+      draft: stepPlanMonths.draft
+    }, deps);
+    assert.equal(stepPlanStatus.field, 'description');
+    assert.match(stepPlanStatus.reply, /Plan ka description kya likhna hai/i);
+
+    // 5. Description
+    const stepPlanDesc = await parseTaskRequest({
+      req: mockReq,
+      message: 'All inclusive premium services',
+      draft: stepPlanStatus.draft
+    }, deps);
+    assert.equal(stepPlanDesc.field, 'services');
+    assert.match(stepPlanDesc.reply, /services shamil karni hain/i);
+
+    // 6. Services multi-select & Done
+    const stepPlanSvc1 = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'toggle_plan_service', service: 'Mobile App Development' },
+      draft: stepPlanDesc.draft
+    }, deps);
+    const stepPlanSvc2 = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'toggle_plan_service', service: 'SEO Optimization' },
+      draft: stepPlanSvc1.draft
+    }, deps);
+
+    // 6b. Service Tasks
+    const stepPlanServicesDone = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'finish_plan_services' },
+      draft: stepPlanSvc2.draft
+    }, deps);
+    assert.equal(stepPlanServicesDone.field, 'serviceTasks');
+    assert.match(stepPlanServicesDone.reply, /in services mein koi task add karna chahte hain/i);
+
+    // Add a service task
+    const stepPlanAddTask = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'add_service_task', service: 'Mobile App Development', name: 'Collect Docs', priority: 'High', dueInDays: 15 },
+      draft: stepPlanServicesDone.draft
+    }, deps);
+
+    // Finish service tasks -> Ready
+    const stepPlanReady = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'finish_service_tasks' },
+      draft: stepPlanAddTask.draft
+    }, deps);
+    assert.equal(stepPlanReady.status, 'ready');
+    assert.equal(stepPlanReady.field, 'ready');
+    assert.match(stepPlanReady.reply, /Client Plan "Diamond Ultra Plan" ka draft taiyar hai/i);
+    assert.equal(stepPlanReady.payload.endpoint, '/client-plans');
+    assert.equal(stepPlanReady.preview.name, 'Diamond Ultra Plan');
+
+    // 7. Confirm creation
+    const stepPlanCreated = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'confirm' },
+      draft: stepPlanReady.draft
+    }, deps);
+    assert.equal(stepPlanCreated.status, 'created');
+    assert.match(stepPlanCreated.reply, /Diamond Ultra Plan.*successfully create aur save ho gaya hai/i);
+
+    // 8. Verify the newly created plan immediately shows up in create_client plan chips!
+    const stepNewClientPlan = await parseTaskRequest({
+      req: mockReq,
+      draft: {
+        intent: 'create_client',
+        client: 'Test New Client',
+        company: 'ABC Corp',
+        city: 'Delhi',
+        status: 'Active',
+        email: 'test@abc.com',
+        projectManager: ['Test Admin'],
+        teamDone: true,
+        asked: ['client', 'company', 'city', 'status', 'email', 'projectManager']
+      }
+    }, deps);
+    assert.equal(stepNewClientPlan.field, 'clientPlan');
+    const newClientPlanChips = stepNewClientPlan.chips.map(c => c.label);
+    assert.ok(newClientPlanChips.some(l => l.includes('Diamond Ultra Plan')), 'Diamond Ultra Plan must appear in create_client plan chips');
+    assert.ok(!newClientPlanChips.includes('Select plan manually'), 'Select plan manually chip must NOT be present');
+  });
+
+  test('15. Context-aware Cancel & Description Skip (Koi nahi / Skip) & Service Tasks flow', async () => {
+    const mockReq = {
+      user: {
+        role: 'Company Owner',
+        companyCode: 'ACME100',
+        permissions: ['admin-task-create'],
+      }
+    };
+    const deps = {
+      accessibleProjects: [],
+      accessibleClients: [],
+      companyUsers: [{ _id: 'u1', name: 'Test Admin', role: 'Company Owner' }],
+      services: ['Web Development', 'Mobile App Development'],
+      clientPlans: []
+    };
+
+    // A. Cancel in create_client says Client add karna cancel...
+    const cancelClient = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'cancel' },
+      draft: { intent: 'create_client', client: 'Kanika' }
+    }, deps);
+    assert.equal(cancelClient.status, 'cancelled');
+    assert.match(cancelClient.reply, /Client add karna cancel kar diya gaya hai/i);
+    assert.ok(cancelClient.chips.some(c => c.label === 'Naya Client Add Karein'));
+
+    // B. Cancel in create_client_plan says Client plan banana cancel...
+    const cancelPlan = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'cancel' },
+      draft: { intent: 'create_client_plan', name: 'Bronze Plan' }
+    }, deps);
+    assert.equal(cancelPlan.status, 'cancelled');
+    assert.match(cancelPlan.reply, /Client plan banana cancel kar diya gaya hai/i);
+    assert.ok(cancelPlan.chips.some(c => c.label === 'Naya Plan Banayein'));
+
+    // C. Description skip with "Koi nahi / Skip"
+    const planDescTurn = await parseTaskRequest({
+      req: mockReq,
+      message: 'Koi nahi / Skip',
+      draft: {
+        intent: 'create_client_plan',
+        name: 'Platinum Plan',
+        price: 5000,
+        months: 1,
+        status: 'Active',
+        asked: ['name', 'price', 'months', 'status', 'description']
+      }
+    }, deps);
+    assert.equal(planDescTurn.draft.descriptionSkipped, true);
+    assert.equal(planDescTurn.field, 'services');
+    assert.match(planDescTurn.reply, /services shamil karni hain/i);
+
+    // D. Service Tasks query in create_client
+    const clientServicesDone = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'finish_client_services' },
+      draft: {
+        intent: 'create_client',
+        client: 'Kanika Corp',
+        company: 'Kanika Pvt Ltd',
+        city: 'Mohali',
+        status: 'Active',
+        email: 'kanika@corp.com',
+        projectManager: ['Test Admin'],
+        teamDone: true,
+        services: ['Web Development'],
+        servicesDone: true,
+        clientPlanSkipped: true,
+        asked: ['client', 'company', 'city', 'status', 'email', 'projectManager', 'clientPlan', 'services']
+      }
+    }, deps);
+    assert.equal(clientServicesDone.field, 'more_details', 'create_client bypasses serviceTasks and moves directly to more_details');
+
+    // C. create_client_plan DOES ask for service tasks
+    const planServicesDone = await parseTaskRequest({
+      req: mockReq,
+      draft: {
+        intent: 'create_client_plan',
+        name: 'Silver Plan',
+        price: 5000,
+        months: 1,
+        status: 'Active',
+        description: '',
+        descriptionDone: true,
+        services: ['Web Development'],
+        servicesDone: true,
+        asked: ['name', 'price', 'months', 'status', 'description', 'services']
+      }
+    }, deps);
+    assert.equal(planServicesDone.field, 'serviceTasks');
+    assert.match(planServicesDone.reply, /in services mein koi task add karna chahte hain/i);
+    const serviceTaskChips = planServicesDone.chips.map(c => c.label);
+    assert.ok(serviceTaskChips.includes('Haan, task add karein'));
+    assert.ok(serviceTaskChips.includes('Nahi, aage badhein'));
+  });
+
 });

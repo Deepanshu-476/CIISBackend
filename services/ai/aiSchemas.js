@@ -226,6 +226,9 @@ const typedActionSchema = z.discriminatedUnion('type', [
     type: z.literal('finish_more_details'),
   }),
   z.object({
+    type: z.literal('skip_more_details'),
+  }),
+  z.object({
     type: z.literal('select_details_group'),
     group: z.string().optional(),
     value: z.string().optional(),
@@ -259,13 +262,42 @@ const typedActionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('show_more_members'), page: z.number().optional() }),
   z.object({ type: z.literal('set_only_self') }),
   z.object({ type: z.literal('finish_members') }),
+
+  // Client Plan & Service Task Actions
+  z.object({ type: z.literal('start_add_service_tasks') }).passthrough(),
+  z.object({ type: z.literal('finish_service_tasks') }).passthrough(),
+  z.object({ type: z.literal('skip_service_tasks') }).passthrough(),
+  z.object({ type: z.literal('select_task_service'), service: z.string().optional() }).passthrough(),
+  z.object({ type: z.literal('pick_another_service') }).passthrough(),
+  z.object({ type: z.literal('add_service_task'), service: z.string().optional(), name: z.string().optional(), taskName: z.string().optional(), priority: z.string().optional(), dueInDays: z.any().optional(), description: z.string().optional() }).passthrough(),
+  z.object({ type: z.literal('skip_plan_description') }).passthrough(),
+  z.object({ type: z.literal('skip_description') }).passthrough(),
+  z.object({ type: z.literal('toggle_plan_service'), service: z.string().optional() }).passthrough(),
+  z.object({ type: z.literal('finish_plan_services') }).passthrough(),
+  z.object({ type: z.literal('start_manual_plan') }).passthrough(),
+  z.object({ type: z.literal('edit_manual_plan'), field: z.string().optional() }).passthrough(),
+  z.object({ type: z.literal('cancel_manual_plan') }).passthrough(),
+  z.object({ type: z.literal('save_and_use_plan') }).passthrough(),
+  z.object({ type: z.literal('set_manual_plan_field'), field: z.string().optional(), value: z.any().optional() }).passthrough(),
+  z.object({ type: z.literal('add_manual_plan_service'), service: z.string().optional() }).passthrough(),
+  z.object({ type: z.literal('remove_manual_plan_service'), service: z.string().optional() }).passthrough(),
+  z.object({ type: z.literal('finish_manual_plan_services') }).passthrough(),
+  z.object({ type: z.literal('set_client_task_client'), client: z.string().optional() }).passthrough(),
+  z.object({ type: z.literal('set_client_task_assignee'), assignee: z.string().optional(), assigneeId: z.string().optional() }).passthrough(),
+  z.object({ type: z.literal('skip_client_task_assignee') }).passthrough(),
+  z.object({ type: z.literal('skip_client_task_description') }).passthrough(),
+  z.object({ type: z.literal('ask_client_details_group'), group: z.string().optional() }).passthrough(),
+  z.object({ type: z.literal('finish_client_details') }).passthrough(),
+  z.object({ type: z.literal('set_details_group'), group: z.string().optional() }).passthrough(),
+  z.object({ type: z.literal('change_client_name') }).passthrough(),
+  z.object({ type: z.literal('attach_file') }).passthrough(),
 ]);
 
 const objectActionSchema = z.object({
   pickProject: z.object({
     projectId: z.string().trim().optional(),
-  }).optional(),
-});
+  }),
+}).passthrough();
 
 const actionSchema = z.union([typedActionSchema, objectActionSchema, z.record(z.string(), z.any())]);
 
