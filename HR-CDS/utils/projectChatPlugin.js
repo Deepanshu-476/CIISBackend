@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const { context, diffEvents } = require('./projectChatEvents');
 
 // Outbox entries are committed in the SAME document write as the task mutation.
@@ -19,8 +20,17 @@ module.exports = function projectChatPlugin(schema) {
       update.$inc = { ...update.$inc, __v: 1 };
       update.$set = { ...update.$set, chatSyncPending: true };
       if (!update.$push?.tasks && !update.$push?.['tasks.$.remarks'] && !update.$set?.tasks) return;
-      const previous = await this.model.findOne(this.getFilter()).lean();
+      // A new task or a remark only changes one task, so only that task is read: the rest of a
+      // large project (megabytes) cannot produce events and took ~16s to load on every write.
+      const remarkTaskId = this.getFilter()['tasks._id'] || this.getFilter().tasks?.$elemMatch?._id;
+      let projection = null;
+      if (!update.$set?.tasks && !update.$push?.['tasks.$.remarks']) projection = { createdBy: 1, __v: 1 };
+      else if (!update.$set?.tasks && mongoose.isValidObjectId(String(remarkTaskId))) {
+        projection = { createdBy: 1, __v: 1, tasks: { $elemMatch: { _id: new mongoose.Types.ObjectId(String(remarkTaskId)) } } };
+      }
+      const previous = await this.model.findOne(this.getFilter(), projection).lean();
       if (!previous) return;
+      previous.tasks ||= [];
       const after = JSON.parse(JSON.stringify(previous));
       if (update.$set?.tasks) after.tasks = update.$set.tasks;
       if (update.$push?.tasks) {

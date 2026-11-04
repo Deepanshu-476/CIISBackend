@@ -1762,11 +1762,12 @@ exports.addTask = async (req, res) => {
 
       const { id } = req.params;
       const { title, description, assignedTo, dueDate, priority, status, checkpoints } = req.body;
-      void 0;
-      void 0;
-      void 0;
 
-      const project = await Project.findById(id);
+      // Only what the access check and the response need: a big project (hundreds of tasks,
+      // thousands of notifications) is megabytes, and reading all of it took ~16s per request.
+      const project = await Project.findById(id)
+        .select('projectName users createdBy managers company companyCode tasks.assignedTo tasks.assignedUsers')
+        .lean();
       if (!project) {
         return res.status(404).json({
           success: false,
@@ -1857,13 +1858,32 @@ exports.addTask = async (req, res) => {
       }
 
 
+      const isInitialInProgress = task.status === 'in-progress' || task.status === 'in progress';
+      if (isInitialInProgress) {
+        task.startedAt = now;
+        task.inProgressSince = now;
+      }
+
       const activityLog = {
         type: "creation",
         description: `Task "${safeTitle}" was created`,
-        performedBy: req.user.id
+        performedBy: req.user.id,
+        performedAt: now,
+        newValue: task.status
       };
 
       task.activityLogs = [activityLog];
+
+      if (isInitialInProgress) {
+        task.activityLogs.push({
+          type: "status_change",
+          description: "Status changed from pending to in progress",
+          oldValue: "pending",
+          newValue: "in progress",
+          performedBy: req.user.id,
+          performedAt: now
+        });
+      }
 
 
       const updateResult = await Project.updateOne(
