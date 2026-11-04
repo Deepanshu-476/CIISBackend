@@ -1,0 +1,502 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CIIS API Test Lab</title>
+<style>
+:root{
+  --bg:#f6f7f9;--panel:#fff;--panel2:#f1f3f6;--ink:#151a22;--muted:#5d6675;--line:#e1e5eb;
+  --accent:#2f5bea;--accent-ink:#fff;--pass:#16794a;--pass-bg:#e5f4ec;--fail:#c4302b;--fail-bg:#fbe9e8;
+  --warn:#9a6200;--warn-bg:#fdf3dc;--skip:#5d6675;--skip-bg:#eef0f3;--slow:#7a3fd1;--slow-bg:#f1eafc;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0f1218;--panel:#171b23;--panel2:#1e232d;--ink:#e6e9ef;--muted:#98a1b0;--line:#2a303c;
+  --accent:#6d8cff;--accent-ink:#0f1218;--pass:#4cc38a;--pass-bg:#16301f;--fail:#ff7b72;--fail-bg:#3a1a19;
+  --warn:#e3b341;--warn-bg:#352a10;--skip:#98a1b0;--skip-bg:#232833;--slow:#b48cff;--slow-bg:#2a2140;
+}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{position:sticky;top:0;z-index:5;background:var(--panel);border-bottom:1px solid var(--line);padding:10px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+header h1{font-size:16px;margin:0 8px 0 0;letter-spacing:.2px}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:12px;background:var(--panel2);color:var(--muted);border:1px solid var(--line);white-space:nowrap}
+.pill.ok{color:var(--pass);background:var(--pass-bg);border-color:transparent}
+.pill.bad{color:var(--fail);background:var(--fail-bg);border-color:transparent}
+.pill.warn{color:var(--warn);background:var(--warn-bg);border-color:transparent}
+.target{display:flex;gap:6px;align-items:center;margin-left:auto}
+input[type=text],input[type=search],select{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:inherit}
+input[type=text]{width:240px;font-family:var(--mono);font-size:12.5px}
+button{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:8px;padding:7px 12px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600}
+button.danger{color:var(--fail);border-color:color-mix(in srgb,var(--fail) 40%,var(--line))}
+button:disabled{opacity:.5;cursor:not-allowed}
+main{max-width:1320px;margin:0 auto;padding:16px;display:grid;grid-template-columns:minmax(0,1fr);gap:14px}
+main>*,.grid2>*,.steps>*,.kpi{min-width:0}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}
+.card h2{font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:0 0 10px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.grid2{display:grid;grid-template-columns:1.2fr 1fr;gap:14px}
+@media (max-width:900px){.grid2{grid-template-columns:1fr}input[type=text]{width:100%}.target{margin-left:0;width:100%}}
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+@media (max-width:700px){.steps{grid-template-columns:1fr}}
+.step{border:1px solid var(--line);border-radius:10px;padding:12px;background:var(--panel2);display:flex;flex-direction:column;gap:8px}
+.step b{font-size:13px}.step p{margin:0;color:var(--muted);font-size:12.5px}
+.mods{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:10px}
+.mods label{display:flex;gap:6px;align-items:center;font-size:13px}
+.kpis{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:8px}
+@media (max-width:1000px){.kpis{grid-template-columns:repeat(4,minmax(0,1fr))}}
+@media (max-width:560px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}main{padding:12px 16px}header{padding:10px 16px}}
+.kpi{background:var(--panel2);border-radius:10px;padding:10px}
+.kpi .v{font-size:22px;font-weight:650;font-variant-numeric:tabular-nums}
+.kpi .l{font-size:11.5px;color:var(--muted)}
+.kpi.pass .v{color:var(--pass)}.kpi.fail .v{color:var(--fail)}.kpi.warn .v{color:var(--warn)}.kpi.slow .v{color:var(--slow)}
+.bar{height:8px;border-radius:99px;background:var(--panel2);overflow:hidden;display:flex;margin:10px 0 4px}
+.bar span{display:block;height:100%}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:11.5px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px;position:sticky;top:0;background:var(--panel)}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.mono{font-family:var(--mono);font-size:12px;word-break:break-all}
+.tag{display:inline-block;padding:1px 7px;border-radius:6px;font-size:11.5px;font-weight:600;white-space:nowrap}
+.tag.pass{background:var(--pass-bg);color:var(--pass)}.tag.fail{background:var(--fail-bg);color:var(--fail)}
+.tag.warn{background:var(--warn-bg);color:var(--warn)}.tag.skip{background:var(--skip-bg);color:var(--skip)}
+.tag.slow{background:var(--slow-bg);color:var(--slow)}
+.m{font-weight:600;font-size:11px;color:var(--muted)}
+tr.res{cursor:pointer}tr.res:hover td{background:var(--panel2)}
+tr.detail td{background:var(--panel2);font-size:12.5px}
+pre{margin:6px 0 0;white-space:pre-wrap;word-break:break-word;font-family:var(--mono);font-size:11.5px;max-height:240px;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px}
+.tablewrap{max-height:70vh;overflow:auto;border:1px solid var(--line);border-radius:10px}
+.filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+.chip{border-radius:999px;padding:4px 11px;font-size:12.5px}
+.chip.on{background:var(--ink);color:var(--panel);border-color:var(--ink)}
+.log{font-family:var(--mono);font-size:11.5px;max-height:180px;overflow:auto;color:var(--muted);white-space:pre-wrap}
+.log .warn{color:var(--warn)}.log .err{color:var(--fail)}
+.muted{color:var(--muted)}.small{font-size:12px}
+.users td{font-size:12.5px}
+.copy{font-size:11px;padding:2px 7px}
+.banner{border-radius:10px;padding:10px 12px;font-size:13px}
+.banner.bad{background:var(--fail-bg);color:var(--fail)}.banner.warn{background:var(--warn-bg);color:var(--warn)}
+.phase{font-weight:600}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<header>
+  <h1>CIIS API Test Lab</h1>
+  <span id="dbPill" class="pill">DB …</span>
+  <span id="pingPill" class="pill">Backend …</span>
+  <span id="clockPill" class="pill">…</span>
+  <div class="target">
+    <input id="targetInput" type="text" aria-label="Backend URL" spellcheck="false">
+    <button id="saveTarget">Use URL</button>
+  </div>
+</header>
+
+<main>
+  <div id="banner" class="banner hidden"></div>
+
+  <section class="card">
+    <h2>Run</h2>
+    <div class="steps">
+      <div class="step">
+        <b>1 · Add dummy data</b>
+        <p>Creates a dummy company (code ZZLAB…) and its owner login. The test run then creates 2 departments, 2 job roles with shifts, 6 employees and a client through the real APIs.</p>
+        <div><button id="seedBtn">Add dummy data</button></div>
+      </div>
+      <div class="step">
+        <b>2 · Start test</b>
+        <p>Runs every flow below in order, notes the time of each API call and lists what fails. Adds dummy data first if it is missing.</p>
+        <div class="row"><button id="runBtn" class="primary">Start test</button><button id="stopBtn" disabled>Stop</button></div>
+      </div>
+      <div class="step">
+        <b>3 · Delete dummy data</b>
+        <p>Removes the dummy company and everything linked to it (users, attendance, leaves, tasks, projects, clients, notifications…).</p>
+        <div><button id="deleteBtn" class="danger">Delete dummy data</button></div>
+      </div>
+    </div>
+    <div class="mods" id="mods"></div>
+    <div class="mods">
+      <label><input type="checkbox" id="sweepOn" checked> All GET APIs sweep (time + broken check)</label>
+      <label><input type="checkbox" id="sweepEmp"> sweep again as employee</label>
+      <label><input type="checkbox" id="sweepClient"> sweep again as client</label>
+      <label><input type="checkbox" id="sweepAlias"> include old alias paths</label>
+    </div>
+  </section>
+
+  <section class="card" id="progressCard">
+    <div class="row" style="justify-content:space-between">
+      <div><span class="muted small">Now:</span> <span id="phase" class="phase">Not started</span></div>
+      <div class="row small muted"><span id="elapsed"></span><button id="dlJson" class="copy">Report JSON</button><button id="dlCsv" class="copy">CSV</button></div>
+    </div>
+    <div class="bar" id="bar"></div>
+    <div class="kpis" id="kpis"></div>
+  </section>
+
+  <div class="grid2">
+    <section class="card">
+      <h2>By module</h2>
+      <div class="tablewrap" style="max-height:360px">
+        <table id="modTable"><thead><tr><th>Module</th><th class="num">Pass</th><th class="num">Fail</th><th class="num">Warn</th><th class="num">Skip</th><th class="num">Avg ms</th></tr></thead><tbody></tbody></table>
+      </div>
+    </section>
+    <section class="card">
+      <h2>Slowest API calls</h2>
+      <div class="tablewrap" style="max-height:360px">
+        <table id="slowTable"><thead><tr><th>API</th><th class="num">ms</th></tr></thead><tbody></tbody></table>
+      </div>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>Results</h2>
+    <div class="filters">
+      <button class="chip on" data-f="all">All</button>
+      <button class="chip" data-f="fail">Failed</button>
+      <button class="chip" data-f="warn">Warnings</button>
+      <button class="chip" data-f="slow">Slow</button>
+      <button class="chip" data-f="skip">Skipped</button>
+      <select id="modFilter" aria-label="Module"><option value="">All modules</option></select>
+      <input id="search" type="search" placeholder="Search name or path" aria-label="Search">
+      <span id="shown" class="muted small"></span>
+    </div>
+    <div class="tablewrap">
+      <table id="resTable">
+        <thead><tr><th>#</th><th>Result</th><th>Test</th><th>API</th><th>As</th><th class="num">HTTP</th><th class="num">ms</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="grid2">
+    <section class="card">
+      <h2>Dummy logins (use these in web / app to check by hand)</h2>
+      <div id="usersBox" class="muted small">No dummy data yet.</div>
+    </section>
+    <section class="card">
+      <h2>Dummy data in database</h2>
+      <div id="invBox" class="muted small">—</div>
+      <h2 style="margin-top:14px">Log</h2>
+      <div id="log" class="log"></div>
+    </section>
+  </div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let rows = [];
+let filter = 'all';
+let openRow = null;
+let es = null;
+let startedAt = null;
+let timer = null;
+let info = null;
+
+async function j(url, opts = {}) {
+  const r = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...opts });
+  let body = {};
+  try { body = await r.json(); } catch {}
+  if (!r.ok) throw new Error(body.message || `HTTP ${r.status}`);
+  return body;
+}
+
+function log(text, level = 'info') {
+  const el = $('#log');
+  const line = document.createElement('div');
+  line.className = level === 'warn' ? 'warn' : level === 'error' ? 'err' : '';
+  line.textContent = `${new Date().toLocaleTimeString()}  ${text}`;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+
+function banner(text, kind = 'warn') {
+  const b = $('#banner');
+  if (!text) { b.classList.add('hidden'); return; }
+  b.className = `banner ${kind}`;
+  b.textContent = text;
+}
+
+async function loadInfo() {
+  info = await j('/lab/info');
+  $('#targetInput').value = info.target;
+  const db = info.mongo;
+  const dbPill = $('#dbPill');
+  dbPill.textContent = `DB ${db.hosts}/${db.db}${db.isLocal ? ' · local' : ' · REMOTE'}${db.connected ? '' : ' · not connected'}`;
+  dbPill.className = 'pill ' + (!db.connected ? 'bad' : db.isLocal ? 'ok' : 'warn');
+  if (!db.isLocal && !db.remoteAllowed) banner(`Database ${db.hosts}/${db.db} is not local, so the lab will not write to it. Point MONGO_URI to a local/test database, or start the lab with LAB_ALLOW_REMOTE_DB=1 if you really mean a shared database.`, 'bad');
+  else if (!db.isLocal) banner(`Careful: dummy data is going into a REMOTE database (${db.hosts}/${db.db}). Press "Delete dummy data" when done.`, 'warn');
+  else if (db.error) banner(`Database error: ${db.error}`, 'bad');
+  else banner('');
+  const lw = info.liveWindow;
+  const cp = $('#clockPill');
+  cp.textContent = lw.open ? `Live clock-in tests: on (${lw.from}–${lw.to} IST)` : `Live clock-in tests skip now (run ${lw.from}–${lw.to} IST)`;
+  cp.className = 'pill ' + (lw.open ? 'ok' : 'warn');
+
+  const mods = $('#mods');
+  if (!mods.children.length) {
+    mods.innerHTML = info.modules.map(m => `<label><input type="checkbox" data-mod="${m.key}" checked ${m.required ? 'disabled' : ''}> ${esc(m.label)}${m.required ? ' <span class="muted small">(always)</span>' : ''}</label>`).join('');
+  }
+  renderUsers();
+  renderInventory();
+  $('#runBtn').disabled = info.running;
+  $('#stopBtn').disabled = !info.running;
+  if (info.running && !es) listen();
+  if (!rows.length && info.lastReport && !info.running) loadLastReport();
+  ping();
+}
+
+async function ping() {
+  const p = $('#pingPill');
+  p.textContent = 'Backend …';
+  try {
+    const r = await j('/lab/ping');
+    p.textContent = r.ok ? `Backend up · ${r.ms} ms` : `Backend down${r.error ? ' · ' + r.error : ''}`;
+    p.className = 'pill ' + (r.ok ? 'ok' : 'bad');
+  } catch (e) {
+    p.textContent = 'Backend ?';
+    p.className = 'pill bad';
+  }
+}
+
+function renderUsers() {
+  const s = info.state;
+  const box = $('#usersBox');
+  if (!s) { box.innerHTML = 'No dummy data yet. Press <b>Add dummy data</b> or <b>Start test</b>.'; return; }
+  const entries = Object.entries(s.users || {});
+  box.innerHTML = `<div class="small" style="margin-bottom:8px">Company code <b class="mono">${esc(s.companyCode)}</b> · created ${new Date(s.createdAt).toLocaleString()}</div>
+  <div class="tablewrap" style="max-height:320px"><table class="users"><thead><tr><th>Who</th><th>Email</th><th>Password</th></tr></thead><tbody>
+  ${entries.map(([k, u]) => `<tr><td><b>${esc(k)}</b><div class="muted small">${esc(u.note || u.name || '')}</div></td>
+    <td class="mono">${esc(u.email)} <button class="copy" data-copy="${esc(u.email)}">copy</button></td>
+    <td class="mono">${esc(u.password)}</td></tr>`).join('')}
+  </tbody></table></div>`;
+}
+
+function renderInventory() {
+  const inv = info.inventory;
+  const box = $('#invBox');
+  if (!inv || !inv.companies.length) { box.textContent = 'No dummy data in the database.'; return; }
+  const parts = Object.entries(inv.counts).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${esc(k)} <b>${v}</b>`);
+  box.innerHTML = `Companies: <span class="mono">${inv.companies.map(esc).join(', ')}</span><br>${parts.join(' · ')}`;
+}
+
+function counts() {
+  const c = { total: rows.length, pass: 0, fail: 0, warn: 0, skip: 0, slow: 0, calls: 0, ms: 0 };
+  for (const r of rows) {
+    c[r.result] = (c[r.result] || 0) + 1;
+    if (r.slow) c.slow += 1;
+    if (r.ms > 0) { c.calls += 1; c.ms += r.ms; }
+  }
+  return c;
+}
+
+function renderKpis() {
+  const c = counts();
+  const avg = c.calls ? Math.round(c.ms / c.calls) : 0;
+  const k = [
+    ['Total checks', c.total, ''], ['Passed', c.pass, 'pass'], ['Failed', c.fail, 'fail'], ['Warnings', c.warn, 'warn'],
+    ['Skipped', c.skip, ''], ['Slow (>1.5 s)', c.slow, 'slow'], ['API calls', c.calls, ''], ['Avg time', avg + ' ms', ''],
+  ];
+  $('#kpis').innerHTML = k.map(([l, v, cls]) => `<div class="kpi ${cls}"><div class="v">${v}</div><div class="l">${l}</div></div>`).join('');
+  const t = c.total || 1;
+  $('#bar').innerHTML = [['pass', 'var(--pass)'], ['warn', 'var(--warn)'], ['fail', 'var(--fail)'], ['skip', 'var(--skip)']]
+    .map(([k2, col]) => `<span style="width:${(c[k2] / t) * 100}%;background:${col}"></span>`).join('');
+}
+
+function renderModules() {
+  const mods = {};
+  for (const r of rows) {
+    const m = mods[r.module] || (mods[r.module] = { pass: 0, fail: 0, warn: 0, skip: 0, ms: 0, calls: 0 });
+    m[r.result] += 1;
+    if (r.ms > 0) { m.ms += r.ms; m.calls += 1; }
+  }
+  $('#modTable tbody').innerHTML = Object.entries(mods).map(([name, m]) => `<tr>
+    <td><a href="#" data-mod-filter="${esc(name)}">${esc(name)}</a></td>
+    <td class="num" style="color:var(--pass)">${m.pass}</td><td class="num" style="color:${m.fail ? 'var(--fail)' : 'inherit'}">${m.fail}</td>
+    <td class="num">${m.warn}</td><td class="num">${m.skip}</td><td class="num">${m.calls ? Math.round(m.ms / m.calls) : '—'}</td></tr>`).join('');
+  const sel = $('#modFilter');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">All modules</option>' + Object.keys(mods).map(m => `<option ${m === cur ? 'selected' : ''}>${esc(m)}</option>`).join('');
+}
+
+function renderSlow() {
+  const top = rows.filter(r => r.ms > 0).sort((a, b) => b.ms - a.ms).slice(0, 12);
+  $('#slowTable tbody').innerHTML = top.map(r => `<tr class="res" data-id="${r.id}"><td><span class="m">${esc(r.method)}</span> <span class="mono">${esc(r.path)}</span><div class="muted small">${esc(r.name)}</div></td><td class="num">${r.ms}</td></tr>`).join('') || '<tr><td colspan="2" class="muted">—</td></tr>';
+}
+
+function visibleRows() {
+  const q = $('#search').value.trim().toLowerCase();
+  const mod = $('#modFilter').value;
+  return rows.filter(r => {
+    if (filter === 'slow' ? !r.slow : filter !== 'all' && r.result !== filter) return false;
+    if (mod && r.module !== mod) return false;
+    if (q && !(`${r.name} ${r.path} ${r.detail} ${r.serverMessage}`.toLowerCase().includes(q))) return false;
+    return true;
+  });
+}
+
+function rowHtml(r) {
+  const tag = `<span class="tag ${r.result}">${r.result.toUpperCase()}</span>${r.slow ? ' <span class="tag slow">SLOW</span>' : ''}`;
+  const http = r.status === '' ? '' : r.status === 0 ? '—' : r.status;
+  return `<tr class="res" data-id="${r.id}"><td class="num muted">${r.id}</td><td>${tag}</td>
+    <td>${esc(r.name)}${r.detail ? `<div class="small" style="color:${r.result === 'fail' ? 'var(--fail)' : 'var(--muted)'}">${esc(r.detail)}</div>` : ''}<div class="muted small">${esc(r.module)}</div></td>
+    <td>${r.method && r.method !== 'CHECK' && r.method !== 'SKIP' ? `<span class="m">${esc(r.method)}</span> ` : ''}<span class="mono">${esc(r.path)}</span></td>
+    <td class="small muted">${esc(r.as || '')}</td><td class="num">${http}</td><td class="num">${r.ms || ''}</td></tr>
+    ${openRow === r.id ? detailHtml(r) : ''}`;
+}
+
+function detailHtml(r) {
+  const parts = [];
+  if (r.expect) parts.push(`<div><b>Expected:</b> ${esc(r.expect)}</div>`);
+  if (r.serverMessage) parts.push(`<div><b>Server said:</b> ${esc(r.serverMessage)}</div>`);
+  if (r.file) parts.push(`<div><b>Route file:</b> <span class="mono">${esc(r.file)}</span></div>`);
+  if (r.request !== undefined) parts.push(`<div><b>Request body</b><pre>${esc(typeof r.request === 'string' ? r.request : JSON.stringify(r.request, null, 2))}</pre></div>`);
+  if (r.response !== undefined) parts.push(`<div><b>Response</b><pre>${esc(typeof r.response === 'string' ? r.response : JSON.stringify(r.response, null, 2))}</pre></div>`);
+  if (!parts.length) parts.push('<div class="muted">No extra detail.</div>');
+  return `<tr class="detail"><td></td><td colspan="6">${parts.join('')}</td></tr>`;
+}
+
+let renderQueued = false;
+function render() {
+  if (renderQueued) return;
+  renderQueued = true;
+  requestAnimationFrame(() => {
+    renderQueued = false;
+    renderKpis();
+    renderModules();
+    renderSlow();
+    const vis = visibleRows();
+    const shown = vis.slice(-1500);
+    $('#resTable tbody').innerHTML = shown.map(rowHtml).join('') || '<tr><td colspan="7" class="muted">Nothing to show.</td></tr>';
+    $('#shown').textContent = `${vis.length} of ${rows.length}`;
+  });
+}
+
+function listen() {
+  if (es) es.close();
+  es = new EventSource('/lab/stream');
+  es.onmessage = ev => {
+    const e = JSON.parse(ev.data);
+    if (e.type === 'start') {
+      rows = []; openRow = null; startedAt = new Date(e.at).getTime();
+      $('#log').innerHTML = '';
+      log(`Run started against ${e.target}`);
+      tick(); clearInterval(timer); timer = setInterval(tick, 1000);
+      setRunning(true);
+    } else if (e.type === 'phase') {
+      $('#phase').textContent = e.label;
+      log(`▶ ${e.label}`);
+    } else if (e.type === 'module') {
+      $('#phase').textContent = e.module;
+    } else if (e.type === 'log') {
+      log(e.text, e.level);
+    } else if (e.type === 'result') {
+      rows.push(e.row);
+      render();
+    } else if (e.type === 'done') {
+      clearInterval(timer);
+      const s = e.summary;
+      $('#phase').textContent = `${e.aborted ? 'Stopped' : 'Finished'} in ${(e.durationMs / 1000).toFixed(1)} s — ${s.fail} failed, ${s.warn} warnings, ${s.pass} passed`;
+      log(`Done: ${s.pass} passed, ${s.fail} failed, ${s.warn} warnings, ${s.skip} skipped`);
+      setRunning(false);
+      es.close(); es = null;
+      loadInfo();
+    }
+  };
+  es.onerror = () => { /* the browser retries by itself */ };
+}
+
+function tick() {
+  if (!startedAt) return;
+  $('#elapsed').textContent = `${Math.round((Date.now() - startedAt) / 1000)} s`;
+}
+
+function setRunning(on) {
+  $('#runBtn').disabled = on;
+  $('#stopBtn').disabled = !on;
+  $('#seedBtn').disabled = on;
+  $('#deleteBtn').disabled = on;
+}
+
+async function loadLastReport() {
+  try {
+    const r = await j('/lab/report');
+    rows = r.rows || [];
+    $('#phase').textContent = `Last run ${new Date(r.finishedAt).toLocaleString()} — ${r.summary.fail} failed, ${r.summary.warn} warnings, ${r.summary.pass} passed (${(r.durationMs / 1000).toFixed(1)} s)`;
+    render();
+  } catch {}
+}
+
+function download(name, text, type) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type }));
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// ---- events ----
+$('#saveTarget').onclick = async () => {
+  try { await j('/lab/target', { method: 'POST', body: JSON.stringify({ target: $('#targetInput').value }) }); log(`Backend URL set to ${$('#targetInput').value}`); ping(); }
+  catch (e) { log(e.message, 'error'); }
+};
+$('#seedBtn').onclick = async () => {
+  $('#seedBtn').disabled = true;
+  try { const r = await j('/lab/seed', { method: 'POST' }); log(r.message); await loadInfo(); }
+  catch (e) { log(e.message, 'error'); banner(e.message, 'bad'); }
+  finally { $('#seedBtn').disabled = false; }
+};
+$('#runBtn').onclick = async () => {
+  const modules = [...document.querySelectorAll('[data-mod]')].filter(i => i.checked).map(i => i.dataset.mod);
+  const sweep = { enabled: $('#sweepOn').checked, asEmployee: $('#sweepEmp').checked, asClient: $('#sweepClient').checked, includeAliases: $('#sweepAlias').checked };
+  setRunning(true);
+  listen();
+  try { await j('/lab/run', { method: 'POST', body: JSON.stringify({ modules, sweep }) }); }
+  catch (e) { log(e.message, 'error'); banner(e.message, 'bad'); setRunning(false); }
+};
+$('#stopBtn').onclick = () => j('/lab/stop', { method: 'POST' }).catch(() => {});
+$('#deleteBtn').onclick = async () => {
+  if (!confirm('Delete ALL dummy data (company ZZLAB…, its users, attendance, leaves, tasks, projects, clients)?')) return;
+  $('#deleteBtn').disabled = true;
+  try {
+    const r = await j('/lab/delete', { method: 'POST' });
+    const n = Object.entries(r.removed || {}).map(([k, v]) => `${k}=${v}`).join(', ');
+    log(n ? `Deleted: ${n}` : 'Nothing to delete');
+    await loadInfo();
+  } catch (e) { log(e.message, 'error'); }
+  finally { $('#deleteBtn').disabled = false; }
+};
+document.querySelectorAll('.chip').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.chip').forEach(x => x.classList.remove('on'));
+  b.classList.add('on'); filter = b.dataset.f; render();
+});
+$('#modFilter').onchange = render;
+$('#search').oninput = render;
+document.addEventListener('click', e => {
+  const tr = e.target.closest('tr.res');
+  if (tr) {
+    const id = Number(tr.dataset.id);
+    openRow = openRow === id ? null : id;
+    if (tr.closest('#slowTable')) { filter = 'all'; document.querySelectorAll('.chip').forEach(x => x.classList.toggle('on', x.dataset.f === 'all')); $('#modFilter').value = ''; $('#search').value = ''; }
+    render();
+    if (tr.closest('#slowTable')) setTimeout(() => document.querySelector(`#resTable tr.res[data-id="${id}"]`)?.scrollIntoView({ block: 'center' }), 50);
+  }
+  const mf = e.target.closest('[data-mod-filter]');
+  if (mf) { e.preventDefault(); $('#modFilter').value = mf.dataset.modFilter; render(); $('#resTable').scrollIntoView({ behavior: 'smooth' }); }
+  const cp = e.target.closest('[data-copy]');
+  if (cp) { navigator.clipboard?.writeText(cp.dataset.copy); cp.textContent = 'copied'; setTimeout(() => (cp.textContent = 'copy'), 900); }
+});
+$('#dlJson').onclick = () => { window.location.href = '/lab/report'; };
+$('#dlCsv').onclick = () => {
+  const head = ['id', 'module', 'result', 'slow', 'name', 'method', 'path', 'as', 'status', 'ms', 'detail', 'serverMessage'];
+  const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  download('api-test-results.csv', [head.join(','), ...rows.map(r => head.map(h => q(r[h])).join(','))].join('\n'), 'text/csv');
+};
+
+render();
+loadInfo().catch(e => { log(e.message, 'error'); banner('Lab server not reachable: ' + e.message, 'bad'); });
+</script>
+</body>
+</html>
