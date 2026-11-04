@@ -1867,9 +1867,17 @@ exports.addTask = async (req, res) => {
       const activityLog = {
         type: "creation",
         description: `Task "${safeTitle}" was created`,
+<<<<<<< HEAD
         performedBy: req.user.id,
         performedAt: now,
         newValue: task.status
+=======
+        // The status the task starts in, so time tracking knows a task created
+        // "in progress" started at creation.
+        newValue: task.status,
+        performedBy: req.user.id,
+        performedAt: now
+>>>>>>> 5ed4583e677b7fe778c0603f7e62fb0d005a3e2a
       };
 
       task.activityLogs = [activityLog];

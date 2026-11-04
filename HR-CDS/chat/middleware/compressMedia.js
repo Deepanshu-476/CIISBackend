@@ -15,15 +15,66 @@ const IMAGE_QUALITY = 76;
 const AUTO_COMPRESS_IMAGE_BYTES = 10 * 1024 * 1024;
 const AUTO_COMPRESS_VIDEO_BYTES = 200 * 1024 * 1024;
 const WEB_SAFE_IMAGE_TYPES = new Set(["image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif", "image/avif"]);
+const HEIC_TYPES = new Set(["image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence"]);
+const IMAGE_EXTENSION_TYPES = {
+  ".heic": "image/heic", ".heif": "image/heif", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+  ".png": "image/png", ".webp": "image/webp", ".gif": "image/gif", ".avif": "image/avif",
+  ".bmp": "image/bmp", ".tif": "image/tiff", ".tiff": "image/tiff",
+};
 
+const isHd = req => String(req.body?.compressionMode || "normal").toLowerCase() === "hd";
+
+// Some phones send HEIC/JPEG files as application/octet-stream; use the extension then.
+const normalizeImageMimetype = file => {
+  const type = String(file.mimetype || "").toLowerCase();
+  if (type && type !== "application/octet-stream") return;
+  const fromExtension = IMAGE_EXTENSION_TYPES[path.extname(file.originalname || file.path || "").toLowerCase()];
+  if (fromExtension) file.mimetype = fromExtension;
+};
+
+// "hd" (the default of the current app and web) keeps photos and videos exactly
+// as uploaded: same bytes, size and format. Only "normal" (older app builds)
+// re-encodes. Audio is still normalised so every client can play it.
 const shouldCompressFile = (req, file) => {
-  const preference = String(req.body?.compressionMode || "normal").toLowerCase();
-  if (preference !== "hd") return true;
-  if (file.mimetype?.startsWith("image/")) {
-    return !WEB_SAFE_IMAGE_TYPES.has(file.mimetype) || Number(file.size || 0) > AUTO_COMPRESS_IMAGE_BYTES;
-  }
+  if (!isHd(req)) return true;
+  if (file.mimetype?.startsWith("image/")) return false;
   if (file.mimetype?.startsWith("video/")) return Number(file.size || 0) > AUTO_COMPRESS_VIDEO_BYTES;
   return false;
+};
+
+// Photos kept in original form that a browser cannot show (HEIC/TIFF/BMP) or that
+// are very large get a small display-only copy. Download/save/share always use
+// the original file; clients show `previewFile` only inside the chat.
+const needsDisplayPreview = file => file.mimetype?.startsWith("image/")
+  && file.mimetype !== "image/gif"
+  && (!WEB_SAFE_IMAGE_TYPES.has(file.mimetype) || Number(file.size || 0) > AUTO_COMPRESS_IMAGE_BYTES);
+
+const decodeHeic = async filePath => {
+  const decode = require("heic-decode");
+  const {width, height, data} = await decode({buffer: await fs.promises.readFile(filePath)});
+  return sharp(Buffer.from(data.buffer, data.byteOffset, data.byteLength), {raw: {width, height, channels: 4}});
+};
+
+const writePreview = (image, outputPath) => image
+  .resize(IMAGE_MAX_DIMENSION, IMAGE_MAX_DIMENSION, {fit: "inside", withoutEnlargement: true})
+  .webp({quality: 80})
+  .toFile(outputPath);
+
+const createDisplayPreview = async file => {
+  const outputPath = previewPathFor(file.path);
+  try {
+    try {
+      await writePreview(sharp(file.path, {failOn: "none"}).rotate(), outputPath);
+    } catch (error) {
+      // The sharp build reads AVIF but not HEVC-coded HEIC (iPhone photos); decode those in JS.
+      if (!HEIC_TYPES.has(file.mimetype)) throw error;
+      await writePreview(await decodeHeic(file.path), outputPath);
+    }
+    file.previewFilename = path.basename(outputPath);
+  } catch (error) {
+    removeQuietly(outputPath);
+    console.warn("Chat image preview skipped:", error.message);
+  }
 };
 
 const updateFile = (file, targetPath, mimetype) => {
@@ -38,6 +89,11 @@ const updateFile = (file, targetPath, mimetype) => {
 const removeQuietly = filePath => {
   if (!filePath) return;
   fs.promises.unlink(filePath).catch(() => { });
+};
+
+const previewPathFor = filePath => {
+  const parsed = path.parse(filePath);
+  return path.join(parsed.dir, `${parsed.name}-preview.webp`);
 };
 
 const compressedPathFor = (filePath, extension) => {
@@ -144,7 +200,11 @@ const compressUploadedMedia = async (req, _res, next) => {
   const file = req.file;
 
   if (!file?.path) return next();
-  if (!shouldCompressFile(req, file)) return next();
+  normalizeImageMimetype(file);
+  if (!shouldCompressFile(req, file)) {
+    if (needsDisplayPreview(file)) await createDisplayPreview(file);
+    return next();
+  }
 
   try {
     if (file.mimetype?.startsWith("image/")) {

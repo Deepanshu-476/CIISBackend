@@ -16,7 +16,8 @@
     "backfill:client-chats": "node scripts/backfillClientChats.js --apply",
     "backfill:client-chats:dry": "node scripts/backfillClientChats.js --dry-run",
     "backfill:status-changed-at": "node scripts/backfillStatusChangedAt.js --apply",
-    "backfill:status-changed-at:dry": "node scripts/backfillStatusChangedAt.js --dry-run"
+    "backfill:status-changed-at:dry": "node scripts/backfillStatusChangedAt.js --dry-run",
+    "lab": "node tools/api-test-lab/server.js"
   },
   "keywords": [],
   "author": "",
@@ -38,6 +39,7 @@
     "express-validator": "^7.2.1",
     "ffmpeg-static": "^5.3.0",
     "firebase-admin": "^13.5.0",
+    "heic-decode": "^2.1.0",
     "html-to-text": "^10.0.1",
     "joi": "^17.13.3",
     "jsonwebtoken": "^9.0.2",
