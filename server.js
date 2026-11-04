@@ -1244,11 +1244,15 @@ app.use("/api/groups", require("./HR-CDS/routes/groupRoutes.js"));
 app.use("/api/projects", require("./HR-CDS/routes/projectRoutes.js"));
 app.use("/api/clientsservice", require("./HR-CDS/routes/clientRoutes.js"));
 app.use("/api/client-plans", require("./HR-CDS/routes/clientPlanRoutes.js"));
+app.use("/client-plans", require("./HR-CDS/routes/clientPlanRoutes.js"));
+app.use("/api/api/client-plans", require("./HR-CDS/routes/clientPlanRoutes.js"));
 app.use("/api/chat", require("./HR-CDS/chat/routes/chatRoutes"));
 
 app.use("/api/tasks/self", require("./HR-CDS/routes/selfTaskRoute.js"));
 app.use("/api/tasks/assigned", require("./HR-CDS/routes/assignedTaskRoute.js"));
 app.use("/api/tasks/client-tasks", require("./HR-CDS/routes/clientTaskRoute.js"));
+app.use("/tasks/client-tasks", require("./HR-CDS/routes/clientTaskRoute.js"));
+app.use("/api/api/tasks/client-tasks", require("./HR-CDS/routes/clientTaskRoute.js"));
 app.use("/api/tasks/project", require("./HR-CDS/routes/projectTaskRoute.js"));
 app.use("/api/tasks/all", require("./HR-CDS/routes/allTaskRoute.js"));
 

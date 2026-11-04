@@ -1,6 +1,6 @@
 const { taskDraftSchema, getSchemaForIntent } = require('./aiSchemas');
 const { getModel } = require('./llm');
-const { parseHinglishSlots, applyTitleFallback, isInvalidOrCommandTitle, isSkip, isSkipAll, isInitiationPhrase } = require('./hinglishParser');
+const { parseHinglishSlots, applyTitleFallback, isInvalidOrCommandTitle, isSkip, isSkipAll, isInitiationPhrase, cleanAssigneeName, isValidAssigneeCandidate } = require('./hinglishParser');
 const { consumeTaskBudget } = require('../../middleware/aiTaskBudget');
 const { mergeIntoLedger, syncAssigneeLedgerDerivedFields } = require('./assigneeLedger');
 
@@ -32,25 +32,29 @@ function formatIstReference(date = new Date()) {
  * - LLM values win for title/description unless empty.
  * - If title is still empty, title fallback applies.
  */
-function mergeDraft(previous = {}, extracted = {}, deterministic = {}, rawMessage = '') {
+function mergeDraft(previous = {}, extracted = {}, deterministic = {}, rawMessage = '', lastAskedField = '') {
   const prev = previous || {};
   const ext = extracted || {};
   const det = deterministic || {};
 
   // Title: LLM wins unless empty, else deterministic wins, else title fallback
   let title = null;
-  const candidateAssignee = ext.assigneeName || det.assigneeName || prev.assigneeName || '';
+  const rawCand = ext.assigneeName || det.assigneeName || prev.assigneeName || '';
+  const candidateAssignee = (rawCand && isValidAssigneeCandidate(rawCand)) ? cleanAssigneeName(rawCand) : '';
   if (ext.title !== null && ext.title !== undefined && String(ext.title).trim() !== '') {
     title = String(ext.title).trim();
   } else if (det.title !== null && det.title !== undefined && String(det.title).trim() !== '') {
     title = String(det.title).trim();
   } else if (prev.title !== null && prev.title !== undefined && String(prev.title).trim() !== '') {
     title = String(prev.title).trim();
-  } else {
+  } else if (lastAskedField !== 'assignee' && lastAskedField !== 'members' && lastAskedField !== 'team') {
     title = applyTitleFallback(null, rawMessage);
   }
 
   if (title && isInvalidOrCommandTitle(title, rawMessage, candidateAssignee)) {
+    title = null;
+  }
+  if (title && candidateAssignee && title.toLowerCase().trim() === candidateAssignee.toLowerCase().trim()) {
     title = null;
   }
 
@@ -123,8 +127,9 @@ function mergeDraft(previous = {}, extracted = {}, deterministic = {}, rawMessag
   let assigneeLabel = prev.assigneeLabel || null;
 
   const rawExtAssignee = ext.assigneeName || det.assigneeName;
-  if (rawExtAssignee !== null && rawExtAssignee !== undefined) {
-    const cleanExtName = String(rawExtAssignee).trim();
+  const validExtAssignee = (rawExtAssignee && isValidAssigneeCandidate(rawExtAssignee)) ? cleanAssigneeName(rawExtAssignee) : null;
+  if (validExtAssignee !== null) {
+    const cleanExtName = String(validExtAssignee).trim();
     const cleanPrevName = prev.assigneeName ? String(prev.assigneeName).trim() : '';
 
     if (cleanExtName && cleanExtName.toLowerCase() !== cleanPrevName.toLowerCase()) {
@@ -148,7 +153,7 @@ function mergeDraft(previous = {}, extracted = {}, deterministic = {}, rawMessag
   let wantsOthers = Boolean(prev.wantsOthers);
   if (prev.intent === 'task_project' || prev.projectId || prev.taskFor === 'project' || det.projectName || ext.projectName) {
     taskFor = 'project';
-  } else if (assigneeName || rawExtAssignee || (assigneeLedger && assigneeLedger.length > 0)) {
+  } else if (assigneeName || validExtAssignee || (assigneeLedger && assigneeLedger.length > 0)) {
     taskFor = 'others';
     wantsOthers = true;
   }
@@ -161,9 +166,13 @@ function mergeDraft(previous = {}, extracted = {}, deterministic = {}, rawMessag
   const projectId = prev.projectId || null;
   const dueDate = det.dueDate || ext.dueDate || prev.dueDate || dueDateTime || null;
 
-  const newExtractedNames = Array.isArray(det.pendingAssigneeNames) && det.pendingAssigneeNames.length > 0
+  const rawExtractedNames = Array.isArray(det.pendingAssigneeNames) && det.pendingAssigneeNames.length > 0
     ? det.pendingAssigneeNames
-    : (ext.assigneeName ? [ext.assigneeName] : (det.assigneeName ? [det.assigneeName] : []));
+    : (validExtAssignee ? [validExtAssignee] : []);
+
+  const newExtractedNames = rawExtractedNames
+    .map(cleanAssigneeName)
+    .filter(n => n && isValidAssigneeCandidate(n));
 
   if (newExtractedNames.length > 0) {
     assigneeLedger = mergeIntoLedger(assigneeLedger, newExtractedNames);
@@ -294,6 +303,14 @@ function normaliseExtracted(data, message = '') {
     assigneeName?.toLowerCase() === 'undefined'
   ) {
     assigneeName = null;
+  }
+  if (assigneeName) {
+    const cleaned = cleanAssigneeName(assigneeName);
+    if (!cleaned || !isValidAssigneeCandidate(cleaned)) {
+      assigneeName = null;
+    } else {
+      assigneeName = cleaned;
+    }
   }
 
   // IGNORE self-introductions in assignee:

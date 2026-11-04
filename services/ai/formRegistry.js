@@ -261,16 +261,16 @@ const FORM_REGISTRY = {
         dueLabel: draft.dueDateTime ? formatHumanIstDate(draft.dueDateTime) : '—',
         dueDateTimeFormatted: draft.dueDateTime ? formatHumanIstDate(draft.dueDateTime) : '—',
         priority: draft.priority ? (draft.priority.charAt(0).toUpperCase() + draft.priority.slice(1)) : 'Medium',
-        status: draft.status || 'pending',
-        statusLabel: STATUS_LABELS[draft.status] || 'Pending',
         priorityDays: draft.priorityDays || '1',
-        reminder: getReminderPreviewText(draft),
-        reminderOption: draft.reminder ? (draft.reminderOption || 'oneHourBefore') : null,
-        repeatIntervalMinutes: draft.repeatIntervalMinutes || null,
-        minutesBeforeDue: draft.minutesBeforeDue || null,
-        customTime: draft.customTime || null,
-        repeat: draft.repeatPattern === 'daily' ? 'Repeat Task' : 'No repeat',
-        repeatPattern: draft.repeatPattern === 'daily' ? 'Roz (Daily)' : 'Nahi (None)',
+        status: null,
+        statusLabel: null,
+        reminder: null,
+        reminderOption: null,
+        repeatIntervalMinutes: null,
+        minutesBeforeDue: null,
+        customTime: null,
+        repeat: null,
+        repeatPattern: null,
         checkpointsCount: cleanedCheckpoints.length,
         checkpoints: cleanedCheckpoints.length > 0 ? cleanedCheckpoints.map((c) => c.title) : [],
         attachmentsCount: draft.attachmentsCount || 0,
@@ -321,11 +321,7 @@ const FORM_REGISTRY = {
       'dueDateTime',
       'description',
       'priority',
-      'status',
-      'reminder',
-      'reminderOption',
       'priorityDays',
-      'repeatPattern',
       'checkpoints',
       'attachments',
     ],
@@ -403,16 +399,16 @@ const FORM_REGISTRY = {
         dueLabel: draft.dueDateTime ? formatHumanIstDate(draft.dueDateTime) : '—',
         dueDateTimeFormatted: draft.dueDateTime ? formatHumanIstDate(draft.dueDateTime) : '—',
         priority: draft.priority ? (draft.priority.charAt(0).toUpperCase() + draft.priority.slice(1)) : 'Medium',
-        status: draft.status || 'pending',
-        statusLabel: STATUS_LABELS[draft.status] || 'Pending',
         priorityDays: draft.priorityDays || '1',
-        reminder: getReminderPreviewText(draft),
-        reminderOption: draft.reminder ? (draft.reminderOption || 'oneHourBefore') : null,
-        repeatIntervalMinutes: draft.repeatIntervalMinutes || null,
-        minutesBeforeDue: draft.minutesBeforeDue || null,
-        customTime: draft.customTime || null,
-        repeat: draft.repeatPattern === 'daily' ? 'Repeat Task' : 'No repeat',
-        repeatPattern: draft.repeatPattern === 'daily' ? 'Roz (Daily)' : 'Nahi (None)',
+        status: null,
+        statusLabel: null,
+        reminder: null,
+        reminderOption: null,
+        repeatIntervalMinutes: null,
+        minutesBeforeDue: null,
+        customTime: null,
+        repeat: null,
+        repeatPattern: null,
         checkpointsCount: cleanedCheckpoints.length,
         checkpoints: cleanedCheckpoints.length > 0 ? cleanedCheckpoints.map((c) => c.title) : [],
         attachmentsCount: draft.attachmentsCount || 0,
@@ -1004,6 +1000,17 @@ const createClientFormConfig = {
       companyCode: cleanCompanyCode,
       clientPlanId: draft.clientPlanId || '',
       subscription: subscriptionArray,
+      customTasks: Array.isArray(draft.customTasks) ? draft.customTasks : (
+        draft.serviceTasks ? Object.entries(draft.serviceTasks).flatMap(([svc, tList]) => (
+          Array.isArray(tList) ? tList.map(t => ({
+            service: svc,
+            name: t.name || t.title || '',
+            description: t.description || '',
+            priority: t.priority || 'Medium',
+            dueInDays: t.dueInDays || 30
+          })) : []
+        )) : []
+      ),
     };
 
     if (selectedBranchId && selectedBranchId !== 'all') {
@@ -1123,7 +1130,7 @@ Object.defineProperty(FORM_REGISTRY, 'create_client', {
 const createClientTaskFormConfig = {
   intent: 'create_client_task',
   title: 'Client Task Banao',
-  endpoint: '/api/tasks/client-tasks/client/:clientId/service/:service',
+  endpoint: '/tasks/client-tasks/client/:clientId/service/:service',
   method: 'POST',
   isMultipart: false,
   roleRules: {
@@ -1133,43 +1140,151 @@ const createClientTaskFormConfig = {
   slots: {
     client: { required: true, askOrder: 1 },
     service: { required: true, askOrder: 2 },
-    assignee: { required: false, askOrder: 3 },
-    title: { required: true, askOrder: 4 },
+    title: { required: true, askOrder: 3 },
+    description: { required: false, askOrder: 4 },
     dueDateTime: { required: true, askOrder: 5 },
-    priority: { required: false, askOrder: 6, default: 'Medium' },
-    description: { required: false, askOrder: 7 },
-    reminder: { required: false, askOrder: 8 },
-    checkpoints: { required: false, askOrder: 9 },
+    assignee: { required: false, askOrder: 6 },
+    priority: { required: false, askOrder: 7, default: 'Medium' },
   },
   buildPayload(draft, user = {}) {
+    const cId = draft.clientId || '';
+    const sName = draft.service || '';
+    const encodedService = encodeURIComponent(sName);
     return {
-      name: draft.title || '',
-      description: draft.description || '',
-      dueDate: draft.dueDate || (draft.dueDateTime ? draft.dueDateTime.split('T')[0] : null),
-      dueDateTime: draft.dueDateTime || null,
-      assignee: draft.assignee || draft.assigneeName || (user.name || ''),
-      assigneeId: draft.assigneeId || (user._id ? String(user._id) : null),
-      priority: draft.priority || 'Medium',
-      checkpoints: getCleanCheckpoints(draft.checkpoints),
-      reminderSettings: buildReminderPayload(draft.reminderSettings || { enabled: Boolean(draft.reminder) }),
+      endpoint: `/tasks/client-tasks/client/${cId}/service/${encodedService}`,
+      method: 'POST',
+      multipart: false,
+      fields: {
+        name: draft.title || draft.name || '',
+        description: draft.description || '',
+        dueDate: draft.dueDate || (draft.dueDateTime ? draft.dueDateTime.split('T')[0] : null),
+        dueDateTime: draft.dueDateTime || null,
+        assignee: draft.assignee || draft.assigneeName || '',
+        assigneeId: draft.assigneeId || null,
+        priority: draft.priority || 'Medium',
+      }
     };
   },
   buildPreview(draft, user = {}) {
     return {
+      entity: 'client_task',
+      intent: 'create_client_task',
       type: 'client_task',
-      title: draft.title || 'Client Task Draft',
+      title: draft.title || draft.name || 'Client Service Task Draft',
       client: draft.client || '—',
+      clientId: draft.clientId || null,
       service: draft.service || '—',
-      assignee: draft.assignee || draft.assigneeName || user.name || '—',
-      dueDateTime: formatHumanIstDate(draft.dueDateTime),
-      priority: draft.priority || 'Medium',
       description: draft.description || '—',
+      dueDateTime: draft.dueDateTime ? formatHumanIstDate(draft.dueDateTime) : (draft.dueDate || '—'),
+      dueDate: draft.dueDate || (draft.dueDateTime ? draft.dueDateTime.split('T')[0] : '—'),
+      assignee: draft.assignee || draft.assigneeName || 'Unassigned',
+      priority: draft.priority || 'Medium',
     };
   },
 };
 
 Object.defineProperty(FORM_REGISTRY, 'create_client_task', {
   value: createClientTaskFormConfig,
+  enumerable: false,
+  writable: true,
+  configurable: true,
+});
+
+// --------------------------------------------------------------------------
+// 7. CREATE_CLIENT_PLAN (Plan Name, Price, Months, Status, Description, Services, ServiceTasks)
+// --------------------------------------------------------------------------
+const createClientPlanFormConfig = {
+  intent: 'create_client_plan',
+  title: 'Client Plan Banao',
+  endpoint: '/client-plans',
+  method: 'POST',
+  isMultipart: false,
+  roleRules: {
+    allowedRoles: ['owner', 'admin', 'super_admin', 'super-admin', 'manager', 'hr'],
+    pageScopeCheck: true,
+  },
+  slots: {
+    name: { required: true, askOrder: 1 },
+    price: { required: true, askOrder: 2 },
+    months: { required: true, askOrder: 3, default: 1 },
+    status: { required: false, askOrder: 4, default: 'Active' },
+    description: { required: false, askOrder: 5 },
+    services: { required: true, askOrder: 6 },
+    serviceTasks: { required: false, askOrder: 7 },
+  },
+  buildPayload(draft, user = {}) {
+    return {
+      endpoint: '/client-plans',
+      method: 'POST',
+      multipart: false,
+      fields: {
+        companyCode: String(user.companyCode || user.company?.companyCode || '').trim().toUpperCase(),
+        name: String(draft.name || '').trim(),
+        price: Number(draft.price || 0),
+        months: Number(draft.months || 1),
+        description: String(draft.description || '').trim(),
+        services: (Array.isArray(draft.services) ? draft.services : []).map(item => {
+          const sName = typeof item === 'string' ? item.trim() : String(item.service || item.name || '').trim();
+          const sTasks = Array.isArray(item.tasks) && item.tasks.length > 0
+            ? item.tasks
+            : (draft.serviceTasks && Array.isArray(draft.serviceTasks[sName]) ? draft.serviceTasks[sName] : []);
+          return {
+            service: sName,
+            tasks: sTasks.map(t => ({
+              name: String(t.name || t.title || '').trim(),
+              description: String(t.description || '').trim(),
+              priority: ['Low', 'Medium', 'High'].includes(t.priority) ? t.priority : 'Medium',
+              dueInDays: Number(t.dueInDays || 30),
+            })).filter(t => t.name)
+          };
+        }).filter(s => s.service),
+        isActive: draft.status === 'Inactive' ? false : (draft.isActive !== false)
+      }
+    };
+  },
+  buildPreview(draft) {
+    const rawServices = Array.isArray(draft.services) ? draft.services : [];
+    const services = rawServices.map(item => {
+      const sName = typeof item === 'string' ? item.trim() : String(item.service || item.name || '').trim();
+      const sTasks = Array.isArray(item.tasks) && item.tasks.length > 0
+        ? item.tasks
+        : (draft.serviceTasks && Array.isArray(draft.serviceTasks[sName]) ? draft.serviceTasks[sName] : []);
+      return {
+        service: sName,
+        tasks: sTasks
+      };
+    }).filter(s => s.service);
+
+    return {
+      entity: 'client_plan',
+      intent: 'create_client_plan',
+      name: draft.name || '—',
+      price: Number(draft.price || 0),
+      months: Number(draft.months || 1),
+      status: draft.status || (draft.isActive === false ? 'Inactive' : 'Active'),
+      description: draft.description || '—',
+      services,
+    };
+  },
+  validateDraft(draft) {
+    if (!draft.name || !String(draft.name).trim()) {
+      return { valid: false, field: 'name', reason: 'Plan name is required' };
+    }
+    if (draft.price === undefined || draft.price === null || isNaN(Number(draft.price)) || Number(draft.price) < 0) {
+      return { valid: false, field: 'price', reason: 'Plan price must be a valid number >= 0' };
+    }
+    if (!draft.months || isNaN(Number(draft.months)) || Number(draft.months) < 1) {
+      return { valid: false, field: 'months', reason: 'Plan duration must be at least 1 month' };
+    }
+    if (!Array.isArray(draft.services) || draft.services.length === 0) {
+      return { valid: false, field: 'services', reason: 'Add at least one service in plan' };
+    }
+    return { valid: true };
+  }
+};
+
+Object.defineProperty(FORM_REGISTRY, 'create_client_plan', {
+  value: createClientPlanFormConfig,
   enumerable: false,
   writable: true,
   configurable: true,
@@ -1188,7 +1303,7 @@ const CREATE_PROJECT_EXPLICIT_REGEX = /(?:\b(?:naya\s+project|new\s+project|crea
 const TASK_INSIDE_PROJECT_REGEX = /\b(?:project\s+(?:mein|mai|in|ke\s+andar)\s+task|task\s+in\s+project)\b/i;
 
 const AMBIGUOUS_CLIENT_TASK_REGEX = /(?:\bclient\b|\bक्लाइंट\b|\bक्लाइन्ट\b).*(?:\bmeeting\b|\bcall\b|\btask\b|\bkal\b|\baaj\b|\d+\s*baje|\breminder\b|\bमीटिंग\b|\bकॉल\b|\bटास्क\b)/i;
-const CREATE_CLIENT_TASK_REGEX = /(?:\b(?:create\s+client\s+task|client\s+task\s+banao|client\s+task\s+add\s+karo|client\s+task|naya\s+client\s+task|client\s+ka\s+task\s+kisi\s+ko\s+dena|client\s+ka\s+task)\b)/i;
+const CREATE_CLIENT_TASK_REGEX = /(?:\b(?:is\s+client\s+ke\s+liye\s+task\s+banayein|is\s+client\s+ke\s+liye\s+task|client\s+ke\s+liye\s+task|create\s+client\s+task|client\s+task\s+banao|client\s+task\s+add\s+karo|client\s+task|naya\s+client\s+task|client\s+ka\s+task\s+kisi\s+ko\s+dena|client\s+ka\s+task|service\s+task|services\s+task|client\s+mein\s+task)\b)/i;
 const CREATE_CLIENT_EXPLICIT_REGEX = /(?:\b(?:naya\s+client|new\s+client|create\s+(?:a\s+)?client|client\s+create\s+karo|client\s+add\s+karo|add\s+(?:new\s+)?client|client\s+banao|add\s+client)\b|(?:(?:(?:^|\s|[.,;])(?:नया|निया|नयी|नई)\s*)?(?:क्लाइंट|क्लाइन्ट|client)\s*(?:बनाओ|बना\s*दो|बनाइए|बनाइये|क्रिएट|create\s*karo|banao|add\s*karo|जोड़ो|जोड़े)(?:[\s.,;!?]|$))|(?:(?:क्लाइंट|क्लाइन्ट|client)\s+का\s+नाम))/iu;
 
 /**
@@ -1221,7 +1336,7 @@ function detectIntent(opts = {}) {
   // 0b. Ambiguous Client Task check (Item 1)
   // "Client meeting ka task banao", "client call kal 5 baje" must not trigger create_client
   const hasTaskAssignment = /\b(?:assign\s+to|ko\s+assign|task\s+assign|assign\s+karo)\b/i.test(text);
-  if (!CREATE_CLIENT_TASK_REGEX.test(text) && !hasTaskAssignment && !CREATE_CLIENT_EXPLICIT_REGEX.test(text) && AMBIGUOUS_CLIENT_TASK_REGEX.test(text) && draft?.intent !== 'create_client') {
+  if (!CREATE_CLIENT_TASK_REGEX.test(text) && !hasTaskAssignment && !CREATE_CLIENT_EXPLICIT_REGEX.test(text) && AMBIGUOUS_CLIENT_TASK_REGEX.test(text) && draft?.intent !== 'create_client' && draft?.intent !== 'create_client_task') {
     return {
       intent: 'ambiguous_client_or_task',
       isSupported: true,
@@ -1671,22 +1786,38 @@ function migrateDraftBetweenIntents(sourceIntentKey, targetIntentKey, currentDra
 // ============================================================================
 
 function getIntentSlots(intentKey, draft = {}) {
+  if (intentKey === 'create_client_plan') {
+    const slots = [];
+    if (!draft.name) slots.push('name');
+    if (draft.price === undefined || draft.price === null) slots.push('price');
+    if (!draft.months) slots.push('months');
+    if (!draft.status) slots.push('status');
+    if (!draft.description && !draft.descriptionDone && !draft.descriptionSkipped) slots.push('description');
+    if (!draft.servicesDone || !Array.isArray(draft.services) || draft.services.length === 0) slots.push('services');
+    if (draft.servicesDone && Array.isArray(draft.services) && draft.services.length > 0 && !draft.serviceTasksDone && !draft.serviceTasksSkipped) {
+      slots.push('serviceTasks');
+    }
+    return slots;
+  }
   if (intentKey === 'create_client') {
     const slots = [];
     if (!draft.client && !draft.clientName) slots.push('client');
     if (!draft.company && !draft.companyName) slots.push('company');
     if (!draft.city) slots.push('city');
     if (!draft.status) slots.push('status');
+    if (!draft.email) slots.push('email');
     const hasPm = ((Array.isArray(draft.projectManager) && draft.projectManager.length > 0) ||
                   (Array.isArray(draft.team) && draft.team.length > 0) ||
                   (Array.isArray(draft.members) && draft.members.length > 0)) && Boolean(draft.teamDone);
     if (!hasPm) slots.push('projectManager');
     if (!draft.activeDetailsGroup) {
-      if (!draft.servicesDone && !draft.servicesSkipped) {
-        slots.push('services');
-      }
       if (!draft.clientPlanDone && !draft.clientPlanSkipped && !draft.clientPlanId) {
         slots.push('clientPlan');
+      }
+      // If a plan is selected, services come from the plan automatically.
+      // Only ask for manual services if no plan was chosen (i.e. skipped/no plan).
+      if (!draft.clientPlanId && !draft.servicesDone && !draft.servicesSkipped) {
+        slots.push('services');
       }
       if (draft.clientPlanId && !draft.subscriptionStartDate) {
         slots.push('subscriptionStartDate');
@@ -1736,10 +1867,23 @@ function getIntentSlots(intentKey, draft = {}) {
   const config = FORM_REGISTRY[intentKey] || FORM_REGISTRY.self_task;
   const isOthers = intentKey === 'task_assigned_user';
 
-  const activeFields = [];
-  if (isOthers && !draft.assigneeId) {
-    activeFields.push('assignee');
+  if (isOthers) {
+    const activeFields = [];
+    const hasAssignee = Boolean(draft.assigneeId || (Array.isArray(draft.assignees) && draft.assignees.length > 0) || (Array.isArray(draft.assignedUsers) && draft.assignedUsers.length > 0));
+    if (!hasAssignee) {
+      activeFields.push('assignee');
+    }
+    activeFields.push('title');
+    activeFields.push('dueDateTime');
+    activeFields.push('description');
+    activeFields.push('priority');
+    activeFields.push('priorityDays');
+    activeFields.push('checkpoints');
+    activeFields.push('attachments');
+    return activeFields;
   }
+
+  const activeFields = [];
   activeFields.push('title');
   activeFields.push('dueDateTime');
   activeFields.push('description');
@@ -1771,6 +1915,7 @@ const FLOW_FIRST_QUESTION_HINTS = {
   task_project: 'Aap ek saath bol sakte hain, jaise: "Alpha project mein UI revamp ka task banao kal tak".',
   create_client: 'Aap ek saath bol sakte hain, jaise: "Rohan Sharma, ZZ Tech Mohali ka naya client add karo".',
   create_client_task: 'Aap ek saath bol sakte hain, jaise: "ZZ Tech client ke liye Cloud Architecture ka task Rahul ko do".',
+  create_client_plan: 'Aap ek saath bol sakte hain, jaise: "Naya Gold plan banao 5000 price aur 3 mahine duration".',
 };
 
 const SLOT_CHIPS_TABLE = {
@@ -1779,8 +1924,8 @@ const SLOT_CHIPS_TABLE = {
     'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'checkpoints', 'attachments', 'ready'
   ],
   task_assigned_user: [
-    'welcome', 'assignee', 'title', 'dueDateTime', 'description', 'priority', 'status',
-    'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'checkpoints', 'attachments', 'ready'
+    'welcome', 'assignee', 'title', 'dueDateTime', 'description', 'priority',
+    'priorityDays', 'checkpoints', 'attachments', 'ready'
   ],
   create_project: [
     'welcome', 'name', 'description', 'startDate', 'endDate', 'members', 'priority', 'status', 'ready'
@@ -1795,8 +1940,11 @@ const SLOT_CHIPS_TABLE = {
     'email', 'phone', 'industry', 'website', 'address', 'state', 'country', 'pincode', 'notes', 'status', 'ready'
   ],
   create_client_task: [
-    'welcome', 'client', 'service', 'assignee', 'assignTo', 'title', 'dueDateTime', 'priority',
-    'description', 'reminder', 'checkpoints', 'ready'
+    'welcome', 'client', 'service', 'title', 'dueDateTime', 'priority',
+    'description', 'assignee', 'assignTo', 'ready'
+  ],
+  create_client_plan: [
+    'welcome', 'name', 'price', 'months', 'status', 'description', 'services', 'serviceTasks', 'ready'
   ],
 };
 
@@ -1835,7 +1983,7 @@ function buildChips(intent, slot, ctx = {}) {
       { label: 'Naya project banana', action: { type: 'set_intent', intent: 'create_project' } },
       { label: 'Project mein task banana/assign karna', action: { type: 'set_intent', intent: 'task_project' } },
       { label: 'Naya client add karna', action: { type: 'set_intent', intent: 'create_client' } },
-      { label: 'Client ka task kisi ko dena', action: { type: 'set_intent', intent: 'create_client_task' } },
+      { label: 'Client plan banana', action: { type: 'set_intent', intent: 'create_client_plan' } },
     ];
   }
 
@@ -1908,7 +2056,7 @@ function buildChips(intent, slot, ctx = {}) {
     const draftMembers = Array.isArray(ctx.draft?.members) ? ctx.draft.members : [];
     const draftAssigned = Array.isArray(ctx.draft?.assignedUsers) ? ctx.draft.assignedUsers : [];
     const selectedMembers = [...draftPm, ...draftTeam, ...draftMembers, ...draftAssigned];
-    const isMultiSelect = (intent === 'create_client' || (intent === 'create_project' && (slot === 'members' || slot === 'assignee')));
+    const isMultiSelect = (intent === 'create_client' || (intent === 'create_project' && (slot === 'members' || slot === 'assignee')) || intent === 'task_assigned_user');
 
     const chips = [];
 
@@ -2157,6 +2305,136 @@ function buildChips(intent, slot, ctx = {}) {
       { label: 'Nahi, bas', action: { type: 'finish_client_details' } },
       { label: 'Cancel', action: { type: 'cancel' } },
     ];
+  }
+
+  if (intent === 'create_client' && slot === 'serviceTasks') {
+    const draft = ctx.draft || {};
+    if (draft.addingServiceTasks && draft.activeTaskService) {
+      const s = draft.activeTaskService;
+      return [
+        { label: 'Collect Docs', action: { type: 'add_service_task', service: s, name: 'Collect Docs' } },
+        { label: 'Client Meeting', action: { type: 'add_service_task', service: s, name: 'Client Meeting' } },
+        { label: 'Initial Setup', action: { type: 'add_service_task', service: s, name: 'Initial Setup' } },
+        { label: 'Done / Aage badhein', action: { type: 'finish_service_tasks' } },
+        { label: 'Cancel', action: { type: 'cancel' } },
+      ];
+    }
+    if (draft.addingServiceTasks) {
+      const selServices = Array.isArray(draft.services) ? draft.services.map(s => typeof s === 'string' ? s : (s.service || s.name)) : [];
+      return [
+        ...selServices.map(s => ({
+          label: `${s} mein task add karein`,
+          action: { type: 'select_task_service', service: s },
+        })),
+        { label: 'Done / Aage badhein', action: { type: 'finish_service_tasks' } },
+        { label: 'Cancel', action: { type: 'cancel' } },
+      ];
+    }
+    return [
+      { label: 'Haan, task add karein', action: { type: 'start_add_service_tasks' } },
+      { label: 'Nahi, aage badhein', action: { type: 'finish_service_tasks' } },
+      { label: 'Cancel', action: { type: 'cancel' } },
+    ];
+  }
+
+  if (intent === 'create_client_plan') {
+    if (slot === 'name') {
+      return [{ label: 'Cancel', action: { type: 'cancel' } }];
+    }
+    if (slot === 'price') {
+      return [
+        { label: 'Free (₹0)', action: { type: 'set', field: 'price', value: 0 } },
+        { label: '₹1,000', action: { type: 'set', field: 'price', value: 1000 } },
+        { label: '₹2,500', action: { type: 'set', field: 'price', value: 2500 } },
+        { label: '₹5,000', action: { type: 'set', field: 'price', value: 5000 } },
+        { label: '₹10,000', action: { type: 'set', field: 'price', value: 10000 } },
+        { label: 'Cancel', action: { type: 'cancel' } },
+      ];
+    }
+    if (slot === 'months') {
+      return [
+        { label: '1 Month', action: { type: 'set', field: 'months', value: 1 } },
+        { label: '3 Months', action: { type: 'set', field: 'months', value: 3 } },
+        { label: '6 Months', action: { type: 'set', field: 'months', value: 6 } },
+        { label: '12 Months (1 Year)', action: { type: 'set', field: 'months', value: 12 } },
+        { label: 'Cancel', action: { type: 'cancel' } },
+      ];
+    }
+    if (slot === 'status') {
+      return [
+        { label: 'Active', action: { type: 'set', field: 'status', value: 'Active' } },
+        { label: 'Inactive', action: { type: 'set', field: 'status', value: 'Inactive' } },
+        { label: 'Cancel', action: { type: 'cancel' } },
+      ];
+    }
+    if (slot === 'description') {
+      return [
+        { label: 'Koi nahi / Skip', action: { type: 'skip_plan_description' } },
+        { label: 'Cancel', action: { type: 'cancel' } },
+      ];
+    }
+    if (slot === 'services') {
+      const compServices = Array.isArray(ctx.services) ? ctx.services : (Array.isArray(ctx.deps?.services) ? ctx.deps.services : []);
+      const selected = Array.isArray(ctx.draft?.services) ? ctx.draft.services.map(s => typeof s === 'string' ? s : s.service) : [];
+      const chips = [];
+      chips.push({ label: 'Done', action: { type: 'finish_plan_services' } });
+      const availServices = compServices.length > 0 ? compServices : ['Cloud Architecture', 'Mobile App Development', 'SEO Optimization', 'UI/UX Design', 'Web Development'];
+      for (const s of availServices) {
+        const sName = typeof s === 'string' ? s : (s.name || s.service || String(s));
+        const isSelected = selected.some(x => x.toLowerCase() === sName.toLowerCase());
+        chips.push({
+          label: isSelected ? ('✓ ' + sName) : sName,
+          action: { type: 'toggle_plan_service', service: sName },
+        });
+      }
+      chips.push({ label: 'Cancel', action: { type: 'cancel' } });
+      return chips;
+    }
+    if (slot === 'serviceTasks') {
+      const draft = ctx.draft || {};
+      if (draft.addingServiceTasks && draft.activeTaskService) {
+        const s = draft.activeTaskService;
+        return [
+          { label: 'Collect Docs', action: { type: 'add_service_task', service: s, name: 'Collect Docs' } },
+          { label: 'Client Meeting', action: { type: 'add_service_task', service: s, name: 'Client Meeting' } },
+          { label: 'Initial Setup', action: { type: 'add_service_task', service: s, name: 'Initial Setup' } },
+          { label: 'Done / Aage badhein', action: { type: 'finish_service_tasks' } },
+          { label: 'Cancel', action: { type: 'cancel' } },
+        ];
+      }
+      if (draft.addingServiceTasks && draft.lastAddedService) {
+        const s = draft.lastAddedService;
+        return [
+          { label: `${s} mein aur task add karein`, action: { type: 'select_task_service', service: s } },
+          { label: 'Kisi aur service mein', action: { type: 'pick_another_service' } },
+          { label: 'Done / Aage badhein', action: { type: 'finish_service_tasks' } },
+          { label: 'Cancel', action: { type: 'cancel' } },
+        ];
+      }
+      if (draft.addingServiceTasks) {
+        const selServices = Array.isArray(draft.services) ? draft.services.map(s => typeof s === 'string' ? s : (s.service || s.name)) : [];
+        return [
+          ...selServices.map(s => ({
+            label: `${s} mein task add karein`,
+            action: { type: 'select_task_service', service: s },
+          })),
+          { label: 'Done / Aage badhein', action: { type: 'finish_service_tasks' } },
+          { label: 'Cancel', action: { type: 'cancel' } },
+        ];
+      }
+      return [
+        { label: 'Haan, task add karein', action: { type: 'start_add_service_tasks' } },
+        { label: 'Nahi, aage badhein', action: { type: 'finish_service_tasks' } },
+        { label: 'Cancel', action: { type: 'cancel' } },
+      ];
+    }
+    if (slot === 'ready') {
+      return [
+        { label: 'Create karo', action: { type: 'confirm' } },
+        { label: 'Edit', action: { type: 'edit' } },
+        { label: 'Cancel', action: { type: 'cancel' } },
+      ];
+    }
   }
 
   // Text inputs default:

@@ -1966,6 +1966,34 @@ const addClient = async (req, res) => {
         session
       });
     }
+
+    if (Array.isArray(req.body.customTasks) && req.body.customTasks.length > 0) {
+      const customDocs = req.body.customTasks.map(ct => ({
+        clientId: newClient._id,
+        subscriptionId: newClient.subscription?.[newClient.subscription.length - 1]?._id || null,
+        subscriptionNo: newClient.subscription?.[newClient.subscription.length - 1]?.subscriptionNo || '',
+        planId: selectedClientPlan?._id || null,
+        planName: selectedClientPlan?.name || '',
+        isPlanTask: false,
+        service: ct.service || '',
+        name: ct.name || ct.title || 'Task',
+        description: ct.description || ct.name || '',
+        dueDate: ct.dueDate || new Date(Date.now() + (Number(ct.dueInDays) || 30) * 86400000),
+        dueDateSource: 'custom',
+        priority: ['Low', 'Medium', 'High'].includes(ct.priority) ? ct.priority : 'Medium',
+        status: 'pending',
+        completed: false,
+        activityLogs: [{
+          action: 'created_from_agent',
+          userName: req.user?.name || 'System',
+          description: `Custom service task created via AI`,
+          createdAt: new Date()
+        }]
+      })).filter(t => t.name);
+      if (customDocs.length > 0) {
+        await ClientTask.insertMany(customDocs, { session });
+      }
+    }
     void 0;
     void 0;
 

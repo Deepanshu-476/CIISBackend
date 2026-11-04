@@ -213,10 +213,20 @@ const WEEKDAY_NAMES = {
 
 // Check for deterministic skip phrases
 const SKIP_PHRASES = [
+  'koi nahi / skip',
+  'koi nahi/skip',
+  'koi nahi skip',
+  'koini / skip',
+  'koini/skip',
+  'koini skip',
+  'koini',
+  'koinhi',
   'koi nahi',
   'kuch nahi',
   'nahi',
   'nahi hai',
+  'nahi chahiye',
+  'nahi chahiyeh',
   'skip',
   'chhod do',
   'chhodo',
@@ -299,7 +309,16 @@ const FORBIDDEN_ASSIGNEE_NAMES = new Set([
   'din', 'baje', 'time', 'ek', 'do', 'teen', 'chaar', 'paanch', 'chhe', 'saat', 'aath', 'nau', 'das',
   'new', 'naya', 'naye', 'nayi', 'task', 'priority', 'status', 'project', 'co', 'ko', 'ka',
   'ki', 'ke', 'me', 'mein', 'mai', 'main', 'hai', 'ho', 'karo', 'banao', 'kar', 'do', 'kardo',
-  'high', 'low', 'medium', 'urgent', 'pending', 'reminder', 'checkpoints', 'description', 'title'
+  'high', 'low', 'medium', 'urgent', 'pending', 'reminder', 'checkpoints', 'description', 'title',
+  'of', 'for', 'in', 'at', 'by', 'to', 'on', 'with', 'about', 'from', 'into', 'as', 'like', 'through',
+  'after', 'over', 'between', 'out', 'against', 'during', 'without', 'before', 'under', 'around', 'among',
+  'the', 'a', 'an', 'and', 'or', 'but', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+  'have', 'has', 'had', 'do', 'does', 'did', 'doing', 'will', 'would', 'shall', 'should',
+  'can', 'could', 'may', 'might', 'must', 'it', 'its', 'this', 'that', 'these', 'those',
+  'testing', 'test', 'assign', 'assigned', 'create', 'created', 'meeting', 'call', 'review',
+  'work', 'done', 'set', 'get', 'give', 'take', 'make', 'all', 'any', 'both', 'each',
+  'few', 'more', 'most', 'other', 'some', 'such', 'no', 'nor', 'not', 'only', 'own', 'same',
+  'so', 'than', 'too', 'very'
 ]);
 
 const DATE_WORDS_SET = new Set([
@@ -387,7 +406,7 @@ function extractAssigneeMention(text) {
   }
 
   // 3. "<Name> task assign(ed) karo" (without particle)
-  const taskAssignMatch = clean.match(/([a-zA-Z\u0900-\u097F]{2,})\s+(?:ek\s+)?task\s+assign(?:ed)?(?:\s+(?:karo|kardo|karna|kariye))?/i);
+  const taskAssignMatch = clean.match(/([a-zA-Z\u0900-\u097F]{2,})\s+(?:ek\s+)?task\s+assign(?:ed)?\s+(?:karo|kardo|karna|kariye|de\s*do|dena)\b/i);
   if (taskAssignMatch && taskAssignMatch[1]) {
     const cleaned = cleanAssigneeName(taskAssignMatch[1]);
     if (cleaned) return cleaned;
@@ -504,13 +523,23 @@ function extractMultipleAssignees(text) {
 
 function isSkip(text) {
   if (!text || typeof text !== 'string') return false;
-  const clean = text.trim().toLowerCase().replace(/[.,!?;:]/g, '');
+  const rawClean = text.trim().toLowerCase();
+
+  // Direct fast check for compound skip like "Koi nahi / Skip", "koini/skip", "koi nahi", "skip"
+  if (/^(?:skip|koi\s*na?hi?|koi\s*nhi|koini|koinhi|none|chhod\s*do|chhodo|rehne\s*do|no|na)(?:\s*(?:\/|\-)?\s*skip)?$/i.test(rawClean)) {
+    return true;
+  }
+
+  const clean = rawClean.replace(/[/\\.,!?;:\-_]/g, ' ').replace(/\s+/g, ' ').trim();
 
   // If message contains substantive field commands or time/slot details, it is NOT a field skip
   const hasSubstantiveContent = /(?:title|naam|नाम|description|विवरण|priority|प्रायोरिटी|status|स्टेटस|due|time|samay|समय|date|tareekh|tarikh|तारीख|baje|बजे|baaj|baj|bach|minute|min|मिनट|hour|ghanta|घंटा|high|low|medium|urgent|pending|completed|change|badal|badlo|बदलो|rakhna|rakho|रखो|रखना)/iu.test(clean);
   if (hasSubstantiveContent) return false;
 
-  return SKIP_PHRASES.some(phrase => clean === phrase || clean.startsWith(phrase + ' ') || clean.endsWith(' ' + phrase));
+  return SKIP_PHRASES.some(phrase => {
+    const cleanPhrase = phrase.replace(/[/\\.,!?;:\-_]/g, ' ').replace(/\s+/g, ' ').trim();
+    return clean === cleanPhrase || rawClean === phrase || clean.startsWith(cleanPhrase + ' ') || clean.endsWith(' ' + cleanPhrase);
+  });
 }
 
 function isSkipAll(text) {
