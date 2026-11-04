@@ -411,16 +411,27 @@ const getTaskStatusEvents = task => {
     }));
   }
 
-  if (Array.isArray(task.activityLogs) && task.activityLogs.length > 0) {
-    return task.activityLogs
-      .map(entry => ({
-        status: entry.newValue || entry.newValues?.status || entry.status,
-        at: entry.performedAt || entry.createdAt || entry.updatedAt
-      }))
-      .filter(entry => entry.status);
-  }
+  const logs = Array.isArray(task.activityLogs) ? task.activityLogs : [];
+  const events = logs
+    .map(entry => ({
+      status: entry.newValue || entry.newValues?.status || entry.status,
+      oldStatus: entry.oldValue || entry.oldValues?.status,
+      at: entry.performedAt || entry.createdAt || entry.updatedAt
+    }))
+    .filter(entry => entry.status && toValidWorkDate(entry.at))
+    .sort((a, b) => toValidWorkDate(a.at) - toValidWorkDate(b.at));
 
-  return [];
+  // A task created straight as "in progress" (project tasks before the creation log
+  // carried the status) has no event for that start: its first change says it came
+  // *from* in progress, or it never changed at all. It has been running since creation.
+  const createdAt = toValidWorkDate(task.createdAt);
+  const startedAtCreation = createdAt && (events.length
+    ? normalizeTaskStatus(events[0].oldStatus) === 'in-progress'
+    : task.taskSource === 'project' && normalizeTaskStatus(task.userStatus || task.status) === 'in-progress');
+  if (startedAtCreation && (!events.length || createdAt <= toValidWorkDate(events[0].at))) {
+    events.unshift({ status: 'in-progress', at: createdAt });
+  }
+  return events.map(({ status, at }) => ({ status, at }));
 };
 
 const parseDurationStringToSeconds = (str) => {
@@ -437,7 +448,10 @@ const parseDurationStringToSeconds = (str) => {
 
 const calculateTaskWork = (task, workWindow, fallbackRange) => {
   const windowStart = workWindow?.start || fallbackRange?.start;
-  const windowEnd = workWindow?.end || fallbackRange?.end || new Date();
+  // The report window can end later today (end of the day without attendance);
+  // never count time that has not happened yet.
+  const rawWindowEnd = toValidWorkDate(workWindow?.end || fallbackRange?.end) || new Date();
+  const windowEnd = new Date(Math.min(rawWindowEnd.getTime(), Date.now()));
   const workIntervals = Array.isArray(workWindow?.intervals) && workWindow.intervals.length > 0
     ? workWindow.intervals
     : [{ start: windowStart, end: windowEnd }];
