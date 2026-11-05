@@ -191,6 +191,14 @@ app.get('/lab/report', (req, res) => {
   res.json(lastReport);
 });
 
+// Readable report: one HTML file that opens without the lab and prints to PDF.
+app.get('/lab/report.html', (req, res) => {
+  if (!lastReport) return res.status(404).json({ ok: false, message: 'No report yet' });
+  const stamp = (lastReport.finishedAt || '').slice(0, 19).replace(/[:T]/g, '-');
+  res.setHeader('Content-Disposition', `attachment; filename="api-test-report-${stamp}.html"`);
+  res.type('html').send(require('./lib/reportHtml').buildReportHtml(lastReport));
+});
+
 app.post('/lab/run', async (req, res) => {
   if (!dbGuard(res)) return;
   if (current && !current.done) return res.status(409).json({ ok: false, message: 'A test run is already in progress' });
