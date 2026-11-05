@@ -345,7 +345,7 @@ exports.sendSystemNotification = async ({
       },
     })
       .then(result => logNotificationDebug('push:result', result))
-      .catch(error => console.error('[NOTIFICATION DEBUG] push:error', {
+      .catch(error => console.error('[NOTIFICATION] push:error', {
         at: new Date().toISOString(),
         message: error.message,
         stack: error.stack,

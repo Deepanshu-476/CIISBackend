@@ -2580,8 +2580,7 @@ exports.updateTaskStatus = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Error updating task status",
-      error: error.message,
-      stack: error.stack
+      error: error.message
     });
   }
 };

@@ -342,13 +342,6 @@ router.delete('/company/:id', requirePlatformOwner, async (req, res) => {
     res.status(500).json({ error: 'Failed to delete company' });
   }
 });
-router.get("/test", (req, res) => {
-  void 0;
-  res.json({
-    success: true,
-    user: req.user
-  });
-});
 
 module.exports = router;
 void 0;
