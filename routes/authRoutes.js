@@ -72,9 +72,11 @@ const otpLimiter = rateLimit({
   },
 });
 
+// Per-IP guard only; per-account OTP limits (60 s wait, 5 sends, 1 h lock) are in
+// authController.forgotPassword. Forgot + verify + reset share this budget.
 const passwordResetLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
-  limit: 10,
+  limit: 30,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
