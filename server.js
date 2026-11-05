@@ -160,6 +160,14 @@ process.on('unhandledRejection', error => {
   console.error('Unhandled promise rejection:', error);
 });
 
+process.on('uncaughtException', error => {
+  console.error('Uncaught exception:', error);
+  if (error?.code === 'ECONNRESET' || error?.code === 'EPIPE' || error?.code === 'ETIMEDOUT' || isTransientMongoError(error)) {
+    console.warn('Recovered from transient connection error:', error.message);
+    return;
+  }
+});
+
 const isDbReady = () => mongoose.connection.readyState === 1;
 
 const isTransientMongoError = error => {

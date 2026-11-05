@@ -208,7 +208,15 @@ const runWorkAnniversaryEmails = async (now = new Date()) => {
       user: user._id,
       anniversaryYear: today.year,
       templateVersion: WORK_ANNIVERSARY_TEMPLATE_VERSION,
-      status: { $in: ["pending", "sent", "skipped"] },
+      // A previously sent entry must only suppress this run when it was sent
+      // to the same address for the same anniversary milestone. Employee
+      // records can be corrected after an earlier test or an incorrect date
+      // of joining, and that old log must not block the corrected email.
+      email: user.email,
+      completedYears,
+      // A skipped record is retryable: it can be created while this email
+      // module is disabled and must not prevent delivery after it is enabled.
+      status: { $in: ["pending", "sent"] },
     });
     if (existingSentLog) {
       summary.skipped += 1;

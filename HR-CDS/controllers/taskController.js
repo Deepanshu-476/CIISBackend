@@ -411,16 +411,27 @@ const getTaskStatusEvents = task => {
     }));
   }
 
-  if (Array.isArray(task.activityLogs) && task.activityLogs.length > 0) {
-    return task.activityLogs
-      .map(entry => ({
-        status: entry.newValue || entry.newValues?.status || entry.status,
-        at: entry.performedAt || entry.createdAt || entry.updatedAt
-      }))
-      .filter(entry => entry.status);
-  }
+  const logs = Array.isArray(task.activityLogs) ? task.activityLogs : [];
+  const events = logs
+    .map(entry => ({
+      status: entry.newValue || entry.newValues?.status || entry.status,
+      oldStatus: entry.oldValue || entry.oldValues?.status,
+      at: entry.performedAt || entry.createdAt || entry.updatedAt
+    }))
+    .filter(entry => entry.status && toValidWorkDate(entry.at))
+    .sort((a, b) => toValidWorkDate(a.at) - toValidWorkDate(b.at));
 
-  return [];
+  // A task created straight as "in progress" (project tasks before the creation log
+  // carried the status) has no event for that start: its first change says it came
+  // *from* in progress, or it never changed at all. It has been running since creation.
+  const createdAt = toValidWorkDate(task.createdAt);
+  const startedAtCreation = createdAt && (events.length
+    ? normalizeTaskStatus(events[0].oldStatus) === 'in-progress'
+    : task.taskSource === 'project' && normalizeTaskStatus(task.userStatus || task.status) === 'in-progress');
+  if (startedAtCreation && (!events.length || createdAt <= toValidWorkDate(events[0].at))) {
+    events.unshift({ status: 'in-progress', at: createdAt });
+  }
+  return events.map(({ status, at }) => ({ status, at }));
 };
 
 const parseDurationStringToSeconds = (str) => {
@@ -437,7 +448,10 @@ const parseDurationStringToSeconds = (str) => {
 
 const calculateTaskWork = (task, workWindow, fallbackRange) => {
   const windowStart = workWindow?.start || fallbackRange?.start;
-  const windowEnd = workWindow?.end || fallbackRange?.end || new Date();
+  // The report window can end later today (end of the day without attendance);
+  // never count time that has not happened yet.
+  const rawWindowEnd = toValidWorkDate(workWindow?.end || fallbackRange?.end) || new Date();
+  const windowEnd = new Date(Math.min(rawWindowEnd.getTime(), Date.now()));
   const workIntervals = Array.isArray(workWindow?.intervals) && workWindow.intervals.length > 0
     ? workWindow.intervals
     : [{ start: windowStart, end: windowEnd }];
@@ -2824,6 +2838,39 @@ exports.getTaskActivityLogs = async (req, res) => {
       });
     }
 
+    // 2. If task was not in Task model, check Project model for project tasks
+    if (!task) {
+      try {
+        const { Project: ProjectModel } = require('../models/Project');
+        const projectDoc = await ProjectModel.findOne(
+          { "tasks._id": taskId },
+          { "tasks.$": 1, projectName: 1, createdBy: 1, users: 1 }
+        ).lean();
+        if (projectDoc && projectDoc.tasks?.[0]) {
+          const pTask = projectDoc.tasks[0];
+          (pTask.activityLogs || []).forEach((log, idx) => {
+            const lDate = log.performedAt || log.createdAt || new Date();
+            const lTime = new Date(lDate).getTime();
+            const key = `p_${lTime}_${idx}`;
+            combinedMap.set(key, {
+              _id: log._id || key,
+              action: log.type || 'activity_logged',
+              user: log.performedBy,
+              userName: 'User',
+              description: log.description || log.remark || 'Activity logged',
+              oldValues: log.oldValue ? { status: log.oldValue } : undefined,
+              newValues: log.newValue ? { status: log.newValue } : undefined,
+              status: log.newValue || log.status,
+              createdAt: lDate,
+              performedAt: lDate
+            });
+          });
+        }
+      } catch (err) {
+        console.error("Error looking up project task activity logs:", err.message);
+      }
+    }
+
     // 2. Add status history records from the task if any are missing
     if (task && Array.isArray(task.statusHistory)) {
       task.statusHistory.forEach((sh, idx) => {
@@ -3265,9 +3312,31 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
       const displayStatus = projectStatus;
       const assignedBy = getProjectTaskAssignedBy(task, project);
 
+      let projectTrackedSeconds = Number(task.timeSpent || task.workTime?.seconds || task.timeTracking?.totalSeconds || 0);
+      if (projectTrackedSeconds === 0 && (projectStatus === 'completed' || task.completionDate || task.completedAt)) {
+        const compDate = task.completionDate ? new Date(task.completionDate) : (task.completedAt ? new Date(task.completedAt) : null);
+        if (compDate && !isNaN(compDate.getTime())) {
+          const logs = Array.isArray(task.activityLogs) ? task.activityLogs : [];
+          const startLog = logs.find(l => {
+            const desc = String(l.description || l.details || l.remark || l.remarks || '').toLowerCase();
+            return desc.includes('start') || desc.includes('working') || desc.includes('progress');
+          });
+          const startDate = (startLog ? new Date(startLog.performedAt || startLog.createdAt || 0) : null) || (task.createdAt ? new Date(task.createdAt) : null);
+          if (startDate && !isNaN(startDate.getTime()) && compDate.getTime() > startDate.getTime()) {
+            projectTrackedSeconds = Math.max(0, Math.floor((compDate.getTime() - startDate.getTime()) / 1000));
+          }
+        }
+      }
+
       projectFormatted.push({
         _id: task._id,
         projectId: project._id,
+        timeSpent: projectTrackedSeconds,
+        workTime: {
+          seconds: projectTrackedSeconds,
+          label: `${Math.floor(projectTrackedSeconds / 3600)}h ${Math.floor((projectTrackedSeconds % 3600) / 60)}m`
+        },
+        timeTracking: { totalSeconds: projectTrackedSeconds },
         title: task.title || 'Untitled Project Task',
         description: task.description || project.description || '',
         dueDate: task.dueDate,

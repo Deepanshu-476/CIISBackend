@@ -11,7 +11,7 @@ const context = page => async (req, res, next) => {
   try {
     const company = req.user?.company?._id || req.user?.company || req.user?.companyId;
     if (!mongoose.isValidObjectId(company)) {
-      return res.status(403).json({ message: 'A valid company is required.' });
+      return res.status(403).json({ message: 'A valid company is required.' }); 
     }
     const record = await Company.findById(company).select('allowedPages').lean();
     const allowed = (record?.allowedPages || []).map(v => String(v).toLowerCase().replace(/^\/+/, '').replace(/^ciisuser\//, ''));
