@@ -11,10 +11,12 @@ node -e 'require("mongodb").MongoClient.connect("mongodb://127.0.0.1:27027/?dire
 
 # 2. backend on port 3100 against that database (no emails, no cron jobs)
 MONGO_URI="mongodb://127.0.0.1:27027/ciislab?replicaSet=rs0" PORT=3100 DISABLE_SCHEDULED_JOBS=true \
-  EMAIL_HOST= EMAIL_USER= EMAIL_PASS= REDIS_URL= node server.js
+  EMAIL_HOST= EMAIL_USER= EMAIL_PASS= REDIS_URL= \
+  COTURN_HOST=turn.lab.local COTURN_STATIC_AUTH_SECRET=lab-turn-secret node server.js
 
 # 3. the lab (another terminal)
-MONGO_URI="mongodb://127.0.0.1:27027/ciislab?replicaSet=rs0" LAB_TARGET=http://localhost:3100 npm run lab
+MONGO_URI="mongodb://127.0.0.1:27027/ciislab?replicaSet=rs0" LAB_TARGET=http://localhost:3100 \
+  COTURN_STATIC_AUTH_SECRET=lab-turn-secret npm run lab
 # open http://localhost:4600
 ```
 
@@ -40,7 +42,10 @@ If login OTP is switched on in that database, the lab reads the OTP the backend 
 | CRM | owner given access to all CRM admin pages through Page Management, lead types/sources, add lead (validation), stages, single + bulk assignment, history, workload, telecaller sees only own leads, call outcomes (callback → follow-up, converted → locked), follow-ups, all admin call pages, 8 reports, employee and client blocked |
 | Payroll | components, structure (Basic + Special − PT), assign ₹30,000 salary, payroll run for last month: generate → review → approve → lock → reopen, payslip only after approval, employees blocked |
 | Admin pages | employee edit/delete, branches, groups, meetings, client meetings, alerts, support tickets, dashboards, asset requests |
+| Calls (TURN) | `/api/chat/turn-credentials` returns a TURN server with a username + credential that is still valid and matches `COTURN_STATIC_AUTH_SECRET` (when the lab is given it); no token → 401 |
 | All GET APIs | every GET route found in the code is called (owner, optionally employee and client) and timed; 5xx, timeouts and "Route not found" are failures. GET routes that start jobs, download files or are test/debug routes are never called. |
+
+The `COTURN_*` values above are local placeholders: the endpoint only signs credentials, it never contacts a TURN server. Without them the backend answers 503 and the TURN rows fail.
 
 Live clock-in tests run only between 03:05 and 21:20 India time.
 

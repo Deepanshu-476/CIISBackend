@@ -129,7 +129,7 @@ pre{margin:6px 0 0;white-space:pre-wrap;word-break:break-word;font-family:var(--
   <section class="card" id="progressCard">
     <div class="row" style="justify-content:space-between">
       <div><span class="muted small">Now:</span> <span id="phase" class="phase">Not started</span></div>
-      <div class="row small muted"><span id="elapsed"></span><button id="dlJson" class="copy">Report JSON</button><button id="dlCsv" class="copy">CSV</button></div>
+      <div class="row small muted"><span id="elapsed"></span><button id="dlHtml" class="copy">Download report</button><button id="dlJson" class="copy">Report JSON</button><button id="dlCsv" class="copy">CSV</button></div>
     </div>
     <div class="bar" id="bar"></div>
     <div class="kpis" id="kpis"></div>
@@ -488,6 +488,7 @@ document.addEventListener('click', e => {
   const cp = e.target.closest('[data-copy]');
   if (cp) { navigator.clipboard?.writeText(cp.dataset.copy); cp.textContent = 'copied'; setTimeout(() => (cp.textContent = 'copy'), 900); }
 });
+$('#dlHtml').onclick = () => { window.location.href = '/lab/report.html'; };
 $('#dlJson').onclick = () => { window.location.href = '/lab/report'; };
 $('#dlCsv').onclick = () => {
   const head = ['id', 'module', 'result', 'slow', 'name', 'method', 'path', 'as', 'status', 'ms', 'detail', 'serverMessage'];
