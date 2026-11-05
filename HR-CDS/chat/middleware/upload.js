@@ -18,4 +18,5 @@ const storage = multer.diskStorage({
   },
 });
 
-module.exports = multer({ storage, limits: {fileSize: 100 * 1024 * 1024, files: 1} });
+// No size cap on chat attachments (user asked that no file be rejected for size).
+module.exports = multer({ storage, limits: {files: 1} });
