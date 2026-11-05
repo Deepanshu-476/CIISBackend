@@ -23,6 +23,19 @@ function normalizePerson(val) {
   return { id: '', name: s, email: '' };
 }
 
+// Old clients and tasks keep plain-text names of employees who have since left (inactive
+// users are not candidates), and sweeps resolve them every pass. Report each name once per
+// client per process; lookups without a client (chat-list access checks) are expected misses.
+const unmatchedWarned = new Set();
+function warnUnmatchedOnce(name, client) {
+  if (!client) return;
+  const key = `${id(client._id)}:${String(name).trim().toLowerCase()}`;
+  if (unmatchedWarned.has(key)) return;
+  if (unmatchedWarned.size > 5000) unmatchedWarned.clear();
+  unmatchedWarned.add(key);
+  console.warn('[client-chat] unmatched member name:', name, 'for client:', client.client || id(client._id));
+}
+
 function resolveMember(value, users, client = null) {
   const target = normalizePerson(value);
   if (!target) return null;
@@ -62,7 +75,7 @@ function resolveMember(value, users, client = null) {
       }
       if (candidates.length === 1) return candidates[0]._id;
     }
-    console.warn('[client-chat] unmatched member name:', target.name, 'for client:', client?.client || client?._id || 'unknown');
+    warnUnmatchedOnce(target.name, client);
   }
 
   return null;
@@ -92,9 +105,10 @@ const notSyncedSince = (ms = RESYNC_AFTER_MS) => ({ clientSyncedAt: { $not: { $g
 
 // usersByCompany: sweeps pass one Map so each company's users are read once per pass instead of
 // once per client.
+// The Map holds the running promise, not the Query: a Mongoose Query can only be executed once.
 const loadCompanyUsers = (companyId, usersByCompany) => {
   const read = () => User.find({ company: companyId, isActive: { $ne: false } })
-    .select('_id name email companyRole role jobRoleName employeeType department departmentName team').lean();
+    .select('_id name email companyRole role jobRoleName employeeType department departmentName team').lean().exec();
   if (!usersByCompany) return read();
   const key = id(companyId);
   if (!usersByCompany.has(key)) usersByCompany.set(key, read());
