@@ -86,16 +86,18 @@ const buildDashboardTaskStats = (tasks, userId, todayStart, todayEnd) => {
     const status = normalizeDashboardTaskStatus(task, userId);
     if (excludedTaskStatuses.has(status)) return;
 
+    const rawDue = task.dueDateTime || task.dueDate;
+    const dueDate = rawDue ? new Date(rawDue) : null;
+    const updatedAt = (task.updatedAt || task.statusChangedAt) ? new Date(task.updatedAt || task.statusChangedAt) : null;
+    const createdAt = task.createdAt ? new Date(task.createdAt) : null;
+
     stats.total += 1;
     if (completedStatuses.has(status)) stats.completed += 1;
     else if (["in-progress", "inprogress", "reopen"].includes(status)) stats.inProgress += 1;
     else if (["on-hold", "onhold", "hold"].includes(status)) stats.onHold += 1;
-    else if (status === "overdue" || (task.dueDateTime && new Date(task.dueDateTime) < now && !completedStatuses.has(status))) stats.overdue += 1;
+    else if (status === "overdue" || (dueDate && dueDate < now && !completedStatuses.has(status))) stats.overdue += 1;
     else stats.pending += 1;
 
-    const dueDate = task.dueDateTime ? new Date(task.dueDateTime) : null;
-    const updatedAt = task.updatedAt ? new Date(task.updatedAt) : null;
-    const createdAt = task.createdAt ? new Date(task.createdAt) : null;
     const isDueToday = dueDate && dueDate >= todayStart && dueDate <= todayEnd;
     const touchedToday = (updatedAt && updatedAt >= todayStart && updatedAt <= todayEnd) || (createdAt && createdAt >= todayStart && createdAt <= todayEnd);
 
@@ -520,7 +522,7 @@ const getEmployeeDashboardSummary = async (req, res) => {
         .limit(12)
         // The dashboard only counts each project's tasks and reads their status;
         // full tasks carry logs and remarks and made this response ~1 MB.
-        .select("projectName name title updatedAt createdAt users createdBy tasks._id tasks.title tasks.status tasks.userStatus tasks.overallStatus tasks.assignedTo tasks.assignedUsers tasks.dueDate")
+        .select("projectName name title updatedAt createdAt users createdBy tasks._id tasks.title tasks.status tasks.userStatus tasks.overallStatus tasks.assignedTo tasks.assignedUsers tasks.dueDate tasks.dueDateTime tasks.createdAt tasks.updatedAt tasks.completionDate tasks.statusChangedAt")
         .lean(),
       User.findById(userId)
         .select("_id name email employeeId jobRole department employeeType shiftId shiftName shiftType")
@@ -632,7 +634,30 @@ const getEmployeeDashboardSummary = async (req, res) => {
       leavesTaken: getLeaveDatesInMonth(leaves, monthReference),
       holidayDays: holidays.filter(holiday => isSameCalendarMonth(holiday.date, monthReference)).length,
     };
-    const {taskStats, focusStats} = buildDashboardTaskStats(dashboardTasks, userId, todayStart, todayEnd);
+    const projectTasksForUser = (Array.isArray(projects) ? projects : []).flatMap(project => (project.tasks || [])
+      .filter(task => {
+        const assigned = (task.assignedUsers || []).map(u => String(u?._id || u));
+        return assigned.includes(String(userId)) ||
+               String(task.assignedTo?._id || task.assignedTo || "") === String(userId) ||
+               String(task.createdBy?._id || task.createdBy || "") === String(userId);
+      })
+      .map(task => ({
+        _id: task._id,
+        title: task.title,
+        createdAt: task.createdAt,
+        updatedAt: task.updatedAt,
+        statusChangedAt: task.statusChangedAt,
+        dueDateTime: task.dueDateTime || task.dueDate,
+        dueDate: task.dueDate || task.dueDateTime,
+        overallStatus: task.status || task.overallStatus || task.userStatus,
+        status: task.status || task.overallStatus || task.userStatus,
+        completionDate: task.completionDate || (completedStatuses.has(normalizeProductivityStatus(task.status)) ? task.updatedAt : null),
+        statusByUser: [],
+        statusHistory: [],
+        isProjectTask: true,
+      })));
+    const allUserDashboardTasks = [...dashboardTasks, ...projectTasksForUser];
+    const {taskStats, focusStats} = buildDashboardTaskStats(allUserDashboardTasks, userId, todayStart, todayEnd);
     const upcomingMeetings = buildUpcomingMeetings(meetings);
     const productivityStart = new Date(todayStart.getTime() - (6 * DAY_MS));
     const excludedDates = new Set(holidays.map(item => dateKey(item.date)));
@@ -663,14 +688,14 @@ const getEmployeeDashboardSummary = async (req, res) => {
         start: productivityStart,
         end: todayEnd,
         attendance,
-        tasks: dashboardTasks,
+        tasks: allUserDashboardTasks,
         excludedDates,
         userId,
       });
       const productivityBuckets = buildProductivityBuckets(productivityStart, todayEnd, "weekly");
       const productivitySeries = productivityBuckets.buckets.map(bucket => ({
         ...bucket,
-        ...calculateProductivityMetrics({...bucket, attendance, tasks: dashboardTasks, excludedDates, userId}),
+        ...calculateProductivityMetrics({...bucket, attendance, tasks: allUserDashboardTasks, excludedDates, userId}),
       })).map(item => ({
         date: item.start,
         label: item.label,
