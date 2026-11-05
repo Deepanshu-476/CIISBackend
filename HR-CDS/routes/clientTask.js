@@ -9,7 +9,6 @@ const fs = require('fs');
 const sharp = require('sharp');
 
 
-
 const SENSITIVE_UPLOAD_FOLDERS = [
   'employee-documents',
   'client-documents',
@@ -117,41 +116,6 @@ const compressImage = async (req, res, next) => {
 };
 
 
-router.get('/test', (req, res) => {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(404).json({ success: false, message: 'Not found' });
-  }
-  res.json({
-    status: 'success',
-    message: 'Client Task API is working',
-    timestamp: new Date().toISOString(),
-    staticFilesServed: true,
-    uploadDirectory: uploadDir,
-    endpoints: [
-      'GET /api/tasks/test',
-      'GET /api/tasks/assigned-to-me',
-      'GET /api/tasks/user/:userId/assigned-tasks',
-      'GET /api/tasks/client/:clientId/service/:service',
-      'POST /api/tasks/client/:clientId/service/:service',
-      'GET /api/tasks/client/:clientId',
-      'GET /api/tasks/client/:clientId/stats',
-      'PUT /api/tasks/:taskId',
-      'PATCH /api/tasks/:taskId/toggle',
-      'DELETE /api/tasks/:taskId',
-      'POST /api/tasks/:taskId/client-remarks',
-      'POST /api/tasks/:taskId/client-remarks/upload-images',
-      'GET /api/tasks/:taskId/client-remarks',
-      'DELETE /api/tasks/:taskId/client-remarks/:remarkId',
-      'POST /api/tasks/:taskId/client-activity-logs',
-      'GET /api/tasks/:taskId/client-activity-logs',
-      'GET /api/tasks/:taskId/debug'
-    ]
-  });
-});
-
-
-
-
 router.get('/assigned-to-me', authMiddleware, taskController.getAssignedToMeTasks);
 router.get('/assigned-to-me/stats', authMiddleware, taskController.getAssignedToMeTaskStats);
 
@@ -175,15 +139,6 @@ router.delete('/:taskId/client-remarks/:remarkId', authMiddleware, taskControlle
 
 router.post('/:taskId/client-activity-logs', authMiddleware, taskController.addClientActivityLog);
 router.get('/:taskId/client-activity-logs', authMiddleware, taskController.getClientTaskActivityLogs);
-
-
-router.get('/:taskId/debug', authMiddleware, taskController.debugActivityLogs);
-router.get('/:taskId/debug', (req, res, next) => {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(404).json({ success: false, message: 'Not found' });
-  }
-  next();
-}, authMiddleware, taskController.debugActivityLogs);
 
 
 router.get('/', authMiddleware, (req, res, next) => {

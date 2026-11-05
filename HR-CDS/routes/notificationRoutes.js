@@ -158,7 +158,7 @@ router.post('/devices/unregister', async (req, res) => {
       deletedCount: result.deletedCount,
     });
   } catch (error) {
-    console.error('[FCM DEBUG] device-unregister:error', error);
+    console.error('[FCM] device-unregister:error', error);
     return res.status(500).json({success: false, message: 'Device unregistration failed'});
   }
 });
@@ -289,7 +289,7 @@ router.get('/push-status', async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('[FCM DEBUG] push-status:error', {
+    console.error('[FCM] push-status:error', {
       at: new Date().toISOString(),
       userId: req.user?._id?.toString(),
       message: error.message,
@@ -308,7 +308,7 @@ router.post('/devices', async (req, res) => {
     void 0;
 
     if (!deviceToken) {
-      console.warn('[FCM DEBUG] device-register:missing-token', {
+      console.warn('[FCM] device-register:missing-token', {
         at: new Date().toISOString(),
         userId: req.user?._id?.toString(),
       });
@@ -333,7 +333,7 @@ router.post('/devices', async (req, res) => {
 
     res.status(200).json({success: true, data: device});
   } catch (error) {
-    console.error('[FCM DEBUG] device-register:error', {
+    console.error('[FCM] device-register:error', {
       at: new Date().toISOString(),
       userId: req.user?._id?.toString(),
       message: error.message,
@@ -357,7 +357,7 @@ const deleteDeviceHandler = async (req, res) => {
     const result = await Device.deleteMany(query);
     res.json({success: true, deletedCount: result.deletedCount});
   } catch (error) {
-    console.error('[FCM DEBUG] device-delete:error', {
+    console.error('[FCM] device-delete:error', {
       at: new Date().toISOString(),
       userId: req.user?._id?.toString(),
       message: error.message,

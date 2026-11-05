@@ -717,15 +717,6 @@ router.get('/user-config', async (req, res) => {
     });
   }
 });
-router.get("/test", (req, res) => {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(404).json({ success: false, message: 'Not found' });
-  }
-  res.json({
-    success: true,
-    user: req.user
-  });
-});
 router.findSidebarConfig = findSidebarConfig;
 module.exports = router;
 module.exports.findSidebarConfig = findSidebarConfig;
