@@ -1239,6 +1239,7 @@ app.use("/api/department", require("./routes/Department.routes.js"));
 app.use("/departments", require("./routes/Department.routes.js"));
 app.use("/department", require("./routes/Department.routes.js"));
 app.use("/api/alerts", require("./HR-CDS/routes/alertRoutes.js"));
+app.use("/api/promos", require("./HR-CDS/routes/promoRoutes.js"));
 app.use("/api/badges", require("./routes/badgeRoutes.js"));
 app.use("/api/notifications", require("./HR-CDS/routes/notificationRoutes.js"));
 app.use("/api/feedback", require("./HR-CDS/routes/feedbackRoutes.js"));
