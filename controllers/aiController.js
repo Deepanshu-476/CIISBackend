@@ -35,7 +35,7 @@ exports.parseTask = async (req, res, deps = {}) => {
       hasLLM();
     }
 
-    const activeDeps = req?._deps || deps;
+    const activeDeps = { ...(req?._deps || deps), allowedIntents: req.body?.allowedIntents };
     const result = await parseTaskRequest({
       req,
       message,

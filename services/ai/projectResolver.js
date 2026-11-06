@@ -225,7 +225,7 @@ async function getAccessibleProjects(req = {}, deps = {}) {
   }
 
   const projects = await ProjectModel.find(query)
-    .select('projectName description status startDate endDate users createdBy company companyCode')
+    .select('projectName description status startDate endDate users tasks createdBy company companyCode')
     .populate('users', '_id name email role jobRole profileImage')
     .lean();
 

@@ -855,7 +855,7 @@ function parseHinglishSlots(rawText, now = new Date(), referenceDate = null) {
   const titleRegexes = [
     new RegExp(`(?:(?:urgent\\s+)?(?:ek\\s+)?(?:naya\\s+)?task\\s*(?:banao|create\\s+karo|karo|bana\\s*do|banayein|create)\\s*:\\s*)(.+?)${stopKeywords}`, 'i'),
     new RegExp(`^(.+?)(?:\\s+(?:ka|ke\\s+liye)\\s+(?:ek\\s+)?task\\s+(?:banao|create\\s+karo|karo|bana\\s*do|banayein))${stopKeywords}`, 'i'),
-    new RegExp(`(?:^|\\b)(?:(?:mera|meri|mere|hamara|hamari|hamare|apna|apni|apne)\\s+(?:liye\\s+)?)?(?:ek\\s+)?(?:naya\\s+|nayi\\s+)?\\b(?!(?:ek|naya|nayi|naye|mera|meri|mere|liye|hamara|hamari|hamare|apna|apni|apne|kisi|kripya|please|ka|ke|ki|urgent|quick)\\b)([a-zA-Z\\u0900-\\u097F0-9_-]+(?:\\s+[a-zA-Z\\u0900-\\u097F0-9_-]+)*)\\s+task\\s+(?:banao|create\\s+karo|karo|bana\\s*do|bana\\s*dijiye|banayein|create)${stopKeywords}`, 'i'),
+    new RegExp(`(?:^|\\b)(?:(?:mera|meri|mere|hamara|hamari|hamare|apna|apni|apne)\\s+(?:liye\\s+)?)?(?:ek\\s+)?(?:naya\\s+|nayi\\s+|new\\s+)?\\b(?!(?:ek|naya|nayi|naye|new|mera|meri|mere|liye|hamara|hamari|hamare|apna|apni|apne|kisi|kripya|please|ka|ke|ki|urgent|quick)\\b)([a-zA-Z\\u0900-\\u097F0-9_-]+(?:\\s+[a-zA-Z\\u0900-\\u097F0-9_-]+)*)\\s+task\\s+(?:banao|create\\s+karo|karo|bana\\s*do|bana\\s*dijiye|banayein|create)${stopKeywords}`, 'i'),
     new RegExp(`(?:(?:task\\s+)?(?:title|naam|नाम)\\s*(?:badlo|badal\\s+kar|change\\s+karo|change\\s+to|change|बदलो)\\s*(?:to|ko|kar)?\\s*)(.+?)${stopKeywords}`, 'i'),
     new RegExp(`(?:(?:and\\s+|aur\\s+)?task\\s+(?:name|naam)\\s*(?:is\\s+|ka\\s+naam\\s+|:\\s*|\\s+as\\s+|\\s+to\\s+be\\s+)?)(.+?)${stopKeywords}`, 'i'),
     new RegExp(`(?:(?:task\\s+)?title\\s*(?:is\\s+|:\\s*|\\s+as\\s+|\\s+to\\s+be\\s+|hai\\s+|hoga\\s+)?)(.+?)${stopKeywords}`, 'i'),
@@ -876,7 +876,7 @@ function parseHinglishSlots(rawText, now = new Date(), referenceDate = null) {
       t = t.replace(/\s+(ho|hoga|rakhna|hai|rakhein|karo|kar\s+do|करो|कर\s+दो)$/i, '');
       t = t.replace(/\s+(ka|ke|ki)$/i, '');
       t = t.replace(/^[.,;:\s]+|[.,;:\s]+$/g, '').trim();
-      if (t.length > 0 && t.length <= 100 && !/^(task|create|banana|hai|is|ek|naya|nayi|naye|mera|meri|mere|liye|hamare|hamara|apne|apna|khud)$/i.test(t)) {
+      if (t.length > 0 && t.length <= 100 && !/^(task|tasks|create|banana|hai|is|ek|naya|nayi|naye|new|mera|meri|mere|liye|hamare|hamara|apne|apna|khud)$/i.test(t)) {
         slots.title = t.charAt(0).toUpperCase() + t.slice(1);
         break;
       }
@@ -1091,8 +1091,8 @@ function isInitiationPhrase(text) {
   if (!text) return false;
   const clean = text.trim().toLowerCase().replace(/[\s,.;:!?]+/g, ' ');
   if (INITIATION_PHRASE_REGEX.test(clean)) return true;
-  return /^(?:hello|hi|hey|namaste)?[\s,;]*(?:create|make|add|start)\s*(?:a\s+)?(?:new\s+)?(?:task)$/i.test(clean) ||
-    /^(?:new\s+task|naya\s+task|नया\s+टास्क)$/i.test(clean);
+  return /^(?:hello|hi|hey|namaste|please|plz)?[\s,;]*(?:create|make|add|start|banao|bana\s*do|banayein)\s*(?:a\s+|an\s+|the\s+|my\s+|one\s+|mera\s+|meri\s+|apna\s+|apne\s+)?(?:new\s+|naya\s+|naye\s+)?(?:personal\s+|self\s+)?(?:task|project|client|plan|काम|टास्क)$/i.test(clean) ||
+    /^(?:new\s+task|naya\s+task|नया\s+टास्क|personal\s+task|my\s+task|mera\s+task|apna\s+task)$/i.test(clean);
 }
 
 function isSelfIntroduction(text) {
@@ -1114,7 +1114,8 @@ const TITLE_GUARD_FILLERS = new Set([
   'ko', 'co', 'haan', 'ha', 'haanji', 'hnji', 'hn', 'hnn', 'nahi', 'nahin', 'no', 'nope', 'na',
   'theek hai', 'thik hai', 'theek', 'thik', 'accha', 'acha', 'achha', 'kuch nahi', 'koi nahi',
   'kuch nhi', 'koi nhi', 'skip', 'kardo', 'kar do', 'banao', 'bana do', 'do', 'done',
-  'sure', 'true', 'false', 'blank', 'none', 'नहीं', 'हाँ', 'हां', 'नमस्ते', 'हेलो', 'हाय'
+  'sure', 'true', 'false', 'blank', 'none', 'नहीं', 'हाँ', 'हां', 'नमस्ते', 'हेलो', 'हाय',
+  'new', 'naya', 'nayi', 'naye', 'task', 'tasks', 'mera', 'meri', 'mere', 'apna', 'apne', 'apni'
 ]);
 
 function detectPersonInActionTitle(text) {
@@ -1182,8 +1183,8 @@ function isInvalidOrCommandTitle(title, message = '', assigneeName = '') {
   }
 
   // 1. Bare commands: purely instructions to create/make/assign a task with no actual task subject
-  // e.g. "ek task banao", "task banao", "naya task banao", "task create karo", "create a task", "make a task", "task bana do"
-  const bareCommandRegex = /^(?:(?:hello|hi|hey|namaste|please|plz)?\s*(?:mujhe|mere\s+liye|apne\s+liye)?\s*(?:ek\s+|a\s+|one\s+)?(?:naya\s+|new\s+)?(?:urgent\s+)?(?:task|kaam|काम|टास्क)\s*(?:banao|bana\s*do|banayein|create\s*karo|create\s*kar\s*do|create|kar\s*do|karna\s*hai|likho|daalo|add\s*karo|karo|do|बनाओ|बनाएं|बना\s*दो|करना\s*है|करो|कर\s*दो)?)$/i;
+  // e.g. "ek task banao", "task banao", "naya task banao", "task create karo", "create a task", "create my new task", "create my new personal task"
+  const bareCommandRegex = /^(?:(?:hello|hi|hey|namaste|please|plz)?\s*(?:create|make|add|start|banao|bana\s*do|banayein)?\s*(?:mujhe|mere\s+liye|apne\s+liye|my|a|an|the|ek|one)?\s*(?:naya\s+|new\s+)?(?:personal\s+|self\s+)?(?:urgent\s+)?(?:task|kaam|काम|टास्क)\s*(?:banao|bana\s*do|banayein|create\s*karo|create\s*kar\s*do|create|kar\s*do|karna\s*hai|likho|daalo|add\s*karo|karo|do|बनाओ|बनाएं|बना\s*दो|करना\s*है|करो|कर\s*दो)?)$/i;
   if (bareCommandRegex.test(normTitle)) {
     return true;
   }
@@ -1191,6 +1192,20 @@ function isInvalidOrCommandTitle(title, message = '', assigneeName = '') {
   // 1b. Project / Client creation commands must NEVER become task titles
   const projectOrClientCommandRegex = /(?:\b(?:naya\s+project|new\s+project|project\s+banao|project\s+create|ek\s+new\s+project|ek\s+naya\s+project|naya\s+client|new\s+client|client\s+banao|client\s+add|client\s+create)\b|(?:(?:नया|एक\s+नया|नई)\s*(?:प्रोजेक्ट|प्रजेक्ट|प्रोज़ेक्ट|क्लाइंट|क्लाइन्ट)))/iu;
   if (projectOrClientCommandRegex.test(normTitle)) {
+    return true;
+  }
+
+  // 1c. Greetings, chit-chat, and moods must NEVER become task titles
+  const greetingOrMoodRegex = /(?:\b(?:gud\s+morning|good\s+morning|good\s+afternoon|good\s+evening|good\s+night|how\s+(?:are|r)\s+u|kaise\s+ho|kya\s+haal|mood|bhuut\s+kush|bohot\s+khush|kush\s+hu|khush\s+hu|feeling\s+happy|feeling\s+good|sab\s+theek|kaisa\s+hai|bhuut\s+asha|bahut\s+achha)\b)/iu;
+  if (greetingOrMoodRegex.test(normTitle)) {
+    return true;
+  }
+
+  // 1d. Questions, queries, inquiries, counts and requests must NEVER become task titles
+  if (
+    t.includes('?') ||
+    /(?:\b(?:kon\s+sa|konsa|kaun\s+sa|kaunsa|konsi|kaunsi|kya\s+hai|kya\s+hain|status\s+kya|kya\s+status|which|what|dikhao|batao|batayein|tell|list|show|check|kitne|kitna|kitni|how\s+many|projects?|clients?|chal\s+raha|chal\s+rahe|kya\s+chal|in[- ]progress|pending|completed|overdue|crm\s+ma?i|crm\s+mein)\b)/iu.test(normTitle)
+  ) {
     return true;
   }
 

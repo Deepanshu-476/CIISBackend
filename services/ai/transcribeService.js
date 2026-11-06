@@ -14,6 +14,7 @@
  */
 
 const path = require('path');
+const { executeWithGroqFallback, getGroqApiKeys } = require('./groqKeyManager');
 const GROQ_AUDIO_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
 const DEFAULT_MODEL = 'whisper-large-v3-turbo';
 
@@ -237,8 +238,8 @@ async function transcribeAudio(audioBuffer, options = {}, deps = {}) {
     throw classifyAndLogGroqError(err);
   }
 
-  const apiKey = deps.apiKey || process.env.GROQ_API_KEY;
-  if (!apiKey || !apiKey.trim()) {
+  const candidateKeys = deps.apiKey ? [deps.apiKey] : getGroqApiKeys();
+  if (!candidateKeys || candidateKeys.length === 0) {
     const err = new Error('GROQ_API_KEY is not configured');
     err.code = 'STT_AUTH';
     err.status = 401;
@@ -294,27 +295,29 @@ async function transcribeAudio(audioBuffer, options = {}, deps = {}) {
     formData.append('prompt', resolvedPrompt);
     formData.append('response_format', 'verbose_json');
 
-    const response = await fetchFn(GROQ_AUDIO_URL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey.trim()}`,
-      },
-      body: formData,
-    });
+    const data = await executeWithGroqFallback(async (activeKey) => {
+      const response = await fetchFn(GROQ_AUDIO_URL, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${activeKey.trim()}`,
+        },
+        body: formData,
+      });
 
-    if (!response.ok) {
-      let errorBody = '';
-      try {
-        errorBody = await response.text();
-      } catch {
-        errorBody = '';
+      if (!response.ok) {
+        let errorBody = '';
+        try {
+          errorBody = await response.text();
+        } catch {
+          errorBody = '';
+        }
+        const err = new Error(`Groq STT HTTP ${response.status}: ${errorBody}`);
+        err.status = response.status;
+        throw err;
       }
-      const err = new Error(`Groq STT HTTP ${response.status}: ${errorBody}`);
-      err.status = response.status;
-      throw err;
-    }
 
-    const data = await response.json();
+      return await response.json();
+    });
     if (!data || typeof data.text !== 'string') {
       const err = new Error('Groq STT returned invalid response without text field');
       err.code = 'STT_BAD_OUTPUT';

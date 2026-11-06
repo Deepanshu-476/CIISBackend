@@ -262,15 +262,15 @@ const FORM_REGISTRY = {
         dueDateTimeFormatted: draft.dueDateTime ? formatHumanIstDate(draft.dueDateTime) : '—',
         priority: draft.priority ? (draft.priority.charAt(0).toUpperCase() + draft.priority.slice(1)) : 'Medium',
         priorityDays: draft.priorityDays || '1',
-        status: null,
-        statusLabel: null,
-        reminder: null,
-        reminderOption: null,
-        repeatIntervalMinutes: null,
-        minutesBeforeDue: null,
-        customTime: null,
-        repeat: null,
-        repeatPattern: null,
+        status: draft.status || 'pending',
+        statusLabel: STATUS_LABELS[draft.status] || (draft.status ? (draft.status.charAt(0).toUpperCase() + draft.status.slice(1)) : 'Pending'),
+        reminder: getReminderPreviewText(draft),
+        reminderOption: draft.reminderOption || null,
+        repeatIntervalMinutes: draft.repeatIntervalMinutes || null,
+        minutesBeforeDue: draft.minutesBeforeDue || null,
+        customTime: draft.customTime || null,
+        repeat: draft.repeatPattern || null,
+        repeatPattern: draft.repeatPattern || null,
         checkpointsCount: cleanedCheckpoints.length,
         checkpoints: cleanedCheckpoints.length > 0 ? cleanedCheckpoints.map((c) => c.title) : [],
         attachmentsCount: draft.attachmentsCount || 0,
@@ -1295,7 +1295,7 @@ Object.defineProperty(FORM_REGISTRY, 'create_client_plan', {
 // INTENT DETECTION (Deterministic First)
 // ============================================================================
 
-const SELF_KEYWORDS_REGEX = /\b(?:mere\s+liye|khud\s+ke\s+liye|apne\s+liye|khud\s+ke|apne\s+ko|self|for\s+me|my\s+task|personal\s+task)\b/i;
+const SELF_KEYWORDS_REGEX = /\b(?:mere\s+liye|khud\s+ke\s+liye|apne\s+liye|khud\s+ke|apne\s+ko|self|for\s+me|my\s+task|personal\s+task|mera\s+task|khud\s+ka\s+task|apna\s+task)\b/i;
 const ASSIGN_OTHERS_REGEX = /\b(?:assign(?:ed)?\s+to|ko\s+assign(?:ed)?|task\s+assign(?:ed)?|assign(?:ed)?\s+karo|assign(?:ed)?|task\s+to|kisi\s+aur\s+ke\s+liye|kisi\s+aur\s+ko|others|[a-zA-Z\u0900-\u097F]+\s+(?:ko|co|koh|kor|ke\s+liye)\b|give\s+to|de\s*do|bhejo)\b/i;
 const GROUP_EXTENSION_REGEX = /\b(?:group\s+ko|team\s+ko|group\s+task|group\s+me)\b/i;
 const AMBIGUOUS_PROJECT_PLAN_REGEX = /\bproject\s+plan\s+banao\b/i;
@@ -1303,8 +1303,9 @@ const CREATE_PROJECT_EXPLICIT_REGEX = /(?:\b(?:naya\s+project|new\s+project|crea
 const TASK_INSIDE_PROJECT_REGEX = /\b(?:project\s+(?:mein|mai|in|ke\s+andar)\s+task|task\s+in\s+project)\b/i;
 
 const AMBIGUOUS_CLIENT_TASK_REGEX = /(?:\bclient\b|\bक्लाइंट\b|\bक्लाइन्ट\b).*(?:\bmeeting\b|\bcall\b|\btask\b|\bkal\b|\baaj\b|\d+\s*baje|\breminder\b|\bमीटिंग\b|\bकॉल\b|\bटास्क\b)/i;
-const CREATE_CLIENT_TASK_REGEX = /(?:\b(?:is\s+client\s+ke\s+liye\s+task\s+banayein|is\s+client\s+ke\s+liye\s+task|client\s+ke\s+liye\s+task|create\s+client\s+task|client\s+task\s+banao|client\s+task\s+add\s+karo|client\s+task|naya\s+client\s+task|client\s+ka\s+task\s+kisi\s+ko\s+dena|client\s+ka\s+task|service\s+task|services\s+task|client\s+mein\s+task)\b)/i;
+const CREATE_CLIENT_TASK_REGEX = /(?:\b(?:is\s+client\s+ke\s+liye\s+task|client\s+ke\s+liye\s+task|create\s+client\s+task|client\s+task|naya\s+client\s+task|client\s+ka\s+task|service\s+task|services\s+task|client\s+mein\s+task|client.*service.*task|service.*task.*client|client.*task\s+(?:add|banao|create|karo)|service.*task\s+(?:add|banao|create|karo)|task.*client.*service|task.*service.*client)\b)/i;
 const CREATE_CLIENT_EXPLICIT_REGEX = /(?:\b(?:naya\s+client|new\s+client|create\s+(?:a\s+)?client|client\s+create\s+karo|client\s+add\s+karo|add\s+(?:new\s+)?client|client\s+banao|add\s+client)\b|(?:(?:(?:^|\s|[.,;])(?:नया|निया|नयी|नई)\s*)?(?:क्लाइंट|क्लाइन्ट|client)\s*(?:बनाओ|बना\s*दो|बनाइए|बनाइये|क्रिएट|create\s*karo|banao|add\s*karo|जोड़ो|जोड़े)(?:[\s.,;!?]|$))|(?:(?:क्लाइंट|क्लाइन्ट|client)\s+का\s+नाम))/iu;
+const CREATE_CLIENT_PLAN_EXPLICIT_REGEX = /(?:\b(?:naya\s+plan|new\s+plan|client\s+plan|plan\s+banao|create\s+(?:a\s+)?(?:client\s+)?plan|plan\s+create|add\s+(?:new\s+)?plan|plan\s+add\s+karo|ek\s+plan\s+banao|naya\s+client\s+plan)\b|(?:(?:(?:^|\s|[.,;])(?:नया|निया|नयी|नई|एक)\s*)?(?:क्लाइंट\s*)?(?:प्लान|प्लैन)\s*(?:बनाओ|बना\s*दो|बनाइए|बनाइये|क्रिएट|create\s*karo|banao|add\s*karo|जोड़ो|जोड़े)(?:[\s.,;!?]|$))|(?:(?:प्लान|प्लैन)\s+का\s+नाम))/iu;
 
 /**
  * Detects the target intent from message text, draft state, accessible projects, and user context.
@@ -1315,6 +1316,13 @@ function detectIntent(opts = {}) {
   const accessibleProjects = opts.accessibleProjects || [];
   const hasAccessibleProjects = opts.accessibleProjects !== undefined;
   const text = String(message || '').trim();
+
+  // If the user's message is an inquiry or question (e.g. "check karke batao...", "kitne projects hai", "tell me..."),
+  // and there is no active draft intent, do NOT detect a creation intent!
+  const isQueryQuestion = /(?:(?:\b|^|\s)(?:check|batao|batayein|dikhao|dikhayein|tell|list|show|kitne|kitna|how\s+many|kon\s+sa|konsa|kaun\s+sa|kaunsa|konsi|kaunsi|which|what|details?|info)(?:\b|$|\s))|(?:कौन\s*सा|कौन\s*कौन|दी\s*गई|क्या\s*है|दिखाओ|बताओ|कितने|इतने|सर्विस(?:िस)?|प्लाइ?न्स?)/iu.test(text);
+  if (isQueryQuestion && !draft?.intent) {
+    return { intent: null, isSupported: false, reason: 'inquiry_question' };
+  }
 
   // 0. Ambiguous Project Plan check (Requirement 5)
   // "Project plan banao kal 5 baje" must not silently become create_project
@@ -1336,7 +1344,8 @@ function detectIntent(opts = {}) {
   // 0b. Ambiguous Client Task check (Item 1)
   // "Client meeting ka task banao", "client call kal 5 baje" must not trigger create_client
   const hasTaskAssignment = /\b(?:assign\s+to|ko\s+assign|task\s+assign|assign\s+karo)\b/i.test(text);
-  if (!CREATE_CLIENT_TASK_REGEX.test(text) && !hasTaskAssignment && !CREATE_CLIENT_EXPLICIT_REGEX.test(text) && AMBIGUOUS_CLIENT_TASK_REGEX.test(text) && draft?.intent !== 'create_client' && draft?.intent !== 'create_client_task') {
+  const hasServiceTask = /\b(?:service|services)\b.*(?:task|tasks|kaam)\b/i.test(text) || /\b(?:task|tasks|kaam)\b.*(?:service|services)\b/i.test(text);
+  if (!CREATE_CLIENT_TASK_REGEX.test(text) && !hasTaskAssignment && !hasServiceTask && !CREATE_CLIENT_EXPLICIT_REGEX.test(text) && AMBIGUOUS_CLIENT_TASK_REGEX.test(text) && draft?.intent !== 'create_client' && draft?.intent !== 'create_client_task') {
     return {
       intent: 'ambiguous_client_or_task',
       isSupported: true,
@@ -1377,8 +1386,10 @@ function detectIntent(opts = {}) {
     draft?.intent === 'task_project' && draft?.asked?.includes('project') && !draft?.projectId && !CREATE_PROJECT_EXPLICIT_REGEX.test(text)
   );
 
+  const isPastQuestionOrInquiry = /(?:^(?:kya|did|have|has|check\s+karo\s+kya)|(?:\?|kiya\s+(?:hai|hain|tha|hoga)|bana\s+(?:hai|hain|tha)|create\s+hua))/i.test(text);
+
   // 1b. Explicit Create Project detection (Requirement 5)
-  if (!isAnsweringProjectSlot && !TASK_INSIDE_PROJECT_REGEX.test(text) && CREATE_PROJECT_EXPLICIT_REGEX.test(text)) {
+  if (!isAnsweringProjectSlot && !isPastQuestionOrInquiry && !TASK_INSIDE_PROJECT_REGEX.test(text) && CREATE_PROJECT_EXPLICIT_REGEX.test(text)) {
     // If text has "mein task" or "ke andar task", it belongs to task_project
     if (!/\b(?:mein|mai|in|ke\s+andar)\s+task\b/i.test(text)) {
       // Extract project name if specified
@@ -1387,8 +1398,11 @@ function detectIntent(opts = {}) {
       let extractedName = pSlots?.name || null;
       if (!extractedName) {
         const nameMatch = text.match(/(?:naya\s+project\s+banao|new\s+project\s+banao|new\s+project|project\s+banao|create\s+project)\s+([a-zA-Z0-9\s_-]+)/i);
-        if (nameMatch && nameMatch[1] && !/^(?:kal|aaj|high|medium|low|urgent|banao|karo)/i.test(nameMatch[1].trim())) {
-          extractedName = nameMatch[1].trim();
+        if (nameMatch && nameMatch[1]) {
+          const cand = nameMatch[1].trim();
+          if (!/^(?:kal|aaj|high|medium|low|urgent|banao|karo|in\b|for\b|to\b|into\b|named\b|with\b|hai\b|please\b)/i.test(cand) && !/\b(?:in\s+my\s+crm|in\s+crm|in\s+the\s+crm|crm\s+mein|crm\s+me)\b/i.test(cand)) {
+            extractedName = cand;
+          }
         }
       }
       return {
@@ -1400,22 +1414,34 @@ function detectIntent(opts = {}) {
     }
   }
 
-  // 1c. Explicit Create Client detection (Item 1)
-  if (CREATE_CLIENT_TASK_REGEX.test(text) || draft?.intent === 'create_client_task') {
+  // 1c. Explicit Create Client Plan detection (Checked before create_client so "client plan" is not parsed as client name "plan")
+  if (!isPastQuestionOrInquiry && CREATE_CLIENT_PLAN_EXPLICIT_REGEX.test(text)) {
+    return {
+      intent: 'create_client_plan',
+      isSupported: true,
+      isExplicit: true,
+    };
+  }
+
+  // 1d. Explicit Create Client detection (Item 1)
+  if (CREATE_CLIENT_TASK_REGEX.test(text) || hasServiceTask || draft?.intent === 'create_client_task') {
     return {
       intent: 'create_client_task',
       isSupported: true,
       isExplicit: true,
     };
   }
-  if (CREATE_CLIENT_EXPLICIT_REGEX.test(text)) {
+  if (!isPastQuestionOrInquiry && CREATE_CLIENT_EXPLICIT_REGEX.test(text)) {
     const { extractCreateClientSlots } = require('./clientSlotFiller');
     const cSlots = extractCreateClientSlots(text);
     let extractedClientName = cSlots?.client || null;
     if (!extractedClientName) {
       const nameMatch = text.match(/(?:naya\s+client\s+banao|new\s+client\s+banao|new\s+client|client\s+banao|create\s+client|add\s+client|client\s+add\s+karo)\s+([a-zA-Z0-9\s_-]+)/i);
-      if (nameMatch && nameMatch[1] && !/^(?:kal|aaj|high|medium|active|banao|karo)/i.test(nameMatch[1].trim())) {
-        extractedClientName = nameMatch[1].trim();
+      if (nameMatch && nameMatch[1]) {
+        const cand = nameMatch[1].trim();
+        if (!/^(?:kal|aaj|high|medium|active|banao|karo|in\b|for\b|to\b|into\b|named\b|with\b|hai\b|please\b|shamil\b)/i.test(cand) && !/\b(?:in\s+my\s+crm|in\s+crm|in\s+the\s+crm|crm\s+mein|crm\s+me)\b/i.test(cand)) {
+          extractedClientName = cand;
+        }
       }
     }
     return {
@@ -1465,6 +1491,20 @@ function detectIntent(opts = {}) {
     }
   }
 
+  // 3a. Existing draft state continuity (Strict Intent Lock: slot answers, field edits, and disambiguation chips never hijack active flow)
+  if (draft?.intent && FORM_REGISTRY[draft.intent]) {
+    const EXPLICIT_INTENT_SWITCH_REGEX = /\b(?:naya\s+task|new\s+task|task\s+banao|task\s+create\s+karo|ek\s+task\s+banao|नया\s+टास्क|टास्क\s+बनाओ|naya\s+project|new\s+project|create\s+project|naya\s+client|new\s+client|create\s+client|project\s+mein\s+task|client\s+mein\s+task)\b/iu;
+    const isExplicitSwitch = EXPLICIT_INTENT_SWITCH_REGEX.test(text);
+    if (!isExplicitSwitch || (draft.intent === 'create_project' && !/\b(?:naya\s+task|new\s+task|task\s+banao|naya\s+client|new\s+client|create\s+client|project\s+mein\s+task)\b/i.test(text))) {
+      return { intent: draft.intent, isSupported: true, isExplicit: false };
+    }
+  }
+
+  // 3. Explicit self task keywords (check before fuzzy project matching unless explicitly "project mein")
+  if (SELF_KEYWORDS_REGEX.test(text) && !/\b(?:project\s+mein|in\s+(?:the\s+)?project|project\s+me)\b/i.test(text)) {
+    return { intent: 'self_task', isSupported: true, isExplicit: true };
+  }
+
   if (mentionsProject || (projectMatchedByLocative && projectMatchedByLocative.length > 0)) {
     return {
       intent: 'task_project',
@@ -1474,7 +1514,7 @@ function detectIntent(opts = {}) {
     };
   }
 
-  // 3. Explicit self task keywords
+  // 3b. Explicit self task keywords fallback
   if (SELF_KEYWORDS_REGEX.test(text)) {
     return { intent: 'self_task', isSupported: true, isExplicit: true };
   }
@@ -1977,7 +2017,15 @@ function formatMemberChipLabel(u, isSelected = false) {
 function buildChips(intent, slot, ctx = {}) {
   // If no intent or welcome:
   if (!intent || slot === 'welcome') {
-    return [
+    const isEn = ctx?.language === 'en';
+    const welcomeButtons = isEn ? [
+      { label: 'Create personal task', action: { type: 'set_intent', intent: 'self_task' } },
+      { label: 'Assign task to someone', action: { type: 'set_intent', intent: 'task_assigned_user' } },
+      { label: 'Create new project', action: { type: 'set_intent', intent: 'create_project' } },
+      { label: 'Create task in project', action: { type: 'set_intent', intent: 'task_project' } },
+      { label: 'Add new client', action: { type: 'set_intent', intent: 'create_client' } },
+      { label: 'Create client plan', action: { type: 'set_intent', intent: 'create_client_plan' } },
+    ] : [
       { label: 'Personal task banana', action: { type: 'set_intent', intent: 'self_task' } },
       { label: 'Kisi ko task assign karna', action: { type: 'set_intent', intent: 'task_assigned_user' } },
       { label: 'Naya project banana', action: { type: 'set_intent', intent: 'create_project' } },
@@ -1985,6 +2033,10 @@ function buildChips(intent, slot, ctx = {}) {
       { label: 'Naya client add karna', action: { type: 'set_intent', intent: 'create_client' } },
       { label: 'Client plan banana', action: { type: 'set_intent', intent: 'create_client_plan' } },
     ];
+    if (Array.isArray(ctx?.allowedIntents) && ctx.allowedIntents.length > 0) {
+      return welcomeButtons.filter(b => ctx.allowedIntents.includes(b.action.intent));
+    }
+    return welcomeButtons;
   }
 
   // If generic "task banao" typed by user and deciding taskFor:
