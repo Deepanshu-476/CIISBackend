@@ -32,6 +32,7 @@ const {
 } = require('./taskHelper');
 
 const Attendance = require('../models/Attendance');
+const PagePermission = require('../../models/PagePermission');
 
 const INDIA_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
@@ -110,6 +111,43 @@ const applyBranchUserFilter = (query, req, currentUser = req.user || {}) => {
       { assignedBranches: requestedBranchId }
     ]
   });
+};
+
+// Company All Task is configured in Page Management. For a user explicitly
+// granted access there, its branch/department scope must take precedence over
+// the default employee-only (own department) filter.
+const getCompanyAllTaskPageScope = async (currentUser = {}) => {
+  const companyId = currentUser.company?._id || currentUser.company || currentUser.companyId;
+  const userId = String(currentUser._id || currentUser.id || '');
+  if (!companyId || !userId) return null;
+
+  const page = await PagePermission.findOne({
+    company: companyId,
+    $or: [
+      { path: '/ciisUser/company-all-task' },
+      { pageKey: 'company-all-task' }
+    ]
+  }).select('viewUsers editUsers deleteUsers approvers userAccessScopes').lean();
+  if (!page) return null;
+
+  const userMatches = entry => String(entry?.user?._id || entry?.user || entry || '') === userId;
+  const hasDirectAccess = ['viewUsers', 'editUsers', 'deleteUsers', 'approvers']
+    .some(field => (page[field] || []).some(userMatches));
+  const scopes = (page.userAccessScopes || []).filter(scope => userMatches(scope));
+  if (!hasDirectAccess && scopes.length === 0) return null;
+
+  // A direct access entry without an explicit scope is global. Empty arrays in
+  // an explicit scope likewise mean "All Branches / All Departments".
+  if (scopes.length === 0) return { branchIds: [], departmentIds: [] };
+
+  const branchIds = [...new Set(scopes.flatMap(scope => (scope.branchIds || [])
+    .map(value => String(value?._id || value || '')).filter(Boolean)))];
+  const departmentIds = [...new Set(scopes.flatMap(scope => (scope.departmentIds || [])
+    .map(value => String(value?._id || value || '')).filter(Boolean)))];
+  return {
+    branchIds: scopes.some(scope => !(scope.branchIds || []).length) ? [] : branchIds,
+    departmentIds: scopes.some(scope => !(scope.departmentIds || []).length) ? [] : departmentIds
+  };
 };
 
 const escapeRegex = value => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -983,10 +1021,28 @@ exports.getCompanyAllTaskOverview = async (req, res) => {
     if (currentUser.company) query.company = currentUser.company;
     else if (currentUser.companyCode) query.companyCode = currentUser.companyCode;
 
-    if (!isOwnerScope && currentUser.department) {
-      query.department = currentUser.department;
+    const pageScope = isOwnerScope ? null : await getCompanyAllTaskPageScope(currentUser);
+    if (pageScope) {
+      if (pageScope.departmentIds.length > 0) {
+        query.department = { $in: pageScope.departmentIds };
+      }
+      if (pageScope.branchIds.length > 0) {
+        query.$and = [
+          ...(Array.isArray(query.$and) ? query.$and : []),
+          {
+            $or: [
+              { branch: { $in: pageScope.branchIds } },
+              { assignedBranches: { $in: pageScope.branchIds } }
+            ]
+          }
+        ];
+      }
+    } else {
+      if (!isOwnerScope && currentUser.department) {
+        query.department = currentUser.department;
+      }
+      applyBranchUserFilter(query, req, currentUser);
     }
-    applyBranchUserFilter(query, req, currentUser);
 
     const users = await User.find(query)
       .select('name email role companyRole jobRole employeeType employeeId company department companyCode branch assignedBranches isActive createdAt')

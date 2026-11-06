@@ -233,6 +233,51 @@ const canViewSensitiveEmployeeDetails = async (user = {}) => {
   ].some(entry => String(entry?.user || entry) === targetId);
 };
 
+// Employee Details editors receive only the edit capability configured in Page
+// Management. They never receive delete access, and their branch/department
+// scope is honoured for every edit.
+const canEditEmployeeDetailsFromPage = async (requestingUser = {}, targetUser = {}) => {
+  const companyId = requestingUser.company?._id || requestingUser.company || requestingUser.companyId;
+  const requesterId = String(requestingUser._id || requestingUser.id || '');
+  if (!companyId || !requesterId) return false;
+
+  const permission = await PagePermission.findOne({
+    company: companyId,
+    $or: [
+      { path: '/ciisUser/emp-details' },
+      { pageKey: 'emp-details' }
+    ]
+  }).select('editUsers userAccessScopes').lean();
+  if (!permission) return false;
+
+  const isDirectEditor = (permission.editUsers || []).some(entry =>
+    String(entry?.user?._id || entry?.user || entry || '') === requesterId
+  );
+  const editScopes = (permission.userAccessScopes || []).filter(scope =>
+    String(scope?.user?._id || scope?.user || '') === requesterId &&
+    String(scope?.accessType || '').trim().toLowerCase() === 'edit'
+  );
+  if (!isDirectEditor && editScopes.length === 0) return false;
+
+  // A direct editor without a scope is an all-branches/all-departments editor.
+  // Empty scope arrays also mean "All" in Page Management.
+  if (editScopes.length === 0) return true;
+
+  const targetBranchIds = new Set([
+    targetUser.branch,
+    ...(Array.isArray(targetUser.assignedBranches) ? targetUser.assignedBranches : [])
+  ].map(value => String(value?._id || value || '')).filter(Boolean));
+  const targetDepartmentId = String(targetUser.department?._id || targetUser.department || '');
+
+  return editScopes.some(scope => {
+    const branchIds = (scope.branchIds || []).map(value => String(value?._id || value || '')).filter(Boolean);
+    const departmentIds = (scope.departmentIds || []).map(value => String(value?._id || value || '')).filter(Boolean);
+    const branchAllowed = branchIds.length === 0 || branchIds.some(id => targetBranchIds.has(id));
+    const departmentAllowed = departmentIds.length === 0 || departmentIds.includes(targetDepartmentId);
+    return branchAllowed && departmentAllowed;
+  });
+};
+
 const appendAndCondition = (filter, condition) => {
   if (!condition || Object.keys(condition).length === 0) return filter;
   filter.$and = Array.isArray(filter.$and) ? [...filter.$and, condition] : [condition];
@@ -1770,8 +1815,11 @@ exports.updateUser = async (req, res) => {
     const isSelfUpdate = Boolean(id && requestingUserId && String(requestingUserId) === String(id));
     const requesterRole = String(requestingUser.companyRole || requestingUser.jobRole || requestingUser.role || '').toLowerCase();
     const isPrivilegedUser = ['super_admin', 'superadmin', 'owner', 'admin', 'hr'].includes(requesterRole) || requestingUser.isSuperAdmin === true;
+    const canEditEmployeeDetails = !isSelfUpdate && !isPrivilegedUser
+      ? await canEditEmployeeDetailsFromPage(requestingUser, user)
+      : false;
 
-    if (!isSelfUpdate && !isPrivilegedUser) {
+    if (!isSelfUpdate && !isPrivilegedUser && !canEditEmployeeDetails) {
       return errorResponse(res, 403, "You do not have permission to update other employees");
     }
 
@@ -1792,7 +1840,7 @@ exports.updateUser = async (req, res) => {
     }
 
     // 3. Salary modifications require Admin, Owner, or SuperAdmin
-    if (req.body.salary !== undefined) {
+    if (req.body.salary !== undefined && !canEditEmployeeDetails) {
       const canEditSalary = ['owner', 'admin', 'super_admin', 'superadmin'].includes(requesterRole) || requestingUser.isSuperAdmin === true;
       if (!canEditSalary) {
         delete req.body.salary;
@@ -1808,7 +1856,7 @@ exports.updateUser = async (req, res) => {
       }
     }
 
-    if (!isPrivilegedUser) {
+    if (!isPrivilegedUser && !canEditEmployeeDetails) {
       // Normal employees cannot modify sensitive employment, role, or WFH fields
       const employeeForbiddenFields = [
         'companyRole', 'role', 'jobRole', 'employeeType', 'salary', 'isActive',
