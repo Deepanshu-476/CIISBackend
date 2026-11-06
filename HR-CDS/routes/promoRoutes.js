@@ -261,7 +261,12 @@ router.post("/manage", requireManage, promoUpload, async (req, res, next) => {
     });
 
     let notify = null;
-    if (parseBool(req.body.notify)) {
+    if (parseBool(req.body.notify) && startAt > new Date(Date.now() + 60 * 1000)) {
+      // Starts later: the push goes out when it starts (see the job at the bottom).
+      promo.notifyAtStart = true;
+      await promo.save();
+      notify = { scheduled: true, at: startAt };
+    } else if (parseBool(req.body.notify)) {
       notify = await sendAudiencePush({
         scope: promo.scope,
         allCompanies: promo.audience === "public" ? true : promo.allCompanies,
@@ -383,4 +388,44 @@ router.use((error, _req, res, _next) => {
   res.status(error.status || 500).json({ success: false, message: error.status ? error.message : "Something went wrong" });
 });
 
+// ---------- push at start ----------
+// Promotions published with "send a push" but a later start time get their push when they
+// start. Runs only in the instance that runs scheduled jobs (they share one database).
+const sendDuePromoPushes = async () => {
+  const now = new Date();
+  for (let i = 0; i < 20; i += 1) {
+    // Claim one at a time so a push is never sent twice.
+    const promo = await Promo.findOneAndUpdate(
+      { notifyAtStart: true, isActive: true, startAt: { $lte: now }, endAt: { $gte: now } },
+      { $set: { notifyAtStart: false } },
+      { new: true },
+    );
+    if (!promo) break;
+    try {
+      const notify = await sendAudiencePush({
+        scope: promo.scope,
+        allCompanies: promo.audience === "public" ? true : promo.allCompanies,
+        companyIds: promo.companyIds,
+        company: promo.company,
+        title: promo.title || "New update",
+        body: promo.message,
+        promoId: promo._id,
+      });
+      await Promo.updateOne({ _id: promo._id }, { $set: { lastNotifiedAt: new Date(), lastNotifyResult: notify } });
+    } catch (error) {
+      console.error("[promotions] push at start failed:", error.message);
+    }
+  }
+  // Ended before it could be sent: nothing to send any more.
+  await Promo.updateMany({ notifyAtStart: true, endAt: { $lt: now } }, { $set: { notifyAtStart: false } });
+};
+
+if (process.env.NODE_ENV !== "test" && require("../../utils/scheduledJobs").scheduledJobsEnabled()) {
+  setInterval(() => {
+    if (mongoose.connection.readyState !== 1) return;
+    sendDuePromoPushes().catch((error) => console.error("[promotions] push job failed:", error.message));
+  }, 60 * 1000).unref();
+}
+
 module.exports = router;
+module.exports.sendDuePromoPushes = sendDuePromoPushes;

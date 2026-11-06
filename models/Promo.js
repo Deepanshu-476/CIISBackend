@@ -29,6 +29,8 @@ const promoSchema = new mongoose.Schema({
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   lastNotifiedAt: { type: Date, default: null },
   lastNotifyResult: { type: Object, default: null },
+  // "Send a push" was ticked for a promotion that starts later: sent when it starts.
+  notifyAtStart: { type: Boolean, default: false },
 }, { timestamps: true });
 
 promoSchema.index({ scope: 1, audience: 1, isActive: 1, endAt: 1 });
