@@ -63,5 +63,6 @@ const assert = require('node:assert');
   assert.equal(res3.chips.length, 6);
 
   console.log('\n>>> ALL MAIN MENU RESET TESTS PASSED 100%! <<<');
+  process.exit(0);
 })();
 

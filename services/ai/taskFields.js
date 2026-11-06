@@ -23,7 +23,7 @@ const TASK_FIELD_ORDER = [
   'attachments',
 ];
 
-const buildDateChips = (refTime = new Date()) => {
+const buildDateChips = (refTime = new Date(), isEn = false) => {
   const now = refTime instanceof Date ? refTime : new Date(refTime);
   const istTimeMs = now.getTime() + (330 * 60 * 1000);
   const istDate = new Date(istTimeMs);
@@ -47,18 +47,18 @@ const buildDateChips = (refTime = new Date()) => {
   const chips = [];
   if (today6pmUtc > now.getTime()) {
     chips.push({
-      label: 'Aaj shaam 6:00 PM',
+      label: isEn ? 'Today 6:00 PM' : 'Aaj shaam 6:00 PM',
       value: today6pmIso,
       action: { type: 'set', field: 'dueDateTime', value: today6pmIso },
     });
   }
   chips.push({
-    label: 'Kal subah 10:00 AM',
+    label: isEn ? 'Tomorrow 10:00 AM' : 'Kal subah 10:00 AM',
     value: kal10amIso,
     action: { type: 'set', field: 'dueDateTime', value: kal10amIso },
   });
   chips.push({
-    label: 'Kal shaam 6:00 PM',
+    label: isEn ? 'Tomorrow 6:00 PM' : 'Kal shaam 6:00 PM',
     value: kal6pmIso,
     action: { type: 'set', field: 'dueDateTime', value: kal6pmIso },
   });
@@ -72,13 +72,17 @@ const TASK_FIELDS = {
     askOrder: 0.5,
     question: {
       reply: 'Kis project mein task add karna hai? Project ka naam batayein.',
+      replyEn: 'Which project should this task be added to? Please provide the project name.',
       speech: 'किस प्रोजेक्ट में टास्क जोड़ना है? प्रोजेक्ट का नाम बताएं।',
+      speechEn: 'Which project should this task be added to? Please provide the project name.',
       speakText: 'Kis project mein task add karna hai? Project ka naam batayein.',
       speakTextHi: 'किस Project में Task जोड़ना है? Project का नाम बताएं।',
     },
     reAskQuestion: {
       reply: 'Kripya project ka sahi naam batayein ya options se chun lein.',
+      replyEn: 'Please provide the project name or select from the options.',
       speech: 'कृपया प्रोजेक्ट का सही नाम बताएं।',
+      speechEn: 'Please provide the project name or select from the options.',
       speakText: 'Kripya project ka sahi naam batayein.',
       speakTextHi: 'कृपया Project का सही नाम बताएं।',
     },
@@ -92,13 +96,17 @@ const TASK_FIELDS = {
     askOrder: 1,
     question: {
       reply: 'Kiske liye task banana hai? Employee ka naam batayein.',
+      replyEn: 'Who is this task for? Please provide the employee name:',
       speech: 'किसके लिए टास्क बनाना है? कर्मचारी का नाम बताएं।',
+      speechEn: 'Who is this task for? Please provide the employee name.',
       speakText: 'Kiske liye task banana hai? Employee ka naam batayein.',
       speakTextHi: 'किसके लिए Task बनाना है? Employee का नाम बताएं।',
     },
     reAskQuestion: {
       reply: 'Kripya employee ka naam sahi se batayein, ya "khud ke liye" chun lein.',
+      replyEn: 'Please specify the employee name, or choose "For myself".',
       speech: 'कृपया कर्मचारी का नाम सही से बताएं, या खुद के लिए चुन लें।',
+      speechEn: 'Please specify the employee name, or choose For myself.',
       speakText: 'Kripya employee ka naam batayein ya khud ke liye chun lein.',
       speakTextHi: 'कृपया employee का नाम बताएं या खुद के लिए चुन लें।',
     },
@@ -118,13 +126,17 @@ const TASK_FIELDS = {
     askOrder: 2,
     question: {
       reply: 'Task ka naam kya rakhna hai?',
+      replyEn: 'What should be the task title?',
       speech: 'टास्क का नाम क्या रखना है?',
+      speechEn: 'What should be the task title?',
       speakText: 'Task ka naam kya rakhna hai?',
       speakTextHi: 'Task का नाम क्या रखना है?',
     },
     reAskQuestion: {
       reply: 'Task ka naam 2-3 shabdon mein seedhe likh dein (jaise "Client meeting" ya "Bug fix").',
+      replyEn: 'Please enter the task title directly (e.g. "Client meeting" or "Bug fix").',
       speech: 'टास्क का नाम सीधे लिख दें, जैसे क्लाइंट मीटिंग या बग फिक्स।',
+      speechEn: 'Please enter the task title directly, such as Client meeting or Bug fix.',
       speakText: 'Task ka naam seedhe likh dein, jaise Client meeting ya Bug fix.',
       speakTextHi: 'Task का नाम सीधे लिख दें, जैसे Client meeting या Bug fix।',
     },
@@ -145,13 +157,17 @@ const TASK_FIELDS = {
     askOrder: 3,
     question: {
       reply: "Description kya likhna hai? Agar nahi hai to 'koi nahi' bol dein.",
+      replyEn: "What description would you like to add? Or say 'Skip' if none.",
       speech: 'Description क्या लिखना है? अगर नहीं है तो कोई नहीं बोल दें।',
+      speechEn: 'What description would you like to add? Or say Skip if none.',
       speakText: 'Description kya likhna hai? Agar nahi to skip bol dein.',
       speakTextHi: 'Description क्या लिखना है? अगर नहीं है तो skip बोल दें।',
     },
     reAskQuestion: {
       reply: "Description optional hai. Kuch nahi likhna to 'Skip' dabayein.",
+      replyEn: "Description is optional. Click 'Skip' if you do not want to add one.",
       speech: 'Description जरूरी नहीं है। कुछ नहीं लिखना तो स्किप दबाएं।',
+      speechEn: 'Description is optional. Click Skip if you do not want to add one.',
       speakText: 'Description optional hai. Kuch nahi likhna to Skip dabayein.',
       speakTextHi: 'Description optional है। कुछ नहीं लिखना तो Skip दबाएं।',
     },
@@ -174,13 +190,17 @@ const TASK_FIELDS = {
     askOrder: 4,
     question: {
       reply: 'Ye task kab tak complete hona chahiye? Date aur time batayein.',
+      replyEn: 'When should this task be completed? Please specify the date and time.',
       speech: 'यह टास्क कब तक पूरा होना चाहिए? तारीख और समय बताएं।',
+      speechEn: 'When should this task be completed? Please specify the date and time.',
       speakText: 'Ye task kab tak complete hona chahiye? Due date aur time batayein.',
       speakTextHi: 'यह Task कब तक complete होना चाहिए? Due date और समय बताएं।',
     },
     reAskQuestion: {
       reply: 'Kripya niche diye options se direct date aur time chun lein.',
+      replyEn: 'Please select a date and time directly from the options below.',
       speech: 'कृपया नीचे दिए विकल्पों से तारीख और समय चुन लें।',
+      speechEn: 'Please select a date and time directly from the options below.',
       speakText: 'Kripya niche diye options se direct Due date chun lein.',
       speakTextHi: 'कृपया नीचे दिए विकल्पों से Due date चुन लें।',
     },
@@ -202,13 +222,17 @@ const TASK_FIELDS = {
     askOrder: 5,
     question: {
       reply: 'Priority kya rakhein? Low, Medium ya High?',
+      replyEn: 'What priority should we set? Low, Medium, or High?',
       speech: 'Priority क्या रखें? Low, Medium ya High?',
+      speechEn: 'What priority should we set? Low, Medium, or High?',
       speakText: 'Priority kya rakhein? Low, Medium ya High?',
       speakTextHi: 'Priority क्या रखें? Low, Medium या High?',
     },
     reAskQuestion: {
       reply: 'Kripya inme se ek priority chun lein: Low, Medium ya High.',
+      replyEn: 'Please choose one of the priorities: Low, Medium, or High.',
       speech: 'कृपया इनमें से एक Priority चुनें: Low, Medium ya High।',
+      speechEn: 'Please choose one of the priorities: Low, Medium, or High.',
       speakText: 'Inme se ek Priority chun lein: Low, Medium ya High.',
       speakTextHi: 'इनमें से एक Priority चुन लें: Low, Medium या High।',
     },
@@ -243,13 +267,17 @@ const TASK_FIELDS = {
     askOrder: 5.5,
     question: {
       reply: 'Task ka status kya rakhna hai? Pending, In Progress, On Hold, ya Completed?',
+      replyEn: 'What should be the task status? Pending, In Progress, On Hold, or Completed?',
       speech: 'टास्क का स्टेटस क्या रखना है? पेंडिंग, इन प्रोग्रेस, ऑन होल्ड, या कम्प्लीटेड?',
+      speechEn: 'What should be the task status? Pending, In Progress, On Hold, or Completed?',
       speakText: 'Task ka status kya rakhna hai? Pending, In Progress, On Hold, ya Completed?',
       speakTextHi: 'Task का status क्या रखना है? Pending, In Progress, On Hold, या Completed?',
     },
     reAskQuestion: {
       reply: 'Status chun lein (jaise Pending, In Progress, On Hold, Completed). Default Pending rahega.',
+      replyEn: 'Please select a status (such as Pending, In Progress, On Hold, Completed). Default is Pending.',
       speech: 'स्टेटस चुन लें, जैसे पेंडिंग, इन प्रोग्रेस, ऑन होल्ड, या कम्प्लीटेड। डिफॉल्ट पेंडिंग रहेगा।',
+      speechEn: 'Please select a status, default is Pending.',
       speakText: 'Status chun lein, default Pending rahega.',
       speakTextHi: 'Status चुन लें, default Pending रहेगा।',
     },
@@ -290,13 +318,17 @@ const TASK_FIELDS = {
     askOrder: 6,
     question: {
       reply: 'Reminder on karna hai? Haan ya nahi? (Jaise har 10 min, har 30 min, 1 ghante pehle)',
+      replyEn: 'Would you like to set a reminder? (Yes or No)',
       speech: 'रिमाइंडर ऑन करना है? हाँ या नहीं?',
+      speechEn: 'Would you like to set a reminder?',
       speakText: 'Reminder on karna hai? Haan ya nahi?',
       speakTextHi: 'Reminder on करना है? हाँ या नहीं?',
     },
     reAskQuestion: {
       reply: 'Reminder lagana hai ya nahi? Niche diye button par tap karein.',
+      replyEn: 'Would you like a reminder or not? Please tap a button below.',
       speech: 'रिमाइंडर लगाना है या नहीं? नीचे दिए बटन पर टैप करें।',
+      speechEn: 'Would you like a reminder or not? Please tap a button below.',
       speakText: 'Reminder lagana hai ya nahi?',
       speakTextHi: 'Reminder लगाना है या नहीं?',
     },
@@ -333,13 +365,17 @@ const TASK_FIELDS = {
     parentKey: 'reminder',
     question: {
       reply: 'Reminder kab bhejein? Har 10 min me, har 30 min me, har 1 ghante me, ya 1 ghante pehle?',
+      replyEn: 'When should the reminder be sent? (e.g. Every 10 min, Every 30 min, 1 hour before):',
       speech: 'रिमाइंडर कब भेजें? हर दस मिनट में, हर तीस मिनट में, हर एक घंटे में, या एक घंटे पहले?',
+      speechEn: 'When should the reminder be sent?',
       speakText: 'Reminder kab bhejein? Jaise har 10 min ya 1 ghanta pehle.',
       speakTextHi: 'Reminder कब भेजें? जैसे हर 10 मिनट या 1 घंटा पहले।',
     },
     reAskQuestion: {
       reply: 'Kripya reminder timing option chun lein (jaise har 10 min, har 30 min, 1 ghante pehle).',
+      replyEn: 'Please select a reminder timing option (such as Every 10 min, Every 30 min, 1 hour before).',
       speech: 'कृपया रिमाइंडर टाइमिंग ऑप्शन चुन लें।',
+      speechEn: 'Please select a reminder timing option.',
       speakText: 'Reminder ka time chun lein.',
       speakTextHi: 'Reminder का समय चुन लें।',
     },
@@ -379,13 +415,17 @@ const TASK_FIELDS = {
     askOrder: 8,
     question: {
       reply: 'Priority Days kitne rakhein? (default 1)',
+      replyEn: 'How many priority days should we set? (default 1)',
       speech: 'प्रायोरिटी डेज कितने रखें? (डिफ़ॉल्ट एक)',
+      speechEn: 'How many priority days should we set? Default is 1.',
       speakText: 'Priority days kitne rakhne hain? Jaise 1, 2 ya 3 din.',
       speakTextHi: 'Priority days कितने रखने हैं? जैसे 1, 2, या 3 दिन।',
     },
     reAskQuestion: {
       reply: 'Priority days kitne din rakhne hain? Niche se chun lein.',
+      replyEn: 'Please select how many priority days to set from the options below.',
       speech: 'प्रायोरिटी डेज नीचे से चुन लें।',
+      speechEn: 'Please select how many priority days to set.',
       speakText: 'Priority days niche se chun lein.',
       speakTextHi: 'Priority days नीचे से चुन लें।',
     },
@@ -414,13 +454,17 @@ const TASK_FIELDS = {
     askOrder: 9,
     question: {
       reply: 'Kya ye task repeat karna hai? (No repeat / Repeat Task)',
+      replyEn: 'Should this task repeat? (No repeat / Repeat daily)',
       speech: 'क्या यह टास्क रिपीट करना है?',
+      speechEn: 'Should this task repeat?',
       speakText: 'Kya yeh task repeat karna hai?',
       speakTextHi: 'क्या यह Task repeat करना है?',
     },
     reAskQuestion: {
       reply: 'Task repeat karna hai ya nahi? Niche option chunein.',
+      replyEn: 'Please choose whether this task should repeat or not.',
       speech: 'टास्क रिपीट करना है या नहीं? नीचे विकल्प चुनें।',
+      speechEn: 'Please choose whether this task should repeat or not.',
       speakText: 'Task repeat karna hai ya nahi?',
       speakTextHi: 'Task repeat करना है या नहीं?',
     },
@@ -449,13 +493,17 @@ const TASK_FIELDS = {
     askOrder: 10,
     question: {
       reply: "Koi checkpoints add karne hain? Ek ek bol dein, ya 'koi nahi' bol dein.",
+      replyEn: "Would you like to add checkpoints? Say them one by one, or say 'Skip'.",
       speech: 'कोई चेकपॉइंट्स जोड़ने हैं? एक-एक बोल दें, या कोई नहीं बोल दें।',
+      speechEn: 'Would you like to add checkpoints?',
       speakText: 'Checkpoints add karne hain? Ek ek bol dein, ya skip bol dein.',
       speakTextHi: 'कोई Checkpoints add करने हैं? एक-एक बोल दें, या skip बोल दें।',
     },
     reAskQuestion: {
       reply: "Checkpoints add nahi karne to 'Skip' par tap karein.",
+      replyEn: "If you do not want to add checkpoints, tap 'Skip'.",
       speech: 'चेकपॉइंट्स नहीं जोड़ने तो स्किप पर टैप करें।',
+      speechEn: 'If you do not want to add checkpoints, tap Skip.',
       speakText: 'Checkpoints add nahi karne to Skip par tap karein.',
       speakTextHi: 'Checkpoints नहीं जोड़ने तो Skip पर tap करें।',
     },
@@ -582,13 +630,15 @@ const TASK_FIELDS = {
     askOrder: 12,
     question: {
       reply: 'Sab details ready hain. Kya ise create kar doon?',
+      replyEn: 'All details are ready. Shall I create this task?',
       speech: 'सब details ready हैं। क्या इसे create कर दूं?',
+      speechEn: 'All details are ready. Shall I create this task?',
       speakText: 'Sab details ready hain. Kya ise create kar doon?',
       speakTextHi: 'सब details ready हैं। क्या इसे create कर दूं?',
     },
-    chips: () => [
-      { label: 'Haan, create karo', action: { type: 'confirm' } },
-      { label: 'Kuch badalna hai', action: { type: 'edit' } },
+    chips: (now, isEn = false) => [
+      { label: isEn ? 'Yes, create it' : 'Haan, create karo', action: { type: 'confirm' } },
+      { label: isEn ? 'Edit' : 'Kuch badalna hai', action: { type: 'edit' } },
     ],
     default: false,
   },
