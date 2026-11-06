@@ -4,6 +4,7 @@ const crypto = require("crypto");
 const rateLimit = require("express-rate-limit");
 
 const {
+  markMessagesDelivered,
   createConversation,
   createGroupConversation,
   getConversations,
@@ -122,6 +123,7 @@ router.patch("/message/:messageId/delete-for-me", deleteMessageForMe);
 router.patch("/message/:messageId/delete-for-everyone", deleteMessageForEveryone);
 router.post("/message/:messageId/forward", forwardMessage);
 router.patch("/message/:messageId/seen", markMessageSeen);
+router.post("/messages/delivered", markMessagesDelivered);
 router.get("/message/:messageId/info", getMessageInfo);
 router.patch("/conversation/:id/mute", updateConversationMute);
 router.patch("/conversation/:id/disappearing-messages", updateDisappearingMessages);
