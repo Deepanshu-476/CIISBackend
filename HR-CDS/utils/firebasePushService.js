@@ -286,7 +286,8 @@ exports.sendPushToUsers = async ({userIds, title, body, data = {}}) => {
         payload: {
           aps: {
             ...(!isCall || isIncomingCall ? {sound: 'default'} : {}),
-            ...(isCall && {contentAvailable: true}),
+            // Chat pushes also wake the iOS app briefly so it can report the message as delivered.
+            ...((isCall || ['chat_message', 'group_chat_message'].includes(data.type)) && {contentAvailable: true}),
             ...(isIncomingCall && {alert: {title, body}}),
           },
         },
