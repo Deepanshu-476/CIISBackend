@@ -116,6 +116,8 @@ const filterMenuItemsByCompanyAccess = async (companyId, menuItems) => {
   const normalizeKey = value => String(value || '').trim().replace(/^\/+/, '').toLowerCase();
   const allowedSet = new Set(allowedPages.map(page => normalizeKey(page)).filter(Boolean));
   return menuItems.filter(item => {
+    // Promotions is not a plan feature: its own API decides who may use it.
+    if (normalizeKey(item?.id) === 'promotions' || normalizeKey(item?.path).replace(/\/+$/, '') === 'ciisuser/promotions') return true;
     const itemKeys = [...getRouteAccessKeys(item)].map(key => normalizeKey(key)).filter(Boolean);
     return itemKeys.some(key => allowedSet.has(key));
   });
