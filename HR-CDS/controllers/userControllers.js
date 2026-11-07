@@ -2491,6 +2491,13 @@ exports.getCompanyUsers = async (req, res) => {
       return errorResponse(res, 401, "Authentication required");
     }
 
+    // Employee Details View/Edit access may open a single employee with
+    // includeSensitive=true. Respect that Page Management permission so the
+    // detail modal receives the family, emergency, bank and identity fields.
+    if (String(req.query?.includeSensitive || '').toLowerCase() === 'true') {
+      req.allowSensitiveEmployeeDetails = await canViewSensitiveEmployeeDetails(currentUser);
+    }
+
     const companyScope = getCompanyScope(req);
     if (companyScope.error) {
       return errorResponse(res, companyScope.error.status, companyScope.error.message);
