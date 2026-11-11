@@ -855,7 +855,7 @@ function parseHinglishSlots(rawText, now = new Date(), referenceDate = null) {
   const titleRegexes = [
     new RegExp(`(?:(?:urgent\\s+)?(?:ek\\s+)?(?:naya\\s+)?task\\s*(?:banao|create\\s+karo|karo|bana\\s*do|banayein|create)\\s*:\\s*)(.+?)${stopKeywords}`, 'i'),
     new RegExp(`^(.+?)(?:\\s+(?:ka|ke\\s+liye)\\s+(?:ek\\s+)?task\\s+(?:banao|create\\s+karo|karo|bana\\s*do|banayein))${stopKeywords}`, 'i'),
-    new RegExp(`(?:^|\\b)(?:(?:mera|meri|mere|hamara|hamari|hamare|apna|apni|apne)\\s+(?:liye\\s+)?)?(?:ek\\s+)?(?:naya\\s+|nayi\\s+|new\\s+)?\\b(?!(?:ek|naya|nayi|naye|new|mera|meri|mere|liye|hamara|hamari|hamare|apna|apni|apne|kisi|kripya|please|ka|ke|ki|urgent|quick)\\b)([a-zA-Z\\u0900-\\u097F0-9_-]+(?:\\s+[a-zA-Z\\u0900-\\u097F0-9_-]+)*)\\s+task\\s+(?:banao|create\\s+karo|karo|bana\\s*do|bana\\s*dijiye|banayein|create)${stopKeywords}`, 'i'),
+    new RegExp(`(?:^|\\b)(?:(?:mera|meri|mere|hamara|hamari|hamare|apna|apni|apne)\\s+(?:liye\\s+)?)?(?:ek\\s+)?(?:naya\\s+|nayi\\s+|new\\s+)?(?:personal\\s+|self\\s+)?\\b(?!(?:ek|naya|nayi|naye|new|mera|meri|mere|liye|hamara|hamari|hamare|apna|apni|apne|kisi|kripya|please|ka|ke|ki|urgent|quick|personal|self)\\b)([a-zA-Z\\u0900-\\u097F0-9_-]+(?:\\s+[a-zA-Z\\u0900-\\u097F0-9_-]+)*)\\s+task\\s+(?:banao|create\\s+karo|karo|bana\\s*do|bana\\s*dijiye|banayein|create)${stopKeywords}`, 'i'),
     new RegExp(`(?:(?:task\\s+)?(?:title|naam|नाम)\\s*(?:badlo|badal\\s+kar|change\\s+karo|change\\s+to|change|बदलो)\\s*(?:to|ko|kar)?\\s*)(.+?)${stopKeywords}`, 'i'),
     new RegExp(`(?:(?:and\\s+|aur\\s+)?task\\s+(?:name|naam)\\s*(?:is\\s+|ka\\s+naam\\s+|:\\s*|\\s+as\\s+|\\s+to\\s+be\\s+)?)(.+?)${stopKeywords}`, 'i'),
     new RegExp(`(?:(?:task\\s+)?title\\s*(?:is\\s+|:\\s*|\\s+as\\s+|\\s+to\\s+be\\s+|hai\\s+|hoga\\s+)?)(.+?)${stopKeywords}`, 'i'),
@@ -876,7 +876,7 @@ function parseHinglishSlots(rawText, now = new Date(), referenceDate = null) {
       t = t.replace(/\s+(ho|hoga|rakhna|hai|rakhein|karo|kar\s+do|करो|कर\s+दो)$/i, '');
       t = t.replace(/\s+(ka|ke|ki)$/i, '');
       t = t.replace(/^[.,;:\s]+|[.,;:\s]+$/g, '').trim();
-      if (t.length > 0 && t.length <= 100 && !/^(task|tasks|create|banana|hai|is|ek|naya|nayi|naye|new|mera|meri|mere|liye|hamare|hamara|apne|apna|khud)$/i.test(t)) {
+      if (t.length > 0 && t.length <= 100 && !/^(task|tasks|create|banana|hai|is|ek|naya|nayi|naye|new|mera|meri|mere|liye|hamare|hamara|apne|apna|khud|personal|self|urgent|quick)$/i.test(t)) {
         slots.title = t.charAt(0).toUpperCase() + t.slice(1);
         break;
       }
@@ -1085,14 +1085,15 @@ function isFillerPhrase(text) {
 
 const SELF_INTRO_REGEX = /^(?:hello|hi|namaste|hey)?[\s,;]*(?:my\s+name\s+is|i\s+am|mera\s+naam|main\s+hoon)\s+[a-zA-Z\u0900-\u097F]+(?:\s+hai)?[\s,.]*$/i;
 
-const INITIATION_PHRASE_REGEX = /^(?:hello|hi|namaste|hey)?[\s,;]*(?:mera\s+)?(?:ek\s+)?(?:naya\s+|new\s+)?(?:task|kaam|काम|टास्क)\s*(?:banao|bana\s*do|banayein|create\s*karo|create\s*kar\s*do|karna\s*hai|likho|daalo|add\s*karo|बनाओ|बनाएं|बना\s*दो|करना\s*है)?$/i;
+const INITIATION_PHRASE_REGEX = /^(?:hello|hi|namaste|hey)?[\s,;]*(?:mera\s+)?(?:ek\s+)?(?:naya\s+|new\s+)?(?:personal\s+|self\s+)?(?:task|kaam|काम|टास्क)\s*(?:banao|bana\s*do|banayein|create\s*karo|create\s*kar\s*do|karna\s*hai|likho|daalo|add\s*karo|बनाओ|बनाएं|बना\s*दो|करना\s*है)?$/i;
 
 function isInitiationPhrase(text) {
   if (!text) return false;
   const clean = text.trim().toLowerCase().replace(/[\s,.;:!?]+/g, ' ');
   if (INITIATION_PHRASE_REGEX.test(clean)) return true;
-  return /^(?:hello|hi|hey|namaste|please|plz)?[\s,;]*(?:create|make|add|start|banao|bana\s*do|banayein)\s*(?:a\s+|an\s+|the\s+|my\s+|one\s+|mera\s+|meri\s+|apna\s+|apne\s+)?(?:new\s+|naya\s+|naye\s+)?(?:personal\s+|self\s+)?(?:task|project|client|plan|काम|टास्क)$/i.test(clean) ||
-    /^(?:new\s+task|naya\s+task|नया\s+टास्क|personal\s+task|my\s+task|mera\s+task|apna\s+task)$/i.test(clean);
+  return /^(?:hello|hi|hey|namaste|please|plz)?[\s,;]*(?:create|make|add|start|banao|bana\s*do|banayein)\s*(?:a\s+|an\s+|the\s+|my\s+|one\s+|mera\s+|meri\s+|mere\s+|apna\s+|apne\s+)?(?:ek\s+)?(?:new\s+|naya\s+|naye\s+)?(?:personal\s+|self\s+)?(?:task|project|client|plan|काम|टास्क)$/i.test(clean) ||
+    /^(?:mera\s+|meri\s+|mere\s+|apna\s+|apne\s+)?(?:ek\s+)?(?:naya\s+|nayi\s+|naye\s+|new\s+)?(?:personal\s+|self\s+)?(?:task|project|client|plan|काम|टास्क)\s*(?:banao|bana\s*do|banayein|create\s*karo|create|karo)$/i.test(clean) ||
+    /^(?:new\s+task|naya\s+task|नया\s+टास्क|personal\s+task|self\s+task|my\s+task|mera\s+task|apna\s+task)$/i.test(clean);
 }
 
 function isSelfIntroduction(text) {
@@ -1115,7 +1116,8 @@ const TITLE_GUARD_FILLERS = new Set([
   'theek hai', 'thik hai', 'theek', 'thik', 'accha', 'acha', 'achha', 'kuch nahi', 'koi nahi',
   'kuch nhi', 'koi nhi', 'skip', 'kardo', 'kar do', 'banao', 'bana do', 'do', 'done',
   'sure', 'true', 'false', 'blank', 'none', 'नहीं', 'हाँ', 'हां', 'नमस्ते', 'हेलो', 'हाय',
-  'new', 'naya', 'nayi', 'naye', 'task', 'tasks', 'mera', 'meri', 'mere', 'apna', 'apne', 'apni'
+  'new', 'naya', 'nayi', 'naye', 'task', 'tasks', 'mera', 'meri', 'mere', 'apna', 'apne', 'apni',
+  'personal', 'self', 'urgent', 'quick'
 ]);
 
 function detectPersonInActionTitle(text) {
@@ -1174,6 +1176,10 @@ function isInvalidOrCommandTitle(title, message = '', assigneeName = '') {
   // Strip punctuation and check bare fillers ("hlo", "hello", "hi", "hey", "ya", "yes", "ok", "ko", "haan", "nahi", etc.)
   const cleanBare = normTitle.replace(/^[#@$%&*+=~`<>{}()[\]\\/|'"]+|[#@$%&*+=~`<>{}()[\]\\/|'"]+$/g, '').trim();
   if (TITLE_GUARD_FILLERS.has(cleanBare) || cleanBare.length < 2) {
+    return true;
+  }
+
+  if (/^(?:personal|self|urgent|quick|new|naya|nayi|naye|task|tasks|kaam|काम|टास्क|personal\s+task|self\s+task)$/i.test(cleanBare)) {
     return true;
   }
 

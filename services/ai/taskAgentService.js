@@ -238,7 +238,7 @@ function detectMessageLanguage(text, fallback = 'hinglish') {
   if (!text || typeof text !== 'string') return fallback;
   const clean = text.trim();
   if (/[\u0900-\u097F]/.test(clean)) return 'hinglish';
-  const hinglishMarker = /\b(?:aap|ap|mera|meri|mere|mujhe|hamara|hum|kya|kaun|kon|kaunsi|kab|kahan|kaise|kese|kyun|kisko|kisse|kitne|kitna|hai|hain|ho|hoon|hun|tha|thi|kar|karo|karna|kariye|banao|banayein|batao|batayein|dikhao|dikhayein|rakho|hoga|hogi|dena|dijiye|chahiye|raha|rahi|rahe|aur|ya|ke|ki|ka|ko|mein|main|liye|saath|bhi|nahi|nhi|mat|badhiya|shukriya|theek|thik|dhanyawad|kaam|kardo|karwao)\b/i;
+  const hinglishMarker = /\b(?:aap|ap|mera|meri|mere|mujhe|hamara|hum|kya|kaun|kon|kaunsi|kab|kahan|kaise|kese|kyun|kisko|kisse|kitne|kitna|hai|hain|ho|hoon|hun|tha|thi|kar|karo|karna|kariye|banao|banayein|batao|batayein|dikhao|dikhayein|rakho|rakh|hoga|hogi|dena|dijiye|chahiye|chahiyein|raha|rahi|rahe|aur|ya|ke|ki|ka|ko|mein|main|liye|saath|bhi|nahi|nhi|mat|badhiya|shukriya|theek|thik|dhanyawad|kaam|kardo|karwao|aaj|aj|kal|kl|cal|parso|shaam|sham|subah|subha|dopahar|raat|baje|tarikh|pehle|baad|hona|wale|wali|wala|kisi|dusre|apna|apne|apni|khud|ek|do|teen|chaar|panch|banado|dalo|likho|chhod|sab|baaki|kuch|koi)\b/i;
   if (hinglishMarker.test(clean)) return 'hinglish';
   const englishWords = clean.match(/\b[a-zA-Z]{2,}\b/g) || [];
   if (englishWords.length > 0) {
@@ -3985,16 +3985,24 @@ const lastAskedField = currentDraft.asked.length > 0
   const rawMessage = typeof message === 'string' ? message.trim() : '';
   const trimmedMessage = rawMessage ? normalizeTranscript(rawMessage) : '';
   const detectedIntent = trimmedMessage ? detectUserIntent(trimmedMessage) : null;
-  const explicitLang = (language && language !== 'hinglish') ? language : null;
-  const userLang = detectMessageLanguage(trimmedMessage, explicitLang || currentDraft?.language || draft?.language || 'hinglish');
-  currentDraft.language = userLang;
-
   const isDraftInProgress = Boolean(
     (currentDraft.title && String(currentDraft.title).trim()) ||
     (currentDraft.name && String(currentDraft.name).trim()) ||
     (currentDraft.client && String(currentDraft.client).trim()) ||
     (Array.isArray(currentDraft.asked) && currentDraft.asked.length > 0)
   );
+
+  const explicitLang = (language && language !== 'hinglish') ? language : null;
+  const prevLang = draft?.language || currentDraft?.language;
+  let userLang;
+  const isLanguageSwitchCommand = /\b(?:speak|talk|reply|answer|switch|change)\s*(?:in|to)?\s*(?:english|hindi|hinglish)\b/i.test(trimmedMessage);
+  const isShortOrAction = !trimmedMessage || /^(?:skip|skip\s+remaining|high|medium|low|urgent|pending|in[- ]progress|completed|on[- ]hold|\d+|yes|no|haan|nahi|default|cancel)$/i.test(trimmedMessage);
+  if (prevLang && !isLanguageSwitchCommand && (isDraftInProgress || isShortOrAction)) {
+    userLang = prevLang;
+  } else {
+    userLang = detectMessageLanguage(trimmedMessage, explicitLang || prevLang || 'hinglish');
+  }
+  currentDraft.language = userLang;
 
   // --------------------------------------------------------------------------
   // CONVERSATIONAL ROUTER 1: Chit-chat & Greetings (ChatGPT-like natural replies)
