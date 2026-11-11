@@ -1674,6 +1674,74 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
   return null;
 }
 
+function applyTaskStatusAndPriority(taskDoc, targetStatus, targetPriority, userId) {
+  if (!taskDoc) return;
+  const now = new Date();
+  if (targetPriority) {
+    taskDoc.priority = targetPriority.toLowerCase();
+  }
+  if (targetStatus) {
+    const normalized = targetStatus.toLowerCase();
+    taskDoc.status = normalized;
+    taskDoc.overallStatus = normalized;
+
+    if (normalized === 'completed') {
+      taskDoc.completed = true;
+      taskDoc.completedAt = now;
+      taskDoc.completionDate = now;
+    } else {
+      taskDoc.completed = false;
+      taskDoc.completedAt = null;
+      taskDoc.completionDate = null;
+    }
+
+    if (!Array.isArray(taskDoc.statusByUser)) {
+      taskDoc.statusByUser = [];
+    }
+
+    const uidStr = String(userId || '');
+    let matchedUser = false;
+    taskDoc.statusByUser.forEach(s => {
+      const sUid = String(s.user?._id || s.user || '');
+      if ((uidStr && sUid === uidStr) || taskDoc.taskFor === 'self') {
+        s.status = normalized;
+        s.updatedAt = now;
+        s.statusChangedAt = now;
+        s.remarks = `Status updated to ${normalized} via AI Assistant`;
+        matchedUser = true;
+      }
+    });
+
+    if (!matchedUser && (uidStr || taskDoc.taskFor === 'self')) {
+      taskDoc.statusByUser.push({
+        user: userId || taskDoc.createdBy,
+        status: normalized,
+        updatedAt: now,
+        statusChangedAt: now,
+        remarks: `Status updated to ${normalized} via AI Assistant`
+      });
+    }
+
+    if (!Array.isArray(taskDoc.statusHistory)) {
+      taskDoc.statusHistory = [];
+    }
+    taskDoc.statusHistory.push({
+      status: normalized,
+      changedBy: userId || taskDoc.createdBy,
+      changedByType: 'user',
+      remarks: `Status updated to ${normalized} via AI Assistant`,
+      changedAt: now
+    });
+
+    if (typeof taskDoc.markModified === 'function') {
+      taskDoc.markModified('statusByUser');
+      taskDoc.markModified('statusHistory');
+    }
+
+    taskDoc.lastActivityAt = now;
+  }
+}
+
 async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', context = {}) {
   const isEn = lang === 'en';
   const userId = req?.user?._id || req?.user?.id;
@@ -2139,11 +2207,7 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
       return false;
     });
     if (tTask) {
-      if (targetPriority) tTask.priority = targetPriority.toLowerCase();
-      if (targetStatus) {
-        tTask.status = targetStatus;
-        tTask.overallStatus = targetStatus;
-      }
+      applyTaskStatusAndPriority(tTask, targetStatus, targetPriority, userId);
       updatedDoc = tTask;
     }
   }
@@ -2158,15 +2222,7 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
       };
       const tTask = await TaskModel.findOne(tQuery).sort({ createdAt: -1 });
       if (tTask) {
-        if (targetPriority) tTask.priority = targetPriority.toLowerCase();
-        if (targetStatus) {
-          tTask.status = targetStatus;
-          tTask.overallStatus = targetStatus;
-          if (targetStatus === 'completed') {
-            tTask.completed = true;
-            tTask.completedAt = new Date();
-          }
-        }
+        applyTaskStatusAndPriority(tTask, targetStatus, targetPriority, userId);
         if (typeof tTask.save === 'function') await tTask.save();
         updatedDoc = tTask;
       }
@@ -2248,6 +2304,9 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
       speakText: rep,
       speakTextHi: `Task ${taskTitle} safaltapoorvak update ho gaya hai.`,
       draft: null,
+      taskUpdated: true,
+      updatedTaskId: String(updatedDoc._id || updatedDoc.id || ''),
+      updatedTask: typeof updatedDoc?.toObject === 'function' ? updatedDoc.toObject() : updatedDoc,
       chips,
       candidates: [],
       notices: []
@@ -2971,8 +3030,7 @@ const lastAskedField = currentDraft.asked.length > 0
         if (!didUpdate && Array.isArray(deps.tasks)) {
           const tt = deps.tasks.find(t => String(t._id || t.id) === String(targetTaskId));
           if (tt) {
-            if (targetStatus) { tt.status = targetStatus; tt.overallStatus = targetStatus; if (targetStatus === 'completed') tt.completed = true; }
-            if (targetPriority) tt.priority = targetPriority.toLowerCase();
+            applyTaskStatusAndPriority(tt, targetStatus, targetPriority, req?.user?._id || req?.user?.id);
             didUpdate = true;
           }
         }
@@ -2992,8 +3050,7 @@ const lastAskedField = currentDraft.asked.length > 0
             try {
               const tt = await TaskModel.findById(targetTaskId);
               if (tt) {
-                if (targetStatus) { tt.status = targetStatus; tt.overallStatus = targetStatus; if (targetStatus === 'completed') { tt.completed = true; tt.completedAt = new Date(); } }
-                if (targetPriority) tt.priority = targetPriority.toLowerCase();
+                applyTaskStatusAndPriority(tt, targetStatus, targetPriority, req?.user?._id || req?.user?.id);
                 await tt.save();
                 didUpdate = true;
               }
@@ -3014,6 +3071,8 @@ const lastAskedField = currentDraft.asked.length > 0
           speakText: rep,
           speakTextHi: rep,
           draft: null,
+          taskUpdated: true,
+          updatedTaskId: String(targetTaskId),
           chips: [
             { label: 'Tasks list dekhein', action: { type: 'show_tasks' } },
             { label: 'Main menu', action: { type: 'reset' } }
