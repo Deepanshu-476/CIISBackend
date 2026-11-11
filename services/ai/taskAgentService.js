@@ -1255,13 +1255,19 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
     // Detect date filter (e.g. "aaj ke", "aj", "today", "kal", "tomorrow")
     const isToday = /\b(?:aaj|aj|today)\b/i.test(message);
     const isTomorrow = /\b(?:kal|tomorrow)\b/i.test(message) && !/\b(?:pichle|yesterday)\b/i.test(message);
-    const isPersonal = /\b(?:personal|self)\b/i.test(message) || (/\b(?:mera|meri|mere|apne)\b/i.test(message) && !/\b(?:assigned|client|project)\b/i.test(message));
+    const isExplicitAll = /\b(?:all\s+tasks?|all\s+time|saare\s+tasks?|sare\s+tasks?|sab\s+tasks?|total\s+tasks?|all\s+type|all\b)/i.test(message);
+    const isProjectSpecific = /\b(?:project\s+tasks?|project\s+ke\s+tasks?|project\s+task)\b/i.test(message);
+    const isAssignedSpecific = /\b(?:assigned\s+to\s+me|assigned\s+tasks?|mujhe\s+assign|assigned\s+task)\b/i.test(message);
+    const isClientSpecific = /\b(?:client\s+tasks?|client\s+ke\s+tasks?|client\s+task)\b/i.test(message);
+    const isPersonal = !isExplicitAll && !isProjectSpecific && !isAssignedSpecific && !isClientSpecific && (
+      /\b(?:personal|self)\b/i.test(message) || (/\b(?:mera|meri|mere|apne)\b/i.test(message) && !/\b(?:all|saare|sare|sab|total|assigned|client|project)\b/i.test(message))
+    );
     const dayRange = getIstDayRange(context.now || deps.now || new Date());
 
     // Detect desired status filter from user query
     let statusFilter = null;
-    let statusLabel = isToday ? (isPersonal ? "today's personal" : "today's") : (isTomorrow ? "tomorrow's" : (isPersonal ? "personal" : 'recent'));
-    let statusLabelHi = isToday ? (isPersonal ? "aaj ke personal" : "aaj ke") : (isTomorrow ? "kal ke" : (isPersonal ? "personal" : 'haal ke'));
+    let statusLabel = isToday ? (isPersonal ? "today's personal" : "today's") : (isTomorrow ? "tomorrow's" : (isPersonal ? "personal" : (isExplicitAll ? 'all' : 'recent')));
+    let statusLabelHi = isToday ? (isPersonal ? "aaj ke personal" : "aaj ke") : (isTomorrow ? "kal ke" : (isPersonal ? "personal" : (isExplicitAll ? 'sab' : 'haal ke')));
 
     if (/\b(?:in[- ]progress|chalu|chal\s+raha)\b/i.test(message)) {
       statusFilter = { $in: ['in-progress', 'in progress'] };
@@ -1282,13 +1288,126 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
     }
 
     let tasks = Array.isArray(deps.tasks) ? deps.tasks : [];
+
+    if (tasks.length === 0 && (deps.Task || mongoose?.connection?.readyState === 1)) {
+      let taskHelper = null;
+      try {
+        taskHelper = require('../../HR-CDS/controllers/taskHelper');
+      } catch (e) {
+        taskHelper = null;
+      }
+
+      if (taskHelper && typeof taskHelper.fetchPersonalTaskList === 'function' && req?.user) {
+        try {
+          const taskReq = {
+            user: req.user,
+            query: { ...req?.query, dateField: 'reportDate' }
+          };
+
+          if (isPersonal) {
+            tasks = await taskHelper.fetchPersonalTaskList(taskReq, { lightweight: true });
+          } else if (isProjectSpecific) {
+            tasks = await taskHelper.fetchAssignedProjectTaskList(taskReq);
+          } else if (isAssignedSpecific) {
+            tasks = await taskHelper.fetchAssignedToMeTaskList(taskReq, { lightweight: true });
+          } else if (isClientSpecific) {
+            tasks = await taskHelper.fetchAssignedClientTaskList(taskReq, { lightweight: true });
+          } else {
+            // view === 'all' (unified: personal + assigned + client + project)
+            const [personal, assigned, client, project] = await Promise.all([
+              taskHelper.fetchPersonalTaskList(taskReq, { lightweight: true }).catch(() => []),
+              taskHelper.fetchAssignedToMeTaskList(taskReq, { lightweight: true }).catch(() => []),
+              taskHelper.fetchAssignedClientTaskList(taskReq, { lightweight: true }).catch(() => []),
+              taskHelper.fetchAssignedProjectTaskList(taskReq).catch(() => [])
+            ]);
+            tasks = [...(personal || []), ...(assigned || []), ...(client || []), ...(project || [])];
+          }
+        } catch (err) {
+          console.warn('[taskAgentService] Error reading unified tasks from taskHelper:', err?.message || err);
+        }
+      }
+
+      // Fallback to TaskModel.find if taskHelper didn't return tasks (or in unit tests)
+      if (tasks.length === 0) {
+        const TaskModel = deps.Task || mongoose.models.Task || require('../../HR-CDS/models/Task');
+        if (TaskModel && typeof TaskModel.find === 'function') {
+          try {
+            const andConditions = [
+              { isActive: { $ne: false } }
+            ];
+
+            if (companyCodeFilter) {
+              const baseCode = typeof companyCodeFilter === 'string' ? companyCodeFilter.split('-')[0].trim() : '';
+              andConditions.push({
+                companyCode: baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : companyCodeFilter
+              });
+            }
+
+            if (isPersonal) {
+              andConditions.push({
+                $or: [
+                  { taskFor: 'self' },
+                  { taskFor: { $exists: false } }
+                ]
+              });
+            }
+
+            if (statusFilter) {
+              andConditions.push({ overallStatus: statusFilter });
+            }
+
+            if (isToday) {
+              andConditions.push({
+                $or: [
+                  { dueDateTime: { $gte: dayRange.start, $lte: dayRange.end } },
+                  { dueDate: { $gte: dayRange.start, $lte: dayRange.end } }
+                ]
+              });
+            } else if (isTomorrow) {
+              const tomStart = new Date(dayRange.start.getTime() + 86400000);
+              const tomEnd = new Date(dayRange.end.getTime() + 86400000);
+              andConditions.push({
+                $or: [
+                  { dueDateTime: { $gte: tomStart, $lte: tomEnd } },
+                  { dueDate: { $gte: tomStart, $lte: tomEnd } }
+                ]
+              });
+            }
+
+            if (userId) {
+              andConditions.push({
+                $or: [
+                  { createdBy: userId },
+                  { assignedUser: userId },
+                  { 'assignedUsers.user': userId },
+                  { user: userId }
+                ]
+              });
+            }
+
+            const filter = { $and: andConditions };
+            tasks = await TaskModel.find(filter)
+              .sort({ createdAt: -1 })
+              .limit(100)
+              .lean();
+          } catch (e) {
+            console.warn('[taskAgentService] Error reading tasks:', e);
+          }
+        }
+      }
+    }
+
     if (tasks.length > 0) {
       if (isPersonal) {
         tasks = tasks.filter(t => !t.taskFor || t.taskFor === 'self' || String(t.taskSource || t.__taskSource || '').includes('self'));
       }
       if (statusFilter) {
         if (typeof statusFilter === 'string') {
-          tasks = tasks.filter(t => String(t.overallStatus || t.status || '').toLowerCase() === statusFilter.toLowerCase());
+          if (statusFilter === 'overdue') {
+            tasks = tasks.filter(t => t.isOverdue || String(t.overallStatus || t.status || '').toLowerCase() === 'overdue');
+          } else {
+            tasks = tasks.filter(t => String(t.overallStatus || t.status || '').toLowerCase() === statusFilter.toLowerCase());
+          }
         } else if (statusFilter.$in) {
           tasks = tasks.filter(t => statusFilter.$in.some(st => String(t.overallStatus || t.status || '').toLowerCase().includes(st)));
         }
@@ -1309,74 +1428,6 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
           const time = new Date(d).getTime();
           return time >= tomStart.getTime() && time <= tomEnd.getTime();
         });
-      }
-    }
-
-    if (tasks.length === 0 && (deps.Task || mongoose?.connection?.readyState === 1)) {
-      const TaskModel = deps.Task || mongoose.models.Task || require('../../HR-CDS/models/Task');
-      if (TaskModel && typeof TaskModel.find === 'function') {
-        try {
-          const andConditions = [
-            { isActive: { $ne: false } }
-          ];
-
-          if (companyCodeFilter) {
-            const baseCode = typeof companyCodeFilter === 'string' ? companyCodeFilter.split('-')[0].trim() : '';
-            andConditions.push({
-              companyCode: baseCode ? { $regex: new RegExp('^' + baseCode + '(-|$)', 'i') } : companyCodeFilter
-            });
-          }
-
-          if (isPersonal) {
-            andConditions.push({
-              $or: [
-                { taskFor: 'self' },
-                { taskFor: { $exists: false } }
-              ]
-            });
-          }
-
-          if (statusFilter) {
-            andConditions.push({ overallStatus: statusFilter });
-          }
-
-          if (isToday) {
-            andConditions.push({
-              $or: [
-                { dueDateTime: { $gte: dayRange.start, $lte: dayRange.end } },
-                { dueDate: { $gte: dayRange.start, $lte: dayRange.end } }
-              ]
-            });
-          } else if (isTomorrow) {
-            const tomStart = new Date(dayRange.start.getTime() + 86400000);
-            const tomEnd = new Date(dayRange.end.getTime() + 86400000);
-            andConditions.push({
-              $or: [
-                { dueDateTime: { $gte: tomStart, $lte: tomEnd } },
-                { dueDate: { $gte: tomStart, $lte: tomEnd } }
-              ]
-            });
-          }
-
-          if (userId) {
-            andConditions.push({
-              $or: [
-                { createdBy: userId },
-                { assignedUser: userId },
-                { 'assignedUsers.user': userId },
-                { user: userId }
-              ]
-            });
-          }
-
-          const filter = { $and: andConditions };
-          tasks = await TaskModel.find(filter)
-            .sort({ createdAt: -1 })
-            .limit(100)
-            .lean();
-        } catch (e) {
-          console.warn('[taskAgentService] Error reading tasks:', e);
-        }
       }
     }
 
@@ -1410,14 +1461,37 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
 
     const taskLines = tasks.map((t, idx) => {
       const title = t.title || t.name || 'Untitled task';
-      const status = t.overallStatus || t.status || 'Pending';
-      const due = t.dueDateTime ? ` (Due: ${formatHumanIstDate(t.dueDateTime)})` : '';
-      return `${idx + 1}. **${title}** — *${status}*${due}`;
+      const rawStatus = t.overallStatus || t.status || 'Pending';
+      const status = t.isOverdue && rawStatus !== 'completed' ? 'overdue' : rawStatus;
+      const due = (t.dueDateTime || t.dueDate) ? ` (Due: ${formatHumanIstDate(t.dueDateTime || t.dueDate)})` : '';
+      let typeLabel = '';
+      if (t.projectName || t.projectId) {
+        typeLabel = ` — *Project: ${t.projectName || 'Project Task'}*`;
+      } else if (t.clientName || t.clientId) {
+        typeLabel = ` — *Client: ${t.clientName || 'Client Task'}*`;
+      } else if (t.taskSource === 'assigned' || t.__taskSource === 'assigned') {
+        typeLabel = ` — *Assigned*`;
+      } else if (t.taskSource === 'self' || t.__taskSource === 'self') {
+        typeLabel = ` — *Personal*`;
+      }
+      return `${idx + 1}. **${title}** — *${status}*${typeLabel}${due}`;
     });
 
-    const header = isEn
-      ? `${greetingPrefix}Here are your ${statusLabel} tasks (${tasks.length} found):`
-      : `${greetingPrefix}Aapke ${statusLabelHi} tasks ye hain (${tasks.length} mile):`;
+    const isCountQuery = /\b(?:how\s+many|kitne|kitna|count|total|कितने|संख्या)\b/i.test(message);
+    const pendingCount = tasks.filter(t => String(t.overallStatus || t.status || '').toLowerCase().includes('pending')).length;
+    const overdueCount = tasks.filter(t => t.isOverdue || String(t.overallStatus || t.status || '').toLowerCase().includes('overdue')).length;
+    const completedCount = tasks.filter(t => String(t.overallStatus || t.status || '').toLowerCase().includes('completed') || String(t.overallStatus || t.status || '').toLowerCase().includes('done')).length;
+
+    let header;
+    if (isCountQuery) {
+      header = isEn
+        ? `${greetingPrefix}You have **${tasks.length} task(s)** in total (${pendingCount} pending, ${overdueCount} overdue, ${completedCount} completed):`
+        : `${greetingPrefix}Aapke paas kul **${tasks.length} task(s)** hain (${pendingCount} pending, ${overdueCount} overdue, ${completedCount} completed):`;
+    } else {
+      header = isEn
+        ? `${greetingPrefix}Here are your ${statusLabel} tasks (${tasks.length} found):`
+        : `${greetingPrefix}Aapke ${statusLabelHi} tasks ye hain (${tasks.length} mile):`;
+    }
     const prompt = isEn
       ? "\nWhat would you like to do next?"
       : "\nAap aage kya karna chahte hain?";
@@ -2107,13 +2181,6 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
     return ALL_INTENTS;
   }
 
-  if (Array.isArray(deps.allowedIntents) && deps.allowedIntents.length > 0) {
-    const valid = new Set(ALL_INTENTS);
-    return deps.allowedIntents.filter((i) => valid.has(i));
-  }
-
-  const allowed = ['self_task'];
-
   const userPerms = Array.isArray(user.allowedPages) ? user.allowedPages
     : (Array.isArray(user.pagePermissions) ? user.pagePermissions
     : (Array.isArray(user.permissions) ? user.permissions : []));
@@ -2127,12 +2194,16 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
       .replace(/[\s_-]+/g, ''))
   );
 
-  const canAssign = scope.isOwner || scope.hasAccess || normalizedPerms.has('admintaskcreate') || normalizedPerms.has('taskmanagement') || normalizedPerms.has('ciisuser/admintaskcreate');
+  const allowed = ['self_task'];
+
+  // Assigning tasks to others requires "Admin Create Task" permission (not general Task Management)
+  const canAssign = scope.isOwner || (scope.hasAccess && normalizedPerms.has('admintaskcreate')) || normalizedPerms.has('admintaskcreate') || normalizedPerms.has('ciisuser/admintaskcreate');
   if (canAssign) {
     allowed.push('task_assigned_user');
   }
 
-  const canProj = scope.hasManageProjectsAccess || normalizedPerms.has('adminproject') || normalizedPerms.has('projects') || normalizedPerms.has('project') || normalizedPerms.has('ciisuser/adminproject');
+  // Creating projects requires administrative project permission
+  const canProj = scope.hasManageProjectsAccess || normalizedPerms.has('adminproject') || normalizedPerms.has('manageprojects') || normalizedPerms.has('ciisuser/adminproject');
   if (canProj) {
     allowed.push('create_project');
   }
@@ -2142,15 +2213,20 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
     allowed.push('task_project');
   }
 
-  const canClient = scope.hasClientManagementAccess || normalizedPerms.has('empclient') || normalizedPerms.has('clientmanagement') || normalizedPerms.has('clients') || normalizedPerms.has('client') || normalizedPerms.has('ciisuser/empclient');
+  const canClient = scope.hasClientManagementAccess || normalizedPerms.has('empclient') || normalizedPerms.has('clientmanagement') || normalizedPerms.has('emp-client') || normalizedPerms.has('ciisuser/empclient');
   if (canClient) {
     allowed.push('create_client');
     allowed.push('create_client_task');
   }
 
-  const canPlan = normalizedPerms.has('clientplans') || normalizedPerms.has('ciisuser/clientplans');
+  const canPlan = normalizedPerms.has('clientplans') || normalizedPerms.has('clientplan') || normalizedPerms.has('ciisuser/clientplans');
   if (canPlan) {
     allowed.push('create_client_plan');
+  }
+
+  if (Array.isArray(deps.allowedIntents) && deps.allowedIntents.length > 0) {
+    const valid = new Set(allowed);
+    return deps.allowedIntents.filter((i) => valid.has(i));
   }
 
   return allowed;
@@ -2393,7 +2469,12 @@ async function parseTaskRequest({
     cRole.includes('owner') ||
     req?.user?.permissions?.includes?.('admin-task-create')
   );
-  const canAssignOthers = true; // All authenticated CRM users can assign tasks and manage CRM items via AI assistant
+  const userAllowedIntents = resolveUserAllowedIntents(req?.user, scope, deps);
+  const canAssignOthers = Boolean(
+    isPrivilegedUser ||
+    scope.isOwner ||
+    userAllowedIntents.includes('task_assigned_user')
+  );
 
   // Retrieve accessible projects tenant-safely
   const accessibleProjects = Array.isArray(deps.accessibleProjects)
