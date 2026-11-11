@@ -1295,7 +1295,7 @@ Object.defineProperty(FORM_REGISTRY, 'create_client_plan', {
 // INTENT DETECTION (Deterministic First)
 // ============================================================================
 
-const SELF_KEYWORDS_REGEX = /\b(?:mere\s+liye|khud\s+ke\s+liye|apne\s+liye|khud\s+ke|apne\s+ko|self|for\s+me|my\s+task|personal\s+task|mera\s+task|khud\s+ka\s+task|apna\s+task)\b/i;
+const SELF_KEYWORDS_REGEX = /(?:\b(?:mere\s+liye|khud\s+ke\s+liye|apne\s+liye|khud\s+ke|apne\s+ko|self|for\s+me|my\s+task|personal\s+task|parshan\s+task|mera\s+task|khud\s+ka\s+task|apna\s+task)\b|(?:\b(?:mera|meri|mere|apna|apne|khud)\s+(?:ek\s+)?(?:naya\s+|new\s+)?(?:personal\s+|parshan\s+|self\s+)?task\b)|(?:(?:मेरा|मेरी|मेरे|अपने|खुद|स्वयं)\s*(?:एक\s*)?(?:नया\s*)?(?:पर्सनल|परशन|स्वयं|खुद)?\s*(?:टास्क|काम))|(?:(?:पर्सनल|परशन)\s*(?:टास्क|काम)))/iu;
 const ASSIGN_OTHERS_REGEX = /\b(?:assign(?:ed)?\s+to|ko\s+assign(?:ed)?|task\s+assign(?:ed)?|assign(?:ed)?\s+karo|assign(?:ed)?|task\s+to|kisi\s+aur\s+ke\s+liye|kisi\s+aur\s+ko|others|[a-zA-Z\u0900-\u097F]+\s+(?:ko|co|koh|kor|ke\s+liye)\b|give\s+to|de\s*do|bhejo)\b/i;
 const GROUP_EXTENSION_REGEX = /\b(?:group\s+ko|team\s+ko|group\s+task|group\s+me)\b/i;
 const AMBIGUOUS_PROJECT_PLAN_REGEX = /\bproject\s+plan\s+banao\b/i;

@@ -659,8 +659,9 @@ function isActionOrCreationCommand(text) {
   if (isQuestionOrInquiry) return false;
 
   return (
-    /\b(?:banao|banayein|create|add|assign|kardo|karo|set|badlo|change|update|edit|cancel|delete|hatao)\b/i.test(clean) ||
-    /\b(?:task\s+ka\s+naam|task\s+name|task\s+assign|task\s+banao|naya\s+task|new\s+task|project\s+banao|naya\s+project|new\s+project|client\s+banao|naya\s+client|new\s+client|client\s+add)\b/i.test(clean)
+    /\b(?:banao|banayein|create|add|assign|kardo|karo|karu|karun|set|badlo|change|update|edit|cancel|delete|hatao|dalo|likho)\b/i.test(clean) ||
+    /\b(?:task\s+ka\s+naam|task\s+name|task\s+assign|task\s+banao|naya\s+task|new\s+task|personal\s+task|parshan\s+task|project\s+banao|naya\s+project|new\s+project|client\s+banao|naya\s+client|new\s+client|client\s+add)\b/i.test(clean) ||
+    /(?:टास्क|काम|प्रोजेक्ट|क्लाइंट|प्लान|बनाओ|बनाएं|बना|क्रिएट|क्रियेट|करो|करूं|करू|असाइन|नाम|शीर्षक|जोड़ो|ऐड)/iu.test(clean)
   );
 }
 
