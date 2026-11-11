@@ -104,6 +104,9 @@ exports.addHoliday = async (req, res) => {
         if (error.code === 11000) {
             return errorResponse(res, 409, "Duplicate holiday - this already exists");
         }
+        if (error.name === "ValidationError" || error.name === "CastError") {
+            return errorResponse(res, 400, Object.values(error.errors || {}).map(e => e.message).join(", ") || error.message);
+        }
         
         return errorResponse(res, 500, "Failed to add holiday");
     }
@@ -304,6 +307,9 @@ exports.updateHoliday = async (req, res) => {
         
         if (error.code === 11000) {
             return errorResponse(res, 409, "Duplicate holiday - this already exists");
+        }
+        if (error.name === "ValidationError" || error.name === "CastError") {
+            return errorResponse(res, 400, Object.values(error.errors || {}).map(e => e.message).join(", ") || error.message);
         }
         
         return errorResponse(res, 500, "Failed to update holiday");

@@ -13,6 +13,7 @@ const mongoose = require("mongoose");
 const { validateRequest } = require("../middleware/validation");
 const { loginSchema } = require("../validations/authValidation");
 const OTP = require('../models/OTP');
+const PasswordResetThrottle = require('../models/PasswordResetThrottle');
 const emailService = require('../services/emailService'); 
 const { getLoginSettings } = require("../services/emailSettingsService");
 const {
@@ -1916,6 +1917,34 @@ exports.resendLoginOTP = async (req, res) => {
 };
 
 
+// Forgot-password OTP rules (web + app): the same OTP is re-sent until it is used or
+// expires, the next send is allowed 60 s after the previous one, and an account gets
+// 5 sends; after the 5th it is locked for 1 hour.
+const RESET_OTP_MAX_SENDS = 5;
+const RESET_OTP_COOLDOWN_MS = 60 * 1000;
+const RESET_OTP_LOCK_MS = 60 * 60 * 1000;
+const RESET_OTP_VALID_MS = 5 * 60 * 1000;
+
+const secondsUntil = (date) => Math.max(1, Math.ceil((new Date(date).getTime() - Date.now()) / 1000));
+const resetOtpLimitInfo = (throttle) => ({
+  maxAttempts: RESET_OTP_MAX_SENDS,
+  attemptsLeft: Math.max(0, RESET_OTP_MAX_SENDS - (throttle?.sendCount || 0)),
+});
+const lockedResponse = (res, throttle) => {
+  const retryAfterSeconds = secondsUntil(throttle.lockedUntil);
+  const minutes = Math.ceil(retryAfterSeconds / 60);
+  return res.status(429).json({
+    success: false,
+    message: `OTP limit reached. You can request a new OTP after ${minutes} minute${minutes === 1 ? '' : 's'}.`,
+    errorCode: 'OTP_LOCKED',
+    lockedUntil: throttle.lockedUntil,
+    retryAfterSeconds,
+    resendAfterSeconds: retryAfterSeconds,
+    ...resetOtpLimitInfo(throttle),
+    attemptsLeft: 0,
+  });
+};
+
 exports.forgotPassword = async (req, res) => {
   try {
     const { email, companyCode, companyIdentifier } = req.body;
@@ -1931,7 +1960,6 @@ exports.forgotPassword = async (req, res) => {
       return res.status(404).json({ message: 'No account found with this email.' });
     }
 
-    const otp = generateOTP();
     const otpScope = { email: cleanEmail };
 
     if (companyScope?.companyCode) {
@@ -1940,14 +1968,75 @@ exports.forgotPassword = async (req, res) => {
       otpScope.companyCode = client.companyCode;
     }
 
-    await OTP.deleteMany(otpScope);
+    // ---- send limits ----
+    const throttleKey = { email: cleanEmail, companyCode: String(otpScope.companyCode || '').toUpperCase() };
+    const now = new Date();
+    await PasswordResetThrottle.updateOne(throttleKey, { $setOnInsert: { sendCount: 0 } }, { upsert: true });
+    let throttle = await PasswordResetThrottle.findOne(throttleKey);
+    if (throttle.lockedUntil && throttle.lockedUntil > now) return lockedResponse(res, throttle);
+    const lockOver = throttle.lockedUntil && throttle.lockedUntil <= now;
+    const idleForAnHour = throttle.lastSentAt && now - throttle.lastSentAt >= RESET_OTP_LOCK_MS;
+    if (lockOver || idleForAnHour) {
+      await PasswordResetThrottle.updateOne(throttleKey, { $set: { sendCount: 0, lockedUntil: null } });
+    }
 
-    await OTP.create({
-      email: cleanEmail,
-      companyCode: otpScope.companyCode,
-      otp,
-      expiresAt: new Date(Date.now() + 5 * 60 * 1000)
+    // Take one send slot atomically, so double clicks cannot send twice or skip the wait.
+    const previousSentAt = throttle.lastSentAt || null;
+    const claimed = await PasswordResetThrottle.findOneAndUpdate(
+      {
+        ...throttleKey,
+        sendCount: { $lt: RESET_OTP_MAX_SENDS },
+        $or: [{ lastSentAt: null }, { lastSentAt: { $lte: new Date(now.getTime() - RESET_OTP_COOLDOWN_MS) } }, { sendCount: 0 }],
+      },
+      { $inc: { sendCount: 1 }, $set: { lastSentAt: now, expireAt: new Date(now.getTime() + 24 * 60 * 60 * 1000) } },
+      { new: true }
+    );
+    if (!claimed) {
+      throttle = await PasswordResetThrottle.findOne(throttleKey);
+      if (throttle.lockedUntil && throttle.lockedUntil > now) return lockedResponse(res, throttle);
+      const waitUntil = new Date((throttle.lastSentAt || now).getTime() + RESET_OTP_COOLDOWN_MS);
+      const resendAfterSeconds = secondsUntil(waitUntil);
+      return res.status(429).json({
+        success: false,
+        message: `Please wait ${resendAfterSeconds} seconds before requesting another OTP.`,
+        errorCode: 'OTP_COOLDOWN',
+        resendAfterSeconds,
+        ...resetOtpLimitInfo(throttle),
+      });
+    }
+    if (claimed.sendCount >= RESET_OTP_MAX_SENDS) {
+      claimed.lockedUntil = new Date(now.getTime() + RESET_OTP_LOCK_MS);
+      await claimed.save();
+    }
+    const undoClaim = () => PasswordResetThrottle.updateOne(throttleKey, {
+      $inc: { sendCount: -1 },
+      $set: { lastSentAt: previousSentAt, lockedUntil: null },
     });
+
+    // ---- same OTP while it is still unused and valid ----
+    const existing = await OTP.findOne({ ...otpScope, verified: { $ne: true }, expiresAt: { $gt: now } }).sort({ createdAt: -1 });
+    let otp;
+    let createdOtpId = null;
+    if (existing) {
+      otp = existing.otp;
+      existing.expiresAt = new Date(now.getTime() + RESET_OTP_VALID_MS);
+      await existing.save();
+    } else {
+      otp = generateOTP();
+      await OTP.deleteMany(otpScope);
+      const created = await OTP.create({
+        email: cleanEmail,
+        companyCode: otpScope.companyCode,
+        otp,
+        expiresAt: new Date(now.getTime() + RESET_OTP_VALID_MS)
+      });
+      createdOtpId = created._id;
+    }
+    // A failed email does not use up a try; a freshly made OTP is dropped again.
+    const rollback = async () => {
+      await undoClaim();
+      if (createdOtpId) await OTP.deleteOne({ _id: createdOtpId });
+    };
 
     try {
       const recipientName = user?.name || client?.client || 'User';
@@ -1973,7 +2062,7 @@ exports.forgotPassword = async (req, res) => {
       );
 
       if (!isRealEmailSent(emailResult)) {
-        await OTP.deleteMany(otpScope);
+        await rollback();
         return res.status(503).json({
           success: false,
           message: emailResult?.message || "OTP email could not be sent. Please contact administrator.",
@@ -1982,7 +2071,7 @@ exports.forgotPassword = async (req, res) => {
       }
     } catch (emailError) {
       console.error("Password reset email failed:", emailError);
-      await OTP.deleteMany(otpScope);
+      await rollback();
 
       return res.status(503).json({
         success: false,
@@ -1991,7 +2080,18 @@ exports.forgotPassword = async (req, res) => {
       });
     }
 
-    res.json({ success: true, message: "OTP sent successfully" });
+    const attemptsLeft = Math.max(0, RESET_OTP_MAX_SENDS - claimed.sendCount);
+    res.json({
+      success: true,
+      message: attemptsLeft
+        ? `OTP sent successfully. ${attemptsLeft} more ${attemptsLeft === 1 ? 'try' : 'tries'} left.`
+        : 'OTP sent successfully. That was the last try for the next hour.',
+      maxAttempts: RESET_OTP_MAX_SENDS,
+      attemptsLeft,
+      resendAfterSeconds: attemptsLeft ? Math.round(RESET_OTP_COOLDOWN_MS / 1000) : secondsUntil(claimed.lockedUntil),
+      lockedUntil: claimed.lockedUntil || null,
+      otpValidSeconds: Math.round(RESET_OTP_VALID_MS / 1000),
+    });
 
   } catch (error) {
     console.error(error);
@@ -2921,6 +3021,8 @@ exports.resetPassword = async (req, res) => {
       ? { email: cleanEmail, companyCode: otpRecord.companyCode }
       : { email: cleanEmail }
     );
+    // Password changed: the next forgot-password starts with all 5 sends again.
+    await PasswordResetThrottle.deleteOne({ email: cleanEmail, companyCode: String(otpRecord.companyCode || '').toUpperCase() });
 
     
     emailService.sendEmail(
@@ -3109,7 +3211,7 @@ exports.getCompanyDetailsByIdentifier = async (req, res) => {
           $expr: {
             $regexMatch: {
               input: cleanIdentifier,
-              regex: { $concat: ["^company-", "$companyCode", "$"] }
+              regex: { $concat: ["^company-", "$companyCode", { $literal: "$" }] }
             }
           }
         }

@@ -125,18 +125,6 @@ router.put('/:id/restore', protect, requirePlatformSuperAdmin, async (req, res) 
     res.status(500).json({ error: error.message });
   }
 });
-router.get('/test', (req, res) => {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(404).json({ success: false, message: 'Not found' });
-  }
-  res.json({
-    status: 'healthy',
-    service: 'Menu Access API',
-    timestamp: new Date().toISOString(),
-    version: '1.0.0',
-    uptime: process.uptime()
-  });
-});
 
 module.exports = router;
 void 0;

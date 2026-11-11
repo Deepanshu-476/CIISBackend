@@ -6,7 +6,6 @@ const upload = require('../../utils/multer');
 const { uploadRemarkImage } = require('../middlewares/uploadMiddleware');
 
 
-
 router.get('/', protect, taskController.getTasks);
 router.get('/my', protect, taskController.getMyTasks);
 router.get('/personal', protect, taskController.getPersonalTasks);
@@ -18,7 +17,6 @@ router.get('/assigned', protect, taskController.getAssignedTasks);
 router.get('/all', protect, taskController.getAllMyTaskViews);
 router.get('/all/stats', protect, taskController.getAllMyTaskStats);
 router.get('/counts', protect, taskController.getAllMyTaskStats);
-
 
 
 const uploadFields = upload.fields([
@@ -41,10 +39,8 @@ router.patch('/:taskId/quick-status', protect, taskController.quickStatusUpdate)
 router.patch('/:taskId/creator-status', protect, taskController.updateCreatorStatus);
 
 
-
 router.post('/:taskId/remarks', protect, uploadRemarkImage, taskController.addRemark);
 router.get('/:taskId/remarks', protect, taskController.getRemarks);
-
 
 
 router.get('/notifications/all', protect, taskController.getNotifications);
@@ -52,14 +48,11 @@ router.patch('/notifications/:notificationId/read', protect, taskController.mark
 router.patch('/notifications/read-all', protect, taskController.markAllNotificationsAsRead);
 
 
-
 router.get('/:taskId/activity-logs', protect, taskController.getTaskActivityLogs);
 router.get('/user-activity/:userId', protect, taskController.getUserActivityTimeline);
 
 
-
 router.get('/assignable-users', protect, taskController.getAssignableUsers);
-
 
 
 router.get('/status-counts', protect, taskController.getTaskStatusCounts);
@@ -72,7 +65,6 @@ router.get('/user/:userId/all-tasks', protect, taskController.getUserAllTasksPag
 router.get('/user/:userId/tasks', protect, taskController.getUserTasks);
 
 
-
 router.get('/overdue', protect, taskController.getOverdueTasks);
 router.get('/user/:userId/overdue', protect, taskController.getUserOverdueTasks);
 router.patch('/:taskId/overdue', protect, taskController.markTaskAsOverdue);
@@ -82,41 +74,7 @@ router.get('/overdue/summary', protect, taskController.getOverdueSummary);
 router.get('/overdue/summary/:userId', protect, taskController.getOverdueSummary);
 
 
-
 router.patch('/:taskId/snooze', protect, taskController.snoozeTask);
 
-
-router.get('/test', (req, res) => {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(404).json({ success: false, message: 'Not found' });
-  }
-  return res.json({ success: true, message: 'Task management API is running', timestamp: new Date(), version: '1.0.0' });
-});
-
-router.get('/test1', (req, res, next) => {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(404).json({ success: false, message: 'Not found' });
-  }
-  next();
-}, protect, (req, res) => {
-  return res.json({
-    success: true,
-    user: { id: req.user._id, name: req.user.name, email: req.user.email, role: req.user.role },
-    endpoints: {
-      getTasks: 'GET /',
-      getMyTasks: 'GET /my',
-      getAssignedTasks: 'GET /assigned',
-      createSelfTask: 'POST /create-self',
-      createTaskForOthers: 'POST /create-for-others',
-      updateTask: 'PUT /:taskId',
-      deleteTask: 'DELETE /:taskId',
-      updateStatus: 'PATCH /:taskId/status',
-      getAssignableUsers: 'GET /assignable-users',
-      getUserTasks: 'GET /user/:userId/tasks',
-      getUserStats: 'GET /user/:userId/stats',
-      getUsersWithTaskCounts: 'GET /users-with-counts'
-    }
-  });
-});
 
 module.exports = router;

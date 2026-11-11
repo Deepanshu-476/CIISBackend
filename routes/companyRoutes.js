@@ -118,18 +118,6 @@ router.patch("/:id/deactivate", protect, restrictTo("super_admin"), requirePlatf
 router.patch("/:id/activate", protect, restrictTo("super_admin"), requirePlatformOwner, companyController.activateCompany);
 router.delete("/:id", protect, restrictTo("super_admin"), requirePlatformOwner, companyController.deleteCompanyPermanently);
 
-router.get('/test', (req, res) => {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(404).json({ success: false, message: 'Not found' });
-  }
-  res.json({  
-    status: 'healthy',
-    service: 'Company API',
-    timestamp: new Date().toISOString(),
-    version: '1.0.0',
-    uptime: process.uptime()
-  });
-});
 
 // Company profile view and update
 router.get("/:id", protect, requireCompanyMember, companyController.getCompanyById);
@@ -141,14 +129,5 @@ router.put("/:id/dashboard-config", protect, companyController.updateDashboardCo
 router.get("/:id/location", protect, companyController.getCompanyLocation);
 router.put("/:id/location", protect, companyController.updateCompanyLocation);
 
-router.get('/test', (req, res) => {
-  res.json({  
-    status: 'healthy',
-    service: 'Menu Access API',
-    timestamp: new Date().toISOString(),
-    version: '1.0.0',
-    uptime: process.uptime()
-  });
-});
 
 module.exports = router;

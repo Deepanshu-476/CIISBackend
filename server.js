@@ -19,7 +19,8 @@ if (missingEnvVars.length > 0) {
 }
 
 require('./services/subscriptionReminderService');
-const { runWorkAnniversaryEmails } = require('./services/workAnniversaryService');
+// Registers the hourly work-anniversary email job.
+require('./services/workAnniversaryService');
 const { runAutoClockOutSweep } = require('./HR-CDS/cron/forceClockOut');
 const { cleanRecurringTasksForAbsentUser } = require('./HR-CDS/cron/recurringTasks');
 
@@ -420,7 +421,6 @@ const sendReminderForTask = async ({ task, recipients, title, taskTitle, taskTyp
 };
 
 
-
 const io = socketIo(server, {
   cors: {
     origin: (origin, callback) => {
@@ -450,8 +450,6 @@ const initializeSocket = require('./HR-CDS/socket/index.js');
 
 
 initializeSocket(io);
-
-
 
 
 const checkAndMarkOverdueTasks = async () => {
@@ -990,8 +988,6 @@ const markPastAbsentRecords = async () => {
 const { markDailyAbsent } = require('./HR-CDS/controllers/AttendanceController');
 
 
-
-
 const { syncOnHoldTaskOverdue } = require('./HR-CDS/utils/onHoldOverdueService');
 const { autoRejectExpiredLeaves } = require('./HR-CDS/controllers/LeaveController');
 scheduleDbJob('* * * * *', 'On hold attendance overdue check', syncOnHoldTaskOverdue);
@@ -1204,7 +1200,6 @@ app.use((req, res, next) => {
 const dashboardRoutes = require('./HR-CDS/routes/dashboardRoutes.js');
 
 
-
 app.use("/api/auth", require("./routes/authRoutes.js"));
 app.use('/api/crm/lead-types', require('./routes/leadTypeRoutes.js'));
 app.use('/api/crm/lead-sources', require('./routes/leadSourceRoutes.js'));
@@ -1244,6 +1239,7 @@ app.use("/api/department", require("./routes/Department.routes.js"));
 app.use("/departments", require("./routes/Department.routes.js"));
 app.use("/department", require("./routes/Department.routes.js"));
 app.use("/api/alerts", require("./HR-CDS/routes/alertRoutes.js"));
+app.use("/api/promos", require("./HR-CDS/routes/promoRoutes.js"));
 app.use("/api/badges", require("./routes/badgeRoutes.js"));
 app.use("/api/notifications", require("./HR-CDS/routes/notificationRoutes.js"));
 app.use("/api/feedback", require("./HR-CDS/routes/feedbackRoutes.js"));
@@ -1266,7 +1262,6 @@ app.use("/api/tasks", require("./HR-CDS/routes/clientTask.js"));
 app.use("/api/tasks", require("./HR-CDS/routes/taskRoute.js"));
 // Client task routes dedicated namespace
 app.use("/api/client-tasks", require("./HR-CDS/routes/clientTask.js"));
-
 
 
 app.use('/api/dashboard', dashboardRoutes);
@@ -1302,8 +1297,6 @@ app.use('/api/leave-policies', require('./routes/leavePolicyRoutes.js'));
 app.use('/api/salary-components', require('./routes/salaryComponentRoutes.js'));
 app.use('/api/salary-structures', require('./routes/salaryStructureRoutes.js'));
 app.use('/api/employee-salaries', require('./routes/employeeSalaryRoutes.js'));
-
-
 
 
 app.get("/", (req, res) => {
@@ -1391,25 +1384,6 @@ app.get("/api/manual-attendance-check", protect, restrictTo("super_admin"), sens
 });
 
 
-app.get("/api/tasks/test", (req, res) => {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(404).json({ success: false, message: 'Not found' });
-  }
-  res.json({
-    success: true,
-    message: "Tasks API is working",
-    endpoints: {
-      assignedToMe: "/api/tasks/assigned-to-me",
-      clientTasks: "/api/tasks/client/:clientId",
-      serviceTasks: "/api/tasks/client/:clientId/service/:service"
-    },
-    timestamp: new Date().toISOString()
-  });
-});
-
-
-
-
 app.use((req, res) => {
   void 0;
   res.status(404).json({
@@ -1457,14 +1431,6 @@ const startServer = async () => {
   require('./HR-CDS/utils/projectChatWorker').start();
 
   server.listen(PORT, async () => {
-
-    // Temporarily enabled for work-anniversary email template testing.
-    if (scheduledJobsEnabled()) try {
-      const anniversarySummary = await runWorkAnniversaryEmails();
-      console.log("Startup work anniversary test completed:", anniversarySummary);
-    } catch (err) {
-      console.error("Startup work anniversary test failed:", err);
-    }
 
     try {
       const migrateTenantIndexes = require("./utils/tenantIndexMigration");
