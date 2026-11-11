@@ -98,6 +98,7 @@ const { parseHinglishSlots, isSkip, isSkipAll, isSelfPhrase, isFillerPhrase, ext
 const { detectUserIntent, normalizeTranscript } = require('./sttNormalizer');
 const User = require('../../models/User');
 const Department = require('../../models/Department');
+const SidebarConfig = require('../../models/SidebarConfig');
 const { Project: DefaultProjectModel } = require('../../HR-CDS/models/Project');
 const {
   resolveProject,
@@ -706,7 +707,8 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
   const clients = context.accessibleClients || deps.accessibleClients || [];
   const projects = context.accessibleProjects || deps.accessibleProjects || [];
   const draft = context.draft || deps.draft || {};
-  const allowedIntents = resolveUserAllowedIntents(req?.user, context.scope, deps);
+  const queryDeps = { ...deps, accessibleProjects: projects };
+  const allowedIntents = resolveUserAllowedIntents(req?.user, context.scope, queryDeps);
 
   const mentionsProject = /(?:projects?|projekts?|projets?|प्रोजेक्ट्स?|प्रजेक्ट|प्रोज़ेक्ट)/iu.test(message);
   const matchedProject = findReferencedProject(message, projects, draft);
@@ -1135,7 +1137,7 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
         speakText: rep,
         speakTextHi: rep,
         draft: null,
-        chips: buildChips(null, 'welcome', { ...deps, language: lang, allowedIntents: resolveUserAllowedIntents(req?.user, context.scope, deps) }),
+        chips: buildChips(null, 'welcome', { ...queryDeps, language: lang, allowedIntents }),
         candidates: [],
         notices: [],
         canAssignOthers: context.canAssignOthers
@@ -1215,7 +1217,7 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
         speakTextHi: isEn ? null : rep,
         language: isEn ? 'en' : 'hinglish',
         draft: null,
-        chips: buildChips(null, 'welcome', { ...deps, language: lang, allowedIntents: resolveUserAllowedIntents(req?.user, context.scope, deps) }),
+        chips: buildChips(null, 'welcome', { ...queryDeps, language: lang, allowedIntents }),
         candidates: [],
         notices: [],
         canAssignOthers: context.canAssignOthers
@@ -1452,7 +1454,7 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
         speakTextHi: isEn ? null : rep,
         language: isEn ? 'en' : 'hinglish',
         draft: null,
-        chips: buildChips(null, 'welcome', { ...deps, language: lang, allowedIntents: resolveUserAllowedIntents(req?.user, context.scope, deps) }),
+        chips: buildChips(null, 'welcome', { ...queryDeps, language: lang, allowedIntents }),
         candidates: [],
         notices: [],
         canAssignOthers: context.canAssignOthers
@@ -2181,18 +2183,28 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
     return ALL_INTENTS;
   }
 
-  const userPerms = Array.isArray(user.allowedPages) ? user.allowedPages
-    : (Array.isArray(user.pagePermissions) ? user.pagePermissions
-    : (Array.isArray(user.permissions) ? user.permissions : []));
+  const userPerms = [
+    ...(Array.isArray(user?.allowedPages) ? user.allowedPages : []),
+    ...(Array.isArray(user?.pagePermissions) ? user.pagePermissions : []),
+    ...(Array.isArray(user?.permissions) ? user.permissions : []),
+    ...(Array.isArray(deps?.sidebarMenuItems) ? deps.sidebarMenuItems : []),
+    ...(Array.isArray(deps?.menuItems) ? deps.menuItems : []),
+  ];
 
-  const normalizedPerms = new Set(
-    userPerms.map((p) => String(typeof p === 'object' ? p.page || p.name || p.path || '' : p)
-      .trim()
-      .toLowerCase()
-      .replace(/^\/+/, '')
-      .replace(/^ciisuser\//, '')
-      .replace(/[\s_-]+/g, ''))
-  );
+  const normalizedPerms = new Set();
+  userPerms.forEach((p) => {
+    if (typeof p === 'object' && p !== null) {
+      [p.page, p.name, p.path, p.id, p.key].filter(Boolean).forEach((val) => {
+        normalizedPerms.add(
+          String(val).trim().toLowerCase().replace(/^\/+/, '').replace(/^ciisuser\//, '').replace(/[\s_-]+/g, '')
+        );
+      });
+    } else if (p) {
+      normalizedPerms.add(
+        String(p).trim().toLowerCase().replace(/^\/+/, '').replace(/^ciisuser\//, '').replace(/[\s_-]+/g, '')
+      );
+    }
+  });
 
   const allowed = ['self_task'];
 
@@ -2208,7 +2220,16 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
     allowed.push('create_project');
   }
 
-  const hasProjects = canProj || (Array.isArray(deps.accessibleProjects) && deps.accessibleProjects.length > 0);
+  // Creating tasks in projects is allowed for anyone with My Projects / Project view or admin project access
+  const hasProjects = canProj ||
+    normalizedPerms.has('projects') ||
+    normalizedPerms.has('project') ||
+    normalizedPerms.has('myprojects') ||
+    normalizedPerms.has('myproject') ||
+    normalizedPerms.has('ciisuser/project') ||
+    Boolean(user?.hasProjects) ||
+    (Array.isArray(deps?.accessibleProjects) && deps.accessibleProjects.length > 0) ||
+    (Array.isArray(deps?.projects) && deps.projects.length > 0);
   if (hasProjects) {
     allowed.push('task_project');
   }
@@ -2469,17 +2490,41 @@ async function parseTaskRequest({
     cRole.includes('owner') ||
     req?.user?.permissions?.includes?.('admin-task-create')
   );
-  const userAllowedIntents = resolveUserAllowedIntents(req?.user, scope, deps);
+  // Retrieve accessible projects tenant-safely
+  const accessibleProjects = Array.isArray(deps.accessibleProjects)
+    ? deps.accessibleProjects
+    : await getAccessibleProjects(req, deps);
+  deps.accessibleProjects = accessibleProjects;
+
+  let sidebarMenuItems = Array.isArray(deps.sidebarMenuItems) ? deps.sidebarMenuItems : [];
+  if (sidebarMenuItems.length === 0 && (deps.SidebarConfig || (mongoose && mongoose.connection && mongoose.connection.readyState === 1))) {
+    try {
+      const SCModel = deps.SidebarConfig || (mongoose && mongoose.models && mongoose.models.SidebarConfig) || SidebarConfig;
+      const roleId = req?.user?.jobRole?._id || req?.user?.jobRole || req?.user?.role;
+      const compId = req?.user?.company?._id || req?.user?.company || req?.user?.companyId;
+      if (SCModel && compId && roleId) {
+        const scDoc = await SCModel.findOne({ companyId: compId, role: String(roleId) }).lean();
+        if (scDoc && Array.isArray(scDoc.menuItems)) {
+          sidebarMenuItems = scDoc.menuItems;
+        }
+      }
+    } catch (err) {
+      // Ignore DB lookup error
+    }
+  }
+  deps.sidebarMenuItems = sidebarMenuItems;
+
+  const userAllowedIntents = resolveUserAllowedIntents(req?.user, scope, {
+    ...deps,
+    accessibleProjects,
+    sidebarMenuItems,
+    allowedIntents: deps.allowedIntents || req?.body?.allowedIntents
+  });
   const canAssignOthers = Boolean(
     isPrivilegedUser ||
     scope.isOwner ||
     userAllowedIntents.includes('task_assigned_user')
   );
-
-  // Retrieve accessible projects tenant-safely
-  const accessibleProjects = Array.isArray(deps.accessibleProjects)
-    ? deps.accessibleProjects
-    : await getAccessibleProjects(req, deps);
 
   const companyId = req?.user?.company?._id || req?.user?.company || req?.user?.companyId;
   const rawCompanyCode = req?.user?.companyCode || req?.user?.company?.companyCode || '';
