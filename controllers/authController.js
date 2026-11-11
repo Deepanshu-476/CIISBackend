@@ -3211,7 +3211,7 @@ exports.getCompanyDetailsByIdentifier = async (req, res) => {
           $expr: {
             $regexMatch: {
               input: cleanIdentifier,
-              regex: { $concat: ["^company-", "$companyCode", "$"] }
+              regex: { $concat: ["^company-", "$companyCode", { $literal: "$" }] }
             }
           }
         }

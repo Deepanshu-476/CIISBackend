@@ -21,7 +21,7 @@ router.get("/:id/tasks/:taskId/document", protect, projectController.downloadTas
 router.get("/:id/tasks/:taskId/files", protect, projectController.downloadTaskFile);
 router.get("/:id", protect, projectController.getProjectById);
 
-router.post("/", protect, [
+router.post("/", protect, require("../../middleware/pageAccess").blockClientLogins, [
   check("projectName").notEmpty().withMessage("Project name is required"),
   check("description").notEmpty().withMessage("Description is required"),
   check("users").custom(value => {

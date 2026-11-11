@@ -1540,7 +1540,12 @@ exports.getAllUsers = async (req, res) => {
     
     
     const authorizedRoles = ['admin', 'super_admin', 'hr', 'manager', 'employee'];
-    const isAuthorized = authorizedRoles.includes(req.user.jobRole);
+    // Owners/admins (companyRole) see every department; the jobRole check stays as it was.
+    const companyWideRoles = ['owner', 'company_owner', 'admin', 'super_admin', 'superadmin', 'hr', 'manager'];
+    const normalizedCompanyRole = String(req.user.companyRole || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+    const isAuthorized = authorizedRoles.includes(req.user.jobRole) ||
+      companyWideRoles.includes(normalizedCompanyRole) ||
+      req.user.isCompanyOwner === true;
     
     if (!isAuthorized && userDepartment) {
       filter.department = userDepartment;

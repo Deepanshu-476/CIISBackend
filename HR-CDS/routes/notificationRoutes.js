@@ -372,10 +372,9 @@ router.delete('/devices/:deviceToken', deleteDeviceHandler);
 
 router.get('/preferences', async (req, res) => {
   try {
-    const user = await req.user.populate('notificationPreferences').execPopulate?.() || req.user;
-    
-    const prefs = (await require('../../models/User').findById(req.user._id).select('notificationPreferences')).notificationPreferences;
-    res.json({success: true, data: prefs});
+    // req.user is a plain cached object (no .populate); read the stored preferences directly.
+    const user = await require('../../models/User').findById(req.user._id).select('notificationPreferences').lean();
+    res.json({success: true, data: user?.notificationPreferences || {}});
   } catch (error) {
     console.error('Failed to get preferences:', error);
     res.status(500).json({success: false, message: 'Failed to get preferences'});

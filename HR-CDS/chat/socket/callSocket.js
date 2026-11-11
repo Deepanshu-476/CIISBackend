@@ -248,6 +248,25 @@ const scheduleInviteTimeout = (io, callId, userId, expiresAt) => {
         });
     }, delay));
 };
+// A participant can stay "invited" or "joined" after the person is gone: the ring timer and the
+// disconnect grace timer live in one server's memory, so a restart (or another backend that
+// shares the Redis call store) leaves the status behind. Such people must be addable again.
+const isStaleParticipant = async (io, participant) => {
+    if (participant?.status === "invited") {
+        const expiresAt = Number(participant.expiresAt || 0);
+        return expiresAt > 0 && expiresAt < Date.now();
+    }
+    if (participant?.status === "joined") {
+        if (!participant.socketId) return false;
+        try {
+            const sockets = await io.in(participant.socketId).fetchSockets(); // all servers
+            return sockets.length === 0;
+        } catch (_) {
+            return false;
+        }
+    }
+    return false;
+};
 const callSocket = (io, socket) => {
     const reconnectTimer = socketDisconnectTimers.get(socket.id);
     if (reconnectTimer) {
@@ -513,14 +532,27 @@ const callSocket = (io, socket) => {
                 emitCallUnavailable(socket, data, "Call is no longer active");
                 return;
             }
-            // People who missed, declined, left or were removed can be added again.
-            const requestedIds = getParticipantIds(data)
-                .filter(userId => userId !== socket.userId && !["joined", "invited"].includes(room.participants[userId]?.status));
+            // People who missed, declined, left or were removed can be added again, and so can
+            // people whose "invited"/"joined" status is stale (see isStaleParticipant).
+            const alreadyInCallIds = [];
+            const alreadyRingingIds = [];
+            const requestedIds = [];
+            for (const userId of getParticipantIds(data)) {
+                if (userId === socket.userId) continue;
+                const participant = room.participants[userId];
+                if (["joined", "invited"].includes(participant?.status) && !(await isStaleParticipant(io, participant))) {
+                    (participant.status === "joined" ? alreadyInCallIds : alreadyRingingIds).push(userId);
+                    continue;
+                }
+                requestedIds.push(userId);
+            }
             if (requestedIds.length === 0) {
                 socket.emit("call:ringing", {
                     callId,
                     toUserIds: [],
                     unavailableIds: [],
+                    alreadyInCallIds,
+                    alreadyRingingIds,
                     callType: room.callType,
                 });
                 return;
@@ -604,6 +636,8 @@ const callSocket = (io, socket) => {
                 callId,
                 toUserIds: targetParticipantIds,
                 unavailableIds,
+                alreadyInCallIds,
+                alreadyRingingIds,
                 callType: room.callType,
             });
         });

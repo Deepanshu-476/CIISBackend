@@ -26,10 +26,12 @@ const canManageAlerts = (req, res, next) => {
   if (allowed.includes(role) || allowed.includes(companyRole) || allowed.includes(jobRole)) {
     return next();
   }
-  return res.status(403).json({
-    success: false,
-    message: 'Not authorized to manage alerts'
-  });
+  // Employees given the Create Alert page in Page Management may manage alerts too.
+  const action = req.method === 'DELETE' ? 'delete' : 'edit';
+  return require('../../middleware/pageAccess')
+    .hasPageAccess(req.user, { paths: ['/ciisUser/create-alert', 'create-alert'], action })
+    .then(ok => (ok ? next() : res.status(403).json({ success: false, message: 'Not authorized to manage alerts' })))
+    .catch(next);
 };
 
 
@@ -40,9 +42,9 @@ router.patch("/:id/read", protect, alertController.markAsRead);
 router.patch("/:id/unread", protect, alertController.markAsUnread);
 
 
-router.post("/", protect, alertController.addAlert);
-router.put("/:id", protect, alertController.updateAlert);
-router.delete("/:id", protect ,  alertController.deleteAlert);
+router.post("/", protect, canManageAlerts, alertController.addAlert);
+router.put("/:id", protect, canManageAlerts, alertController.updateAlert);
+router.delete("/:id", protect, canManageAlerts, alertController.deleteAlert);
 
 
 module.exports = router;
