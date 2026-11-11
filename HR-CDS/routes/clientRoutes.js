@@ -61,10 +61,16 @@ router.post('/service-enquiries', serviceEnquiryController.createServiceEnquiry)
 // All client management, service management, and client portal routes require authentication
 router.use(auth.protect);
 
+const { requirePageAccess } = require('../../middleware/pageAccess');
+// Owner and company admin always; anyone else needs the "Client Services" page in Page Management.
+const SERVICE_PAGES = ['/ciisUser/client-services'];
+const canEditServices = requirePageAccess({ paths: SERVICE_PAGES, action: 'edit', alwaysRoles: ['admin'], label: 'Client Services' });
+const canDeleteServices = requirePageAccess({ paths: SERVICE_PAGES, action: 'delete', alwaysRoles: ['admin'], label: 'Client Services' });
+
 router.get('/services', serviceController.getAllServices);
-router.post('/services', serviceController.addService);
-router.put('/services/:id', serviceController.updateService);
-router.delete('/services/:id', serviceController.deleteService);
+router.post('/services', canEditServices, serviceController.addService);
+router.put('/services/:id', canEditServices, serviceController.updateService);
+router.delete('/services/:id', canDeleteServices, serviceController.deleteService);
 
 router.get('/service-enquiries', serviceEnquiryController.getServiceEnquiries);
 router.patch('/service-enquiries/:id/status', serviceEnquiryController.updateServiceEnquiryStatus);

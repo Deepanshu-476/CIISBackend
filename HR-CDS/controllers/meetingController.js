@@ -8,6 +8,17 @@ const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagin
 
 const callerCompanyCode = req => req.user?.companyCode || req.user?.company?.companyCode || "";
 const findCompanyMeeting = (req, meetingId) => Meeting.findOne({ _id: meetingId, companyCode: callerCompanyCode(req) });
+// Meeting managers: owner/admin/HR/manager, or anyone given the Admin Meeting page.
+const MEETING_MANAGER_ROLES = ['owner', 'company_owner', 'admin', 'company_admin', 'hr', 'hr_manager', 'manager', 'super_admin', 'superadmin'];
+const MEETING_PAGES = ['/ciisUser/admin-meeting', 'admin-meeting'];
+const meetingRoleOf = value => String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+const canManageMeetings = async (req, action) => {
+  const user = req.user || {};
+  if ([user.companyRole, user.role, user.jobRoleName, user.jobRole].map(meetingRoleOf).some(r => MEETING_MANAGER_ROLES.includes(r))) return true;
+  return require("../../middleware/pageAccess").hasPageAccess(user, { paths: MEETING_PAGES, action });
+};
+const isMeetingCreator = (req, meeting) => String(meeting?.createdBy || '') === String(req.user?._id || req.user?.id || '');
+
 const attendeeEmails = async ids => {
   const users = await User.find({ _id: { $in: ids } }).select("name email").lean();
   const byId = new Map(users.map(user => [String(user._id), user]));
@@ -171,6 +182,9 @@ const updateMeeting = async (req, res) => {
     if (!meeting) {
       return res.status(404).json({ error: "Meeting not found" });
     }
+    if (!isMeetingCreator(req, meeting) && !(await canManageMeetings(req, 'edit'))) {
+      return res.status(403).json({ error: "Only the person who created this meeting can change it" });
+    }
 
     
     cancelMeetingReminder(meetingId);
@@ -247,6 +261,10 @@ const updateMeeting = async (req, res) => {
  
 const getUserMeetings = async (req, res) => {
   try {
+    const isSelf = String(req.params.userId) === String(req.user?._id || req.user?.id || '');
+    if (!isSelf && !(await canManageMeetings(req, 'view'))) {
+      return res.status(403).json({ error: "You can only see your own meetings" });
+    }
     const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
     const filter = {
       attendees: req.params.userId,
@@ -364,8 +382,11 @@ const deleteMeeting = async (req, res) => {
     }
 
     
-    const meeting = await findCompanyMeeting(req, meetingId).select("_id").lean();
+    const meeting = await findCompanyMeeting(req, meetingId).select("_id createdBy").lean();
     if (!meeting) return res.status(404).json({ error: "Meeting not found" });
+    if (!isMeetingCreator(req, meeting) && !(await canManageMeetings(req, 'delete'))) {
+      return res.status(403).json({ error: "Only the person who created this meeting can delete it" });
+    }
 
     cancelMeetingReminder(meetingId);
 

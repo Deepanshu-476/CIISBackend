@@ -51,7 +51,7 @@ router.post('/sync',
 router.get('/stats', leaveController.getLeaveStats);
 
 
-router.get('/all', leaveController.getAllLeaves);
+router.get('/all', require('../../middleware/pageAccess').blockClientLogins, leaveController.getAllLeaves);
 
 router.get('/approval-options/:id',
   [

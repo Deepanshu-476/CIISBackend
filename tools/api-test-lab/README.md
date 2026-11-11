@@ -58,11 +58,50 @@ Login and add-employee share a limit of 20 calls per 15 minutes per IP. Running 
 - Everything the lab creates belongs to a company whose code starts with `ZZLAB`, and every login email ends with `@zzlab-test.example.com`. Delete removes only records linked to those companies and users.
 - A database that is not on localhost is refused unless the lab is started with `LAB_ALLOW_REMOTE_DB=1`. The production backends share the live database, so do not point it there.
 
+## On the server at `/test`
+
+The lab needs its **own** database and its **own** backend copy on the server. app1, app2 and the web backend all use the live database, so never point the lab at them.
+
+```bash
+# 1. lab database (Docker, localhost only)
+docker run -d --name ciislab-mongo --restart unless-stopped -p 127.0.0.1:27027:27017 mongo:8 --replSet rs0 --bind_ip_all
+docker exec ciislab-mongo mongosh --quiet --eval 'rs.initiate({_id:"rs0",members:[{_id:0,host:"127.0.0.1:27017"}]})'
+
+# 2. lab backend = copy of the repo backend in /var/www/apitestlab (own .env, NOT the live one)
+cd /var/www/apitestlab
+MONGO_URI="mongodb://127.0.0.1:27027/ciislab?replicaSet=rs0&directConnection=true" PORT=3100 DISABLE_SCHEDULED_JOBS=true \
+  EMAIL_HOST= EMAIL_USER= EMAIL_PASS= REDIS_URL= COTURN_HOST=turn.lab.local COTURN_STATIC_AUTH_SECRET=lab-turn-secret \
+  pm2 start server.js --name lab-backend --update-env
+
+# 3. the lab page at /test with a password
+MONGO_URI="mongodb://127.0.0.1:27027/ciislab?replicaSet=rs0&directConnection=true" LAB_TARGET=http://127.0.0.1:3100 \
+  COTURN_STATIC_AUTH_SECRET=lab-turn-secret LAB_BASE_PATH=/test LAB_PASSWORD='<strong password>' \
+  pm2 start tools/api-test-lab/server.js --name lab --update-env
+```
+
+nginx (inside the domain's `server { listen 443 ... }` block):
+
+```nginx
+location = /test { return 301 /test/; }
+location /test/ {
+    proxy_pass http://127.0.0.1:4600;
+    proxy_set_header Host $host;
+    proxy_set_header Authorization $http_authorization;
+    proxy_buffering off;          # live progress (server-sent events)
+    proxy_read_timeout 900s;
+}
+```
+
+Open `https://<domain>/test/` and log in as `lab` / `LAB_PASSWORD`. With `LAB_BASE_PATH` set, the lab will not start without `LAB_PASSWORD`. It listens on 127.0.0.1 only (`LAB_HOST`).
+
 ## Settings
 
 | Env | Default |
 |---|---|
 | `LAB_PORT` | 4600 |
+| `LAB_HOST` | 127.0.0.1 |
+| `LAB_BASE_PATH` | none (server: `/test`) |
+| `LAB_USER` / `LAB_PASSWORD` | `lab` / none — password login is on when `LAB_PASSWORD` is set; required with `LAB_BASE_PATH` |
 | `LAB_TARGET` | `http://localhost:$PORT` from `.env` (can be changed on the page) |
 | `LAB_MONGO_URI` / `MONGO_URI` | from `.env` |
 | `LAB_ALLOW_REMOTE_DB` | off |

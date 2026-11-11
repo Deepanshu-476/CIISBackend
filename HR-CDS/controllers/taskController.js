@@ -4188,5 +4188,8 @@ exports.updateTaskReminder = async (req, res) => {
   }
 };
 
+// Shared with assignedTaskController so both status APIs follow the same rules.
+exports.canManageTaskFromCompanyAll = canManageTaskFromCompanyAll;
+
 module.exports = exports;
 void 0;
