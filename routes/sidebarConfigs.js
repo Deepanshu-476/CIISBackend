@@ -71,8 +71,45 @@ const getRouteAccessKeys = item => {
   }
 
   if (cleanPath) {
+    keys.add(cleanPath.replace(/^ciisUser\//i, ''));
     keys.add(`/ciisUser/${cleanPath}`);
     keys.add(`ciisUser/${cleanPath}`);
+  }
+
+  const pathLower = cleanPath.toLowerCase();
+  if (pathLower.startsWith('ciisuser/crm/admin/')) {
+    const slug = pathLower.replace('ciisuser/crm/admin/', '');
+    keys.add(`admin-crm-${slug}`);
+    keys.add(`crm/admin/${slug}`);
+  } else if (pathLower.startsWith('ciisuser/crm/reports/')) {
+    const slug = pathLower.replace('ciisuser/crm/reports/', '');
+    keys.add(`admin-crm-reports-${slug}`);
+    keys.add(`crm/reports/${slug}`);
+  } else if (pathLower.startsWith('ciisuser/telecaller/')) {
+    const slug = pathLower.replace('ciisuser/telecaller/', '');
+    keys.add(`admin-telecaller-${slug}`);
+    keys.add(`telecaller/${slug}`);
+  }
+
+  const idLower = id.toLowerCase();
+  if (idLower.startsWith('crm/admin/')) {
+    const slug = idLower.replace('crm/admin/', '');
+    keys.add(`admin-crm-${slug}`);
+  } else if (idLower.startsWith('crm/reports/')) {
+    const slug = idLower.replace('crm/reports/', '');
+    keys.add(`admin-crm-reports-${slug}`);
+  } else if (idLower.startsWith('telecaller/')) {
+    const slug = idLower.replace('telecaller/', '');
+    keys.add(`admin-telecaller-${slug}`);
+  } else if (idLower.startsWith('admin-telecaller-')) {
+    const slug = idLower.replace('admin-telecaller-', '');
+    keys.add(`telecaller/${slug}`);
+  } else if (idLower.startsWith('admin-crm-reports-')) {
+    const slug = idLower.replace('admin-crm-reports-', '');
+    keys.add(`crm/reports/${slug}`);
+  } else if (idLower.startsWith('admin-crm-')) {
+    const slug = idLower.replace('admin-crm-', '');
+    keys.add(`crm/admin/${slug}`);
   }
 
   const clientKey = id.startsWith('client-')
@@ -115,9 +152,21 @@ const filterMenuItemsByCompanyAccess = async (companyId, menuItems) => {
 
   const normalizeKey = value => String(value || '').trim().replace(/^\/+/, '').toLowerCase();
   const allowedSet = new Set(allowedPages.map(page => normalizeKey(page)).filter(Boolean));
+  const hasCrmAccess = allowedSet.has('crm') || allowedSet.has('admin-crm');
+  const hasTelecallerAccess = allowedSet.has('telecaller') || allowedSet.has('admin-telecaller');
+
   return menuItems.filter(item => {
+    // Dashboard is the authenticated landing route, not an optional feature.
+    if (['dashboard', 'user-dashboard'].includes(normalizeKey(item?.id)) ||
+      normalizeKey(item?.path).replace(/\/+$/, '') === 'ciisuser/user-dashboard') {
+      return true;
+    }
     // Promotions is not a plan feature: its own API decides who may use it.
     if (normalizeKey(item?.id) === 'promotions' || normalizeKey(item?.path).replace(/\/+$/, '') === 'ciisuser/promotions') return true;
+
+    if (normalizeKey(item?.path).startsWith('ciisuser/crm/') && hasCrmAccess) return true;
+    if (normalizeKey(item?.path).startsWith('ciisuser/telecaller/') && hasTelecallerAccess) return true;
+
     const itemKeys = [...getRouteAccessKeys(item)].map(key => normalizeKey(key)).filter(Boolean);
     return itemKeys.some(key => allowedSet.has(key));
   });
