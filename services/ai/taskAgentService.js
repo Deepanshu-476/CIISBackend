@@ -373,7 +373,7 @@ const CRM_TASK_COMPLETE_REGEX = /(?:(?:task|kam)\s*(?:ko\s*)?(?:complete|done|kh
 const CRM_TASK_UPDATE_REGEX = /(?:(?:priority|status)\s*(?:ko\s*)?(?:badal\s*kar\s*)?(?:high|low|medium|in[- ]progress|pending|completed?|done|on[- ]?hold|planning|active|cancelled|inactive)|(?:high|low|medium|in[- ]progress|pending|completed?|done|on[- ]?hold|planning|active|cancelled|inactive)\s*(?:priority|status|kardo|kar\s+do|rakho)|(?:priority|status)\s*(?:high|low|medium|in[- ]progress|pending|completed?|done|on[- ]?hold|planning|active|cancelled|inactive)|(?:task|kam|project|client|plan)\s+(?:complete|done|khatam|active|planning|on[- ]?hold|inactive)\s+(?:karo|kar\s+do|mark)|mark\s+(?:task\s+|project\s+|client\s+|plan\s+)?(?:as\s+)?(?:complete|done|active|planning|on[- ]?hold|inactive)|(?:priority|status)\s+(?:update|change|badal|set|make)|(?:kardo|kar\s+do|update|change|badal|set|make).*?(?:priority|status)|(?:status|priority).*?(?:planning|active|completed|high|low|medium|pending|on[- ]?hold|inactive)|(?:make|set|change|put).*?(?:planning|active|on[- ]?hold|inactive)|(?:client|plan).*?(?:on[- ]?hold|active|inactive)\s*(?:kardo|kar\s*do|karo|rakho|set))/iu;
 const CRM_TASK_EDIT_REGEX = /(?:edit|badal|change|update).*?(?:task|kam|kaam|description|desc|title|naam|priority|status|assignee|due\s*date)|(?:task|kam|kaam).*?(?:ko\s+)?(?:edit|update|badal|change)/iu;
 
-function findReferencedClient(text, clients = []) {
+function findReferencedClient(text, clients = [], draft = null) {
   if (!text || !Array.isArray(clients) || clients.length === 0) return null;
   const lower = text.toLowerCase();
 
@@ -427,6 +427,30 @@ function findReferencedClient(text, clients = []) {
     }
   }
 
+  // PASS 5: Contextual pronoun references: "esko", "isko", "iska", "iski", "is client", "es client", "this client", "inhe", "unhe", "is wale client"
+  const isClientPronoun = /\b(?:is|es|iss|this|same|current|is\s+wale)\s+client\b|\b(?:esko|isko|iska|iski|inhe|unhe|usko|uska|uski)\b/i.test(lower);
+  if (draft?.lastClientId) {
+    const lastClient = clients.find(c => String(c._id || c.id) === String(draft.lastClientId));
+    if (lastClient) {
+      if (isClientPronoun) return lastClient;
+      // Also match if user mentions any service belonging to this client
+      if (Array.isArray(lastClient.services) && lastClient.services.length > 0) {
+        const hasServiceMention = lastClient.services.some(s => {
+          const sName = (typeof s === 'string' ? s : (s.service || s.name || s.servicename || '')).toLowerCase().trim();
+          if (!sName || sName.length < 3) return false;
+          return lower.includes(sName);
+        });
+        if (hasServiceMention) return lastClient;
+      }
+      // If lastActiveType was client and user didn't mention any project
+      if (draft?.lastActiveType === 'client' && !/\b(?:projects?|projekts?)\b/i.test(lower)) {
+        if (/(?:tasks?|टास्क|services?|सर्विस|plans?|प्लान|details?|info)/i.test(lower)) {
+          return lastClient;
+        }
+      }
+    }
+  }
+
   return null;
 }
 
@@ -453,32 +477,24 @@ function findReferencedProject(text, projects = [], draft = null) {
 
   // 1. Contextual pronoun reference: "es project", "is project", "this project", "isme", "iss project", "is wale project"
   if (/\b(?:is|es|iss|this|same|current|is\s+wale)\s+project\b|\bisme\b|\b(?:check\s+project\s+details|project\s+details|view\s+project|view\s+tasks|project\s+tasks|team\s+members|project\s+ke\s+tasks|project\s+members)\b/i.test(lower)) {
-    const lastId = draft?.lastProjectId || draft?.projectId || draft?._lastProjectId || draft?._lastProject?._id;
-    const lastName = draft?.lastProjectName || draft?.projectName || draft?._lastProjectName || draft?._lastProject?.name;
-    if (lastId) {
-      const found = projects.find(p => String(p._id || p.id) === String(lastId));
-      if (found) return found;
-    }
-    if (lastName) {
-      const found = projects.find(p => (p.projectName || p.name || '').toLowerCase() === String(lastName).toLowerCase());
-      if (found) return found;
-    }
-    // Search backwards in conversation history for any project mention
-    const hist = Array.isArray(draft?.history) ? draft.history : (Array.isArray(draft?.messages) ? draft.messages : []);
-    if (hist.length > 0) {
-      for (let i = hist.length - 1; i >= 0; i--) {
-        const hText = String(hist[i]?.content || hist[i]?.text || hist[i]?.message || '').toLowerCase();
-        for (const p of projects) {
-          const pName = (p.projectName || p.name || '').toLowerCase();
-          if (pName && hText.includes(pName)) return p;
-        }
+    if (!/\b(?:is|es|iss|this)\s+client\b/i.test(lower)) {
+      const lastId = draft?.lastProjectId || draft?.projectId || draft?._lastProjectId || draft?._lastProject?._id;
+      const lastName = draft?.lastProjectName || draft?.projectName || draft?._lastProjectName || draft?._lastProject?.name;
+      if (lastId) {
+        const found = projects.find(p => String(p._id || p.id) === String(lastId));
+        if (found) return found;
+      }
+      if (lastName) {
+        const found = projects.find(p => (p.projectName || p.name || '').toLowerCase() === String(lastName).toLowerCase());
+        if (found) return found;
       }
     }
-    if (projects.length === 1) return projects[0];
   }
 
   // If query is about team members, tasks, or details and there is a lastProjectId in draft
-  if (draft?.lastProjectId && /(?:members?|people|log|tasks?|टास्क|details?|info)/i.test(lower)) {
+  // ONLY if not inquiring about a client or client services, and lastActiveType is not 'client'
+  const hasClientIndicator = /\b(?:clients?|cleints?|services?|सर्विस|plans?|subscription|esko|isko|iska|iski|inhe|unhe)\b/i.test(lower) || Boolean(draft?.lastClientId && draft?.lastActiveType === 'client');
+  if (!hasClientIndicator && draft?.lastProjectId && draft?.lastActiveType === 'project' && /(?:members?|people|log|tasks?|टास्क|details?|info)/i.test(lower)) {
     const found = projects.find(p => String(p._id || p.id) === String(draft.lastProjectId));
     if (found) return found;
   }
@@ -836,8 +852,8 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
     ? { $regex: new RegExp('^' + escapeRegex(baseCode) + '(-|$)', 'i') }
     : (rawCompanyCode || undefined);
 
-  const clients = context.accessibleClients || deps.accessibleClients || [];
-  const projects = context.accessibleProjects || deps.accessibleProjects || [];
+  const clients = context.accessibleClients || deps.accessibleClients || deps.clients || context.clients || [];
+  const projects = context.accessibleProjects || deps.accessibleProjects || deps.projects || context.projects || [];
   const draft = context.draft || deps.draft || {};
   const queryDeps = { ...deps, accessibleProjects: projects };
   const allowedIntents = resolveUserAllowedIntents(req?.user, context.scope, queryDeps);
@@ -880,12 +896,18 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
     }
   }
 
+  const clientPlansPool = deps.clientPlans || [];
+  const servicesPool = deps.services || [];
+  const planOrServiceFilter = !mentionsProject ? checkClientsByPlanOrService(message, clients, clientPlansPool, servicesPool) : null;
+  const matchedClientRef = findReferencedClient(message, clients, draft);
+  const isCreationOrMutation = /(?:create|add|assign|banao|banayein|kardo|karo|set|badlo|change|update|delete|hatao)\b/i.test(message);
+
   const isAskingMembersSpecifically = /(?:members?|people|log|members\s+add|members\s+hain|kon\s+kon|kaun\s+kaun|kitne\s+members|team\s+members?|टीम\s*मेंबर्स?)/i.test(message);
   const isAskingTasksSpecifically = /(?:tasks?|टास्क).*?(?:kitne|kitna|how\s+many|batao|dikhao|status|list|details?|hai|hain|show|view)|(?:kitne|kitna|how\s+many|kaun\s+se|view|show|check).*?(?:tasks?|टास्क)/i.test(message);
-  const isProjectInquiry = Boolean(matchedProject) && (
+  const isProjectInquiry = Boolean(matchedProject) && !matchedClientRef && (
     mentionsProject ||
     /(?:details?|status|members?|tasks?|टास्क|log|info|kya|kon|kaun|kab|deadline|batao|dikhao|view|check|\?)/iu.test(message) ||
-    Boolean(draft?.lastProjectId)
+    Boolean(draft?.lastProjectId && draft?.lastActiveType === 'project')
   );
 
   // 0. SPECIFIC PROJECT QUERY (Status, Members, Tasks, Details)
@@ -934,8 +956,11 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
       speakTextHi: isEn ? null : `Project ${pName} ki details.`,
       language: isEn ? 'en' : 'hinglish',
       draft: {
+        lastActiveType: 'project',
         lastProjectId: String(matchedProject._id || matchedProject.id),
-        lastProjectName: pName
+        lastProjectName: pName,
+        lastClientId: null,
+        lastClientName: null
       },
       chips: projChips,
       candidates: [],
@@ -945,20 +970,12 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
   }
 
   // 0b. SPECIFIC CLIENT QUERY (Services, Plan, Status, Details)
-  const clientPlansPool = deps.clientPlans || [];
-  const servicesPool = deps.services || [];
-  const planOrServiceFilter = !mentionsProject ? checkClientsByPlanOrService(message, clients, clientPlansPool, servicesPool) : null;
-  const matchedClientRef = findReferencedClient(message, clients);
-  const isCreationOrMutation = /(?:create|add|assign|banao|banayein|kardo|karo|set|badlo|change|update|delete|hatao)\b/i.test(message);
-
   const isClientInquiry = !mentionsProject && (
     Boolean(planOrServiceFilter) ||
+    Boolean(matchedClientRef) ||
     CLIENT_DETAIL_QUERY_REGEX.test(message) ||
     /(?:(?:client|cleint|clint|clinet|ग्राहक|कंपनी).*(?:details?|services?|plans?|tasks?|टास्क|kaam|काम|status|info|batao|dikhao|kya|kon|kaun|kin|kis|which|कौन|क्या|बताओ|दिखाओ))/iu.test(message) ||
-    Boolean(matchedClientRef && (
-      /(?:services?|सर्विस(?:िस)?|plans?|प्लाइ?न्स?|tasks?|टास्क|kaam|काम|status|details?|info|kya|kaun|kon|kin|kis|batao|dikhao|diya|diye|di\s+gayi|दी\s+गई|konsi|kaunsi|कौन|क्या|बताओ|दिखाओ|\?)/iu.test(message) ||
-      (!isCreationOrMutation && (/\b(?:client|cleint|clint|ग्राहक|कंपनी)\b/i.test(message) || message.trim().length <= 60))
-    ))
+    Boolean(draft?.lastClientId && /(?:services?|सर्विस|plans?|प्लान|tasks?|टास्क|details?|info)/i.test(message))
   );
 
   if (isClientInquiry) {
@@ -1158,7 +1175,14 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
           speakText: rep,
           speakTextHi: isEn ? null : `Client ${clientDisplayName} ki ${matchedServiceName} service ke tasks.`,
           language: isEn ? 'en' : 'hinglish',
-          draft: null,
+          draft: {
+            lastActiveType: 'client',
+            lastClientId: String(matchedClient._id || matchedClient.id || ''),
+            lastClientName: clientDisplayName,
+            lastService: matchedServiceName,
+            lastProjectId: null,
+            lastProjectName: null
+          },
           chips: taskChips,
           candidates: [],
           notices: [],
@@ -1214,7 +1238,14 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
           speakText: rep,
           speakTextHi: isEn ? null : `Client ${clientDisplayName} ki services ke tasks.`,
           language: isEn ? 'en' : 'hinglish',
-          draft: null,
+          draft: {
+            lastActiveType: 'client',
+            lastClientId: String(matchedClient._id || matchedClient.id || ''),
+            lastClientName: clientDisplayName,
+            lastService: matchedServiceName,
+            lastProjectId: null,
+            lastProjectName: null
+          },
           chips: taskChips,
           candidates: [],
           notices: [],
@@ -1271,7 +1302,13 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
         speakText: rep,
         speakTextHi: isEn ? null : `Client ${clientDisplayName} ki services, plan aur task details.`,
         language: isEn ? 'en' : 'hinglish',
-        draft: null,
+        draft: {
+          lastActiveType: 'client',
+          lastClientId: String(matchedClient._id || matchedClient.id || ''),
+          lastClientName: clientDisplayName,
+          lastProjectId: null,
+          lastProjectName: null
+        },
         chips: clientChips,
         candidates: [],
         notices: [],
@@ -1325,7 +1362,13 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
         speakText: rep,
         speakTextHi: isEn ? null : notFoundSpeech,
         language: isEn ? 'en' : 'hinglish',
-        draft: null,
+        draft: {
+          lastActiveType: 'client',
+          lastClientId: String(matchedClient._id || matchedClient.id || ''),
+          lastClientName: clientDisplayName,
+          lastProjectId: null,
+          lastProjectName: null
+        },
         chips: clientChips,
         candidates: [],
         notices: [],
@@ -3032,10 +3075,12 @@ async function parseTaskRequest({
     descriptionSkipped: Boolean(draft?.descriptionSkipped),
     manualPlan: draft?.manualPlan ? JSON.parse(JSON.stringify(draft.manualPlan)) : null,
     allowedPlanServices: Array.isArray(draft?.allowedPlanServices) ? [...draft.allowedPlanServices] : null,
+    lastActiveType: draft?.lastActiveType ?? (draft?.lastClientId ? 'client' : (draft?.lastProjectId ? 'project' : null)),
     lastProjectId: draft?.lastProjectId ?? null,
     lastProjectName: draft?.lastProjectName ?? null,
     lastClientId: draft?.lastClientId ?? null,
     lastClientName: draft?.lastClientName ?? null,
+    lastService: draft?.lastService ?? null,
     history: Array.isArray(draft?.history) ? [...draft.history] : (Array.isArray(req?.body?.history) ? [...req.body.history] : []),
     _lastReply: draft?._lastReply ?? null,
     _lastChipsKey: draft?._lastChipsKey ?? null,
