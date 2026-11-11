@@ -402,14 +402,14 @@ function findReferencedClient(text, clients = []) {
     }
   }
 
-  // PASS 3: Word-boundary Match on Company Name (excluding generic placeholder words like 'test', 'sample')
-  const genericCompanyWords = new Set(['test', 'test2', 'demo', 'sample', 'abc', 'xyz', 'company', 'corp', 'solutions', 'technologies', 'services']);
+  // PASS 3: Word-boundary Match on Company Name (excluding generic placeholder words like 'test', 'sample', 'ciis', 'ai')
+  const genericCompanyWords = new Set(['test', 'test2', 'demo', 'sample', 'abc', 'xyz', 'company', 'corp', 'solutions', 'technologies', 'services', 'ciis', 'network', 'ai', 'assistant', 'crm', 'testing', 'techsoft']);
   for (const c of clients) {
     const compName = (c.company || '').trim();
     if (!compName || compName.length < 3) continue;
     if (genericCompanyWords.has(compName.toLowerCase())) {
-      // For generic words like 'test', only match if user explicitly said "company test" or "test company"
-      const explicitCompanyRegex = new RegExp('(?:company|firm|org)\\s+' + escapeRegex(compName) + '|' + escapeRegex(compName) + '\\s+(?:company|firm|org)', 'i');
+      // For generic words like 'test', only match if user explicitly said "company test" or "test company" or mentions "client"
+      const explicitCompanyRegex = new RegExp('(?:company|firm|org|client|cleint)\\s+' + escapeRegex(compName) + '|' + escapeRegex(compName) + '\\s+(?:company|firm|org|client|cleint)', 'i');
       if (explicitCompanyRegex.test(text)) return c;
       continue;
     }
@@ -420,7 +420,7 @@ function findReferencedClient(text, clients = []) {
   // PASS 4: Token match on non-generic Company Name
   for (const c of clients) {
     const compName = (c.company || '').trim();
-    const tokens = compName.split(/[\s,.-]+/).filter(t => t.length >= 3 && !['solutions', 'pvt', 'ltd', 'inc', 'tech', 'technologies', 'private', 'limited', 'services', 'corp', 'company', 'test', 'demo', 'sample'].includes(t.toLowerCase()));
+    const tokens = compName.split(/[\s,.-]+/).filter(t => t.length >= 3 && !['solutions', 'pvt', 'ltd', 'inc', 'tech', 'technologies', 'private', 'limited', 'services', 'corp', 'company', 'test', 'demo', 'sample', 'ciis', 'network', 'ai', 'assistant', 'crm', 'testing', 'techsoft'].includes(t.toLowerCase()));
     for (const t of tokens) {
       const reg = new RegExp('(?:^|[^a-zA-Z0-9])' + escapeRegex(t) + '(?:[^a-zA-Z0-9]|$)', 'i');
       if (reg.test(text)) return c;
@@ -463,6 +463,17 @@ function findReferencedProject(text, projects = [], draft = null) {
       const found = projects.find(p => (p.projectName || p.name || '').toLowerCase() === String(lastName).toLowerCase());
       if (found) return found;
     }
+    // Search backwards in conversation history for any project mention
+    const hist = Array.isArray(draft?.history) ? draft.history : (Array.isArray(draft?.messages) ? draft.messages : []);
+    if (hist.length > 0) {
+      for (let i = hist.length - 1; i >= 0; i--) {
+        const hText = String(hist[i]?.content || hist[i]?.text || hist[i]?.message || '').toLowerCase();
+        for (const p of projects) {
+          const pName = (p.projectName || p.name || '').toLowerCase();
+          if (pName && hText.includes(pName)) return p;
+        }
+      }
+    }
     if (projects.length === 1) return projects[0];
   }
 
@@ -470,6 +481,18 @@ function findReferencedProject(text, projects = [], draft = null) {
   if (draft?.lastProjectId && /(?:members?|people|log|tasks?|टास्क|details?|info)/i.test(lower)) {
     const found = projects.find(p => String(p._id || p.id) === String(draft.lastProjectId));
     if (found) return found;
+  }
+
+  // Search backwards in conversation history if pronoun like "es project" / "is project"
+  const hist = Array.isArray(draft?.history) ? draft.history : (Array.isArray(draft?.messages) ? draft.messages : []);
+  if (hist.length > 0 && /\b(?:is|es|iss|this|same|current)\b/i.test(lower)) {
+    for (let i = hist.length - 1; i >= 0; i--) {
+      const hText = String(hist[i]?.content || hist[i]?.text || hist[i]?.message || '').toLowerCase();
+      for (const p of projects) {
+        const pName = (p.projectName || p.name || '').toLowerCase();
+        if (pName && hText.includes(pName)) return p;
+      }
+    }
   }
 
   const mentionsProjectWord = /\b(?:projects?|projekts?)\b/i.test(text);
@@ -2147,16 +2170,59 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
   }
 
   // 3. Extract Task Name / Candidate:
-  // e.g. "kanika client ki cloud architecture kai updated testing ka status change karke completed kardo"
-  // e.g. "hlo1 task ka status change karke in progress kardo with remark all done"
+  // e.g. "change the status of hlo task to completed"
+  // e.g. "change the status of hlo task make it completed"
+  // e.g. "mere Testing of CIIS AI assistant ka status change karke completed kardo"
   // e.g. "hlo1 task ko edit karke priority high kardo"
   let taskCandidate = null;
 
-  const quoteMatch = message.match(/["']([^"']+)["']/);
-  if (quoteMatch && quoteMatch[1] && !statusRemarkText?.includes(quoteMatch[1]) && !editDescription?.includes(quoteMatch[1])) {
-    taskCandidate = quoteMatch[1].trim();
-  } else {
-    let cleanedForTask = message;
+  // Pattern A: "change the status of <task> to <status>" / "change status of <task> make it <status>"
+  const engStatusOfMatch = commandWithoutRemark.match(/\b(?:change|update|set)?\s*(?:the\s+)?(?:status|priority)\s+of\s+(.+?)(?:\s+task)?\s+(?:to|as|make\s+it)\s+(?:completed?|done|in[- ]progress|pending|on[- ]?hold|high|low|medium)/i);
+  if (engStatusOfMatch && engStatusOfMatch[1]) {
+    taskCandidate = engStatusOfMatch[1].trim();
+  }
+
+  // Pattern B: "mark <task> (task) as <status>" / "make <task> (task) <status>"
+  if (!taskCandidate) {
+    const markMatch = commandWithoutRemark.match(/\b(?:mark|set|make)\s+(?:task\s+)?(.+?)(?:\s+task)?\s+(?:as|to)?\s*(?:completed?|done|in[- ]progress|pending|on[- ]?hold|high|low|medium)\b/i);
+    if (markMatch && markMatch[1]) {
+      const cand = markMatch[1].trim();
+      if (!['it', 'the', 'this', 'that', 'task'].includes(cand.toLowerCase())) {
+        taskCandidate = cand;
+      }
+    }
+  }
+
+  // Pattern C: "change <task> (task) status to <status>" / "update <task> (task) status to <status>"
+  if (!taskCandidate) {
+    const changeMatch = commandWithoutRemark.match(/\b(?:change|update|set)\s+(?:the\s+)?(.+?)(?:\s+task)?\s+(?:status|priority)\s+(?:to|as|make\s+it)\s+(?:completed?|done|in[- ]progress|pending|on[- ]?hold|high|low|medium)/i);
+    if (changeMatch && changeMatch[1]) {
+      taskCandidate = changeMatch[1].trim();
+    }
+  }
+
+  // Pattern D: Hinglish "mere/apne <task> task ka status completed kardo" / "<task> task ko edit karke priority high kardo"
+  if (!taskCandidate) {
+    const hinglishMatch = commandWithoutRemark.match(/(?:mere\s+|apne\s+)?(.+?)(?:\s+(?:task|kaam|kam))?\s*(?:ko|ka|ki)?\s*(?:edit\s*karke|status|priority)?\s*(?:change\s+karke|badal\s+kar|badal\s+ke|update\s+karke)?\s*(?:status|priority)?\s*(?:ko\s*)?(?:completed?|done|khatam|in[- ]progress|pending|on[- ]?hold|high|low|medium)\s*(?:kardo|kar\s*do|karo|rakho|set|mark)?/i);
+    if (hinglishMatch && hinglishMatch[1]) {
+      const cand = hinglishMatch[1].trim();
+      if (cand.length >= 2 && !['is', 'es', 'this', 'naya', 'new', 'ye', 'the', 'task'].includes(cand.toLowerCase())) {
+        taskCandidate = cand;
+      }
+    }
+  }
+
+  // Pattern E: Quoted string e.g. "hlo" task
+  if (!taskCandidate) {
+    const quoteMatch = commandWithoutRemark.match(/["']([^"']+)["']/);
+    if (quoteMatch && quoteMatch[1] && !statusRemarkText?.includes(quoteMatch[1]) && !editDescription?.includes(quoteMatch[1])) {
+      taskCandidate = quoteMatch[1].trim();
+    }
+  }
+
+  // Pattern F: Fallback cleaning with full English & Hindi stopwords
+  if (!taskCandidate) {
+    let cleanedForTask = commandWithoutRemark;
     if (remarkMatch) cleanedForTask = cleanedForTask.replace(remarkMatch[0], ' ');
     if (descMatch) cleanedForTask = cleanedForTask.replace(descMatch[0], ' ');
     if (titleMatch) cleanedForTask = cleanedForTask.replace(titleMatch[0], ' ');
@@ -2176,13 +2242,13 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
     cleanedForTask = cleanedForTask.replace(/\b(?:plan|plaan|plans|subscription)\b/gi, ' ');
     cleanedForTask = cleanedForTask.replace(/\b(?:active|planning|completed?|done|khatam|in[- ]progress|pending|on[- ]?hold|inactive|cancelled)\b/gi, ' ');
 
-    // Strip update / status / priority command suffix
     cleanedForTask = cleanedForTask
       .replace(/(?:ka|ki|ke)?\s*(?:status|priority)?\s*(?:ko\s*)?(?:badal\s*kar\s*|change\s*(?:karke)?\s*|update\s*(?:karke)?\s*|set\s*(?:karke)?\s*|edit\s*(?:karke)?\s*)?(?:high|low|medium|completed?|done|khatam|in[- ]progress|pending|on[- ]?hold)\s*(?:kardo|kar\s*do|karo|banao|rakho|set|mark)?/gi, ' ')
       .replace(/(?:task|taks)?\s*(?:ko\s*)?(?:complete|done)\s*(?:mark\s*kardo|mark\s*karo|kardo|kar\s*do|mark)?/gi, ' ')
       .replace(/(?:status|priority)\s*(?:change|update|badal|set|edit)(?:\s*(?:karke|kardo|kar\s*do|karo))?/gi, ' ')
       .replace(/\b(?:status|priority|completed?|in[- ]progress|pending|on[- ]?hold|high|low|medium)\b/gi, ' ')
-      .replace(/\b(?:task|taks|kardo|kar\s*do|kar|karo|edit|update|badal)\b/gi, ' ')
+      .replace(/\b(?:task|taks|kardo|kar\s*do|kar|karo|edit|update|badal|change|set|mark|make|it)\b/gi, ' ')
+      .replace(/\b(?:the|of|to|as|for|in|on|at|by|from|my|our|a|an|please|can|you|is|are|this|that)\b/gi, ' ')
       .replace(/\b(?:mai|mein|in|kai|ke|ki|ka|ko|par|pe|se|sai|sy|from|to|wala|wali|wale|change|karke|badal|badalkar)\b/gi, ' ')
       .replace(/\s+/g, ' ')
       .trim();
@@ -2192,31 +2258,17 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
     }
   }
 
-  // 4. Try updating ClientTask if matchedClient is present or ClientTask model exists
-  if (matchedClient) {
-    const allowedIntents = resolveUserAllowedIntents(req?.user, context.scope, deps);
-    if (!allowedIntents.includes('create_client') && !allowedIntents.includes('create_client_task')) {
-      const denial = getPermissionDeniedReply('create_client', allowedIntents, req?.user, lang);
-      return {
-        success: true,
-        status: 'open',
-        field: 'welcome',
-        reply: denial.reply,
-        speech: denial.speech,
-        speakText: denial.speakText,
-        speakTextHi: denial.speakTextHi,
-        language: isEn ? 'en' : 'hinglish',
-        draft: null,
-        chips: buildChips(null, 'welcome', { ...deps, language: lang, allowedIntents }),
-      };
-    }
+  if (taskCandidate) {
+    taskCandidate = taskCandidate.replace(/^(?:the|a|an|my|mere|apne|this|that)\s+/i, '').replace(/\s+(?:task|kam|kaam)$/i, '').trim();
   }
+
   const isDbReady = Boolean(mongoose && mongoose.connection && mongoose.connection.readyState === 1);
   const isValidObjectId = (id) => Boolean(id && mongoose && mongoose.Types && mongoose.Types.ObjectId && mongoose.Types.ObjectId.isValid(id));
   const ClientTaskModel = deps.ClientTask || (mongoose && mongoose.models && mongoose.models.ClientTask) || (isDbReady ? require('../../HR-CDS/models/ClientTask') : null);
   const TaskModel = deps.Task || (mongoose && mongoose.models && mongoose.models.Task) || (isDbReady ? require('../../HR-CDS/models/Task') : null);
+  const ProjectModel = deps.Project || (mongoose.models && mongoose.models.Project) || (mongoose.models && mongoose.models.project);
 
-  // SAFETY GUARD: If no task name could be extracted, NEVER mutate a random task!
+  // SAFETY GUARD: If no task name could be extracted, prompt the user
   if (!taskCandidate) {
     let candidateTasks = [];
     if (matchedClient && Array.isArray(deps.clientTasks)) {
@@ -2287,57 +2339,7 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
   let updatedDoc = null;
   let isClientTask = false;
 
-  // Check memory mock for ClientTask (deps.clientTasks) first
-  if (!updatedDoc && matchedClient && Array.isArray(deps.clientTasks)) {
-    const cTask = deps.clientTasks.find(t => {
-      const matchClient = String(t.clientId) === String(matchedClient._id || matchedClient.id);
-      const matchName = taskCandidate ? String(t.name || t.title).toLowerCase().includes(taskCandidate.toLowerCase()) : false;
-      return matchClient && matchName;
-    });
-    if (cTask) {
-      if (targetPriority) cTask.priority = targetPriority;
-      if (targetStatus) {
-        cTask.status = targetStatus;
-        if (targetStatus === 'completed') cTask.completed = true;
-      }
-      updatedDoc = cTask;
-      isClientTask = true;
-    }
-  }
-
-  // Live DB search for ClientTask:
-  if (!updatedDoc && matchedClient && isDbReady && ClientTaskModel && typeof ClientTaskModel.findOne === 'function') {
-    try {
-      const cQuery = {
-        ...(isValidObjectId(matchedClient._id || matchedClient.id) ? { clientId: matchedClient._id || matchedClient.id } : {}),
-        ...(matchedService ? { service: { $regex: new RegExp(escapeRegex(matchedService), 'i') } } : {}),
-        name: { $regex: new RegExp(escapeRegex(taskCandidate), 'i') }
-      };
-      let cTask = await ClientTaskModel.findOne(cQuery).sort({ createdAt: -1 });
-      if (!cTask && isValidObjectId(matchedClient._id || matchedClient.id)) {
-        cTask = await ClientTaskModel.findOne({
-          clientId: matchedClient._id || matchedClient.id,
-          name: { $regex: new RegExp(escapeRegex(taskCandidate), 'i') }
-        }).sort({ createdAt: -1 });
-      }
-      if (cTask) {
-        if (targetPriority) cTask.priority = targetPriority;
-        if (targetStatus) {
-          cTask.status = targetStatus;
-          if (targetStatus === 'completed') {
-            cTask.completed = true;
-            cTask.completedAt = new Date();
-          }
-        }
-        if (typeof cTask.save === 'function') await cTask.save();
-        updatedDoc = cTask;
-        isClientTask = true;
-      }
-    } catch (e) {
-      console.warn('[taskAgentService] Error updating ClientTask:', e);
-    }
-  }
-
+  // 1. FIRST PRIORITY: Personal / Assigned Tasks (TaskModel & deps.tasks)
   // Check memory mock for Task (deps.tasks)
   if (!updatedDoc && Array.isArray(deps.tasks)) {
     const tTask = deps.tasks.find(t => {
@@ -2346,6 +2348,12 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
     });
     if (tTask) {
       applyTaskStatusAndPriority(tTask, targetStatus, targetPriority, userId);
+      if (editTitle) tTask.title = editTitle;
+      if (editDescription) tTask.description = editDescription;
+      if (statusRemarkText) {
+        if (!Array.isArray(tTask.remarks)) tTask.remarks = [];
+        tTask.remarks.push({ user: userId, userName: req?.user?.name || 'User', text: statusRemarkText, createdAt: new Date() });
+      }
       updatedDoc = tTask;
     }
   }
@@ -2361,6 +2369,13 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
       const tTask = await TaskModel.findOne(tQuery).sort({ createdAt: -1 });
       if (tTask) {
         applyTaskStatusAndPriority(tTask, targetStatus, targetPriority, userId);
+        if (editTitle) tTask.title = editTitle;
+        if (editDescription) tTask.description = editDescription;
+        if (statusRemarkText) {
+          if (!Array.isArray(tTask.remarks)) tTask.remarks = [];
+          tTask.remarks.push({ user: userId, userName: req?.user?.name || 'User', text: statusRemarkText, createdAt: new Date() });
+          if (typeof tTask.markModified === 'function') tTask.markModified('remarks');
+        }
         if (typeof tTask.save === 'function') await tTask.save();
         updatedDoc = tTask;
       }
@@ -2369,11 +2384,9 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
     }
   }
 
-  // Live search and update for Project tasks:
+  // 2. SECOND PRIORITY: Project tasks (ProjectModel & deps.accessibleProjects)
   if (!updatedDoc && (context.accessibleProjects || deps.accessibleProjects || (isDbReady && (deps.Project || mongoose.models.Project)))) {
-    const ProjectModel = deps.Project || (mongoose.models && mongoose.models.Project) || (mongoose.models && mongoose.models.project);
-    
-    // 1. Try DB update first to ensure persistence
+    // DB search for Project task first
     if (isDbReady && ProjectModel && typeof ProjectModel.findOne === 'function' && taskCandidate) {
       try {
         const pDoc = await ProjectModel.findOne({
@@ -2452,7 +2465,7 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
       }
     }
 
-    // 2. Memory mock update fallback (for unit tests / mock context)
+    // Memory mock update fallback for Project tasks
     if (!updatedDoc) {
       const projList = context.accessibleProjects || deps.accessibleProjects || [];
       for (const p of projList) {
@@ -2471,6 +2484,78 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
             break;
           }
         }
+      }
+    }
+  }
+
+  // 3. THIRD PRIORITY: Client Tasks (ClientTaskModel & deps.clientTasks)
+  // Only check client task if task was not found in personal tasks or project tasks
+  if (!updatedDoc && (matchedClient || /\b(?:client|client\s+task|service)\b/i.test(message))) {
+    const allowedIntents = resolveUserAllowedIntents(req?.user, context.scope, deps);
+    if (!allowedIntents.includes('create_client') && !allowedIntents.includes('create_client_task')) {
+      const denial = getPermissionDeniedReply('create_client', allowedIntents, req?.user, lang);
+      return {
+        success: true,
+        status: 'open',
+        field: 'welcome',
+        reply: denial.reply,
+        speech: denial.speech,
+        speakText: denial.speakText,
+        speakTextHi: denial.speakTextHi,
+        language: isEn ? 'en' : 'hinglish',
+        draft: null,
+        chips: buildChips(null, 'welcome', { ...deps, language: lang, allowedIntents }),
+      };
+    }
+
+    // Check memory mock for ClientTask (deps.clientTasks)
+    if (!updatedDoc && matchedClient && Array.isArray(deps.clientTasks)) {
+      const cTask = deps.clientTasks.find(t => {
+        const matchClient = String(t.clientId) === String(matchedClient._id || matchedClient.id);
+        const matchName = taskCandidate ? String(t.name || t.title).toLowerCase().includes(taskCandidate.toLowerCase()) : false;
+        return matchClient && matchName;
+      });
+      if (cTask) {
+        if (targetPriority) cTask.priority = targetPriority;
+        if (targetStatus) {
+          cTask.status = targetStatus;
+          if (targetStatus === 'completed') cTask.completed = true;
+        }
+        updatedDoc = cTask;
+        isClientTask = true;
+      }
+    }
+
+    // Live DB search for ClientTask:
+    if (!updatedDoc && matchedClient && isDbReady && ClientTaskModel && typeof ClientTaskModel.findOne === 'function') {
+      try {
+        const cQuery = {
+          ...(isValidObjectId(matchedClient._id || matchedClient.id) ? { clientId: matchedClient._id || matchedClient.id } : {}),
+          ...(matchedService ? { service: { $regex: new RegExp(escapeRegex(matchedService), 'i') } } : {}),
+          name: { $regex: new RegExp(escapeRegex(taskCandidate), 'i') }
+        };
+        let cTask = await ClientTaskModel.findOne(cQuery).sort({ createdAt: -1 });
+        if (!cTask && isValidObjectId(matchedClient._id || matchedClient.id)) {
+          cTask = await ClientTaskModel.findOne({
+            clientId: matchedClient._id || matchedClient.id,
+            name: { $regex: new RegExp(escapeRegex(taskCandidate), 'i') }
+          }).sort({ createdAt: -1 });
+        }
+        if (cTask) {
+          if (targetPriority) cTask.priority = targetPriority;
+          if (targetStatus) {
+            cTask.status = targetStatus;
+            if (targetStatus === 'completed') {
+              cTask.completed = true;
+              cTask.completedAt = new Date();
+            }
+          }
+          if (typeof cTask.save === 'function') await cTask.save();
+          updatedDoc = cTask;
+          isClientTask = true;
+        }
+      } catch (e) {
+        console.warn('[taskAgentService] Error updating ClientTask:', e);
       }
     }
   }
@@ -2651,7 +2736,17 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
   const allowed = ['self_task'];
 
   // Assigning tasks to others requires "Admin Create Task" permission (not general Task Management)
-  const canAssign = scope.isOwner || (scope.hasAccess && normalizedPerms.has('admintaskcreate')) || normalizedPerms.has('admintaskcreate') || normalizedPerms.has('ciisuser/admintaskcreate');
+  const canAssign = Boolean(
+    scope.isOwner ||
+    normalizedPerms.has('admintaskcreate') ||
+    normalizedPerms.has('admincreatetask') ||
+    normalizedPerms.has('admin-task-create') ||
+    normalizedPerms.has('admin-create-task') ||
+    normalizedPerms.has('ciisuser/admintaskcreate') ||
+    normalizedPerms.has('ciisuser/admin-task-create') ||
+    user?.permissions?.includes?.('admin-task-create') ||
+    user?.permissions?.includes?.('admin-create-task')
+  );
   if (canAssign) {
     allowed.push('task_assigned_user');
   }
@@ -2857,6 +2952,7 @@ async function parseTaskRequest({
     lastProjectName: draft?.lastProjectName ?? null,
     lastClientId: draft?.lastClientId ?? null,
     lastClientName: draft?.lastClientName ?? null,
+    history: Array.isArray(draft?.history) ? [...draft.history] : (Array.isArray(req?.body?.history) ? [...req.body.history] : []),
     _lastReply: draft?._lastReply ?? null,
     _lastChipsKey: draft?._lastChipsKey ?? null,
     _lastUserMsg: draft?._lastUserMsg ?? null,
@@ -5187,6 +5283,19 @@ const lastAskedField = currentDraft.asked.length > 0
       if (groqAnswer) {
         const allowedIntents = resolveUserAllowedIntents(req?.user, scope, deps);
         const welcomeChips = buildChips(null, 'welcome', { ...deps, allowedIntents, language: userLang });
+        const refProject = findReferencedProject(trimmedMessage, accessibleProjects, currentDraft);
+        const projId = refProject ? String(refProject._id || refProject.id) : (currentDraft.lastProjectId || null);
+        const projName = refProject ? (refProject.projectName || refProject.name) : (currentDraft.lastProjectName || null);
+
+        let activeChips = welcomeChips;
+        if (refProject) {
+          activeChips = [
+            { label: 'View Tasks', action: { type: 'view_project_tasks', projectId: String(refProject._id || refProject.id) } },
+            { label: 'Team members list', action: { type: 'view_project_members', projectId: String(refProject._id || refProject.id) } },
+            { label: 'Main menu', action: { type: 'reset' } }
+          ];
+        }
+
         return {
           success: true,
           status: 'open',
@@ -5195,8 +5304,10 @@ const lastAskedField = currentDraft.asked.length > 0
           speech: groqAnswer.split('\n')[0].replace(/[*_#]/g, ''),
           speakText: groqAnswer,
           speakTextHi: groqAnswer,
-          draft: null,
-          chips: welcomeChips,
+          draft: {
+            ...(projId ? { lastProjectId: projId, lastProjectName: projName } : {})
+          },
+          chips: activeChips,
           candidates: [],
           notices: [],
           canAssignOthers
