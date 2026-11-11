@@ -5,6 +5,7 @@ const { transcribeAudio } = require('../services/ai/transcribeService');
 const { consumeSttBudget } = require('../middleware/aiTaskBudget');
 
 
+
 exports.parseTask = async (req, res, deps = {}) => {
   try {
     const companyCode = req.user?.companyCode || req.user?.company?.companyCode;

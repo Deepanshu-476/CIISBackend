@@ -24,6 +24,7 @@ async function runTests() {
   console.log('Pankaj English Chips:', chipLabelsEn);
 
   assert.ok(chipLabelsEn.includes('Create personal task'), 'Must include Create personal task');
+  assert.ok(chipLabelsEn.includes('Create task in project'), 'Must include Create task in project for user with My Projects');
   assert.ok(!chipLabelsEn.includes('Assign task to someone'), 'Must NOT include Assign task to someone');
   assert.ok(!chipLabelsEn.includes('Create new project'), 'Must NOT include Create new project');
 
@@ -32,10 +33,11 @@ async function runTests() {
   console.log('Pankaj Hinglish Chips:', chipLabelsHi);
 
   assert.ok(chipLabelsHi.includes('Personal task banana'), 'Must include Personal task banana');
+  assert.ok(chipLabelsHi.includes('Project mein task banana/assign karna'), 'Must include Project task in Hinglish');
   assert.ok(!chipLabelsHi.includes('Kisi ko task assign karna'), 'Must NOT include Kisi ko task assign karna');
   assert.ok(!chipLabelsHi.includes('Naya project banana'), 'Must NOT include Naya project banana');
 
-  console.log('✔ Test 1 Passed: Pankaj cannot see Assign task to someone or Create new project\n');
+  console.log('✔ Test 1 Passed: Pankaj sees personal task and project task creation, but not assign task or new project\n');
 
   // --------------------------------------------------------------------------
   // TEST 2: Backend resolveUserAllowedIntents for Pankaj
@@ -45,6 +47,7 @@ async function runTests() {
   console.log('Pankaj Backend Allowed Intents:', backendAllowed);
 
   assert.ok(backendAllowed.includes('self_task'), 'Must allow self_task');
+  assert.ok(backendAllowed.includes('task_project'), 'Must allow task_project for user with My Projects');
   assert.ok(!backendAllowed.includes('task_assigned_user'), 'Must NOT allow task_assigned_user');
   assert.ok(!backendAllowed.includes('create_project'), 'Must NOT allow create_project');
 
@@ -118,6 +121,26 @@ async function runTests() {
 
   console.log('✔ Test 5 Passed: Hinglish all tasks count returns 10 tasks\n');
 
+  // --------------------------------------------------------------------------
+  // TEST 6: Project Task Creation Flow for Pankaj
+  // --------------------------------------------------------------------------
+  console.log('--- Test 6: Project Task Creation Flow for Pankaj ---');
+  const mockProjects = [
+    { _id: 'p_ai', projectName: 'ai agent', users: [{ _id: 'u_pankaj', name: 'Pankaj' }, { _id: 'u_admin', name: 'Test Admin' }] }
+  ];
+
+  const resProj1 = await parseTaskRequest({
+    req: { user: pankajUser },
+    action: { type: 'set_intent', intent: 'task_project' }
+  }, { accessibleProjects: mockProjects });
+
+  console.log('Project Task Turn 1 Status:', resProj1.status);
+  console.log('Project Task Turn 1 Field:', resProj1.field);
+  console.log('Project Task Turn 1 Reply:\n', resProj1.reply);
+  assert.ok(resProj1.reply.includes('ai agent') || resProj1.chips.some(c => c.label.includes('ai agent')), 'Must present accessible project');
+
+  console.log('✔ Test 6 Passed: Project task creation flow is active and accessible for Pankaj\n');
+
   console.log('======================================================');
   console.log('>>> ALL RBAC CHIPS AND UNIFIED TASK COUNT TESTS PASSED! <<<');
   console.log('======================================================');
@@ -127,3 +150,4 @@ runTests().catch(err => {
   console.error('Test Failed:', err);
   process.exit(1);
 });
+
