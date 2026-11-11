@@ -371,6 +371,7 @@ const CLIENT_DETAIL_QUERY_REGEX = /(?:(?:services?|सर्विस(?:िस)?
 const CRM_TASKS_QUERY_REGEX = /(?:(?:tasks?|taks|tasak|taask|tsk|kaam|work|टास्क|काम).*(?:\?|kon|kaun|konsa|kaunsa|konsi|kaunsi|kya|which|what|list|dikhao|batao|tell|show|status|kitne|kitna|how\s+many|check|hai|hain|hia|chal\s+raha|कितने|इतने|दिखाओ|बताओ)|(?:\?|check|batao|batayein|dikhao|tell|show|kon|kaun|konsa|kaunsa|konsi|kaunsi|kya|which|what|kitne|kitna|how\s+many|abhi\s+mera|mere|apne|my|aaj\s+ke|कितने|इतने|चेक).*(?:tasks?|taks|tasak|taask|tsk|kaam|work|टास्क|काम)|(?:in[- ]progress|pending|overdue|completed).*(?:tasks?|taks|tasak|taask|tsk|kaam|work|टास्क|काम|\?|hai|hain|hia|chal\s+raha)|(?:tasks?|taks|tasak|taask|tsk|kaam|work|टास्क|काम).*(?:in[- ]progress|pending|overdue|completed)|(?:check|batao|dikhao|tell|kon\s+sa|konsa|kaun\s+sa|kaunsa|kya|चेक|बताओ|दिखाओ).*(?:in[- ]progress|pending|overdue|completed))/iu;
 const CRM_TASK_COMPLETE_REGEX = /(?:(?:task|kam)\s*(?:ko\s*)?(?:complete|done|khatam)\s*(?:mark\s*)?(?:karo|kar\s*do|kardo)?|mark\s*(?:task\s*)?(?:as\s*)?(?:complete|done)|(?:complete|done|khatam)\s*(?:mark\s*)?(?:karo|kar\s*do|kardo))/i;
 const CRM_TASK_UPDATE_REGEX = /(?:(?:priority|status)\s*(?:ko\s*)?(?:badal\s*kar\s*)?(?:high|low|medium|in[- ]progress|pending|completed?|done|on[- ]?hold|planning|active|cancelled|inactive)|(?:high|low|medium|in[- ]progress|pending|completed?|done|on[- ]?hold|planning|active|cancelled|inactive)\s*(?:priority|status|kardo|kar\s+do|rakho)|(?:priority|status)\s*(?:high|low|medium|in[- ]progress|pending|completed?|done|on[- ]?hold|planning|active|cancelled|inactive)|(?:task|kam|project|client|plan)\s+(?:complete|done|khatam|active|planning|on[- ]?hold|inactive)\s+(?:karo|kar\s+do|mark)|mark\s+(?:task\s+|project\s+|client\s+|plan\s+)?(?:as\s+)?(?:complete|done|active|planning|on[- ]?hold|inactive)|(?:priority|status)\s+(?:update|change|badal|set|make)|(?:kardo|kar\s+do|update|change|badal|set|make).*?(?:priority|status)|(?:status|priority).*?(?:planning|active|completed|high|low|medium|pending|on[- ]?hold|inactive)|(?:make|set|change|put).*?(?:planning|active|on[- ]?hold|inactive)|(?:client|plan).*?(?:on[- ]?hold|active|inactive)\s*(?:kardo|kar\s*do|karo|rakho|set))/iu;
+const CRM_TASK_EDIT_REGEX = /(?:edit|badal|change|update).*?(?:task|kam|kaam|description|desc|title|naam|priority|status|assignee|due\s*date)|(?:task|kam|kaam).*?(?:ko\s+)?(?:edit|update|badal|change)/iu;
 
 function findReferencedClient(text, clients = []) {
   if (!text || !Array.isArray(clients) || clients.length === 0) return null;
@@ -451,7 +452,7 @@ function findReferencedProject(text, projects = [], draft = null) {
   }
 
   // 1. Contextual pronoun reference: "es project", "is project", "this project", "isme", "iss project", "is wale project"
-  if (/\b(?:is|es|iss|this|same|current|is\s+wale)\s+project\b|\bisme\b/i.test(lower)) {
+  if (/\b(?:is|es|iss|this|same|current|is\s+wale)\s+project\b|\bisme\b|\b(?:check\s+project\s+details|project\s+details|view\s+project|view\s+tasks|project\s+tasks|team\s+members|project\s+ke\s+tasks|project\s+members)\b/i.test(lower)) {
     const lastId = draft?.lastProjectId || draft?.projectId || draft?._lastProjectId || draft?._lastProject?._id;
     const lastName = draft?.lastProjectName || draft?.projectName || draft?._lastProjectName || draft?._lastProject?.name;
     if (lastId) {
@@ -463,6 +464,12 @@ function findReferencedProject(text, projects = [], draft = null) {
       if (found) return found;
     }
     if (projects.length === 1) return projects[0];
+  }
+
+  // If query is about team members, tasks, or details and there is a lastProjectId in draft
+  if (draft?.lastProjectId && /(?:members?|people|log|tasks?|टास्क|details?|info)/i.test(lower)) {
+    const found = projects.find(p => String(p._id || p.id) === String(draft.lastProjectId));
+    if (found) return found;
   }
 
   const mentionsProjectWord = /\b(?:projects?|projekts?)\b/i.test(text);
@@ -640,7 +647,7 @@ function checkClientsByPlanOrService(message, clients = [], clientPlans = [], se
 function isCrmTaskUpdate(text) {
   if (!text || typeof text !== 'string') return false;
   const clean = text.trim();
-  return CRM_TASK_COMPLETE_REGEX.test(clean) || CRM_TASK_UPDATE_REGEX.test(clean);
+  return CRM_TASK_COMPLETE_REGEX.test(clean) || CRM_TASK_UPDATE_REGEX.test(clean) || CRM_TASK_EDIT_REGEX.test(clean);
 }
 
 function getIstDayRange(now = new Date()) {
@@ -679,7 +686,107 @@ function isCrmQuery(text) {
   );
   if (hasCreationCommand) return false;
   if (isCrmTaskUpdate(clean)) return false;
-  return CRM_PROJECTS_QUERY_REGEX.test(clean) || CRM_CLIENTS_QUERY_REGEX.test(clean) || CRM_TASKS_QUERY_REGEX.test(clean) || CLIENT_DETAIL_QUERY_REGEX.test(clean);
+
+  const isMemberOrDetailQuery = /(?:team\s*members?|members?|details?|info|tasks?|टास्क|लोग|मेंबर्स).*(?:kitne|kitna|kon|kaun|kaunsi|konsi|which|what|list|dikhao|batao|tell|show|hai|hain|check|\?)/iu.test(clean) ||
+    /(?:kitne|kitna|how\s+many|kon|kaun|konsi|kaunsi|which|what|list|dikhao|batao|tell|show|check).*(?:team\s*members?|members?|details?|info|tasks?|टास्क|लोग|मेंबर्स)/iu.test(clean) ||
+    /\b(?:check\s+project\s+details|project\s+details|view\s+project|view\s+tasks|project\s+tasks|team\s+members)\b/i.test(clean);
+
+  return isMemberOrDetailQuery || CRM_PROJECTS_QUERY_REGEX.test(clean) || CRM_CLIENTS_QUERY_REGEX.test(clean) || CRM_TASKS_QUERY_REGEX.test(clean) || CLIENT_DETAIL_QUERY_REGEX.test(clean);
+}
+
+function formatProjectDetails(project, req, isEn = false) {
+  const pName = project.projectName || project.name || 'Project';
+  const pStatus = project.status ? (project.status.charAt(0).toUpperCase() + project.status.slice(1)) : 'Active';
+  const pPriority = project.priority ? (project.priority.charAt(0).toUpperCase() + project.priority.slice(1)) : 'Medium';
+  const pStart = project.startDate ? formatHumanIstDate(project.startDate) : 'Not set';
+  const pEnd = (project.endDate || project.dueDate) ? formatHumanIstDate(project.endDate || project.dueDate) : 'Not set';
+  const pDesc = project.description ? project.description.trim() : 'No description provided';
+
+  const usersList = Array.isArray(project.users) ? project.users : [];
+  const memberNames = usersList.map(u => typeof u === 'object' ? (u.name || u.userName || 'Member') : 'Member');
+  const membersStr = memberNames.length > 0
+    ? `${memberNames.length} Members (${memberNames.join(', ')})`
+    : '0 Members';
+
+  const pTasks = Array.isArray(project.tasks) ? project.tasks : [];
+  const pendingTasks = pTasks.filter(t => ['pending', 'reopen'].includes(String(t.status || '').toLowerCase())).length;
+  const inProgressTasks = pTasks.filter(t => ['in progress', 'in-progress'].includes(String(t.status || '').toLowerCase())).length;
+  const onHoldTasks = pTasks.filter(t => ['on hold', 'on-hold', 'hold'].includes(String(t.status || '').toLowerCase())).length;
+  const completedTasks = pTasks.filter(t => ['completed', 'approved'].includes(String(t.status || '').toLowerCase())).length;
+
+  let taskBreakdown = `${pTasks.length} Tasks`;
+  if (pTasks.length > 0) {
+    const parts = [];
+    if (pendingTasks > 0) parts.push(`${pendingTasks} Pending`);
+    if (inProgressTasks > 0) parts.push(`${inProgressTasks} In Progress`);
+    if (onHoldTasks > 0) parts.push(`${onHoldTasks} On Hold`);
+    if (completedTasks > 0) parts.push(`${completedTasks} Completed`);
+    if (parts.length > 0) taskBreakdown += ` (${parts.join(', ')})`;
+  }
+
+  return isEn
+    ? `📁 **Project: ${pName}**\n\n• **Status**: ${pStatus}\n• **Priority**: ${pPriority}\n• **Members**: ${membersStr}\n• **Total Tasks**: ${taskBreakdown}\n• **Start Date**: ${pStart}\n• **Due Date**: ${pEnd}\n• **Description**: ${pDesc}\n\nWould you like to view project tasks, see team members, or add a new task?`
+    : `📁 **Project: ${pName}**\n\n• **Status**: ${pStatus}\n• **Priority**: ${pPriority}\n• **Members**: ${membersStr}\n• **Total Tasks**: ${taskBreakdown}\n• **Start Date**: ${pStart} • **Due Date**: ${pEnd}\n• **Description**: ${pDesc}\n\nKya aap is project ke tasks dekhna chahte hain ya team members check karna chahte hain?`;
+}
+
+function formatProjectTeamMembers(project, req, isEn = false) {
+  const pName = project.projectName || project.name || 'Project';
+  const usersList = Array.isArray(project.users) ? project.users : [];
+  if (usersList.length === 0) {
+    return isEn
+      ? `Project **${pName}** currently has no team members assigned.`
+      : `Project **${pName}** mein abhi koi team member add nahi hai.`;
+  }
+
+  const list = usersList.map((u, idx) => {
+    const name = typeof u === 'object' ? (u.name || u.userName || 'Member') : 'Member';
+    const role = typeof u === 'object' && (u.jobRole?.name || u.role || u.companyRole) ? ` — *${u.jobRole?.name || u.role || u.companyRole}*` : '';
+    const email = typeof u === 'object' && u.email ? ` (\`${u.email}\`)` : '';
+    return `${idx + 1}. **${name}**${role}${email}`;
+  }).join('\n');
+
+  return isEn
+    ? `👥 Project **${pName}** has **${usersList.length} team member(s)**:\n\n${list}\n\nWould you like to view project tasks or add a new task?`
+    : `👥 Project **${pName}** mein total **${usersList.length} team member(s)** add hain:\n\n${list}\n\nKya aap is project ke tasks dekhna chahte hain ya naya task add karna chahte hain?`;
+}
+
+function formatProjectTasksList(project, req, isEn = false) {
+  const pName = project.projectName || project.name || 'Project';
+  const pTasks = Array.isArray(project.tasks) ? project.tasks : [];
+  if (pTasks.length === 0) {
+    return isEn
+      ? `Project **${pName}** currently has **0 tasks**.\n\nWould you like to create a new task in this project?`
+      : `Project **${pName}** mein abhi koi task create nahi kiya gaya hai (Total 0 tasks).\n\nKya aap is project mein naya task banana chahte hain?`;
+  }
+
+  const taskCards = pTasks.map((t, idx) => {
+    const title = t.title || t.name || 'Untitled Task';
+    const status = t.status ? (t.status.charAt(0).toUpperCase() + t.status.slice(1)) : 'Pending';
+    const priority = t.priority ? (t.priority.charAt(0).toUpperCase() + t.priority.slice(1)) : 'Medium';
+    
+    // Extract assignees
+    let assigneesStr = 'Unassigned';
+    const assignedUsers = Array.isArray(t.assignedUsers) ? t.assignedUsers : (t.assignedTo ? [t.assignedTo] : []);
+    if (assignedUsers.length > 0) {
+      const names = assignedUsers.map(u => typeof u === 'object' ? (u.name || u.userName || 'User') : 'User');
+      assigneesStr = names.join(', ');
+    }
+    const due = (t.dueDateTime || t.dueDate) ? formatHumanIstDate(t.dueDateTime || t.dueDate) : null;
+    const desc = t.description ? t.description.trim() : null;
+
+    let lines = [
+      `${idx + 1}. **${title}**`,
+      `   • **Status**: ${status} | **Priority**: ${priority}`,
+      `   • **Assignees**: ${assigneesStr}`
+    ];
+    if (due) lines.push(`   • **Due Date**: ${due}`);
+    if (desc) lines.push(`   • **Description**: ${desc}`);
+    return lines.join('\n');
+  }).join('\n\n');
+
+  return isEn
+    ? `📋 Project **${pName}** tasks (Showing ${pTasks.length} of ${pTasks.length} tasks):\n\n${taskCards}\n\nYou can update the status of any task (e.g., *"Change status of ${pTasks[0]?.title || 'task'} to completed"*) or edit its details.`
+    : `📋 Project **${pName}** ke tasks (Total ${pTasks.length} tasks):\n\n${taskCards}\n\nAap kisi bhi task ka status update kar sakte hain (jaise: *"Task '${pTasks[0]?.title || 'task'}' ka status completed kardo"*) ya details edit kar sakte hain.`;
 }
 
 async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', context = {}) {
@@ -714,70 +821,85 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
 
   const mentionsProject = /(?:projects?|projekts?|projets?|प्रोजेक्ट्स?|प्रजेक्ट|प्रोज़ेक्ट)/iu.test(message);
   const matchedProject = findReferencedProject(message, projects, draft);
-  const isProjectInquiry = matchedProject && /(?:details?|status|members?|tasks?|टास्क|log|info|kya|kon|kaun|kab|deadline|batao|dikhao|\?)/iu.test(message);
 
-  // 0. SPECIFIC PROJECT QUERY (Status, Members, Details)
-  if (isProjectInquiry) {
-    const pName = matchedProject.projectName || matchedProject.name || 'Project';
-    const pStatus = matchedProject.status ? `*${matchedProject.status}*` : '*Active*';
-    const pStart = matchedProject.startDate ? formatHumanIstDate(matchedProject.startDate) : 'Not set';
-
-    let memberNamesList = [];
-    if (Array.isArray(matchedProject.users)) {
-      const allUsers = deps.companyUsers || context.companyUsers || [];
-      const userMap = new Map();
-      allUsers.forEach(u => {
-        const uid = String(u._id || u.id || '');
-        if (uid) userMap.set(uid, u.name || u.userName || 'Member');
-      });
-      memberNamesList = matchedProject.users.map(u => {
-        if (typeof u === 'string') return userMap.get(u) || u;
-        if (typeof u === 'object') return u.name || userMap.get(String(u._id || u.id)) || 'Member';
-        return 'Member';
-      }).filter(Boolean);
+  // Inaccessible project RBAC guard:
+  if (mentionsProject && !matchedProject) {
+    const ProjectModel = deps.Project || (mongoose.models && mongoose.models.Project) || (mongoose.models && mongoose.models.project);
+    const isDbReady = Boolean(mongoose && mongoose.connection && mongoose.connection.readyState === 1);
+    if (isDbReady && ProjectModel && typeof ProjectModel.findOne === 'function') {
+      try {
+        const cleanNamePart = message.replace(/^(?:kya|show|view|check|dikhao|batao|details|project|tasks|members)\s+/i, '').trim();
+        if (cleanNamePart.length >= 3) {
+          const anyProject = await ProjectModel.findOne({
+            isActive: { $ne: false },
+            projectName: { $regex: new RegExp(escapeRegex(cleanNamePart), 'i') }
+          }).lean();
+          if (anyProject && !hasProjectAccess(anyProject, userId, req?.user?.role, req?.user)) {
+            const pName = anyProject.projectName || 'Project';
+            const denial = isEn
+              ? `You do not have access to the "${pName}" project in your account.`
+              : `Aapke account mein "${pName}" project ka access nahi hai, isliye main iski details nahi dikha sakta.`;
+            return {
+              success: true,
+              status: 'open',
+              field: 'welcome',
+              reply: denial,
+              speech: denial,
+              speakText: denial,
+              draft: null,
+              chips: [{ label: 'Main menu', action: { type: 'reset' } }],
+              candidates: [],
+              notices: []
+            };
+          }
+        }
+      } catch {}
     }
+  }
 
-    const isAskingMembersSpecifically = /(?:members?|people|log|members\s+add|members\s+hain|kon\s+kon|kaun\s+kaun|kitne\s+members)/i.test(message);
-    const isAskingTasksSpecifically = /(?:tasks?|टास्क).*?(?:kitne|kitna|how\s+many|batao|dikhao|status|list|hai|hain)|(?:kitne|kitna|how\s+many|kaun\s+se).*?(?:tasks?|टास्क)/i.test(message);
+  const isAskingMembersSpecifically = /(?:members?|people|log|members\s+add|members\s+hain|kon\s+kon|kaun\s+kaun|kitne\s+members|team\s+members?|टीम\s*मेंबर्स?)/i.test(message);
+  const isAskingTasksSpecifically = /(?:tasks?|टास्क).*?(?:kitne|kitna|how\s+many|batao|dikhao|status|list|details?|hai|hain|show|view)|(?:kitne|kitna|how\s+many|kaun\s+se|view|show|check).*?(?:tasks?|टास्क)/i.test(message);
+  const isProjectInquiry = Boolean(matchedProject) && (
+    mentionsProject ||
+    /(?:details?|status|members?|tasks?|टास्क|log|info|kya|kon|kaun|kab|deadline|batao|dikhao|view|check|\?)/iu.test(message) ||
+    Boolean(draft?.lastProjectId)
+  );
+
+  // 0. SPECIFIC PROJECT QUERY (Status, Members, Tasks, Details)
+  if (isProjectInquiry && matchedProject) {
+    const pName = matchedProject.projectName || matchedProject.name || 'Project';
     const pTasks = Array.isArray(matchedProject.tasks) ? matchedProject.tasks : [];
 
     let rep = '';
-    if (isAskingTasksSpecifically && isAskingMembersSpecifically) {
-      // User asked both: "ciis network mai kitne members hai and kitne tasks hain ?"
-      const taskSummary = pTasks.length > 0 ? `${pTasks.length} task(s)` : (isEn ? 'No tasks yet' : 'Abhi koi task add nahi hai');
-      rep = isEn
-        ? `${greetingPrefix}In project **${pName}**, there are **${memberNamesList.length} member(s)** and **${pTasks.length} task(s)**:\n\n• **Members (${memberNamesList.length})**:\n${memberNamesList.map((m, i) => `${i + 1}. **${m}**`).join('\n')}\n\n• **Tasks**: ${taskSummary}\n\nWould you like to add a task in this project?`
-        : `${greetingPrefix}Project **${pName}** mein total **${memberNamesList.length} member(s)** aur **${pTasks.length} task(s)** hain:\n\n• **Members (${memberNamesList.length})**:\n${memberNamesList.map((m, i) => `${i + 1}. **${m}**`).join('\n')}\n\n• **Tasks**: ${taskSummary}\n\nKya aap is project mein naya task add karna chahte hain?`;
-    } else if (isAskingTasksSpecifically && !isAskingMembersSpecifically) {
-      // User asked only tasks: "es project mai total kitne task hain ?"
-      let taskListStr = '';
-      if (pTasks.length > 0) {
-        taskListStr = '\n\n' + pTasks.map((t, i) => `${i + 1}. **${t.title || t.name || 'Task'}** — *${t.status || 'pending'}*`).join('\n');
-      } else {
-        taskListStr = isEn ? '\n\nNo tasks created yet in this project.' : '\n\nIs project mein abhi koi task create nahi kiya gaya hai.';
+    let projChips = [];
+    if (isAskingTasksSpecifically && !isAskingMembersSpecifically) {
+      rep = formatProjectTasksList(matchedProject, req, isEn);
+      if (pTasks[0]) {
+        projChips.push({ label: `${pTasks[0].title || 'Task'} status update`, action: { type: 'update_project_task_status', projectId: String(matchedProject._id || matchedProject.id), taskId: String(pTasks[0]._id || pTasks[0].id), taskTitle: pTasks[0].title || 'Task' } });
       }
-      rep = isEn
-        ? `${greetingPrefix}Project **${pName}** currently has **${pTasks.length} task(s)**:${taskListStr}\n\nWould you like to add a new task to this project?`
-        : `${greetingPrefix}Project **${pName}** mein abhi total **${pTasks.length} task(s)** hain:${taskListStr}\n\nKya aap is project mein naya task add karna chahte hain?`;
-    } else if (isAskingMembersSpecifically && memberNamesList.length > 0) {
-      rep = isEn
-        ? `${greetingPrefix}Project **${pName}** has ${memberNamesList.length} member(s):\n\n${memberNamesList.map((m, i) => `${i + 1}. **${m}**`).join('\n')}\n\nWould you like to add a task in this project?`
-        : `${greetingPrefix}Project **${pName}** mein total **${memberNamesList.length} member(s)** add hain:\n\n${memberNamesList.map((m, i) => `${i + 1}. **${m}**`).join('\n')}\n\nKya aap is project mein task add karna chahte hain?`;
+      projChips.push(
+        { label: '+ Task add karein', action: { type: 'pickProject', projectId: String(matchedProject._id || matchedProject.id) } },
+        { label: 'Project details', action: { type: 'view_project', projectId: String(matchedProject._id || matchedProject.id) } },
+        { label: 'Team members list', action: { type: 'view_project_members', projectId: String(matchedProject._id || matchedProject.id) } },
+        { label: 'Main menu', action: { type: 'reset' } }
+      );
+    } else if (isAskingMembersSpecifically) {
+      rep = formatProjectTeamMembers(matchedProject, req, isEn);
+      projChips.push(
+        { label: 'View Tasks', action: { type: 'view_project_tasks', projectId: String(matchedProject._id || matchedProject.id) } },
+        { label: 'Project details', action: { type: 'view_project', projectId: String(matchedProject._id || matchedProject.id) } },
+        { label: `${pName} mein task banana`, action: { type: 'pickProject', projectId: String(matchedProject._id || matchedProject.id) } },
+        { label: 'Main menu', action: { type: 'reset' } }
+      );
     } else {
-      const pMembers = memberNamesList.length > 0
-        ? `${memberNamesList.length} (${memberNamesList.join(', ')})`
-        : (Array.isArray(matchedProject.users) ? `${matchedProject.users.length} member(s)` : 'Assigned');
-
-      rep = isEn
-        ? `${greetingPrefix}Here are the details for project **${pName}**:\n\n• **Status**: ${pStatus}\n• **Start Date**: ${pStart}\n• **Members**: ${pMembers}\n• **Tasks**: ${pTasks.length} task(s)\n\nWould you like to add a task in this project?`
-        : `${greetingPrefix}Project **${pName}** ki CRM details:\n\n• **Status**: ${pStatus}\n• **Start Date**: ${pStart}\n• **Members**: ${pMembers}\n• **Tasks**: ${pTasks.length} task(s)\n\nKya aap is project mein task add karna chahte hain?`;
+      rep = formatProjectDetails(matchedProject, req, isEn);
+      projChips.push(
+        { label: 'View Tasks', action: { type: 'view_project_tasks', projectId: String(matchedProject._id || matchedProject.id) } },
+        { label: 'Team members list', action: { type: 'view_project_members', projectId: String(matchedProject._id || matchedProject.id) } },
+        { label: `${pName} mein task banana`, action: { type: 'pickProject', projectId: String(matchedProject._id || matchedProject.id) } },
+        { label: 'Main menu', action: { type: 'reset' } }
+      );
     }
-
-    const projChips = [
-      { label: `${pName} mein task banana`, action: { type: 'pickProject', projectId: String(matchedProject._id || matchedProject.id) } },
-      { label: 'Naya project banana', action: { type: 'set_intent', intent: 'create_project' } },
-      { label: 'Main menu', action: { type: 'reset' } }
-    ];
 
     return {
       success: true,
@@ -1844,10 +1966,12 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
         lastProjectName: pName
       },
       chips: isEn ? [
-        { label: 'Check project details', action: { type: 'set_intent', intent: 'view_project', projectId: String(targetProject._id || targetProject.id) } },
+        { label: 'Check project details', action: { type: 'view_project', projectId: String(targetProject._id || targetProject.id) } },
+        { label: 'View Tasks', action: { type: 'view_project_tasks', projectId: String(targetProject._id || targetProject.id) } },
         { label: 'Main menu', action: { type: 'reset' } }
       ] : [
-        { label: `${pName} details dekhein`, action: { type: 'set_intent', intent: 'view_project', projectId: String(targetProject._id || targetProject.id) } },
+        { label: `${pName} details dekhein`, action: { type: 'view_project', projectId: String(targetProject._id || targetProject.id) } },
+        { label: 'Tasks dekhein', action: { type: 'view_project_tasks', projectId: String(targetProject._id || targetProject.id) } },
         { label: 'Main menu', action: { type: 'reset' } }
       ],
       candidates: [],
@@ -1967,10 +2091,14 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
     };
   }
 
+  const remarkMatch = message.match(/(?:with\s+remark|remark\s+hai|remark\s+mein|remark\s*:?)\s+["']?([^"'\n]+)["']?/i);
+  const statusRemarkText = remarkMatch ? remarkMatch[1].trim() : null;
+  const commandWithoutRemark = remarkMatch ? message.replace(remarkMatch[0], ' ') : message;
+
   // 1. Determine what property is being updated:
   // A. Priority:
   let targetPriority = null;
-  const prioMatch = message.match(/(?:priority\s*(?:ko\s*)?(?:badal\s*kar\s*)?(high|low|medium)|(high|low|medium)\s*(?:priority|kardo|kar\s+do|rakho))/i);
+  const prioMatch = commandWithoutRemark.match(/(?:priority\s*(?:ko\s*)?(?:badal\s*kar\s*)?(high|low|medium)|(high|low|medium)\s*(?:priority|kardo|kar\s+do|rakho))/i);
   if (prioMatch) {
     const rawVal = (prioMatch[1] || prioMatch[2]).toLowerCase();
     if (rawVal === 'high') targetPriority = 'High';
@@ -1980,17 +2108,23 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
 
   // B. Status:
   let targetStatus = null;
-  if (/(?:complete|done|khatam|safal)/i.test(message)) {
-    targetStatus = 'completed';
-  } else if (/in[- ]progress/i.test(message)) {
-    targetStatus = 'in-progress';
-  } else if (/pending/i.test(message)) {
+  if (/in[- ]progress/i.test(commandWithoutRemark)) {
+    targetStatus = 'in progress';
+  } else if (/on[- ]?hold/i.test(commandWithoutRemark)) {
+    targetStatus = 'on hold';
+  } else if (/\bpending\b/i.test(commandWithoutRemark)) {
     targetStatus = 'pending';
-  } else if (/on[- ]?hold/i.test(message)) {
-    targetStatus = 'onhold';
+  } else if (/\b(?:complete|completed|done|khatam|safal)\b/i.test(commandWithoutRemark)) {
+    targetStatus = 'completed';
   }
 
-  if (!targetPriority && !targetStatus) {
+  const titleMatch = message.match(/(?:title|naam)\s+(?:badal\s+ke|karke|to|set|rakho|karo)\s+["']?([^"'\n,]+)["']?/i);
+  const editTitle = titleMatch ? titleMatch[1].trim() : null;
+
+  const descMatch = message.match(/(?:description|desc|विवरण)\s+(?:badal\s+ke|karke|to|set|rakho|karo)\s+["']?([^"'\n,]+)["']?/i);
+  const editDescription = descMatch ? descMatch[1].trim() : null;
+
+  if (!targetPriority && !targetStatus && !editTitle && !editDescription) {
     return null; // Not an update command we can parse
   }
 
@@ -2014,15 +2148,19 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
 
   // 3. Extract Task Name / Candidate:
   // e.g. "kanika client ki cloud architecture kai updated testing ka status change karke completed kardo"
-  // e.g. "kanika cleint ki cloud archetiecure services mai updated testing task ki priority low kardo"
-  // e.g. "Design UI task ka status in-progress kardo"
-  // e.g. "updated testing ka status completed kardo"
+  // e.g. "hlo1 task ka status change karke in progress kardo with remark all done"
+  // e.g. "hlo1 task ko edit karke priority high kardo"
   let taskCandidate = null;
+
   const quoteMatch = message.match(/["']([^"']+)["']/);
-  if (quoteMatch && quoteMatch[1]) {
+  if (quoteMatch && quoteMatch[1] && !statusRemarkText?.includes(quoteMatch[1]) && !editDescription?.includes(quoteMatch[1])) {
     taskCandidate = quoteMatch[1].trim();
   } else {
     let cleanedForTask = message;
+    if (remarkMatch) cleanedForTask = cleanedForTask.replace(remarkMatch[0], ' ');
+    if (descMatch) cleanedForTask = cleanedForTask.replace(descMatch[0], ' ');
+    if (titleMatch) cleanedForTask = cleanedForTask.replace(titleMatch[0], ' ');
+
     if (matchedClient) {
       const cName = matchedClient.client || matchedClient.name;
       cleanedForTask = cleanedForTask.replace(new RegExp(escapeRegex(cName), 'gi'), ' ');
@@ -2040,11 +2178,11 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
 
     // Strip update / status / priority command suffix
     cleanedForTask = cleanedForTask
-      .replace(/(?:ka|ki|ke)?\s*(?:status|priority)?\s*(?:ko\s*)?(?:badal\s*kar\s*|change\s*(?:karke)?\s*|update\s*(?:karke)?\s*|set\s*(?:karke)?\s*)?(?:high|low|medium|completed?|done|khatam|in[- ]progress|pending|on[- ]?hold)\s*(?:kardo|kar\s*do|karo|banao|rakho|set|mark)?/gi, ' ')
+      .replace(/(?:ka|ki|ke)?\s*(?:status|priority)?\s*(?:ko\s*)?(?:badal\s*kar\s*|change\s*(?:karke)?\s*|update\s*(?:karke)?\s*|set\s*(?:karke)?\s*|edit\s*(?:karke)?\s*)?(?:high|low|medium|completed?|done|khatam|in[- ]progress|pending|on[- ]?hold)\s*(?:kardo|kar\s*do|karo|banao|rakho|set|mark)?/gi, ' ')
       .replace(/(?:task|taks)?\s*(?:ko\s*)?(?:complete|done)\s*(?:mark\s*kardo|mark\s*karo|kardo|kar\s*do|mark)?/gi, ' ')
-      .replace(/(?:status|priority)\s*(?:change|update|badal|set)(?:\s*(?:karke|kardo|kar\s*do|karo))?/gi, ' ')
+      .replace(/(?:status|priority)\s*(?:change|update|badal|set|edit)(?:\s*(?:karke|kardo|kar\s*do|karo))?/gi, ' ')
       .replace(/\b(?:status|priority|completed?|in[- ]progress|pending|on[- ]?hold|high|low|medium)\b/gi, ' ')
-      .replace(/\b(?:task|taks|kardo|kar\s*do|karo)\b/gi, ' ')
+      .replace(/\b(?:task|taks|kardo|kar\s*do|kar|karo|edit|update|badal)\b/gi, ' ')
       .replace(/\b(?:mai|mein|in|kai|ke|ki|ka|ko|par|pe|se|sai|sy|from|to|wala|wali|wale|change|karke|badal|badalkar)\b/gi, ' ')
       .replace(/\s+/g, ' ')
       .trim();
@@ -2231,22 +2369,12 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
     }
   }
 
-  // Live search for Project tasks:
+  // Live search and update for Project tasks:
   if (!updatedDoc && (context.accessibleProjects || deps.accessibleProjects || (isDbReady && (deps.Project || mongoose.models.Project)))) {
-    const projList = context.accessibleProjects || deps.accessibleProjects || [];
-    for (const p of projList) {
-      if (Array.isArray(p.tasks)) {
-        const foundTask = p.tasks.find(t => taskCandidate && String(t.title || t.name).toLowerCase().includes(taskCandidate.toLowerCase()));
-        if (foundTask) {
-          if (targetPriority) foundTask.priority = targetPriority.toLowerCase();
-          if (targetStatus) foundTask.status = targetStatus;
-          updatedDoc = { ...foundTask, projectName: p.projectName || p.name };
-          break;
-        }
-      }
-    }
     const ProjectModel = deps.Project || (mongoose.models && mongoose.models.Project) || (mongoose.models && mongoose.models.project);
-    if (!updatedDoc && isDbReady && ProjectModel && typeof ProjectModel.findOne === 'function') {
+    
+    // 1. Try DB update first to ensure persistence
+    if (isDbReady && ProjectModel && typeof ProjectModel.findOne === 'function' && taskCandidate) {
       try {
         const pDoc = await ProjectModel.findOne({
           isActive: { $ne: false },
@@ -2254,16 +2382,95 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
           'tasks.title': { $regex: new RegExp(escapeRegex(taskCandidate), 'i') }
         });
         if (pDoc && Array.isArray(pDoc.tasks)) {
+          // RBAC Check for Project access
+          if (!hasProjectAccess(pDoc, userId, req?.user?.role, req?.user)) {
+            const denial = isEn
+              ? `You do not have access to edit or update tasks in project "${pDoc.projectName}".`
+              : `Aapke paas project "${pDoc.projectName}" ke tasks ko update ya edit karne ka access nahi hai.`;
+            return {
+              success: false,
+              status: 'open',
+              field: 'welcome',
+              reply: denial,
+              speech: denial,
+              speakText: denial,
+              draft: null,
+              chips: [{ label: 'Main menu', action: { type: 'reset' } }],
+              candidates: [],
+              notices: []
+            };
+          }
+
           const tItem = pDoc.tasks.find(t => t.title && new RegExp(escapeRegex(taskCandidate), 'i').test(t.title));
           if (tItem) {
-            if (targetPriority) tItem.priority = targetPriority.toLowerCase();
-            if (targetStatus) tItem.status = targetStatus;
+            const normStatus = targetStatus ? targetStatus.toLowerCase() : null;
+            if (normStatus) {
+              tItem.status = normStatus;
+              if (normStatus === 'completed') {
+                tItem.completionDate = new Date();
+              }
+            }
+            if (targetPriority) {
+              tItem.priority = targetPriority.toLowerCase();
+            }
+            if (editTitle) {
+              tItem.title = editTitle;
+            }
+            if (editDescription) {
+              tItem.description = editDescription;
+            }
+            if (statusRemarkText) {
+              if (!Array.isArray(tItem.remarks)) tItem.remarks = [];
+              tItem.remarks.push({
+                user: userId,
+                userName: req?.user?.name || 'User',
+                text: statusRemarkText,
+                createdAt: new Date()
+              });
+            }
+            if (!Array.isArray(tItem.activityLogs)) tItem.activityLogs = [];
+            tItem.activityLogs.push({
+              action: normStatus ? 'status_update' : 'task_edit',
+              performedBy: userId,
+              performedByName: req?.user?.name || 'User',
+              details: normStatus ? `Status updated to ${normStatus} via CIIS AI` : 'Task details updated via CIIS AI',
+              timestamp: new Date()
+            });
+
+            if (typeof pDoc.markModified === 'function') pDoc.markModified('tasks');
             await pDoc.save();
-            updatedDoc = { ...(typeof tItem.toObject === 'function' ? tItem.toObject() : tItem), projectName: pDoc.projectName };
+
+            updatedDoc = {
+              ...(typeof tItem.toObject === 'function' ? tItem.toObject() : tItem),
+              projectName: pDoc.projectName,
+              projectId: String(pDoc._id || pDoc.id)
+            };
           }
         }
       } catch (e) {
-        console.warn('[taskAgentService] Error updating Project task:', e);
+        console.warn('[taskAgentService] Error updating Project task in DB:', e);
+      }
+    }
+
+    // 2. Memory mock update fallback (for unit tests / mock context)
+    if (!updatedDoc) {
+      const projList = context.accessibleProjects || deps.accessibleProjects || [];
+      for (const p of projList) {
+        if (Array.isArray(p.tasks)) {
+          const foundTask = p.tasks.find(t => taskCandidate && String(t.title || t.name).toLowerCase().includes(taskCandidate.toLowerCase()));
+          if (foundTask) {
+            if (targetPriority) foundTask.priority = targetPriority.toLowerCase();
+            if (targetStatus) foundTask.status = targetStatus.toLowerCase();
+            if (editTitle) foundTask.title = editTitle;
+            if (editDescription) foundTask.description = editDescription;
+            if (statusRemarkText) {
+              if (!Array.isArray(foundTask.remarks)) foundTask.remarks = [];
+              foundTask.remarks.push({ user: userId, text: statusRemarkText, createdAt: new Date() });
+            }
+            updatedDoc = { ...foundTask, projectName: p.projectName || p.name, projectId: String(p._id || p.id) };
+            break;
+          }
+        }
       }
     }
   }
@@ -2279,19 +2486,40 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
     } else if (targetPriority) {
       changeDetails = `priority **${targetPriority}**`;
       changeDetailsEn = `priority to **${targetPriority}**`;
-    } else {
+    } else if (targetStatus) {
       changeDetails = `status **${targetStatus}**`;
       changeDetailsEn = `status to **${targetStatus}**`;
+    } else {
+      changeDetails = `details`;
+      changeDetailsEn = `details`;
     }
 
-    const clientInfo = matchedClient ? ` (Client: **${matchedClient.client || matchedClient.name}**)` : '';
-    const rep = isEn
+    const isProjTask = Boolean(updatedDoc.projectName || updatedDoc.projectId);
+    const projIdStr = String(updatedDoc.projectId || '');
+    const clientInfo = matchedClient ? ` (Client: **${matchedClient.client || matchedClient.name}**)` : (updatedDoc.projectName ? ` (Project: **${updatedDoc.projectName}**)` : '');
+
+    let rep = isEn
       ? `Task **"${taskTitle}"**${clientInfo} has been successfully updated with ${changeDetailsEn}! ✅`
       : `Task **"${taskTitle}"**${clientInfo} ki ${changeDetails} safaltapoorvak update kar di gayi hai! ✅`;
 
+    if (statusRemarkText) {
+      rep += isEn ? `\n• **Remark added**: "${statusRemarkText}"` : `\n• **Remark**: "${statusRemarkText}"`;
+    }
+    if (editTitle) {
+      rep += isEn ? `\n• **Title**: "${editTitle}"` : `\n• **Naya title**: "${editTitle}"`;
+    }
+    if (editDescription) {
+      rep += isEn ? `\n• **Description**: "${editDescription}"` : `\n• **Description**: "${editDescription}"`;
+    }
+
     const chips = [
-      { label: 'Tasks list dekhein', action: { type: 'show_tasks' } },
-      ...(targetStatus !== 'completed' ? [{ label: 'Mark as completed', action: { type: 'complete_task', taskId: String(updatedDoc._id || updatedDoc.id || '') } }] : []),
+      ...(isProjTask && projIdStr ? [
+        { label: 'View Tasks', action: { type: 'view_project_tasks', projectId: projIdStr } },
+        { label: 'Project details', action: { type: 'view_project', projectId: projIdStr } }
+      ] : [
+        { label: 'Tasks list dekhein', action: { type: 'show_tasks' } }
+      ]),
+      ...(targetStatus !== 'completed' ? [{ label: 'Mark as completed', action: { type: isProjTask ? 'update_project_task_status' : 'complete_task', taskId: String(updatedDoc._id || updatedDoc.id || ''), projectId: projIdStr, targetStatus: 'completed' } }] : []),
       { label: 'Main menu', action: { type: 'reset' } }
     ];
 
@@ -2516,6 +2744,7 @@ async function parseTaskRequest({
   const DeptModel = deps.Department || Department;
   const isDbReady = Boolean(deps.User || deps.Department || (mongoose && mongoose.connection && mongoose.connection.readyState === 1));
   const modelName = deps.getModelName ? deps.getModelName() : getModelName();
+  const isEn = (language || draft?.language) === 'en';
 
   // Initialize draft structure
   const currentDraft = {
@@ -2851,6 +3080,50 @@ async function parseTaskRequest({
   }
   deps.clientTasks = clientTasks;
 
+async function resolveProjectForAction(action, req, deps, currentDraft) {
+  const isDbReady = Boolean(mongoose && mongoose.connection && mongoose.connection.readyState === 1);
+  const ProjectModel = deps.Project || (mongoose.models && mongoose.models.Project) || (mongoose.models && mongoose.models.project);
+  const targetId = action?.projectId || currentDraft?.lastProjectId || currentDraft?.projectId;
+  const targetName = action?.projectName || currentDraft?.lastProjectName;
+
+  let projectDoc = null;
+  const accessibleList = deps.accessibleProjects || deps.projects || [];
+  if (targetId) {
+    projectDoc = accessibleList.find(p => String(p._id || p.id) === String(targetId));
+  }
+  if (!projectDoc && targetName) {
+    projectDoc = accessibleList.find(p => (p.projectName || p.name || '').toLowerCase() === targetName.toLowerCase());
+  }
+
+  if (!projectDoc && isDbReady && ProjectModel) {
+    try {
+      if (targetId && mongoose.Types.ObjectId.isValid(targetId)) {
+        projectDoc = await ProjectModel.findById(targetId)
+          .populate('users', '_id name email role jobRole companyRole profileImage')
+          .populate('tasks.assignedTo', '_id name email role jobRole companyRole')
+          .populate('tasks.assignedUsers', '_id name email role jobRole companyRole')
+          .lean();
+      } else if (targetName) {
+        projectDoc = await ProjectModel.findOne({
+          projectName: { $regex: new RegExp(`^${escapeRegex(targetName)}$`, 'i') }
+        })
+          .populate('users', '_id name email role jobRole companyRole profileImage')
+          .populate('tasks.assignedTo', '_id name email role jobRole companyRole')
+          .populate('tasks.assignedUsers', '_id name email role jobRole companyRole')
+          .lean();
+      }
+    } catch (e) {
+      console.warn('[taskAgentService] Error in resolveProjectForAction:', e);
+    }
+  }
+
+  if (!projectDoc && accessibleList.length === 1) {
+    projectDoc = accessibleList[0];
+  }
+
+  return projectDoc;
+}
+
 const lastAskedField = currentDraft.asked.length > 0
     ? currentDraft.asked[currentDraft.asked.length - 1]
     : null;
@@ -2900,74 +3173,407 @@ const lastAskedField = currentDraft.asked.length > 0
     actionHandled = true;
     switch (action.type) {
       case 'set_intent': {
-        const allowedIntents = resolveUserAllowedIntents(req?.user, scope, { ...deps, allowedIntents: action.allowedIntents || req?.body?.allowedIntents });
-        if (!allowedIntents.includes(action.intent)) {
-          const denial = getPermissionDeniedReply(action.intent, allowedIntents, req?.user);
-          const welcomeChips = buildChips(null, 'welcome', { ...deps, allowedIntents });
+        if (action.intent === 'view_project') {
+          action.type = 'view_project';
+          // Fall through to view_project handler below
+        } else {
+          const allowedIntents = resolveUserAllowedIntents(req?.user, scope, { ...deps, allowedIntents: action.allowedIntents || req?.body?.allowedIntents });
+          if (!allowedIntents.includes(action.intent)) {
+            const denial = getPermissionDeniedReply(action.intent, allowedIntents, req?.user);
+            const welcomeChips = buildChips(null, 'welcome', { ...deps, allowedIntents });
+            return {
+              success: true,
+              status: 'open',
+              field: 'welcome',
+              reply: denial.reply,
+              speech: denial.speech,
+              speakText: denial.speakText,
+              speakTextHi: denial.speakTextHi,
+              draft: null,
+              chips: welcomeChips,
+              candidates: [],
+              notices: [],
+              canAssignOthers
+            };
+          }
+          currentDraft.intent = action.intent;
+          if (action.intent === 'self_task') {
+            currentDraft.taskFor = 'self';
+            currentDraft.wantsOthers = false;
+          }
+          if (action.intent === 'task_assigned_user') {
+            currentDraft.taskFor = 'others';
+            currentDraft.wantsOthers = true;
+            currentDraft.skipped = (currentDraft.skipped || []).filter(f => f !== 'assignee');
+          }
+          if (action.intent === 'task_project') currentDraft.taskFor = 'project';
+          if (action.intent === 'create_client_task') {
+            Object.keys(currentDraft).forEach(k => {
+              if (k !== 'history' && k !== '_id') delete currentDraft[k];
+            });
+            currentDraft.intent = 'create_client_task';
+            currentDraft.asked = [];
+            currentDraft.skipped = [];
+            currentDraft.askCounts = {};
+            if (action.client) {
+              currentDraft.client = action.client;
+              currentDraft.asked.push('client');
+            }
+            if (action.clientId) currentDraft.clientId = action.clientId;
+            if (Array.isArray(action.clientServices)) currentDraft.clientServices = action.clientServices;
+            if (action.service) {
+              currentDraft.service = action.service;
+              currentDraft.asked.push('service');
+            }
+          }
+          if (action.intent === 'create_client') {
+            Object.keys(currentDraft).forEach(k => {
+              if (k !== 'history' && k !== '_id') delete currentDraft[k];
+            });
+            currentDraft.intent = 'create_client';
+            currentDraft.asked = [];
+            currentDraft.skipped = [];
+            currentDraft.askCounts = {};
+          }
+          if (action.intent === 'create_client_plan') {
+            Object.keys(currentDraft).forEach(k => {
+              if (k !== 'history' && k !== '_id') delete currentDraft[k];
+            });
+            currentDraft.intent = 'create_client_plan';
+            currentDraft.asked = [];
+            currentDraft.skipped = [];
+            currentDraft.askCounts = {};
+          }
+          break;
+        }
+      }
+      case 'view_project':
+      case 'show_project_details': {
+        actionHandled = true;
+        const projectDoc = await resolveProjectForAction(action, req, deps, currentDraft);
+        const pUserId = req?.user?._id || req?.user?.id;
+        if (!projectDoc) {
+          const notFoundMsg = isEn ? "Could not find the project details." : "Project ki details nahi mil saki.";
           return {
             success: true,
             status: 'open',
             field: 'welcome',
-            reply: denial.reply,
-            speech: denial.speech,
-            speakText: denial.speakText,
-            speakTextHi: denial.speakTextHi,
-            draft: null,
-            chips: welcomeChips,
+            reply: notFoundMsg,
+            speech: notFoundMsg,
+            speakText: notFoundMsg,
+            draft: currentDraft,
+            chips: [{ label: 'Main menu', action: { type: 'reset' } }],
             candidates: [],
-            notices: [],
-            canAssignOthers
+            notices: []
           };
         }
-        currentDraft.intent = action.intent;
-        if (action.intent === 'self_task') {
-          currentDraft.taskFor = 'self';
-          currentDraft.wantsOthers = false;
+        if (!hasProjectAccess(projectDoc, pUserId, req?.user?.role, req?.user)) {
+          const pName = projectDoc.projectName || 'Project';
+          const denial = isEn
+            ? `You do not have access to the "${pName}" project in your account.`
+            : `Aapke account mein "${pName}" project ka access nahi hai, isliye main iski details nahi dikha sakta.`;
+          return {
+            success: true,
+            status: 'open',
+            field: 'welcome',
+            reply: denial,
+            speech: denial,
+            speakText: denial,
+            draft: null,
+            chips: [{ label: 'Main menu', action: { type: 'reset' } }],
+            candidates: [],
+            notices: []
+          };
         }
-        if (action.intent === 'task_assigned_user') {
-          currentDraft.taskFor = 'others';
-          currentDraft.wantsOthers = true;
-          currentDraft.skipped = (currentDraft.skipped || []).filter(f => f !== 'assignee');
+
+        currentDraft.lastProjectId = String(projectDoc._id || projectDoc.id);
+        currentDraft.lastProjectName = projectDoc.projectName || projectDoc.name;
+
+        const rep = formatProjectDetails(projectDoc, req, isEn);
+        const pName = projectDoc.projectName || projectDoc.name || 'Project';
+        return {
+          success: true,
+          status: 'open',
+          field: 'welcome',
+          reply: rep,
+          speech: isEn ? `Project ${pName} details.` : `Project ${pName} ki details.`,
+          speakText: rep,
+          speakTextHi: isEn ? null : `Project ${pName} ki details.`,
+          draft: currentDraft,
+          chips: [
+            { label: 'View Tasks', action: { type: 'view_project_tasks', projectId: String(projectDoc._id || projectDoc.id) } },
+            { label: 'Team members list', action: { type: 'view_project_members', projectId: String(projectDoc._id || projectDoc.id) } },
+            { label: `${pName} mein task banana`, action: { type: 'pickProject', projectId: String(projectDoc._id || projectDoc.id) } },
+            { label: 'Main menu', action: { type: 'reset' } }
+          ],
+          candidates: [],
+          notices: []
+        };
+      }
+      case 'view_project_tasks': {
+        actionHandled = true;
+        const projectDoc = await resolveProjectForAction(action, req, deps, currentDraft);
+        const pUserId = req?.user?._id || req?.user?.id;
+        if (!projectDoc) {
+          const notFoundMsg = isEn ? "Could not find the project tasks." : "Project ke tasks nahi mil sake.";
+          return {
+            success: true,
+            status: 'open',
+            field: 'welcome',
+            reply: notFoundMsg,
+            speech: notFoundMsg,
+            speakText: notFoundMsg,
+            draft: currentDraft,
+            chips: [{ label: 'Main menu', action: { type: 'reset' } }],
+            candidates: [],
+            notices: []
+          };
         }
-        if (action.intent === 'task_project') currentDraft.taskFor = 'project';
-        if (action.intent === 'create_client_task') {
-          Object.keys(currentDraft).forEach(k => {
-            if (k !== 'history' && k !== '_id') delete currentDraft[k];
+        if (!hasProjectAccess(projectDoc, pUserId, req?.user?.role, req?.user)) {
+          const pName = projectDoc.projectName || 'Project';
+          const denial = isEn
+            ? `You do not have access to the "${pName}" project tasks in your account.`
+            : `Aapke account mein "${pName}" project ke tasks ka access nahi hai.`;
+          return {
+            success: true,
+            status: 'open',
+            field: 'welcome',
+            reply: denial,
+            speech: denial,
+            speakText: denial,
+            draft: null,
+            chips: [{ label: 'Main menu', action: { type: 'reset' } }],
+            candidates: [],
+            notices: []
+          };
+        }
+
+        currentDraft.lastProjectId = String(projectDoc._id || projectDoc.id);
+        currentDraft.lastProjectName = projectDoc.projectName || projectDoc.name;
+
+        const rep = formatProjectTasksList(projectDoc, req, isEn);
+        const pTasks = Array.isArray(projectDoc.tasks) ? projectDoc.tasks : [];
+        const chips = [];
+        if (pTasks[0]) {
+          chips.push({
+            label: `${pTasks[0].title || 'Task'} status update`,
+            action: {
+              type: 'update_project_task_status',
+              projectId: String(projectDoc._id || projectDoc.id),
+              taskId: String(pTasks[0]._id || pTasks[0].id),
+              taskTitle: pTasks[0].title || 'Task'
+            }
           });
-          currentDraft.intent = 'create_client_task';
-          currentDraft.asked = [];
-          currentDraft.skipped = [];
-          currentDraft.askCounts = {};
-          if (action.client) {
-            currentDraft.client = action.client;
-            currentDraft.asked.push('client');
+        }
+        chips.push(
+          { label: '+ Task add karein', action: { type: 'pickProject', projectId: String(projectDoc._id || projectDoc.id) } },
+          { label: 'Project details', action: { type: 'view_project', projectId: String(projectDoc._id || projectDoc.id) } },
+          { label: 'Team members list', action: { type: 'view_project_members', projectId: String(projectDoc._id || projectDoc.id) } },
+          { label: 'Main menu', action: { type: 'reset' } }
+        );
+
+        return {
+          success: true,
+          status: 'open',
+          field: 'welcome',
+          reply: rep,
+          speech: isEn ? `Project tasks list.` : `Project ke tasks ki list.`,
+          speakText: rep,
+          speakTextHi: isEn ? null : `Project ke tasks ki list.`,
+          draft: currentDraft,
+          chips,
+          candidates: [],
+          notices: []
+        };
+      }
+      case 'view_project_members': {
+        actionHandled = true;
+        const projectDoc = await resolveProjectForAction(action, req, deps, currentDraft);
+        const pUserId = req?.user?._id || req?.user?.id;
+        if (!projectDoc) {
+          const notFoundMsg = isEn ? "Could not find the project team members." : "Project ke team members nahi mil sake.";
+          return {
+            success: true,
+            status: 'open',
+            field: 'welcome',
+            reply: notFoundMsg,
+            speech: notFoundMsg,
+            speakText: notFoundMsg,
+            draft: currentDraft,
+            chips: [{ label: 'Main menu', action: { type: 'reset' } }],
+            candidates: [],
+            notices: []
+          };
+        }
+        if (!hasProjectAccess(projectDoc, pUserId, req?.user?.role, req?.user)) {
+          const pName = projectDoc.projectName || 'Project';
+          const denial = isEn
+            ? `You do not have access to view team members of "${pName}".`
+            : `Aapke account mein "${pName}" project ke team members dekhne ka access nahi hai.`;
+          return {
+            success: true,
+            status: 'open',
+            field: 'welcome',
+            reply: denial,
+            speech: denial,
+            speakText: denial,
+            draft: null,
+            chips: [{ label: 'Main menu', action: { type: 'reset' } }],
+            candidates: [],
+            notices: []
+          };
+        }
+
+        currentDraft.lastProjectId = String(projectDoc._id || projectDoc.id);
+        currentDraft.lastProjectName = projectDoc.projectName || projectDoc.name;
+
+        const rep = formatProjectTeamMembers(projectDoc, req, isEn);
+        const pName = projectDoc.projectName || projectDoc.name || 'Project';
+        return {
+          success: true,
+          status: 'open',
+          field: 'welcome',
+          reply: rep,
+          speech: isEn ? `Project team members list.` : `Project ke team members ki list.`,
+          speakText: rep,
+          speakTextHi: isEn ? null : `Project ke team members ki list.`,
+          draft: currentDraft,
+          chips: [
+            { label: 'View Tasks', action: { type: 'view_project_tasks', projectId: String(projectDoc._id || projectDoc.id) } },
+            { label: 'Project details', action: { type: 'view_project', projectId: String(projectDoc._id || projectDoc.id) } },
+            { label: `${pName} mein task banana`, action: { type: 'pickProject', projectId: String(projectDoc._id || projectDoc.id) } },
+            { label: 'Main menu', action: { type: 'reset' } }
+          ],
+          candidates: [],
+          notices: []
+        };
+      }
+      case 'update_project_task_status': {
+        actionHandled = true;
+        const targetProjectId = action.projectId || currentDraft.lastProjectId;
+        const targetTaskId = action.taskId;
+        const taskTitle = action.taskTitle || 'Task';
+        const targetStatus = action.targetStatus;
+
+        // If targetStatus not yet selected, prompt with status choice chips
+        if (!targetStatus) {
+          const promptMsg = isEn
+            ? `Select the new status for task **"${taskTitle}"**:`
+            : `Task **"${taskTitle}"** ke liye naya status chuniye:`;
+          return {
+            success: true,
+            status: 'needs_input',
+            field: 'status_select',
+            reply: promptMsg,
+            speech: promptMsg,
+            speakText: promptMsg,
+            draft: currentDraft,
+            chips: [
+              { label: 'Pending', action: { type: 'update_project_task_status', projectId: targetProjectId, taskId: targetTaskId, taskTitle, targetStatus: 'pending' } },
+              { label: 'In Progress', action: { type: 'update_project_task_status', projectId: targetProjectId, taskId: targetTaskId, taskTitle, targetStatus: 'in progress' } },
+              { label: 'Completed', action: { type: 'update_project_task_status', projectId: targetProjectId, taskId: targetTaskId, taskTitle, targetStatus: 'completed' } },
+              { label: 'On Hold', action: { type: 'update_project_task_status', projectId: targetProjectId, taskId: targetTaskId, taskTitle, targetStatus: 'on hold' } },
+              { label: 'Cancel', action: { type: 'view_project_tasks', projectId: targetProjectId } }
+            ],
+            candidates: [],
+            notices: []
+          };
+        }
+
+        // Save status update to database
+        const isDbReady = Boolean(mongoose && mongoose.connection && mongoose.connection.readyState === 1);
+        const ProjectModel = deps.Project || (mongoose.models && mongoose.models.Project) || (mongoose.models && mongoose.models.project);
+        const pUserId = req?.user?._id || req?.user?.id;
+
+        let updatedTaskItem = null;
+        let projectName = '';
+
+        if (isDbReady && ProjectModel && targetProjectId) {
+          try {
+            const pDoc = await ProjectModel.findById(targetProjectId);
+            if (pDoc) {
+              projectName = pDoc.projectName;
+              if (!hasProjectAccess(pDoc, pUserId, req?.user?.role, req?.user)) {
+                const denial = isEn ? "You do not have access to update tasks in this project." : "Aapke paas is project ke tasks update karne ka access nahi hai.";
+                return {
+                  success: false,
+                  status: 'open',
+                  field: 'welcome',
+                  reply: denial,
+                  speech: denial,
+                  speakText: denial,
+                  draft: currentDraft,
+                  chips: [{ label: 'Main menu', action: { type: 'reset' } }]
+                };
+              }
+              const tItem = pDoc.tasks?.id ? pDoc.tasks.id(targetTaskId) : pDoc.tasks?.find(t => String(t._id || t.id) === String(targetTaskId));
+              if (tItem) {
+                const normStatus = targetStatus.toLowerCase();
+                tItem.status = normStatus;
+                if (normStatus === 'completed') {
+                  tItem.completionDate = new Date();
+                }
+                if (action.remark) {
+                  if (!Array.isArray(tItem.remarks)) tItem.remarks = [];
+                  tItem.remarks.push({
+                    user: pUserId,
+                    userName: req?.user?.name || 'User',
+                    text: action.remark,
+                    createdAt: new Date()
+                  });
+                }
+                if (!Array.isArray(tItem.activityLogs)) tItem.activityLogs = [];
+                tItem.activityLogs.push({
+                  action: 'status_update',
+                  performedBy: pUserId,
+                  performedByName: req?.user?.name || 'User',
+                  details: `Status updated to ${normStatus} via CIIS AI`,
+                  timestamp: new Date()
+                });
+                if (typeof pDoc.markModified === 'function') pDoc.markModified('tasks');
+                await pDoc.save();
+                updatedTaskItem = tItem;
+              }
+            }
+          } catch (e) {
+            console.warn('[taskAgentService] Error updating project task status:', e);
           }
-          if (action.clientId) currentDraft.clientId = action.clientId;
-          if (Array.isArray(action.clientServices)) currentDraft.clientServices = action.clientServices;
-          if (action.service) {
-            currentDraft.service = action.service;
-            currentDraft.asked.push('service');
+        }
+
+        // Also update memory mock if in deps/context
+        const memProjects = context.accessibleProjects || deps.accessibleProjects || deps.projects || [];
+        const memProj = memProjects.find(p => String(p._id || p.id) === String(targetProjectId));
+        if (memProj && Array.isArray(memProj.tasks)) {
+          const memTask = memProj.tasks.find(t => String(t._id || t.id) === String(targetTaskId));
+          if (memTask) {
+            memTask.status = targetStatus.toLowerCase();
+            if (!updatedTaskItem) updatedTaskItem = memTask;
           }
         }
-        if (action.intent === 'create_client') {
-          Object.keys(currentDraft).forEach(k => {
-            if (k !== 'history' && k !== '_id') delete currentDraft[k];
-          });
-          currentDraft.intent = 'create_client';
-          currentDraft.asked = [];
-          currentDraft.skipped = [];
-          currentDraft.askCounts = {};
-        }
-        if (action.intent === 'create_client_plan') {
-          Object.keys(currentDraft).forEach(k => {
-            if (k !== 'history' && k !== '_id') delete currentDraft[k];
-          });
-          currentDraft.intent = 'create_client_plan';
-          currentDraft.asked = [];
-          currentDraft.skipped = [];
-          currentDraft.askCounts = {};
-        }
-        break;
+
+        const rep = isEn
+          ? `Project task **"${taskTitle}"** status has been updated to **${targetStatus}**! ✅`
+          : `Project task **"${taskTitle}"** ka status **${targetStatus}** safaltapoorvak update kar diya gaya hai! ✅`;
+
+        return {
+          success: true,
+          status: 'open',
+          field: 'welcome',
+          reply: rep,
+          speech: rep,
+          speakText: rep,
+          draft: currentDraft,
+          taskUpdated: true,
+          updatedTaskId: String(targetTaskId),
+          updatedTask: updatedTaskItem,
+          chips: [
+            { label: 'View Tasks', action: { type: 'view_project_tasks', projectId: targetProjectId } },
+            { label: 'Project details', action: { type: 'view_project', projectId: targetProjectId } },
+            { label: 'Main menu', action: { type: 'reset' } }
+          ],
+          candidates: [],
+          notices: []
+        };
       }
       case 'set_client_task_client': {
         actionHandled = true;
