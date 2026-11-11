@@ -101,11 +101,17 @@ exports.createTaskForOthers = async (req, res) => {
     const files = (req.files?.files || []).map(f => ({ filename: f.filename, originalName: f.originalname, path: f.path, uploadedBy: req.user._id }));
     const voiceNote = req.files?.voiceNote?.[0] ? { filename: req.files.voiceNote[0].filename, originalName: req.files.voiceNote[0].originalname, path: req.files.voiceNote[0].path, uploadedBy: req.user._id } : null;
 
-    let parsedDue = null;
-    if (dueDateTime) {
-      parsedDue = new Date(dueDateTime);
-      if (isNaN(parsedDue.getTime())) return res.status(400).json({ success: false, error: 'Invalid due date format' });
+    if (!String(title || '').trim()) {
+      return res.status(400).json({ success: false, error: 'Title is required' });
     }
+    if (!Array.isArray(parsedUsers) || !Array.isArray(parsedGroups) || (parsedUsers.length === 0 && parsedGroups.length === 0)) {
+      return res.status(400).json({ success: false, error: 'Select at least one user or group' });
+    }
+    if (!dueDateTime) {
+      return res.status(400).json({ success: false, error: 'Due date is required' });
+    }
+    const parsedDue = new Date(dueDateTime);
+    if (isNaN(parsedDue.getTime())) return res.status(400).json({ success: false, error: 'Invalid due date format' });
 
     const statusByUser = parsedUsers.map(uid => ({ user: uid, status: 'pending' }));
     const parsedCheckpoints = parseTaskCheckpoints(checkpoints);
@@ -149,14 +155,17 @@ exports.createTaskForOthers = async (req, res) => {
 
       enqueueBackgroundJob(async () => {
         await sendTaskCreationEmail({ ...task.toObject(), _id: taskId, assignedUsers }, assignedUsers);
-        await createNotification(
-          createdById,
-          'New Task Assigned',
-          `${creatorName} assigned you task "${title}"`,
-          'task_assigned',
-          taskId,
-          { priority, dueDateTime: parsedDue, targetUsers }
-        );
+        // Each assignee gets the notification (it used to go to the creator only).
+        for (const userId of targetUsers) {
+          await createNotification(
+            userId,
+            'New Task Assigned',
+            `${creatorName} assigned you task "${title}"`,
+            'task_assigned',
+            taskId,
+            { priority, dueDateTime: parsedDue, createdBy: createdById }
+          );
+        }
       });
     }
 
@@ -396,7 +405,6 @@ exports.updateStatus = async (req, res) => {
     if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
 
     const currentUserId = (req.user._id || req.user.id).toString();
-    const userCompanyCode = getRequestCompanyCode(req);
 
     const isCreator = task.createdBy.toString() === currentUserId;
     const isAssigned = task.assignedUsers.some(uid => uid.toString() === currentUserId);
@@ -406,10 +414,12 @@ exports.updateStatus = async (req, res) => {
     const groupIds = userGroups.map(g => g._id.toString());
     const isGroupAssigned = task.assignedGroups?.some(gid => groupIds.includes(gid.toString()));
 
-    const isSameCompany = task.companyCode && userCompanyCode &&
-      task.companyCode.toUpperCase() === userCompanyCode.toUpperCase();
+    // Same company alone is not enough to change a colleague's task; company-wide
+    // edits need the Company All Task permission (same rule as the /task API).
+    const { canManageTaskFromCompanyAll } = require('./taskController');
+    const allowCompanyAllEdit = await canManageTaskFromCompanyAll(req, task);
 
-    if (!isCreator && !isAssigned && !isGroupAssigned && !isSameCompany) {
+    if (!isCreator && !isAssigned && !isGroupAssigned && !allowCompanyAllEdit) {
       return res.status(403).json({ success: false, error: 'Not authorized' });
     }
 
@@ -446,6 +456,13 @@ exports.updateStatus = async (req, res) => {
         await task.save();
       }
       return res.status(400).json({ success: false, error: 'Cannot change status of an overdue task' });
+    }
+
+    if (oldStatus === 'completed' && status !== 'completed' && status !== 'reopen' && !allowCompanyAllEdit) {
+      return res.status(400).json({ success: false, error: 'Completed tasks can only be reopened.' });
+    }
+    if (oldStatus === 'reopen' && status !== 'reopen' && status !== 'completed' && !allowCompanyAllEdit) {
+      return res.status(400).json({ success: false, error: 'Reopened tasks can only be completed.' });
     }
 
     const updateUserStatusInList = (targetUserId, newStatus, userRemarks) => {

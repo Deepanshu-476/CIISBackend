@@ -153,8 +153,14 @@ const getUserBranchIds = (user = {}) => normalizeIdList([
 ]);
 
 const canViewAllCompanyBranches = (user = {}) => {
-  const roleText = String(user.companyRole || user.jobRole || user.role || '').trim().toLowerCase();
-  return ['owner', 'company_owner', 'companyowner', 'super_admin', 'superadmin', 'admin', 'hr', 'manager', 'career infowis admin'].includes(roleText);
+  // HR and Manager job titles must not widen a user's branch scope. Company
+  // admins retain their existing company-wide directory access.
+  // `isCompanyOwner` is set by authMiddleware after validating the account.
+  if (user.isCompanyOwner === true || user.isSuperAdmin === true || user.superAdmin === true) return true;
+  const companyRole = String(user.companyRole || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  const jobRole = String(user.jobRole || user.role || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  return ['owner', 'company_owner', 'companyowner', 'admin', 'career_infowis_admin'].includes(companyRole) ||
+    ['admin', 'career_infowis_admin'].includes(jobRole);
 };
 
 const isPrivilegedPiiViewer = (user = {}) => {
@@ -310,7 +316,14 @@ const applyBranchAccessFilter = (filter, req) => {
     return filter;
   }
 
-  if (!canViewAllCompanyBranches(currentUser) && accessibleBranchIds.length > 0) {
+  if (!canViewAllCompanyBranches(currentUser)) {
+    // A non-owner with no assigned branch is not entitled to the entire
+    // company directory. Returning an empty result is safer than omitting
+    // the branch predicate (which previously exposed every branch).
+    if (accessibleBranchIds.length === 0) {
+      filter._id = null;
+      return filter;
+    }
     appendAndCondition(filter, { $or: [
       { branch: { $in: accessibleBranchIds } },
       { assignedBranches: { $in: accessibleBranchIds } }
@@ -323,7 +336,7 @@ const applyBranchAccessFilter = (filter, req) => {
 const userMatchesBranchScope = (targetUser, currentUser = {}) => {
   if (canViewAllCompanyBranches(currentUser)) return true;
   const accessibleBranchIds = getUserBranchIds(currentUser);
-  if (!accessibleBranchIds.length) return true;
+  if (!accessibleBranchIds.length) return false;
   const targetBranchIds = getUserBranchIds(targetUser);
   return targetBranchIds.some(branchId => accessibleBranchIds.includes(branchId));
 };
@@ -1188,6 +1201,45 @@ exports.getRegisterRequests = async (req, res) => {
   }
 };
 
+exports.getRegisterRequestsCount = async (req, res) => {
+  try {
+    const canView = await hasRegisterRequestViewAccess(req);
+    if (!canView) {
+      return res.status(200).json({ success: true, count: 0 });
+    }
+
+    const companyScope = getCompanyScope(req);
+    let companyFilter = {};
+    if (!companyScope.error) {
+      companyFilter = companyScope.filter;
+    } else {
+      const role = String(req.user?.companyRole || req.user?.jobRole || req.user?.role || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+      if (!['super_admin', 'superadmin'].includes(role)) {
+        return res.status(200).json({ success: true, count: 0 });
+      }
+    }
+
+    const filter = {
+      ...companyFilter,
+      $or: [
+        { registrationStatus: 'pending' },
+        { registrationSource: 'self_register', isActive: false },
+        {
+          registrationSource: { $exists: false },
+          registrationStatus: { $exists: false },
+          isActive: false
+        }
+      ]
+    };
+
+    const count = await User.countDocuments(filter);
+    return res.status(200).json({ success: true, count });
+  } catch (err) {
+    console.error("❌ Get register requests count error:", err);
+    return res.status(500).json({ success: false, error: err.message, count: 0 });
+  }
+};
+
 exports.updateRegisterRequest = async (req, res) => {
   try {
     const canVerify = await hasRegisterRequestVerifyAccess(req);
@@ -1540,7 +1592,12 @@ exports.getAllUsers = async (req, res) => {
     
     
     const authorizedRoles = ['admin', 'super_admin', 'hr', 'manager', 'employee'];
-    const isAuthorized = authorizedRoles.includes(req.user.jobRole);
+    // Owners/admins (companyRole) see every department; the jobRole check stays as it was.
+    const companyWideRoles = ['owner', 'company_owner', 'admin', 'super_admin', 'superadmin', 'hr', 'manager'];
+    const normalizedCompanyRole = String(req.user.companyRole || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+    const isAuthorized = authorizedRoles.includes(req.user.jobRole) ||
+      companyWideRoles.includes(normalizedCompanyRole) ||
+      req.user.isCompanyOwner === true;
     
     if (!isAuthorized && userDepartment) {
       filter.department = userDepartment;

@@ -67,8 +67,11 @@ const normalizeIdList = (value) => {
 };
 
 const canViewAllBranchData = (user = {}) => {
-  const roleText = String(user.companyRole || user.jobRole || user.role || '').trim().toLowerCase();
-  return ['owner', 'company_owner', 'companyowner', 'super_admin', 'superadmin', 'admin', 'hr', 'manager', 'career infowis admin'].includes(roleText);
+  if (user.isCompanyOwner === true || user.isSuperAdmin === true || user.superAdmin === true) return true;
+  const companyRole = String(user.companyRole || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  const jobRole = String(user.jobRole || user.role || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  return ['owner', 'company_owner', 'companyowner', 'admin', 'career_infowis_admin'].includes(companyRole) ||
+    ['admin', 'career_infowis_admin'].includes(jobRole);
 };
 
 const getUserBranchIds = (user = {}) => normalizeIdList([
@@ -87,7 +90,11 @@ const applyBranchUserFilter = (query, req, currentUser = req.user || {}) => {
 
   if (!requestedBranch) {
     const accessibleBranchIds = getUserBranchIds(currentUser);
-    if (!canViewAllBranchData(currentUser) && accessibleBranchIds.length > 0) {
+    if (!canViewAllBranchData(currentUser)) {
+      if (accessibleBranchIds.length === 0) {
+        query._id = null;
+        return query;
+      }
       return appendBranchCondition({
         $or: [
           { branch: { $in: accessibleBranchIds } },
@@ -1009,8 +1016,7 @@ exports.getCompanyAllTaskOverview = async (req, res) => {
       return res.status(401).json({ success: false, message: 'User not found' });
     }
 
-    const rawRole = String(currentUser.companyRole || currentUser.role || currentUser.jobRole || '').toLowerCase();
-    const isOwnerScope = ['owner', 'admin', 'super-admin', 'superadmin', 'hr', 'manager', 'career infowis admin'].includes(rawRole);
+    const isOwnerScope = canViewAllBranchData(currentUser);
     // Company All Task is an employee workspace. Client portal accounts must
     // never be returned here, otherwise they appear as a "Client" department.
     const query = {
@@ -1041,8 +1047,10 @@ exports.getCompanyAllTaskOverview = async (req, res) => {
       if (!isOwnerScope && currentUser.department) {
         query.department = currentUser.department;
       }
-      applyBranchUserFilter(query, req, currentUser);
     }
+    // Page Management visibility can narrow access further, but it must never
+    // let HR or Manager escape their profile's assigned branch scope.
+    applyBranchUserFilter(query, req, currentUser);
 
     const users = await User.find(query)
       .select('name email role companyRole jobRole employeeType employeeId company department companyCode branch assignedBranches isActive createdAt')

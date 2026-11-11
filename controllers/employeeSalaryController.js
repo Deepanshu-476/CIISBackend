@@ -888,7 +888,7 @@ exports.getPayrollRun = async (req, res) => {
   try {
     const company = getCompany(req);
     const month = String(req.query.month || "").trim();
-    if (!company || !/^\d{4}-\d{2}$/.test(month)) {
+    if (!company || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
       return res.status(400).json({ success: false, message: "A valid payroll month is required." });
     }
     const run = await PayrollRun.findOne({ company, month }).lean();
@@ -912,7 +912,7 @@ exports.generatePayrollRun = async (req, res) => {
   try {
     const company = getCompany(req);
     const month = String(req.body?.month || req.query?.month || "").trim();
-    if (!company || !/^\d{4}-\d{2}$/.test(month)) {
+    if (!company || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
       return res.status(400).json({ success: false, message: "A valid payroll month is required." });
     }
     const existing = await PayrollRun.findOne({ company, month });
@@ -954,7 +954,7 @@ exports.updatePayrollSettings = async (req, res) => {
     const salaryDaysBasis = req.body?.salaryDaysBasis || "calendar";
     const sandwichRuleEnabled = Boolean(req.body?.sandwichRuleEnabled);
 
-    if (!company || !/^\d{4}-\d{2}$/.test(month)) {
+    if (!company || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
       return res.status(400).json({ success: false, message: "A valid payroll month is required." });
     }
 
@@ -1010,7 +1010,7 @@ exports.recalculateSingleEmployee = async (req, res) => {
     const company = getCompany(req);
     const month = String(req.body?.month || req.query?.month || "").trim();
     const employeeId = String(req.body?.employeeId || "").trim();
-    if (!company || !/^\d{4}-\d{2}$/.test(month) || !employeeId) {
+    if (!company || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month) || !employeeId) {
       return res.status(400).json({ success: false, message: "Valid month and employeeId are required." });
     }
     const run = await PayrollRun.findOne({ company, month });
@@ -1081,7 +1081,7 @@ exports.addPayrollAdjustment = async (req, res) => {
     const reason = String(req.body.reason || "").trim();
     const remarks = String(req.body.remarks || "").trim();
     const amount = Number(req.body.amount);
-    if (!company || !/^\d{4}-\d{2}$/.test(month) || !employeeId || !reason || !Number.isFinite(amount) || amount <= 0) {
+    if (!company || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month) || !employeeId || !reason || !Number.isFinite(amount) || amount <= 0) {
       return res.status(400).json({ success: false, message: "Employee, fine reason and a valid amount are required." });
     }
     const run = await PayrollRun.findOne({ company, month });
@@ -1215,7 +1215,7 @@ exports.updatePayrollEmployeeStatus = async (req, res) => {
     const month = String(req.body.month || "").trim();
     const employeeId = String(req.body.employeeId || "").trim();
     const action = String(req.body.action || "").trim().toLowerCase();
-    if (!company || !/^\d{4}-\d{2}$/.test(month) || !employeeId || !["review", "approve", "lock", "reopen", "unlock"].includes(action)) {
+    if (!company || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month) || !employeeId || !["review", "approve", "lock", "reopen", "unlock"].includes(action)) {
       return res.status(400).json({ success: false, message: "Month, employee and a valid action are required." });
     }
 
@@ -1394,7 +1394,7 @@ exports.emailPayslip = async (req, res) => {
     const company = getCompany(req);
     const month = String(req.body?.month || "").trim();
     const employeeId = String(req.body?.employeeId || "").trim();
-    if (!company || !/^\d{4}-\d{2}$/.test(month) || !employeeId) return res.status(400).json({ success: false, message: "Payroll month and employee are required." });
+    if (!company || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month) || !employeeId) return res.status(400).json({ success: false, message: "Payroll month and employee are required." });
     const run = await PayrollRun.findOne({ company, month }).lean();
     if (!run) return res.status(404).json({ success: false, message: "Payroll run was not found." });
     const employee = (run.employees || []).find(item => employeePayrollKey(item) === employeeId || String(item._id || "") === employeeId);

@@ -36,12 +36,4 @@ router.patch('/:id/status', updateMeetingStatus);
 router.delete('/:id', deleteMeeting);
 
 
-router.get("/test", (req, res) => {
-  void 0;
-  res.json({
-    success: true,
-    user: req.user
-  });
-});
-
 module.exports = router;

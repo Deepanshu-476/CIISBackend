@@ -36,11 +36,4 @@ router.get("/view-status/:meetingId", getViewStatus);
 
 
 router.get("/", getAllMeetings);  
-router.get("/test", (req, res) => {
-  void 0;
-  res.json({
-    success: true,
-    user: req.user
-  });
-});
 module.exports = router;
