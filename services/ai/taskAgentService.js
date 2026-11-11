@@ -465,6 +465,34 @@ const PROJECT_COMMON_WORDS = new Set([
   'home', 'dashboard', 'report', 'reports', 'log', 'logs', 'call', 'meeting'
 ]);
 
+const PROJECT_PRONOUNS = new Set([
+  'is', 'es', 'iss', 'this', 'same', 'current', 'wale', 'wala', 'vali', 'us', 'uss', 'that', 'my', 'mera', 'apna', 'ye', 'yeh'
+]);
+
+function extractCandidateProjectName(text) {
+  if (!text || typeof text !== 'string') return null;
+  const lower = text.toLowerCase().trim();
+
+  // Pattern 1: Leading candidate before "project": e.g. "zz ai testing project", "ciis netwrok project"
+  const beforeProject = lower.match(/^(?:kya|show|view|check|dikhao|batao|details|please)?\s*([a-z0-9\s_-]{2,40}?)\s+\b(?:projects?|projekts?)\b/i);
+  if (beforeProject && beforeProject[1]) {
+    const cand = beforeProject[1].trim();
+    if (cand && !PROJECT_PRONOUNS.has(cand)) return cand;
+    if (PROJECT_PRONOUNS.has(cand)) return null;
+  }
+
+  // Pattern 2: "project <candidateName>" where candidate ends before standard prepositions
+  const afterProject = lower.match(/\b(?:projects?|projekts?)\s+([a-z0-9\s_-]{2,40}?)(?:\s+(?:ki|ke|ka|ko|se|sai|mein|me|mai|in|on|details|tasks|status|members|full)|$)/i);
+  if (afterProject && afterProject[1]) {
+    const cand = afterProject[1].trim();
+    if (cand && !PROJECT_PRONOUNS.has(cand) && !['naam', 'name', 'list', 'details', 'tasks', 'members'].includes(cand)) {
+      return cand;
+    }
+  }
+
+  return null;
+}
+
 function findReferencedProject(text, projects = [], draft = null) {
   if (!text || !Array.isArray(projects) || projects.length === 0) return null;
   const lower = text.toLowerCase();
@@ -475,28 +503,84 @@ function findReferencedProject(text, projects = [], draft = null) {
     return null;
   }
 
-  // 1. Contextual pronoun reference: "es project", "is project", "this project", "isme", "iss project", "is wale project"
-  if (/\b(?:is|es|iss|this|same|current|is\s+wale)\s+project\b|\bisme\b|\b(?:check\s+project\s+details|project\s+details|view\s+project|view\s+tasks|project\s+tasks|team\s+members|project\s+ke\s+tasks|project\s+members)\b/i.test(lower)) {
-    if (!/\b(?:is|es|iss|this)\s+client\b/i.test(lower)) {
-      const lastId = draft?.lastProjectId || draft?.projectId || draft?._lastProjectId || draft?._lastProject?._id;
-      const lastName = draft?.lastProjectName || draft?.projectName || draft?._lastProjectName || draft?._lastProject?.name;
-      if (lastId) {
-        const found = projects.find(p => String(p._id || p.id) === String(lastId));
-        if (found) return found;
+  const cleanText = lower.replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ');
+  const candidateName = extractCandidateProjectName(lower);
+
+  // PASS 1: If user explicitly mentioned a candidate name before/after "project":
+  // Match candidate specifically against accessible projects!
+  if (candidateName) {
+    const cleanCand = candidateName.replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    const candWords = cleanCand.split(/\s+/).filter(Boolean);
+
+    // Exact candidate match
+    for (const p of projects) {
+      const pName = (p.projectName || p.name || '').trim().toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ');
+      if (pName === cleanCand) return p;
+    }
+
+    // Fuzzy candidate match (e.g. "ciis network" vs "ciis netwrok")
+    for (const p of projects) {
+      const pName = (p.projectName || p.name || '').trim().toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ');
+      const pWords = pName.split(/\s+/).filter(Boolean);
+      if (candWords.length === pWords.length) {
+        const matchesAll = candWords.every((cw, idx) => {
+          const pw = pWords[idx];
+          if (cw === pw) return true;
+          // 1 character typo tolerance
+          if (Math.abs(cw.length - pw.length) <= 1 && (cw.includes(pw.slice(0, 3)) || pw.includes(cw.slice(0, 3)))) return true;
+          return false;
+        });
+        if (matchesAll) return p;
       }
-      if (lastName) {
-        const found = projects.find(p => (p.projectName || p.name || '').toLowerCase() === String(lastName).toLowerCase());
-        if (found) return found;
-      }
+    }
+
+    // Candidate was explicitly specified (e.g. "zz ai agent"), but does NOT match any accessible project!
+    // Strict guard: Do NOT fall back to a random project or draft.lastProjectId!
+    return null;
+  }
+
+  // PASS 2: Check all accessible projects by exact full name in text
+  // Sort by length descending so longer/more specific names match first
+  const sortedProjects = [...projects].sort((a, b) => (b.projectName || b.name || '').length - (a.projectName || a.name || '').length);
+
+  for (const p of sortedProjects) {
+    const pName = (p.projectName || p.name || '').trim().toLowerCase();
+    if (!pName || pName.length < 2) continue;
+    const cleanP = pName.replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ');
+    if (cleanP.length >= 3 && cleanText.includes(cleanP)) {
+      return p;
     }
   }
 
-  // If query is about team members, tasks, or details and there is a lastProjectId in draft
-  // ONLY if not inquiring about a client or client services, and lastActiveType is not 'client'
+  // PASS 3: Distinctive token match (e.g. "BSK", "TENDER INTELLIGENCE")
+  for (const p of sortedProjects) {
+    const pName = (p.projectName || p.name || '').trim().toLowerCase();
+    const pWords = pName.split(/\s+/).filter(w => w.length >= 3 && !['project', 'the', 'and', 'for', 'platform'].includes(w));
+    if (pWords.length === 1 && new RegExp(`\\b${escapeRegex(pWords[0])}\\b`, 'i').test(lower)) {
+      return p;
+    }
+  }
+
+  // PASS 4: Contextual pronoun references: "es project", "is project", "this project", "isme"
+  // ONLY if user did not specify an unknown project candidate
+  const hasPronoun = /\b(?:is|es|iss|this|same|current|is\s+wale)\s+project\b|\bisme\b/i.test(lower);
+  const mentionsProjectWord = /\b(?:projects?|projekts?)\b/i.test(lower);
+  const isGenericFollowup = /(?:^|\s)(?:check\s+project\s+details|project\s+details|view\s+project|view\s+tasks|project\s+tasks|team\s+members|project\s+ke\s+tasks|project\s+members)(?:\s|$)/i.test(lower) ||
+    (!mentionsProjectWord && /(?:members?|people|tasks?|टास्क|details?|info)/i.test(lower));
+
   const hasClientIndicator = /\b(?:clients?|cleints?|services?|सर्विस|plans?|subscription|esko|isko|iska|iski|inhe|unhe)\b/i.test(lower) || Boolean(draft?.lastClientId && draft?.lastActiveType === 'client');
-  if (!hasClientIndicator && draft?.lastProjectId && draft?.lastActiveType === 'project' && /(?:members?|people|log|tasks?|टास्क|details?|info)/i.test(lower)) {
-    const found = projects.find(p => String(p._id || p.id) === String(draft.lastProjectId));
-    if (found) return found;
+
+  if (!hasClientIndicator && (hasPronoun || isGenericFollowup)) {
+    const lastId = draft?.lastProjectId || draft?.projectId || draft?._lastProjectId || draft?._lastProject?._id;
+    const lastName = draft?.lastProjectName || draft?.projectName || draft?._lastProjectName || draft?._lastProject?.name;
+    if (lastId) {
+      const found = projects.find(p => String(p._id || p.id) === String(lastId));
+      if (found) return found;
+    }
+    if (lastName) {
+      const found = projects.find(p => (p.projectName || p.name || '').toLowerCase() === String(lastName).toLowerCase());
+      if (found) return found;
+    }
   }
 
   // Search backwards in conversation history if pronoun like "es project" / "is project"
@@ -511,30 +595,6 @@ function findReferencedProject(text, projects = [], draft = null) {
     }
   }
 
-  const mentionsProjectWord = /\b(?:projects?|projekts?)\b/i.test(text);
-
-  for (const p of projects) {
-    const pName = (p.projectName || p.name || '').trim().toLowerCase();
-    if (!pName) continue;
-
-    // Full name match with word boundary
-    const fullRegex = new RegExp('(^|[^a-zA-Z0-9])' + escapeRegex(pName) + '([^a-zA-Z0-9]|$)', 'i');
-    if (fullRegex.test(text)) return p;
-
-    // Multi-token projects: match tokens only if distinctive and not common words
-    const tokens = pName.split(/[\s,.-]+/).filter(t => t.length >= 3 && !PROJECT_COMMON_WORDS.has(t));
-    if (tokens.length > 0) {
-      for (const t of tokens) {
-        const reg = new RegExp('(^|[^a-zA-Z0-9])' + escapeRegex(t) + '([^a-zA-Z0-9]|$)', 'i');
-        if (reg.test(text)) {
-          // If token matches, return project if distinctive (>=4 chars), single token, or mentions "project"
-          if (mentionsProjectWord || tokens.length === 1 || t.length >= 4) {
-            return p;
-          }
-        }
-      }
-    }
-  }
   return null;
 }
 
@@ -893,6 +953,36 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
           }
         }
       } catch {}
+    }
+
+    const candidateProjName = extractCandidateProjectName(message);
+    if (candidateProjName && !matchedProject) {
+      const availLines = projects.slice(0, 5).map((p, idx) => `${idx + 1}. **${p.projectName || p.name}**`).join('\n');
+      const rep = isEn
+        ? `Could not find a project named "${candidateProjName}" in your account.\n\nYour accessible project(s):\n${availLines || 'No accessible projects'}\n\nPlease choose a project or check the project name.`
+        : `Aapke account mein "${candidateProjName}" naam ka koi project nahi mila.\n\nAapke accessible projects ye hain:\n\n${availLines || 'Koi accessible project nahi hai'}\n\nKripya inme se kisi project ka naam batayein.`;
+
+      const projChips = projects.slice(0, 4).map(p => ({
+        label: `${p.projectName || p.name} details`,
+        action: { type: 'view_project', projectId: String(p._id || p.id) }
+      }));
+      projChips.push({ label: 'Main menu', action: { type: 'reset' } });
+
+      return {
+        success: true,
+        status: 'open',
+        field: 'welcome',
+        reply: rep,
+        speech: isEn ? `Project ${candidateProjName} not found.` : `${candidateProjName} naam ka project nahi mila.`,
+        speakText: rep,
+        speakTextHi: isEn ? null : `${candidateProjName} naam ka project nahi mila.`,
+        language: isEn ? 'en' : 'hinglish',
+        draft: null,
+        chips: projChips,
+        candidates: [],
+        notices: [],
+        canAssignOthers: context.canAssignOthers
+      };
     }
   }
 
