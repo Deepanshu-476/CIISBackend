@@ -292,10 +292,11 @@ const getEffectiveVisibilityCached = (companyId, userId) => getOrSetCached(
 const resolvePageMeta = (requestedPath = '') => {
   const clean = String(requestedPath || '').trim();
   if (!clean) return null;
+  const exact = APP_PAGES.find(item => item.path === clean || item.pageKey.toLowerCase() === clean.toLowerCase());
+  if (exact) return exact;
+
   const leaf = clean.split('?')[0].split('#')[0].split('/').filter(Boolean).pop();
   return APP_PAGES.find(item => {
-    if (item.path === clean) return true;
-    if (item.pageKey.toLowerCase() === clean.toLowerCase()) return true;
     if (leaf && item.pageKey.toLowerCase() === leaf.toLowerCase()) return true;
     const itemLeaf = item.path.split('/').filter(Boolean).pop();
     if (leaf && itemLeaf && itemLeaf.toLowerCase() === leaf.toLowerCase()) return true;
