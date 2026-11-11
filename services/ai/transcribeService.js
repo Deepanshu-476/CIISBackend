@@ -18,11 +18,12 @@ const { executeWithGroqFallback, getGroqApiKeys } = require('./groqKeyManager');
 const GROQ_AUDIO_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
 const DEFAULT_MODEL = 'whisper-large-v3-turbo';
 
-// Context prompts conditioned on selected language to prevent Whisper hallucination loops
-const HINDI_PROMPT = 'CIIS AI task management, deadline, status, high priority, kal, aaj, baje, tarikh.';
-const ENGLISH_PROMPT = 'CIIS AI task management, deadline, status, high priority, tomorrow, today, review.';
-const BILINGUAL_PROMPT = 'CIIS AI task management, deadline, status, high priority, kal, today.';
-const DEFAULT_PROMPT = HINDI_PROMPT;
+// Context prompts conditioned on selected language to guide Whisper to transcribe in clean Roman Hinglish/English
+const HINGLISH_CRM_PROMPT = 'CIIS CRM Task Management: create personal task, naya task banao, add client, new project, task ka naam doing live testing of CRM, status in-progress, pending, completed, high priority, deadline, aaj shaam 6:00 PM, kal subah 10:00 AM, assignee, description, checkpoints, notes.';
+const HINDI_PROMPT = HINGLISH_CRM_PROMPT;
+const ENGLISH_PROMPT = 'CIIS CRM task management, create task, deadline, status in-progress, pending, completed, high priority, tomorrow, today, review, live testing, client meeting.';
+const BILINGUAL_PROMPT = HINGLISH_CRM_PROMPT;
+const DEFAULT_PROMPT = HINGLISH_CRM_PROMPT;
 
 /**
  * Maps a provider error to a standardized internal code and logs a single sanitized line.
