@@ -847,8 +847,8 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
 
   // Inaccessible project RBAC guard:
   if (mentionsProject && !matchedProject) {
-    const ProjectModel = deps.Project || (mongoose.models && mongoose.models.Project) || (mongoose.models && mongoose.models.project);
     const isDbReady = Boolean(mongoose && mongoose.connection && mongoose.connection.readyState === 1);
+    const ProjectModel = deps.Project || DefaultProjectModel || (mongoose?.models?.Project) || (isDbReady ? require('../../HR-CDS/models/Project').Project : null);
     if (isDbReady && ProjectModel && typeof ProjectModel.findOne === 'function') {
       try {
         const cleanNamePart = message.replace(/^(?:kya|show|view|check|dikhao|batao|details|project|tasks|members)\s+/i, '').trim();
@@ -1950,7 +1950,7 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
         chips: buildChips(null, 'welcome', { ...deps, language: lang, allowedIntents }),
       };
     }
-    const ProjectModel = deps.Project || (mongoose.models && mongoose.models.Project) || (isDbConnected ? require('../../HR-CDS/models/Project') : null);
+    const ProjectModel = deps.Project || DefaultProjectModel || (mongoose?.models?.Project) || (isDbConnected ? require('../../HR-CDS/models/Project').Project : null);
     const updatePayload = {};
     if (targetProjectStatus) updatePayload.status = targetProjectStatus;
     if (targetProjectPriority) updatePayload.priority = targetProjectPriority;
@@ -2116,7 +2116,7 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
 
   const remarkMatch = message.match(/(?:with\s+remark|remark\s+hai|remark\s+mein|remark\s*:?)\s+["']?([^"'\n]+)["']?/i);
   const statusRemarkText = remarkMatch ? remarkMatch[1].trim() : null;
-  const commandWithoutRemark = remarkMatch ? message.replace(remarkMatch[0], ' ') : message;
+  let commandWithoutRemark = remarkMatch ? message.replace(remarkMatch[0], ' ') : message;
 
   // 1. Determine what property is being updated:
   // A. Priority:
@@ -2167,6 +2167,37 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
     if (typeof matchedService !== 'string' && matchedService) {
       matchedService = matchedService.service || matchedService.name;
     }
+  }
+
+  // 2b. Check if a project is mentioned or in context:
+  let resolvedProj = targetProject;
+  if (!resolvedProj) {
+    const projectList = (Array.isArray(context.accessibleProjects) && context.accessibleProjects.length > 0)
+      ? [...context.accessibleProjects]
+      : (Array.isArray(deps.accessibleProjects) && deps.accessibleProjects.length > 0)
+        ? [...deps.accessibleProjects]
+        : (Array.isArray(deps.projects) && deps.projects.length > 0)
+          ? [...deps.projects]
+          : [];
+
+    for (const p of projectList) {
+      const pName = p.projectName || p.name || '';
+      if (pName && new RegExp(`\\b${escapeRegex(pName)}\\b`, 'i').test(message)) {
+        resolvedProj = p;
+        break;
+      }
+    }
+    if (!resolvedProj && (context.currentProjectId || context.lastProjectId)) {
+      resolvedProj = projectList.find(p => String(p._id || p.id) === String(context.currentProjectId || context.lastProjectId));
+    }
+  }
+
+  if (resolvedProj) {
+    const pName = resolvedProj.projectName || resolvedProj.name;
+    commandWithoutRemark = commandWithoutRemark.replace(
+      new RegExp(`(?:\\b(?:in|for|of)\\s+)?(?:the\\s+)?${escapeRegex(pName)}\\s*(?:project)?(?:\\s+\\b(?:ke|ki|kai|ka|mein|me|in)\\b)?`, 'gi'),
+      ' '
+    ).replace(/\s+/g, ' ').trim();
   }
 
   // 3. Extract Task Name / Candidate:
@@ -2259,14 +2290,21 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
   }
 
   if (taskCandidate) {
-    taskCandidate = taskCandidate.replace(/^(?:the|a|an|my|mere|apne|this|that)\s+/i, '').replace(/\s+(?:task|kam|kaam)$/i, '').trim();
+    taskCandidate = taskCandidate
+      .replace(/^(.+?)\s+project\s+(?:ke|ki|ka|kai|mein|me|in)\s+/i, '')
+      .replace(/^(?:the|of|a|an|my|mere|apne|this|that)\s+/i, '')
+      .replace(/^(?:the|of|a|an|my|mere|apne|this|that)\s+/i, '')
+      .replace(/\s+(?:task\s+)?(?:in|for|of)\s+(?:the\s+)?(.+?)\s+project$/i, '')
+      .replace(/\s+project$/i, '')
+      .replace(/\s+(?:task|kam|kaam)$/i, '')
+      .trim();
   }
 
   const isDbReady = Boolean(mongoose && mongoose.connection && mongoose.connection.readyState === 1);
   const isValidObjectId = (id) => Boolean(id && mongoose && mongoose.Types && mongoose.Types.ObjectId && mongoose.Types.ObjectId.isValid(id));
   const ClientTaskModel = deps.ClientTask || (mongoose && mongoose.models && mongoose.models.ClientTask) || (isDbReady ? require('../../HR-CDS/models/ClientTask') : null);
   const TaskModel = deps.Task || (mongoose && mongoose.models && mongoose.models.Task) || (isDbReady ? require('../../HR-CDS/models/Task') : null);
-  const ProjectModel = deps.Project || (mongoose.models && mongoose.models.Project) || (mongoose.models && mongoose.models.project);
+  const ProjectModel = deps.Project || DefaultProjectModel || (mongoose?.models?.Project) || (isDbReady ? require('../../HR-CDS/models/Project').Project : null);
 
   // SAFETY GUARD: If no task name could be extracted, prompt the user
   if (!taskCandidate) {
@@ -2385,15 +2423,23 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
   }
 
   // 2. SECOND PRIORITY: Project tasks (ProjectModel & deps.accessibleProjects)
-  if (!updatedDoc && (context.accessibleProjects || deps.accessibleProjects || (isDbReady && (deps.Project || mongoose.models.Project)))) {
+  const activeProjRef = resolvedProj || targetProject;
+  if (!updatedDoc && (activeProjRef || context.accessibleProjects || deps.accessibleProjects || (isDbReady && (deps.Project || DefaultProjectModel || mongoose.models.Project)))) {
     // DB search for Project task first
     if (isDbReady && ProjectModel && typeof ProjectModel.findOne === 'function' && taskCandidate) {
       try {
-        const pDoc = await ProjectModel.findOne({
+        const projectQuery = {
           isActive: { $ne: false },
           ...(companyCodeFilter ? { companyCode: companyCodeFilter } : {}),
           'tasks.title': { $regex: new RegExp(escapeRegex(taskCandidate), 'i') }
-        });
+        };
+        if (activeProjRef && (activeProjRef._id || activeProjRef.id)) {
+          projectQuery._id = activeProjRef._id || activeProjRef.id;
+        }
+        let pDoc = await ProjectModel.findOne(projectQuery);
+        if (!pDoc && activeProjRef && (activeProjRef._id || activeProjRef.id)) {
+          pDoc = await ProjectModel.findById(activeProjRef._id || activeProjRef.id);
+        }
         if (pDoc && Array.isArray(pDoc.tasks)) {
           // RBAC Check for Project access
           if (!hasProjectAccess(pDoc, userId, req?.user?.role, req?.user)) {
@@ -2417,41 +2463,79 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
           const tItem = pDoc.tasks.find(t => t.title && new RegExp(escapeRegex(taskCandidate), 'i').test(t.title));
           if (tItem) {
             const normStatus = targetStatus ? targetStatus.toLowerCase() : null;
-            if (normStatus) {
-              tItem.status = normStatus;
-              if (normStatus === 'completed') {
-                tItem.completionDate = new Date();
+            const nextProjectStatus = normStatus === 'in-progress' ? 'in progress' : (normStatus === 'onhold' ? 'on hold' : normStatus);
+            const now = new Date();
+            const updateFields = {
+              "tasks.$.updatedAt": now,
+              "tasks.$.statusChangedAt": now
+            };
+            if (nextProjectStatus) {
+              updateFields["tasks.$.status"] = nextProjectStatus;
+              tItem.status = nextProjectStatus;
+              if (nextProjectStatus === 'completed') {
+                updateFields["tasks.$.completionDate"] = now;
+                tItem.completionDate = now;
+              } else if (tItem.completionDate) {
+                updateFields["tasks.$.completionDate"] = null;
+                tItem.completionDate = null;
               }
             }
             if (targetPriority) {
-              tItem.priority = targetPriority.toLowerCase();
+              const pNorm = targetPriority.toLowerCase();
+              updateFields["tasks.$.priority"] = pNorm;
+              tItem.priority = pNorm;
             }
             if (editTitle) {
+              updateFields["tasks.$.title"] = editTitle;
               tItem.title = editTitle;
             }
             if (editDescription) {
+              updateFields["tasks.$.description"] = editDescription;
               tItem.description = editDescription;
             }
-            if (statusRemarkText) {
-              if (!Array.isArray(tItem.remarks)) tItem.remarks = [];
-              tItem.remarks.push({
-                user: userId,
-                userName: req?.user?.name || 'User',
-                text: statusRemarkText,
-                createdAt: new Date()
-              });
-            }
-            if (!Array.isArray(tItem.activityLogs)) tItem.activityLogs = [];
-            tItem.activityLogs.push({
-              action: normStatus ? 'status_update' : 'task_edit',
+
+            const activityLog = {
+              type: nextProjectStatus ? "status_change" : "task_edit",
+              description: nextProjectStatus ? `Status changed to ${nextProjectStatus} via CIIS AI` : "Task details updated via CIIS AI",
+              oldValue: tItem.status,
+              newValue: nextProjectStatus || tItem.status,
               performedBy: userId,
               performedByName: req?.user?.name || 'User',
-              details: normStatus ? `Status updated to ${normStatus} via CIIS AI` : 'Task details updated via CIIS AI',
-              timestamp: new Date()
-            });
+              remark: statusRemarkText || "Updated via CIIS AI",
+              timestamp: now
+            };
+
+            const statusRemarkDoc = statusRemarkText ? {
+              _id: new mongoose.Types.ObjectId(),
+              mentions: [],
+              text: statusRemarkText,
+              createdBy: userId,
+              userName: req?.user?.name || 'User',
+              createdAt: now
+            } : null;
+
+            if (!Array.isArray(tItem.activityLogs)) tItem.activityLogs = [];
+            tItem.activityLogs.push(activityLog);
+            if (statusRemarkDoc) {
+              if (!Array.isArray(tItem.remarks)) tItem.remarks = [];
+              tItem.remarks.push(statusRemarkDoc);
+            }
+
+            await ProjectModel.updateOne(
+              { _id: pDoc._id, "tasks._id": tItem._id },
+              {
+                $set: updateFields,
+                $push: {
+                  "tasks.$.activityLogs": activityLog,
+                  ...(statusRemarkDoc ? { "tasks.$.remarks": statusRemarkDoc } : {})
+                }
+              }
+            );
 
             if (typeof pDoc.markModified === 'function') pDoc.markModified('tasks');
-            await pDoc.save();
+            try {
+              await pDoc.save();
+            } catch (saveErr) {}
 
             updatedDoc = {
               ...(typeof tItem.toObject === 'function' ? tItem.toObject() : tItem),
@@ -3178,7 +3262,7 @@ async function parseTaskRequest({
 
 async function resolveProjectForAction(action, req, deps, currentDraft) {
   const isDbReady = Boolean(mongoose && mongoose.connection && mongoose.connection.readyState === 1);
-  const ProjectModel = deps.Project || (mongoose.models && mongoose.models.Project) || (mongoose.models && mongoose.models.project);
+  const ProjectModel = deps.Project || DefaultProjectModel || (mongoose?.models?.Project) || (isDbReady ? require('../../HR-CDS/models/Project').Project : null);
   const targetId = action?.projectId || currentDraft?.lastProjectId || currentDraft?.projectId;
   const targetName = action?.projectName || currentDraft?.lastProjectName;
 
@@ -3578,7 +3662,7 @@ const lastAskedField = currentDraft.asked.length > 0
 
         // Save status update to database
         const isDbReady = Boolean(mongoose && mongoose.connection && mongoose.connection.readyState === 1);
-        const ProjectModel = deps.Project || (mongoose.models && mongoose.models.Project) || (mongoose.models && mongoose.models.project);
+        const ProjectModel = deps.Project || DefaultProjectModel || (mongoose?.models?.Project) || (isDbReady ? require('../../HR-CDS/models/Project').Project : null);
         const pUserId = req?.user?._id || req?.user?.id;
 
         let updatedTaskItem = null;
@@ -3605,29 +3689,64 @@ const lastAskedField = currentDraft.asked.length > 0
               const tItem = pDoc.tasks?.id ? pDoc.tasks.id(targetTaskId) : pDoc.tasks?.find(t => String(t._id || t.id) === String(targetTaskId));
               if (tItem) {
                 const normStatus = targetStatus.toLowerCase();
-                tItem.status = normStatus;
-                if (normStatus === 'completed') {
-                  tItem.completionDate = new Date();
+                const nextProjStatus = normStatus === 'in-progress' ? 'in progress' : (normStatus === 'onhold' ? 'on hold' : normStatus);
+                const now = new Date();
+                const updateFields = {
+                  "tasks.$.status": nextProjStatus,
+                  "tasks.$.updatedAt": now,
+                  "tasks.$.statusChangedAt": now
+                };
+                tItem.status = nextProjStatus;
+                if (nextProjStatus === 'completed') {
+                  updateFields["tasks.$.completionDate"] = now;
+                  tItem.completionDate = now;
+                } else if (tItem.completionDate) {
+                  updateFields["tasks.$.completionDate"] = null;
+                  tItem.completionDate = null;
                 }
-                if (action.remark) {
-                  if (!Array.isArray(tItem.remarks)) tItem.remarks = [];
-                  tItem.remarks.push({
-                    user: pUserId,
-                    userName: req?.user?.name || 'User',
-                    text: action.remark,
-                    createdAt: new Date()
-                  });
-                }
-                if (!Array.isArray(tItem.activityLogs)) tItem.activityLogs = [];
-                tItem.activityLogs.push({
-                  action: 'status_update',
+
+                const activityLog = {
+                  type: 'status_change',
+                  description: `Status changed to ${nextProjStatus} via CIIS AI`,
+                  oldValue: tItem.status,
+                  newValue: nextProjStatus,
                   performedBy: pUserId,
                   performedByName: req?.user?.name || 'User',
-                  details: `Status updated to ${normStatus} via CIIS AI`,
-                  timestamp: new Date()
-                });
+                  remark: action.remark || "Status updated via CIIS AI",
+                  timestamp: now
+                };
+
+                const statusRemarkDoc = action.remark ? {
+                  _id: new mongoose.Types.ObjectId(),
+                  mentions: [],
+                  text: action.remark,
+                  createdBy: pUserId,
+                  userName: req?.user?.name || 'User',
+                  createdAt: now
+                } : null;
+
+                if (!Array.isArray(tItem.activityLogs)) tItem.activityLogs = [];
+                tItem.activityLogs.push(activityLog);
+                if (statusRemarkDoc) {
+                  if (!Array.isArray(tItem.remarks)) tItem.remarks = [];
+                  tItem.remarks.push(statusRemarkDoc);
+                }
+
+                await ProjectModel.updateOne(
+                  { _id: pDoc._id, "tasks._id": tItem._id },
+                  {
+                    $set: updateFields,
+                    $push: {
+                      "tasks.$.activityLogs": activityLog,
+                      ...(statusRemarkDoc ? { "tasks.$.remarks": statusRemarkDoc } : {})
+                    }
+                  }
+                );
+
                 if (typeof pDoc.markModified === 'function') pDoc.markModified('tasks');
-                await pDoc.save();
+                try {
+                  await pDoc.save();
+                } catch (saveErr) {}
                 updatedTaskItem = tItem;
               }
             }
