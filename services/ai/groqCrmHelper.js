@@ -77,6 +77,7 @@ async function answerWithGroqCRM({
   tasks = [],
   clientPlans = [],
   services = [],
+  clientTasks = [],
   language = 'hinglish'
 }) {
   const apiKey = getGroqApiKey();
@@ -131,6 +132,18 @@ async function answerWithGroqCRM({
       }).join('\n')
     : 'No clients registered.';
 
+  // Format client tasks grouped by client and service
+  const clientTaskSummary = Array.isArray(clientTasks) && clientTasks.length > 0
+    ? clientTasks.slice(0, 80).map(t => {
+        const cId = String(t.clientId || '');
+        const clientObj = (accessibleClients || []).find(c => String(c._id || c.id) === cId);
+        const cName = clientObj ? (clientObj.client || clientObj.name) : 'Client';
+        const st = t.status || 'pending';
+        const asg = t.assignee ? `, Assignee: ${t.assignee}` : '';
+        return `- Client '${cName}', Service '${t.service || 'General'}': Task '${t.name || t.title}', Status: ${st}${asg}`;
+      }).join('\n')
+    : 'No client tasks registered.';
+
   // Format tasks
   const taskSummary = Array.isArray(tasks) && tasks.length > 0
     ? tasks.slice(0, 50).map(t => {
@@ -151,7 +164,7 @@ Language: Answer in ${isEn ? 'English' : 'conversational Hinglish (natural Hindi
 Rules:
 1. Always base answers strictly on the CRM Context below. Do not fabricate projects or clients.
 2. When asked about projects (e.g. status, members, list), provide exact details. If asked who is in a project or member count, list their names.
-3. When asked about clients, services, or plans, check the clients' active plans and services from the CRM Context and answer directly.
+3. When asked about clients, services, plans, or tasks inside a client's services, check the Clients, Services, and Client Tasks from the CRM Context and answer directly with task names, assignees, and statuses.
 4. If the user shares feelings or moods (e.g. tired, happy, good morning), acknowledge empathetically in 1 short sentence and ask how you can assist with their CRM work.
 5. If the user asks about completely unrelated topics (cooking recipes, political figures, medicines, off-topic trivia), politely state that you are the CIIS CRM Assistant and only assist with company CRM tasks, projects, and clients.
 6. Keep responses crisp and format list items cleanly using numbered lists (1. **Item Name**) or bullet points. Always wrap bold item names in clean double asterisks (**Item Name**). Never leave dangling or unmatched asterisks.
@@ -161,8 +174,11 @@ Rules:
 Projects:
 ${projectSummary}
 
-Clients:
+Clients & Services:
 ${clientSummary}
+
+Client Tasks (by Service):
+${clientTaskSummary}
 
 Recent Tasks:
 ${taskSummary}

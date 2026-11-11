@@ -99,6 +99,8 @@ const { detectUserIntent, normalizeTranscript } = require('./sttNormalizer');
 const User = require('../../models/User');
 const Department = require('../../models/Department');
 const SidebarConfig = require('../../models/SidebarConfig');
+const ClientTask = require('../../HR-CDS/models/ClientTask');
+const Client = require('../../HR-CDS/models/Client');
 const { Project: DefaultProjectModel } = require('../../HR-CDS/models/Project');
 const {
   resolveProject,
@@ -807,9 +809,9 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
   const isClientInquiry = !mentionsProject && (
     Boolean(planOrServiceFilter) ||
     CLIENT_DETAIL_QUERY_REGEX.test(message) ||
-    /(?:(?:client|ग्राहक|कंपनी).*(?:details?|services?|plans?|status|info|batao|dikhao|kya|kon|kaun|kin|kis|which|कौन|क्या|बताओ|दिखाओ))/iu.test(message) ||
+    /(?:(?:client|cleint|clint|clinet|ग्राहक|कंपनी).*(?:details?|services?|plans?|tasks?|टास्क|kaam|काम|status|info|batao|dikhao|kya|kon|kaun|kin|kis|which|कौन|क्या|बताओ|दिखाओ))/iu.test(message) ||
     Boolean(matchedClientRef && (
-      /(?:services?|सर्विस(?:िस)?|plans?|प्लाइ?न्स?|status|details?|info|kya|kaun|kon|kin|kis|batao|dikhao|diya|diye|di\s+gayi|दी\s+गई|konsi|kaunsi|कौन|क्या|बताओ|दिखाओ|\?)/iu.test(message) ||
+      /(?:services?|सर्विस(?:िस)?|plans?|प्लाइ?न्स?|tasks?|टास्क|kaam|काम|status|details?|info|kya|kaun|kon|kin|kis|batao|dikhao|diya|diye|di\s+gayi|दी\s+गई|konsi|kaunsi|कौन|क्या|बताओ|दिखाओ|\?)/iu.test(message) ||
       (!isCreationOrMutation && (/\b(?:client|cleint|clint|ग्राहक|कंपनी)\b/i.test(message) || message.trim().length <= 60))
     ))
   );
@@ -923,15 +925,159 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
       const compStr = matchedClient.company ? ` (*${matchedClient.company}*)` : '';
       const statusStr = matchedClient.status || 'Active';
 
+      const isAskingAboutTasks = /(?:tasks?|टास्क|kaam|काम|subtasks?|work)/i.test(message);
+
       let servicesStr = '';
-      if (Array.isArray(matchedClient.services) && matchedClient.services.length > 0) {
-        const list = matchedClient.services.map(s => typeof s === 'string' ? s : (s.service || s.name || s.servicename)).filter(Boolean);
+      const clientServicesList = Array.isArray(matchedClient.services) ? matchedClient.services : [];
+      if (clientServicesList.length > 0) {
+        const list = clientServicesList.map(s => typeof s === 'string' ? s : (s.service || s.name || s.servicename)).filter(Boolean);
         if (list.length > 0) servicesStr = list.join(', ');
       }
       if (!servicesStr) {
         servicesStr = isEn ? 'No services currently assigned' : 'Abhi koi service assign nahi hai';
       }
 
+      // Check if user specifically asked about a specific service (e.g. "meesho", "amazon", "seo", "app development")
+      let matchedServiceName = null;
+      for (const s of clientServicesList) {
+        const sName = typeof s === 'string' ? s : (s.service || s.name || s.servicename || '');
+        if (!sName) continue;
+        const sEscaped = escapeRegex(sName.trim());
+        if (new RegExp(`(?:^|[^a-zA-Z0-9])${sEscaped}(?:[^a-zA-Z0-9]|$)`, 'i').test(message)) {
+          matchedServiceName = sName;
+          break;
+        }
+        const sWords = sName.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length >= 3 && !['account', 'listing', 'and', 'management', 'production', 'services'].includes(w));
+        if (sWords.some(w => new RegExp(`\\b${escapeRegex(w)}\\b`, 'i').test(message))) {
+          matchedServiceName = sName;
+          break;
+        }
+      }
+
+      // Query client tasks for this client
+      const CTModel = deps.ClientTask || mongoose.models.ClientTask || ClientTask;
+      let clientTasks = [];
+      if (Array.isArray(deps.clientTasks)) {
+        clientTasks = deps.clientTasks.filter(t => String(t.clientId) === String(matchedClient._id || matchedClient.id));
+      } else if (CTModel && typeof CTModel.find === 'function') {
+        try {
+          const tQuery = { clientId: matchedClient._id || matchedClient.id };
+          clientTasks = await CTModel.find(tQuery)
+            .select('name service status assignee dueDate priority')
+            .sort({ updatedAt: -1, createdAt: -1 })
+            .lean();
+        } catch (err) {
+          console.warn('[taskAgentService] Error loading client tasks for query:', err);
+        }
+      }
+
+      // SCENARIO 1: Specific Service Tasks Query (e.g. "Sarla Rani ki Meesho service ke tasks batao")
+      if (matchedServiceName) {
+        const serviceTasks = clientTasks.filter(t => {
+          const ts = String(t.service || '').toLowerCase().trim();
+          const ms = matchedServiceName.toLowerCase().trim();
+          return ts.includes(ms) || ms.includes(ts);
+        });
+
+        let rep = '';
+        if (serviceTasks.length > 0) {
+          const taskLines = serviceTasks.slice(0, 15).map((t, i) => {
+            const tName = t.name || t.title || 'Task';
+            const tStatus = t.status ? `*${t.status}*` : '*pending*';
+            const tAssignee = t.assignee ? ` (Assignee: **${t.assignee}**)` : '';
+            const tDue = t.dueDate ? ` — Due: ${formatHumanIstDate(t.dueDate)}` : '';
+            return `${i + 1}. **${tName}** — ${tStatus}${tAssignee}${tDue}`;
+          }).join('\n');
+
+          rep = isEn
+            ? `${greetingPrefix}Client **${clientDisplayName}**${compStr} has **${serviceTasks.length} task(s)** under the **${matchedServiceName}** service:\n\n${taskLines}\n\nWould you like to assign a new task to this service?`
+            : `${greetingPrefix}Client **${clientDisplayName}**${compStr} ki **${matchedServiceName}** service ke andar total **${serviceTasks.length} task(s)** hain:\n\n${taskLines}\n\nKya aap is service mein naya task banana chahte hain?`;
+        } else {
+          rep = isEn
+            ? `${greetingPrefix}Client **${clientDisplayName}**${compStr} has the **${matchedServiceName}** service active, but there are currently **no tasks** created under this service.\n\nWould you like to create a task for this service?`
+            : `${greetingPrefix}Client **${clientDisplayName}**${compStr} ke paas **${matchedServiceName}** service active hai, lekin is service ke andar abhi **koi task add nahi hai**.\n\nKya aap is service ke liye naya task banana chahte hain?`;
+        }
+
+        const taskChips = [
+          { label: `${matchedServiceName} mein task banana`, action: { type: 'set_intent', intent: 'create_client_task', client: clientDisplayName, clientId: String(matchedClient._id || matchedClient.id || ''), service: matchedServiceName } },
+          { label: 'Client plan banana', action: { type: 'set_intent', intent: 'create_client_plan' } },
+          { label: 'Main menu', action: { type: 'reset' } }
+        ];
+
+        return {
+          success: true,
+          status: 'open',
+          field: 'welcome',
+          reply: rep,
+          speech: isEn ? `Client ${clientDisplayName} ${matchedServiceName} service tasks.` : `Client ${clientDisplayName} ki ${matchedServiceName} service ke tasks.`,
+          speakText: rep,
+          speakTextHi: isEn ? null : `Client ${clientDisplayName} ki ${matchedServiceName} service ke tasks.`,
+          language: isEn ? 'en' : 'hinglish',
+          draft: null,
+          chips: taskChips,
+          candidates: [],
+          notices: [],
+          canAssignOthers: context.canAssignOthers
+        };
+      }
+
+      // SCENARIO 2: All Tasks Across Services Query (e.g. "Sarla Rani client ki services ke tasks dikhao")
+      if (isAskingAboutTasks) {
+        let rep = '';
+        if (clientTasks.length > 0) {
+          const tasksByService = new Map();
+          for (const t of clientTasks) {
+            const sKey = (t.service || 'General Service').trim();
+            if (!tasksByService.has(sKey)) tasksByService.set(sKey, []);
+            tasksByService.get(sKey).push(t);
+          }
+
+          const serviceSections = [];
+          let sIdx = 1;
+          for (const [sName, tList] of tasksByService.entries()) {
+            const tItems = tList.slice(0, 5).map((t, i) => {
+              const tName = t.name || t.title || 'Task';
+              const tStatus = t.status ? `*${t.status}*` : '*pending*';
+              const tAssignee = t.assignee ? ` (Assignee: **${t.assignee}**)` : '';
+              return `   ${i + 1}. **${tName}** — ${tStatus}${tAssignee}`;
+            }).join('\n');
+            const extra = tList.length > 5 ? `\n   *...aur ${tList.length - 5} aur tasks*` : '';
+            serviceSections.push(`• **Service ${sIdx++}: ${sName}** (${tList.length} task${tList.length > 1 ? 's' : ''}):\n${tItems}${extra}`);
+          }
+
+          rep = isEn
+            ? `${greetingPrefix}Here are the tasks across services for client **${clientDisplayName}**${compStr} (Total: **${clientTasks.length} task(s)**):\n\n${serviceSections.join('\n\n')}\n\nWould you like to assign a new task to one of these services?`
+            : `${greetingPrefix}Client **${clientDisplayName}**${compStr} ki services ke andar total **${clientTasks.length} task(s)** hain:\n\n${serviceSections.join('\n\n')}\n\nKya aap inme se kisi service ke liye naya task banana chahte hain?`;
+        } else {
+          rep = isEn
+            ? `${greetingPrefix}Client **${clientDisplayName}**${compStr} has **${clientServicesList.length} service(s)** active (${servicesStr}), but there are currently **no tasks** created under any service.\n\nWould you like to create a client task now?`
+            : `${greetingPrefix}Client **${clientDisplayName}**${compStr} ke paas **${clientServicesList.length} service(s)** active hain (${servicesStr}), lekin abhi inme se kisi bhi service mein **koi task add nahi hai**.\n\nKya aap is client ke liye task banana chahte hain?`;
+        }
+
+        const taskChips = [
+          { label: `${clientDisplayName} ke liye task banana`, action: { type: 'set_intent', intent: 'create_client_task', client: clientDisplayName, clientId: String(matchedClient._id || matchedClient.id || '') } },
+          { label: 'Client plan banana', action: { type: 'set_intent', intent: 'create_client_plan' } },
+          { label: 'Main menu', action: { type: 'reset' } }
+        ];
+
+        return {
+          success: true,
+          status: 'open',
+          field: 'welcome',
+          reply: rep,
+          speech: isEn ? `Client ${clientDisplayName} tasks across services.` : `Client ${clientDisplayName} ki services ke tasks.`,
+          speakText: rep,
+          speakTextHi: isEn ? null : `Client ${clientDisplayName} ki services ke tasks.`,
+          language: isEn ? 'en' : 'hinglish',
+          draft: null,
+          chips: taskChips,
+          candidates: [],
+          notices: [],
+          canAssignOthers: context.canAssignOthers
+        };
+      }
+
+      // SCENARIO 3: General Client Details Query (Services, Plan, Status, Tasks count)
       let planStr = '';
       const activePlanRef = matchedClient.activeClientPlan;
       if (activePlanRef) {
@@ -956,11 +1102,16 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
         pmStr = matchedClient.projectManager.join(', ');
       }
 
+      const taskSummaryLine = clientTasks.length > 0
+        ? `\n• **Client Tasks**: ${clientTasks.length} task(s) across active services`
+        : '\n• **Client Tasks**: 0 tasks created';
+
       const rep = isEn
-        ? `${greetingPrefix}Here are the CRM details for client **${clientDisplayName}**${compStr}:\n\n• **Services**: ${servicesStr}\n• **Active Plan**: ${planStr}\n• **Status**: ${statusStr}${pmStr ? `\n• **Project Manager**: ${pmStr}` : ''}\n\nWould you like to assign a task for this client or create a client plan?`
-        : `${greetingPrefix}Client **${clientDisplayName}**${compStr} ki CRM details:\n\n• **Services**: ${servicesStr}\n• **Active Plan**: ${planStr}\n• **Status**: ${statusStr}${pmStr ? `\n• **Project Manager**: ${pmStr}` : ''}\n\nAap is client ke liye task banana chahte hain ya client plan banana chahte hain?`;
+        ? `${greetingPrefix}Here are the CRM details for client **${clientDisplayName}**${compStr}:\n\n• **Services**: ${servicesStr}\n• **Active Plan**: ${planStr}\n• **Status**: ${statusStr}${pmStr ? `\n• **Project Manager**: ${pmStr}` : ''}${taskSummaryLine}\n\nWould you like to view service tasks or assign a new task for this client?`
+        : `${greetingPrefix}Client **${clientDisplayName}**${compStr} ki CRM details:\n\n• **Services**: ${servicesStr}\n• **Active Plan**: ${planStr}\n• **Status**: ${statusStr}${pmStr ? `\n• **Project Manager**: ${pmStr}` : ''}${taskSummaryLine}\n\nKya aap is client ki services ke tasks dekhna chahte hain ya naya task banana chahte hain?`;
 
       const clientChips = [
+        ...(clientTasks.length > 0 ? [{ label: 'Services ke tasks dekhna', action: { type: 'set_intent', intent: 'create_client_task', client: clientDisplayName, clientId: String(matchedClient._id || matchedClient.id || '') } }] : []),
         { label: `${clientDisplayName} ke liye task banana`, action: { type: 'set_intent', intent: 'create_client_task', client: clientDisplayName, clientId: String(matchedClient._id || matchedClient.id || '') } },
         { label: 'Client plan banana', action: { type: 'set_intent', intent: 'create_client_plan' } },
         { label: 'Main menu', action: { type: 'reset' } }
@@ -971,9 +1122,9 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
         status: 'open',
         field: 'welcome',
         reply: rep,
-        speech: isEn ? `Client ${clientDisplayName}: services and plan details.` : `Client ${clientDisplayName} ki services aur plan details.`,
+        speech: isEn ? `Client ${clientDisplayName}: services, plan and task details.` : `Client ${clientDisplayName} ki services, plan aur task details.`,
         speakText: rep,
-        speakTextHi: isEn ? null : `Client ${clientDisplayName} ki services aur plan details.`,
+        speakTextHi: isEn ? null : `Client ${clientDisplayName} ki services, plan aur task details.`,
         language: isEn ? 'en' : 'hinglish',
         draft: null,
         chips: clientChips,
@@ -997,17 +1148,21 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
         }
       }
 
-      const clientLines = clients.map((c, idx) => `${idx + 1}. **${c.client || c.name}**${c.company ? ` (${c.company})` : ''}`).join('\n');
+      const clientLines = clients.slice(0, 10).map((c, idx) => {
+        const sList = Array.isArray(c.services) ? c.services.slice(0, 3).join(', ') : '';
+        const sExtra = Array.isArray(c.services) && c.services.length > 3 ? ` (+${c.services.length - 3} more)` : '';
+        return `${idx + 1}. **${c.client || c.name}**${c.company ? ` (${c.company})` : ''}${sList ? ` — Services: *${sList}${sExtra}*` : ''}`;
+      }).join('\n');
       const rep = targetName
         ? (isEn
-            ? `${greetingPrefix}No client named **"${targetName}"** was found in your CRM.\n\nRegistered clients in your CRM:\n\n${clientLines || 'No clients registered.'}\n\nWould you like to check services or plans for one of these clients?`
-            : `${greetingPrefix}CRM mein **"${targetName}"** naam ka koi client nahi mila.\n\nAapke CRM mein registered clients ye hain:\n\n${clientLines || 'Koi clients registered nahi hain.'}\n\nAap inme se kisi client ki services ya plan check karna chahte hain?`)
+            ? `${greetingPrefix}No client named **"${targetName}"** was found in your CRM.\n\nRegistered clients in your CRM:\n\n${clientLines || 'No clients registered.'}\n\nWould you like to check services or tasks for one of these clients?`
+            : `${greetingPrefix}CRM mein **"${targetName}"** naam ka koi client nahi mila.\n\nAapke CRM mein registered clients ye hain:\n\n${clientLines || 'Koi clients registered nahi hain.'}\n\nAap inme se kisi client ki services ya tasks check karna chahte hain?`)
         : (isEn
-            ? `${greetingPrefix}Which client's services or plan would you like to check? Here are registered clients:\n\n${clientLines}`
-            : `${greetingPrefix}Aap kaun se client ki services ya plan check karna chahte hain? Aapke registered clients ye hain:\n\n${clientLines}`);
+            ? `${greetingPrefix}Which client's service tasks would you like to check? You can ask, for example: **"Show tasks for [Client Name] in [Service Name]"**.\n\nRegistered clients and active services:\n\n${clientLines}`
+            : `${greetingPrefix}Aap kis client ki service ke tasks check karna chahte hain? Aap bol ya likh sakte hain, jaise: **"[Client Name] ki [Service Name] service ke tasks dikhao"**.\n\nAapke registered clients aur services ye hain:\n\n${clientLines}`);
 
-      const clientChips = clients.slice(0, 8).map(c => ({
-        label: c.client || c.name,
+      const clientChips = clients.slice(0, 5).map(c => ({
+        label: `${c.client || c.name} ke tasks`,
         action: { type: 'set_intent', intent: 'create_client_task', client: c.client || c.name, clientId: String(c._id || c.id || '') }
       }));
       clientChips.push({ label: 'Main menu', action: { type: 'reset' } });
@@ -2617,6 +2772,25 @@ async function parseTaskRequest({
     }
   }
   deps.accessibleClients = accessibleClients;
+
+  let clientTasks = Array.isArray(deps.clientTasks) ? deps.clientTasks : [];
+  if ((!clientTasks || clientTasks.length === 0) && (deps.ClientTask || isDbConnected)) {
+    const CTModel = deps.ClientTask || (mongoose && mongoose.models && mongoose.models.ClientTask) || ClientTask;
+    if (CTModel && typeof CTModel.find === 'function') {
+      try {
+        const clientIds = (accessibleClients || []).map(c => c._id || c.id).filter(Boolean);
+        const ctQuery = clientIds.length > 0 ? { clientId: { $in: clientIds } } : {};
+        clientTasks = await CTModel.find(ctQuery)
+          .select('clientId service name status assignee dueDate priority')
+          .sort({ updatedAt: -1, createdAt: -1 })
+          .limit(100)
+          .lean();
+      } catch (err) {
+        console.warn('[taskAgentService] Error loading clientTasks:', err);
+      }
+    }
+  }
+  deps.clientTasks = clientTasks;
 
 const lastAskedField = currentDraft.asked.length > 0
     ? currentDraft.asked[currentDraft.asked.length - 1]
@@ -4341,6 +4515,7 @@ const lastAskedField = currentDraft.asked.length > 0
         tasks: deps.tasks,
         clientPlans: deps.clientPlans,
         services: deps.services,
+        clientTasks: deps.clientTasks,
         language: userLang
       });
 
