@@ -5120,6 +5120,30 @@ const lastAskedField = currentDraft.asked.length > 0
               meta: { model: modelName },
             };
           }
+          if (currentDraft.intent === 'self_task' && targetField === 'description') {
+            currentDraft.skipped = (currentDraft.skipped || []).filter((f) => f !== 'description');
+            const isEn = userLang === 'en';
+            return {
+              success: true,
+              status: 'needs_input',
+              field: 'description',
+              reply: isEn ? 'Task description is required and cannot be skipped. Please provide a description:' : 'Task ka description zaroori hai, isko skip nahi kar sakte. Kripya description batayein:',
+              speech: isEn ? 'Task description is required and cannot be skipped. Please provide a description.' : 'टास्क का डिस्क्रिप्शन जरूरी है, इसको स्किप नहीं कर सकते। कृपया डिस्क्रिप्शन बताएं।',
+              speakText: isEn ? 'Task description is required, please provide a description.' : 'Task ka description zaroori hai, isko skip nahi kar sakte. Kripya description batayein:',
+              speakTextHi: isEn ? null : 'टास्क का Description जरूरी है, इसको skip नहीं कर सकते। कृपया Description बताएं:',
+              draft: currentDraft,
+              missing: ['description'],
+              chips: [],
+              candidates: [],
+              notices,
+              canAssignOthers,
+              progress: { done: 1, total: 10 },
+              payload: null,
+              preview: null,
+              intent: null,
+              meta: { model: modelName },
+            };
+          }
           if (!currentDraft.skipped.includes(targetField)) currentDraft.skipped.push(targetField);
           if (targetField === 'description') currentDraft.description = '';
           if (targetField === 'priority') currentDraft.priority = currentDraft.intent === 'task_project' ? 'Medium' : 'medium';
@@ -5146,7 +5170,9 @@ const lastAskedField = currentDraft.asked.length > 0
           ? ['priority', 'status', 'pdfFile']
           : (currentDraft.intent === 'create_client'
             ? ['email', 'phone', 'industry', 'gst', 'pan', 'website', 'address', 'state', 'country', 'pincode', 'description', 'notes', 'more_details']
-            : ['description', 'priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'checkpoints', 'attachments', 'file']);
+            : (currentDraft.intent === 'self_task'
+              ? (currentDraft.description ? ['priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'checkpoints', 'attachments', 'file'] : ['priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'checkpoints', 'attachments', 'file'])
+              : ['description', 'priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'checkpoints', 'attachments', 'file']));
         if (currentDraft.intent === 'create_client') {
           currentDraft.moreDetailsDone = true;
         }
@@ -7630,7 +7656,9 @@ const lastAskedField = currentDraft.asked.length > 0
           ? ['priority', 'status', 'pdfFile']
           : (currentDraft.intent === 'create_client'
             ? ['email', 'phone', 'industry', 'gst', 'pan', 'website', 'address', 'state', 'country', 'pincode', 'description', 'notes', 'more_details']
-            : ['description', 'priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'checkpoints', 'attachments', 'file', 'pdfFile']);
+            : (currentDraft.intent === 'self_task'
+              ? (currentDraft.description ? ['priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'checkpoints', 'attachments', 'file', 'pdfFile'] : ['priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'checkpoints', 'attachments', 'file', 'pdfFile'])
+              : ['description', 'priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'checkpoints', 'attachments', 'file', 'pdfFile']));
         if (currentDraft.intent === 'create_client') {
           currentDraft.moreDetailsDone = true;
         }
@@ -7654,9 +7682,10 @@ const lastAskedField = currentDraft.asked.length > 0
         actionHandled = true;
       } else if (!actionHandled && isPureIntent && (detectedIntent.type === 'create_now' || detectedIntent.type === 'confirm_yes')) {
         // If required fields are filled, skip optional fields and proceed
-        if (currentDraft.title && currentDraft.dueDateTime) {
+        if (currentDraft.title && currentDraft.dueDateTime && (currentDraft.intent !== 'self_task' || currentDraft.description)) {
           const allOptional = ['description', 'priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'checkpoints', 'attachments', 'file', 'pdfFile'];
           allOptional.forEach((f) => {
+            if (currentDraft.intent === 'self_task' && f === 'description' && !currentDraft.description) return;
             if (!currentDraft.skipped.includes(f)) currentDraft.skipped.push(f);
           });
         }
@@ -7769,6 +7798,33 @@ const lastAskedField = currentDraft.asked.length > 0
           };
         }
 
+        if (!actionHandled && lastAskedField === 'description' && currentDraft.intent === 'self_task' && (isSkip(trimmedMessage) || isSkipAll(trimmedMessage))) {
+          currentDraft.description = null;
+          currentDraft.skipped = (currentDraft.skipped || []).filter((f) => f !== 'description');
+          actionHandled = true;
+          const isEnTurn = (userLang === 'en');
+          return {
+            success: true,
+            status: 'needs_input',
+            field: 'description',
+            reply: isEnTurn ? 'Task description is required and cannot be skipped. Please provide a description:' : 'Task ka description zaroori hai, isko skip nahi kar sakte. Kripya description batayein:',
+            speech: isEnTurn ? 'Task description is required and cannot be skipped. Please provide a description.' : 'टास्क का डिस्क्रिप्शन जरूरी है, इसको स्किप नहीं कर सकते। कृपया डिस्क्रिप्शन बताएं।',
+            speakText: isEnTurn ? 'Task description is required, please provide a description.' : 'Task ka description zaroori hai, isko skip nahi kar sakte. Kripya description batayein:',
+            speakTextHi: isEnTurn ? null : 'टास्क का Description जरूरी है, इसको skip नहीं कर सकते। कृपया Description बताएं:',
+            draft: currentDraft,
+            missing: ['description'],
+            chips: [],
+            candidates: [],
+            notices,
+            canAssignOthers,
+            progress: { done: 1, total: 10 },
+            payload: null,
+            preview: null,
+            intent: detectedIntent ? { type: detectedIntent.type, field: detectedIntent.field } : null,
+            meta: { model: modelName },
+          };
+        }
+
         if (lastAskedField === 'description' && (!currentDraft.description) && (!detSlots.description) && trimmedMessage.length <= 300 && !isPureIntent && !isSkip(trimmedMessage)) {
           detSlots.description = trimmedMessage;
         }
@@ -7868,7 +7924,9 @@ const lastAskedField = currentDraft.asked.length > 0
 
         // Apply intent AFTER extraction (when message contains both extraction AND intent)
         if (detectedIntent?.type === 'skip_all' || isSkipAll(trimmedMessage)) {
-          const allOptional = ['description', 'priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'checkpoints', 'attachments', 'file', 'pdfFile'];
+          const allOptional = (currentDraft.intent === 'self_task' && (!currentDraft.description || !String(currentDraft.description).trim()))
+            ? ['priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'checkpoints', 'attachments', 'file', 'pdfFile']
+            : ['description', 'priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'checkpoints', 'attachments', 'file', 'pdfFile'];
           allOptional.forEach((fieldKey) => {
             if (!currentDraft.skipped.includes(fieldKey)) currentDraft.skipped.push(fieldKey);
             if (currentDraft[fieldKey] === null || currentDraft[fieldKey] === undefined) {
@@ -7886,7 +7944,9 @@ const lastAskedField = currentDraft.asked.length > 0
           });
         } else if (detectedIntent?.type === 'skip_field') {
           const target = detectedIntent.field || lastAskedField;
-          if (target && !currentDraft.skipped.includes(target)) {
+          if (target === 'description' && currentDraft.intent === 'self_task') {
+            // Description is required for self_task - cannot skip
+          } else if (target && !currentDraft.skipped.includes(target)) {
             currentDraft.skipped.push(target);
             if (target === 'description') currentDraft.description = '';
             if (target === 'priority') currentDraft.priority = 'medium';
@@ -7901,17 +7961,21 @@ const lastAskedField = currentDraft.asked.length > 0
           }
         } else if (isSkip(trimmedMessage)) {
           const target = lastAskedField || 'description';
-          if (!currentDraft.skipped.includes(target)) currentDraft.skipped.push(target);
-          if (target === 'description') currentDraft.description = '';
-          if (target === 'priority') currentDraft.priority = 'medium';
-          if (target === 'status') currentDraft.status = 'pending';
-          if (target === 'reminder') currentDraft.reminder = false;
-          if (target === 'priorityDays') currentDraft.priorityDays = '1';
-          if (target === 'repeatPattern') currentDraft.repeatPattern = 'none';
-          if (target === 'checkpoints') currentDraft.checkpoints = [];
-          if (target === 'attachments') currentDraft.attachmentsCount = 0;
-          if (target === 'file') currentDraft.file = null;
-          if (target === 'pdfFile') currentDraft.pdfFile = null;
+          if (target === 'description' && currentDraft.intent === 'self_task') {
+            // Description is required for self_task - cannot skip
+          } else {
+            if (!currentDraft.skipped.includes(target)) currentDraft.skipped.push(target);
+            if (target === 'description') currentDraft.description = '';
+            if (target === 'priority') currentDraft.priority = 'medium';
+            if (target === 'status') currentDraft.status = 'pending';
+            if (target === 'reminder') currentDraft.reminder = false;
+            if (target === 'priorityDays') currentDraft.priorityDays = '1';
+            if (target === 'repeatPattern') currentDraft.repeatPattern = 'none';
+            if (target === 'checkpoints') currentDraft.checkpoints = [];
+            if (target === 'attachments') currentDraft.attachmentsCount = 0;
+            if (target === 'file') currentDraft.file = null;
+            if (target === 'pdfFile') currentDraft.pdfFile = null;
+          }
         }
       }
     }
@@ -8798,7 +8862,11 @@ const lastAskedField = currentDraft.asked.length > 0
 
   for (const fieldKey of activeFields) {
     if (currentDraft.skipped.includes(fieldKey)) {
-      continue;
+      if (currentDraft.intent === 'self_task' && fieldKey === 'description' && (!currentDraft.description || !String(currentDraft.description).trim())) {
+        currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'description');
+      } else {
+        continue;
+      }
     }
 
     if (fieldKey === 'client') {
@@ -9089,8 +9157,13 @@ const lastAskedField = currentDraft.asked.length > 0
       defaultEnReply = 'When should this task be completed? Please specify the date and time.';
       defaultEnSpeech = 'When should this task be completed? Please specify the date and time.';
     } else if (nextFieldKey === 'description') {
-      defaultEnReply = "What description would you like to add? Or say 'Skip' if none.";
-      defaultEnSpeech = 'What description would you like to add? Or say Skip if none.';
+      if (currentDraft.intent === 'self_task') {
+        defaultEnReply = 'What should be the task description? (Required):';
+        defaultEnSpeech = 'Please provide the task description.';
+      } else {
+        defaultEnReply = 'What description would you like to add?';
+        defaultEnSpeech = 'What description would you like to add?';
+      }
     } else if (nextFieldKey === 'assignee') {
       defaultEnReply = 'Who is this task for? Please provide the employee name:';
       defaultEnSpeech = 'Who is this task for? Please provide the employee name.';
