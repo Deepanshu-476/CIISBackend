@@ -1144,6 +1144,23 @@ const clockOut = async (req, res) => {
 
     const totalMs = now - new Date(record.inTime);
 
+    if (record.isOnBreak) {
+      const breakStartTime = record.currentBreakStart || now;
+      const breakDiffMs = Math.max(0, now.getTime() - new Date(breakStartTime).getTime());
+      const breakDurationMinutes = Math.max(1, Math.round(breakDiffMs / 60000));
+      if (!Array.isArray(record.breaks)) record.breaks = [];
+      record.breaks.push({
+        breakType: record.currentBreakType || 'BREAK',
+        startTime: breakStartTime,
+        endTime: now,
+        durationMinutes: breakDurationMinutes
+      });
+      record.totalBreakMinutes = (record.totalBreakMinutes || 0) + breakDurationMinutes;
+      record.isOnBreak = false;
+      record.currentBreakType = null;
+      record.currentBreakStart = null;
+    }
+
     record.outTime = now;
     record.clockOutMode = 'MANUAL';
     record.isClockedIn = false;
@@ -1241,6 +1258,162 @@ const clockOut = async (req, res) => {
   }
 };
 
+const startBreak = async (req, res) => {
+  try {
+    const userId = req.user._id || req.user.id;
+    const { breakType = 'LUNCH' } = req.body;
+
+    const now = new Date();
+    const { start: todayStart, end: todayEnd } = getIndiaDayRange(now);
+
+    let today = await Attendance.findOne({
+      user: userId,
+      date: { $gte: todayStart, $lte: todayEnd }
+    });
+
+    if (!today) {
+      today = await Attendance.findOne({
+        user: userId,
+        isClockedIn: true
+      }).sort({ inTime: -1 });
+    }
+
+    if (!today || !today.isClockedIn || today.outTime) {
+      return res.status(400).json({ success: false, message: "You must be clocked in to take a break." });
+    }
+
+    if (today.isOnBreak) {
+      return res.status(400).json({ success: false, message: "You are already on a break." });
+    }
+
+    const selectedType = ['LUNCH', 'TEA', 'SHORT_BREAK', 'OTHER'].includes(breakType) ? breakType : 'LUNCH';
+
+    // Verify time window if configured in user's JobRole shift settings
+    const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
+    const { userObj } = await getAttendanceSettingsContext({ companyCode: userCompanyCode, userId });
+    const shiftSettings = await resolveSelectedShiftSettings(userObj);
+
+    if (shiftSettings) {
+      const nowIndia = new Date(Date.now() + INDIA_OFFSET_MS);
+      const currentMinutes = nowIndia.getUTCHours() * 60 + nowIndia.getUTCMinutes();
+
+      if (selectedType === 'LUNCH') {
+        const lunchConfig = shiftSettings.lunchBreakWindow;
+        if (lunchConfig && lunchConfig.enabled !== false && lunchConfig.start && lunchConfig.end) {
+          const startMin = parseTimeToMinutes(lunchConfig.start);
+          const endMin = parseTimeToMinutes(lunchConfig.end);
+          const inWindow = startMin <= endMin
+            ? (currentMinutes >= startMin && currentMinutes <= endMin)
+            : (currentMinutes >= startMin || currentMinutes <= endMin);
+
+          if (!inWindow) {
+            return res.status(400).json({
+              success: false,
+              message: `Lunch break is only allowed between ${lunchConfig.start} and ${lunchConfig.end}.`
+            });
+          }
+        }
+      } else if (selectedType === 'TEA') {
+        const teaBreaks = Array.isArray(shiftSettings.teaBreaks) ? shiftSettings.teaBreaks : [];
+        if (teaBreaks.length > 0) {
+          const matchingSlot = teaBreaks.find(slot => {
+            if (!slot.start || !slot.end) return true;
+            const sMin = parseTimeToMinutes(slot.start);
+            const eMin = parseTimeToMinutes(slot.end);
+            return sMin <= eMin
+              ? (currentMinutes >= sMin && currentMinutes <= eMin)
+              : (currentMinutes >= sMin || currentMinutes <= eMin);
+          });
+
+          if (!matchingSlot) {
+            const slotTimings = teaBreaks.map(s => `${s.label || 'Tea Break'} (${s.start} - ${s.end})`).join(', ');
+            return res.status(400).json({
+              success: false,
+              message: `Tea break is only allowed during scheduled slots: ${slotTimings}.`
+            });
+          }
+        }
+      }
+    }
+
+    today.isOnBreak = true;
+    today.currentBreakType = selectedType;
+    today.currentBreakStart = new Date();
+
+    await today.save();
+
+    const label = selectedType === 'LUNCH' ? 'Lunch Break' : selectedType === 'TEA' ? 'Tea Break' : 'Break';
+    return res.status(200).json({
+      success: true,
+      message: `${label} started successfully`,
+      data: today
+    });
+  } catch (err) {
+    console.error("Start Break Error:", err);
+    return res.status(500).json({ success: false, message: "Failed to start break", error: err.message });
+  }
+};
+
+const endBreak = async (req, res) => {
+  try {
+    const userId = req.user._id || req.user.id;
+
+    const now = new Date();
+    const { start: todayStart, end: todayEnd } = getIndiaDayRange(now);
+
+    let today = await Attendance.findOne({
+      user: userId,
+      date: { $gte: todayStart, $lte: todayEnd }
+    });
+
+    if (!today) {
+      today = await Attendance.findOne({
+        user: userId,
+        isClockedIn: true
+      }).sort({ inTime: -1 });
+    }
+
+    if (!today) {
+      return res.status(404).json({ success: false, message: "Attendance record not found." });
+    }
+
+    if (!today.isOnBreak) {
+      return res.status(400).json({ success: false, message: "You are not currently on a break." });
+    }
+
+    const endTime = new Date();
+    const startTime = today.currentBreakStart || endTime;
+    const diffMs = Math.max(0, endTime.getTime() - new Date(startTime).getTime());
+    const durationMinutes = Math.max(1, Math.round(diffMs / 60000));
+
+    if (!Array.isArray(today.breaks)) {
+      today.breaks = [];
+    }
+
+    today.breaks.push({
+      breakType: today.currentBreakType || 'LUNCH',
+      startTime,
+      endTime,
+      durationMinutes
+    });
+
+    today.totalBreakMinutes = (today.totalBreakMinutes || 0) + durationMinutes;
+    today.isOnBreak = false;
+    today.currentBreakType = null;
+    today.currentBreakStart = null;
+
+    await today.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Break ended successfully. Welcome back to work!",
+      data: today
+    });
+  } catch (err) {
+    console.error("End Break Error:", err);
+    return res.status(500).json({ success: false, message: "Failed to end break", error: err.message });
+  }
+};
 
 const getTodayStatus = async (req, res) => {
   try {
@@ -1343,9 +1516,10 @@ const getTodayStatus = async (req, res) => {
     let shiftId = today.shiftId;
     let shiftType = today.shiftType;
 
-    if (!shiftStart || !shiftEnd) {
+    let shiftSettings = null;
+    try {
       const { userObj } = await getAttendanceSettingsContext({ companyCode: userCompanyCode, userId });
-      const shiftSettings = await resolveSelectedShiftSettings(userObj);
+      shiftSettings = await resolveSelectedShiftSettings(userObj);
       if (shiftSettings) {
         shiftStart = shiftStart || shiftSettings.shiftStart;
         shiftEnd = shiftEnd || shiftSettings.shiftEnd;
@@ -1353,6 +1527,8 @@ const getTodayStatus = async (req, res) => {
         shiftId = shiftId || shiftSettings.shiftId;
         shiftType = shiftType || shiftSettings.shiftType;
       }
+    } catch (e) {
+      console.warn("Could not resolve shift settings for status:", e.message);
     }
 
     const shiftTime = formatShiftTimeWindow(shiftStart, shiftEnd);
@@ -1365,6 +1541,8 @@ const getTodayStatus = async (req, res) => {
       shiftStart,
       shiftEnd,
       shiftTime,
+      lunchBreakWindow: shiftSettings?.lunchBreakWindow || null,
+      teaBreaks: shiftSettings?.teaBreaks || [],
       login: formattedLogin,
       logout: formattedLogout,
       outTime: isClockedInNow ? null : today.outTime,
@@ -2715,6 +2893,8 @@ const previewAttendance = async (req, res) => {
 module.exports = {
   clockIn,
   clockOut,
+  startBreak,
+  endBreak,
   getAttendanceList,
   getTodayStatus,
   getAllUsersAttendance,

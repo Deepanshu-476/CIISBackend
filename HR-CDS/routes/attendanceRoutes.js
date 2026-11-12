@@ -89,6 +89,8 @@ const checkAttendanceAccess = (requiredPermission = 'view') => async (req, res, 
 
 router.post('/in', protect, attendanceController.clockIn);
 router.post('/out', protect, attendanceController.clockOut);
+router.post('/break/start', protect, attendanceController.startBreak);
+router.post('/break/end', protect, attendanceController.endBreak);
 router.post('/upload-selfie', protect, upload.single('selfie'), (req, res) => {
   try {
     if (!req.file) {

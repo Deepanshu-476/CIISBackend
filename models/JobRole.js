@@ -15,8 +15,32 @@ const shiftDefaults = () => ({
   secondHalfClockInWindow: {
     start: "13:30",
     end: "14:30"
-  }
+  },
+  lunchBreakWindow: {
+    enabled: true,
+    start: "13:00",
+    end: "14:30",
+    maxDurationMinutes: 45
+  },
+  teaBreaks: [
+    { label: "Morning Tea Break", start: "11:00", end: "11:30", maxDurationMinutes: 15 },
+    { label: "Evening Tea Break", start: "16:30", end: "17:00", maxDurationMinutes: 15 }
+  ]
 });
+
+const teaBreakSlotSchema = new mongoose.Schema({
+  label: { type: String, default: "Tea Break", trim: true },
+  start: { type: String, default: "11:00" },
+  end: { type: String, default: "11:30" },
+  maxDurationMinutes: { type: Number, default: 15 }
+}, { _id: false });
+
+const lunchBreakWindowSchema = new mongoose.Schema({
+  enabled: { type: Boolean, default: true },
+  start: { type: String, default: "13:00" },
+  end: { type: String, default: "14:30" },
+  maxDurationMinutes: { type: Number, default: 45 }
+}, { _id: false });
 
 const shiftSettingsSchema = new mongoose.Schema({
   shiftId: { type: String, default: () => new mongoose.Types.ObjectId().toString(), trim: true },
@@ -33,6 +57,17 @@ const shiftSettingsSchema = new mongoose.Schema({
   secondHalfClockInWindow: {
     start: { type: String, default: "13:30" },
     end: { type: String, default: "14:30" }
+  },
+  lunchBreakWindow: {
+    type: lunchBreakWindowSchema,
+    default: () => ({ enabled: true, start: "13:00", end: "14:30", maxDurationMinutes: 45 })
+  },
+  teaBreaks: {
+    type: [teaBreakSlotSchema],
+    default: () => [
+      { label: "Morning Tea Break", start: "11:00", end: "11:30", maxDurationMinutes: 15 },
+      { label: "Evening Tea Break", start: "16:30", end: "17:00", maxDurationMinutes: 15 }
+    ]
   }
 }, { _id: false });
 
