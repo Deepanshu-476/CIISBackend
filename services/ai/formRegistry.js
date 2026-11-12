@@ -107,7 +107,9 @@ function getCleanCheckpoints(checkpoints) {
 }
 
 function buildReminderPayload(settings = {}) {
-  const enabled = Boolean(settings.enabled);
+  const enabled = typeof settings === 'boolean'
+    ? settings
+    : Boolean(settings?.enabled || settings?.reminder);
   if (!enabled) {
     return {
       enabled: false,
@@ -119,22 +121,23 @@ function buildReminderPayload(settings = {}) {
     };
   }
 
-  const options = Array.isArray(settings.options) ? [...settings.options] : [];
-  if (settings.reminderOption && !options.includes(settings.reminderOption)) {
-    options.push(settings.reminderOption);
+  const rawSettings = (typeof settings === 'object' && settings !== null) ? settings : {};
+  const options = Array.isArray(rawSettings.options) ? [...rawSettings.options] : [];
+  if (rawSettings.reminderOption && !options.includes(rawSettings.reminderOption)) {
+    options.push(rawSettings.reminderOption);
   }
 
-  const repeatIntervalMinutes = settings.repeatIntervalMinutes ? Number(settings.repeatIntervalMinutes) : null;
+  const repeatIntervalMinutes = rawSettings.repeatIntervalMinutes ? Number(rawSettings.repeatIntervalMinutes) : null;
   if (repeatIntervalMinutes && !options.includes('interval')) {
     options.push('interval');
   }
 
-  const minutesBeforeDue = settings.minutesBeforeDue ? Number(settings.minutesBeforeDue) : null;
-  if (minutesBeforeDue && !options.includes('beforeDue') && settings.reminderOption !== 'oneHourBefore') {
+  const minutesBeforeDue = rawSettings.minutesBeforeDue ? Number(rawSettings.minutesBeforeDue) : null;
+  if (minutesBeforeDue && !options.includes('beforeDue') && rawSettings.reminderOption !== 'oneHourBefore') {
     options.push('beforeDue');
   }
 
-  const customTime = settings.customTime || (settings.reminderTime ? (settings.reminderTime instanceof Date ? settings.reminderTime.toISOString() : String(settings.reminderTime)) : null);
+  const customTime = rawSettings.customTime || (rawSettings.reminderTime ? (rawSettings.reminderTime instanceof Date ? rawSettings.reminderTime.toISOString() : String(rawSettings.reminderTime)) : null);
   if (customTime && !options.includes('custom')) {
     options.push('custom');
   }
@@ -1144,15 +1147,21 @@ const createClientTaskFormConfig = {
     client: { required: true, askOrder: 1 },
     service: { required: true, askOrder: 2 },
     title: { required: true, askOrder: 3 },
-    description: { required: false, askOrder: 4 },
+    description: { required: true, askOrder: 4 },
     dueDateTime: { required: true, askOrder: 5 },
     assignee: { required: false, askOrder: 6 },
     priority: { required: false, askOrder: 7, default: 'Medium' },
+    reminder: { required: false, askOrder: 8 },
+    checkpoints: { required: false, askOrder: 9 },
   },
   buildPayload(draft, user = {}) {
     const cId = draft.clientId || '';
     const sName = draft.service || '';
     const encodedService = encodeURIComponent(sName);
+    const cleanCheckpoints = typeof getCleanCheckpoints === 'function' ? getCleanCheckpoints(draft.checkpoints) : [];
+    const reminderPayload = typeof buildReminderPayload === 'function' ? buildReminderPayload(draft.reminderSettings || draft.reminder) : { enabled: false };
+    const effectiveAssignee = draft.assignee || draft.assigneeName || user?.name || user?.userName || '';
+    const effectiveAssigneeId = draft.assigneeId || user?._id || user?.id || null;
     return {
       endpoint: `/tasks/client-tasks/client/${cId}/service/${encodedService}`,
       method: 'POST',
@@ -1162,13 +1171,17 @@ const createClientTaskFormConfig = {
         description: draft.description || '',
         dueDate: draft.dueDate || (draft.dueDateTime ? draft.dueDateTime.split('T')[0] : null),
         dueDateTime: draft.dueDateTime || null,
-        assignee: draft.assignee || draft.assigneeName || '',
-        assigneeId: draft.assigneeId || null,
+        assignee: effectiveAssignee,
+        assigneeId: effectiveAssigneeId,
         priority: draft.priority || 'Medium',
+        checkpoints: cleanCheckpoints,
+        reminderSettings: reminderPayload,
       }
     };
   },
   buildPreview(draft, user = {}) {
+    const cleanCheckpoints = typeof getCleanCheckpoints === 'function' ? getCleanCheckpoints(draft.checkpoints) : [];
+    const reminderEnabled = Boolean(draft.reminder || draft.reminderSettings?.enabled);
     return {
       entity: 'client_task',
       intent: 'create_client_task',
@@ -1180,8 +1193,10 @@ const createClientTaskFormConfig = {
       description: draft.description || '—',
       dueDateTime: draft.dueDateTime ? formatHumanIstDate(draft.dueDateTime) : (draft.dueDate || '—'),
       dueDate: draft.dueDate || (draft.dueDateTime ? draft.dueDateTime.split('T')[0] : '—'),
-      assignee: draft.assignee || draft.assigneeName || 'Unassigned',
+      assignee: draft.assignee || draft.assigneeName || (user?.name || user?.userName || 'Unassigned'),
       priority: draft.priority || 'Medium',
+      checkpoints: cleanCheckpoints.length > 0 ? `${cleanCheckpoints.length} item(s)` : 'None',
+      reminder: reminderEnabled ? (draft.reminderOption || 'Active') : 'OFF',
     };
   },
 };
@@ -1983,8 +1998,8 @@ const SLOT_CHIPS_TABLE = {
     'email', 'phone', 'industry', 'website', 'address', 'state', 'country', 'pincode', 'notes', 'status', 'ready'
   ],
   create_client_task: [
-    'welcome', 'client', 'service', 'title', 'dueDateTime', 'priority',
-    'description', 'assignee', 'assignTo', 'ready'
+    'welcome', 'client', 'service', 'assignee', 'assignTo', 'title', 'dueDateTime', 'priority',
+    'description', 'reminder', 'reminderOption', 'checkpoints', 'ready'
   ],
   create_client_plan: [
     'welcome', 'name', 'price', 'months', 'status', 'description', 'services', 'serviceTasks', 'ready'
@@ -2026,6 +2041,7 @@ function buildChips(intent, slot, ctx = {}) {
       { label: 'Assign task to someone', action: { type: 'set_intent', intent: 'task_assigned_user' } },
       { label: 'Create new project', action: { type: 'set_intent', intent: 'create_project' } },
       { label: 'Create task in project', action: { type: 'set_intent', intent: 'task_project' } },
+      { label: 'Create client task', action: { type: 'set_intent', intent: 'create_client_task' } },
       { label: 'Add new client', action: { type: 'set_intent', intent: 'create_client' } },
       { label: 'Create client plan', action: { type: 'set_intent', intent: 'create_client_plan' } },
     ] : [
@@ -2033,6 +2049,7 @@ function buildChips(intent, slot, ctx = {}) {
       { label: 'Kisi ko task assign karna', action: { type: 'set_intent', intent: 'task_assigned_user' } },
       { label: 'Naya project banana', action: { type: 'set_intent', intent: 'create_project' } },
       { label: 'Project mein task banana/assign karna', action: { type: 'set_intent', intent: 'task_project' } },
+      { label: 'Client task banana', action: { type: 'set_intent', intent: 'create_client_task' } },
       { label: 'Naya client add karna', action: { type: 'set_intent', intent: 'create_client' } },
       { label: 'Client plan banana', action: { type: 'set_intent', intent: 'create_client_plan' } },
     ];
