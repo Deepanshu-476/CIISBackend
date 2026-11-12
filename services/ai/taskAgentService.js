@@ -746,6 +746,18 @@ function checkClientsByPlanOrService(message, clients = [], clientPlans = [], se
 function isCrmTaskUpdate(text) {
   if (!text || typeof text !== 'string') return false;
   const clean = text.trim();
+
+  // Strict creation guard: If message has explicit creation intent, it is NOT an update!
+  const hasCreationIntent = (
+    /\b(?:create|banao|bana\s*do|banayein|add|naya|nayi|naye|new)\s*(?:a\s+|an\s+|the\s+|my\s+|mera\s+|meri\s+|mere\s+|apna\s+|apne\s+)?(?:personal\s+|self\s+)?(?:task|project|client|plan)\b/i.test(clean) ||
+    /\b(?:personal\s+task|self\s+task|mera\s+task|apna\s+task)\s*(?:create|banao|bana\s*do|banayein)\b/i.test(clean) ||
+    /(?:मेरा|मेरी|मेरे|अपना|अपने)\s*(?:पर्सनल\s*)?टास्क\s*(?:क्रिएट|बनाओ|बना\s*दो|बनाएं|करो)/iu.test(clean) ||
+    /(?:टास्क\s*का\s*नाम|task\s*ka\s*naam|task\s*name)\b/i.test(clean) ||
+    /\b(?:create\s+task|create\s+project|create\s+client|create\s+plan)\b/i.test(clean) ||
+    /\b(?:personal\s+task\s+create|task\s+create\s+karo)\b/i.test(clean)
+  );
+  if (hasCreationIntent) return false;
+
   return CRM_TASK_COMPLETE_REGEX.test(clean) || CRM_TASK_UPDATE_REGEX.test(clean) || CRM_TASK_EDIT_REGEX.test(clean);
 }
 
@@ -764,8 +776,20 @@ function getIstDayRange(now = new Date()) {
 function isActionOrCreationCommand(text) {
   if (!text || typeof text !== 'string') return false;
   const clean = text.trim();
-  const isQuestionOrInquiry = /(?:^(?:kya|did|have|has|check)|(?:\?|kitne|kitna|how\s+many|kaun|kon|konsi|kaunsi|kisko|kinhe|kin\s+|batao|dikhao|list|kiya\s+(?:hai|hain|tha|hoga)|bana\s+(?:hai|hain|tha)|create\s+hua))/i.test(clean);
-  if (isQuestionOrInquiry) return false;
+
+  // Explicit creation phrases must ALWAYS be treated as creation commands regardless of trailing or speech-recognition question marks
+  const hasExplicitCreation = (
+    /\b(?:create|banao|bana\s*do|banayein|add|naya|nayi|naye|new)\s*(?:a\s+|an\s+|the\s+|my\s+|mera\s+|meri\s+|mere\s+|apna\s+|apne\s+)?(?:personal\s+|self\s+)?(?:task|project|client|plan)\b/i.test(clean) ||
+    /\b(?:personal\s+task|self\s+task|mera\s+task|apna\s+task)\s*(?:create|banao|bana\s*do|banayein)\b/i.test(clean) ||
+    /(?:मेरा|मेरी|मेरे|अपना|अपने)\s*(?:पर्सनल\s*)?टास्क\s*(?:क्रिएट|बनाओ|बना\s*दो|बनाएं|करो)/iu.test(clean) ||
+    /(?:टास्क\s*का\s*नाम|task\s*ka\s*naam|task\s*name)\b/i.test(clean) ||
+    /\b(?:create\s+task|create\s+project|create\s+client|create\s+plan)\b/i.test(clean) ||
+    /\b(?:personal\s+task\s+create|task\s+create\s+karo)\b/i.test(clean)
+  );
+  if (hasExplicitCreation) return true;
+
+  const isQuestionOrInquiry = /(?:^(?:kya|did|have|has|check)|(?:kitne|kitna|how\s+many|kaun|kon|konsi|kaunsi|kisko|kinhe|kin\s+|batao|dikhao|list|kiya\s+(?:hai|hain|tha|hoga)|bana\s+(?:hai|hain|tha)|create\s+hua))/i.test(clean);
+  if (isQuestionOrInquiry && !/\b(?:create|banao|add|dalo|likho)\b/i.test(clean)) return false;
 
   return (
     /\b(?:banao|banayein|create|add|assign|kardo|karo|karu|karun|set|badlo|change|update|edit|cancel|delete|hatao|dalo|likho)\b/i.test(clean) ||
@@ -777,6 +801,18 @@ function isActionOrCreationCommand(text) {
 function isCrmQuery(text) {
   if (!text || typeof text !== 'string') return false;
   const clean = text.trim();
+
+  // Explicit creation requests must NEVER be hijacked as CRM queries!
+  const hasExplicitCreation = (
+    /\b(?:create|banao|bana\s*do|banayein|add)\s*(?:a\s+|an\s+|the\s+|my\s+|mera\s+|meri\s+|mere\s+|apna\s+|apne\s+)?(?:personal\s+|self\s+)?(?:task|project|client|plan)\b/i.test(clean) ||
+    /\b(?:personal\s+task|self\s+task|mera\s+task|apna\s+task)\s*(?:create|banao|bana\s*do|banayein)\b/i.test(clean) ||
+    /(?:मेरा|मेरी|मेरे|अपना|अपने)\s*(?:पर्सनल\s*)?टास्क\s*(?:क्रिएट|बनाओ|बना\s*दो|बनाएं|करो)/iu.test(clean) ||
+    /(?:टास्क\s*का\s*नाम|task\s*ka\s*naam|task\s*name)\b/i.test(clean) ||
+    /\b(?:create\s+task|create\s+project|create\s+client|create\s+plan)\b/i.test(clean) ||
+    /\b(?:personal\s+task\s+create|task\s+create\s+karo)\b/i.test(clean)
+  );
+  if (hasExplicitCreation) return false;
+
   const isPastQuestionOrInquiry = /(?:^(?:kya|did|have|has|check\s+karo\s+kya)|(?:\?|kiya\s+(?:hai|hain|tha|hoga)|bana\s+(?:hai|hain|tha)|create\s+hua))/i.test(clean);
   const hasCreationCommand = !isPastQuestionOrInquiry && (
     isActionOrCreationCommand(clean) ||
