@@ -1,5 +1,6 @@
 const { taskDraftSchema, getSchemaForIntent } = require('./aiSchemas');
 const { getModel } = require('./llm');
+const { executeWithGroqFallback } = require('./groqKeyManager');
 const { parseHinglishSlots, applyTitleFallback, isInvalidOrCommandTitle, isSkip, isSkipAll, isInitiationPhrase, cleanAssigneeName, isValidAssigneeCandidate } = require('./hinglishParser');
 const { consumeTaskBudget } = require('../../middleware/aiTaskBudget');
 const { mergeIntoLedger, syncAssigneeLedgerDerivedFields } = require('./assigneeLedger');
@@ -437,9 +438,7 @@ function restoreEnglishTechnicalTerms(text) {
 }
 
 async function extractTaskDraft({ message, now = new Date(), previousDraft = null, model = null, req = null, intent = null, canAssignOthers = false }) {
-  const llm = model || getModel({ temperature: 0, maxTokens: 1500 });
   const schema = intent && getSchemaForIntent ? getSchemaForIntent(intent, canAssignOthers) : taskDraftSchema;
-  const structuredLlm = llm.withStructuredOutput(schema, { name: 'task_draft' });
   const ref = formatIstReference(now);
   const tomorrowIst = new Date(now.getTime() + INDIA_OFFSET_MS + 24 * 60 * 60 * 1000);
   const pad = n => String(n).padStart(2, '0');
@@ -577,13 +576,22 @@ Output:
 
   let rawResult;
   try {
-    rawResult = await structuredLlm.invoke(inputMessages);
+    if (model) {
+      const structuredLlm = model.withStructuredOutput(schema, { name: 'task_draft' });
+      rawResult = await structuredLlm.invoke(inputMessages);
+    } else {
+      rawResult = await executeWithGroqFallback(async (activeApiKey) => {
+        const llmInstance = getModel({ temperature: 0, maxTokens: 1500, apiKey: activeApiKey });
+        const structuredLlm = llmInstance.withStructuredOutput(schema, { name: 'task_draft' });
+        return await structuredLlm.invoke(inputMessages);
+      });
+    }
     // Increment budget ONLY on successful LLM call
     if (req) {
       await consumeTaskBudget(req).catch(err => console.error('consumeTaskBudget error:', err.message));
     }
-  } catch (firstErr) {
-    const providerErr = classifyAndLogGroqError(firstErr);
+  } catch (err) {
+    const providerErr = classifyAndLogGroqError(err);
     if (providerErr && (providerErr.code === 'LLM_AUTH' || providerErr.code === 'LLM_MODEL')) {
       throw providerErr;
     }
