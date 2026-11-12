@@ -1431,6 +1431,16 @@ const startServer = async () => {
     console.error('[socket] Redis adapter failed, falling back to memory:', e.message);
   }
 
+  // Calling depends on two pieces of configuration that fail silently when they are missing: without
+  // Redis the web and app backends cannot signal to each other, and without the Coturn secret
+  // /api/chat/turn-credentials answers 503 and calls across networks never relay. Say so at boot.
+  if (!process.env.REDIS_URL) {
+    console.warn('[calls] REDIS_URL is not set: calls only work between users connected to THIS backend process (web <-> app calling will fail).');
+  }
+  if (!String(process.env.COTURN_STATIC_AUTH_SECRET || process.env.TURN_STATIC_AUTH_SECRET || '').trim()) {
+    console.warn('[calls] COTURN_STATIC_AUTH_SECRET is not set: /api/chat/turn-credentials returns 503 and calls fall back to STUN only, so calls across different networks will drop.');
+  }
+
   // Uniqueness is a prerequisite for safe concurrent group/event delivery.
   for (const model of [require('./HR-CDS/chat/models/Conversation'), require('./HR-CDS/chat/models/Message'), require('./HR-CDS/models/Notification')]) await model.createIndexes();
   require('./HR-CDS/utils/projectChatWorker').start();
