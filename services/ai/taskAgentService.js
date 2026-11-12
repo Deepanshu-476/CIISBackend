@@ -498,8 +498,9 @@ function findReferencedProject(text, projects = [], draft = null) {
   const lower = text.toLowerCase();
 
   // If explicit personal task without "project mein", do NOT match any project!
-  if (/\b(?:personal\s+task|self\s+task|mera\s+task|khud\s+ka\s+task|my\s+task|apna\s+task)\b/i.test(text) &&
-      !/\b(?:project\s+mein|in\s+(?:the\s+)?project|project\s+me)\b/i.test(text)) {
+  const isPersonalTaskPhrase = /\b(?:personal\s+task|self\s+task|mera\s+(?:personal\s+)?task|khud\s+ka\s+task|my\s+task|apna\s+task)\b/i.test(text) ||
+    /(?:(?:मेरा|मेरी|मेरे|अपना|अपने|खुद|स्वयं)\s*(?:एक\s*)?(?:नया\s*)?(?:पर्सनल|परशन|स्वयं|खुद)?\s*(?:टास्क|काम))|(?:(?:पर्सनल|परशन)\s*(?:टास्क|काम))/iu.test(text);
+  if (isPersonalTaskPhrase && !/\b(?:project\s+mein|in\s+(?:the\s+)?project|project\s+me|ke\s+andar\s+task)\b/i.test(text)) {
     return null;
   }
 
@@ -5648,26 +5649,44 @@ const lastAskedField = currentDraft.asked.length > 0
     Object.assign(currentDraft, migration.newDraft);
   }
 
-  const mentionsOtherOrProject = /\b(?:assign|kisi\s+aur|dusre|someone\s+else|project|member)\b/i.test(trimmedMessage) ||
-    detectedIntentResult.intent === 'task_assigned_user' ||
-    detectedIntentResult.intent === 'task_project';
+  const hasExplicitSelfPhrase = /(?:\b(?:personal\s+task|self\s+task|my\s+task|apna\s+task|mera\s+(?:personal\s+)?task|khud\s+ka\s+task)\b|(?:(?:मेरा|मेरी|मेरे|अपना|अपने|खुद|स्वयं)\s*(?:एक\s*)?(?:नया\s*)?(?:पर्सनल|परशन|स्वयं|खुद)?\s*(?:टास्क|काम))|(?:(?:पर्सनल|परशन)\s*(?:टास्क|काम)))/iu.test(trimmedMessage);
+  const mentionsProjectLocative = /\b(?:project\s+mein|in\s+(?:the\s+)?project|project\s+me|ke\s+andar\s+task)\b/i.test(trimmedMessage);
 
-  const isExplicitPersonalTask = !mentionsOtherOrProject && (
-    /\b(?:personal\s+task|self\s+task|mera\s+(?:personal\s+)?task|khud\s+ka\s+task|my\s+task|apna\s+task)\b/i.test(trimmedMessage) ||
-    (detectedIntentResult.intent === 'self_task' && detectedIntentResult.isExplicit) ||
-    (draft?.intent === 'self_task' && !mentionsOtherOrProject)
+  const mentionsOtherOrProject = !hasExplicitSelfPhrase && (
+    /\b(?:assign|kisi\s+aur|dusre|someone\s+else|project|member)\b/i.test(trimmedMessage) ||
+    detectedIntentResult.intent === 'task_assigned_user' ||
+    detectedIntentResult.intent === 'task_project'
   );
+
+  const isExplicitPersonalTask = (hasExplicitSelfPhrase && !mentionsProjectLocative) ||
+    (!mentionsOtherOrProject && (
+      (detectedIntentResult.intent === 'self_task' && detectedIntentResult.isExplicit) ||
+      (draft?.intent === 'self_task' && !mentionsOtherOrProject)
+    ));
 
   if (isExplicitPersonalTask) {
     currentDraft.intent = 'self_task';
     currentDraft.taskFor = 'self';
+    currentDraft.wantsOthers = false;
     currentDraft.projectId = null;
     currentDraft.projectName = null;
     currentDraft.project = null;
+    currentDraft.assigneeName = null;
+    currentDraft.assigneeId = null;
+    currentDraft.assigneeLabel = null;
+    currentDraft.assignees = [];
+    currentDraft.assignedUsers = [];
+    currentDraft.pendingAssigneeNames = [];
+    currentDraft.assigneeLedger = [];
   }
 
-  // If detected intent is task_project or a project is referenced in message, populate it!
-  if (!isExplicitPersonalTask && !currentDraft.projectId && Array.isArray(accessibleProjects) && accessibleProjects.length > 0) {
+  // If detected intent is task_project or user explicitly requested a project task, populate project:
+  const isProjectTaskIntent = !isExplicitPersonalTask && (
+    detectedIntentResult.intent === 'task_project' ||
+    /\b(?:project\s+task|task\s+in\s+project|project\s+mein|in\s+(?:the\s+)?project)\b/i.test(trimmedMessage)
+  );
+
+  if (isProjectTaskIntent && !currentDraft.projectId && Array.isArray(accessibleProjects) && accessibleProjects.length > 0) {
     const p = (Array.isArray(detectedIntentResult.matchedProjects) && detectedIntentResult.matchedProjects[0]) ||
       findReferencedProject(trimmedMessage, accessibleProjects, currentDraft);
     if (p) {
