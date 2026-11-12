@@ -9,6 +9,7 @@ const bcrypt = require('bcryptjs');
 const { errorResponse, successResponse } = require('../utils/responseHelper.js');
 const Task = require('../../HR-CDS/models/Task.js');
 const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
+const { registerRequestBranchCondition } = require('../../utils/branchScope');
 
 let cascadeUserUpdate = async () => {};
 try {
@@ -1157,6 +1158,9 @@ exports.getRegisterRequests = async (req, res) => {
       ];
     }
 
+    const branchCondition = registerRequestBranchCondition(req.user);
+    if (Object.keys(branchCondition).length) filter.$and = [...(filter.$and || []), branchCondition];
+
     const requests = await User.find(filter)
       .select('-password -resetToken -resetTokenExpiry')
       .populate('company', 'companyName companyCode name')
@@ -1232,6 +1236,8 @@ exports.getRegisterRequestsCount = async (req, res) => {
       ]
     };
 
+    const branchCondition = registerRequestBranchCondition(req.user);
+    if (Object.keys(branchCondition).length) filter.$and = [...(filter.$and || []), branchCondition];
     const count = await User.countDocuments(filter);
     return res.status(200).json({ success: true, count });
   } catch (err) {

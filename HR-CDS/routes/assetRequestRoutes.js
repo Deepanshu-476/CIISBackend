@@ -7,6 +7,16 @@ const path = require('path');
 const assetController = require('../controllers/assetRequestController');
 const { protect } = require('../../middleware/authMiddleware');
 
+// Branch rule: managing someone's asset request needs them to be in the viewer's branches.
+const AssetRequest = require('../models/AssetRequest');
+const { requireRecordInBranches } = require('../../utils/branchScope');
+const assetRequestInBranches = requireRecordInBranches(
+  async req => (require('mongoose').isValidObjectId(req.params.id)
+    ? (await AssetRequest.findById(req.params.id).select('user').lean())?.user
+    : null),
+  { label: 'asset requests' }
+);
+
 const commentUploadDir = path.join(__dirname, '../../uploads/asset-comments');
 fs.mkdirSync(commentUploadDir, { recursive: true });
 
@@ -36,13 +46,14 @@ router.get('/my-requests', protect, assetController.getMyRequests);
 router.get('/available', protect, assetController.getAvailableAssets);
 router.post('/:id/return-request', protect, assetController.requestAssetReturn);
 router.post('/:id/deposit', protect, assetController.depositAsset);
-router.post('/:id/confirm-deposit', protect, assetController.confirmAssetDeposit);
+router.post('/:id/confirm-deposit', protect, assetRequestInBranches, assetController.confirmAssetDeposit);
 
 
 router.get('/all', protect, assetController.getAllRequests);          
 router.patch(
   '/update/:id',
   protect,
+  assetRequestInBranches,
   uploadCommentImage.fields([
     { name: 'commentImages', maxCount: 3 },
     { name: 'commentImage', maxCount: 1 }
@@ -50,8 +61,8 @@ router.patch(
   assetController.updateRequestStatus
 );
 router.delete('/update/:id/comments/:commentId/attachment', protect, assetController.deleteCommentAttachment);
-router.delete('/delete/:id', protect, assetController.deleteRequest);      
-router.delete('/:id', protect, assetController.deleteRequest);      
+router.delete('/delete/:id', protect, assetRequestInBranches, assetController.deleteRequest);      
+router.delete('/:id', protect, assetRequestInBranches, assetController.deleteRequest);      
 
 
 

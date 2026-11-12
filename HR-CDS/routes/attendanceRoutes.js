@@ -7,6 +7,17 @@ const PagePermission = require('../../models/PagePermission');
 
 const upload = require('../../utils/multer');
 
+// Branch rule: editing someone's attendance needs them to be in the viewer's branches.
+const AttendanceModel = require('../models/Attendance');
+const { requireRecordInBranches } = require('../../utils/branchScope');
+const attendanceInBranches = requireRecordInBranches(
+  async req => (require('mongoose').isValidObjectId(req.params.id)
+    ? (await AttendanceModel.findById(req.params.id).select('user').lean())?.user
+    : null),
+  { label: 'attendance' }
+);
+const attendanceUserInBranches = requireRecordInBranches(req => req.body?.user, { label: 'attendance' });
+
 const normalizeRole = value => String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, '_');
 
 const privilegedAttendanceRoles = [
@@ -108,9 +119,9 @@ router.get('/list', protect, attendanceController.getAttendanceList);
 
 router.get('/all', protect, checkAttendanceAccess('view'), attendanceController.getAllUsersAttendance);
 router.post('/preview', protect, checkAttendanceAccess('view'), attendanceController.previewAttendance);
-router.post('/manual', protect, checkAttendanceAccess('edit'), attendanceController.createManualAttendance);
-router.put('/:id', protect, checkAttendanceAccess('edit'), attendanceController.updateAttendanceRecord);
-router.delete('/:id', protect, checkAttendanceAccess('delete'), attendanceController.deleteAttendanceRecord);
+router.post('/manual', protect, checkAttendanceAccess('edit'), attendanceUserInBranches, attendanceController.createManualAttendance);
+router.put('/:id', protect, checkAttendanceAccess('edit'), attendanceInBranches, attendanceController.updateAttendanceRecord);
+router.delete('/:id', protect, checkAttendanceAccess('delete'), attendanceInBranches, attendanceController.deleteAttendanceRecord);
 router.get('/user/:userId', protect, attendanceController.getAttendanceByUser);
 router.get('/stats', protect, checkAttendanceAccess('view'), attendanceController.getAttendanceStats);
 
