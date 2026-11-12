@@ -296,6 +296,9 @@ const FORM_REGISTRY = {
       if (!draft.dueDateTime) {
         return { valid: false, field: 'dueDateTime', reason: 'Due date and time is required' };
       }
+      if (!draft.description || !String(draft.description).trim()) {
+        return { valid: false, field: 'description', reason: 'Description is required' };
+      }
       return { valid: true };
     },
   },
@@ -2233,7 +2236,6 @@ function buildChips(intent, slot, ctx = {}) {
       { label: '1 din', action: { type: 'set', field: 'priorityDays', value: 1 } },
       { label: '2 din', action: { type: 'set', field: 'priorityDays', value: 2 } },
       { label: '3 din', action: { type: 'set', field: 'priorityDays', value: 3 } },
-      { label: 'Skip', action: { type: 'skip', field: 'priorityDays' } },
       { label: 'Cancel', action: { type: 'cancel' } },
     ];
   }
@@ -2264,6 +2266,9 @@ function buildChips(intent, slot, ctx = {}) {
   }
 
   if (slot === 'description') {
+    if (intent === 'self_task' || intent === 'create_task') {
+      return [];
+    }
     return [
       { label: 'Skip', action: { type: 'skip', field: 'description' } },
       { label: 'Cancel', action: { type: 'cancel' } },
