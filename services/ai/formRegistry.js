@@ -1491,18 +1491,18 @@ function detectIntent(opts = {}) {
     }
   }
 
+  // 3. Explicit self task keywords (check before draft continuity and fuzzy project matching unless explicitly "project mein")
+  if (SELF_KEYWORDS_REGEX.test(text) && !/\b(?:project\s+mein|in\s+(?:the\s+)?project|project\s+me|ke\s+andar\s+task)\b/i.test(text)) {
+    return { intent: 'self_task', isSupported: true, isExplicit: true };
+  }
+
   // 3a. Existing draft state continuity (Strict Intent Lock: slot answers, field edits, and disambiguation chips never hijack active flow)
   if (draft?.intent && FORM_REGISTRY[draft.intent]) {
     const EXPLICIT_INTENT_SWITCH_REGEX = /\b(?:naya\s+task|new\s+task|task\s+banao|task\s+create\s+karo|ek\s+task\s+banao|नया\s+टास्क|टास्क\s+बनाओ|naya\s+project|new\s+project|create\s+project|naya\s+client|new\s+client|create\s+client|project\s+mein\s+task|client\s+mein\s+task)\b/iu;
-    const isExplicitSwitch = EXPLICIT_INTENT_SWITCH_REGEX.test(text);
-    if (!isExplicitSwitch || (draft.intent === 'create_project' && !/\b(?:naya\s+task|new\s+task|task\s+banao|naya\s+client|new\s+client|create\s+client|project\s+mein\s+task)\b/i.test(text))) {
+    const isExplicitSwitch = EXPLICIT_INTENT_SWITCH_REGEX.test(text) || SELF_KEYWORDS_REGEX.test(text);
+    if (!isExplicitSwitch || (draft.intent === 'create_project' && !/\b(?:naya\s+task|new\s+task|task\s+banao|naya\s+client|new\s+client|create\s+client|project\s+mein\s+task)\b/i.test(text) && !SELF_KEYWORDS_REGEX.test(text))) {
       return { intent: draft.intent, isSupported: true, isExplicit: false };
     }
-  }
-
-  // 3. Explicit self task keywords (check before fuzzy project matching unless explicitly "project mein")
-  if (SELF_KEYWORDS_REGEX.test(text) && !/\b(?:project\s+mein|in\s+(?:the\s+)?project|project\s+me)\b/i.test(text)) {
-    return { intent: 'self_task', isSupported: true, isExplicit: true };
   }
 
   if (mentionsProject || (projectMatchedByLocative && projectMatchedByLocative.length > 0)) {

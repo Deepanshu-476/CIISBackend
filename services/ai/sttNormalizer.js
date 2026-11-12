@@ -152,6 +152,24 @@ function normalizeTranscript(text) {
   res = res.replace(/साथ\s*बजे/gu, 'सात बजे');
   res = res.replace(/\bsaath\s*baje\b/gi, 'saat baje');
 
+  // Merged date/time speech tokens (e.g. "aajsham 8 baje" -> "aaj shaam 8 baje")
+  res = res.replace(/\b(?:aajsham|aajshaam)\b/gi, 'aaj shaam');
+  res = res.replace(/\b(?:kalsham|kalshaam)\b/gi, 'kal shaam');
+  res = res.replace(/\b(?:aajsubah|aajsubha)\b/gi, 'aaj subah');
+  res = res.replace(/\b(?:kalsubah|kalsubha)\b/gi, 'kal subah');
+  res = res.replace(/\b(?:aajraat)\b/gi, 'aaj raat');
+  res = res.replace(/\b(?:kalraat)\b/gi, 'kal raat');
+  res = res.replace(/\b(?:aajdopahar|aajdophar)\b/gi, 'aaj dopahar');
+  res = res.replace(/\b(?:kaldopahar|kaldophar)\b/gi, 'kal dopahar');
+  res = res.replace(/(?:आजशाम|आज-शाम)/gu, 'आज शाम');
+  res = res.replace(/(?:कलशाम|कल-शाम)/gu, 'कल शाम');
+  res = res.replace(/(?:आजसुबह|आज-सुबह)/gu, 'आज सुबह');
+  res = res.replace(/(?:कलसुबह|कल-सुबह)/gu, 'कल सुबह');
+  res = res.replace(/(?:आजरात|आज-रात)/gu, 'आज रात');
+  res = res.replace(/(?:कलरात|कल-रात)/gu, 'कल रात');
+  res = res.replace(/(?:आजदोपहर|आज-दोपहर)/gu, 'आज दोपहर');
+  res = res.replace(/(?:कलदोपहर|कल-दोपहर)/gu, 'कल दोपहर');
+
   // Whisper mishearings for "baj kar" / "baj ke"
   res = res.replace(/\b(?:baaj|bach|bachh)\s*(?:kar|ke)\b/giu, 'baj kar');
   res = res.replace(/\b(?:bachkar|bachke|bajke|baajke)\b/giu, 'baj kar');

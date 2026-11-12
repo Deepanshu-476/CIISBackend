@@ -339,13 +339,24 @@ function normaliseExtracted(data, message = '') {
   }
 
   let reminder = null;
-  if (typeof data?.reminder === 'boolean') {
-    reminder = data.reminder;
-  }
-
   let repeatIntervalMinutes = typeof data?.repeatIntervalMinutes === 'number' && data.repeatIntervalMinutes > 0
     ? data.repeatIntervalMinutes
     : null;
+
+  if (typeof data?.reminder === 'boolean') {
+    reminder = data.reminder;
+  } else if (typeof data?.reminder === 'string') {
+    const remStr = data.reminder.trim().toLowerCase();
+    if (/(?:no|nahi|off|false|none|disable)/i.test(remStr)) {
+      reminder = false;
+    } else {
+      reminder = true;
+      const intervalMatch = remStr.match(/(?:every|har|interval\s*of)?\s*(\d+)\s*(?:min(?:ute)?s?|m|मिनट)/i);
+      if (intervalMatch && !repeatIntervalMinutes) {
+        repeatIntervalMinutes = parseInt(intervalMatch[1], 10);
+      }
+    }
+  }
   let minutesBeforeDue = typeof data?.minutesBeforeDue === 'number' && data.minutesBeforeDue > 0
     ? data.minutesBeforeDue
     : null;
