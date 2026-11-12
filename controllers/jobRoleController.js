@@ -34,7 +34,17 @@ const DEFAULT_SHIFT_SETTINGS = {
   secondHalfClockInWindow: {
     start: "13:30",
     end: "14:30"
-  }
+  },
+  lunchBreakWindow: {
+    enabled: true,
+    start: "13:00",
+    end: "14:30",
+    maxDurationMinutes: 45
+  },
+  teaBreaks: [
+    { label: "Morning Tea Break", start: "11:00", end: "11:30", maxDurationMinutes: 15 },
+    { label: "Evening Tea Break", start: "16:30", end: "17:00", maxDurationMinutes: 15 }
+  ]
 };
 
 const normalizeShift = (shift = {}, index = 0) => {
@@ -48,7 +58,21 @@ const normalizeShift = (shift = {}, index = 0) => {
     secondHalfClockInWindow: {
       ...DEFAULT_SHIFT_SETTINGS.secondHalfClockInWindow,
       ...(source.secondHalfClockInWindow || {})
-    }
+    },
+    lunchBreakWindow: {
+      enabled: source.lunchBreakWindow?.enabled !== false,
+      start: source.lunchBreakWindow?.start || DEFAULT_SHIFT_SETTINGS.lunchBreakWindow.start,
+      end: source.lunchBreakWindow?.end || DEFAULT_SHIFT_SETTINGS.lunchBreakWindow.end,
+      maxDurationMinutes: Number(source.lunchBreakWindow?.maxDurationMinutes) || 45
+    },
+    teaBreaks: Array.isArray(source.teaBreaks)
+      ? source.teaBreaks.map(t => ({
+          label: String(t.label || "Tea Break").trim(),
+          start: t.start || "11:00",
+          end: t.end || "11:30",
+          maxDurationMinutes: Number(t.maxDurationMinutes) || 15
+        }))
+      : DEFAULT_SHIFT_SETTINGS.teaBreaks
   };
 };
 
