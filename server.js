@@ -433,7 +433,7 @@ const io = socketIo(server, {
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Permanent-Delete", "x-company-code", "companyCode", "X-Company-Code"]
+    allowedHeaders: ["Content-Type", "Authorization", "X-Permanent-Delete", "x-company-code", "companyCode", "X-Company-Code", "X-Page-Path", "X-Client-App"]
   },
   transports: ['websocket', 'polling'],
   allowEIO3: true,
@@ -1046,7 +1046,7 @@ const corsOptions = {
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "Cache-Control", "X-Permanent-Delete", "x-company-code", "companyCode", "X-Company-Code"],
+  allowedHeaders: ["Content-Type", "Authorization", "Cache-Control", "X-Permanent-Delete", "x-company-code", "companyCode", "X-Company-Code", "X-Page-Path", "X-Client-App"],
   exposedHeaders: ["Content-Disposition"]
 };
 
@@ -1197,6 +1197,10 @@ app.use((req, res, next) => {
   next();
 });
 
+// User Activity: every successful write by a logged-in company user is logged against the page
+// the client says it was on (X-Page-Path). Written in batches; see utils/activityTracker.js.
+app.use(require('./utils/activityTracker').trackWrites);
+
 const dashboardRoutes = require('./HR-CDS/routes/dashboardRoutes.js');
 
 
@@ -1241,6 +1245,7 @@ app.use("/department", require("./routes/Department.routes.js"));
 app.use("/api/alerts", require("./HR-CDS/routes/alertRoutes.js"));
 app.use("/api/promos", require("./HR-CDS/routes/promoRoutes.js"));
 app.use("/api/badges", require("./routes/badgeRoutes.js"));
+app.use("/api/activity", require("./routes/activityRoutes.js"));
 app.use("/api/notifications", require("./HR-CDS/routes/notificationRoutes.js"));
 app.use("/api/feedback", require("./HR-CDS/routes/feedbackRoutes.js"));
 app.use("/api/groups", require("./HR-CDS/routes/groupRoutes.js"));

@@ -52,6 +52,7 @@ const APP_PAGES = [
   { pageKey: 'active-clients', name: 'Active Clients', path: '/ciisUser/active-clients', permissionPattern: 'viewEdit' },
   { pageKey: 'client-services', name: 'Client Services', path: '/ciisUser/client-services', permissionPattern: 'viewEdit', permissionActions: { view: 'View', edit: 'Add / Edit', delete: 'Delete' } },
   { pageKey: 'holiday', name: 'Holiday', path: '/ciisUser/holiday', permissionPattern: 'viewEdit', permissionActions: { view: 'View', edit: 'Add / Edit', delete: 'Delete' } },
+  { pageKey: 'user-activity', name: 'Employee Activity', path: '/ciisUser/user-activity', permissionPattern: 'viewEdit', permissionActions: { view: 'View', edit: 'View (same as View)', delete: 'Not used' } },
   { pageKey: 'salary-component', name: 'Salary Component', path: '/ciisUser/salary-component', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.salaryComponent },
   { pageKey: 'salary-structure', name: 'Salary Structure', path: '/ciisUser/salary-structure', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.salaryStructure },
   { pageKey: 'salary-assignment', name: 'Employee Salary', path: '/ciisUser/salary-assignment', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.employeeSalary },
