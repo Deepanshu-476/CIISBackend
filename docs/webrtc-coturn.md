@@ -94,16 +94,20 @@ and the app backend (`/var/www/app1`, port 3001). Socket.IO and the call store (
 per-process unless Redis is attached, so without `REDIS_URL` a `call:incoming` emitted by one process
 never reaches sockets connected to the other: web → app and app → web calls simply do not ring.
 
+On the current VPS this is already done: `redis-server` listens on **127.0.0.1:6380** (not the
+default 6379 - a separate Dockerised Redis holds that port), with no password. Verified 2026-11-12.
+
 ```bash
-sudo apt install -y redis-server
+sudo apt install -y redis-server      # only on a fresh VPS
 sudo systemctl enable --now redis-server
-redis-cli ping     # expects PONG
+redis-cli -p 6380 ping                # expects PONG
+redis-cli -p 6380 --scan --pattern 'ciis:call*' | head   # live call rooms
 ```
 
 Set the same URL in **both** backends' `.env`:
 
 ```env
-REDIS_URL=redis://127.0.0.1:6379
+REDIS_URL=redis://127.0.0.1:6380
 ```
 
 Then restart both and check the log line `[socket] Redis adapter attached`:
@@ -112,6 +116,14 @@ Then restart both and check the log line `[socket] Redis adapter attached`:
 systemctl restart backendr
 pm2 restart app1 && pm2 save
 journalctl -u backendr -n 40 --no-pager | grep -i redis
+grep -i 'Redis adapter' /root/.pm2/logs/app1-out.log | tail -3
+```
+
+The quickest check of both settings at once, from either backend folder:
+
+```bash
+cd /var/www/CIISWEBBACKEND && node scripts/checkCallConfig.cjs
+cd /var/www/app1          && node scripts/checkCallConfig.cjs
 ```
 
 The backend now also warns at boot when either `REDIS_URL` or `COTURN_STATIC_AUTH_SECRET` is missing,
