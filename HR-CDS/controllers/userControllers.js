@@ -153,8 +153,14 @@ const getUserBranchIds = (user = {}) => normalizeIdList([
 ]);
 
 const canViewAllCompanyBranches = (user = {}) => {
-  const roleText = String(user.companyRole || user.jobRole || user.role || '').trim().toLowerCase();
-  return ['owner', 'company_owner', 'companyowner', 'super_admin', 'superadmin', 'admin', 'hr', 'manager', 'career infowis admin'].includes(roleText);
+  // HR and Manager job titles must not widen a user's branch scope. Company
+  // admins retain their existing company-wide directory access.
+  // `isCompanyOwner` is set by authMiddleware after validating the account.
+  if (user.isCompanyOwner === true || user.isSuperAdmin === true || user.superAdmin === true) return true;
+  const companyRole = String(user.companyRole || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  const jobRole = String(user.jobRole || user.role || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  return ['owner', 'company_owner', 'companyowner', 'admin', 'career_infowis_admin'].includes(companyRole) ||
+    ['admin', 'career_infowis_admin'].includes(jobRole);
 };
 
 const isPrivilegedPiiViewer = (user = {}) => {
@@ -233,6 +239,51 @@ const canViewSensitiveEmployeeDetails = async (user = {}) => {
   ].some(entry => String(entry?.user || entry) === targetId);
 };
 
+// Employee Details editors receive only the edit capability configured in Page
+// Management. They never receive delete access, and their branch/department
+// scope is honoured for every edit.
+const canEditEmployeeDetailsFromPage = async (requestingUser = {}, targetUser = {}) => {
+  const companyId = requestingUser.company?._id || requestingUser.company || requestingUser.companyId;
+  const requesterId = String(requestingUser._id || requestingUser.id || '');
+  if (!companyId || !requesterId) return false;
+
+  const permission = await PagePermission.findOne({
+    company: companyId,
+    $or: [
+      { path: '/ciisUser/emp-details' },
+      { pageKey: 'emp-details' }
+    ]
+  }).select('editUsers userAccessScopes').lean();
+  if (!permission) return false;
+
+  const isDirectEditor = (permission.editUsers || []).some(entry =>
+    String(entry?.user?._id || entry?.user || entry || '') === requesterId
+  );
+  const editScopes = (permission.userAccessScopes || []).filter(scope =>
+    String(scope?.user?._id || scope?.user || '') === requesterId &&
+    String(scope?.accessType || '').trim().toLowerCase() === 'edit'
+  );
+  if (!isDirectEditor && editScopes.length === 0) return false;
+
+  // A direct editor without a scope is an all-branches/all-departments editor.
+  // Empty scope arrays also mean "All" in Page Management.
+  if (editScopes.length === 0) return true;
+
+  const targetBranchIds = new Set([
+    targetUser.branch,
+    ...(Array.isArray(targetUser.assignedBranches) ? targetUser.assignedBranches : [])
+  ].map(value => String(value?._id || value || '')).filter(Boolean));
+  const targetDepartmentId = String(targetUser.department?._id || targetUser.department || '');
+
+  return editScopes.some(scope => {
+    const branchIds = (scope.branchIds || []).map(value => String(value?._id || value || '')).filter(Boolean);
+    const departmentIds = (scope.departmentIds || []).map(value => String(value?._id || value || '')).filter(Boolean);
+    const branchAllowed = branchIds.length === 0 || branchIds.some(id => targetBranchIds.has(id));
+    const departmentAllowed = departmentIds.length === 0 || departmentIds.includes(targetDepartmentId);
+    return branchAllowed && departmentAllowed;
+  });
+};
+
 const appendAndCondition = (filter, condition) => {
   if (!condition || Object.keys(condition).length === 0) return filter;
   filter.$and = Array.isArray(filter.$and) ? [...filter.$and, condition] : [condition];
@@ -265,7 +316,14 @@ const applyBranchAccessFilter = (filter, req) => {
     return filter;
   }
 
-  if (!canViewAllCompanyBranches(currentUser) && accessibleBranchIds.length > 0) {
+  if (!canViewAllCompanyBranches(currentUser)) {
+    // A non-owner with no assigned branch is not entitled to the entire
+    // company directory. Returning an empty result is safer than omitting
+    // the branch predicate (which previously exposed every branch).
+    if (accessibleBranchIds.length === 0) {
+      filter._id = null;
+      return filter;
+    }
     appendAndCondition(filter, { $or: [
       { branch: { $in: accessibleBranchIds } },
       { assignedBranches: { $in: accessibleBranchIds } }
@@ -278,7 +336,7 @@ const applyBranchAccessFilter = (filter, req) => {
 const userMatchesBranchScope = (targetUser, currentUser = {}) => {
   if (canViewAllCompanyBranches(currentUser)) return true;
   const accessibleBranchIds = getUserBranchIds(currentUser);
-  if (!accessibleBranchIds.length) return true;
+  if (!accessibleBranchIds.length) return false;
   const targetBranchIds = getUserBranchIds(targetUser);
   return targetBranchIds.some(branchId => accessibleBranchIds.includes(branchId));
 };
@@ -1143,6 +1201,45 @@ exports.getRegisterRequests = async (req, res) => {
   }
 };
 
+exports.getRegisterRequestsCount = async (req, res) => {
+  try {
+    const canView = await hasRegisterRequestViewAccess(req);
+    if (!canView) {
+      return res.status(200).json({ success: true, count: 0 });
+    }
+
+    const companyScope = getCompanyScope(req);
+    let companyFilter = {};
+    if (!companyScope.error) {
+      companyFilter = companyScope.filter;
+    } else {
+      const role = String(req.user?.companyRole || req.user?.jobRole || req.user?.role || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+      if (!['super_admin', 'superadmin'].includes(role)) {
+        return res.status(200).json({ success: true, count: 0 });
+      }
+    }
+
+    const filter = {
+      ...companyFilter,
+      $or: [
+        { registrationStatus: 'pending' },
+        { registrationSource: 'self_register', isActive: false },
+        {
+          registrationSource: { $exists: false },
+          registrationStatus: { $exists: false },
+          isActive: false
+        }
+      ]
+    };
+
+    const count = await User.countDocuments(filter);
+    return res.status(200).json({ success: true, count });
+  } catch (err) {
+    console.error("❌ Get register requests count error:", err);
+    return res.status(500).json({ success: false, error: err.message, count: 0 });
+  }
+};
+
 exports.updateRegisterRequest = async (req, res) => {
   try {
     const canVerify = await hasRegisterRequestVerifyAccess(req);
@@ -1495,7 +1592,12 @@ exports.getAllUsers = async (req, res) => {
     
     
     const authorizedRoles = ['admin', 'super_admin', 'hr', 'manager', 'employee'];
-    const isAuthorized = authorizedRoles.includes(req.user.jobRole);
+    // Owners/admins (companyRole) see every department; the jobRole check stays as it was.
+    const companyWideRoles = ['owner', 'company_owner', 'admin', 'super_admin', 'superadmin', 'hr', 'manager'];
+    const normalizedCompanyRole = String(req.user.companyRole || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+    const isAuthorized = authorizedRoles.includes(req.user.jobRole) ||
+      companyWideRoles.includes(normalizedCompanyRole) ||
+      req.user.isCompanyOwner === true;
     
     if (!isAuthorized && userDepartment) {
       filter.department = userDepartment;
@@ -1770,8 +1872,11 @@ exports.updateUser = async (req, res) => {
     const isSelfUpdate = Boolean(id && requestingUserId && String(requestingUserId) === String(id));
     const requesterRole = String(requestingUser.companyRole || requestingUser.jobRole || requestingUser.role || '').toLowerCase();
     const isPrivilegedUser = ['super_admin', 'superadmin', 'owner', 'admin', 'hr'].includes(requesterRole) || requestingUser.isSuperAdmin === true;
+    const canEditEmployeeDetails = !isSelfUpdate && !isPrivilegedUser
+      ? await canEditEmployeeDetailsFromPage(requestingUser, user)
+      : false;
 
-    if (!isSelfUpdate && !isPrivilegedUser) {
+    if (!isSelfUpdate && !isPrivilegedUser && !canEditEmployeeDetails) {
       return errorResponse(res, 403, "You do not have permission to update other employees");
     }
 
@@ -1792,7 +1897,7 @@ exports.updateUser = async (req, res) => {
     }
 
     // 3. Salary modifications require Admin, Owner, or SuperAdmin
-    if (req.body.salary !== undefined) {
+    if (req.body.salary !== undefined && !canEditEmployeeDetails) {
       const canEditSalary = ['owner', 'admin', 'super_admin', 'superadmin'].includes(requesterRole) || requestingUser.isSuperAdmin === true;
       if (!canEditSalary) {
         delete req.body.salary;
@@ -1808,7 +1913,7 @@ exports.updateUser = async (req, res) => {
       }
     }
 
-    if (!isPrivilegedUser) {
+    if (!isPrivilegedUser && !canEditEmployeeDetails) {
       // Normal employees cannot modify sensitive employment, role, or WFH fields
       const employeeForbiddenFields = [
         'companyRole', 'role', 'jobRole', 'employeeType', 'salary', 'isActive',
@@ -2441,6 +2546,13 @@ exports.getCompanyUsers = async (req, res) => {
 
     if (!currentUser) {
       return errorResponse(res, 401, "Authentication required");
+    }
+
+    // Employee Details View/Edit access may open a single employee with
+    // includeSensitive=true. Respect that Page Management permission so the
+    // detail modal receives the family, emergency, bank and identity fields.
+    if (String(req.query?.includeSensitive || '').toLowerCase() === 'true') {
+      req.allowSensitiveEmployeeDetails = await canViewSensitiveEmployeeDetails(currentUser);
     }
 
     const companyScope = getCompanyScope(req);

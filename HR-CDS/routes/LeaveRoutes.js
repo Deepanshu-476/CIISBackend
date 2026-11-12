@@ -9,7 +9,6 @@ const validateRequest = require('../../middleware/validateRequest.js');
 router.use(authMiddleware.protect);
 
 
-
 router.post('/apply', 
   [
     body('type').trim().notEmpty().isLength({ max: 80 }).withMessage('Invalid leave type'),
@@ -52,7 +51,7 @@ router.post('/sync',
 router.get('/stats', leaveController.getLeaveStats);
 
 
-router.get('/all', leaveController.getAllLeaves);
+router.get('/all', require('../../middleware/pageAccess').blockClientLogins, leaveController.getAllLeaves);
 
 router.get('/approval-options/:id',
   [
@@ -125,58 +124,5 @@ router.get('/balance', leaveController.getLeaveBalance);
 
 router.get('/export', leaveController.exportLeaves);
 
-
-router.get('/test', (req, res, next) => {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(404).json({ success: false, message: 'Not found' });
-  }
-  next();
-}, async (req, res) => {
-    try {
-      const User = require('../../models/User');
-      const Company = require('../../models/Company');
-      
-      const userCompanyId = req.user.company || req.user.companyId;
-      const userCompanyName = req.user.companyName;
-      
-      
-      const testUser = await User.findById(req.user._id).select('name email company companyId department');
-      const testCompany = await Company.findById(userCompanyId).select('companyName companyCode address');
-      
-      
-      const companyUsers = await User.find({ 
-        company: userCompanyId 
-      }).select('name email department').limit(5);
-      
-      res.status(200).json({
-        message: "Company filter test successful",
-        data: {
-          user: {
-            id: req.user._id,
-            name: req.user.name,
-            email: req.user.email,
-            companyId: userCompanyId,
-            companyName: userCompanyName,
-            department: req.user.department
-          },
-          company: testCompany || { message: "Company not found" },
-          companyUsersCount: companyUsers.length,
-          sampleCompanyUsers: companyUsers,
-          testInfo: {
-            timestamp: new Date().toISOString(),
-            endpoint: "/api/leaves/test/company-filter",
-            purpose: "Test company-based data isolation"
-          }
-        }
-      });
-    } catch (error) {
-      console.error("❌ Test route error:", error);
-      res.status(500).json({ 
-        message: "Test failed", 
-        error: error.message 
-      });
-    }
-  }
-);
 
 module.exports = router;

@@ -4,7 +4,7 @@ const Message = require("../models/Message");
 const User = require("../../../models/User");
 const Group = require("../../models/Group");
 const {notifyDirectUsers} = require("../../utils/systemNotificationService");
-const {deliveryReceiptsFor, recordSeen, recordConversationRead, seenByAllOthers} = require("../utils/messageReceipts");
+const {deliveryReceiptsFor, recordDelivered, recordSeen, recordConversationRead, seenByAllOthers} = require("../utils/messageReceipts");
 const {getCompanyOnlineUsers} = require("../../socket/presence");
 
 const getUserId = req => req.user._id?.toString() || req.user.id?.toString();
@@ -1139,6 +1139,43 @@ exports.getMessageInfo = async (req, res) => {
       deliveredTo,
       pending,
     });
+  } catch (error) {
+    res.status(500).json({success: false, message: error.message});
+  }
+};
+
+// The recipient's phone received the push for these messages (it has internet, even if the
+// app is closed): mark them delivered and tell each sender, so they see the double tick
+// like on WhatsApp. Only messages in the user's own conversations, never their own.
+exports.markMessagesDelivered = async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const ids = [...new Set((Array.isArray(req.body?.messageIds) ? req.body.messageIds : [req.body?.messageId])
+      .map(id => String(id || "")).filter(id => mongoose.Types.ObjectId.isValid(id)))].slice(0, 50);
+    if (!ids.length) return res.status(400).json({success: false, message: "messageIds are required"});
+
+    const messages = await Message.find({_id: {$in: ids}, companyId: req.user.company})
+      .select("_id conversationId sender").lean();
+    const conversationIds = [...new Set(messages.map(message => String(message.conversationId)))];
+    const memberOf = new Set((await Conversation.find({
+      _id: {$in: conversationIds},
+      companyId: req.user.company,
+      members: userId,
+    }).select("_id").lean()).map(conversation => String(conversation._id)));
+
+    const delivered = [];
+    for (const message of messages) {
+      if (String(message.sender) === userId || !memberOf.has(String(message.conversationId))) continue;
+      const added = await recordDelivered(message._id, req.user.company, [userId]);
+      if (!added.length) continue;
+      delivered.push(String(message._id));
+      global.io?.to(`user:${message.sender}`).emit("chat:message-delivered", {
+        messageId: message._id,
+        conversationId: message.conversationId,
+        deliveredTo: added,
+      });
+    }
+    res.json({success: true, delivered});
   } catch (error) {
     res.status(500).json({success: false, message: error.message});
   }

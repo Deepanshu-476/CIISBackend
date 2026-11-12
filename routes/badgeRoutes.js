@@ -15,6 +15,8 @@ const routers = {
 const AssetRequest = require('../HR-CDS/models/AssetRequest');
 const Leave = require('../HR-CDS/models/Leave');
 const Meeting = require('../HR-CDS/models/Meeting');
+const User = require('../models/User');
+const PagePermission = require('../models/PagePermission');
 const { autoRejectExpiredLeaves } = require('../HR-CDS/controllers/LeaveController');
 
 // Assets, leaves and meetings used to load the user's full lists (with populates) only to
@@ -44,6 +46,58 @@ const countUpcomingMeetings = (req, userId) => countOrNull(Meeting.countDocument
   date: { $gte: new Date() },
 }));
 
+const countPendingRegisterRequests = async (req) => {
+  try {
+    const user = req.user || {};
+    const role = String(user.companyRole || user.jobRole || user.role || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+    const isAdminRole = ['owner', 'admin', 'hr', 'super_admin', 'superadmin', 'company_owner', 'companyowner', 'managing_director', 'director'].includes(role);
+
+    if (!isAdminRole) {
+      const company = user.company;
+      const companyId = company?._id || company?.id || company;
+      if (!companyId) return 0;
+
+      const page = await PagePermission.findOne({ company: companyId, path: '/ciisUser/register-request' }).lean();
+      if (!page) return 0;
+
+      const currentUserId = String(user._id || user.id || '');
+      const pageUserIds = key => (page[key] || []).map(item => String(item?.user?._id || item?.user || '')).filter(Boolean);
+      const allowedIds = new Set([
+        ...pageUserIds('viewUsers'),
+        ...pageUserIds('editUsers'),
+        ...pageUserIds('approvers'),
+        ...pageUserIds('deleteUsers')
+      ]);
+
+      if (!allowedIds.has(currentUserId)) return 0;
+    }
+
+    const company = user.company;
+    const companyId = company?._id || company?.id || company;
+    const filter = {};
+    if (companyId) {
+      filter.company = companyId;
+    } else if (!['super_admin', 'superadmin'].includes(role)) {
+      return 0;
+    }
+
+    filter.$or = [
+      { registrationStatus: 'pending' },
+      { registrationSource: 'self_register', isActive: false },
+      {
+        registrationSource: { $exists: false },
+        registrationStatus: { $exists: false },
+        isActive: false
+      }
+    ];
+
+    return await User.countDocuments(filter);
+  } catch (err) {
+    console.error('Badge count pending register requests error:', err.message);
+    return null;
+  }
+};
+
 const BADGE_TTL_MS = 30 * 1000;
 
 const pendingFromStats = body => {
@@ -58,13 +112,14 @@ const ok = result => result && result.status < 400 && result.body !== undefined;
 
 const buildCounts = async (req, includeCrm) => {
   const userId = String(req.user._id || req.user.id);
-  const [selfTasks, assignedTasks, assets, meetings, alerts, leaves, crm] = await Promise.all([
+  const [selfTasks, assignedTasks, assets, meetings, alerts, leaves, registerRequests, crm] = await Promise.all([
     internalGet(routers.selfTasks, req, '/stats'),
     internalGet(routers.assignedTasks, req, '/to-me/stats'),
     countPendingAssets(req),
     countUpcomingMeetings(req, userId),
     internalGet(routers.alerts, req, '/unread/count?mine=1'),
     countPendingLeaves(req),
+    countOrNull(countPendingRegisterRequests(req)),
     includeCrm ? internalGet(routers.crmAdmin, req, '/dashboard') : Promise.resolve(null),
   ]);
 
@@ -77,6 +132,7 @@ const buildCounts = async (req, includeCrm) => {
   if (typeof assets === 'number') counts.assets = assets;
   if (typeof leaves === 'number') counts.leaves = leaves;
   if (typeof meetings === 'number') counts.meetings = meetings;
+  if (typeof registerRequests === 'number') counts.registerRequests = registerRequests;
   if (ok(alerts) && typeof alerts.body?.count === 'number') counts.alerts = alerts.body.count;
   if (crm && ok(crm)) {
     const metrics = crm.body?.metrics || {};

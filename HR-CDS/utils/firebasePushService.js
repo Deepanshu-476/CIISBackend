@@ -108,7 +108,7 @@ const loadFirebaseAdmin = () => {
       attemptedPaths: credentialPaths,
       projectId: null,
     };
-    console.warn('[FCM DEBUG] firebase-admin:disabled-missing-credentials', {
+    console.warn('[FCM] firebase-admin:disabled-missing-credentials', {
       at: new Date().toISOString(),
       attemptedPaths: credentialPaths,
     });
@@ -122,7 +122,7 @@ const loadFirebaseAdmin = () => {
       attemptedPaths: firebaseStatus.attemptedPaths,
       projectId: null,
     };
-    console.warn('[FCM DEBUG] firebase-admin:disabled-error', {
+    console.warn('[FCM] firebase-admin:disabled-error', {
       at: new Date().toISOString(),
       message: error.message,
       stack: error.stack,
@@ -286,7 +286,8 @@ exports.sendPushToUsers = async ({userIds, title, body, data = {}}) => {
         payload: {
           aps: {
             ...(!isCall || isIncomingCall ? {sound: 'default'} : {}),
-            ...(isCall && {contentAvailable: true}),
+            // Chat pushes also wake the iOS app briefly so it can report the message as delivered.
+            ...((isCall || ['chat_message', 'group_chat_message'].includes(data.type)) && {contentAvailable: true}),
             ...(isIncomingCall && {alert: {title, body}}),
           },
         },
@@ -350,7 +351,7 @@ exports.sendPushToUsers = async ({userIds, title, body, data = {}}) => {
         lastError = err;
         attempt += 1;
         const backoff = 200 * Math.pow(2, attempt); 
-        console.warn('[FCM DEBUG] firebase:batch-exception', {
+        console.warn('[FCM] firebase:batch-exception', {
           at: new Date().toISOString(),
           batchIndex: b,
           attempt,
@@ -363,7 +364,7 @@ exports.sendPushToUsers = async ({userIds, title, body, data = {}}) => {
     }
 
     if (attempt >= 3 && lastError) {
-      console.error('[FCM DEBUG] firebase:batch-failed-final', {
+      console.error('[FCM] firebase:batch-failed-final', {
         at: new Date().toISOString(),
         batchIndex: b,
         attempts: attempt,
