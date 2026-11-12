@@ -471,7 +471,7 @@ function extractMultipleAssignees(text) {
       const keLiyeMatch = clean.match(/(?:^|\s)([a-zA-Z\u0900-\u097F\s,&+]+?)\s+ke\s+liye\b/i);
       if (keLiyeMatch && keLiyeMatch[1]) {
         candidateSegment = keLiyeMatch[1];
-      } else if (!/(?:project|task|task\s+ka\s+naam|title|description|due\s+date|priority|status|reminder|banao|create|प्रोजेक्ट|प्रजेक्ट|प्रोज़ेक्ट|प्रोजैक्ट|टास्क|बनाओ|बना\s*दो|बनाइए|बनाइये|क्रिएट|नया|नई|नयी|नाम)/iu.test(clean) && (clean.includes(',') || clean.includes('&') || clean.includes('+') || clean.includes('और') || clean.includes('तथा') || /\b(?:and|aur|or|plus|tatha)\b/i.test(clean))) {
+      } else if (!/(?:project|task|task\s+ka\s+naam|title|description|due\s+date|priority|status|reminder|checkpoints?|चेकपॉइंट्स?|चेकपॉइंट|banao|create|प्रोजेक्ट|प्रजेक्ट|प्रोज़ेक्ट|प्रोजैक्ट|टास्क|बनाओ|बना\s*दो|बनाइए|बनाइये|क्रिएट|नया|नई|नयी|नाम)/iu.test(clean) && (clean.includes(',') || clean.includes('&') || clean.includes('+') || clean.includes('और') || clean.includes('तथा') || /\b(?:and|aur|or|plus|tatha)\b/i.test(clean))) {
         candidateSegment = clean;
       }
     }
@@ -838,6 +838,38 @@ function parseHinglishDateTime(rawText, now = new Date(), referenceDate = null) 
   return toIstIsoString(targetDateObj);
 }
 
+function parseCheckpointItems(text) {
+  if (!text || typeof text !== 'string') return [];
+  const trimmed = text.trim();
+  if (!trimmed || isSkip(trimmed) || isSkipAll(trimmed)) return [];
+
+  // Remove leading prefixes like "checkpoints:", "checkpoints hain", "add checkpoints", "checkpoint:", etc.
+  let cleaned = trimmed.replace(/^(?:add\s+)?(?:checkpoints?|चेकपॉइंट्स?|चेकपॉइंट)\s*(?:hain|hai|rakhein|rakho|add\s*karein|add\s*karo|banao|dalo)?\s*[:=-]?\s*/i, '');
+  cleaned = cleaned.replace(/^(?:add\s+checkpoints?|naye\s+checkpoints?)\s*[:=-]?\s*/i, '');
+
+  if (!cleaned.trim()) return [];
+
+  // Split by newlines, semicolons, or commas
+  // Note: Comma is the primary separator requested: "test 1, checking crm , testing"
+  const rawParts = cleaned.split(/[\r\n;]+|(?<=[^,;])\s*,\s*/);
+
+  const items = [];
+  for (let part of rawParts) {
+    if (!part) continue;
+    // Strip leading number / bullet prefix like "1.", "1)", "-", "*", "•", "checkpoint 1:"
+    part = part.trim()
+      .replace(/^(?:checkpoint\s*\d+[:\s\-\.]*)/i, '')
+      .replace(/^(?:\d+[\.\)\-]|[-*•])\s*/, '')
+      .trim();
+    // Strip trailing punctuation
+    part = part.replace(/[.,;]+$/, '').trim();
+    if (part.length > 0 && !isSkip(part) && !isFillerPhrase(part)) {
+      items.push({ title: part, completed: false });
+    }
+  }
+  return items;
+}
+
 /**
  * Deterministically extract title, description, priority, etc. from common Hinglish patterns.
  */
@@ -1035,11 +1067,11 @@ function parseHinglishSlots(rawText, now = new Date(), referenceDate = null) {
   }
 
   // 6. Checkpoints Extraction
-  const cpMatch = normalized.match(/checkpoints?\s*:\s*(.+?)(?:\s+and|\s+aur|\s+due|$)/i);
+  const cpMatch = normalized.match(/(?:add\s+)?(?:checkpoints?|चेकपॉइंट्स?|चेकपॉइंट)\s*(?:hain|hai|rakhein|rakho|add\s*karein|add\s*karo|banao|dalo)?\s*[:=-]?\s*(.+?)(?=\s+(?:status|स्टेटस|priority|प्रायोरिटी|due\s+date|due|deadline|reminder|रिमाइंडर|repeat|attachments?|assign|kal|cal|kl|aaj|today|tomorrow|\bby\b)|$)/i);
   if (cpMatch && cpMatch[1]) {
-    const items = cpMatch[1].split(/[,;]|\baur\b|\band\b/).map(s => s.trim()).filter(Boolean);
+    const items = parseCheckpointItems(cpMatch[1]);
     if (items.length > 0) {
-      slots.checkpoints = items.map(item => ({ title: item, completed: false }));
+      slots.checkpoints = items;
     }
   }
 
@@ -1047,19 +1079,34 @@ function parseHinglishSlots(rawText, now = new Date(), referenceDate = null) {
   if (isSelfPhrase(normalized)) {
     slots.isSelf = true;
   }
-  const multiAssignee = extractMultipleAssignees(normalized);
-  if (multiAssignee.names && multiAssignee.names.length > 0) {
-    slots.assigneeName = multiAssignee.names.length > 1 ? multiAssignee.names.join(', ') : multiAssignee.names[0];
-    slots.pendingAssigneeNames = [...multiAssignee.names];
-    slots.wantsOthers = true;
-    slots.taskFor = 'others';
-  } else {
-    const assigneeMention = extractAssigneeMention(normalized);
-    if (assigneeMention) {
-      slots.assigneeName = assigneeMention;
-      slots.pendingAssigneeNames = [assigneeMention];
+  if (!slots.checkpoints || slots.checkpoints.length === 0) {
+    const multiAssignee = extractMultipleAssignees(normalized);
+    if (multiAssignee.names && multiAssignee.names.length > 0) {
+      slots.assigneeName = multiAssignee.names.length > 1 ? multiAssignee.names.join(', ') : multiAssignee.names[0];
+      slots.pendingAssigneeNames = [...multiAssignee.names];
       slots.wantsOthers = true;
       slots.taskFor = 'others';
+    } else {
+      const assigneeMention = extractAssigneeMention(normalized);
+      if (assigneeMention) {
+        slots.assigneeName = assigneeMention;
+        slots.pendingAssigneeNames = [assigneeMention];
+        slots.wantsOthers = true;
+        slots.taskFor = 'others';
+      }
+    }
+  } else {
+    // Checkpoints present: only extract assignee if explicit assignment syntax is present (e.g. "assign to Rahul" or "Rahul ko")
+    const assignToMatch = normalized.match(/\b(?:assign(?:ed)?\s+to|task\s+to)\s+([a-zA-Z\u0900-\u097F\s,&+]+?)(?=\s+(?:due|kal|aaj|priority|status|description|checkpoints|$))/i);
+    const koMatch = normalized.match(/(?:^|\s)([a-zA-Z\u0900-\u097F\s,&+]+?)\s+(?:ko|co|koh|kor|core|cor|के|को)\b/i);
+    if (assignToMatch || koMatch) {
+      const multiAssignee = extractMultipleAssignees(normalized);
+      if (multiAssignee.names && multiAssignee.names.length > 0) {
+        slots.assigneeName = multiAssignee.names.length > 1 ? multiAssignee.names.join(', ') : multiAssignee.names[0];
+        slots.pendingAssigneeNames = [...multiAssignee.names];
+        slots.wantsOthers = true;
+        slots.taskFor = 'others';
+      }
     }
   }
 
@@ -1466,6 +1513,7 @@ module.exports = {
   parseProjectDate,
   parseProjectStatusHinglish,
   parseProjectPriorityHinglish,
+  parseCheckpointItems,
 };
 
 

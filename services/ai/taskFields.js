@@ -6,7 +6,7 @@
  * anti-loop re-ask templates, chips, defaults, and normalisers.
  */
 
-const { toIstIsoString, parseHinglishDateTime } = require('./hinglishParser');
+const { toIstIsoString, parseHinglishDateTime, parseCheckpointItems } = require('./hinglishParser');
 
 const TASK_FIELD_ORDER = [
   'assignee',
@@ -485,20 +485,20 @@ const TASK_FIELDS = {
     required: false,
     askOrder: 10,
     question: {
-      reply: "Koi checkpoints add karne hain? Ek ek bol dein, ya 'koi nahi' bol dein.",
-      replyEn: "Would you like to add checkpoints? Say them one by one, or say 'Skip'.",
-      speech: 'कोई चेकपॉइंट्स जोड़ने हैं? एक-एक बोल दें, या कोई नहीं बोल दें।',
-      speechEn: 'Would you like to add checkpoints?',
-      speakText: 'Checkpoints add karne hain? Ek ek bol dein, ya skip bol dein.',
-      speakTextHi: 'कोई Checkpoints add करने हैं? एक-एक बोल दें, या skip बोल दें।',
+      reply: 'Task mein koi checkpoints add karne hain? Comma (,) daal kar likhein (jaise "test 1, checking crm, testing") ya Skip dabayein:',
+      replyEn: 'Would you like to add checkpoints? You can list them separated by commas (e.g. "test 1, checking crm, testing") or tap Skip:',
+      speech: 'टास्क में कोई चेकपॉइंट्स जोड़ने हैं? कॉमा लगाकर बताएं या स्किप दबाएं।',
+      speechEn: 'Would you like to add checkpoints? You can list them separated by commas or tap Skip.',
+      speakText: 'Checkpoints add karne hain? Comma daal kar likhein ya skip dabayein.',
+      speakTextHi: 'Checkpoints जोड़ने हैं? कॉमा डालकर बताएं या Skip दबाएं।',
     },
     reAskQuestion: {
-      reply: "Checkpoints add nahi karne to 'Skip' par tap karein.",
-      replyEn: "If you do not want to add checkpoints, tap 'Skip'.",
-      speech: 'चेकपॉइंट्स नहीं जोड़ने तो स्किप पर टैप करें।',
-      speechEn: 'If you do not want to add checkpoints, tap Skip.',
-      speakText: 'Checkpoints add nahi karne to Skip par tap karein.',
-      speakTextHi: 'Checkpoints नहीं जोड़ने तो Skip पर tap करें।',
+      reply: 'Checkpoints comma (,) daal kar likhein (jaise "test 1, checking crm, testing") ya Skip dabayein:',
+      replyEn: 'Please enter checkpoints separated by commas (e.g. "test 1, checking crm, testing") or tap Skip:',
+      speech: 'चेकपॉइंट्स कॉमा लगाकर बताएं या स्किप दबाएं।',
+      speechEn: 'Please enter checkpoints separated by commas or tap Skip.',
+      speakText: 'Checkpoints comma daal kar likhein ya Skip dabayein.',
+      speakTextHi: 'Checkpoints कॉमा डालकर बताएं या Skip दबाएं।',
     },
     chips: () => [
       { label: 'Koi nahi / Skip', action: { type: 'skip', field: 'checkpoints' } },
@@ -516,11 +516,7 @@ const TASK_FIELDS = {
           .filter((item) => item?.title);
       }
       if (typeof val === 'string' && val.trim()) {
-        return val
-          .split(/[,;]|\band\b|\baur\b/)
-          .map((s) => s.trim())
-          .filter(Boolean)
-          .map((title) => ({ title, completed: false }));
+        return parseCheckpointItems(val);
       }
       return [];
     },

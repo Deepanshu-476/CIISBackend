@@ -502,6 +502,10 @@ RULES FOR EXTRACTION:
    - "overdue" -> status: "overdue"
    - "reopen" -> status: "reopen"
 
+7. CHECKPOINTS EXTRACTION:
+   - "checkpoints test 1, checking crm, testing", "checkpoints: A, B, C", "add checkpoints X, Y" -> checkpoints: [{"title": "test 1", "completed": false}, {"title": "checking crm", "completed": false}, {"title": "testing", "completed": false}]
+   - Separate multiple comma-separated items into distinct checkpoint objects. Empty array [] if none mentioned.
+
 FEW-SHOT EXAMPLES:
 Example 1:
 User: "Hello, my name is Kanika and task name is A Voice Assistant, description, creating pipeline of A Voice Assistant, priority high due date, jn tomorrow 10:10 am"

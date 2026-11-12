@@ -94,7 +94,7 @@ const { resolveAssignee, escapeRegex } = require('./assigneeResolver');
 const { getModelName } = require('./llm');
 const { answerWithGroqCRM } = require('./groqCrmHelper');
 const { TASK_FIELDS, TASK_FIELD_ORDER } = require('./taskFields');
-const { parseHinglishSlots, isSkip, isSkipAll, isSelfPhrase, isFillerPhrase, extractAssigneeMention, extractMultipleAssignees, isInvalidOrCommandTitle, cleanAssigneeName, isValidAssigneeCandidate, detectPersonInActionTitle } = require('./hinglishParser');
+const { parseHinglishSlots, isSkip, isSkipAll, isSelfPhrase, isFillerPhrase, extractAssigneeMention, extractMultipleAssignees, isInvalidOrCommandTitle, cleanAssigneeName, isValidAssigneeCandidate, detectPersonInActionTitle, parseCheckpointItems } = require('./hinglishParser');
 const { detectUserIntent, normalizeTranscript } = require('./sttNormalizer');
 const User = require('../../models/User');
 const Department = require('../../models/Department');
@@ -5006,6 +5006,11 @@ const lastAskedField = currentDraft.asked.length > 0
           }
           if (!currentDraft.asked.includes('subscriptionStartDate')) currentDraft.asked.push('subscriptionStartDate');
           currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'subscriptionStartDate');
+        } else if (action.field === 'checkpoints') {
+          const parsed = Array.isArray(action.value) ? action.value : parseCheckpointItems(String(action.value || ''));
+          currentDraft.checkpoints = parsed;
+          if (!currentDraft.asked.includes('checkpoints')) currentDraft.asked.push('checkpoints');
+          currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'checkpoints');
         } else if (action.field) {
           currentDraft[action.field] = action.value;
           if (!currentDraft.asked.includes(action.field)) currentDraft.asked.push(action.field);
@@ -5247,6 +5252,10 @@ const lastAskedField = currentDraft.asked.length > 0
           }
           if (!currentDraft.asked.includes('subscriptionStartDate')) currentDraft.asked.push('subscriptionStartDate');
           currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'subscriptionStartDate');
+        } else if (action.field === 'checkpoints') {
+          currentDraft.checkpoints = [];
+          currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'checkpoints');
+          currentDraft.asked = currentDraft.asked.filter((f) => f !== 'checkpoints');
         } else if (action.field) {
           currentDraft.skipped = currentDraft.skipped.filter((f) => f !== action.field);
           currentDraft[action.field] = null;
@@ -7837,6 +7846,35 @@ const lastAskedField = currentDraft.asked.length > 0
           detSlots.assigneeName = trimmedMessage;
         }
 
+        if (lastAskedField === 'checkpoints' && !actionHandled) {
+          detSlots.assigneeName = null;
+          detSlots.pendingAssigneeNames = [];
+          if (currentDraft.intent === 'self_task') {
+            currentDraft.assigneeName = null;
+            currentDraft.assigneeId = null;
+            currentDraft.assignees = [];
+            currentDraft.assignedUsers = [];
+            currentDraft.pendingAssigneeNames = [];
+          }
+          if (isSkip(trimmedMessage) || isSkipAll(trimmedMessage)) {
+            currentDraft.checkpoints = [];
+            if (!currentDraft.skipped.includes('checkpoints')) currentDraft.skipped.push('checkpoints');
+            if (!currentDraft.asked.includes('checkpoints')) currentDraft.asked.push('checkpoints');
+            actionHandled = true;
+          } else {
+            const parsedCps = parseCheckpointItems(trimmedMessage);
+            if (parsedCps.length > 0) {
+              const isAppending = /(?:add|aur|ek\s+aur)\s+checkpoint/i.test(trimmedMessage);
+              const existing = Array.isArray(currentDraft.checkpoints) ? currentDraft.checkpoints : [];
+              currentDraft.checkpoints = (isAppending && existing.length > 0) ? [...existing, ...parsedCps] : parsedCps;
+              detSlots.checkpoints = currentDraft.checkpoints;
+              currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'checkpoints');
+              if (!currentDraft.asked.includes('checkpoints')) currentDraft.asked.push('checkpoints');
+              actionHandled = true;
+            }
+          }
+        }
+
         const { redactPIIForLLM } = require('./clientSlotFiller');
         const { redactedText: sanitizedForLlm, piiMap } = redactPIIForLLM(trimmedMessage);
         if (piiMap.email && !currentDraft.email) currentDraft.email = piiMap.email;
@@ -9173,6 +9211,9 @@ const lastAskedField = currentDraft.asked.length > 0
     } else if (nextFieldKey === 'reminder') {
       defaultEnReply = 'Would you like to set a reminder? (Yes or No)';
       defaultEnSpeech = 'Would you like to set a reminder?';
+    } else if (nextFieldKey === 'checkpoints') {
+      defaultEnReply = 'Would you like to add checkpoints? You can list them separated by commas (e.g. "test 1, checking crm, testing") or tap Skip:';
+      defaultEnSpeech = 'Would you like to add checkpoints? You can list them separated by commas or tap Skip.';
     }
 
     let replyText = isPastDueTime
