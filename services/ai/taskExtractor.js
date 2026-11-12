@@ -587,20 +587,8 @@ Output:
     if (providerErr && (providerErr.code === 'LLM_AUTH' || providerErr.code === 'LLM_MODEL')) {
       throw providerErr;
     }
-    if (providerErr && providerErr.code === 'LLM_RATE_LIMIT') {
-      return null;
-    }
-
-    try {
-      rawResult = await structuredLlm.invoke(inputMessages);
-      if (req) {
-        await consumeTaskBudget(req).catch(err => console.error('consumeTaskBudget error:', err.message));
-      }
-    } catch (secondErr) {
-      classifyAndLogGroqError(secondErr);
-      // PART C Rule 4: DO NOT fail the whole turn on LLM error. Return null so deterministic parser result is used.
-      return null;
-    }
+    // Fail-fast on rate limit, timeout, or network error so deterministic parser handles the request instantly
+    return null;
   }
 
   const parsed = (schema || taskDraftSchema).safeParse(rawResult);
