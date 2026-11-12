@@ -27,13 +27,13 @@ const hasLLM = () => {
   return true;
 };
 
-const getModel = ({ temperature = 0, maxTokens = 1500, reasoningEffort = 'low' } = {}) => {
+const getModel = ({ temperature = 0, maxTokens = 1500, reasoningEffort = 'low', apiKey = null } = {}) => {
   hasLLM();
   const keys = getOrderedKeys();
-  const apiKey = (keys[0] || '').trim();
+  const activeKey = (apiKey || keys[0] || '').trim();
 
   return new ChatGroq({
-    apiKey,
+    apiKey: activeKey,
     model: getModelName(),
     temperature,
     maxTokens,

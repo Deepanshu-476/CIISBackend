@@ -83,7 +83,15 @@ const aiTaskBudget = async (req, res, next) => {
 
     const currentCount = record ? record.count || 0 : 0;
 
-    if (currentCount >= limit) {
+    // Action-based turns, cancel, confirm, and deterministic button clicks should NOT be blocked by budget check
+    const isActionOrDeterministic = Boolean(
+      req.body?.action ||
+      req.body?.pick ||
+      req.body?.pickProject ||
+      (req.body?.message && /^(?:create\s+(?:personal\s+)?task|create\s+task\s+in\s+project|assign\s+task\s+to\s+someone|view\s+tasks|skip|cancel|edit)$/i.test(String(req.body.message).trim()))
+    );
+
+    if (currentCount >= limit && !isActionOrDeterministic) {
       return res.status(429).json({
         success: false,
         message: 'Aaj ka daily AI task budget exceed ho gaya hai. Kripya kal dobara koshish karein.',
