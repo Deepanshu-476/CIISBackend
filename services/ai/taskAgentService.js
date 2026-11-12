@@ -101,6 +101,7 @@ const Department = require('../../models/Department');
 const SidebarConfig = require('../../models/SidebarConfig');
 const ClientTask = require('../../HR-CDS/models/ClientTask');
 const Client = require('../../HR-CDS/models/Client');
+const ClientPlan = require('../../HR-CDS/models/ClientPlan');
 const { Project: DefaultProjectModel } = require('../../HR-CDS/models/Project');
 const {
   resolveProject,
@@ -3325,33 +3326,88 @@ async function parseTaskRequest({
   const rawCompanyCode = req?.user?.companyCode || req?.user?.company?.companyCode || '';
   const cleanCompanyCode = rawCompanyCode;
   const baseCode = typeof rawCompanyCode === 'string' ? rawCompanyCode.split('-')[0].trim() : '';
-  const companyCodeFilter = baseCode
+  const companyCodeFilter = (baseCode && baseCode !== rawCompanyCode)
     ? { $regex: new RegExp('^' + escapeRegex(baseCode) + '(-|$)', 'i') }
     : (rawCompanyCode || undefined);
 
   // Determine the active field that was asked on the previous turn
-    // Ensure companyUsers, services, clientPlans, and accessibleClients are populated
+  // Ensure companyUsers, services, clientPlans, and accessibleClients are populated
   const isDbConnected = Boolean(mongoose && mongoose.connection && mongoose.connection.readyState === 1);
   let companyUsers = Array.isArray(deps.companyUsers) ? deps.companyUsers : (Array.isArray(scope?.users) ? scope.users : []);
-  if ((!companyUsers || companyUsers.length === 0) && (deps.User || isDbConnected)) {
-    const UModel = deps.User || (mongoose && mongoose.models && mongoose.models.User) || User;
-    if (UModel && typeof UModel.find === 'function') {
-      try {
-        const uQuery = {
-          isActive: { $ne: false },
-          companyRole: { $not: /^client$/i },
-          role: { $not: /^client$/i },
-          ...(companyCodeFilter ? { companyCode: companyCodeFilter } : (cleanCompanyCode ? { companyCode: cleanCompanyCode } : {}))
-        };
-        companyUsers = await UModel.find(uQuery)
-          .select('name department role jobRole companyRole email company companyCode')
-          .populate('department', 'name')
-          .lean();
-      } catch (err) {
-        console.warn('[taskAgentService] Error loading companyUsers:', err);
+  let companyServices = Array.isArray(deps.services) ? deps.services : (Array.isArray(scope?.services) ? scope.services : []);
+  let companyPlans = Array.isArray(deps.clientPlans) ? deps.clientPlans : (Array.isArray(scope?.clientPlans) ? scope.clientPlans : []);
+  let accessibleClients = Array.isArray(deps.accessibleClients) ? deps.accessibleClients : [];
+
+  await Promise.all([
+    (async () => {
+      if ((!companyUsers || companyUsers.length === 0) && (deps.User || isDbConnected)) {
+        const UModel = deps.User || (mongoose && mongoose.models && mongoose.models.User) || User;
+        if (UModel && typeof UModel.find === 'function') {
+          try {
+            const uQuery = {
+              isActive: { $ne: false },
+              companyRole: { $not: /^client$/i },
+              role: { $not: /^client$/i },
+              ...(companyCodeFilter ? { companyCode: companyCodeFilter } : (cleanCompanyCode ? { companyCode: cleanCompanyCode } : {}))
+            };
+            companyUsers = await UModel.find(uQuery)
+              .select('name department role jobRole companyRole email company companyCode')
+              .populate('department', 'name')
+              .lean();
+          } catch (err) {
+            console.warn('[taskAgentService] Error loading companyUsers:', err);
+          }
+        }
       }
-    }
-  }
+    })(),
+    (async () => {
+      if ((!companyServices || companyServices.length === 0) && (deps.Service || isDbConnected)) {
+        const SModel = deps.Service || (mongoose && mongoose.models && mongoose.models.Service);
+        if (SModel && typeof SModel.find === 'function') {
+          try {
+            const sQuery = cleanCompanyCode ? { companyCode: cleanCompanyCode } : {};
+            const docs = await SModel.find(sQuery).select('servicename name').lean();
+            companyServices = docs.map(d => d.servicename || d.name).filter(Boolean);
+          } catch (err) {
+            console.warn('[taskAgentService] Error loading services:', err);
+          }
+        }
+      }
+    })(),
+    (async () => {
+      if ((!companyPlans || companyPlans.length === 0) && (deps.ClientPlan || isDbConnected)) {
+        const PModel = deps.ClientPlan || (mongoose && mongoose.models && mongoose.models.ClientPlan) || ClientPlan;
+        if (PModel && typeof PModel.find === 'function') {
+          try {
+            const pQuery = {
+              isActive: { $ne: false },
+              ...(cleanCompanyCode ? { companyCode: cleanCompanyCode } : {})
+            };
+            companyPlans = await PModel.find(pQuery).lean();
+          } catch (err) {
+            console.warn('[taskAgentService] Error loading clientPlans:', err);
+          }
+        }
+      }
+    })(),
+    (async () => {
+      if ((!accessibleClients || accessibleClients.length === 0) && (deps.Client || isDbConnected)) {
+        const CModel = deps.Client || (mongoose && mongoose.models && mongoose.models.Client) || Client;
+        if (CModel && typeof CModel.find === 'function') {
+          try {
+            const cQuery = cleanCompanyCode ? { companyCode: cleanCompanyCode } : {};
+            accessibleClients = await CModel.find(cQuery)
+              .select('client company services activeClientPlan projectManager status email phone progress')
+              .populate('activeClientPlan', 'name price services')
+              .lean();
+          } catch (err) {
+            console.warn('[taskAgentService] Error loading accessibleClients:', err);
+          }
+        }
+      }
+    })()
+  ]);
+
   if (Array.isArray(companyUsers)) {
     companyUsers = companyUsers.filter(u => {
       const cRole = String(u.companyRole || u.role || '').toLowerCase();
@@ -3361,56 +3417,11 @@ async function parseTaskRequest({
   }
   deps.companyUsers = companyUsers;
 
-  let companyServices = Array.isArray(deps.services) ? deps.services : (Array.isArray(scope?.services) ? scope.services : []);
-  if ((!companyServices || companyServices.length === 0) && (deps.Service || isDbConnected)) {
-    const SModel = deps.Service || (mongoose && mongoose.models && mongoose.models.Service);
-    if (SModel && typeof SModel.find === 'function') {
-      try {
-        const sQuery = cleanCompanyCode ? { companyCode: cleanCompanyCode } : {};
-        const docs = await SModel.find(sQuery).select('servicename name').lean();
-        companyServices = docs.map(d => d.servicename || d.name).filter(Boolean);
-      } catch (err) {
-        console.warn('[taskAgentService] Error loading services:', err);
-      }
-    }
-  }
   if (!companyServices || companyServices.length === 0) {
     companyServices = ['Cloud Architecture', 'Mobile App Development', 'SEO Optimization', 'UI/UX Design'];
   }
   deps.services = companyServices;
-
-  let companyPlans = Array.isArray(deps.clientPlans) ? deps.clientPlans : (Array.isArray(scope?.clientPlans) ? scope.clientPlans : []);
-  if ((!companyPlans || companyPlans.length === 0) && (deps.ClientPlan || isDbConnected)) {
-    const PModel = deps.ClientPlan || (mongoose && mongoose.models && mongoose.models.ClientPlan);
-    if (PModel && typeof PModel.find === 'function') {
-      try {
-        const pQuery = {
-          isActive: { $ne: false },
-          ...(cleanCompanyCode ? { companyCode: cleanCompanyCode } : {})
-        };
-        companyPlans = await PModel.find(pQuery).lean();
-      } catch (err) {
-        console.warn('[taskAgentService] Error loading clientPlans:', err);
-      }
-    }
-  }
   deps.clientPlans = companyPlans;
-
-  let accessibleClients = Array.isArray(deps.accessibleClients) ? deps.accessibleClients : [];
-  if ((!accessibleClients || accessibleClients.length === 0) && (deps.Client || isDbConnected)) {
-    const CModel = deps.Client || (mongoose && mongoose.models && mongoose.models.Client);
-    if (CModel && typeof CModel.find === 'function') {
-      try {
-        const cQuery = cleanCompanyCode ? { companyCode: cleanCompanyCode } : {};
-        accessibleClients = await CModel.find(cQuery)
-          .select('client company services activeClientPlan projectManager status email phone progress')
-          .populate('activeClientPlan', 'name price services')
-          .lean();
-      } catch (err) {
-        console.warn('[taskAgentService] Error loading accessibleClients:', err);
-      }
-    }
-  }
   deps.accessibleClients = accessibleClients;
 
   let clientTasks = Array.isArray(deps.clientTasks) ? deps.clientTasks : [];
@@ -7834,12 +7845,41 @@ const lastAskedField = currentDraft.asked.length > 0
           };
         }
 
-        if (lastAskedField === 'description' && (!currentDraft.description) && (!detSlots.description) && trimmedMessage.length <= 300 && !isPureIntent && !isSkip(trimmedMessage)) {
+        if (!actionHandled && lastAskedField === 'description' && (!currentDraft.description) && trimmedMessage.length <= 300 && !isPureIntent && !isSkip(trimmedMessage)) {
           detSlots.description = trimmedMessage;
+          currentDraft.description = trimmedMessage;
+          if (!currentDraft.asked.includes('description')) currentDraft.asked.push('description');
+          currentDraft.skipped = (currentDraft.skipped || []).filter((f) => f !== 'description');
+          actionHandled = true;
         }
 
-        if (lastAskedField === 'title' && (!currentDraft.title) && (!detSlots.title) && trimmedMessage.length <= 100 && !isFillerPhrase(trimmedMessage) && !isPureIntent && !isSkip(trimmedMessage)) {
+        if (!actionHandled && lastAskedField === 'title' && (!currentDraft.title) && trimmedMessage.length <= 100 && !isFillerPhrase(trimmedMessage) && !isPureIntent && !isSkip(trimmedMessage)) {
           detSlots.title = trimmedMessage;
+          currentDraft.title = trimmedMessage;
+          if (!currentDraft.asked.includes('title')) currentDraft.asked.push('title');
+          currentDraft.skipped = (currentDraft.skipped || []).filter((f) => f !== 'title');
+          actionHandled = true;
+        }
+
+        if (!actionHandled && (lastAskedField === 'dueDateTime' || lastAskedField === 'dueDate') && detSlots.dueDateTime) {
+          currentDraft.dueDateTime = detSlots.dueDateTime;
+          if (!currentDraft.asked.includes('dueDateTime')) currentDraft.asked.push('dueDateTime');
+          currentDraft.skipped = (currentDraft.skipped || []).filter((f) => f !== 'dueDateTime');
+          actionHandled = true;
+        }
+
+        if (!actionHandled && lastAskedField === 'priorityDays' && detSlots.priorityDays) {
+          currentDraft.priorityDays = detSlots.priorityDays;
+          if (!currentDraft.asked.includes('priorityDays')) currentDraft.asked.push('priorityDays');
+          currentDraft.skipped = (currentDraft.skipped || []).filter((f) => f !== 'priorityDays');
+          actionHandled = true;
+        }
+
+        if (!actionHandled && lastAskedField === 'repeatPattern' && detSlots.repeatPattern) {
+          currentDraft.repeatPattern = detSlots.repeatPattern;
+          if (!currentDraft.asked.includes('repeatPattern')) currentDraft.asked.push('repeatPattern');
+          currentDraft.skipped = (currentDraft.skipped || []).filter((f) => f !== 'repeatPattern');
+          actionHandled = true;
         }
 
         if (lastAskedField === 'assignee' && (!currentDraft.assigneeId) && (!currentDraft.assigneeName) && (!detSlots.assigneeName) && trimmedMessage.length <= 50 && !isSkip(trimmedMessage)) {

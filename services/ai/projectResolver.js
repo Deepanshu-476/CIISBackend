@@ -225,10 +225,8 @@ async function getAccessibleProjects(req = {}, deps = {}) {
   }
 
   const projects = await ProjectModel.find(query)
-    .select('projectName description status startDate endDate priority users tasks createdBy company companyCode')
+    .select('projectName description status startDate endDate priority users createdBy company companyCode tasks._id tasks.status')
     .populate('users', '_id name email role jobRole companyRole profileImage')
-    .populate('tasks.assignedTo', '_id name email role jobRole companyRole')
-    .populate('tasks.assignedUsers', '_id name email role jobRole companyRole')
     .lean();
 
   // Guard against any leakage via hasProjectAccess

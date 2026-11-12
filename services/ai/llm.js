@@ -38,8 +38,8 @@ const getModel = ({ temperature = 0, maxTokens = 1500, reasoningEffort = 'low' }
     temperature,
     maxTokens,
     reasoningEffort,
-    maxRetries: 1,
-    timeout: 20000,
+    maxRetries: 0,
+    timeout: 8000,
   });
 };
 
