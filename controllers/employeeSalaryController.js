@@ -13,6 +13,7 @@ const PayrollRun = require("../models/PayrollRun");
 const Company = require("../models/Company");
 const { validateBulkEmployeeStatuses, applyBulkEmployeeTransition, deriveRunStatus } = require("../utils/payrollFlow");
 const { sendEmail } = require("../utils/sendEmail");
+const { scopedUserIds } = require('../utils/branchScope');
 
 const getCompany = (req) => req.user?.company?._id || req.user?.company || req.user?.companyId;
 const getActorName = (req) => req.user?.name || req.user?.fullName || req.user?.email || "Payroll User";
@@ -292,8 +293,10 @@ exports.payrollPreview = async (req, res) => {
     const rawAssignments = await populateQuery(EmployeeSalary.find({ company, status: "active" }))
       .populate("components.component", "name code type proRata")
       .lean();
+    const branchScope = await payrollScope(req);
     const assignments = rawAssignments.filter(item => {
       const u = item.user;
+      if (branchScope && !branchScope.has(String(u?._id || u || ""))) return false;
       if (!u) return false;
       if (u.isActive === false || u.isActive === "false") return false;
       const st = String(u.status || u.employeeStatus || "").toLowerCase().trim();
@@ -777,6 +780,53 @@ const calculatePayroll = async (req) => {
 
 const employeePayrollKey = (employee = {}) => String(employee.user?._id || employee.user || employee._id || "");
 
+// Branch rule for payroll (utils/branchScope): owner/admin see and run the whole company;
+// anyone else only the employees of their own branches. null = no limit.
+const payrollScope = async (req) => {
+  if (req._payrollScope !== undefined) return req._payrollScope;
+  const ids = await scopedUserIds(req.user);
+  req._payrollScope = ids ? new Set(ids.map(String)) : null;
+  return req._payrollScope;
+};
+const inPayrollScope = (scope, employee) => !scope || scope.has(employeePayrollKey(employee));
+const scopePayrollRun = (run, scope) => {
+  if (!scope || !run) return run;
+  const employees = (run.employees || []).filter(employee => inPayrollScope(scope, employee));
+  return { ...run, employees, totals: payrollTotals(employees), branchLimited: true };
+};
+
+// Route guard for whole-company payroll actions (approve/lock/reopen the run, policy settings):
+// only users without a branch limit (owner/admin) may change the run for everyone.
+exports.payrollCompanyWideGuard = async (req, res, next) => {
+  try {
+    if (!(await payrollScope(req))) return next();
+    return res.status(403).json({ success: false, message: "Only the owner or a company admin can change payroll for the whole company. You can work on the employees of your branches." });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+// Route guard for actions on one employee (body/query: month + employeeId).
+exports.payrollEmployeeBranchGuard = async (req, res, next) => {
+  try {
+    const scope = await payrollScope(req);
+    if (!scope) return next();
+    const employeeId = String(req.body?.employeeId || req.query?.employeeId || "").trim();
+    if (!employeeId) return next();
+    if (scope.has(employeeId)) return next();
+    const company = getCompany(req);
+    const month = String(req.body?.month || req.query?.month || "").trim();
+    const runQuery = { company, "employees._id": mongoose.isValidObjectId(employeeId) ? employeeId : null };
+    if (month) runQuery.month = month;
+    const run = await PayrollRun.findOne(runQuery).select("employees._id employees.user").lean();
+    const entry = (run?.employees || []).find(item => String(item._id || "") === employeeId);
+    if (entry && inPayrollScope(scope, entry)) return next();
+    return res.status(403).json({ success: false, message: "This employee is not in your branches." });
+  } catch (error) {
+    return next(error);
+  }
+};
+
 const withPayrollAdjustments = (employee = {}, adjustments = employee.adjustments || []) => {
   const safeAdjustments = (Array.isArray(adjustments) ? adjustments : []).map(item => ({ ...item, amount: Math.max(0, Number(item.amount || 0)) }));
   const adjustmentDeductions = Math.round(safeAdjustments.reduce((sum, item) => sum + Number(item.amount || 0), 0) * 100) / 100;
@@ -893,7 +943,7 @@ exports.getPayrollRun = async (req, res) => {
     }
     const run = await PayrollRun.findOne({ company, month }).lean();
     if (run) {
-      const displayRun = await fillMissingSalaryStructures(company, payrollRunJson(run));
+      const displayRun = scopePayrollRun(await fillMissingSalaryStructures(company, payrollRunJson(run)), await payrollScope(req));
       return res.json({ success: true, run: paginatePayrollRun(req, displayRun) });
     }
 
@@ -933,14 +983,17 @@ exports.generatePayrollRun = async (req, res) => {
 
     const existingAdjustments = new Map((existing?.employees || []).map(employee => [employeePayrollKey(employee), employee.adjustments || []]));
     const calculatedEmployees = calculation.employees.map(employee => withPayrollAdjustments(employee, existingAdjustments.get(employeePayrollKey(employee)) || []));
-    run.employees = calculatedEmployees;
-    run.totals = payrollTotals(calculatedEmployees);
+    // A branch-limited user recalculates only their branches; other branches' rows stay as they are.
+    const generateScope = await payrollScope(req);
+    const keptEmployees = generateScope ? (existing?.employees || []).filter(employee => !inPayrollScope(generateScope, employee)) : [];
+    run.employees = [...keptEmployees, ...calculatedEmployees];
+    run.totals = payrollTotals(run.employees);
     run.status = "Calculated";
     run.calculatedAt = new Date();
     run.updatedBy = actor;
     run.auditLog.push({ action: existing ? "Recalculate Payroll" : "Generate Payroll", fromStatus: previousStatus, toStatus: "Calculated", performedBy: actor, performedByName: getActorName(req) });
     await run.save();
-    return res.json({ success: true, message: "Payroll calculated and saved successfully.", run: payrollRunJson(run.toObject()) });
+    return res.json({ success: true, message: "Payroll calculated and saved successfully.", run: scopePayrollRun(payrollRunJson(run.toObject()), generateScope) });
   } catch (error) {
     return res.status(error.status || 500).json({ success: false, message: error.message || "Unable to generate payroll." });
   }
@@ -978,8 +1031,10 @@ exports.updatePayrollSettings = async (req, res) => {
     run.sandwichRuleEnabled = sandwichRuleEnabled;
     const existingAdjustments = new Map((run.employees || []).map(emp => [employeePayrollKey(emp), emp.adjustments || []]));
     const calculatedEmployees = calculation.employees.map(emp => withPayrollAdjustments(emp, existingAdjustments.get(employeePayrollKey(emp)) || []));
-    run.employees = calculatedEmployees;
-    run.totals = payrollTotals(calculatedEmployees);
+    const settingsScope = await payrollScope(req);
+    const keptEmployees = settingsScope ? (run.employees || []).filter(emp => !inPayrollScope(settingsScope, emp)) : [];
+    run.employees = [...keptEmployees, ...calculatedEmployees];
+    run.totals = payrollTotals(run.employees);
     run.status = "Calculated";
     run.calculatedAt = new Date();
     run.updatedBy = actor;
@@ -996,7 +1051,7 @@ exports.updatePayrollSettings = async (req, res) => {
     return res.json({
       success: true,
       message: "Payroll policy settings updated and payroll recalculated successfully.",
-      run: payrollRunJson(run.toObject())
+      run: scopePayrollRun(payrollRunJson(run.toObject()), settingsScope)
     });
   } catch (error) {
     console.error("Update payroll settings error:", error);
@@ -1319,7 +1374,7 @@ exports.getPayrollPayslips = async (req, res) => {
     const month = String(req.query.month || "").trim();
     const run = await PayrollRun.findOne({ company, month }).lean();
     if (!run) return res.status(404).json({ success: false, message: "Payroll run was not found." });
-    const displayRun = await fillMissingSalaryStructures(company, payrollRunJson(run));
+    const displayRun = scopePayrollRun(await fillMissingSalaryStructures(company, payrollRunJson(run)), await payrollScope(req));
     const approvedEmployees = (displayRun.employees || []).filter(employee => ["Approved", "Locked"].includes(employee.payrollStatus));
     if (!approvedEmployees.length) return res.status(404).json({ success: false, message: "No employee payslip has been approved for this month." });
 
@@ -1427,6 +1482,9 @@ exports.list = async (req, res) => {
     if (status && status !== "all") {
       filter.status = status;
     }
+    // Branch-limited viewers (not owner/admin) see only people of their own branches.
+    const branchUserIds = await scopedUserIds(req.user);
+    if (branchUserIds) filter.user = { $in: branchUserIds };
 
     const assignments = await populateQuery(
       EmployeeSalary.find(filter).sort({ updatedAt: -1 })
@@ -1455,7 +1513,8 @@ exports.list = async (req, res) => {
           { isActive: { $ne: false } },
           { status: { $not: /^(inactive|terminated|resigned|suspended)$/i } },
           { employeeStatus: { $not: /^(inactive|terminated|resigned|suspended)$/i } },
-          { registrationStatus: { $not: /^rejected$/i } }
+          { registrationStatus: { $not: /^rejected$/i } },
+          ...(branchUserIds ? [{ _id: { $in: branchUserIds } }] : [])
         ]
       })
         .select("name email department jobRole designation employeeId empId phone profileImage status employeeStatus isActive registrationStatus dateOfJoining bankName accountNumber ifsc bankHolderName panCard panNo pan aadharCard aadharNo aadhar dob")
@@ -1577,6 +1636,10 @@ exports.getByUserId = async (req, res) => {
     const { userId } = req.params;
     if (!company || !mongoose.isValidObjectId(userId)) {
       return res.status(400).json({ success: false, message: "Invalid user ID." });
+    }
+    const branchUserIds = await scopedUserIds(req.user);
+    if (branchUserIds && String(userId) !== String(req.user._id || req.user.id) && !branchUserIds.some(id => String(id) === String(userId))) {
+      return res.status(403).json({ success: false, message: "This employee is not in your branches." });
     }
 
     const assignment = await populateQuery(
