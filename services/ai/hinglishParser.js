@@ -578,6 +578,9 @@ function parseHinglishDateTime(rawText, now = new Date(), referenceDate = null) 
   // Remove common speech-to-text noise tokens before date markers (e.g. "due date, jn tomorrow 10:10 am")
   text = text.replace(/\b(?:due\s+date|deadline|due|by|tak|tk)[\s,:]*(?:jn|jan|ok|so|uh|um)\b/gi, ' ');
   text = text.replace(/\b(?:jn|jan|ok|so|uh|um)\s+(tomorrow|today|kal|aaj|parso|tonight)\b/gi, '$1');
+  // Normalize common speech-to-text & typing noise for AM/PM (e.g. 'pom', 'p.o.m.', 'p o m', 'aom')
+  text = text.replace(/\b(?:p[\s.]*o[\s.]*m|pom)\b/gi, 'pm')
+             .replace(/\b(?:a[\s.]*o[\s.]*m|aom)\b/gi, 'am');
 
   // Current IST parts
   const currentUtcMs = now.getTime();
@@ -603,6 +606,66 @@ function parseHinglishDateTime(rawText, now = new Date(), referenceDate = null) 
     const hoursToAdd = parseInt(inHoursMatch[1], 10);
     const targetWithHours = new Date(nowIst.getTime() + hoursToAdd * 60 * 60 * 1000);
     return toIstIsoString(new Date(targetWithHours.getTime() - IST_OFFSET_MINUTES * 60 * 1000));
+  }
+
+  // 0. Explicit Calendar Dates (e.g., "24-11-2026", "24/11/2026", "24.11.2026", "24-11-26", "2026-11-24", "24 Nov 2026", "24 November")
+  const ymdMatch = text.match(/\b(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})\b/);
+  const dmyMatch = text.match(/\b(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4}|\d{2})\b/);
+  const namedMonthMap = {
+    jan: 0, january: 0, janv: 0, जनवरी: 0,
+    feb: 1, february: 1, फ़रवरी: 1, फरवरी: 1,
+    mar: 2, march: 2, मार्च: 2,
+    apr: 3, april: 3, अप्रैल: 3,
+    may: 4, मई: 4,
+    jun: 5, june: 5, जून: 5,
+    jul: 6, july: 6, जुलाई: 6,
+    aug: 7, august: 7, अगस्त: 7,
+    sep: 8, sept: 8, september: 8, सितंबर: 8, सितम्बर: 8,
+    oct: 9, october: 9, अक्टूबर: 9, अक्तूबर: 9,
+    nov: 10, november: 10, नवंबर: 10, नवम्बर: 10,
+    dec: 11, december: 11, दिसंबर: 11, दिसम्बर: 11,
+  };
+  const namedDateMatch = text.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+([a-z\u0900-\u097F]+)(?:\s+(\d{4}))?\b/i);
+
+  if (ymdMatch) {
+    targetYear = parseInt(ymdMatch[1], 10);
+    targetMonth = parseInt(ymdMatch[2], 10) - 1;
+    targetDate = parseInt(ymdMatch[3], 10);
+    dayOffsetFound = true;
+  } else if (dmyMatch) {
+    const p1 = parseInt(dmyMatch[1], 10);
+    const p2 = parseInt(dmyMatch[2], 10);
+    let y = parseInt(dmyMatch[3], 10);
+    if (y < 100) y += 2000;
+    let d = p1;
+    let m = p2;
+    if (p2 > 12 && p1 <= 12) {
+      d = p2;
+      m = p1;
+    }
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      targetYear = y;
+      targetMonth = m - 1;
+      targetDate = d;
+      dayOffsetFound = true;
+    }
+  } else if (namedDateMatch && namedMonthMap[namedDateMatch[2].toLowerCase()] !== undefined) {
+    targetDate = parseInt(namedDateMatch[1], 10);
+    targetMonth = namedMonthMap[namedDateMatch[2].toLowerCase()];
+    if (namedDateMatch[3]) targetYear = parseInt(namedDateMatch[3], 10);
+    dayOffsetFound = true;
+  } else {
+    const tarikhMatch = text.match(/\b(\d{1,2})\s*(?:tareekh|tarikh|tareeq|tarik|तारीख|तारीक)\b/i);
+    if (tarikhMatch) {
+      const dVal = parseInt(tarikhMatch[1], 10);
+      if (dVal >= 1 && dVal <= 31) {
+        targetDate = dVal;
+        if (dVal < baseIst.getUTCDate()) {
+          targetMonth += 1;
+        }
+        dayOffsetFound = true;
+      }
+    }
   }
 
   // 1. Day keywords (including English, Hinglish, STT typos, and Devanagari)
