@@ -3,11 +3,12 @@ const express = require('express');
 const router = express.Router();
 const taskController = require('../controllers/ClientTask');
 const authMiddleware = require('../middlewares/auth');
+// A client login may only open its own client's tasks (runs after authMiddleware).
+const ownClientOnly = require('../../middleware/pageAccess').requireOwnClient(req => req.params.clientId);
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const sharp = require('sharp');
-
 
 
 const SENSITIVE_UPLOAD_FOLDERS = [
@@ -117,41 +118,6 @@ const compressImage = async (req, res, next) => {
 };
 
 
-router.get('/test', (req, res) => {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(404).json({ success: false, message: 'Not found' });
-  }
-  res.json({
-    status: 'success',
-    message: 'Client Task API is working',
-    timestamp: new Date().toISOString(),
-    staticFilesServed: true,
-    uploadDirectory: uploadDir,
-    endpoints: [
-      'GET /api/tasks/test',
-      'GET /api/tasks/assigned-to-me',
-      'GET /api/tasks/user/:userId/assigned-tasks',
-      'GET /api/tasks/client/:clientId/service/:service',
-      'POST /api/tasks/client/:clientId/service/:service',
-      'GET /api/tasks/client/:clientId',
-      'GET /api/tasks/client/:clientId/stats',
-      'PUT /api/tasks/:taskId',
-      'PATCH /api/tasks/:taskId/toggle',
-      'DELETE /api/tasks/:taskId',
-      'POST /api/tasks/:taskId/client-remarks',
-      'POST /api/tasks/:taskId/client-remarks/upload-images',
-      'GET /api/tasks/:taskId/client-remarks',
-      'DELETE /api/tasks/:taskId/client-remarks/:remarkId',
-      'POST /api/tasks/:taskId/client-activity-logs',
-      'GET /api/tasks/:taskId/client-activity-logs',
-      'GET /api/tasks/:taskId/debug'
-    ]
-  });
-});
-
-
-
-
 router.get('/assigned-to-me', authMiddleware, taskController.getAssignedToMeTasks);
 router.get('/assigned-to-me/stats', authMiddleware, taskController.getAssignedToMeTaskStats);
 
@@ -177,33 +143,24 @@ router.post('/:taskId/client-activity-logs', authMiddleware, taskController.addC
 router.get('/:taskId/client-activity-logs', authMiddleware, taskController.getClientTaskActivityLogs);
 
 
-router.get('/:taskId/debug', authMiddleware, taskController.debugActivityLogs);
-router.get('/:taskId/debug', (req, res, next) => {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(404).json({ success: false, message: 'Not found' });
-  }
-  next();
-}, authMiddleware, taskController.debugActivityLogs);
-
-
 router.get('/', authMiddleware, (req, res, next) => {
   if (req.query.clientId && req.query.service) {
     req.params.clientId = req.query.clientId;
     req.params.service = req.query.service;
-    return taskController.getTasksByClientService(req, res, next);
+    return ownClientOnly(req, res, () => taskController.getTasksByClientService(req, res, next));
   }
   if (req.query.clientId) {
     req.params.clientId = req.query.clientId;
-    return taskController.getClientTasks(req, res, next);
+    return ownClientOnly(req, res, () => taskController.getClientTasks(req, res, next));
   }
   return res.status(400).json({ success: false, message: 'clientId parameter is required' });
 });
 
-router.get('/client/:clientId/service/:service', authMiddleware, taskController.getTasksByClientService);
-router.post('/client/:clientId/service/:service', authMiddleware, taskController.addTask);
+router.get('/client/:clientId/service/:service', authMiddleware, ownClientOnly, taskController.getTasksByClientService);
+router.post('/client/:clientId/service/:service', authMiddleware, ownClientOnly, taskController.addTask);
 router.get('/summary/bulk', authMiddleware, taskController.getClientTaskSummaries);
-router.get('/client/:clientId', authMiddleware, taskController.getClientTasks);
-router.get('/client/:clientId/stats', authMiddleware, taskController.getTaskStats);
+router.get('/client/:clientId', authMiddleware, ownClientOnly, taskController.getClientTasks);
+router.get('/client/:clientId/stats', authMiddleware, ownClientOnly, taskController.getTaskStats);
 router.put('/:taskId', authMiddleware, taskController.updateTask);
 router.patch('/:taskId', authMiddleware, taskController.updateTask);
 router.patch('/:taskId/reminder', authMiddleware, taskController.updateTask);

@@ -50,6 +50,8 @@ const APP_PAGES = [
   { pageKey: 'SidebarManagement', name: 'Sidebar Management', path: '/ciisUser/SidebarManagement', permissionPattern: 'viewEdit' },
   { pageKey: 'emp-client', name: 'Client Management', path: '/ciisUser/emp-client', permissionPattern: 'viewEdit' },
   { pageKey: 'active-clients', name: 'Active Clients', path: '/ciisUser/active-clients', permissionPattern: 'viewEdit' },
+  { pageKey: 'client-services', name: 'Client Services', path: '/ciisUser/client-services', permissionPattern: 'viewEdit', permissionActions: { view: 'View', edit: 'Add / Edit', delete: 'Delete' } },
+  { pageKey: 'holiday', name: 'Holiday', path: '/ciisUser/holiday', permissionPattern: 'viewEdit', permissionActions: { view: 'View', edit: 'Add / Edit', delete: 'Delete' } },
   { pageKey: 'salary-component', name: 'Salary Component', path: '/ciisUser/salary-component', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.salaryComponent },
   { pageKey: 'salary-structure', name: 'Salary Structure', path: '/ciisUser/salary-structure', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.salaryStructure },
   { pageKey: 'salary-assignment', name: 'Employee Salary', path: '/ciisUser/salary-assignment', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.employeeSalary },
@@ -67,6 +69,7 @@ const APP_PAGES = [
     ['completed-calls', 'Completed Calls'], ['call-history', 'Call History'],
     ['follow-ups', 'My Follow-Ups'], ['converted-leads', 'Converted Leads'],
     ['call-workspace', 'Call Workspace'], ['lead-detail', 'Lead Detail'],
+    ['add-lead', 'Add Lead'],
   ].map(([slug, name]) => ({
     pageKey: `admin-telecaller-${slug}`,
     name: `Admin Telecaller - ${name}`,

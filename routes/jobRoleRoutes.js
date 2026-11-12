@@ -111,14 +111,5 @@ router.post("/", requireJobRolePermission('edit'), jobRoleController.createJobRo
 router.put("/:id", requireJobRolePermission('edit'), jobRoleController.updateJobRole);
 router.delete("/:id", requireJobRolePermission('delete'), jobRoleController.deleteJobRole);
 
-router.get("/test", (req, res) => {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(404).json({ success: false, message: 'Not found' });
-  }
-  res.json({
-    success: true,
-    user: req.user
-  });
-});
 
 module.exports = router;

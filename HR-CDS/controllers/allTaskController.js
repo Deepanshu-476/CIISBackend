@@ -32,6 +32,7 @@ const {
 } = require('./taskHelper');
 
 const Attendance = require('../models/Attendance');
+const PagePermission = require('../../models/PagePermission');
 
 const INDIA_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
@@ -66,8 +67,11 @@ const normalizeIdList = (value) => {
 };
 
 const canViewAllBranchData = (user = {}) => {
-  const roleText = String(user.companyRole || user.jobRole || user.role || '').trim().toLowerCase();
-  return ['owner', 'company_owner', 'companyowner', 'super_admin', 'superadmin', 'admin', 'hr', 'manager', 'career infowis admin'].includes(roleText);
+  if (user.isCompanyOwner === true || user.isSuperAdmin === true || user.superAdmin === true) return true;
+  const companyRole = String(user.companyRole || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  const jobRole = String(user.jobRole || user.role || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  return ['owner', 'company_owner', 'companyowner', 'admin', 'career_infowis_admin'].includes(companyRole) ||
+    ['admin', 'career_infowis_admin'].includes(jobRole);
 };
 
 const getUserBranchIds = (user = {}) => normalizeIdList([
@@ -86,7 +90,11 @@ const applyBranchUserFilter = (query, req, currentUser = req.user || {}) => {
 
   if (!requestedBranch) {
     const accessibleBranchIds = getUserBranchIds(currentUser);
-    if (!canViewAllBranchData(currentUser) && accessibleBranchIds.length > 0) {
+    if (!canViewAllBranchData(currentUser)) {
+      if (accessibleBranchIds.length === 0) {
+        query._id = null;
+        return query;
+      }
       return appendBranchCondition({
         $or: [
           { branch: { $in: accessibleBranchIds } },
@@ -110,6 +118,116 @@ const applyBranchUserFilter = (query, req, currentUser = req.user || {}) => {
       { assignedBranches: requestedBranchId }
     ]
   });
+};
+
+// Company All Task is configured in Page Management. For a user explicitly
+// granted access there, its branch/department scope must take precedence over
+// the default employee-only (own department) filter.
+const getCompanyAllTaskPageScope = async (currentUser = {}) => {
+  const companyId = currentUser.company?._id || currentUser.company || currentUser.companyId;
+  const userId = String(currentUser._id || currentUser.id || '');
+  if (!companyId || !userId) return null;
+
+  const page = await PagePermission.findOne({
+    company: companyId,
+    $or: [
+      { path: '/ciisUser/company-all-task' },
+      { pageKey: 'company-all-task' }
+    ]
+  }).select('viewUsers editUsers deleteUsers approvers userAccessScopes').lean();
+  if (!page) return null;
+
+  const userMatches = entry => String(entry?.user?._id || entry?.user || entry || '') === userId;
+  const hasDirectAccess = ['viewUsers', 'editUsers', 'deleteUsers', 'approvers']
+    .some(field => (page[field] || []).some(userMatches));
+  const scopes = (page.userAccessScopes || []).filter(scope => userMatches(scope));
+  if (!hasDirectAccess && scopes.length === 0) return null;
+
+  // A direct access entry without an explicit scope is global. Empty arrays in
+  // an explicit scope likewise mean "All Branches / All Departments".
+  if (scopes.length === 0) return { branchIds: [], departmentIds: [] };
+
+  const branchIds = [...new Set(scopes.flatMap(scope => (scope.branchIds || [])
+    .map(value => String(value?._id || value || '')).filter(Boolean)))];
+  const departmentIds = [...new Set(scopes.flatMap(scope => (scope.departmentIds || [])
+    .map(value => String(value?._id || value || '')).filter(Boolean)))];
+  return {
+    branchIds: scopes.some(scope => !(scope.branchIds || []).length) ? [] : branchIds,
+    departmentIds: scopes.some(scope => !(scope.departmentIds || []).length) ? [] : departmentIds
+  };
+};
+
+// Users the current user may see on Company All Task (web + app). Shared by the
+// overview list and by the per-employee task/stats endpoints.
+const buildCompanyAllTaskUserQuery = async (currentUser, req = {}) => {
+  const isOwnerScope = canViewAllBranchData(currentUser);
+  // Company All Task is an employee workspace. Client portal accounts must
+  // never be returned here, otherwise they appear as a "Client" department.
+  const query = {
+    isActive: true,
+    companyRole: { $not: /^client$/i }
+  };
+
+  if (currentUser.company) query.company = currentUser.company;
+  else if (currentUser.companyCode) query.companyCode = currentUser.companyCode;
+
+  const pageScope = isOwnerScope ? null : await getCompanyAllTaskPageScope(currentUser);
+  if (pageScope) {
+    if (pageScope.departmentIds.length > 0) {
+      query.department = { $in: pageScope.departmentIds };
+    }
+    if (pageScope.branchIds.length > 0) {
+      query.$and = [
+        ...(Array.isArray(query.$and) ? query.$and : []),
+        {
+          $or: [
+            { branch: { $in: pageScope.branchIds } },
+            { assignedBranches: { $in: pageScope.branchIds } }
+          ]
+        }
+      ];
+    }
+  } else {
+    // Without a Page Management entry HR and Manager keep every department
+    // (still limited to their branches below); other employees see their own.
+    const roleText = String(currentUser.companyRole || currentUser.jobRole || currentUser.role || '').trim().toLowerCase();
+    if (!isOwnerScope && !['hr', 'manager'].includes(roleText) && currentUser.department) {
+      query.department = currentUser.department;
+    }
+  }
+  // Page Management visibility can narrow access further, but it must never
+  // let HR or Manager escape their profile's assigned branch scope.
+  applyBranchUserFilter(query, req, currentUser);
+  return query;
+};
+
+const loadTaskViewer = req => User.findById(req.user?.id || req.user?._id)
+  .select('name role companyRole jobRole company companyCode department branch assignedBranches isCompanyOwner isSuperAdmin superAdmin')
+  .lean();
+
+// The subset of `userIds` the current user may see; self is always allowed.
+const filterVisibleUserIds = async (req, userIds = []) => {
+  const ids = [...new Set(userIds.map(id => String(id || '').trim()).filter(Boolean))];
+  if (!ids.length) return [];
+  const currentUser = await loadTaskViewer(req);
+  if (!currentUser) return [];
+  const selfId = String(currentUser._id);
+  const others = ids.filter(id => id !== selfId && mongoose.Types.ObjectId.isValid(id));
+  const visible = new Set(ids.includes(selfId) ? [selfId] : []);
+  if (others.length) {
+    const query = await buildCompanyAllTaskUserQuery(currentUser, { user: currentUser, query: {} });
+    delete query.isActive; // finished/inactive employees keep their history visible
+    const andParts = [query, { _id: { $in: others } }];
+    const rows = await User.find({ $and: andParts }).select('_id').lean();
+    rows.forEach(row => visible.add(String(row._id)));
+  }
+  return ids.filter(id => visible.has(id));
+};
+
+const denyIfUserNotVisible = async (req, res) => {
+  if ((await filterVisibleUserIds(req, [req.params.userId])).length) return false;
+  res.status(403).json({ success: false, message: 'You do not have access to this employee' });
+  return true;
 };
 
 const escapeRegex = value => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -844,6 +962,7 @@ const enrichTasksWithActivityAndRemarks = async (tasks) => {
 exports.getUserAllTasksPaginated = async (req, res) => {
   try {
     const { userId } = req.params;
+    if (await denyIfUserNotVisible(req, res)) return;
     const isExport = req.query.export === 'true' || req.query.all === 'true';
     const page = parsePositiveInt(req.query.page, 1);
     const limit = isExport
@@ -888,6 +1007,7 @@ exports.getUserAllTasksPaginated = async (req, res) => {
 exports.getUserTaskStats = async (req, res) => {
   try {
     const { userId } = req.params;
+    if (await denyIfUserNotVisible(req, res)) return;
     const allTasks = await queryAllUserTasks(userId, req.user.companyCode, req.query, req.user.company?._id || req.user.company);
     const filtered = filterUserTasks(allTasks, req.query);
 
@@ -904,9 +1024,7 @@ exports.getUserTaskStats = async (req, res) => {
 
 exports.getUsersTaskStatsBatch = async (req, res) => {
   try {
-    const userIds = Array.isArray(req.body?.userIds)
-      ? req.body.userIds.map(id => String(id || '').trim()).filter(Boolean)
-      : [];
+    const userIds = await filterVisibleUserIds(req, Array.isArray(req.body?.userIds) ? req.body.userIds : []);
 
     if (userIds.length === 0) {
       return res.json({ success: true, statsByUser: {} });
@@ -971,22 +1089,7 @@ exports.getCompanyAllTaskOverview = async (req, res) => {
       return res.status(401).json({ success: false, message: 'User not found' });
     }
 
-    const rawRole = String(currentUser.companyRole || currentUser.role || currentUser.jobRole || '').toLowerCase();
-    const isOwnerScope = ['owner', 'admin', 'super-admin', 'superadmin', 'hr', 'manager', 'career infowis admin'].includes(rawRole);
-    // Company All Task is an employee workspace. Client portal accounts must
-    // never be returned here, otherwise they appear as a "Client" department.
-    const query = {
-      isActive: true,
-      companyRole: { $not: /^client$/i }
-    };
-
-    if (currentUser.company) query.company = currentUser.company;
-    else if (currentUser.companyCode) query.companyCode = currentUser.companyCode;
-
-    if (!isOwnerScope && currentUser.department) {
-      query.department = currentUser.department;
-    }
-    applyBranchUserFilter(query, req, currentUser);
+    const query = await buildCompanyAllTaskUserQuery(currentUser, req);
 
     const users = await User.find(query)
       .select('name email role companyRole jobRole employeeType employeeId company department companyCode branch assignedBranches isActive createdAt')

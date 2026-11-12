@@ -50,9 +50,11 @@ const handleRegisterDocumentUpload = (req, res, next) => {
   });
 };
 
+// AUTH_RATE_LIMIT_MAX lets the API Test Lab's own backend copy allow more tries;
+// live backends do not set it and keep 20 per 15 minutes per IP.
 const authAttemptLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  limit: 20,
+  limit: Number(process.env.AUTH_RATE_LIMIT_MAX) || 20,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -72,9 +74,11 @@ const otpLimiter = rateLimit({
   },
 });
 
+// Per-IP guard only; per-account OTP limits (60 s wait, 5 sends, 1 h lock) are in
+// authController.forgotPassword. Forgot + verify + reset share this budget.
 const passwordResetLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
-  limit: 10,
+  limit: 30,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -84,7 +88,29 @@ const passwordResetLimiter = rateLimit({
 });
 
 
-router.post("/register", authAttemptLimiter, handleRegisterDocumentUpload, authController.register);
+// register serves two callers. Self-registration (no token, multipart, or
+// registrationSource=self_register) creates a PENDING login an admin must approve.
+// Anything else creates an ACTIVE login with the requested role, so it must come
+// from a real owner/admin/HR session of the same company. Before this check a
+// made-up Authorization header was enough to create an active owner.
+const guardDirectRegister = (req, res, next) => {
+  const isSelfRegister = req.is("multipart/form-data") || req.body?.registrationSource === "self_register" || !req.headers.authorization;
+  if (isSelfRegister) return next();
+  const { protect, restrictTo, isPlatformOwner } = require("../middleware/authMiddleware");
+  return protect(req, res, () => restrictTo("owner", "admin", "hr")(req, res, () => {
+    if (isPlatformOwner(req.user)) return next();
+    const ownCompanyId = String(req.user?.company?._id || req.user?.company || req.user?.companyId || "");
+    const ownCompanyCode = String(req.user?.companyCode || req.user?.company?.companyCode || "").trim().toUpperCase();
+    const wantedId = req.body?.company ? String(req.body.company) : "";
+    const wantedCode = req.body?.companyCode ? String(req.body.companyCode).trim().toUpperCase() : "";
+    if ((wantedId && wantedId !== ownCompanyId) || (wantedCode && wantedCode !== ownCompanyCode) || (!wantedId && !wantedCode)) {
+      return res.status(403).json({ success: false, message: "You can add employees only to your own company." });
+    }
+    return next();
+  }));
+};
+
+router.post("/register", authAttemptLimiter, handleRegisterDocumentUpload, guardDirectRegister, authController.register);
 router.post("/login", authAttemptLimiter, authController.login); 
 router.post("/forgot-password", passwordResetLimiter, authController.forgotPassword);
 router.post("/verify-reset-otp", passwordResetLimiter, authController.verifyPasswordResetOTP);
@@ -114,12 +140,5 @@ router.post("/company/:companyCode/verify-otp", otpLimiter, authController.verif
 router.post("/company/:companyCode/resend-otp", otpLimiter, authController.resendLoginOTP);
 router.get("/company/:identifier", authController.getCompanyDetailsByIdentifier);
 
-
-router.get("/test", (req, res, next) => {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(404).json({ success: false, message: 'Not found' });
-  }
-  next();
-}, authController.testAPI);
 
 module.exports = router;

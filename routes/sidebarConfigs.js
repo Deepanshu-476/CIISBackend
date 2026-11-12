@@ -116,6 +116,8 @@ const filterMenuItemsByCompanyAccess = async (companyId, menuItems) => {
   const normalizeKey = value => String(value || '').trim().replace(/^\/+/, '').toLowerCase();
   const allowedSet = new Set(allowedPages.map(page => normalizeKey(page)).filter(Boolean));
   return menuItems.filter(item => {
+    // Promotions is not a plan feature: its own API decides who may use it.
+    if (normalizeKey(item?.id) === 'promotions' || normalizeKey(item?.path).replace(/\/+$/, '') === 'ciisuser/promotions') return true;
     const itemKeys = [...getRouteAccessKeys(item)].map(key => normalizeKey(key)).filter(Boolean);
     return itemKeys.some(key => allowedSet.has(key));
   });
@@ -716,15 +718,6 @@ router.get('/user-config', async (req, res) => {
       error: error.message 
     });
   }
-});
-router.get("/test", (req, res) => {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(404).json({ success: false, message: 'Not found' });
-  }
-  res.json({
-    success: true,
-    user: req.user
-  });
 });
 router.findSidebarConfig = findSidebarConfig;
 module.exports = router;

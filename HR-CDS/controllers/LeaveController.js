@@ -5,8 +5,6 @@ const Company = require('../../models/Company');
 const PagePermission = require('../../models/PagePermission');
 const LeavePolicy = require('../../models/LeavePolicy');
 const nodemailer = require('nodemailer');
-const fs = require('fs');
-const path = require('path');
 const mongoose = require('mongoose');
 
 
@@ -183,18 +181,6 @@ const autoRejectExpiredLeaves = async (scopeFilter = {}) => {
   }
 };
 
-const writeLeaveDebugLog = (label, data) => {
-  try {
-    const logPath = path.join(__dirname, '../../leave-debug.log');
-    fs.appendFileSync(
-      logPath,
-      `${new Date().toISOString()} ${label} ${JSON.stringify(data, null, 2)}\n`,
-      'utf8'
-    );
-  } catch {
-    
-  }
-};
 
 const normalizeId = (value) => {
   if (!value) return '';
@@ -723,19 +709,6 @@ exports.applyLeave = async (req, res) => {
 
   } catch (err) {
     console.error("❌ Error in applyLeave controller:", err);
-    writeLeaveDebugLog('applyLeave-error', {
-      message: err.message,
-      stack: err.stack,
-      body: req.body,
-      user: {
-        id: req.user?._id,
-        email: req.user?.email,
-        company: req.user?.company,
-        companyCode: req.user?.companyCode,
-        jobRole: req.user?.jobRole,
-        companyRole: req.user?.companyRole
-      }
-    });
     res.status(500).json({ 
       success: false,
       message: err.message || 'Server error while applying leave',

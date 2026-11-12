@@ -129,7 +129,7 @@ pre{margin:6px 0 0;white-space:pre-wrap;word-break:break-word;font-family:var(--
   <section class="card" id="progressCard">
     <div class="row" style="justify-content:space-between">
       <div><span class="muted small">Now:</span> <span id="phase" class="phase">Not started</span></div>
-      <div class="row small muted"><span id="elapsed"></span><button id="dlJson" class="copy">Report JSON</button><button id="dlCsv" class="copy">CSV</button></div>
+      <div class="row small muted"><span id="elapsed"></span><button id="dlHtml" class="copy">Download report</button><button id="dlJson" class="copy">Report JSON</button><button id="dlCsv" class="copy">CSV</button></div>
     </div>
     <div class="bar" id="bar"></div>
     <div class="kpis" id="kpis"></div>
@@ -220,7 +220,7 @@ function banner(text, kind = 'warn') {
 }
 
 async function loadInfo() {
-  info = await j('/lab/info');
+  info = await j('lab/info');
   $('#targetInput').value = info.target;
   const db = info.mongo;
   const dbPill = $('#dbPill');
@@ -252,7 +252,7 @@ async function ping() {
   const p = $('#pingPill');
   p.textContent = 'Backend …';
   try {
-    const r = await j('/lab/ping');
+    const r = await j('lab/ping');
     p.textContent = r.ok ? `Backend up · ${r.ms} ms` : `Backend down${r.error ? ' · ' + r.error : ''}`;
     p.className = 'pill ' + (r.ok ? 'ok' : 'bad');
   } catch (e) {
@@ -376,7 +376,7 @@ function render() {
 
 function listen() {
   if (es) es.close();
-  es = new EventSource('/lab/stream');
+  es = new EventSource('lab/stream');
   es.onmessage = ev => {
     const e = JSON.parse(ev.data);
     if (e.type === 'start') {
@@ -422,7 +422,7 @@ function setRunning(on) {
 
 async function loadLastReport() {
   try {
-    const r = await j('/lab/report');
+    const r = await j('lab/report');
     rows = r.rows || [];
     $('#phase').textContent = `Last run ${new Date(r.finishedAt).toLocaleString()} — ${r.summary.fail} failed, ${r.summary.warn} warnings, ${r.summary.pass} passed (${(r.durationMs / 1000).toFixed(1)} s)`;
     render();
@@ -439,12 +439,12 @@ function download(name, text, type) {
 
 // ---- events ----
 $('#saveTarget').onclick = async () => {
-  try { await j('/lab/target', { method: 'POST', body: JSON.stringify({ target: $('#targetInput').value }) }); log(`Backend URL set to ${$('#targetInput').value}`); ping(); }
+  try { await j('lab/target', { method: 'POST', body: JSON.stringify({ target: $('#targetInput').value }) }); log(`Backend URL set to ${$('#targetInput').value}`); ping(); }
   catch (e) { log(e.message, 'error'); }
 };
 $('#seedBtn').onclick = async () => {
   $('#seedBtn').disabled = true;
-  try { const r = await j('/lab/seed', { method: 'POST' }); log(r.message); await loadInfo(); }
+  try { const r = await j('lab/seed', { method: 'POST' }); log(r.message); await loadInfo(); }
   catch (e) { log(e.message, 'error'); banner(e.message, 'bad'); }
   finally { $('#seedBtn').disabled = false; }
 };
@@ -453,15 +453,15 @@ $('#runBtn').onclick = async () => {
   const sweep = { enabled: $('#sweepOn').checked, asEmployee: $('#sweepEmp').checked, asClient: $('#sweepClient').checked, includeAliases: $('#sweepAlias').checked };
   setRunning(true);
   listen();
-  try { await j('/lab/run', { method: 'POST', body: JSON.stringify({ modules, sweep }) }); }
+  try { await j('lab/run', { method: 'POST', body: JSON.stringify({ modules, sweep }) }); }
   catch (e) { log(e.message, 'error'); banner(e.message, 'bad'); setRunning(false); }
 };
-$('#stopBtn').onclick = () => j('/lab/stop', { method: 'POST' }).catch(() => {});
+$('#stopBtn').onclick = () => j('lab/stop', { method: 'POST' }).catch(() => {});
 $('#deleteBtn').onclick = async () => {
   if (!confirm('Delete ALL dummy data (company ZZLAB…, its users, attendance, leaves, tasks, projects, clients)?')) return;
   $('#deleteBtn').disabled = true;
   try {
-    const r = await j('/lab/delete', { method: 'POST' });
+    const r = await j('lab/delete', { method: 'POST' });
     const n = Object.entries(r.removed || {}).map(([k, v]) => `${k}=${v}`).join(', ');
     log(n ? `Deleted: ${n}` : 'Nothing to delete');
     await loadInfo();
@@ -488,7 +488,8 @@ document.addEventListener('click', e => {
   const cp = e.target.closest('[data-copy]');
   if (cp) { navigator.clipboard?.writeText(cp.dataset.copy); cp.textContent = 'copied'; setTimeout(() => (cp.textContent = 'copy'), 900); }
 });
-$('#dlJson').onclick = () => { window.location.href = '/lab/report'; };
+$('#dlHtml').onclick = () => { window.location.href = 'lab/report.html'; };
+$('#dlJson').onclick = () => { window.location.href = 'lab/report'; };
 $('#dlCsv').onclick = () => {
   const head = ['id', 'module', 'result', 'slow', 'name', 'method', 'path', 'as', 'status', 'ms', 'detail', 'serverMessage'];
   const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`;

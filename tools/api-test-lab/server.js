@@ -32,6 +32,15 @@ let target = process.env.LAB_TARGET || `http://localhost:${process.env.PORT || 3
 const mongoInfo = data.describeMongo(MONGO_URI);
 const remoteAllowed = process.env.LAB_ALLOW_REMOTE_DB === '1';
 const REPORT_DIR = path.join(__dirname, 'reports');
+// On a server: LAB_BASE_PATH=/test puts the page at https://<domain>/test/ behind nginx.
+const BASE_PATH = (process.env.LAB_BASE_PATH || '').trim().replace(/\/+$/, '').replace(/^(?!\/)(.)/, '/$1');
+const LAB_HOST = process.env.LAB_HOST || '127.0.0.1';
+const LAB_USER = process.env.LAB_USER || 'lab';
+const LAB_PASSWORD = process.env.LAB_PASSWORD || '';
+if (BASE_PATH && !LAB_PASSWORD) {
+  console.error('LAB_BASE_PATH is set (server mode) but LAB_PASSWORD is not. Set LAB_PASSWORD so the page is not open to everyone.');
+  process.exit(1);
+}
 
 const MODULES = [
   { key: 'auth', label: 'Auth & Login', fn: authFlow },
@@ -48,7 +57,29 @@ const MODULES = [
   { key: 'admin', label: 'Admin pages (users, branches, groups, meetings, alerts, support)', fn: adminFlow },
 ];
 
-const app = express();
+const root = express();
+root.set('trust proxy', 'loopback');
+const app = express.Router();
+
+// Password (browser login box) when LAB_PASSWORD is set.
+const safeEqual = (a, b) => {
+  const x = Buffer.from(String(a));
+  const y = Buffer.from(String(b));
+  return x.length === y.length && require('crypto').timingSafeEqual(x, y);
+};
+if (LAB_PASSWORD) {
+  root.use((req, res, next) => {
+    const [scheme, value] = String(req.headers.authorization || '').split(' ');
+    if (scheme === 'Basic' && value) {
+      const decoded = Buffer.from(value, 'base64').toString('utf8');
+      const i = decoded.indexOf(':');
+      if (i > 0 && safeEqual(decoded.slice(0, i), LAB_USER) && safeEqual(decoded.slice(i + 1), LAB_PASSWORD)) return next();
+    }
+    res.set('WWW-Authenticate', 'Basic realm="CIIS API Test Lab", charset="UTF-8"');
+    res.status(401).send('Login required');
+  });
+}
+
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -168,7 +199,8 @@ app.post('/lab/delete', async (req, res) => {
 });
 
 app.get('/lab/stream', (req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+  // X-Accel-Buffering: nginx must pass live events through, not hold them.
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
   res.write(': connected\n\n');
   if (!current) return;
   for (const evt of current.events) res.write(`data: ${JSON.stringify(evt)}\n\n`);
@@ -189,6 +221,14 @@ app.get('/lab/report', (req, res) => {
   if (!lastReport) return res.status(404).json({ ok: false, message: 'No report yet' });
   res.setHeader('Content-Disposition', `attachment; filename="api-test-report-${(lastReport.finishedAt || '').slice(0, 19).replace(/[:T]/g, '-')}.json"`);
   res.json(lastReport);
+});
+
+// Readable report: one HTML file that opens without the lab and prints to PDF.
+app.get('/lab/report.html', (req, res) => {
+  if (!lastReport) return res.status(404).json({ ok: false, message: 'No report yet' });
+  const stamp = (lastReport.finishedAt || '').slice(0, 19).replace(/[:T]/g, '-');
+  res.setHeader('Content-Disposition', `attachment; filename="api-test-report-${stamp}.html"`);
+  res.type('html').send(require('./lib/reportHtml').buildReportHtml(lastReport));
 });
 
 app.post('/lab/run', async (req, res) => {
@@ -229,6 +269,17 @@ app.post('/lab/run', async (req, res) => {
       if (runner.aborted) break;
       if (!m.required && !wanted.has(m.key)) continue;
       broadcast({ type: 'phase', key: m.key, label: m.label });
+      // Every later module logs in as the dummy employees. If setup could not create them
+      // (usually 429: login/add-employee allow 20 tries per 15 minutes per IP), say that once
+      // instead of failing each module with "No dummy user".
+      if (m.key !== 'auth' && m.key !== 'setup' && !(state.users?.ontime && state.users?.std)) {
+        runner.push({
+          name: 'Dummy employees were not created — later modules skipped',
+          method: 'ERROR', path: '/api/auth/register', status: '', ms: 0, result: 'fail',
+          detail: 'Add employee was refused (see the Setup rows; 429 = rate limited). Wait 15 minutes and run again, or restart the backend under test. On the server lab the limit is raised with AUTH_RATE_LIMIT_MAX in the lab .env.',
+        });
+        break;
+      }
       try {
         await m.fn(ctx);
       } catch (err) {
@@ -268,8 +319,20 @@ app.post('/lab/run', async (req, res) => {
   current.clients.clear();
 });
 
-app.listen(LAB_PORT, () => {
-  console.log(`\nCIIS API Test Lab → http://localhost:${LAB_PORT}`);
+if (BASE_PATH) {
+  // /test → /test/ so the page's relative "lab/..." calls land under /test/lab/...
+  root.get(BASE_PATH, (req, res, next) => {
+    const [p, q] = req.originalUrl.split('?');
+    if (p !== BASE_PATH) return next();
+    res.redirect(301, `${BASE_PATH}/${q ? `?${q}` : ''}`);
+  });
+  root.use(BASE_PATH, app);
+} else {
+  root.use(app);
+}
+
+root.listen(LAB_PORT, LAB_HOST, () => {
+  console.log(`\nCIIS API Test Lab → http://${LAB_HOST === '0.0.0.0' ? 'localhost' : LAB_HOST}:${LAB_PORT}${BASE_PATH}/${LAB_PASSWORD ? `  (login: ${LAB_USER} / LAB_PASSWORD)` : ''}`);
   console.log(`  Backend under test : ${target}`);
   console.log(`  Database           : ${mongoInfo.hosts}/${mongoInfo.db}${mongoInfo.isLocal ? '' : remoteAllowed ? '  (REMOTE — allowed by LAB_ALLOW_REMOTE_DB=1)' : '  (REMOTE — blocked)'}\n`);
 });

@@ -7,6 +7,7 @@ const Company = require("../../models/Company");
 const Branch = require("../../models/Branch");
 const Department = require("../../models/Department");
 const JobRole = require("../../models/JobRole");
+const PagePermission = require("../../models/PagePermission");
 const mongoose = require("mongoose");
 const {notifyPageUsers, getCompanyId} = require("../utils/systemNotificationService");
 const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagination");
@@ -72,6 +73,35 @@ const isPrivilegedAttendanceUser = (user = {}, allowManager = true) => {
     ? ['super_admin', 'superadmin', 'owner', 'company_owner', 'admin', 'hr', 'manager']
     : ['super_admin', 'superadmin', 'owner', 'company_owner', 'admin', 'hr'];
   return roles.some(r => allowed.includes(r));
+};
+
+// Page Management is the source of truth for explicitly granted attendance
+// access. Role-based access remains the fallback for administrators.
+const hasAttendancePageAccess = async (user = {}, accessType = 'edit') => {
+  if (isPrivilegedAttendanceUser(user, accessType !== 'delete')) return true;
+
+  const userId = String(user._id || user.id || '').trim();
+  const companyId = String(user.company?._id || user.company?.id || user.company || user.companyId || '').trim();
+  const companyCode = String(user.companyCode || user.company?.companyCode || '').trim();
+  if (!userId || (!companyId && !companyCode)) return false;
+
+  const companyScope = [];
+  if (mongoose.Types.ObjectId.isValid(companyId)) companyScope.push({ company: companyId });
+  if (companyCode) companyScope.push({ companyCode });
+  const page = await PagePermission.findOne({
+    path: '/ciisUser/emp-attendance',
+    ...(companyScope.length === 1 ? companyScope[0] : { $or: companyScope })
+  }).select('viewUsers editUsers deleteUsers approvers').lean();
+  if (!page) return false;
+
+  const fields = accessType === 'delete'
+    ? ['deleteUsers']
+    : accessType === 'view'
+      ? ['viewUsers', 'editUsers', 'approvers']
+      : ['editUsers'];
+  return fields.some(field => (page[field] || []).some(entry =>
+    String(entry?.user?._id || entry?.user?.id || entry?.user || '') === userId
+  ));
 };
 
 const getUserBranchIds = (user = {}) => normalizeIdList([
@@ -2044,9 +2074,9 @@ const updateAttendanceRecord = async (req, res) => {
       });
     }
 
-    if (!isPrivilegedAttendanceUser(req.user, true)) {
+    if (!(await hasAttendancePageAccess(req.user, 'edit'))) {
       return res.status(403).json({
-        message: "Access denied. Only Admin, HR, or Manager can update attendance records."
+        message: "Access denied. You need Edit permission for the Employee Attendance page."
       });
     }
     
@@ -2241,9 +2271,9 @@ const createManualAttendance = async (req, res) => {
       });
     }
 
-    if (!isPrivilegedAttendanceUser(req.user, true)) {
+    if (!(await hasAttendancePageAccess(req.user, 'edit'))) {
       return res.status(403).json({
-        message: "Access denied. Only Admin, HR, or Manager can manually create attendance."
+        message: "Access denied. You need Edit permission for the Employee Attendance page."
       });
     }
     
@@ -2431,9 +2461,9 @@ const deleteAttendanceRecord = async (req, res) => {
       });
     }
 
-    if (!isPrivilegedAttendanceUser(req.user, false)) {
+    if (!(await hasAttendancePageAccess(req.user, 'delete'))) {
       return res.status(403).json({
-        message: "Access denied. Only Admin or HR can delete attendance records."
+        message: "Access denied. You need Delete permission for the Employee Attendance page."
       });
     }
     
