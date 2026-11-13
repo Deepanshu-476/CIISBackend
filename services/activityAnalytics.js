@@ -77,12 +77,55 @@ const userStats = (match) => PageActivity.aggregate([
   } },
 ]);
 
-// Most used page per user.
+// Most used page per user (falls back to endpoint-inferred module/page when path is blank).
 const topPagePerUser = (match) => PageActivity.aggregate([
-  { $match: { ...match, type: { $in: ['view', 'action'] }, path: { $nin: ['', null] } } },
+  { $match: { ...match, type: { $in: ['view', 'action'] } } },
+  {
+    $project: {
+      user: 1,
+      path: {
+        $cond: [
+          { $and: [{ $ne: ['$path', ''] }, { $ne: ['$path', null] }] },
+          '$path',
+          {
+            $switch: {
+              branches: [
+                { case: { $regexMatch: { input: { $ifNull: ['$endpoint', ''] }, regex: /attendance/i } }, then: '/ciisUser/attendance' },
+                { case: { $regexMatch: { input: { $ifNull: ['$endpoint', ''] }, regex: /document|profile|user/i } }, then: '/ciisUser/profile' },
+                { case: { $regexMatch: { input: { $ifNull: ['$endpoint', ''] }, regex: /task/i } }, then: '/ciisUser/task-management' },
+                { case: { $regexMatch: { input: { $ifNull: ['$endpoint', ''] }, regex: /crm|lead|telecall/i } }, then: '/ciisUser/all-lead' },
+                { case: { $regexMatch: { input: { $ifNull: ['$endpoint', ''] }, regex: /leave/i } }, then: '/ciisUser/leave-management' },
+                { case: { $regexMatch: { input: { $ifNull: ['$endpoint', ''] }, regex: /payroll|salary/i } }, then: '/ciisUser/payroll' },
+              ],
+              default: { $ifNull: ['$module', ''] }
+            }
+          }
+        ]
+      }
+    }
+  },
+  { $match: { path: { $nin: ['', null] } } },
   { $group: { _id: { user: '$user', path: '$path' }, count: { $sum: 1 } } },
   { $sort: { count: -1 } },
   { $group: { _id: '$_id.user', path: { $first: '$_id.path' }, count: { $first: '$count' } } },
+]);
+
+const hourlyStats = (match) => PageActivity.aggregate([
+  { $match: match },
+  { $group: {
+    _id: { $hour: { date: '$createdAt', timezone: '+05:30' } },
+    count: { $sum: 1 },
+    actions: { $sum: { $cond: [{ $eq: ['$type', 'action'] }, 1, 0] } },
+  } },
+  { $sort: { _id: 1 } },
+]);
+
+const sourceStats = (match) => PageActivity.aggregate([
+  { $match: match },
+  { $group: {
+    _id: '$source',
+    count: { $sum: 1 },
+  } },
 ]);
 
 const dailyStats = (match) => PageActivity.aggregate([
@@ -117,11 +160,12 @@ const buildUsageSummary = async (companyId, { range, userIds = null, userFilter 
   const usersQuery = {
     company,
     companyRole: { $not: /^client$/i },
+    isActive: true,
     ...(Array.isArray(userIds) ? { _id: { $in: userIds.map(toObjectId).filter(Boolean) } } : {}),
     ...userFilter,
   };
 
-  const [pages, perUser, topPages, days, users] = await Promise.all([
+  const [pages, perUser, topPages, days, users, hourlyRaw, sourcesRaw] = await Promise.all([
     pageStats(match),
     userStats(match),
     topPagePerUser(match),
@@ -129,6 +173,8 @@ const buildUsageSummary = async (companyId, { range, userIds = null, userFilter 
     User.find(usersQuery)
       .select('name email companyRole jobRole jobRoleName department departmentName branch assignedBranches lastLogin isActive profileImage employeeId')
       .lean(),
+    hourlyStats(match),
+    sourceStats(match),
   ]);
 
   const statsByUser = new Map(perUser.map(row => [String(row._id), row]));
@@ -167,7 +213,11 @@ const buildUsageSummary = async (companyId, { range, userIds = null, userFilter 
   const totals = {
     users: userRows.length,
     activeAccounts: activeUsers.length,
-    loggedInToday: activeUsers.filter(u => u.lastLogin && new Date(u.lastLogin) >= todayStart).length,
+    loggedInToday: activeUsers.filter(u => {
+      const loginTime = u.lastLogin ? new Date(u.lastLogin) : null;
+      const activeTime = u.lastActiveAt ? new Date(u.lastActiveAt) : null;
+      return (loginTime && loginTime >= todayStart) || (activeTime && activeTime >= todayStart);
+    }).length,
     loggedInInRange: activeUsers.filter(u => u.lastLogin && new Date(u.lastLogin) >= from).length,
     neverLoggedIn: activeUsers.filter(u => !u.lastLogin).length,
     activeInRange: userRows.filter(u => u.views + u.actions + u.logins > 0).length,
@@ -176,7 +226,14 @@ const buildUsageSummary = async (companyId, { range, userIds = null, userFilter 
     logins: perUser.reduce((sum, u) => sum + (u.logins || 0), 0),
   };
 
-  return { range: { from, to }, totals, pages, users: userRows, days };
+  const hourly = hourlyRaw.map(h => ({ hour: h._id, count: h.count, actions: h.actions }));
+  const sources = {
+    web: sourcesRaw.find(s => s._id === 'web')?.count || 0,
+    app: sourcesRaw.find(s => s._id === 'app')?.count || 0,
+    unknown: sourcesRaw.find(s => s._id === 'unknown' || !s._id)?.count || 0,
+  };
+
+  return { range: { from, to }, totals, pages, users: userRows, days, hourly, sources };
 };
 
 // Latest activity rows (who did what, where), newest first.
@@ -191,6 +248,17 @@ const activityFeed = async (companyId, { range, userIds = null, filters = {}, pa
   }
   if (filters.path) match.path = filters.path === UNKNOWN_PAGE ? { $in: ['', null] } : String(filters.path);
   if (['view', 'action', 'login'].includes(filters.type)) match.type = filters.type;
+  if (filters.search) {
+    const s = String(filters.search).trim();
+    if (s) {
+      match.$or = [
+        { summary: { $regex: s, $options: 'i' } },
+        { endpoint: { $regex: s, $options: 'i' } },
+        { path: { $regex: s, $options: 'i' } },
+        { module: { $regex: s, $options: 'i' } },
+      ];
+    }
+  }
 
   const safeLimit = Math.min(200, Math.max(1, parseInt(limit, 10) || 50));
   const safePage = Math.max(1, parseInt(page, 10) || 1);
@@ -209,6 +277,8 @@ const activityFeed = async (companyId, { range, userIds = null, filters = {}, pa
       endpoint: item.endpoint || '',
       source: item.source,
       durationMs: item.durationMs || 0,
+      summary: item.summary || '',
+      module: item.module || '',
       user: item.user ? { _id: String(item.user._id), name: item.user.name || item.user.email || 'User' } : null,
     })),
     total,

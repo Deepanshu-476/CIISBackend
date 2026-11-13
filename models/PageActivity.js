@@ -18,6 +18,9 @@ const pageActivitySchema = new mongoose.Schema({
   endpoint: { type: String, default: '' },
   status: { type: Number },
   source: { type: String, enum: ['web', 'app', 'unknown'], default: 'unknown' },
+  // Human-readable summary of what was changed/done (e.g. "Task: Homepage UI", "Status: Approved")
+  summary: { type: String, default: '' },
+  module: { type: String, default: '' },
   // How long the page stayed open (views only; sent by the client when the user leaves it).
   durationMs: { type: Number },
   createdAt: { type: Date, default: Date.now },
