@@ -8538,12 +8538,13 @@ const lastAskedField = currentDraft.asked.length > 0
           if (currentDraft.priority) currentDraft.priority = formatProjectPriority(currentDraft.priority);
         }
 
-        // Intent promotion: if assigneeName is extracted and user can assign others, ensure intent is task_assigned_user
-        if (currentDraft.assigneeName && canAssignOthers && currentDraft.intent === 'self_task') {
+        // Intent promotion: ONLY if user explicitly commanded assigning to others
+        const isExplicitAssignCommand = /\b(?:assign\s+to|kisi\s+aur\s+ko|others?\s+ko|ko\s+assign\s+karo)\b/i.test(trimmedMessage);
+        if (currentDraft.assigneeName && canAssignOthers && currentDraft.intent === 'self_task' && isExplicitAssignCommand) {
           currentDraft.intent = 'task_assigned_user';
           currentDraft.taskFor = 'others';
           currentDraft.wantsOthers = true;
-        } else if (!canAssignOthers && currentDraft.intent !== 'task_project' && currentDraft.intent !== 'create_project' && currentDraft.intent !== 'create_client' && currentDraft.intent !== 'create_client_plan') {
+        } else if (currentDraft.intent === 'self_task' || currentDraft.taskFor === 'self' || (!canAssignOthers && currentDraft.intent !== 'task_project' && currentDraft.intent !== 'create_project' && currentDraft.intent !== 'create_client' && currentDraft.intent !== 'create_client_plan')) {
           currentDraft.intent = 'self_task';
           currentDraft.taskFor = 'self';
           currentDraft.wantsOthers = false;
@@ -8553,6 +8554,7 @@ const lastAskedField = currentDraft.asked.length > 0
           currentDraft.assignees = [];
           currentDraft.assignedUsers = [];
           currentDraft.pendingAssigneeNames = [];
+          currentDraft.assigneeLedger = [];
         }
 
         // If a previously skipped field was explicitly updated in this turn, remove it from skipped
@@ -9114,7 +9116,22 @@ const lastAskedField = currentDraft.asked.length > 0
     }
   } else if ((currentDraft.intent !== 'create_project' && currentDraft.intent !== 'create_client' && currentDraft.intent !== 'create_client_plan') || ((currentDraft.intent === 'create_project' || currentDraft.intent === 'create_client') && (currentDraft.asked.includes('members') || currentDraft.asked.includes('projectManager') || lastAskedField === 'members' || lastAskedField === 'projectManager' || (Array.isArray(currentDraft.assigneeLedger) && currentDraft.assigneeLedger.length > 0)))) {
     // 3c. Regular Assignee disambiguation & scope validation (self_task & task_assigned_user, or create_project members / create_client team)
-    const wantsAssignee = Boolean(
+    const isExplicitAssignCommand = /\b(?:assign\s+to|kisi\s+aur\s+ko|others?\s+ko|ko\s+assign\s+karo)\b/i.test(trimmedMessage);
+    const isSelfTask = currentDraft.intent === 'self_task' || currentDraft.taskFor === 'self';
+
+    if (isSelfTask && !isExplicitAssignCommand) {
+      currentDraft.assigneeName = null;
+      currentDraft.assigneeId = null;
+      currentDraft.assigneeLabel = null;
+      currentDraft.assignees = [];
+      currentDraft.assignedUsers = [];
+      currentDraft.pendingAssigneeNames = [];
+      currentDraft.assigneeLedger = [];
+      currentDraft.taskFor = 'self';
+      currentDraft.wantsOthers = false;
+    }
+
+    const wantsAssignee = !isSelfTask && Boolean(
       (currentDraft.pendingAssigneeNames && currentDraft.pendingAssigneeNames.length > 0) ||
       currentDraft.assigneeName ||
       pick?.assigneeId ||
@@ -9446,7 +9463,9 @@ const lastAskedField = currentDraft.asked.length > 0
   if (activeIntent !== 'task_project' && activeIntent !== 'create_project' && activeIntent !== 'create_client' && activeIntent !== 'create_client_task' && activeIntent !== 'create_client_plan') {
     const isOthersTask = Boolean(
       canAssignOthers &&
-      (currentDraft.taskFor === 'others' || currentDraft.intent === 'task_assigned_user' || currentDraft.wantsOthers) &&
+      currentDraft.intent === 'task_assigned_user' &&
+      currentDraft.taskFor === 'others' &&
+      currentDraft.wantsOthers &&
       !currentDraft.skipped.includes('assignee')
     );
     activeIntent = isOthersTask ? 'task_assigned_user' : 'self_task';
@@ -9454,6 +9473,14 @@ const lastAskedField = currentDraft.asked.length > 0
     if (isOthersTask) {
       currentDraft.taskFor = 'others';
       currentDraft.wantsOthers = true;
+    } else {
+      currentDraft.taskFor = 'self';
+      currentDraft.wantsOthers = false;
+      currentDraft.assigneeName = null;
+      currentDraft.assigneeId = null;
+      currentDraft.assignees = [];
+      currentDraft.assignedUsers = [];
+      currentDraft.assigneeLedger = [];
     }
   }
 
