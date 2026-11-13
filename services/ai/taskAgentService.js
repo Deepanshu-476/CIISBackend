@@ -10876,7 +10876,7 @@ const lastAskedField = currentDraft.asked.length > 0
       finalReply = ackPrefix + 'Client Plan "' + currentDraft.name + '" ka draft taiyar hai.\nPrice: ' + priceStr + '\nDuration: ' + (currentDraft.months || 1) + ' Month(s)\nStatus: ' + (currentDraft.status || 'Active') + '\nServices: ' + servicesStr + '\n\nKya main create kar doon?';
       finalSpeech = 'क्लाइंट प्लान "' + currentDraft.name + '" का ड्राफ्ट तैयार है। क्या मैं बना दूं?';
       readyChips = [
-        { label: 'Create karo', action: { type: 'confirm' } },
+        { label: 'Create', action: { type: 'confirm' } },
         { label: 'Edit', action: { type: 'edit' } },
         { label: 'Cancel', action: { type: 'cancel' } },
       ];
@@ -10913,7 +10913,7 @@ const lastAskedField = currentDraft.asked.length > 0
       finalReply = ackPrefix + 'Client "' + currentDraft.client + '" (' + currentDraft.company + ', ' + currentDraft.city + ') ka draft taiyar hai.' + servicesLine + planLine + logoLine + '\n\n' + emailNotice + '\n\nKya main create kar doon?';
       finalSpeech = `क्लाइंट "${currentDraft.client}" का ड्राफ्ट तैयार है। क्या मैं बना दूं?`;
       readyChips = [
-        { label: 'Create karo', action: { type: 'confirm' } },
+        { label: 'Create', action: { type: 'confirm' } },
         { label: 'Edit', action: { type: 'edit' } },
         { label: 'Cancel', action: { type: 'cancel' } },
       ];
@@ -11033,7 +11033,7 @@ const lastAskedField = currentDraft.asked.length > 0
         finalSpeech = `${whoHinglish} ko task assign karna hai. Create kar doon?`;
       }
       readyChips = [
-        { label: 'Create karo', action: { type: 'confirm' } },
+        { label: 'Create', action: { type: 'confirm' } },
         { label: 'Edit', action: { type: 'edit' } },
         { label: 'Cancel', action: { type: 'cancel' } },
       ];
