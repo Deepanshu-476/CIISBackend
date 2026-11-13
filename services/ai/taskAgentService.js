@@ -6028,12 +6028,15 @@ const lastAskedField = currentDraft.asked.length > 0
 
     // EDIT / UPDATE INTERCEPTION for create_client_task
     if (trimmedMessage) {
-      // 1. Priority update (e.g. "priority change karke high karo", "change priority to high", "high priority")
-      const prioMatch = trimmedMessage.match(/(?:priority|प्रायोरिटी)\s*(?:change\s*karke\s*|change\s*to\s*|to\s*|karke\s*|is\s*|:\s*|badal\s*ke\s*)?\s*(high|low|medium|urgent|kam|normal|theek|zaroori|jaruri)\b/i) ||
+      // 1. Priority update (e.g. "priority change karke high karo", "change priority to high", "high priority", "change priority make it low", "make priority low")
+      const prioWordMatch = trimmedMessage.match(/\b(high|low|medium|urgent|kam|normal|theek|zaroori|jaruri)\b/i);
+      const hasPriorityKeyword = /(?:priority|प्रायोरिटी)/i.test(trimmedMessage);
+      const isPriorityEdit = (hasPriorityKeyword && prioWordMatch) ||
+        (parsedSlots?.priority && (hasPriorityKeyword || /(?:change|badal|karo|set|make|rakho)/i.test(trimmedMessage))) ||
         trimmedMessage.match(/\b(high|low|medium|urgent)\s*(?:priority|प्रायोरिटी)\b/i) ||
-        (wantsEditPrompt && trimmedMessage.match(/\b(high|low|medium|urgent)\b/i));
-      if (prioMatch) {
-        const pVal = prioMatch[1].toLowerCase();
+        (wantsEditPrompt && prioWordMatch);
+      if (isPriorityEdit) {
+        const pVal = (prioWordMatch ? prioWordMatch[1] : parsedSlots.priority).toLowerCase();
         if (['high', 'urgent', 'zaroori', 'jaruri'].includes(pVal)) currentDraft.priority = 'High';
         else if (['low', 'kam'].includes(pVal)) currentDraft.priority = 'Low';
         else currentDraft.priority = 'Medium';
@@ -6105,15 +6108,52 @@ const lastAskedField = currentDraft.asked.length > 0
 
       // 6. Checkpoints update / remove
       if (!actionHandled && /(?:checkpoints?|चेकपॉइंट्स?|चेकपॉइंट)\b/i.test(trimmedMessage)) {
-        if (/hatao|remove|delete|clear|koi nahi|none|mat|nahi/i.test(trimmedMessage)) {
-          currentDraft.checkpoints = [];
-          notices.push(isEn ? 'Checkpoints removed.' : 'Checkpoints hata diye gaye hain.');
+        if (/hatao|remove|delete|clear|koi nahi|none|mat|nahi/i.test(trimmedMessage) && !/add\s*karein|add\s*karo|dalo|shamil|more\s*checkpoints/i.test(trimmedMessage)) {
+          const cpToRemove = trimmedMessage.replace(/.*(?:remove|delete|clear|hatao|hata\s*do)\s*(?:checkpoints?|चेकपॉइंट्स?|चेकपॉइंट)?\s*[-–:]?\s*/i, '').trim();
+          if (cpToRemove && Array.isArray(currentDraft.checkpoints) && currentDraft.checkpoints.length > 0) {
+            const beforeCount = currentDraft.checkpoints.length;
+            currentDraft.checkpoints = currentDraft.checkpoints.filter(cp => {
+              const cpTitle = (typeof cp === 'string' ? cp : (cp?.title || '')).toLowerCase().trim();
+              return cpTitle !== cpToRemove.toLowerCase() && !cpTitle.includes(cpToRemove.toLowerCase());
+            });
+            if (currentDraft.checkpoints.length < beforeCount) {
+              notices.push(isEn ? `Checkpoint "${cpToRemove}" removed.` : `Checkpoint "${cpToRemove}" hata diya gaya.`);
+            } else {
+              currentDraft.checkpoints = [];
+              notices.push(isEn ? 'Checkpoints removed.' : 'Checkpoints hata diye gaye hain.');
+            }
+          } else {
+            currentDraft.checkpoints = [];
+            notices.push(isEn ? 'Checkpoints removed.' : 'Checkpoints hata diye gaye hain.');
+          }
         } else {
-          const cpClean = trimmedMessage.replace(/.*(?:checkpoints?|चेकपॉइंट्स?|चेकपॉइंट)\s*(?:add\s*karein|add\s*karo|rakho|dalo|to|is|:)?\s*/i, '');
+          const cpClean = trimmedMessage.replace(/.*(?:checkpoints?|चेकपॉइंट्स?|चेकपॉइंट)\s*(?:add\s*karein|add\s*karo|rakho|dalo|to|is|:)?\s*[-–:]?\s*/i, '');
           if (cpClean.trim()) {
-            const items = typeof parseCheckpointItems === 'function' ? parseCheckpointItems(cpClean) : cpClean.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
-            currentDraft.checkpoints = items.map(t => typeof t === 'string' ? { title: t, completed: false } : (t && t.title ? { title: String(t.title), completed: Boolean(t.completed) } : { title: String(t), completed: false }));
-            notices.push(isEn ? `${currentDraft.checkpoints.length} checkpoint(s) updated.` : `${currentDraft.checkpoints.length} checkpoint(s) update ho gaye.`);
+            const rawItems = typeof parseCheckpointItems === 'function' ? parseCheckpointItems(cpClean) : cpClean.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
+            const newItems = rawItems.map(t => typeof t === 'string' ? { title: t, completed: false } : (t && t.title ? { title: String(t.title), completed: Boolean(t.completed) } : { title: String(t), completed: false })).filter(item => item.title && item.title.trim());
+            
+            const existing = Array.isArray(currentDraft.checkpoints) ? currentDraft.checkpoints : [];
+            const isExplicitReplace = /\b(?:replace|badal\s*kar\s*sirf|sirf\s*yahi|only\s*these)\b/i.test(trimmedMessage);
+            
+            if (isExplicitReplace || existing.length === 0) {
+              currentDraft.checkpoints = newItems;
+              notices.push(isEn ? `${currentDraft.checkpoints.length} checkpoint(s) updated.` : `${currentDraft.checkpoints.length} checkpoint(s) update ho gaye.`);
+            } else {
+              // Append new items avoiding exact duplicates
+              const existingTitles = new Set(existing.map(e => (typeof e === 'string' ? e : e?.title || '').trim().toLowerCase()));
+              const addedItems = [];
+              for (const item of newItems) {
+                const norm = item.title.trim().toLowerCase();
+                if (!existingTitles.has(norm)) {
+                  existingTitles.add(norm);
+                  addedItems.push(item);
+                }
+              }
+              currentDraft.checkpoints = [...existing, ...addedItems];
+              notices.push(isEn 
+                ? `${addedItems.length} new checkpoint(s) added (total ${currentDraft.checkpoints.length} item(s)).` 
+                : `${addedItems.length} naye checkpoint(s) add ho gaye (total ${currentDraft.checkpoints.length} item(s)).`);
+            }
           }
         }
         currentDraft.checkpointsAsked = true;
