@@ -122,28 +122,45 @@ function buildReminderPayload(settings = {}) {
   }
 
   const rawSettings = (typeof settings === 'object' && settings !== null) ? settings : {};
-  const options = Array.isArray(rawSettings.options) ? [...rawSettings.options] : [];
-  if (rawSettings.reminderOption && !options.includes(rawSettings.reminderOption)) {
-    options.push(rawSettings.reminderOption);
-  }
-
-  const repeatIntervalMinutes = rawSettings.repeatIntervalMinutes ? Number(rawSettings.repeatIntervalMinutes) : null;
-  if (repeatIntervalMinutes && !options.includes('interval')) {
-    options.push('interval');
-  }
-
-  const minutesBeforeDue = rawSettings.minutesBeforeDue ? Number(rawSettings.minutesBeforeDue) : null;
-  if (minutesBeforeDue && !options.includes('beforeDue') && rawSettings.reminderOption !== 'oneHourBefore') {
-    options.push('beforeDue');
-  }
-
+  const options = [];
+  let repeatIntervalMinutes = rawSettings.repeatIntervalMinutes ? Number(rawSettings.repeatIntervalMinutes) : null;
+  let minutesBeforeDue = rawSettings.minutesBeforeDue ? Number(rawSettings.minutesBeforeDue) : null;
   const customTime = rawSettings.customTime || (rawSettings.reminderTime ? (rawSettings.reminderTime instanceof Date ? rawSettings.reminderTime.toISOString() : String(rawSettings.reminderTime)) : null);
-  if (customTime && !options.includes('custom')) {
+
+  const rawOpt = String(rawSettings.reminderOption || rawSettings.option || '').trim();
+  if (rawOpt === 'hourly') {
+    options.push('hourly');
+    repeatIntervalMinutes = repeatIntervalMinutes || 60;
+  } else if (rawOpt === 'halfHourly' || rawOpt === 'every30Minutes') {
+    options.push('halfHourly');
+    repeatIntervalMinutes = repeatIntervalMinutes || 30;
+  } else if (rawOpt === 'oneHourBefore') {
+    options.push('oneHourBefore');
+    minutesBeforeDue = minutesBeforeDue || 60;
+  } else if (rawOpt === 'beforeDue' || (minutesBeforeDue && !repeatIntervalMinutes)) {
+    options.push('beforeDue');
+  } else if (rawOpt === 'custom' || customTime) {
     options.push('custom');
+  } else if (rawOpt === 'interval' || rawOpt === 'every10Minutes' || rawOpt === 'every2Hours' || repeatIntervalMinutes) {
+    options.push('interval');
+    if (!repeatIntervalMinutes) {
+      repeatIntervalMinutes = rawOpt === 'every10Minutes' ? 10 : (rawOpt === 'every2Hours' ? 120 : 10);
+    }
+  } else if (Array.isArray(rawSettings.options) && rawSettings.options.length > 0) {
+    const validEnums = new Set(['hourly', 'halfHourly', 'oneHourBefore', 'custom', 'interval', 'beforeDue']);
+    rawSettings.options.forEach(o => {
+      if (validEnums.has(o)) options.push(o);
+    });
   }
 
   if (options.length === 0) {
-    options.push('oneHourBefore');
+    if (repeatIntervalMinutes) {
+      options.push('interval');
+    } else if (minutesBeforeDue) {
+      options.push('beforeDue');
+    } else {
+      options.push('oneHourBefore');
+    }
   }
 
   return {
