@@ -4039,12 +4039,12 @@ const lastAskedField = currentDraft.asked.length > 0
         currentDraft.clientTaskId = action.clientTaskId || null;
         currentDraft.title = action.title || action.name || '';
         currentDraft.description = action.description || action.title || action.name || '';
-        if (action.dueDate || action.dueDateTime) {
-          currentDraft.dueDateTime = action.dueDateTime || action.dueDate;
-          currentDraft.dueDate = String(action.dueDate || action.dueDateTime).split('T')[0];
-        }
-        if (action.priority) currentDraft.priority = action.priority;
-        if (Array.isArray(action.checkpoints)) currentDraft.checkpoints = action.checkpoints;
+        // Explicitly clear dueDateTime & priority so AI will ask user for them as requested
+        currentDraft.dueDateTime = null;
+        currentDraft.dueDate = null;
+        currentDraft.priority = null;
+        currentDraft.asked = (currentDraft.asked || []).filter(f => f !== 'dueDateTime' && f !== 'dueDate' && f !== 'priority');
+        if (Array.isArray(action.checkpoints) && action.checkpoints.length > 0) currentDraft.checkpoints = action.checkpoints;
         if (!currentDraft.asked.includes('title')) currentDraft.asked.push('title');
         if (!currentDraft.asked.includes('description')) currentDraft.asked.push('description');
         if (!currentDraft.asked.includes('select_pending_task')) currentDraft.asked.push('select_pending_task');
@@ -4084,11 +4084,16 @@ const lastAskedField = currentDraft.asked.length > 0
         actionHandled = true;
         currentDraft.reminder = Boolean(action.reminder);
         currentDraft.reminderOption = action.reminderOption || 'off';
+        const remOpt = action.reminderOption;
+        const isInterval = action.repeatIntervalMinutes || remOpt === 'every10Minutes' || remOpt === 'every2Hours' || remOpt === 'interval';
+        const validOption = remOpt === 'hourly' ? 'hourly' : (remOpt === 'halfHourly' || remOpt === 'every30Minutes' ? 'halfHourly' : (isInterval ? 'interval' : 'oneHourBefore'));
+        const intervalMin = action.repeatIntervalMinutes || (remOpt === 'every10Minutes' ? 10 : (remOpt === 'every2Hours' ? 120 : (remOpt === 'every30Minutes' ? 30 : (remOpt === 'hourly' ? 60 : null))));
+        currentDraft.repeatIntervalMinutes = intervalMin;
         currentDraft.reminderSettings = {
           enabled: Boolean(action.reminder),
-          reminderOption: action.reminderOption || 'off',
-          repeatIntervalMinutes: action.repeatIntervalMinutes || null,
-          options: action.reminderOption ? [action.reminderOption] : [],
+          reminderOption: remOpt || 'off',
+          repeatIntervalMinutes: intervalMin,
+          options: action.reminder ? [validOption] : [],
         };
         if (!currentDraft.asked.includes('reminder')) currentDraft.asked.push('reminder');
         break;
@@ -6044,46 +6049,48 @@ const lastAskedField = currentDraft.asked.length > 0
         actionHandled = true;
       } else if ((lastAsked === 'dueDateTime' || lastAsked === 'dueDate') && !currentDraft.dueDateTime && !currentDraft.dueDate) {
         const parsed = parseHinglishSlots(trimmedMessage, now);
-        if (parsed?.dueDateTime) {
-          currentDraft.dueDateTime = parsed.dueDateTime;
-          currentDraft.dueDate = parsed.dueDateTime.split('T')[0];
+        const parsedDt = parsed?.dueDateTime || (typeof parseHinglishDateTime === 'function' ? parseHinglishDateTime(trimmedMessage, now) : null);
+        if (parsedDt) {
+          currentDraft.dueDateTime = parsedDt;
+          currentDraft.dueDate = parsedDt.split('T')[0];
         } else {
           const dateObj = new Date(trimmedMessage);
           if (!isNaN(dateObj.getTime())) {
             currentDraft.dueDateTime = dateObj.toISOString();
             currentDraft.dueDate = dateObj.toISOString().split('T')[0];
-          } else {
-            const defaultDate = new Date(now.getTime() + 7 * 24 * 3600 * 1000);
-            currentDraft.dueDateTime = defaultDate.toISOString();
-            currentDraft.dueDate = defaultDate.toISOString().split('T')[0];
           }
         }
-        if (!currentDraft.asked.includes('dueDateTime')) currentDraft.asked.push('dueDateTime');
-        actionHandled = true;
-      } else if (lastAsked === 'priority' && !currentDraft.priority && !currentDraft.asked.includes('priority')) {
-        if (/high/i.test(trimmedMessage)) currentDraft.priority = 'High';
-        else if (/low/i.test(trimmedMessage)) currentDraft.priority = 'Low';
-        else currentDraft.priority = 'Medium';
-        if (!currentDraft.asked.includes('priority')) currentDraft.asked.push('priority');
-        actionHandled = true;
+        if (currentDraft.dueDateTime) {
+          if (!currentDraft.asked.includes('dueDateTime')) currentDraft.asked.push('dueDateTime');
+          actionHandled = true;
+        }
+      } else if (lastAsked === 'priority' && !currentDraft.priority) {
+        if (/high|urgent|bahut\s*zaroori|jaruri/i.test(trimmedMessage)) currentDraft.priority = 'High';
+        else if (/low|kam/i.test(trimmedMessage)) currentDraft.priority = 'Low';
+        else if (/med|normal|theek|default/i.test(trimmedMessage)) currentDraft.priority = 'Medium';
+        if (currentDraft.priority) {
+          if (!currentDraft.asked.includes('priority')) currentDraft.asked.push('priority');
+          actionHandled = true;
+        }
       } else if (lastAsked === 'reminder' && (currentDraft.reminder === null || currentDraft.reminder === undefined)) {
         if (/off|nahi|no|mat|chhod/i.test(trimmedMessage)) {
           currentDraft.reminder = false;
           currentDraft.reminderOption = 'off';
-          currentDraft.reminderSettings = { enabled: false };
+          currentDraft.reminderSettings = { enabled: false, options: [] };
         } else {
           const isEvery30 = /30\s*min/i.test(trimmedMessage);
           const is1Hour = /1\s*ghant|hourly|1\s*hour/i.test(trimmedMessage);
           const is2Hours = /2\s*ghant|2\s*hour/i.test(trimmedMessage);
-          const option = isEvery30 ? 'every30Minutes' : (is1Hour ? 'hourly' : (is2Hours ? 'every2Hours' : 'every10Minutes'));
           const interval = isEvery30 ? 30 : (is1Hour ? 60 : (is2Hours ? 120 : 10));
+          const option = isEvery30 ? 'halfHourly' : (is1Hour ? 'hourly' : 'interval');
           currentDraft.reminder = true;
-          currentDraft.reminderOption = option;
+          currentDraft.reminderOption = isEvery30 ? 'every30Minutes' : (is1Hour ? 'hourly' : (is2Hours ? 'every2Hours' : 'every10Minutes'));
           currentDraft.repeatIntervalMinutes = interval;
           currentDraft.reminderSettings = {
             enabled: true,
-            reminderOption: option,
+            reminderOption: currentDraft.reminderOption,
             repeatIntervalMinutes: interval,
+            options: [option],
             reminderTime: null,
             customTime: null,
             minutesBeforeDue: null
@@ -6137,12 +6144,12 @@ const lastAskedField = currentDraft.asked.length > 0
           currentDraft.clientTaskId = String(matched._id || matched.id);
           currentDraft.title = matched.name || matched.title;
           currentDraft.description = matched.description || matched.name || matched.title;
-          if (matched.dueDate) {
-            currentDraft.dueDateTime = new Date(matched.dueDate).toISOString();
-            currentDraft.dueDate = new Date(matched.dueDate).toISOString().split('T')[0];
-          }
-          if (matched.priority) currentDraft.priority = matched.priority;
-          if (Array.isArray(matched.checkpoints)) currentDraft.checkpoints = matched.checkpoints;
+          // User must explicitly be asked for due date and priority
+          currentDraft.dueDateTime = null;
+          currentDraft.dueDate = null;
+          currentDraft.priority = null;
+          currentDraft.asked = (currentDraft.asked || []).filter(f => f !== 'dueDateTime' && f !== 'dueDate' && f !== 'priority');
+          if (Array.isArray(matched.checkpoints) && matched.checkpoints.length > 0) currentDraft.checkpoints = matched.checkpoints;
           if (!currentDraft.asked.includes('title')) currentDraft.asked.push('title');
           if (!currentDraft.asked.includes('description')) currentDraft.asked.push('description');
           if (!currentDraft.asked.includes('select_pending_task')) currentDraft.asked.push('select_pending_task');
@@ -6160,8 +6167,6 @@ const lastAskedField = currentDraft.asked.length > 0
             clientTaskId: String(t._id || t.id),
             title: t.name || t.title,
             description: t.description || t.name || t.title,
-            dueDate: t.dueDate ? new Date(t.dueDate).toISOString() : null,
-            priority: t.priority || 'Medium',
             checkpoints: t.checkpoints || []
           }
         }));
@@ -6282,7 +6287,6 @@ const lastAskedField = currentDraft.asked.length > 0
           { label: 'High', action: { type: 'set', field: 'priority', value: 'High' } },
           { label: 'Medium', action: { type: 'set', field: 'priority', value: 'Medium' } },
           { label: 'Low', action: { type: 'set', field: 'priority', value: 'Low' } },
-          { label: 'Default (Medium)', action: { type: 'set', field: 'priority', value: 'Medium' } },
           { label: 'Cancel', action: { type: 'cancel' } }
         ],
         candidates: [],
