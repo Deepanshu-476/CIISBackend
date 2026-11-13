@@ -5505,15 +5505,22 @@ const lastAskedField = currentDraft.asked.length > 0
     (Array.isArray(currentDraft.asked) && currentDraft.asked.length > 0)
   );
 
-  const explicitLang = (language && language !== 'hinglish') ? language : null;
+  const explicitLang = (language && language !== 'auto') ? language : null;
   const prevLang = draft?.language || currentDraft?.language;
   let userLang;
   const isLanguageSwitchCommand = /\b(?:speak|talk|reply|answer|switch|change)\s*(?:in|to)?\s*(?:english|hindi|hinglish)\b/i.test(trimmedMessage);
   const isShortOrAction = !trimmedMessage || /^(?:skip|skip\s+remaining|high|medium|low|urgent|pending|in[- ]progress|completed|on[- ]hold|\d+|yes|no|haan|nahi|default|cancel)$/i.test(trimmedMessage);
-  if (prevLang && !isLanguageSwitchCommand && (isDraftInProgress || isShortOrAction)) {
+  if (isLanguageSwitchCommand) {
+    userLang = detectMessageLanguage(trimmedMessage, 'en');
+  } else if (trimmedMessage && !isShortOrAction) {
+    const detected = detectMessageLanguage(trimmedMessage, explicitLang || prevLang || 'en');
+    userLang = detected;
+  } else if (explicitLang) {
+    userLang = explicitLang;
+  } else if (prevLang) {
     userLang = prevLang;
   } else {
-    userLang = detectMessageLanguage(trimmedMessage, explicitLang || prevLang || 'hinglish');
+    userLang = 'en';
   }
   currentDraft.language = userLang;
 
@@ -5619,8 +5626,9 @@ const lastAskedField = currentDraft.asked.length > 0
 
   // --------------------------------------------------------------------------
   // CONVERSATIONAL ROUTER 4: CRM Task Status Mutations (e.g. mark completed)
+  // (Only runs when NOT in the middle of a draft, so in-draft edits update the draft instead)
   // --------------------------------------------------------------------------
-  if (!actionHandled && (!isDraftInProgress || currentDraft.intent === 'self_task' || currentDraft.intent === 'task_assigned_user') && trimmedMessage && isCrmTaskUpdate(trimmedMessage)) {
+  if (!actionHandled && !isDraftInProgress && trimmedMessage && isCrmTaskUpdate(trimmedMessage)) {
     const updateResult = await handleCrmUpdate(trimmedMessage, req, deps, userLang, {
       accessibleProjects,
       accessibleClients,
@@ -8425,11 +8433,34 @@ const lastAskedField = currentDraft.asked.length > 0
         if (detSlots.title || extracted.title) currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'title');
         if (detSlots.description || extracted.description) currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'description');
         if (detSlots.dueDateTime || extracted.dueDateTime) currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'dueDateTime');
-        if (/(?:remove|delete|clear|hatao|hata\s*do)\s*(?:attachment|file|photo|image)|(?:attachment|file|photo|image)\s*(?:hatao|hata\s*do|remove|delete|clear)/i.test(trimmedMessage)) {
+        if (/(?:remove|delete|clear|hatao|hata\s*do)\s*(?:attachments?|attachements?|files?|photos?|images?)|(?:attachments?|attachements?|files?|photos?|images?)\s*(?:hatao|hata\s*do|remove|delete|clear)/i.test(trimmedMessage)) {
           currentDraft.attachmentsCount = 0;
           currentDraft.file = null;
           currentDraft.pdfFile = null;
+          currentDraft.attachments = [];
+          currentDraft.files = [];
+          if (!currentDraft.skipped.includes('attachments')) currentDraft.skipped.push('attachments');
           notices.push(userLang === 'en' ? 'Attachments removed.' : 'Attachments hata diye gaye hain.');
+        } else if (/(?:add|attach|upload|daalo|jodo|lagao)\s*(?:attachments?|attachements?|files?|photos?|images?)|(?:attachments?|attachements?|files?|photos?|images?)\s*(?:add|attach|upload|daalo|jodo|lagao)/i.test(trimmedMessage)) {
+          currentDraft.skipped = (currentDraft.skipped || []).filter((f) => f !== 'attachments');
+          const isEn = userLang === 'en';
+          const rep = isEn
+            ? 'Please attach your file or image using the paperclip icon below.'
+            : 'Kripya niche paperclip icon se apni file ya photo attach karein.';
+          return {
+            success: true,
+            status: 'needs_input',
+            field: 'attachments',
+            reply: rep,
+            speech: rep,
+            speakText: rep,
+            speakTextHi: isEn ? null : 'कृपया नीचे पेपरक्लिप आइकन से अपनी फ़ाइल या फ़ोटो अटैच करें।',
+            language: isEn ? 'en' : 'hinglish',
+            draft: currentDraft,
+            chips: isEn
+              ? [{ label: 'No', action: { type: 'skip_field', field: 'attachments' } }, { label: 'Skip remaining', action: { type: 'skip_all' } }]
+              : [{ label: 'Nahi', action: { type: 'skip_field', field: 'attachments' } }, { label: 'Skip remaining', action: { type: 'skip_all' } }]
+          };
         }
         if (detSlots.reminder !== undefined || extracted.reminder !== undefined) {
           currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'reminder');
