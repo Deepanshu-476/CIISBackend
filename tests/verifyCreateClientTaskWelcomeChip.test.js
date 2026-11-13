@@ -43,6 +43,37 @@ const plainChips = buildChips(null, 'welcome', { allowedIntents: plainAllowed, l
 assert.ok(!plainChips.some(c => c.label === 'Create client task'), 'Plain employee should NOT see chip');
 console.log('✓ Test 3 passed!');
 
-console.log('\n======================================================');
-console.log('>>> ALL WELCOME CHIP RBAC VERIFICATIONS PASSED 100% <<<');
-console.log('======================================================');
+console.log('\n=== TEST 4: Logged-in employee with standard req.user (no allowedPages set) has Create Task access by default ===');
+const vanshUser = {
+  _id: 'u_vansh',
+  name: 'Vansh Gupta',
+  role: 'employee',
+  companyCode: 'TECH334753'
+};
+const vanshAllowed = resolveUserAllowedIntents(vanshUser, {}, {});
+assert.ok(vanshAllowed.includes('create_client_task'), 'Vansh should have create_client_task allowed');
+const vanshChips = buildChips(null, 'welcome', { allowedIntents: vanshAllowed, language: 'en' });
+assert.ok(vanshChips.some(c => c.label === 'Create client task'), 'Vansh should see Create client task chip');
+console.log('✓ Test 4 passed!');
+
+console.log('\n=== TEST 5: parseTaskRequest with action set_intent create_client_task for employee Vansh must NOT be permission denied ===');
+const { parseTaskRequest } = require('../services/ai/taskAgentService');
+(async () => {
+  const parseRes = await parseTaskRequest({
+    req: { user: vanshUser },
+    action: { type: 'set_intent', intent: 'create_client_task' },
+    message: ''
+  }, {
+    accessibleClients: [{ _id: 'c1', client: 'saniha - cds', services: ['Web Development'] }],
+    accessibleProjects: []
+  });
+  assert.notStrictEqual(parseRes.intent?.type, 'permission_denied', 'Must NOT be permission denied');
+  assert.ok(!parseRes.reply.includes('access nahi hai'), 'Reply must not deny permission');
+  assert.ok(parseRes.reply.includes('client') || parseRes.field === 'client', 'Must prompt for client');
+  console.log('✓ Test 5 passed!');
+
+  console.log('\n======================================================');
+  console.log('>>> ALL WELCOME CHIP RBAC VERIFICATIONS PASSED 100% <<<');
+  console.log('======================================================');
+})();
+
