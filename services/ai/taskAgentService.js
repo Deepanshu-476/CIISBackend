@@ -781,12 +781,12 @@ function isActionOrCreationCommand(text) {
 
   // Explicit creation phrases must ALWAYS be treated as creation commands regardless of trailing or speech-recognition question marks
   const hasExplicitCreation = (
-    /\b(?:create|banao|bana\s*do|banayein|add|naya|nayi|naye|new)\s*(?:a\s+|an\s+|the\s+|my\s+|mera\s+|meri\s+|mere\s+|apna\s+|apne\s+)?(?:personal\s+|self\s+)?(?:task|project|client|plan)\b/i.test(clean) ||
-    /\b(?:personal\s+task|self\s+task|mera\s+task|apna\s+task)\s*(?:create|banao|bana\s*do|banayein)\b/i.test(clean) ||
+    /\b(?:create|banao|bana\s*do|banayein|add|naya|nayi|naye|new)\s*(?:a\s+|an\s+|the\s+|my\s+|mera\s+|meri\s+|mere\s+|apna\s+|apne\s+)?(?:personal\s+|self\s+|client\s+)?(?:task|project|client|plan)\b/i.test(clean) ||
+    /\b(?:personal\s+task|self\s+task|client\s+task|mera\s+task|apna\s+task)\s*(?:create|banao|bana\s*do|banayein)\b/i.test(clean) ||
     /(?:मेरा|मेरी|मेरे|अपना|अपने)\s*(?:पर्सनल\s*)?टास्क\s*(?:क्रिएट|बनाओ|बना\s*दो|बनाएं|करो)/iu.test(clean) ||
     /(?:टास्क\s*का\s*नाम|task\s*ka\s*naam|task\s*name)\b/i.test(clean) ||
-    /\b(?:create\s+task|create\s+project|create\s+client|create\s+plan)\b/i.test(clean) ||
-    /\b(?:personal\s+task\s+create|task\s+create\s+karo)\b/i.test(clean)
+    /\b(?:create\s+task|create\s+project|create\s+client|create\s+plan|create\s+client\s+task)\b/i.test(clean) ||
+    /\b(?:personal\s+task\s+create|task\s+create\s+karo|client\s+task\s+create)\b/i.test(clean)
   );
   if (hasExplicitCreation) return true;
 
@@ -795,7 +795,7 @@ function isActionOrCreationCommand(text) {
 
   return (
     /\b(?:banao|banayein|create|add|assign|kardo|karo|karu|karun|set|badlo|change|update|edit|cancel|delete|hatao|dalo|likho)\b/i.test(clean) ||
-    /\b(?:task\s+ka\s+naam|task\s+name|task\s+assign|task\s+banao|naya\s+task|new\s+task|personal\s+task|parshan\s+task|project\s+banao|naya\s+project|new\s+project|client\s+banao|naya\s+client|new\s+client|client\s+add)\b/i.test(clean) ||
+    /\b(?:task\s+ka\s+naam|task\s+name|task\s+assign|task\s+banao|naya\s+task|new\s+task|personal\s+task|parshan\s+task|project\s+banao|naya\s+project|new\s+project|client\s+banao|naya\s+client|new\s+client|client\s+add|client\s+task)\b/i.test(clean) ||
     /(?:टास्क|काम|प्रोजेक्ट|क्लाइंट|प्लान|बनाओ|बनाएं|बना|क्रिएट|क्रियेट|करो|करूं|करू|असाइन|नाम|शीर्षक|जोड़ो|ऐड)/iu.test(clean)
   );
 }
@@ -806,12 +806,12 @@ function isCrmQuery(text) {
 
   // Explicit creation requests must NEVER be hijacked as CRM queries!
   const hasExplicitCreation = (
-    /\b(?:create|banao|bana\s*do|banayein|add)\s*(?:a\s+|an\s+|the\s+|my\s+|mera\s+|meri\s+|mere\s+|apna\s+|apne\s+)?(?:personal\s+|self\s+)?(?:task|project|client|plan)\b/i.test(clean) ||
-    /\b(?:personal\s+task|self\s+task|mera\s+task|apna\s+task)\s*(?:create|banao|bana\s*do|banayein)\b/i.test(clean) ||
+    /\b(?:create|banao|bana\s*do|banayein|add)\s*(?:a\s+|an\s+|the\s+|my\s+|mera\s+|meri\s+|mere\s+|apna\s+|apne\s+)?(?:personal\s+|self\s+|client\s+)?(?:task|project|client|plan)\b/i.test(clean) ||
+    /\b(?:personal\s+task|self\s+task|client\s+task|mera\s+task|apna\s+task)\s*(?:create|banao|bana\s*do|banayein)\b/i.test(clean) ||
     /(?:मेरा|मेरी|मेरे|अपना|अपने)\s*(?:पर्सनल\s*)?टास्क\s*(?:क्रिएट|बनाओ|बना\s*दो|बनाएं|करो)/iu.test(clean) ||
     /(?:टास्क\s*का\s*नाम|task\s*ka\s*naam|task\s*name)\b/i.test(clean) ||
-    /\b(?:create\s+task|create\s+project|create\s+client|create\s+plan)\b/i.test(clean) ||
-    /\b(?:personal\s+task\s+create|task\s+create\s+karo)\b/i.test(clean)
+    /\b(?:create\s+task|create\s+project|create\s+client|create\s+plan|create\s+client\s+task)\b/i.test(clean) ||
+    /\b(?:personal\s+task\s+create|task\s+create\s+karo|client\s+task\s+create)\b/i.test(clean)
   );
   if (hasExplicitCreation) return false;
 
@@ -2908,7 +2908,7 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
 const INTENT_PAGE_NAMES_EN = {
   create_client: 'Client',
   create_client_plan: 'Client Plans',
-  create_client_task: 'Client',
+  create_client_task: 'Create Task',
   create_project: 'Projects',
   task_project: 'Projects',
   task_assigned_user: 'Task Assignment',
@@ -2918,7 +2918,7 @@ const INTENT_PAGE_NAMES_EN = {
 const INTENT_PAGE_NAMES_HI = {
   create_client: 'Client',
   create_client_plan: 'Client Plans',
-  create_client_task: 'Client',
+  create_client_task: 'Create Task',
   create_project: 'Projects',
   task_project: 'Projects',
   task_assigned_user: 'Task Assignment',
@@ -2972,6 +2972,14 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
     ...(Array.isArray(deps?.sidebarMenuItems) ? deps.sidebarMenuItems : []),
     ...(Array.isArray(deps?.menuItems) ? deps.menuItems : []),
   ];
+
+  const hasExplicitRestrictions = Boolean(
+    (Array.isArray(user?.allowedPages) && user.allowedPages.length > 0) ||
+    (Array.isArray(user?.pagePermissions) && user.pagePermissions.length > 0) ||
+    (Array.isArray(user?.permissions) && user.permissions.length > 0) ||
+    (Array.isArray(deps?.sidebarMenuItems) && deps.sidebarMenuItems.length > 0) ||
+    (Array.isArray(deps?.menuItems) && deps.menuItems.length > 0)
+  );
 
   const normalizedPerms = new Set();
   userPerms.forEach((p) => {
@@ -3032,6 +3040,7 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
   }
 
   // Users with "Create Task" / Task Management page or client management can create client tasks:
+  // In CIIS, the "Create Task" page (/ciisUser/task-management) is accessible to all logged-in company users/employees by default.
   const hasCreateTaskPage = Boolean(
     normalizedPerms.has('taskmanagement') ||
     normalizedPerms.has('createtask') ||
@@ -3041,9 +3050,17 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
     normalizedPerms.has('ciisuser/createtask') ||
     normalizedPerms.has('ciisuser/task-management') ||
     normalizedPerms.has('ciisuser/create-task') ||
-    normalizedPerms.has('task_management')
+    normalizedPerms.has('task_management') ||
+    normalizedPerms.has('create_task') ||
+    normalizedPerms.has('mytasks') ||
+    normalizedPerms.has('my-tasks') ||
+    normalizedPerms.has('tasks') ||
+    normalizedPerms.has('task') ||
+    canClient ||
+    !hasExplicitRestrictions ||
+    (Array.isArray(deps?.allowedIntents) && deps.allowedIntents.includes('create_client_task'))
   );
-  if (canClient || hasCreateTaskPage) {
+  if (hasCreateTaskPage) {
     if (!allowed.includes('create_client_task')) {
       allowed.push('create_client_task');
     }
@@ -3055,8 +3072,15 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
   }
 
   if (Array.isArray(deps.allowedIntents) && deps.allowedIntents.length > 0) {
+    if (deps.allowedIntents.includes('create_client_task') && !allowed.includes('create_client_task')) {
+      allowed.push('create_client_task');
+    }
     const valid = new Set(allowed);
-    return deps.allowedIntents.filter((i) => valid.has(i));
+    const result = deps.allowedIntents.filter((i) => valid.has(i));
+    if (allowed.includes('create_client_task') && !result.includes('create_client_task')) {
+      result.push('create_client_task');
+    }
+    return result;
   }
 
   return allowed;
