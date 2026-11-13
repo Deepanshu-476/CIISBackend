@@ -86,11 +86,28 @@ function mergeDraft(previous = {}, extracted = {}, deterministic = {}, rawMessag
   const status = det.status || ext.status || prev.status || null;
 
   // Checkpoints
-  let checkpoints = prev.checkpoints || [];
-  if (Array.isArray(det.checkpoints) && det.checkpoints.length > 0) {
-    checkpoints = det.checkpoints;
-  } else if (Array.isArray(ext.checkpoints) && ext.checkpoints.length > 0) {
-    checkpoints = ext.checkpoints.map(c => (typeof c === 'string' ? { title: c, completed: false } : c));
+  let checkpoints = Array.isArray(prev.checkpoints) ? prev.checkpoints : [];
+  const isReplaceCheckpoints = /\b(?:replace|badal\s*kar\s*sirf|sirf\s*yahi|only\s*these)\b/i.test(trimmedMessage || '');
+  const isRemoveCheckpoints = /\b(?:hatao|remove|delete|clear)\b/i.test(trimmedMessage || '');
+  const newCps = (Array.isArray(det.checkpoints) && det.checkpoints.length > 0)
+    ? det.checkpoints
+    : ((Array.isArray(ext.checkpoints) && ext.checkpoints.length > 0)
+      ? ext.checkpoints.map(c => (typeof c === 'string' ? { title: c, completed: false } : c))
+      : null);
+
+  if (newCps) {
+    if (isReplaceCheckpoints || checkpoints.length === 0) {
+      checkpoints = newCps;
+    } else {
+      const existingTitles = new Set(checkpoints.map(c => (typeof c === 'string' ? c : (c?.title || '')).trim().toLowerCase()));
+      const toAdd = newCps.filter(c => {
+        const title = (typeof c === 'string' ? c : (c?.title || '')).trim().toLowerCase();
+        return title && !existingTitles.has(title);
+      });
+      checkpoints = [...checkpoints, ...toAdd];
+    }
+  } else if (isRemoveCheckpoints) {
+    checkpoints = [];
   }
 
   // Reminder & options
