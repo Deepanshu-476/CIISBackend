@@ -100,7 +100,7 @@ const serverSideDraftSchema = z.object({
   minutesBeforeDue: z.number().nullish(),
   customTime: z.string().nullish(),
   reminderTime: z.string().nullish(),
-  reminderSettings: z.record(z.any()).nullish(),
+  reminderSettings: z.union([z.record(z.any()), z.boolean()]).nullish(),
   repeatPattern: z.string().nullish(),
   repeatDays: z.array(z.string()).nullish(),
   recurrenceEndDate: z.string().nullish(),

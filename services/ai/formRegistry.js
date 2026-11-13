@@ -1149,10 +1149,9 @@ const createClientTaskFormConfig = {
     title: { required: true, askOrder: 3 },
     description: { required: true, askOrder: 4 },
     dueDateTime: { required: true, askOrder: 5 },
-    assignee: { required: false, askOrder: 6 },
-    priority: { required: false, askOrder: 7, default: 'Medium' },
-    reminder: { required: false, askOrder: 8 },
-    checkpoints: { required: false, askOrder: 9 },
+    priority: { required: false, askOrder: 6, default: 'Medium' },
+    reminder: { required: false, askOrder: 7 },
+    checkpoints: { required: false, askOrder: 8 },
   },
   buildPayload(draft, user = {}) {
     const cId = draft.clientId || '';
@@ -1160,8 +1159,26 @@ const createClientTaskFormConfig = {
     const encodedService = encodeURIComponent(sName);
     const cleanCheckpoints = typeof getCleanCheckpoints === 'function' ? getCleanCheckpoints(draft.checkpoints) : [];
     const reminderPayload = typeof buildReminderPayload === 'function' ? buildReminderPayload(draft.reminderSettings || draft.reminder) : { enabled: false };
-    const effectiveAssignee = draft.assignee || draft.assigneeName || user?.name || user?.userName || '';
+    const effectiveAssignee = draft.assignee || draft.assigneeName || user?.name || user?.userName || 'Logged-in employee';
     const effectiveAssigneeId = draft.assigneeId || user?._id || user?.id || null;
+    if (draft.clientTaskId) {
+      return {
+        endpoint: `/tasks/client-tasks/${draft.clientTaskId}`,
+        method: 'PUT',
+        multipart: false,
+        fields: {
+          name: draft.title || draft.name || '',
+          description: draft.description || '',
+          dueDate: draft.dueDate || (draft.dueDateTime ? draft.dueDateTime.split('T')[0] : null),
+          dueDateTime: draft.dueDateTime || null,
+          assignee: effectiveAssignee,
+          assigneeId: effectiveAssigneeId,
+          priority: draft.priority || 'Medium',
+          checkpoints: cleanCheckpoints,
+          reminderSettings: reminderPayload,
+        }
+      };
+    }
     return {
       endpoint: `/tasks/client-tasks/client/${cId}/service/${encodedService}`,
       method: 'POST',
