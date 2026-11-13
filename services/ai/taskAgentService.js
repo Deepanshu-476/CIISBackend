@@ -5173,13 +5173,14 @@ const lastAskedField = currentDraft.asked.length > 0
           if (targetField === 'title') {
             currentDraft.title = null;
             currentDraft.skipped = (currentDraft.skipped || []).filter((f) => f !== 'title');
+            const replyMsg = isEn ? 'Task title is required and cannot be skipped. Please provide the task title:' : 'Task ka naam zaroori hai, isko skip nahi kar sakte. Kripya task ka naam batayein:';
             return {
               success: true,
               status: 'needs_input',
               field: 'title',
-              reply: 'Task ka naam zaroori hai, isko skip nahi kar sakte. Kripya task ka naam batayein:',
-              speech: 'टास्क का नाम ज़रूरी है, इसको स्किप नहीं कर सकते। कृपया टास्क का नाम बताएं।',
-              speakText: 'Task ka naam zaroori hai, isko skip nahi kar sakte. Kripya task ka naam batayein:',
+              reply: replyMsg,
+              speech: replyMsg,
+              speakText: replyMsg,
               draft: currentDraft,
               missing: ['title'],
               chips: [],
@@ -5195,23 +5196,30 @@ const lastAskedField = currentDraft.asked.length > 0
           }
           if (currentDraft.intent === 'create_project' && ['name', 'description', 'startDate', 'endDate', 'members'].includes(targetField)) {
             currentDraft.skipped = (currentDraft.skipped || []).filter((f) => f !== targetField);
-            const msgMap = {
+            const msgMap = isEn ? {
+              name: 'Project name is required and cannot be skipped. Please specify the project name:',
+              description: 'Project description is required and cannot be skipped. Please specify the description:',
+              startDate: 'Project start date is required and cannot be skipped. Please specify the start date:',
+              endDate: 'Project completion date is required and cannot be skipped. Please specify the completion date:',
+              members: 'At least one team member is required and cannot be skipped. Who will be the project members? Specify names (you will be included):',
+            } : {
               name: 'Project ka naam zaroori hai, isko skip nahi kar sakte. Kripya project ka naam batayein:',
               description: 'Project ka description zaroori hai, isko skip nahi kar sakte. Kripya description batayein:',
               startDate: 'Project ki start date zaroori hai, isko skip nahi kar sakte. Kripya start date batayein:',
               endDate: 'Project ki end date zaroori hai, isko skip nahi kar sakte. Kripya end date batayein:',
               members: 'Kam se kam ek team member zaroori hai, isko skip nahi kar sakte. Project mein kaun kaun members honge? Naam batayein (aap khud shamil honge)',
             };
+            const defaultMsg = isEn ? `${targetField} is required.` : `${targetField} zaroori hai.`;
             return {
               success: true,
               status: 'needs_input',
               field: targetField,
-              reply: msgMap[targetField] || `${targetField} zaroori hai.`,
-              speech: msgMap[targetField] || `${targetField} zaroori hai.`,
-              speakText: msgMap[targetField] || `${targetField} zaroori hai.`,
+              reply: msgMap[targetField] || defaultMsg,
+              speech: msgMap[targetField] || defaultMsg,
+              speakText: msgMap[targetField] || defaultMsg,
               draft: currentDraft,
               missing: [targetField],
-              chips: targetField === 'members' ? [{ label: 'Sirf main', action: { type: 'set', field: 'members', value: 'creator_only' } }] : [],
+              chips: targetField === 'members' ? [{ label: isEn ? 'Just me' : 'Sirf main', action: { type: 'set', field: 'members', value: 'creator_only' } }] : [],
               candidates: [],
               notices,
               canAssignOthers,
@@ -5224,19 +5232,25 @@ const lastAskedField = currentDraft.asked.length > 0
           }
           if (currentDraft.intent === 'create_client' && ['client', 'company', 'city', 'projectManager'].includes(targetField)) {
             currentDraft.skipped = (currentDraft.skipped || []).filter((f) => f !== targetField);
-            const msgMap = {
+            const msgMap = isEn ? {
+              client: 'Client name is required and cannot be skipped. Please specify client name:',
+              company: 'Company name is required and cannot be skipped. Please specify company name:',
+              city: 'City is required and cannot be skipped. Please specify city:',
+              projectManager: 'Selecting at least one team member is required and cannot be skipped. Please specify the team member name:',
+            } : {
               client: 'Client ka naam zaroori hai, isko skip nahi kar sakte. Kripya client ka naam batayein:',
               company: 'Company ka naam zaroori hai, isko skip nahi kar sakte. Kripya company ka naam batayein:',
               city: 'City zaroori hai, isko skip nahi kar sakte. Kripya city batayein:',
               projectManager: 'Kam se kam ek team member chunna zaroori hai, isko skip nahi kar sakte. Kripya team member ka naam batayein:',
             };
+            const defaultMsg = isEn ? `${targetField} is required.` : `${targetField} zaroori hai.`;
             return {
               success: true,
               status: 'needs_input',
               field: targetField,
-              reply: msgMap[targetField] || `${targetField} zaroori hai.`,
-              speech: msgMap[targetField] || `${targetField} zaroori hai.`,
-              speakText: msgMap[targetField] || `${targetField} zaroori hai.`,
+              reply: msgMap[targetField] || defaultMsg,
+              speech: msgMap[targetField] || defaultMsg,
+              speakText: msgMap[targetField] || defaultMsg,
               draft: currentDraft,
               missing: [targetField],
               chips: [],
@@ -5252,7 +5266,6 @@ const lastAskedField = currentDraft.asked.length > 0
           }
           if (currentDraft.intent === 'self_task' && targetField === 'description') {
             currentDraft.skipped = (currentDraft.skipped || []).filter((f) => f !== 'description');
-            const isEn = userLang === 'en';
             return {
               success: true,
               status: 'needs_input',
@@ -7148,30 +7161,31 @@ const lastAskedField = currentDraft.asked.length > 0
 
       if (isDateSkip) {
         // Date is required in create_project, so skip is refused
+        const isEnTurn = (userLang === 'en');
         return {
           success: true,
           status: 'needs_input',
           field: lastAskedField,
-          reply: isStart
-            ? 'Project ki start date zaroori hai, isko skip nahi kar sakte. Kripya start date batayein (jaise: "03-11-2026" ya "kal se"):'
-            : 'Project ki end date zaroori hai, isko skip nahi kar sakte. Kripya end date batayein (jaise: "30-11-2026" ya "1 mahine baad"):',
-          speech: isStart
-            ? 'प्रोजेक्ट की स्टार्ट डेट ज़रूरी है। कृपया स्टार्ट डेट बताएं।'
-            : 'प्रोजेक्ट की एंड डेट ज़रूरी है। कृपया एंड डेट बताएं।',
-          speakText: isStart
-            ? 'Project ki start date zaroori hai. Kripya start date batayein.'
-            : 'Project ki end date zaroori hai. Kripya end date batayein.',
+          reply: isEnTurn
+            ? (isStart ? 'Project start date is required and cannot be skipped. Please specify a start date (e.g. "03-11-2026" or "from tomorrow"):' : 'Project end date is required and cannot be skipped. Please specify an end date (e.g. "30-11-2026" or "next month"):')
+            : (isStart ? 'Project ki start date zaroori hai, isko skip nahi kar sakte. Kripya start date batayein (jaise: "03-11-2026" ya "kal se"):' : 'Project ki end date zaroori hai, isko skip nahi kar sakte. Kripya end date batayein (jaise: "30-11-2026" ya "1 mahine baad"):'),
+          speech: isEnTurn
+            ? (isStart ? 'Project start date is required. Please specify a start date.' : 'Project end date is required. Please specify an end date.')
+            : (isStart ? 'प्रोजेक्ट की स्टार्ट डेट ज़रूरी है। कृपया स्टार्ट डेट बताएं।' : 'प्रोजेक्ट की एंड डेट ज़रूरी है। कृपया एंड डेट बताएं।'),
+          speakText: isEnTurn
+            ? (isStart ? 'Project start date is required. Please specify a start date.' : 'Project end date is required. Please specify an end date.')
+            : (isStart ? 'Project ki start date zaroori hai. Kripya start date batayein.' : 'Project ki end date zaroori hai. Kripya end date batayein.'),
           draft: currentDraft,
           missing: [lastAskedField],
           chips: isStart
             ? [
-                { label: 'Aaj se', action: { type: 'set', field: 'startDate', value: formatIstDate(now) } },
-                { label: 'Kal se', action: { type: 'set', field: 'startDate', value: formatIstDate(new Date(now.getTime() + 86400000)) } },
+                { label: isEnTurn ? 'From today' : 'Aaj se', action: { type: 'set', field: 'startDate', value: formatIstDate(now) } },
+                { label: isEnTurn ? 'From tomorrow' : 'Kal se', action: { type: 'set', field: 'startDate', value: formatIstDate(new Date(now.getTime() + 86400000)) } },
                 { label: 'Cancel', action: { type: 'cancel' } },
               ]
             : [
-                { label: '30 din baad', action: { type: 'set', field: 'endDate', value: parseProjectDate('30 din baad', now) } },
-                { label: '1 mahine baad', action: { type: 'set', field: 'endDate', value: parseProjectDate('1 mahine', now) } },
+                { label: isEnTurn ? 'In 30 days' : '30 din baad', action: { type: 'set', field: 'endDate', value: parseProjectDate('30 din baad', now) } },
+                { label: isEnTurn ? 'By next month' : '1 mahine baad', action: { type: 'set', field: 'endDate', value: parseProjectDate('1 mahine', now) } },
                 { label: 'Cancel', action: { type: 'cancel' } },
               ],
           candidates: [],
@@ -7186,6 +7200,7 @@ const lastAskedField = currentDraft.asked.length > 0
       }
 
       const parsedDate = parseProjectDate(trimmedMessage, now);
+      const isEnTurn = (userLang === 'en');
       if (parsedDate) {
         if (isStart) {
           currentDraft.startDate = parsedDate;
@@ -7193,20 +7208,26 @@ const lastAskedField = currentDraft.asked.length > 0
         } else {
           // endDate
           if (currentDraft.startDate && parsedDate < currentDraft.startDate) {
-            notices.push('End date start date se pehle nahi ho sakti. Kripya valid end date batayein.');
+            notices.push(isEnTurn ? 'End date cannot be earlier than start date. Please provide a valid end date.' : 'End date start date se pehle nahi ho sakti. Kripya valid end date batayein.');
             currentDraft.endDate = null;
             return {
               success: true,
               status: 'needs_input',
               field: 'endDate',
-              reply: 'End date start date se pehle nahi ho sakti. Kripya valid end date batayein (jaise: "30-11-2026" ya "1 mahine baad"):',
-              speech: 'एंड डेट स्टार्ट डेट से पहले नहीं हो सकती। कृपया सही एंड डेट बताएं।',
-              speakText: 'End date start date se pehle nahi ho sakti. Kripya valid end date batayein.',
+              reply: isEnTurn
+                ? 'End date cannot be earlier than start date. Please provide a valid end date (e.g. "30-11-2026" or "next month"):'
+                : 'End date start date se pehle nahi ho sakti. Kripya valid end date batayein (jaise: "30-11-2026" ya "1 mahine baad"):',
+              speech: isEnTurn
+                ? 'End date cannot be earlier than start date. Please provide a valid end date.'
+                : 'एंड डेट स्टार्ट डेट से पहले नहीं हो सकती। कृपया सही एंड डेट बताएं।',
+              speakText: isEnTurn
+                ? 'End date cannot be earlier than start date. Please provide a valid end date.'
+                : 'End date start date se pehle nahi ho sakti. Kripya valid end date batayein.',
               draft: currentDraft,
               missing: ['endDate'],
               chips: [
-                { label: '30 din baad', action: { type: 'set', field: 'endDate', value: parseProjectDate('30 din baad', now) } },
-                { label: '1 mahine baad', action: { type: 'set', field: 'endDate', value: parseProjectDate('1 mahine', now) } },
+                { label: isEnTurn ? 'In 30 days' : '30 din baad', action: { type: 'set', field: 'endDate', value: parseProjectDate('30 din baad', now) } },
+                { label: isEnTurn ? 'By next month' : '1 mahine baad', action: { type: 'set', field: 'endDate', value: parseProjectDate('1 mahine', now) } },
                 { label: 'Cancel', action: { type: 'cancel' } },
               ],
               candidates: [],
@@ -7229,26 +7250,26 @@ const lastAskedField = currentDraft.asked.length > 0
           success: true,
           status: 'needs_input',
           field: lastAskedField,
-          reply: isStart
-            ? 'Project kis date se shuru hoga? Kripya date batayein (jaise: "03-11-2026" ya "kal se"):'
-            : 'Project kab tak complete hona chahiye? Kripya date batayein (jaise: "30-11-2026" ya "1 mahine baad"):',
-          speech: isStart
-            ? 'प्रोजेक्ट किस तारीख से शुरू होगा? कृपया तारीख बताएं जैसे 03-11-2026 या कल से।'
-            : 'प्रोजेक्ट कब तक पूरा होना चाहिए? कृपया तारीख बताएं जैसे 30-11-2026 या एक महीने बाद।',
-          speakText: isStart
-            ? 'Project kis date se shuru hoga? Kripya date batayein jaise 03-11-2026 ya kal se.'
-            : 'Project kab tak complete hona chahiye? Kripya date batayein jaise 30-11-2026 ya ek mahine baad.',
+          reply: isEnTurn
+            ? (isStart ? 'When will the project start? Please specify a date (e.g. "03-11-2026" or "from tomorrow"):' : 'When should the project be completed? Please specify a date (e.g. "30-11-2026" or "next month"):')
+            : (isStart ? 'Project kis date se shuru hoga? Kripya date batayein (jaise: "03-11-2026" ya "kal se"):' : 'Project kab tak complete hona chahiye? Kripya date batayein (jaise: "30-11-2026" ya "1 mahine baad"):'),
+          speech: isEnTurn
+            ? (isStart ? 'When will the project start? Please specify a date.' : 'When should the project be completed? Please specify an end date.')
+            : (isStart ? 'प्रोजेक्ट किस तारीख से शुरू होगा? कृपया तारीख बताएं जैसे 03-11-2026 या कल से।' : 'प्रोजेक्ट कब तक पूरा होना चाहिए? कृपया तारीख बताएं जैसे 30-11-2026 या एक महीने बाद।'),
+          speakText: isEnTurn
+            ? (isStart ? 'When will the project start? Please specify a date.' : 'When should the project be completed? Please specify an end date.')
+            : (isStart ? 'Project kis date se shuru hoga? Kripya date batayein jaise 03-11-2026 ya kal se.' : 'Project kab tak complete hona chahiye? Kripya date batayein jaise 30-11-2026 ya ek mahine baad.'),
           draft: currentDraft,
           missing: [lastAskedField],
           chips: isStart
             ? [
-                { label: 'Aaj se', action: { type: 'set', field: 'startDate', value: formatIstDate(now) } },
-                { label: 'Kal se', action: { type: 'set', field: 'startDate', value: formatIstDate(new Date(now.getTime() + 86400000)) } },
+                { label: isEnTurn ? 'From today' : 'Aaj se', action: { type: 'set', field: 'startDate', value: formatIstDate(now) } },
+                { label: isEnTurn ? 'From tomorrow' : 'Kal se', action: { type: 'set', field: 'startDate', value: formatIstDate(new Date(now.getTime() + 86400000)) } },
                 { label: 'Cancel', action: { type: 'cancel' } },
               ]
             : [
-                { label: '30 din baad', action: { type: 'set', field: 'endDate', value: parseProjectDate('30 din baad', now) } },
-                { label: '1 mahine baad', action: { type: 'set', field: 'endDate', value: parseProjectDate('1 mahine', now) } },
+                { label: isEnTurn ? 'In 30 days' : '30 din baad', action: { type: 'set', field: 'endDate', value: parseProjectDate('30 din baad', now) } },
+                { label: isEnTurn ? 'By next month' : '1 mahine baad', action: { type: 'set', field: 'endDate', value: parseProjectDate('1 mahine', now) } },
                 { label: 'Cancel', action: { type: 'cancel' } },
               ],
           candidates: [],

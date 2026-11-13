@@ -80,24 +80,25 @@ function formatIstDate(dateInput) {
 }
 
 function parseProjectDate(text, refDate = new Date()) {
-  const clean = String(text || '').trim().toLowerCase();
+  let clean = String(text || '').trim().toLowerCase();
   if (!clean) return null;
+  clean = clean.replace(/^(?:from|starting|starts|by|till|until)\s+/i, '');
   const ist = getIstDateObj(refDate);
 
-  // 1. "aaj", "today"
-  if (/^(?:aaj|today|आज)(?:\s+se)?$/i.test(clean)) {
+  // 1. "aaj", "today", "from today", "starting today"
+  if (/^(?:(?:from|starting|starts)\s+)?(?:aaj|today|आज)(?:\s+se)?$/i.test(clean)) {
     return formatIstYmd(ist.year, ist.month, ist.day);
   }
 
-  // 2. "kal", "tomorrow"
-  if (/^(?:kal|tomorrow|कल)(?:\s+se)?$/i.test(clean)) {
+  // 2. "kal", "tomorrow", "from tomorrow", "starting tomorrow"
+  if (/^(?:(?:from|starting|starts)\s+)?(?:kal|tomorrow|कल)(?:\s+se)?$/i.test(clean)) {
     const d = new Date(refDate.getTime() + 24 * 60 * 60 * 1000);
     const nextIst = getIstDateObj(d);
     return formatIstYmd(nextIst.year, nextIst.month, nextIst.day);
   }
 
-  // 3. "parso", "day after tomorrow"
-  if (/^(?:parso|parson|day\s+after\s+tomorrow|परसों)(?:\s+se)?$/i.test(clean)) {
+  // 3. "parso", "day after tomorrow", "from day after tomorrow"
+  if (/^(?:(?:from|starting)\s+)?(?:parso|parson|day\s+after\s+tomorrow|परसों)(?:\s+se)?$/i.test(clean)) {
     const d = new Date(refDate.getTime() + 48 * 60 * 60 * 1000);
     const nextIst = getIstDateObj(d);
     return formatIstYmd(nextIst.year, nextIst.month, nextIst.day);
@@ -143,17 +144,17 @@ function parseProjectDate(text, refDate = new Date()) {
     const nextIst = getIstDateObj(d);
     return formatIstYmd(nextIst.year, nextIst.month, nextIst.day);
   }
-  if (/^(?:1\s+mahine|1\s+month|ek\s+mahina|1\s+mahine\s+baad)$/i.test(clean)) {
+  if (/^(?:(?:after|in)\s+)?(?:1\s+mahine|1\s+month|next\s+month|one\s+month|ek\s+mahina|agle\s+mahine)(?:\s+(?:baad|tak|later))?$/i.test(clean)) {
     const now = new Date(refDate);
     now.setUTCMonth(now.getUTCMonth() + 1);
     return formatIstDate(now);
   }
-  if (/^(?:3\s+mahine|3\s+months|teen\s+mahine|3\s+mahine\s+baad)$/i.test(clean)) {
+  if (/^(?:(?:after|in)\s+)?(?:3\s+mahine|3\s+months|three\s+months|teen\s+mahine)(?:\s+(?:baad|tak|later))?$/i.test(clean)) {
     const now = new Date(refDate);
     now.setUTCMonth(now.getUTCMonth() + 3);
     return formatIstDate(now);
   }
-  if (/^(?:6\s+mahine|6\s+months|che\s+mahine|6\s+mahine\s+baad)$/i.test(clean)) {
+  if (/^(?:(?:after|in)\s+)?(?:6\s+mahine|6\s+months|six\s+months|che\s+mahine)(?:\s+(?:baad|tak|later))?$/i.test(clean)) {
     const now = new Date(refDate);
     now.setUTCMonth(now.getUTCMonth() + 6);
     return formatIstDate(now);
@@ -290,13 +291,13 @@ function extractCreateProjectSlotsFromMessage(text, now = new Date()) {
     extracted.endDate = range.endDate;
   }
 
-  const startMatch = clean.match(/(?:start\s+date|shuru\s+date|shuru)\s*(?:hai|hoga|se)?\s*([a-zA-Z0-9\s_-]+?)(?:,\s*|end\s+date|khatam|$)/i);
+  const startMatch = clean.match(/(?:start\s+date|shuru\s+date|shuru|starting(?:\s+from)?|starts?|from)\s*(?:hai|is|hoga|se|on)?\s*([a-zA-Z0-9\s_-]+?)(?:,\s*|end\s+date|khatam|till|to|by|$)/i);
   if (startMatch && startMatch[1] && !extracted.startDate) {
     const parsedStart = parseProjectDate(startMatch[1], now);
     if (parsedStart) extracted.startDate = parsedStart;
   }
 
-  const endMatch = clean.match(/(?:end\s+date|khatam\s+date|complete\s+date|tak)\s*(?:hai|hoga)?\s*([a-zA-Z0-9\s_-]+?)(?:,\s*|members|priority|$)/i);
+  const endMatch = clean.match(/(?:end\s+date|khatam\s+date|complete\s+date|completion\s+date|tak|till|to|by)\s*(?:hai|is|hoga)?\s*([a-zA-Z0-9\s_-]+?)(?:,\s*|members|priority|$)/i);
   if (endMatch && endMatch[1] && !extracted.endDate) {
     const parsedEnd = parseProjectDate(endMatch[1], now);
     if (parsedEnd) extracted.endDate = parsedEnd;

@@ -129,12 +129,13 @@ function sanitizeTranscript(rawText) {
     throw err;
   }
 
-  // 4. Reject known Whisper silence/noise hallucinations (Indonesian phrases, YouTube artifacts)
+  // 4. Reject known Whisper silence/noise hallucinations (Indonesian phrases, YouTube artifacts, Captioned by broth3rmax, etc.)
   const lowerTrimmed = text.toLowerCase().trim();
   const cleanPunct = lowerTrimmed.replace(/[.,!?;:।]+/gu, ' ').replace(/\s+/g, ' ').trim();
   if (
-    /^(?:bersambungan|terima\s*kasih|dari\b.*meeting|subtitles?\s*by|amara\.org|thank\s*you\s*for\s*watching|please\s*subscribe|like\s*and\s*subscribe|nonton|selamat\s*menonton)\b/i.test(cleanPunct) ||
-    /\b(?:bersambungan|amara\.org|subtitles\s*by|thank\s*you\s*for\s*watching|terima\s*kasih)\b/i.test(cleanPunct)
+    /^(?:bersambungan|terima\s*kasih|dari\b.*meeting|subtitles?\s*by|captioned\s*by|broth3rmax|transcribed\s*by|amara\.org|thank\s*you\s*for\s*watching|please\s*subscribe|like\s*and\s*subscribe|nonton|selamat\s*menonton)\b/i.test(cleanPunct) ||
+    /\b(?:bersambungan|amara\.org|subtitles?\s*by|captioned\s*by|broth3rmax|transcribed\s*by|thank\s*you\s*for\s*watching|terima\s*kasih)\b/i.test(cleanPunct) ||
+    /\b(?:captioned\s*by|broth3rmax)\b/i.test(lowerTrimmed)
   ) {
     const err = new Error('Awaaz saaf nahi aayi, dobara bolein');
     err.code = 'STT_NO_SPEECH';
