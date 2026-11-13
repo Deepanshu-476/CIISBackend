@@ -145,7 +145,12 @@ function mergeDraft(previous = {}, extracted = {}, deterministic = {}, rawMessag
   let assigneeId = prev.assigneeId || null;
   let assigneeLabel = prev.assigneeLabel || null;
 
-  const rawExtAssignee = ext.assigneeName || det.assigneeName;
+  const isExplicitAssignCommand = /\b(?:assign\s+to|kisi\s+aur\s+ko|others?\s+ko|ko\s+assign\s+karo)\b/i.test(rawMessage);
+  const isPersonalTask = prev.intent === 'self_task' || prev.taskFor === 'self';
+  const isAnsweringNonAssigneeField = Boolean(lastAskedField && ['dueDateTime', 'dueDate', 'description', 'title', 'priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'checkpoints', 'attachments', 'file'].includes(lastAskedField));
+  const shouldIgnoreExtractedAssignee = (isPersonalTask && !isExplicitAssignCommand) || (isAnsweringNonAssigneeField && !isExplicitAssignCommand);
+
+  const rawExtAssignee = shouldIgnoreExtractedAssignee ? null : (ext.assigneeName || det.assigneeName);
   const validExtAssignee = (rawExtAssignee && isValidAssigneeCandidate(rawExtAssignee)) ? cleanAssigneeName(rawExtAssignee) : null;
   if (validExtAssignee !== null) {
     const cleanExtName = String(validExtAssignee).trim();
@@ -172,9 +177,18 @@ function mergeDraft(previous = {}, extracted = {}, deterministic = {}, rawMessag
   let wantsOthers = Boolean(prev.wantsOthers);
   if (prev.intent === 'task_project' || prev.projectId || prev.taskFor === 'project' || det.projectName || ext.projectName) {
     taskFor = 'project';
-  } else if (assigneeName || validExtAssignee || (assigneeLedger && assigneeLedger.length > 0)) {
-    taskFor = 'others';
-    wantsOthers = true;
+  } else if (!isPersonalTask || isExplicitAssignCommand) {
+    if (assigneeName || validExtAssignee || (assigneeLedger && assigneeLedger.length > 0)) {
+      taskFor = 'others';
+      wantsOthers = true;
+    }
+  } else {
+    taskFor = 'self';
+    wantsOthers = false;
+    assigneeName = null;
+    assigneeId = null;
+    assigneeLabel = null;
+    assigneeLedger = [];
   }
   const askCounts = typeof prev.askCounts === 'object' && prev.askCounts ? { ...prev.askCounts } : {};
   const skipped = Array.isArray(prev.skipped) ? [...prev.skipped] : [];
@@ -185,9 +199,11 @@ function mergeDraft(previous = {}, extracted = {}, deterministic = {}, rawMessag
   const projectId = prev.projectId || null;
   const dueDate = det.dueDate || ext.dueDate || prev.dueDate || dueDateTime || null;
 
-  const rawExtractedNames = Array.isArray(det.pendingAssigneeNames) && det.pendingAssigneeNames.length > 0
-    ? det.pendingAssigneeNames
-    : (validExtAssignee ? [validExtAssignee] : []);
+  const rawExtractedNames = shouldIgnoreExtractedAssignee
+    ? []
+    : (Array.isArray(det.pendingAssigneeNames) && det.pendingAssigneeNames.length > 0
+        ? det.pendingAssigneeNames
+        : (validExtAssignee ? [validExtAssignee] : []));
 
   const newExtractedNames = rawExtractedNames
     .map(cleanAssigneeName)

@@ -351,12 +351,35 @@ function isDateLikeToken(cand) {
   return false;
 }
 
+const INVALID_ASSIGNEE_WORDS = new Set([
+  'i', 'me', 'my', 'myself', 'we', 'our', 'ours', 'you', 'your', 'yours', 'he', 'him', 'his', 'she', 'her', 'hers', 'it', 'its', 'they', 'them', 'their',
+  'the', 'a', 'an', 'and', 'or', 'to', 'in', 'on', 'at', 'for', 'from', 'with', 'by', 'of', 'as', 'into', 'about',
+  'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'done',
+  'need', 'needs', 'needed', 'want', 'wants', 'wanted', 'can', 'could', 'will', 'would', 'shall', 'should', 'must',
+  'potato', 'tomato', 'food', 'file', 'image', 'photo', 'portal', 'time', 'date', 'day', 'month', 'year',
+  'today', 'tomorrow', 'yesterday', 'am', 'pm', 'kal', 'aaj', 'parso', 'subah', 'sham', 'raat', 'baje',
+  'yeh', 'ye', 'woh', 'wo', 'kya', 'kaise', 'kyu', 'kyun', 'kisko', 'kisne', 'kise', 'sab', 'kuch', 'koi'
+]);
+
 function isValidAssigneeCandidate(cand) {
   if (!cand || typeof cand !== 'string') return false;
   const clean = cand.trim().toLowerCase();
   if (clean.length < 2) return false;
+  // Never treat strings with digits as assignee names (e.g. "2026 at 7 PM", "11 AM", "123")
+  if (/\d/.test(clean)) return false;
+  // Never treat strings with sentence punctuation or colons as assignee names
+  if (/[.!?:\\]/.test(clean)) return false;
   if (FORBIDDEN_ASSIGNEE_NAMES.has(clean)) return false;
   if (isDateLikeToken(clean)) return false;
+
+  const words = clean.split(/\s+/).filter(Boolean);
+  if (words.length > 3) return false;
+
+  for (const w of words) {
+    if (INVALID_ASSIGNEE_WORDS.has(w)) return false;
+    if (!/^[a-zA-Z\u0900-\u097F]+$/.test(w)) return false;
+  }
+
   // Never treat command verbs, project keywords, or system roles as an assignee name (English or Devanagari)
   if (/\b(?:project|task|banao|bana\s*do|create|karo|kardo|naam|name|testing|crm|admin|user|प्रोजेक्ट|प्रजेक्ट|प्रोज़ेक्ट|प्रोजैक्ट|टास्क|बनाओ|बना\s*दो|बनाइए|बनाइये|क्रिएट|नया|नई|नयी|नाम)\b/iu.test(clean)) {
     return false;
@@ -373,6 +396,7 @@ function cleanAssigneeName(name) {
   let clean = name.trim().replace(/^(?:task|assign(?:ed)?|karo|kardo|karna|kar\s*do|dena|de\s*do|bhejo|banao|haan|ha|yes|haanji|hnji|टास्क|बनाओ|बना\s*दो|नया|नयी|नई)[,\s]+/iu, '').trim();
   clean = clean.replace(/^(?:team\s+members?|team\s+member|members?|users?|teammates?)[,\s]+/iu, '').trim();
   clean = clean.replace(/\s+(?:ko|co|koh|kor|ke\s+liye|को|के\s+लिए)$/iu, '').trim();
+  clean = clean.replace(/^[.,;:!?'"\\/()\[\]{}]+|[.,;:!?'"\\/()\[\]{}]+$/g, '').trim();
   if (isDateLikeToken(clean)) return null;
   if (isValidAssigneeCandidate(clean)) {
     return clean;
@@ -471,7 +495,13 @@ function extractMultipleAssignees(text) {
       const keLiyeMatch = clean.match(/(?:^|\s)([a-zA-Z\u0900-\u097F\s,&+]+?)\s+ke\s+liye\b/i);
       if (keLiyeMatch && keLiyeMatch[1]) {
         candidateSegment = keLiyeMatch[1];
-      } else if (!/(?:project|task|task\s+ka\s+naam|title|description|due\s+date|priority|status|reminder|checkpoints?|चेकपॉइंट्स?|चेकपॉइंट|banao|create|प्रोजेक्ट|प्रजेक्ट|प्रोज़ेक्ट|प्रोजैक्ट|टास्क|बनाओ|बना\s*दो|बनाइए|बनाइये|क्रिएट|नया|नई|नयी|नाम)/iu.test(clean) && (clean.includes(',') || clean.includes('&') || clean.includes('+') || clean.includes('और') || clean.includes('तथा') || /\b(?:and|aur|or|plus|tatha)\b/i.test(clean))) {
+      } else if (
+        !/\d/.test(clean) &&
+        !/[.!?:\\]/.test(clean) &&
+        !isDateLikeToken(clean) &&
+        !/(?:project|task|task\s+ka\s+naam|title|description|due\s+date|priority|status|reminder|checkpoints?|चेकपॉइंट्स?|चेकपॉइंट|banao|create|kal|aaj|parso|am\b|pm\b|baje|time|date|प्रोजेक्ट|प्रजेक्ट|प्रोज़ेक्ट|प्रोजैक्ट|टास्क|बनाओ|बना\s*दो|बनाइए|बनाइये|क्रिएट|नया|नई|नयी|नाम)/iu.test(clean) &&
+        (clean.includes(',') || clean.includes('&') || clean.includes('+') || clean.includes('और') || clean.includes('तथा') || /\b(?:and|aur|or|plus|tatha)\b/i.test(clean))
+      ) {
         candidateSegment = clean;
       }
     }
