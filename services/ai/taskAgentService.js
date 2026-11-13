@@ -477,12 +477,16 @@ const PROJECT_COMMON_WORDS = new Set([
 ]);
 
 const PROJECT_PRONOUNS = new Set([
-  'is', 'es', 'iss', 'this', 'same', 'current', 'wale', 'wala', 'vali', 'us', 'uss', 'that', 'my', 'mera', 'apna', 'ye', 'yeh'
+  'is', 'es', 'iss', 'this', 'same', 'current', 'wale', 'wala', 'vali', 'us', 'uss', 'that', 'my', 'mera', 'apna', 'ye', 'yeh',
+  'how many', 'kitne', 'kitna', 'total', 'all', 'mere', 'apne', 'sab', 'saare', 'user', 'active'
 ]);
 
 function extractCandidateProjectName(text) {
   if (!text || typeof text !== 'string') return null;
   const lower = text.toLowerCase().trim();
+  if (/\b(?:how\s+many|kitne|kitna|total|count|tasks?|टास्क)\b/i.test(lower)) {
+    return null;
+  }
 
   // Pattern 1: Leading candidate before "project": e.g. "zz ai testing project", "ciis netwrok project"
   const beforeProject = lower.match(/^(?:kya|show|view|check|dikhao|batao|details|please)?\s*([a-z0-9\s_-]{2,40}?)\s+\b(?:projects?|projekts?)\b/i);
@@ -800,8 +804,15 @@ function isActionOrCreationCommand(text) {
   );
   if (hasExplicitCreation) return true;
 
+  // Passive "add hai" / "add hu" / "added" or count inquiries in project/task queries are NEVER creation commands!
+  const isMembershipOrCountQuery = /\b(?:how\s+many|kitne|kitna|total|count)\b/i.test(clean) ||
+    /\b(?:add\s+(?:hai|hu|hain|ho)|(?:main|me|mein)\s+add|added)\b/i.test(clean);
+  if (isMembershipOrCountQuery && !/\b(?:create\s+task|banao\s+task|task\s+banao|create\s+project|project\s+banao|create\s+client|client\s+banao|task\s+add\s+karo)\b/i.test(clean)) {
+    return false;
+  }
+
   const isQuestionOrInquiry = /(?:^(?:kya|did|have|has|check)|(?:kitne|kitna|how\s+many|kaun|kon|konsi|kaunsi|kisko|kinhe|kin\s+|batao|dikhao|list|kiya\s+(?:hai|hain|tha|hoga)|bana\s+(?:hai|hain|tha)|create\s+hua))/i.test(clean);
-  if (isQuestionOrInquiry && !/\b(?:create|banao|add|dalo|likho)\b/i.test(clean)) return false;
+  if (isQuestionOrInquiry && !/\b(?:create|banao|dalo|likho)\b/i.test(clean)) return false;
 
   return (
     /\b(?:banao|banayein|create|add|assign|kardo|karo|karu|karun|set|badlo|change|update|edit|cancel|delete|hatao|dalo|likho)\b/i.test(clean) ||
@@ -825,7 +836,7 @@ function isCrmQuery(text) {
   );
   if (hasExplicitCreation) return false;
 
-  const isPastQuestionOrInquiry = /(?:^(?:kya|did|have|has|check\s+karo\s+kya)|(?:\?|kiya\s+(?:hai|hain|tha|hoga)|bana\s+(?:hai|hain|tha)|create\s+hua))/i.test(clean);
+  const isPastQuestionOrInquiry = /(?:^(?:kya|did|have|has|check\s+karo\s+kya)|(?:\?|kiya\s+(?:hai|hain|tha|hoga)|bana\s+(?:hai|hain|tha)|create\s+hua|kitne|kitna|how\s+many))/i.test(clean);
   const hasCreationCommand = !isPastQuestionOrInquiry && (
     isActionOrCreationCommand(clean) ||
     /\b(?:create|make|add|start|banao|bana\s*do|banayein|assign|set)\s*(?:a\s+|an\s+|the\s+|my\s+|one\s+|mera\s+|meri\s+|mere\s+|apna\s+|apne\s+)?(?:new\s+|naya\s+|naye\s+)?(?:personal\s+|self\s+)?(?:task|project|client|plan)\b/i.test(clean) ||
@@ -969,8 +980,16 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
   const mentionsProject = /(?:projects?|projekts?|projets?|प्रोजेक्ट्स?|प्रजेक्ट|प्रोज़ेक्ट)/iu.test(message);
   const matchedProject = findReferencedProject(message, projects, draft);
 
+  const isGeneralTasksQuery = /\b(?:tasks?|टास्क|kaam|काम)\b/i.test(message) && (
+    /\b(?:client\s+tasks?|project\s+tasks?|assigned\s+tasks?|assigned\s+to\s+me|personal\s+tasks?|all\s+tasks?|total\s+tasks?|tasks?\s+i\s+have|my\s+tasks?)\b/i.test(message) ||
+    (/\b(?:how\s+many|kitne|kitna|count|total)\b/i.test(message) && !matchedProject)
+  );
+  const isProjectCountOrListQuery = /\b(?:projects?|projekts?)\b/i.test(message) &&
+    /\b(?:how\s+many|kitne|kitna|count|total|all|list|show|mere|apne|my|added|shamil|add\s+hai|add\s+hu|add\s+hain|main\s+add|user)\b/i.test(message) &&
+    !/\b(?:tasks?|टास्क)\b/i.test(message);
+
   // Inaccessible project RBAC guard:
-  if (mentionsProject && !matchedProject) {
+  if (mentionsProject && !matchedProject && !isGeneralTasksQuery && !isProjectCountOrListQuery) {
     const isDbReady = Boolean(mongoose && mongoose.connection && mongoose.connection.readyState === 1);
     const ProjectModel = deps.Project || DefaultProjectModel || (mongoose?.models?.Project) || (isDbReady ? require('../../HR-CDS/models/Project').Project : null);
     if (isDbReady && ProjectModel && typeof ProjectModel.findOne === 'function') {
@@ -1049,7 +1068,7 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
   );
 
   // 0. SPECIFIC PROJECT QUERY (Status, Members, Tasks, Details)
-  if (isProjectInquiry && matchedProject) {
+  if (isProjectInquiry && matchedProject && !isGeneralTasksQuery) {
     const pName = matchedProject.projectName || matchedProject.name || 'Project';
     const pTasks = Array.isArray(matchedProject.tasks) ? matchedProject.tasks : [];
 
@@ -1108,11 +1127,11 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
   }
 
   // 0b. SPECIFIC CLIENT QUERY (Services, Plan, Status, Details)
-  const isClientInquiry = !mentionsProject && (
+  const isClientInquiry = !mentionsProject && !isGeneralTasksQuery && (
     Boolean(planOrServiceFilter) ||
     Boolean(matchedClientRef) ||
     CLIENT_DETAIL_QUERY_REGEX.test(message) ||
-    /(?:(?:client|cleint|clint|clinet|ग्राहक|कंपनी).*(?:details?|services?|plans?|tasks?|टास्क|kaam|काम|status|info|batao|dikhao|kya|kon|kaun|kin|kis|which|कौन|क्या|बताओ|दिखाओ))/iu.test(message) ||
+    (!isGeneralTasksQuery && /(?:(?:client|cleint|clint|clinet|ग्राहक|कंपनी).*(?:details?|services?|plans?|status|info|batao|dikhao|kya|kon|kaun|kin|kis|which|कौन|क्या|बताओ|दिखाओ))/iu.test(message)) ||
     Boolean(draft?.lastClientId && /(?:services?|सर्विस|plans?|प्लान|tasks?|टास्क|details?|info)/i.test(message))
   );
 
@@ -1442,8 +1461,8 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
         language: isEn ? 'en' : 'hinglish',
         draft: {
           lastActiveType: 'client',
-          lastClientId: String(matchedClient._id || matchedClient.id || ''),
-          lastClientName: clientDisplayName,
+          lastClientId: matchedClient ? String(matchedClient._id || matchedClient.id || '') : null,
+          lastClientName: matchedClient ? clientDisplayName : null,
           lastProjectId: null,
           lastProjectName: null
         },
@@ -1502,8 +1521,8 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
         language: isEn ? 'en' : 'hinglish',
         draft: {
           lastActiveType: 'client',
-          lastClientId: String(matchedClient._id || matchedClient.id || ''),
-          lastClientName: clientDisplayName,
+          lastClientId: matchedClient ? String(matchedClient._id || matchedClient.id || '') : null,
+          lastClientName: matchedClient ? clientDisplayName : null,
           lastProjectId: null,
           lastProjectName: null
         },
@@ -1631,19 +1650,20 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
       return `${idx + 1}. **${name}**${status}`;
     });
 
+    const isMemberQuery = /(?:added|shamil|add\s+hai|add\s+hu|add\s+hain|main\s+add|members?|जुड़े|शामिल)/i.test(message);
     const header = isEn
-      ? `${greetingPrefix}You have access to ${projects.length} project(s):`
-      : `${greetingPrefix}Aapke paas ${projects.length} project(s) ka access hai:`;
-    const fullReply = `${header}\n\n${projLines.join('\n')}\n\n${isEn ? 'Would you like to add a task in a project or create a new one?' : 'Aap kisi project mein task banana chahte hain ya naya project?'}`;
+      ? (isMemberQuery ? `${greetingPrefix}You are added to **${projects.length} project(s)**:` : `${greetingPrefix}You have access to **${projects.length} project(s)**:`)
+      : (isMemberQuery ? `${greetingPrefix}Aap **${projects.length} project(s)** mein added hain:` : `${greetingPrefix}Aapke paas **${projects.length} project(s)** ka access hai:`);
+    const fullReply = `${header}\n\n${projLines.join('\n')}\n\n${isEn ? 'Would you like to add a task in a project or view project details?' : 'Aap kisi project mein task banana chahte hain ya project details dekhna chahte hain?'}`;
 
     return {
       success: true,
       status: 'open',
       field: 'welcome',
       reply: fullReply,
-      speech: isEn ? `You have access to ${projects.length} projects.` : `Aapke paas ${projects.length} projects hain.`,
+      speech: isEn ? (isMemberQuery ? `You are added to ${projects.length} projects.` : `You have access to ${projects.length} projects.`) : (isMemberQuery ? `Aap ${projects.length} projects mein add hain.` : `Aapke paas ${projects.length} projects hain.`),
       speakText: fullReply,
-      speakTextHi: isEn ? null : `Aapke paas ${projects.length} projects hain.`,
+      speakTextHi: isEn ? null : (isMemberQuery ? `Aap ${projects.length} projects mein add hain.` : `Aapke paas ${projects.length} projects hain.`),
       language: isEn ? 'en' : 'hinglish',
       draft: null,
       chips: buildChips(null, 'welcome', { ...deps, language: lang, allowedIntents }),
@@ -1654,7 +1674,7 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
   }
 
   // 2. Clients Query
-  if (CRM_CLIENTS_QUERY_REGEX.test(message)) {
+  if (CRM_CLIENTS_QUERY_REGEX.test(message) && !/\b(?:tasks?|टास्क)\b/i.test(message)) {
     if (!allowedIntents.includes('create_client') && !allowedIntents.includes('create_client_task')) {
       const denial = getPermissionDeniedReply('create_client', allowedIntents, req?.user, lang);
       return {
@@ -1739,9 +1759,9 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
     const isToday = /\b(?:aaj|aj|today)\b/i.test(message);
     const isTomorrow = /\b(?:kal|tomorrow)\b/i.test(message) && !/\b(?:pichle|yesterday)\b/i.test(message);
     const isExplicitAll = /\b(?:all\s+tasks?|all\s+time|saare\s+tasks?|sare\s+tasks?|sab\s+tasks?|total\s+tasks?|all\s+type|all\b)/i.test(message);
-    const isProjectSpecific = /\b(?:project\s+tasks?|project\s+ke\s+tasks?|project\s+task)\b/i.test(message);
-    const isAssignedSpecific = /\b(?:assigned\s+to\s+me|assigned\s+tasks?|mujhe\s+assign|assigned\s+task)\b/i.test(message);
-    const isClientSpecific = /\b(?:client\s+tasks?|client\s+ke\s+tasks?|client\s+task)\b/i.test(message);
+    const isProjectSpecific = /\b(?:project\s+tasks?|project\s+ke\s+tasks?|project\s+task|projects?\s+tasks?|projects?\s+ke\s+task)\b/i.test(message);
+    const isAssignedSpecific = /\b(?:assigned\s+to\s+me|assigned\s+tasks?|mujhe\s+assign|assigned\s+task|assign\s+kiye\s+huye|mere\s+assigned)\b/i.test(message);
+    const isClientSpecific = /\b(?:client\s+tasks?|client\s+ke\s+tasks?|client\s+task|clients?\s+tasks?|clients?\s+ke\s+task)\b/i.test(message);
     const isPersonal = !isExplicitAll && !isProjectSpecific && !isAssignedSpecific && !isClientSpecific && (
       /\b(?:personal|self)\b/i.test(message) || (/\b(?:mera|meri|mere|apne)\b/i.test(message) && !/\b(?:all|saare|sare|sab|total|assigned|client|project)\b/i.test(message))
     );
@@ -1749,8 +1769,32 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
 
     // Detect desired status filter from user query
     let statusFilter = null;
-    let statusLabel = isToday ? (isPersonal ? "today's personal" : "today's") : (isTomorrow ? "tomorrow's" : (isPersonal ? "personal" : (isExplicitAll ? 'all' : 'recent')));
-    let statusLabelHi = isToday ? (isPersonal ? "aaj ke personal" : "aaj ke") : (isTomorrow ? "kal ke" : (isPersonal ? "personal" : (isExplicitAll ? 'sab' : 'haal ke')));
+    let statusLabel = isToday
+      ? (isPersonal ? "today's personal" : (isClientSpecific ? "today's client" : (isProjectSpecific ? "today's project" : (isAssignedSpecific ? "today's assigned" : "today's"))))
+      : (isTomorrow
+        ? "tomorrow's"
+        : (isPersonal
+          ? "personal"
+          : (isClientSpecific
+            ? "client"
+            : (isProjectSpecific
+              ? "project"
+              : (isAssignedSpecific
+                ? "assigned to you"
+                : (isExplicitAll ? 'all' : 'recent'))))));
+    let statusLabelHi = isToday
+      ? (isPersonal ? "aaj ke personal" : (isClientSpecific ? "aaj ke client" : (isProjectSpecific ? "aaj ke project" : (isAssignedSpecific ? "aaj ke assigned" : "aaj ke"))))
+      : (isTomorrow
+        ? "kal ke"
+        : (isPersonal
+          ? "personal"
+          : (isClientSpecific
+            ? "client"
+            : (isProjectSpecific
+              ? "project"
+              : (isAssignedSpecific
+                ? "aapko assign kiye gaye"
+                : (isExplicitAll ? 'sab' : 'haal ke'))))));
 
     if (/\b(?:in[- ]progress|chalu|chal\s+raha)\b/i.test(message)) {
       statusFilter = { $in: ['in-progress', 'in progress'] };
@@ -1772,12 +1816,14 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
 
     let tasks = Array.isArray(deps.tasks) ? deps.tasks : [];
 
-    if (tasks.length === 0 && (deps.Task || mongoose?.connection?.readyState === 1)) {
-      let taskHelper = null;
-      try {
-        taskHelper = require('../../HR-CDS/controllers/taskHelper');
-      } catch (e) {
-        taskHelper = null;
+    if (tasks.length === 0 && (deps.Task || deps.taskHelper || mongoose?.connection?.readyState === 1)) {
+      let taskHelper = deps.taskHelper || null;
+      if (!taskHelper) {
+        try {
+          taskHelper = require('../../HR-CDS/controllers/taskHelper');
+        } catch (e) {
+          taskHelper = null;
+        }
       }
 
       if (taskHelper && typeof taskHelper.fetchPersonalTaskList === 'function' && req?.user) {
@@ -1812,8 +1858,26 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
 
       // Fallback to TaskModel.find if taskHelper didn't return tasks (or in unit tests)
       if (tasks.length === 0) {
+        if (isClientSpecific) {
+          const ClientTaskModel = deps.ClientTask || mongoose.models.ClientTask || (isDbReady ? require('../../HR-CDS/models/ClientTask') : null);
+          if (ClientTaskModel && typeof ClientTaskModel.find === 'function') {
+            try {
+              const ctQuery = {
+                isActive: { $ne: false },
+                ...(companyCodeFilter ? { companyCode: companyCodeFilter } : {})
+              };
+              tasks = await ClientTaskModel.find(ctQuery).sort({ createdAt: -1 }).limit(100).lean();
+            } catch (err) {
+              console.warn('[taskAgentService] Error reading client tasks fallback:', err);
+            }
+          }
+        } else if (isProjectSpecific) {
+          const projs = context.accessibleProjects || deps.accessibleProjects || [];
+          tasks = projs.flatMap(p => (Array.isArray(p.tasks) ? p.tasks.map(t => ({ ...t, projectName: p.projectName || p.name, projectId: p._id || p.id })) : []));
+        }
+
         const TaskModel = deps.Task || mongoose.models.Task || require('../../HR-CDS/models/Task');
-        if (TaskModel && typeof TaskModel.find === 'function') {
+        if (tasks.length === 0 && TaskModel && typeof TaskModel.find === 'function') {
           try {
             const andConditions = [
               { isActive: { $ne: false } }
@@ -1965,11 +2029,14 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
     const overdueCount = tasks.filter(t => t.isOverdue || String(t.overallStatus || t.status || '').toLowerCase().includes('overdue')).length;
     const completedCount = tasks.filter(t => String(t.overallStatus || t.status || '').toLowerCase().includes('completed') || String(t.overallStatus || t.status || '').toLowerCase().includes('done')).length;
 
+    const categoryNameEn = isClientSpecific ? ' client' : (isProjectSpecific ? ' project' : (isAssignedSpecific ? ' assigned' : (isPersonal ? ' personal' : '')));
+    const categoryNameHi = isClientSpecific ? ' client' : (isProjectSpecific ? ' project' : (isAssignedSpecific ? ' assigned' : (isPersonal ? ' personal' : '')));
+
     let header;
     if (isCountQuery) {
       header = isEn
-        ? `${greetingPrefix}You have **${tasks.length} task(s)** in total (${pendingCount} pending, ${overdueCount} overdue, ${completedCount} completed):`
-        : `${greetingPrefix}Aapke paas kul **${tasks.length} task(s)** hain (${pendingCount} pending, ${overdueCount} overdue, ${completedCount} completed):`;
+        ? `${greetingPrefix}You have **${tasks.length}${categoryNameEn} task(s)** in total (${pendingCount} pending, ${overdueCount} overdue, ${completedCount} completed):`
+        : `${greetingPrefix}Aapke paas kul **${tasks.length}${categoryNameHi} task(s)** hain (${pendingCount} pending, ${overdueCount} overdue, ${completedCount} completed):`;
     } else {
       header = isEn
         ? `${greetingPrefix}Here are your ${statusLabel} tasks (${tasks.length} found):`

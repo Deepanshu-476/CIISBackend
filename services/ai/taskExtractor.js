@@ -86,9 +86,10 @@ function mergeDraft(previous = {}, extracted = {}, deterministic = {}, rawMessag
   const status = det.status || ext.status || prev.status || null;
 
   // Checkpoints
+  const trimmedMessage = String(rawMessage || '').trim();
   let checkpoints = Array.isArray(prev.checkpoints) ? prev.checkpoints : [];
-  const isReplaceCheckpoints = /\b(?:replace|badal\s*kar\s*sirf|sirf\s*yahi|only\s*these)\b/i.test(trimmedMessage || '');
-  const isRemoveCheckpoints = /\b(?:hatao|remove|delete|clear)\b/i.test(trimmedMessage || '');
+  const isReplaceCheckpoints = /\b(?:replace|badal\s*kar\s*sirf|sirf\s*yahi|only\s*these)\b/i.test(trimmedMessage);
+  const isRemoveCheckpoints = /\b(?:hatao|remove|delete|clear)\b/i.test(trimmedMessage);
   const newCps = (Array.isArray(det.checkpoints) && det.checkpoints.length > 0)
     ? det.checkpoints
     : ((Array.isArray(ext.checkpoints) && ext.checkpoints.length > 0)
