@@ -19,9 +19,10 @@ const GROQ_AUDIO_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
 const DEFAULT_MODEL = 'whisper-large-v3-turbo';
 
 // Context prompts conditioned on selected language to guide Whisper to transcribe in clean Roman Hinglish/English
-const HINGLISH_CRM_PROMPT = 'CIIS CRM Task Management: create personal task, naya task banao, add client, new project, task ka naam doing live testing of CRM, status in-progress, pending, completed, high priority, deadline, aaj shaam 6:00 PM, kal subah 10:00 AM, assignee, description, checkpoints, notes.';
+const CRM_COMMON_NAMES = 'Vansh Test, Aarav Sharma, Test Admin, Rohan Mehta, Kavya Bansal, Ishita Singh, Gaurav Rajput, Simran Kaur, Pankaj Bhatia, Pooja Arora, Rahul Khanna, Divya Tiwari, Deepak Sethi, Sylvester Sargent, Priya Chauhan, Aditya Kumar, Vivaan Joshi, Ananya Gupta, Arjun Verma, Diya Patel, Tellecaller, Admincrm';
+const HINGLISH_CRM_PROMPT = `CIIS CRM Task Management: create personal task, naya task banao, add client, new project, members: ${CRM_COMMON_NAMES}, status in-progress, pending, completed, high priority, deadline, aaj shaam 6:00 PM, kal subah 10:00 AM, assignee, description, checkpoints, notes.`;
 const HINDI_PROMPT = HINGLISH_CRM_PROMPT;
-const ENGLISH_PROMPT = 'CIIS CRM task management, create task, deadline, status in-progress, pending, completed, high priority, tomorrow, today, review, live testing, client meeting.';
+const ENGLISH_PROMPT = `CIIS CRM task management, create task, new project, members: ${CRM_COMMON_NAMES}, deadline, status in-progress, pending, completed, high priority, tomorrow, today, review, client meeting.`;
 const BILINGUAL_PROMPT = HINGLISH_CRM_PROMPT;
 const DEFAULT_PROMPT = HINGLISH_CRM_PROMPT;
 
