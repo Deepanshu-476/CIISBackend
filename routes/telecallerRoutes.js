@@ -36,6 +36,11 @@ const lookupHandler = typeof controller.lookup === 'function'
   ? controller.lookup
   : (req, res) => res.json({ found: false });
 router.get('/lookup', requireCrmPagePermission(telecallerPaths), lookupHandler);
+// The app's call-log sweep: which of these phone-log numbers are my leads, and what is already stored.
+const matchPhonesHandler = typeof controller.matchPhones === 'function'
+  ? controller.matchPhones
+  : (req, res) => res.json({ items: [] });
+router.post('/match-phones', requireCrmPagePermission(telecallerPaths), matchPhonesHandler);
 const workspaceEnabled = (req, res, next) => (enabled(req.telecallerPages, 'call-workspace')
   ? next()
   : res.status(403).json({ message: 'This call update page is not enabled for your company.' }));
