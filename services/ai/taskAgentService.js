@@ -41,6 +41,11 @@ function getPendingSlotQuestion(intent, slot, lang = 'hinglish') {
     if (slot === 'assignee') return 'Who should this task be assigned to?';
     if (slot === 'title') return 'What should be the task title?';
     if (slot === 'dueDateTime' || slot === 'dueDate') return 'What is the due date and time?';
+    if (slot === 'description') return 'What should be the task description?';
+    if (slot === 'priority') return 'What should be the priority? Low, Medium, or High?';
+    if (slot === 'reminder') return 'Would you like to set a reminder? (Yes or No)';
+    if (slot === 'checkpoints') return 'Would you like to add checkpoints? You can list them separated by commas or tap Skip:';
+    if (slot === 'attachments' || slot === 'file') return 'Would you like to attach any file or image? If yes, please upload it, otherwise click on No.';
     return 'Please provide the next detail:';
   }
 
@@ -84,6 +89,11 @@ function getPendingSlotQuestion(intent, slot, lang = 'hinglish') {
   if (slot === 'assignee') return 'Task kisse assign karna hai?';
   if (slot === 'title') return 'Task ka naam kya hoga?';
   if (slot === 'dueDateTime' || slot === 'dueDate') return 'Due date aur time kya hoga?';
+  if (slot === 'description') return 'Task ka description kya rakhna hai?';
+  if (slot === 'priority') return 'Priority kya rakhni hai? Low, Medium ya High?';
+  if (slot === 'reminder') return 'Reminder lagana hai ya nahi?';
+  if (slot === 'checkpoints') return 'Checkpoints add karne hain?';
+  if (slot === 'attachments' || slot === 'file') return 'Kya aap koi file ya image attach karna chahte hain? Agar haan toh upload karein, nahi toh "Nahi" par click karein.';
   return 'Agli detail batayein:';
 }
 
@@ -5898,9 +5908,13 @@ const lastAskedField = currentDraft.asked.length > 0
       if (!currentDraft.asked.includes('client')) currentDraft.asked.push('client');
     }
 
+    const isEn = userLang === 'en';
+
     // 1. If NO client chosen yet:
     if (!currentDraft.client) {
-      const askClientReply = 'Kaun se client ke liye service task banana hai? Client select kijiye:';
+      const askClientReply = isEn
+        ? 'Which client would you like to create a service task for? Please select a client:'
+        : 'Kaun se client ke liye service task banana hai? Client select kijiye:';
       const clientChips = (pool.length > 0 ? pool : []).map(c => ({
         label: ((c.client || '') + (c.company ? ` - ${c.company}` : '')).trim(),
         action: { type: 'set_client_task_client', client: c.client, clientId: String(c._id || c.id) }
@@ -5911,7 +5925,7 @@ const lastAskedField = currentDraft.asked.length > 0
         status: 'needs_input',
         field: 'client',
         reply: askClientReply,
-        speech: 'Kaun se client ke liye task banana hai?',
+        speech: isEn ? 'Which client would you like to create a service task for?' : 'Kaun se client ke liye task banana hai?',
         speakText: askClientReply,
         draft: currentDraft,
         missing: ['client'],
@@ -5925,7 +5939,9 @@ const lastAskedField = currentDraft.asked.length > 0
     // 2. Client is chosen. Check services:
     const availableServices = Array.isArray(currentDraft.clientServices) ? currentDraft.clientServices : [];
     if (availableServices.length === 0) {
-      const noServicesReply = `Client "${currentDraft.client}" ke paas abhi koi service assign nahi hai. Kripya pehle client ko service ya plan assign karein.`;
+      const noServicesReply = isEn
+        ? `Client "${currentDraft.client}" does not have any services assigned yet. Please assign a service or plan to this client first.`
+        : `Client "${currentDraft.client}" ke paas abhi koi service assign nahi hai. Kripya pehle client ko service ya plan assign karein.`;
       return {
         success: true,
         status: 'needs_input',
@@ -5936,7 +5952,7 @@ const lastAskedField = currentDraft.asked.length > 0
         draft: currentDraft,
         missing: ['service'],
         chips: [
-          { label: 'Naya Client Banayein', action: { type: 'set_intent', intent: 'create_client' } },
+          { label: isEn ? 'Create New Client' : 'Naya Client Banayein', action: { type: 'set_intent', intent: 'create_client' } },
           { label: 'Cancel', action: { type: 'cancel' } }
         ],
         candidates: [],
@@ -5959,7 +5975,9 @@ const lastAskedField = currentDraft.asked.length > 0
 
     // 3. If service is not chosen yet:
     if (!currentDraft.service) {
-      const askServiceReply = `Client "${currentDraft.client}" ke liye kaun si service mein task banana hai? Service select kijiye:`;
+      const askServiceReply = isEn
+        ? `Which service under client "${currentDraft.client}" is this task for? Please select a service:`
+        : `Client "${currentDraft.client}" ke liye kaun si service mein task banana hai? Service select kijiye:`;
       const serviceChips = availableServices.map(s => {
         const sName = typeof s === 'string' ? s : (s.service || s.name);
         return {
@@ -5986,43 +6004,152 @@ const lastAskedField = currentDraft.asked.length > 0
 
     // Extract any slots present in trimmedMessage:
     const parsedSlots = parseHinglishSlots(trimmedMessage, now);
-    if (parsedSlots.title && !currentDraft.title) {
-      currentDraft.title = parsedSlots.title;
-      if (!currentDraft.asked.includes('title')) currentDraft.asked.push('title');
+
+    // EDIT / UPDATE INTERCEPTION for create_client_task
+    if (trimmedMessage) {
+      // 1. Priority update (e.g. "priority change karke high karo", "change priority to high", "high priority")
+      const prioMatch = trimmedMessage.match(/(?:priority|प्रायोरिटी)\s*(?:change\s*karke\s*|change\s*to\s*|to\s*|karke\s*|is\s*|:\s*|badal\s*ke\s*)?\s*(high|low|medium|urgent|kam|normal|theek|zaroori|jaruri)\b/i) ||
+        trimmedMessage.match(/\b(high|low|medium|urgent)\s*(?:priority|प्रायोरिटी)\b/i) ||
+        (wantsEditPrompt && trimmedMessage.match(/\b(high|low|medium|urgent)\b/i));
+      if (prioMatch) {
+        const pVal = prioMatch[1].toLowerCase();
+        if (['high', 'urgent', 'zaroori', 'jaruri'].includes(pVal)) currentDraft.priority = 'High';
+        else if (['low', 'kam'].includes(pVal)) currentDraft.priority = 'Low';
+        else currentDraft.priority = 'Medium';
+        if (!currentDraft.asked.includes('priority')) currentDraft.asked.push('priority');
+        currentDraft.checkpointsAsked = true;
+        actionHandled = true;
+        notices.push(isEn ? `Priority updated to ${currentDraft.priority}.` : `Priority badal kar ${currentDraft.priority} kar di gayi hai.`);
+      }
+
+      // 2. Due Date / Time update
+      if (!actionHandled && /(?:due|date|time|kal|aaj|today|tomorrow|tarikh|tareekh|baje)\b/i.test(trimmedMessage)) {
+        const parsedDt = parsedSlots.dueDateTime || (typeof parseHinglishDateTime === 'function' ? parseHinglishDateTime(trimmedMessage, now) : null);
+        if (parsedDt) {
+          currentDraft.dueDateTime = parsedDt;
+          currentDraft.dueDate = parsedDt.split('T')[0];
+          if (!currentDraft.asked.includes('dueDateTime')) currentDraft.asked.push('dueDateTime');
+          currentDraft.checkpointsAsked = true;
+          actionHandled = true;
+          notices.push(isEn ? 'Due date and time updated.' : 'Due date aur time update ho gaya.');
+        }
+      }
+
+      // 3. Title update
+      const titleEditMatch = trimmedMessage.match(/(?:title|naam|name)\s*(?:change\s*karke|badal\s*ke|change\s*to|to|rakho|karo|is|:)\s*(.+)$/i);
+      if (!actionHandled && titleEditMatch && titleEditMatch[1].trim()) {
+        currentDraft.title = titleEditMatch[1].trim();
+        if (!currentDraft.asked.includes('title')) currentDraft.asked.push('title');
+        currentDraft.checkpointsAsked = true;
+        actionHandled = true;
+        notices.push(isEn ? `Title updated to "${currentDraft.title}".` : `Title badal kar "${currentDraft.title}" kar diya gaya hai.`);
+      }
+
+      // 4. Description update
+      const descEditMatch = trimmedMessage.match(/(?:description|विवरण|डिस्क्रिप्शन)\s*(?:change\s*karke|badal\s*ke|change\s*to|to|rakho|karo|is|:)\s*(.+)$/i);
+      if (!actionHandled && descEditMatch && descEditMatch[1].trim()) {
+        currentDraft.description = descEditMatch[1].trim();
+        if (!currentDraft.asked.includes('description')) currentDraft.asked.push('description');
+        currentDraft.checkpointsAsked = true;
+        actionHandled = true;
+        notices.push(isEn ? 'Description updated.' : 'Description update ho gaya.');
+      }
+
+      // 5. Reminder update / off
+      if (!actionHandled && /(?:reminder|रिमाइंडर)\b/i.test(trimmedMessage)) {
+        if (/off|band|hatao|nahi|no|mat|turn\s*off|disable/i.test(trimmedMessage)) {
+          currentDraft.reminder = false;
+          currentDraft.reminderOption = 'off';
+          currentDraft.reminderSettings = { enabled: false, options: [] };
+          notices.push(isEn ? 'Reminder turned off.' : 'Reminder band kar diya gaya hai.');
+        } else {
+          const isEvery30 = /30\s*min/i.test(trimmedMessage);
+          const is1Hour = /1\s*ghant|hourly|1\s*hour/i.test(trimmedMessage);
+          const is2Hours = /2\s*ghant|2\s*hour/i.test(trimmedMessage);
+          const interval = isEvery30 ? 30 : (is1Hour ? 60 : (is2Hours ? 120 : 10));
+          currentDraft.reminder = true;
+          currentDraft.reminderOption = isEvery30 ? 'every30Minutes' : (is1Hour ? 'hourly' : (is2Hours ? 'every2Hours' : 'every10Minutes'));
+          currentDraft.repeatIntervalMinutes = interval;
+          currentDraft.reminderSettings = {
+            enabled: true,
+            reminderOption: currentDraft.reminderOption,
+            repeatIntervalMinutes: interval
+          };
+          notices.push(isEn ? 'Reminder updated.' : 'Reminder update ho gaya.');
+        }
+        if (!currentDraft.asked.includes('reminder')) currentDraft.asked.push('reminder');
+        currentDraft.checkpointsAsked = true;
+        actionHandled = true;
+      }
+
+      // 6. Checkpoints update / remove
+      if (!actionHandled && /(?:checkpoints?|चेकपॉइंट्स?|चेकपॉइंट)\b/i.test(trimmedMessage)) {
+        if (/hatao|remove|delete|clear|koi nahi|none|mat|nahi/i.test(trimmedMessage)) {
+          currentDraft.checkpoints = [];
+          notices.push(isEn ? 'Checkpoints removed.' : 'Checkpoints hata diye gaye hain.');
+        } else {
+          const cpClean = trimmedMessage.replace(/.*(?:checkpoints?|चेकपॉइंट्स?|चेकपॉइंट)\s*(?:add\s*karein|add\s*karo|rakho|dalo|to|is|:)?\s*/i, '');
+          if (cpClean.trim()) {
+            const items = typeof parseCheckpointItems === 'function' ? parseCheckpointItems(cpClean) : cpClean.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
+            currentDraft.checkpoints = items.map(t => typeof t === 'string' ? { title: t, completed: false } : (t && t.title ? { title: String(t.title), completed: Boolean(t.completed) } : { title: String(t), completed: false }));
+            notices.push(isEn ? `${currentDraft.checkpoints.length} checkpoint(s) updated.` : `${currentDraft.checkpoints.length} checkpoint(s) update ho gaye.`);
+          }
+        }
+        currentDraft.checkpointsAsked = true;
+        if (!currentDraft.asked.includes('checkpoints')) currentDraft.asked.push('checkpoints');
+        actionHandled = true;
+      }
+
+      // 7. Attachments removal
+      if (!actionHandled && /(?:remove|delete|clear|hatao|hata\s*do)\s*(?:attachment|file|photo|image)|(?:attachment|file|photo|image)\s*(?:hatao|hata\s*do|remove|delete|clear)/i.test(trimmedMessage)) {
+        currentDraft.attachmentsCount = 0;
+        currentDraft.file = null;
+        currentDraft.pdfFile = null;
+        notices.push(isEn ? 'Attachments removed.' : 'Attachments hata diye gaye hain.');
+        currentDraft.checkpointsAsked = true;
+        actionHandled = true;
+      }
     }
-    if (parsedSlots.description && !currentDraft.description) {
-      currentDraft.description = parsedSlots.description;
-      if (!currentDraft.asked.includes('description')) currentDraft.asked.push('description');
-    }
-    if (parsedSlots.dueDateTime && !currentDraft.dueDateTime) {
-      currentDraft.dueDateTime = parsedSlots.dueDateTime;
-      currentDraft.dueDate = parsedSlots.dueDateTime.split('T')[0];
-      if (!currentDraft.asked.includes('dueDateTime')) currentDraft.asked.push('dueDateTime');
-    }
-    if (parsedSlots.priority && !currentDraft.priority) {
-      currentDraft.priority = parsedSlots.priority;
-      if (!currentDraft.asked.includes('priority')) currentDraft.asked.push('priority');
-    }
-    if (parsedSlots.reminder && (currentDraft.reminder === null || currentDraft.reminder === undefined)) {
-      currentDraft.reminder = Boolean(parsedSlots.reminder);
-      const isEvery30 = /30\s*min/i.test(trimmedMessage);
-      const is1Hour = /1\s*ghant|hourly|1\s*hour/i.test(trimmedMessage);
-      const is2Hours = /2\s*ghant|2\s*hour/i.test(trimmedMessage);
-      const option = isEvery30 ? 'every30Minutes' : (is1Hour ? 'hourly' : (is2Hours ? 'every2Hours' : 'every10Minutes'));
-      const interval = isEvery30 ? 30 : (is1Hour ? 60 : (is2Hours ? 120 : 10));
-      currentDraft.reminderOption = option;
-      currentDraft.repeatIntervalMinutes = interval;
-      currentDraft.reminderSettings = {
-        enabled: true,
-        reminderOption: option,
-        repeatIntervalMinutes: interval
-      };
-      if (!currentDraft.asked.includes('reminder')) currentDraft.asked.push('reminder');
-    }
-    if (Array.isArray(parsedSlots.checkpoints) && parsedSlots.checkpoints.length > 0 && (!currentDraft.checkpoints || currentDraft.checkpoints.length === 0)) {
-      currentDraft.checkpoints = parsedSlots.checkpoints;
-      currentDraft.checkpointsAsked = true;
-      if (!currentDraft.asked.includes('checkpoints')) currentDraft.asked.push('checkpoints');
+
+    if (!actionHandled) {
+      if (parsedSlots.title && !currentDraft.title) {
+        currentDraft.title = parsedSlots.title;
+        if (!currentDraft.asked.includes('title')) currentDraft.asked.push('title');
+      }
+      if (parsedSlots.description && !currentDraft.description) {
+        currentDraft.description = parsedSlots.description;
+        if (!currentDraft.asked.includes('description')) currentDraft.asked.push('description');
+      }
+      if (parsedSlots.dueDateTime && !currentDraft.dueDateTime) {
+        currentDraft.dueDateTime = parsedSlots.dueDateTime;
+        currentDraft.dueDate = parsedSlots.dueDateTime.split('T')[0];
+        if (!currentDraft.asked.includes('dueDateTime')) currentDraft.asked.push('dueDateTime');
+      }
+      if (parsedSlots.priority && !currentDraft.priority) {
+        currentDraft.priority = parsedSlots.priority;
+        if (!currentDraft.asked.includes('priority')) currentDraft.asked.push('priority');
+      }
+      if (parsedSlots.reminder && (currentDraft.reminder === null || currentDraft.reminder === undefined)) {
+        currentDraft.reminder = Boolean(parsedSlots.reminder);
+        const isEvery30 = /30\s*min/i.test(trimmedMessage);
+        const is1Hour = /1\s*ghant|hourly|1\s*hour/i.test(trimmedMessage);
+        const is2Hours = /2\s*ghant|2\s*hour/i.test(trimmedMessage);
+        const option = isEvery30 ? 'every30Minutes' : (is1Hour ? 'hourly' : (is2Hours ? 'every2Hours' : 'every10Minutes'));
+        const interval = isEvery30 ? 30 : (is1Hour ? 60 : (is2Hours ? 120 : 10));
+        currentDraft.reminderOption = option;
+        currentDraft.repeatIntervalMinutes = interval;
+        currentDraft.reminderSettings = {
+          enabled: true,
+          reminderOption: option,
+          repeatIntervalMinutes: interval
+        };
+        if (!currentDraft.asked.includes('reminder')) currentDraft.asked.push('reminder');
+      }
+      if (Array.isArray(parsedSlots.checkpoints) && parsedSlots.checkpoints.length > 0 && (!currentDraft.checkpoints || currentDraft.checkpoints.length === 0)) {
+        currentDraft.checkpoints = parsedSlots.checkpoints;
+        currentDraft.checkpointsAsked = true;
+        if (!currentDraft.asked.includes('checkpoints')) currentDraft.asked.push('checkpoints');
+      }
     }
 
     // Both Client and Service are selected!
@@ -6099,15 +6226,18 @@ const lastAskedField = currentDraft.asked.length > 0
         if (!currentDraft.asked.includes('reminder')) currentDraft.asked.push('reminder');
         actionHandled = true;
       } else if (lastAsked === 'checkpoints' && !currentDraft.checkpointsAsked) {
-        if (/nahi|no|skip|mat|koi nahi|chhod/i.test(trimmedMessage)) {
-          currentDraft.checkpoints = [];
-        } else {
-          const items = typeof parseCheckpointItems === 'function' ? parseCheckpointItems(trimmedMessage) : trimmedMessage.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
-          currentDraft.checkpoints = items.map(t => typeof t === 'string' ? { title: t, completed: false } : (t && t.title ? { title: String(t.title), completed: Boolean(t.completed) } : { title: String(t), completed: false }));
+        const hasOtherFieldKeyword = /(?:priority|प्रायोरिटी|due|date|time|kal|aaj|today|tomorrow|title|naam|name|description|विवरण|डिस्क्रिप्शन|reminder|रिमाइंडर|attachment|file)/i.test(trimmedMessage);
+        if (!hasOtherFieldKeyword) {
+          if (/nahi|no|skip|mat|koi nahi|chhod/i.test(trimmedMessage)) {
+            currentDraft.checkpoints = [];
+          } else {
+            const items = typeof parseCheckpointItems === 'function' ? parseCheckpointItems(trimmedMessage) : trimmedMessage.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
+            currentDraft.checkpoints = items.map(t => typeof t === 'string' ? { title: t, completed: false } : (t && t.title ? { title: String(t.title), completed: Boolean(t.completed) } : { title: String(t), completed: false }));
+          }
+          currentDraft.checkpointsAsked = true;
+          if (!currentDraft.asked.includes('checkpoints')) currentDraft.asked.push('checkpoints');
+          actionHandled = true;
         }
-        currentDraft.checkpointsAsked = true;
-        if (!currentDraft.asked.includes('checkpoints')) currentDraft.asked.push('checkpoints');
-        actionHandled = true;
       }
     }
 
@@ -6159,7 +6289,9 @@ const lastAskedField = currentDraft.asked.length > 0
       if (!currentDraft.title) {
         if (!currentDraft.asked.includes('select_pending_task')) currentDraft.asked.push('select_pending_task');
         const pendingListText = servicePendingTasks.map((t, idx) => `${idx + 1}. **${t.name || t.title}**${t.dueDate ? ` (Due: ${new Date(t.dueDate).toLocaleDateString('en-GB')})` : ''}`).join('\n');
-        const askPendingReply = `Client "${currentDraft.client}" ki service "${currentDraft.service}" ke pending tasks ye hain:\n\n${pendingListText}\n\nAap kaun sa task apne liye select karna chahte hain? (Ya naya task likhein):`;
+        const askPendingReply = isEn
+          ? `Client "${currentDraft.client}" - Service "${currentDraft.service}" has the following pending tasks:\n\n${pendingListText}\n\nWhich task would you like to select for yourself? (Or write a new task):`
+          : `Client "${currentDraft.client}" ki service "${currentDraft.service}" ke pending tasks ye hain:\n\n${pendingListText}\n\nAap kaun sa task apne liye select karna chahte hain? (Ya naya task likhein):`;
         const pendingChips = servicePendingTasks.map(t => ({
           label: t.name || t.title,
           action: {
@@ -6170,7 +6302,7 @@ const lastAskedField = currentDraft.asked.length > 0
             checkpoints: t.checkpoints || []
           }
         }));
-        pendingChips.push({ label: 'Naya task likhein', action: { type: 'new_client_task_title' } });
+        pendingChips.push({ label: isEn ? 'Write a new task' : 'Naya task likhein', action: { type: 'new_client_task_title' } });
         pendingChips.push({ label: 'Cancel', action: { type: 'cancel' } });
 
         return {
@@ -6178,7 +6310,7 @@ const lastAskedField = currentDraft.asked.length > 0
           status: 'needs_input',
           field: 'select_pending_task',
           reply: askPendingReply,
-          speech: `Service ke pending tasks me se task select kijiye ya naya task likhein`,
+          speech: isEn ? 'Please select a pending task or write a new task' : `Service ke pending tasks me se task select kijiye ya naya task likhein`,
           speakText: askPendingReply,
           draft: currentDraft,
           missing: ['title'],
@@ -6193,7 +6325,9 @@ const lastAskedField = currentDraft.asked.length > 0
     // Slot 3: Task Title (REQUIRED)
     if (!currentDraft.title) {
       if (!currentDraft.asked.includes('title')) currentDraft.asked.push('title');
-      const titleReply = `Task ka naam (title) batao jo "${currentDraft.service}" mein add karna hai:`;
+      const titleReply = isEn
+        ? `What is the task title to add under "${currentDraft.service}"?`
+        : `Task ka naam (title) batao jo "${currentDraft.service}" mein add karna hai:`;
       return {
         success: true,
         status: 'needs_input',
@@ -6213,7 +6347,9 @@ const lastAskedField = currentDraft.asked.length > 0
     // Slot 4: Task Description (REQUIRED - NO SKIP CHIP)
     if (!currentDraft.description || currentDraft.description === '') {
       if (!currentDraft.asked.includes('description')) currentDraft.asked.push('description');
-      const descReply = 'Task ka description kya rakhna hai? Description batayein:';
+      const descReply = isEn
+        ? 'What should be the task description? Please provide the description:'
+        : 'Task ka description kya rakhna hai? Description batayein:';
       return {
         success: true,
         status: 'needs_input',
@@ -6235,7 +6371,9 @@ const lastAskedField = currentDraft.asked.length > 0
     // Slot 5: Due Date & Time (REQUIRED - NO SKIP CHIP)
     if (!currentDraft.dueDateTime && !currentDraft.dueDate) {
       if (!currentDraft.asked.includes('dueDateTime')) currentDraft.asked.push('dueDateTime');
-      const dueReply = 'Ye task kab tak complete hona chahiye? Date aur time batayein:';
+      const dueReply = isEn
+        ? 'When should this task be completed? Please specify the date and time:'
+        : 'Ye task kab tak complete hona chahiye? Date aur time batayein:';
       const today6pm = new Date(now);
       today6pm.setHours(18, 0, 0, 0);
       const tomorrow11am = new Date(now);
@@ -6248,6 +6386,20 @@ const lastAskedField = currentDraft.asked.length > 0
       oneWeek.setDate(oneWeek.getDate() + 7);
       oneWeek.setHours(18, 0, 0, 0);
 
+      const dueChips = isEn ? [
+        { label: 'Today 6:00 PM', action: { type: 'set', field: 'dueDateTime', value: today6pm.toISOString() } },
+        { label: 'Tomorrow 11:00 AM', action: { type: 'set', field: 'dueDateTime', value: tomorrow11am.toISOString() } },
+        { label: 'In 3 days', action: { type: 'set', field: 'dueDateTime', value: threeDays.toISOString() } },
+        { label: '1 Week', action: { type: 'set', field: 'dueDateTime', value: oneWeek.toISOString() } },
+        { label: 'Cancel', action: { type: 'cancel' } }
+      ] : [
+        { label: 'Aaj shaam 6:00 PM', action: { type: 'set', field: 'dueDateTime', value: today6pm.toISOString() } },
+        { label: 'Kal 11:00 AM', action: { type: 'set', field: 'dueDateTime', value: tomorrow11am.toISOString() } },
+        { label: '3 Din baad', action: { type: 'set', field: 'dueDateTime', value: threeDays.toISOString() } },
+        { label: '1 Hafta', action: { type: 'set', field: 'dueDateTime', value: oneWeek.toISOString() } },
+        { label: 'Cancel', action: { type: 'cancel' } }
+      ];
+
       return {
         success: true,
         status: 'needs_input',
@@ -6257,13 +6409,7 @@ const lastAskedField = currentDraft.asked.length > 0
         speakText: dueReply,
         draft: currentDraft,
         missing: ['dueDateTime'],
-        chips: [
-          { label: 'Aaj shaam 6:00 PM', action: { type: 'set', field: 'dueDateTime', value: today6pm.toISOString() } },
-          { label: 'Kal 11:00 AM', action: { type: 'set', field: 'dueDateTime', value: tomorrow11am.toISOString() } },
-          { label: '3 Din baad', action: { type: 'set', field: 'dueDateTime', value: threeDays.toISOString() } },
-          { label: '1 Hafta', action: { type: 'set', field: 'dueDateTime', value: oneWeek.toISOString() } },
-          { label: 'Cancel', action: { type: 'cancel' } }
-        ],
+        chips: dueChips,
         candidates: [],
         notices,
         canAssignOthers: false,
@@ -6273,7 +6419,9 @@ const lastAskedField = currentDraft.asked.length > 0
     // Slot 6: Priority (NO SKIP CHIP)
     if (!currentDraft.priority && !currentDraft.asked.includes('priority')) {
       if (!currentDraft.asked.includes('priority')) currentDraft.asked.push('priority');
-      const prioReply = 'Priority kya rakhein? High, Medium ya Low?';
+      const prioReply = isEn
+        ? 'What should be the priority? High, Medium, or Low?'
+        : 'Priority kya rakhein? High, Medium ya Low?';
       return {
         success: true,
         status: 'needs_input',
@@ -6298,7 +6446,25 @@ const lastAskedField = currentDraft.asked.length > 0
     // Slot 7: Reminder Settings
     if ((currentDraft.reminder === null || currentDraft.reminder === undefined) && !currentDraft.asked.includes('reminder')) {
       if (!currentDraft.asked.includes('reminder')) currentDraft.asked.push('reminder');
-      const reminderReply = 'Kya task ke liye reminder lagana hai?';
+      const reminderReply = isEn
+        ? 'Would you like to set a reminder for this task?'
+        : 'Kya task ke liye reminder lagana hai?';
+      const reminderChips = isEn ? [
+        { label: 'Reminder OFF', action: { type: 'set_client_task_reminder', reminder: false, reminderOption: 'off' } },
+        { label: 'Every 10 min', action: { type: 'set_client_task_reminder', reminder: true, reminderOption: 'every10Minutes', repeatIntervalMinutes: 10 } },
+        { label: 'Every 30 min', action: { type: 'set_client_task_reminder', reminder: true, reminderOption: 'every30Minutes', repeatIntervalMinutes: 30 } },
+        { label: 'Every 1 hour', action: { type: 'set_client_task_reminder', reminder: true, reminderOption: 'hourly', repeatIntervalMinutes: 60 } },
+        { label: 'Every 2 hours', action: { type: 'set_client_task_reminder', reminder: true, reminderOption: 'every2Hours', repeatIntervalMinutes: 120 } },
+        { label: 'Cancel', action: { type: 'cancel' } }
+      ] : [
+        { label: 'Reminder OFF', action: { type: 'set_client_task_reminder', reminder: false, reminderOption: 'off' } },
+        { label: 'Har 10 min', action: { type: 'set_client_task_reminder', reminder: true, reminderOption: 'every10Minutes', repeatIntervalMinutes: 10 } },
+        { label: 'Har 30 min', action: { type: 'set_client_task_reminder', reminder: true, reminderOption: 'every30Minutes', repeatIntervalMinutes: 30 } },
+        { label: 'Har 1 ghanta', action: { type: 'set_client_task_reminder', reminder: true, reminderOption: 'hourly', repeatIntervalMinutes: 60 } },
+        { label: 'Har 2 ghante', action: { type: 'set_client_task_reminder', reminder: true, reminderOption: 'every2Hours', repeatIntervalMinutes: 120 } },
+        { label: 'Cancel', action: { type: 'cancel' } }
+      ];
+
       return {
         success: true,
         status: 'needs_input',
@@ -6308,14 +6474,7 @@ const lastAskedField = currentDraft.asked.length > 0
         speakText: reminderReply,
         draft: currentDraft,
         missing: ['reminder'],
-        chips: [
-          { label: 'Reminder OFF', action: { type: 'set_client_task_reminder', reminder: false, reminderOption: 'off' } },
-          { label: 'Har 10 min', action: { type: 'set_client_task_reminder', reminder: true, reminderOption: 'every10Minutes', repeatIntervalMinutes: 10 } },
-          { label: 'Har 30 min', action: { type: 'set_client_task_reminder', reminder: true, reminderOption: 'every30Minutes', repeatIntervalMinutes: 30 } },
-          { label: 'Har 1 ghanta', action: { type: 'set_client_task_reminder', reminder: true, reminderOption: 'hourly', repeatIntervalMinutes: 60 } },
-          { label: 'Har 2 ghante', action: { type: 'set_client_task_reminder', reminder: true, reminderOption: 'every2Hours', repeatIntervalMinutes: 120 } },
-          { label: 'Cancel', action: { type: 'cancel' } }
-        ],
+        chips: reminderChips,
         candidates: [],
         notices,
         canAssignOthers: false,
@@ -6326,7 +6485,17 @@ const lastAskedField = currentDraft.asked.length > 0
     if (!currentDraft.checkpointsAsked && !currentDraft.asked.includes('checkpoints')) {
       currentDraft.checkpointsAsked = true;
       if (!currentDraft.asked.includes('checkpoints')) currentDraft.asked.push('checkpoints');
-      const cpReply = 'Checkpoints add karne hain? Comma daal kar likhein (jaise: test 1, checking crm, testing) ya "Koi checkpoint nahi" chunein:';
+      const cpReply = isEn
+        ? 'Would you like to add checkpoints? You can list them separated by commas (e.g. "test 1, checking crm, testing") or select "No checkpoints":'
+        : 'Checkpoints add karne hain? Comma daal kar likhein (jaise: test 1, checking crm, testing) ya "Koi checkpoint nahi" chunein:';
+      const cpChips = isEn ? [
+        { label: 'No checkpoints', action: { type: 'skip_client_task_checkpoints' } },
+        { label: 'Cancel', action: { type: 'cancel' } }
+      ] : [
+        { label: 'Koi checkpoint nahi', action: { type: 'skip_client_task_checkpoints' } },
+        { label: 'Cancel', action: { type: 'cancel' } }
+      ];
+
       return {
         success: true,
         status: 'needs_input',
@@ -6336,10 +6505,7 @@ const lastAskedField = currentDraft.asked.length > 0
         speakText: cpReply,
         draft: currentDraft,
         missing: ['checkpoints'],
-        chips: [
-          { label: 'Koi checkpoint nahi', action: { type: 'skip_client_task_checkpoints' } },
-          { label: 'Cancel', action: { type: 'cancel' } }
-        ],
+        chips: cpChips,
         candidates: [],
         notices,
         canAssignOthers: false,
@@ -6355,9 +6521,24 @@ const lastAskedField = currentDraft.asked.length > 0
     const payload = FORM_REGISTRY.create_client_task.buildPayload(currentDraft, req?.user || {});
     const preview = FORM_REGISTRY.create_client_task.buildPreview(currentDraft, req?.user || {});
 
-    const readyReply = currentDraft.clientTaskId
-      ? `Task "${currentDraft.title}" "${currentDraft.client}" ki "${currentDraft.service}" service mein aapko assign karne ke liye ready hai. Kya ise assign/create kar doon?`
-      : `Task "${currentDraft.title}" "${currentDraft.client}" ki "${currentDraft.service}" service ke liye ready hai. Kya ise create kar doon?`;
+    const readyReply = isEn
+      ? (currentDraft.clientTaskId
+        ? `Task "${currentDraft.title}" under "${currentDraft.service}" for "${currentDraft.client}" is ready to be assigned to you. Shall I assign it?`
+        : `Task "${currentDraft.title}" under "${currentDraft.service}" for "${currentDraft.client}" is ready. Shall I create it?`)
+      : (currentDraft.clientTaskId
+        ? `Task "${currentDraft.title}" "${currentDraft.client}" ki "${currentDraft.service}" service mein aapko assign karne ke liye ready hai. Kya ise assign/create kar doon?`
+        : `Task "${currentDraft.title}" "${currentDraft.client}" ki "${currentDraft.service}" service ke liye ready hai. Kya ise create kar doon?`);
+
+    const readyChips = isEn ? [
+      { label: currentDraft.clientTaskId ? 'Yes, assign it' : 'Yes, create it', action: { type: 'confirm' } },
+      { label: 'Edit', action: { type: 'edit' } },
+      { label: 'Cancel', action: { type: 'cancel' } }
+    ] : [
+      { label: currentDraft.clientTaskId ? 'Haan, assign karo' : 'Haan, create karo', action: { type: 'confirm' } },
+      { label: 'Kuch badalna hai', action: { type: 'edit' } },
+      { label: 'Cancel', action: { type: 'cancel' } }
+    ];
+
     return {
       success: true,
       status: 'ready',
@@ -6367,11 +6548,7 @@ const lastAskedField = currentDraft.asked.length > 0
       speakText: readyReply,
       draft: currentDraft,
       missing: [],
-      chips: [
-        { label: currentDraft.clientTaskId ? 'Haan, assign karo' : 'Haan, create karo', action: { type: 'confirm' } },
-        { label: 'Kuch badalna hai', action: { type: 'edit' } },
-        { label: 'Cancel', action: { type: 'cancel' } }
-      ],
+      chips: readyChips,
       candidates: [],
       notices,
       canAssignOthers: false,
@@ -8148,7 +8325,8 @@ const lastAskedField = currentDraft.asked.length > 0
           detSlots.assigneeName = trimmedMessage;
         }
 
-        if (lastAskedField === 'checkpoints' && !actionHandled) {
+        const hasOtherFieldKeyword = /(?:priority|प्रायोरिटी|due|date|time|kal|aaj|today|tomorrow|title|naam|name|description|विवरण|डिस्क्रिप्शन|reminder|रिमाइंडर|attachment|file)/i.test(trimmedMessage);
+        if (lastAskedField === 'checkpoints' && !actionHandled && !hasOtherFieldKeyword) {
           detSlots.assigneeName = null;
           detSlots.pendingAssigneeNames = [];
           if (currentDraft.intent === 'self_task') {
@@ -8247,6 +8425,12 @@ const lastAskedField = currentDraft.asked.length > 0
         if (detSlots.title || extracted.title) currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'title');
         if (detSlots.description || extracted.description) currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'description');
         if (detSlots.dueDateTime || extracted.dueDateTime) currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'dueDateTime');
+        if (/(?:remove|delete|clear|hatao|hata\s*do)\s*(?:attachment|file|photo|image)|(?:attachment|file|photo|image)\s*(?:hatao|hata\s*do|remove|delete|clear)/i.test(trimmedMessage)) {
+          currentDraft.attachmentsCount = 0;
+          currentDraft.file = null;
+          currentDraft.pdfFile = null;
+          notices.push(userLang === 'en' ? 'Attachments removed.' : 'Attachments hata diye gaye hain.');
+        }
         if (detSlots.reminder !== undefined || extracted.reminder !== undefined) {
           currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'reminder');
           if (currentDraft.reminder) {
@@ -9516,6 +9700,9 @@ const lastAskedField = currentDraft.asked.length > 0
     } else if (nextFieldKey === 'checkpoints') {
       defaultEnReply = 'Would you like to add checkpoints? You can list them separated by commas (e.g. "test 1, checking crm, testing") or tap Skip:';
       defaultEnSpeech = 'Would you like to add checkpoints? You can list them separated by commas or tap Skip.';
+    } else if (nextFieldKey === 'attachments' || nextFieldKey === 'file') {
+      defaultEnReply = 'Would you like to attach any file or image? If yes, please upload it, otherwise click on No.';
+      defaultEnSpeech = 'Would you like to attach any file or image? If yes, please upload it, otherwise click on No.';
     }
 
     let replyText = isPastDueTime
@@ -10277,9 +10464,12 @@ const lastAskedField = currentDraft.asked.length > 0
         { label: 'Cancelled', action: { type: 'set', field: 'status', value: 'cancelled' } },
       ];
     } else if (activeIntent === 'task_project' && nextFieldKey === 'file') {
-      chipsList = [
-        { label: 'Nahi (Skip)', action: { type: 'skip', field: 'file' } },
-        { label: 'Baaki sab default', action: { type: 'skip_all' } },
+      chipsList = isEnTurn ? [
+        { label: 'No', action: { type: 'skip', field: 'file' } },
+        { label: 'Skip remaining', action: { type: 'skip_all' } },
+      ] : [
+        { label: 'Nahi', action: { type: 'skip', field: 'file' } },
+        { label: 'Skip remaining', action: { type: 'skip_all' } },
       ];
     } else if (isReAsk && typeof fieldConfig.reAskChips === 'function') {
       chipsList = fieldConfig.reAskChips(now, isEnTurn);
@@ -10315,11 +10505,15 @@ const lastAskedField = currentDraft.asked.length > 0
     if (isEnTurn && Array.isArray(chipsList)) {
       chipsList = chipsList.map(c => {
         let lbl = c.label || '';
+        if (lbl === 'Haan') return { ...c, label: 'Yes' };
+        if (lbl === 'Nahi' || lbl === 'Nahi (Skip)') return { ...c, label: 'No' };
+        if (lbl === 'Har 10 min') return { ...c, label: 'Every 10 min' };
+        if (lbl === '1 ghanta pehle') return { ...c, label: '1 hour before' };
         if (lbl === 'Baaki sab default') return { ...c, label: 'Skip remaining' };
-        if (lbl === 'Koi nahi / Skip') return { ...c, label: 'Skip' };
+        if (lbl === 'Koi nahi / Skip' || lbl === 'Koi checkpoint nahi') return { ...c, label: 'Skip' };
         if (lbl === 'Khud ke liye') return { ...c, label: 'For myself' };
         if (lbl === 'Kisi aur ke liye') return { ...c, label: 'For someone else' };
-        if (lbl === 'Haan, create karo') return { ...c, label: 'Yes, create it' };
+        if (lbl === 'Haan, create karo' || lbl === 'Haan, assign karo') return { ...c, label: 'Yes, create it' };
         if (lbl === 'Kuch badalna hai') return { ...c, label: 'Edit' };
         if (lbl.startsWith('Aaj shaam')) return { ...c, label: lbl.replace('Aaj shaam', 'Today') };
         if (lbl.startsWith('Kal subah')) return { ...c, label: lbl.replace('Kal subah', 'Tomorrow') };
@@ -10533,16 +10727,30 @@ const lastAskedField = currentDraft.asked.length > 0
             { label: 'Haan, create karo', action: { type: 'confirm' } },
           ]));
 
+    let finalEditChips = editChips;
+    if (isEnTurn && Array.isArray(finalEditChips)) {
+      finalEditChips = finalEditChips.map(c => {
+        let lbl = c.label || '';
+        if (lbl === 'Priority badlo') return { ...c, label: 'Change priority' };
+        if (lbl === 'Date/Time badlo' || lbl === 'Date badlo' || lbl === 'Dates badlo') return { ...c, label: 'Change date/time' };
+        if (lbl === 'Reminder badlo') return { ...c, label: 'Change reminder' };
+        if (lbl === 'Status badlo') return { ...c, label: 'Change status' };
+        if (lbl === 'Name badlo') return { ...c, label: 'Change name' };
+        if (lbl.startsWith('Haan')) return { ...c, label: 'Yes, create it' };
+        return c;
+      });
+    }
+
     return {
       success: true,
       status: 'ready',
       field: 'ready',
-      reply: 'Ji batayein kya changes karne hain? Main kar dungi.',
-      speech: 'जी बताएं क्या बदलाव करने हैं? मैं कर दूंगी।',
-      speakText: 'Ji batayein kya changes karne hain? Main kar dungi.',
+      reply: isEnTurn ? 'Please tell me what changes you would like to make, and I will update them.' : 'Ji batayein kya changes karne hain? Main kar dungi.',
+      speech: isEnTurn ? 'Please tell me what changes you would like to make.' : 'जी बताएं क्या बदलाव करने हैं? मैं कर दूंगी।',
+      speakText: isEnTurn ? 'Please tell me what changes you would like to make.' : 'Ji batayein kya changes karne hain? Main kar dungi.',
       draft: currentDraft,
       missing: [],
-      chips: editChips,
+      chips: finalEditChips,
       candidates: [],
       notices,
       progress: { done: total, total },
