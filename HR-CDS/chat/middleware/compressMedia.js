@@ -196,6 +196,67 @@ const normalizeAudio = async file => {
   removeQuietly(originalPath);
 };
 
+// Small cover picture shown in the chat bubble instead of the photo/video itself, so media
+// is only downloaded when the user taps it (WhatsApp style). ~360px WebP, usually 10-30 KB.
+// Videos use a frame from the first second. Returns the thumbnail path or "" when not possible.
+const THUMB_DIMENSION = 360;
+const thumbPathFor = filePath => {
+  const parsed = path.parse(filePath);
+  return path.join(parsed.dir, `${parsed.name}-thumb.webp`);
+};
+
+const createThumbnailForPath = async (filePath, mimetype = "") => {
+  if (!filePath || !fs.existsSync(filePath)) return "";
+  const outputPath = thumbPathFor(filePath);
+  const type = String(mimetype || "").toLowerCase();
+  const ext = path.extname(filePath).toLowerCase();
+  const isVideo = type.startsWith("video/") || [".mp4", ".mov", ".m4v", ".webm", ".3gp", ".mkv", ".avi"].includes(ext);
+  const isImage = type.startsWith("image/") || Object.prototype.hasOwnProperty.call(IMAGE_EXTENSION_TYPES, ext);
+  const resizeToThumb = image => image
+    .resize(THUMB_DIMENSION, THUMB_DIMENSION, { fit: "inside", withoutEnlargement: true })
+    .webp({ quality: 55 })
+    .toFile(outputPath);
+  try {
+    if (isVideo) {
+      const framePath = `${outputPath}.frame.jpg`;
+      try {
+        // Frame at 1s (skips black first frames); very short clips fall back to the first frame.
+        const grab = seek => runFfmpeg([
+          "-y", ...(seek ? ["-ss", seek] : []), "-i", filePath, "-frames:v", "1",
+          "-vf", `scale='min(${THUMB_DIMENSION * 2},iw)':-2`, "-q:v", "4", framePath,
+        ], 60000).catch(() => {});
+        const hasFrame = () => fs.existsSync(framePath) && fs.statSync(framePath).size > 0;
+        await grab("1");
+        if (!hasFrame()) await grab("");
+        if (!hasFrame()) return "";
+        await resizeToThumb(sharp(framePath, { failOn: "none" }));
+      } finally {
+        removeQuietly(framePath);
+      }
+    } else if (isImage) {
+      try {
+        await resizeToThumb(sharp(filePath, { failOn: "none", animated: false }).rotate());
+      } catch (error) {
+        if (!HEIC_TYPES.has(type) && ![".heic", ".heif"].includes(ext)) throw error;
+        await resizeToThumb(await decodeHeic(filePath));
+      }
+    } else {
+      return "";
+    }
+    return fs.existsSync(outputPath) ? outputPath : "";
+  } catch (error) {
+    removeQuietly(outputPath);
+    console.warn("Chat thumbnail skipped:", error.message);
+    return "";
+  }
+};
+
+const addThumbnail = async file => {
+  if (!file?.path || !/^(image|video)\//.test(String(file.mimetype || ""))) return;
+  const thumbPath = await createThumbnailForPath(file.path, file.mimetype);
+  if (thumbPath) file.thumbFilename = path.basename(thumbPath);
+};
+
 const compressUploadedMedia = async (req, _res, next) => {
   const file = req.file;
 
@@ -203,6 +264,7 @@ const compressUploadedMedia = async (req, _res, next) => {
   normalizeImageMimetype(file);
   if (!shouldCompressFile(req, file)) {
     if (needsDisplayPreview(file)) await createDisplayPreview(file);
+    await addThumbnail(file);
     return next();
   }
 
@@ -221,7 +283,9 @@ const compressUploadedMedia = async (req, _res, next) => {
     console.warn("Chat media compression skipped:", error.message);
   }
 
+  await addThumbnail(file);
   next();
 };
 
 module.exports = compressUploadedMedia;
+module.exports.createThumbnailForPath = createThumbnailForPath;

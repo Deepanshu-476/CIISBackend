@@ -433,7 +433,7 @@ const io = socketIo(server, {
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Permanent-Delete", "x-company-code", "companyCode", "X-Company-Code"]
+    allowedHeaders: ["Content-Type", "Authorization", "X-Permanent-Delete", "x-company-code", "companyCode", "X-Company-Code", "X-Page-Path", "X-Client-App"]
   },
   transports: ['websocket', 'polling'],
   allowEIO3: true,
@@ -1046,7 +1046,7 @@ const corsOptions = {
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "Cache-Control", "X-Permanent-Delete", "x-company-code", "companyCode", "X-Company-Code"],
+  allowedHeaders: ["Content-Type", "Authorization", "Cache-Control", "X-Permanent-Delete", "x-company-code", "companyCode", "X-Company-Code", "X-Page-Path", "X-Client-App"],
   exposedHeaders: ["Content-Disposition"]
 };
 
@@ -1197,6 +1197,10 @@ app.use((req, res, next) => {
   next();
 });
 
+// User Activity: every successful write by a logged-in company user is logged against the page
+// the client says it was on (X-Page-Path). Written in batches; see utils/activityTracker.js.
+app.use(require('./utils/activityTracker').trackWrites);
+
 const dashboardRoutes = require('./HR-CDS/routes/dashboardRoutes.js');
 
 
@@ -1241,6 +1245,7 @@ app.use("/department", require("./routes/Department.routes.js"));
 app.use("/api/alerts", require("./HR-CDS/routes/alertRoutes.js"));
 app.use("/api/promos", require("./HR-CDS/routes/promoRoutes.js"));
 app.use("/api/badges", require("./routes/badgeRoutes.js"));
+app.use("/api/activity", require("./routes/activityRoutes.js"));
 app.use("/api/notifications", require("./HR-CDS/routes/notificationRoutes.js"));
 app.use("/api/feedback", require("./HR-CDS/routes/feedbackRoutes.js"));
 app.use("/api/groups", require("./HR-CDS/routes/groupRoutes.js"));
@@ -1424,6 +1429,16 @@ const startServer = async () => {
     await attachRedisAdapter(io);
   } catch (e) {
     console.error('[socket] Redis adapter failed, falling back to memory:', e.message);
+  }
+
+  // Calling depends on two pieces of configuration that fail silently when they are missing: without
+  // Redis the web and app backends cannot signal to each other, and without the Coturn secret
+  // /api/chat/turn-credentials answers 503 and calls across networks never relay. Say so at boot.
+  if (!process.env.REDIS_URL) {
+    console.warn('[calls] REDIS_URL is not set: calls only work between users connected to THIS backend process (web <-> app calling will fail).');
+  }
+  if (!String(process.env.COTURN_STATIC_AUTH_SECRET || process.env.TURN_STATIC_AUTH_SECRET || '').trim()) {
+    console.warn('[calls] COTURN_STATIC_AUTH_SECRET is not set: /api/chat/turn-credentials returns 503 and calls fall back to STUN only, so calls across different networks will drop.');
   }
 
   // Uniqueness is a prerequisite for safe concurrent group/event delivery.

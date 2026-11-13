@@ -115,6 +115,8 @@ const messageSchema = new mongoose.Schema(
     // Display-only copy (webp) of a photo that browsers cannot show or that is very
     // large. `file` always stays the original upload, used for download/save/share.
     previewFile: { type: String, default: "" },
+    // Small cover picture (photo/video) shown in the bubble; the media itself loads on tap.
+    thumbFile: { type: String, default: "" },
     fileSize: { type: Number, default: 0 },
     // Voice note length in seconds, sent by the recorder so players can show it before download.
     duration: { type: Number, default: 0, min: 0 },

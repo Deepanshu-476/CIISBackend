@@ -54,6 +54,10 @@ const getPublicChatPreviewUrl = req => (
   req.file?.previewFilename ? `${getPublicOrigin(req)}/api/uploads/chat/${req.file.previewFilename}` : ""
 );
 
+const getPublicChatThumbUrl = req => (
+  req.file?.thumbFilename ? `${getPublicOrigin(req)}/api/uploads/chat/${req.file.thumbFilename}` : ""
+);
+
 const activeMessageFilter = () => ({
   $or: [
     {expiresAt: null},
@@ -493,6 +497,7 @@ exports.sendMessage = async (req, res) => {
     const fileName = req.body?.fileName || (req.file ? (req.file.originalname || req.file.filename) : "");
     const fileSize = req.file ? req.file.size : 0;
     const previewFile = getPublicChatPreviewUrl(req);
+    const thumbFile = getPublicChatThumbUrl(req);
     // Voice notes carry their recorded length; cap it so a bad client value can't show nonsense.
     const rawDuration = Number(req.body.duration);
     const voiceDuration = req.file && Number.isFinite(rawDuration) && rawDuration > 0 ? Math.min(Math.round(rawDuration), 6 * 60 * 60) : 0;
@@ -527,6 +532,7 @@ exports.sendMessage = async (req, res) => {
       fileName,
       fileSize,
       previewFile,
+      thumbFile,
       duration: voiceDuration,
       replyTo: replyTo?._id || null,
       expiresAt,
@@ -960,6 +966,7 @@ exports.deleteMessageForEveryone = async (req, res) => {
     message.text = "";
     message.file = "";
     message.previewFile = "";
+    message.thumbFile = "";
     message.fileType = "";
     await message.save();
     await emitUnreadCounts(conversation, userId);
@@ -1044,6 +1051,7 @@ exports.forwardMessage = async (req, res) => {
         fileName: original.fileName || "",
         fileSize: original.fileSize || 0,
         previewFile: original.previewFile || "",
+        thumbFile: original.thumbFile || "",
         duration: original.duration || 0,
         seenBy: [userId],
         deliveredTo,

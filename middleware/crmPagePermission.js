@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const PagePermission = require('../models/PagePermission');
+const { scopedUserIds } = require('../utils/branchScope');
 
 const companyId = req => req.user?.company?._id || req.user?.company || req.user?.companyId;
 const userId = req => req.user?._id || req.user?.id;
@@ -39,6 +40,8 @@ const requireCrmPagePermission = (paths, permission = 'view') => async (req, res
       return res.status(403).json({ message: `You do not have ${permission} access for this CRM page.` });
     }
     req.crmCompany = company;
+    // Branch rule: null for owner/admin, otherwise the users of the viewer's branches.
+    req.crmUserScope = await scopedUserIds(req.user);
     return next();
   } catch (error) {
     return next(error);

@@ -5,6 +5,7 @@ const { sendEmail } = require("../../utils/sendEmail");
 const { notifyDirectUsers } = require("../utils/systemNotificationService");
 const { scheduleMeetingReminder, cancelMeetingReminder } = require("../../services/meetingSchedulerService");
 const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagination");
+const { scopedUserIds } = require('../../utils/branchScope');
 
 const callerCompanyCode = req => req.user?.companyCode || req.user?.company?.companyCode || "";
 const findCompanyMeeting = (req, meetingId) => Meeting.findOne({ _id: meetingId, companyCode: callerCompanyCode(req) });
@@ -265,6 +266,12 @@ const getUserMeetings = async (req, res) => {
     if (!isSelf && !(await canManageMeetings(req, 'view'))) {
       return res.status(403).json({ error: "You can only see your own meetings" });
     }
+    if (!isSelf) {
+      const branchUserIds = await scopedUserIds(req.user);
+      if (branchUserIds && !branchUserIds.some(id => String(id) === String(req.params.userId))) {
+        return res.status(403).json({ error: "This employee is not in your branches" });
+      }
+    }
     const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
     const filter = {
       attendees: req.params.userId,
@@ -350,6 +357,9 @@ const getAllMeetings = async (req, res) => {
     const { page, limit, skip } = getPaginationOptions(req.query, { limit: 25, maxLimit: 100 });
     // Previously no companyCode meant every company's meetings; the client-supplied code is ignored now.
     const filter = { companyCode: callerCompanyCode(req) };
+    // Branch-limited viewers (not owner/admin): meetings with someone from their branches.
+    const branchUserIds = await scopedUserIds(req.user);
+    if (branchUserIds) filter.$or = [{ attendees: { $in: branchUserIds } }, { createdBy: { $in: branchUserIds } }];
     const [meetings, total] = await Promise.all([
       Meeting.find(filter)
         .sort({ date: -1 })

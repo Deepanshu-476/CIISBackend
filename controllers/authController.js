@@ -23,6 +23,7 @@ const {
 
 const SidebarConfig = require("../models/SidebarConfig");
 const { findSidebarConfig } = require("../routes/sidebarConfigs");
+const { recordLogin } = require("../utils/activityTracker");
 
 const resolveUserAssignedDashboard = async (user, companyDetails) => {
   try {
@@ -402,7 +403,7 @@ const setAuthCookies = (res, accessToken, refreshToken) => {
   }
 };
 
-const completeStandardLogin = async (userId, res, { message = "Login successful" } = {}) => {
+const completeStandardLogin = async (userId, res, { message = "Login successful", req = null } = {}) => {
   const user = await User.findById(userId)
     .select("-password -loginAttempts -lockUntil")
     .populate("department", "name")
@@ -419,6 +420,7 @@ const completeStandardLogin = async (userId, res, { message = "Login successful"
 
   user.lastLogin = new Date();
   await user.save();
+  recordLogin(user, req);
 
   const linkedClient = await resolveClientForUser(user);
   const rawAdditionalDetails = parseAdditionalDetails(user.additionalDetails);
@@ -876,6 +878,7 @@ exports.companyLogin = async (req, res) => {
     if (!loginSettings.companyLoginOtpEnabled) {
       return completeStandardLogin(user._id, res, {
         message: "Login successful",
+        req,
       });
     }
 
@@ -1503,6 +1506,7 @@ exports.login = async (req, res) => {
     if (!loginSettings.companyLoginOtpEnabled) {
       return completeStandardLogin(user._id, res, {
         message: "Login successful",
+        req,
       });
     }
 
@@ -1699,6 +1703,7 @@ exports.verifyLoginOTP = async (req, res) => {
     
     user.lastLogin = new Date();
     await user.save();
+    recordLogin(user, req);
 
     const linkedClient = await resolveClientForUser(user);
     const rawAdditionalDetails = parseAdditionalDetails(user.additionalDetails);

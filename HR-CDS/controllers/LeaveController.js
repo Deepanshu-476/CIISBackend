@@ -18,6 +18,7 @@ const { emitLeaveEvents } = require('../socket/handlers/leaveHandlers');
 const {notifyPageUsers, notifyDirectUsers} = require('../utils/systemNotificationService');
 const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
 const { cleanRecurringTasksForAbsentUserRange } = require('../cron/recurringTasks');
+const { userBranchCondition } = require('../../utils/branchScope');
 
 const APPROVAL_ROLES = ['manager', 'hr', 'owner'];
 
@@ -419,34 +420,19 @@ const getEmployeeLeavesPageAccess = async (companyId, userId) => {
   };
 };
 
-const getCompanyUserIds = async (companyId) => {
+// Users of this company whose leaves the viewer may see: owner/admin every branch, anyone
+// else only the branches assigned to them (utils/branchScope). `branchId` narrows it further.
+const getBranchScopedCompanyUserIds = async (companyId, branchId, viewer = null) => {
+  const branchCondition = viewer ? userBranchCondition(viewer, branchId) : (
+    branchId && mongoose.isValidObjectId(branchId)
+      ? { $or: [{ branch: branchId }, { branchId }, { assignedBranches: branchId }] }
+      : {}
+  );
   const companyUsers = await User.find({
-    $or: [
-      { company: companyId },
-      { companyId }
+    $and: [
+      { $or: [{ company: companyId }, { companyId }] },
+      branchCondition,
     ]
-  }).select('_id');
-
-  return companyUsers.map(user => user._id);
-};
-
-const getBranchScopedCompanyUserIds = async (companyId, branchId) => {
-  if (!branchId || !mongoose.isValidObjectId(branchId)) {
-    return getCompanyUserIds(companyId);
-  }
-
-  const companyUsers = await User.find({
-    $or: [
-      { company: companyId },
-      { companyId }
-    ],
-    $and: [{
-      $or: [
-        { branch: branchId },
-        { branchId },
-        { assignedBranches: branchId }
-      ]
-    }]
   }).select('_id');
 
   return companyUsers.map(user => user._id);
@@ -795,7 +781,7 @@ exports.getAllLeaves = async (req, res) => {
 
     
     const requestedBranchId = req.query.branch || req.query.branchId;
-    const companyUserIds = await getBranchScopedCompanyUserIds(userCompanyId, requestedBranchId);
+    const companyUserIds = await getBranchScopedCompanyUserIds(userCompanyId, requestedBranchId, req.user);
     const pageAccess = await getEmployeeLeavesPageAccess(userCompanyId, req.user._id);
     
     void 0;
@@ -2099,7 +2085,7 @@ exports.getLeaveStats = async (req, res) => {
     let stats = {};
 
     if (isPrivileged && userCompanyId) {
-      const companyUserIds = await getBranchScopedCompanyUserIds(userCompanyId, req.query.branch);
+      const companyUserIds = await getBranchScopedCompanyUserIds(userCompanyId, req.query.branch, req.user);
       let filter = {
         user: { $in: companyUserIds }
       };

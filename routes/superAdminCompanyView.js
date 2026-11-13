@@ -71,6 +71,16 @@ router.use(async (req, res, next) => {
 
 const USER_FIELDS = 'name email phone companyRole jobRole jobRoleName department departmentName branch branchName employeeId employeeType isActive lastLogin createdAt profileImage';
 
+// Usage: how many users, how many logged in, which pages are used most / least (User Activity data).
+router.get('/usage', async (req, res, next) => {
+  try {
+    const { parseRange, buildUsageSummary } = require('../services/activityAnalytics');
+    const data = await buildUsageSummary(req.viewCompanyId, { range: parseRange(req.query, 30) });
+    // Same privacy rule as the other view routes: no contact details beyond what /users shows.
+    res.json({ success: true, ...data });
+  } catch (error) { next(error); }
+});
+
 router.get('/summary', async (req, res, next) => {
   try {
     const { viewCompanyId: company, viewCompanyCode: code } = req;
