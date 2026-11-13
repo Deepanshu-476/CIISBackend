@@ -1453,6 +1453,14 @@ function parseProjectDate(raw, now = new Date()) {
     }
   }
 
+  if (/\b(?:next\s+month|1\s+month|one\s+month|1\s+mahine|ek\s+mahina)\b/i.test(clean)) {
+    const d = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+    return formatYyyyMmDd(d);
+  }
+  if (/\b(?:next\s+week|1\s+week|one\s+week|1\s+hafte|ek\s+hafta)\b/i.test(clean)) {
+    const d = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    return formatYyyyMmDd(d);
+  }
   if (/\b(?:kal|tomorrow)\b/i.test(clean)) {
     const d = new Date(now.getTime() + 24 * 60 * 60 * 1000);
     return formatYyyyMmDd(d);
