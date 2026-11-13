@@ -8,6 +8,14 @@ const validateRequest = require('../../middleware/validateRequest.js');
 
 router.use(authMiddleware.protect);
 
+// Branch rule: approving / deleting a leave needs its employee to be in the viewer's branches.
+const Leave = require('../models/Leave');
+const { requireRecordInBranches } = require('../../utils/branchScope');
+const leaveInBranches = requireRecordInBranches(
+  async req => (await Leave.findById(req.params.id).select('user').lean())?.user,
+  { label: 'leaves' }
+);
+
 
 router.post('/apply', 
   [
@@ -58,6 +66,7 @@ router.get('/approval-options/:id',
     param('id').isMongoId().withMessage('Invalid leave ID format'),
     validateRequest
   ],
+  leaveInBranches,
   leaveController.getLeaveApprovalOptions
 );
 
@@ -76,6 +85,7 @@ router.patch('/status/:id',
     body('payType').optional().isIn(['Paid', 'Unpaid']).withMessage('Pay type must be Paid or Unpaid'),
     validateRequest
   ],
+  leaveInBranches,
   leaveController.updateLeaveStatus
 );
 
@@ -94,6 +104,7 @@ router.delete('/:id',
     param('id').isMongoId().withMessage('Invalid leave ID format'),
     validateRequest
   ],
+  leaveInBranches,
   leaveController.deleteLeave
 );
 

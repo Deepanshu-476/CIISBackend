@@ -25,6 +25,7 @@ const ClientDocument = require("../HR-CDS/models/ClientDocument");
 const ActivityLog = require("../HR-CDS/models/ActivityLog");
 const Group = require("../HR-CDS/models/Group");
 const Alert = require("../HR-CDS/models/alertModel");
+const { scopedUserIds, allowedBranchIds } = require('../utils/branchScope');
 
 const SECTION_METADATA = {
   employeesOverview: {
@@ -318,12 +319,23 @@ const buildDynamicDashboardOverview = async (req, res) => {
     const isSuperAdmin = req.user?.role === "super_admin";
     const hasPayrollPrivilege = canAccessSensitivePayroll(req.user);
 
+    // Branch rule (utils/branchScope): a company user who is not owner/admin sees only the
+    // people of their own branches. Super admin previews of another company are not limited.
+    const viewerCompanyId = String(req.user?.company?._id || req.user?.company || req.user?.companyId || "");
+    const viewerScope = !isSuperAdmin && viewerCompanyId === String(companyId) ? await scopedUserIds(req.user) : null;
+    const viewerBranches = viewerScope ? (allowedBranchIds(req.user) || []) : null;
+    // With a branch limit, company-wide matches (company / companyCode) are dropped from
+    // people-based queries so only the scoped users' records count.
+    const peopleCodeVariations = viewerScope ? [] : companyCodeVariations;
+    const peopleCompanyId = viewerScope ? new mongoose.Types.ObjectId() : companyId;
+
     // Resolve company users
     const users = await User.find({
       $or: [
         { company: companyId },
         { companyCode: { $in: companyCodeVariations } },
       ],
+      ...(viewerScope ? { _id: { $in: viewerScope } } : {}),
     })
       .select("_id name email role companyRole jobRole department phone isActive createdAt avatar profileImage")
       .sort({ createdAt: -1 })
@@ -381,7 +393,7 @@ const buildDynamicDashboardOverview = async (req, res) => {
       Attendance.find({
         $or: [
           { user: { $in: companyUserIds } },
-          { companyCode: { $in: companyCodeVariations } },
+          { companyCode: { $in: peopleCodeVariations } },
         ],
         date: { $gte: startOfToday, $lte: endOfToday },
       }).lean().catch(() => []),
@@ -389,7 +401,7 @@ const buildDynamicDashboardOverview = async (req, res) => {
       Attendance.find({
         $or: [
           { user: { $in: companyUserIds } },
-          { companyCode: { $in: companyCodeVariations } },
+          { companyCode: { $in: peopleCodeVariations } },
         ],
         date: { $gte: sevenDaysAgo },
       }).sort({ date: -1 }).limit(100).lean().catch(() => []),
@@ -397,11 +409,16 @@ const buildDynamicDashboardOverview = async (req, res) => {
       Leave.find({
         $or: [
           { user: { $in: companyUserIds } },
-          { companyCode: { $in: companyCodeVariations } },
+          { companyCode: { $in: peopleCodeVariations } },
         ],
       }).sort({ createdAt: -1 }).limit(100).lean().catch(() => []),
 
-      CompanyAsset.find({
+      CompanyAsset.find(viewerScope ? {
+        $and: [
+          { $or: [{ company: companyId }, { companyCode: { $in: companyCodeVariations } }] },
+          { $or: [{ branch: { $in: viewerBranches } }, { assignedTo: { $in: companyUserIds } }] },
+        ],
+      } : {
         $or: [
           { company: companyId },
           { company: { $in: companyCodeVariations } },
@@ -414,13 +431,13 @@ const buildDynamicDashboardOverview = async (req, res) => {
       AssetRequest.find({
         $or: [
           { user: { $in: companyUserIds } },
-          { companyCode: { $in: companyCodeVariations } },
+          { companyCode: { $in: peopleCodeVariations } },
         ],
       }).select("assetName status requestType department reason createdAt").sort({ createdAt: -1 }).limit(20).lean().catch(() => []),
 
       Task.find({
         $or: [
-          { companyCode: { $in: companyCodeVariations } },
+          { companyCode: { $in: peopleCodeVariations } },
           { createdBy: { $in: companyUserIds } },
           { assignedUsers: { $in: companyUserIds } },
         ],
@@ -428,8 +445,8 @@ const buildDynamicDashboardOverview = async (req, res) => {
 
       Project.find({
         $or: [
-          { company: companyId },
-          { companyCode: { $in: companyCodeVariations } },
+          { company: peopleCompanyId },
+          { companyCode: { $in: peopleCodeVariations } },
           { users: { $in: companyUserIds } },
           { managers: { $in: companyUserIds } },
           { createdBy: { $in: companyUserIds } },
@@ -438,7 +455,7 @@ const buildDynamicDashboardOverview = async (req, res) => {
 
       Meeting.find({
         $or: [
-          { companyCode: { $in: companyCodeVariations } },
+          { companyCode: { $in: peopleCodeVariations } },
           { createdBy: { $in: companyUserIds } },
           { attendees: { $in: companyUserIds } },
         ],
@@ -492,12 +509,12 @@ const buildDynamicDashboardOverview = async (req, res) => {
         user: { $in: companyUserIds },
       }).select("action user createdAt").sort({ createdAt: -1 }).limit(25).populate("user", "name email avatar").lean().catch(() => []),
 
-      hasPayrollPrivilege
+      hasPayrollPrivilege && !viewerScope
         ? PayrollRun.find({ $or: [{ company: companyId }, { company: String(companyId) }] }).sort({ month: -1 }).limit(6).lean().catch(() => [])
         : Promise.resolve([]),
 
       hasPayrollPrivilege
-        ? EmployeeSalary.find({ $or: [{ company: companyId }, { user: { $in: companyUserIds } }] }).select("monthlyGross monthlyNet annualCTC status user baseAmount").lean().catch(() => [])
+        ? EmployeeSalary.find(viewerScope ? { user: { $in: companyUserIds } } : { $or: [{ company: companyId }, { user: { $in: companyUserIds } }] }).select("monthlyGross monthlyNet annualCTC status user baseAmount").lean().catch(() => [])
         : Promise.resolve([]),
     ]);
 
@@ -1053,6 +1070,13 @@ exports.getDynamicDashboardOverviewData = async (req, res) => {
       company: String(company._id),
       superAdmin: req.user?.role === "super_admin",
       payroll: canAccessSensitivePayroll(req.user),
+      // Branch-limited viewers get their own cache entry (see buildDynamicDashboardOverview).
+      branches: (() => {
+        if (req.user?.role === "super_admin") return "all";
+        const allowed = allowedBranchIds(req.user);
+        if (allowed === null) return "all";
+        return allowed.length ? [...allowed].sort().join(",") : `self:${req.user?._id || req.user?.id}`;
+      })(),
     });
     const cached = getCached(key);
     if (cached) return res.status(200).json(cached);

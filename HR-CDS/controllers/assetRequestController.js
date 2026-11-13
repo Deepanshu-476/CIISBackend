@@ -11,6 +11,7 @@ const PagePermission = require('../../models/PagePermission');
 const { sendNotification, notifyCompanyOwners } = require('../../HR-CDS/utils/notificationHelper');
 const {notifyPageUsers, notifyDirectUsers} = require('../utils/systemNotificationService');
 const { sendEmail } = require('../../utils/sendEmail');
+const { scopedUserIds } = require('../../utils/branchScope');
 
 const formatDate = (date) => {
   if (!date) return 'N/A';
@@ -659,6 +660,9 @@ exports.getAllRequests = async (req, res) => {
     if (assetId && mongoose.Types.ObjectId.isValid(assetId)) {
       filter.asset = assetId;
     }
+    // Branch-limited viewers (not owner/admin) see only requests of people in their branches.
+    const branchUserIds = await scopedUserIds(req.user);
+    if (branchUserIds) filter.user = { $in: branchUserIds };
     if (branch && mongoose.Types.ObjectId.isValid(branch)) {
       const branchAssetIds = await CompanyAsset.find({
         companyCode: req.user.companyCode,
@@ -1526,8 +1530,10 @@ exports.deleteRequest = async (req, res) => {
 
 exports.getRequestStats = async (req, res) => {
   try {
+    const branchUserIds = await scopedUserIds(req.user);
+    const match = { companyCode: req.user.companyCode, ...(branchUserIds ? { user: { $in: branchUserIds } } : {}) };
     const stats = await AssetRequest.aggregate([
-      { $match: { companyCode: req.user.companyCode } },
+      { $match: match },
       {
         $group: {
           _id: '$status',
@@ -1536,9 +1542,7 @@ exports.getRequestStats = async (req, res) => {
       }
     ]);
 
-    const total = await AssetRequest.countDocuments({ 
-      companyCode: req.user.companyCode 
-    });
+    const total = await AssetRequest.countDocuments(match);
 
     res.status(200).json({
       success: true,
