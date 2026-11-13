@@ -107,93 +107,141 @@ const assert = require('node:assert');
   console.log('res5.field:', res5.field);
   console.log('res5.reply:', res5.reply);
   console.log('res5.chips:', res5.chips?.map(c => c.label));
-  assert.equal(res5.field, 'assignee');
-  assert.ok(res5.chips.some(c => c.label.includes('Test Admin')));
-  assert.ok(res5.chips.some(c => c.label === 'Vansh Test'));
-  assert.ok(res5.chips.some(c => c.label === 'Aarav Sharma'));
+  // In Create Client Task, assignee is ALWAYS the logged-in user (no other employee can be chosen)
+  // So it directly proceeds to priority without asking who to assign to!
+  assert.equal(res5.field, 'priority');
+  assert.equal(res5.draft.assignee, 'Test Admin');
 
-  console.log('\n=== STEP 6: User selects Assignee "Test Admin" ===');
+  console.log('\n=== STEP 6: User selects Priority "High" ===');
   const res6 = await parseTaskRequest({
     req: mockReq,
-    action: { type: 'set_client_task_assignee', assignee: 'Test Admin', assigneeId: 'u1' },
+    action: { type: 'set', field: 'priority', value: 'High' },
     draft: res5.draft
   }, deps);
 
   console.log('res6.field:', res6.field);
   console.log('res6.reply:', res6.reply);
   console.log('res6.chips:', res6.chips?.map(c => c.label));
-  assert.equal(res6.field, 'priority');
-  assert.equal(res6.draft.assignee, 'Test Admin');
+  assert.equal(res6.field, 'reminder');
 
-  console.log('\n=== STEP 7: User selects Priority "High" ===');
+  console.log('\n=== STEP 7: User types reminder "every 10 min." (Reproduction of Image 2) ===');
   const res7 = await parseTaskRequest({
     req: mockReq,
-    action: { type: 'set', field: 'priority', value: 'High' },
+    message: 'every 10 min.',
     draft: res6.draft
   }, deps);
 
   console.log('res7.field:', res7.field);
   console.log('res7.reply:', res7.reply);
   console.log('res7.chips:', res7.chips?.map(c => c.label));
-  assert.equal(res7.field, 'reminder');
+  console.log('res7.draft.reminderSettings:', res7.draft.reminderSettings);
+  assert.equal(res7.field, 'checkpoints');
+  assert.equal(typeof res7.draft.reminderSettings, 'object', 'reminderSettings MUST be an object, NEVER boolean');
+  assert.equal(res7.draft.reminderSettings.enabled, true);
 
-  console.log('\n=== STEP 8: User sets Reminder "Har 10 min" ===');
+  console.log('\n=== STEP 8: User provides comma-separated Checkpoints "new 1, new 2, new 3" (Image 2 test) ===');
   const res8 = await parseTaskRequest({
     req: mockReq,
-    action: { type: 'set_client_task_reminder', reminder: true, reminderOption: 'every10Minutes', repeatIntervalMinutes: 10 },
+    message: 'new 1, new 2, new 3',
     draft: res7.draft
   }, deps);
 
+  console.log('res8.status:', res8.status);
   console.log('res8.field:', res8.field);
   console.log('res8.reply:', res8.reply);
-  console.log('res8.chips:', res8.chips?.map(c => c.label));
-  assert.equal(res8.field, 'checkpoints');
+  console.log('res8.payload:', res8.payload);
+  console.log('res8.preview:', res8.preview);
 
-  console.log('\n=== STEP 9: User provides comma-separated Checkpoints ===');
+  assert.equal(res8.status, 'ready');
+  assert.equal(res8.payload.endpoint, '/tasks/client-tasks/client/client_asdfg_123/service/Web%20Development');
+  assert.equal(res8.payload.method, 'POST');
+  assert.equal(res8.payload.fields.name, 'testing ai agent');
+  assert.equal(res8.payload.fields.description, 'Detailed CRM client task description');
+  assert.equal(res8.payload.fields.assignee, 'Test Admin');
+  assert.equal(res8.payload.fields.priority, 'High');
+  assert.equal(res8.payload.fields.checkpoints.length, 3);
+  assert.equal(res8.payload.fields.checkpoints[0].title, 'new 1');
+  assert.equal(res8.payload.fields.checkpoints[1].title, 'new 2');
+  assert.equal(res8.payload.fields.checkpoints[2].title, 'new 3');
+  assert.equal(res8.payload.fields.reminderSettings.enabled, true);
+  assert.equal(res8.preview.entity, 'client_task');
+  assert.equal(res8.preview.client, 'asdfg');
+  assert.equal(res8.preview.service, 'Web Development');
+
+  console.log('\n=== STEP 9: User confirms creation ===');
   const res9 = await parseTaskRequest({
     req: mockReq,
-    message: 'test 1, checking crm, testing',
+    action: { type: 'confirm' },
     draft: res8.draft
   }, deps);
 
   console.log('res9.status:', res9.status);
-  console.log('res9.field:', res9.field);
   console.log('res9.reply:', res9.reply);
-  console.log('res9.payload:', res9.payload);
-  console.log('res9.preview:', res9.preview);
+  console.log('res9.chips:', res9.chips?.map(c => c.label));
+  assert.equal(res9.status, 'created');
+  assert.match(res9.reply, /testing ai agent.*Web Development.*successfully/);
+  assert.ok(res9.chips.some(c => c.label.includes('Web Development mein aur task add karein')));
+  assert.ok(res9.chips.some(c => c.label === 'Main Menu'));
 
-  assert.equal(res9.status, 'ready');
-  assert.equal(res9.payload.endpoint, '/tasks/client-tasks/client/client_asdfg_123/service/Web%20Development');
-  assert.equal(res9.payload.method, 'POST');
-  assert.equal(res9.payload.fields.name, 'testing ai agent');
-  assert.equal(res9.payload.fields.description, 'Detailed CRM client task description');
-  assert.equal(res9.payload.fields.assignee, 'Test Admin');
-  assert.equal(res9.payload.fields.priority, 'High');
-  assert.equal(res9.payload.fields.checkpoints.length, 3);
-  assert.equal(res9.payload.fields.checkpoints[0].title, 'test 1');
-  assert.equal(res9.payload.fields.checkpoints[1].title, 'checking crm');
-  assert.equal(res9.payload.fields.checkpoints[2].title, 'testing');
-  assert.equal(res9.payload.fields.reminderSettings.enabled, true);
-  assert.equal(res9.preview.entity, 'client_task');
-  assert.equal(res9.preview.client, 'asdfg');
-  assert.equal(res9.preview.service, 'Web Development');
+  console.log('\n=== TEST FLOW B: Pending Service Tasks (Select for Edit) Flow ===');
+  const pendingDeps = {
+    ...deps,
+    servicePendingTasks: [
+      {
+        _id: 'pending_task_1',
+        id: 'pending_task_1',
+        name: 'Core Feature Integration',
+        description: 'Implement core modules',
+        dueDate: '2026-11-18T18:00:00.000Z',
+        priority: 'High',
+        checkpoints: [{ title: 'Module A', completed: false }]
+      },
+      {
+        _id: 'pending_task_2',
+        id: 'pending_task_2',
+        name: 'QA & Staging Release',
+        description: 'Test on staging server',
+        dueDate: '2026-11-25T18:00:00.000Z',
+        priority: 'Medium',
+        checkpoints: []
+      }
+    ]
+  };
 
-  console.log('\n=== STEP 10: User confirms creation ===');
-  const res10 = await parseTaskRequest({
+  const pRes1 = await parseTaskRequest({
     req: mockReq,
-    action: { type: 'confirm' },
-    draft: res9.draft
-  }, deps);
+    action: { type: 'set_client_task_service', service: 'Web Development' },
+    draft: {
+      intent: 'create_client_task',
+      client: 'asdfg',
+      clientId: 'client_asdfg_123',
+      asked: ['client']
+    }
+  }, pendingDeps);
 
-  console.log('res10.status:', res10.status);
-  console.log('res10.reply:', res10.reply);
-  console.log('res10.chips:', res10.chips?.map(c => c.label));
-  assert.equal(res10.status, 'created');
-  assert.match(res10.reply, /testing ai agent.*Web Development.*successfully/);
-  assert.ok(res10.chips.some(c => c.label.includes('Web Development mein aur task add karein')));
-  assert.ok(res10.chips.some(c => c.label === 'Main Menu'));
+  console.log('pRes1.field:', pRes1.field);
+  console.log('pRes1.reply:', pRes1.reply);
+  console.log('pRes1.chips:', pRes1.chips?.map(c => c.label));
+  assert.equal(pRes1.field, 'select_pending_task', 'Should show pending tasks for Web Development');
+  assert.ok(pRes1.chips.some(c => c.label === 'Core Feature Integration'));
+  assert.ok(pRes1.chips.some(c => c.label === 'QA & Staging Release'));
+  assert.ok(pRes1.chips.some(c => c.label === 'Naya task likhein'));
+
+  console.log('\n=== User selects pending task "Core Feature Integration" ===');
+  const pRes2 = await parseTaskRequest({
+    req: mockReq,
+    action: pRes1.chips.find(c => c.label === 'Core Feature Integration').action,
+    draft: pRes1.draft
+  }, pendingDeps);
+
+  console.log('pRes2.draft.title:', pRes2.draft.title);
+  console.log('pRes2.draft.clientTaskId:', pRes2.draft.clientTaskId);
+  console.log('pRes2.field:', pRes2.field);
+  assert.equal(pRes2.draft.title, 'Core Feature Integration');
+  assert.equal(pRes2.draft.clientTaskId, 'pending_task_1');
+  assert.equal(pRes2.draft.assignee, 'Test Admin');
 
   console.log('\n======================================================');
-  console.log('>>> ALL 8 STEPS OF CLIENT SERVICE TASK PASSED 100% <<<');
+  console.log('>>> ALL CLIENT SERVICE TASK QA TESTS PASSED 100% <<<');
   console.log('======================================================');
 })();

@@ -3150,7 +3150,9 @@ async function parseTaskRequest({
     minutesBeforeDue: draft?.minutesBeforeDue ?? null,
     customTime: draft?.customTime ?? null,
     reminderTime: draft?.reminderTime ?? null,
-    reminderSettings: draft?.reminderSettings ?? null,
+    reminderSettings: typeof draft?.reminderSettings === 'boolean'
+      ? { enabled: draft.reminderSettings }
+      : (draft?.reminderSettings ?? null),
     priorityDays: draft?.priorityDays ?? null,
     repeatPattern: draft?.repeatPattern ?? null,
     repeatDays: Array.isArray(draft?.repeatDays) ? [...draft.repeatDays] : [],
@@ -4031,17 +4033,44 @@ const lastAskedField = currentDraft.asked.length > 0
         if (!currentDraft.asked.includes('service')) currentDraft.asked.push('service');
         break;
       }
+      case 'select_client_pending_task': {
+        actionHandled = true;
+        currentDraft.intent = 'create_client_task';
+        currentDraft.clientTaskId = action.clientTaskId || null;
+        currentDraft.title = action.title || action.name || '';
+        currentDraft.description = action.description || action.title || action.name || '';
+        if (action.dueDate || action.dueDateTime) {
+          currentDraft.dueDateTime = action.dueDateTime || action.dueDate;
+          currentDraft.dueDate = String(action.dueDate || action.dueDateTime).split('T')[0];
+        }
+        if (action.priority) currentDraft.priority = action.priority;
+        if (Array.isArray(action.checkpoints)) currentDraft.checkpoints = action.checkpoints;
+        if (!currentDraft.asked.includes('title')) currentDraft.asked.push('title');
+        if (!currentDraft.asked.includes('description')) currentDraft.asked.push('description');
+        if (!currentDraft.asked.includes('select_pending_task')) currentDraft.asked.push('select_pending_task');
+        break;
+      }
+      case 'new_client_task_title': {
+        actionHandled = true;
+        currentDraft.intent = 'create_client_task';
+        currentDraft.clientTaskId = null;
+        currentDraft.title = null;
+        currentDraft.description = null;
+        if (!currentDraft.asked.includes('select_pending_task')) currentDraft.asked.push('select_pending_task');
+        currentDraft.asked = (currentDraft.asked || []).filter(f => f !== 'title' && f !== 'description');
+        break;
+      }
       case 'set_client_task_assignee': {
         actionHandled = true;
-        currentDraft.assignee = action.assignee || action.name || '';
-        currentDraft.assigneeId = action.assigneeId || action.userId || null;
+        currentDraft.assignee = req?.user?.name || req?.user?.userName || 'Logged-in employee';
+        currentDraft.assigneeId = String(req?.user?._id || req?.user?.id || '');
         if (!currentDraft.asked.includes('assignee')) currentDraft.asked.push('assignee');
         break;
       }
       case 'skip_client_task_assignee': {
         actionHandled = true;
-        currentDraft.assignee = '';
-        currentDraft.assigneeId = null;
+        currentDraft.assignee = req?.user?.name || req?.user?.userName || 'Logged-in employee';
+        currentDraft.assigneeId = String(req?.user?._id || req?.user?.id || '');
         if (!currentDraft.asked.includes('assignee')) currentDraft.asked.push('assignee');
         break;
       }
@@ -5970,8 +5999,19 @@ const lastAskedField = currentDraft.asked.length > 0
       if (!currentDraft.asked.includes('priority')) currentDraft.asked.push('priority');
     }
     if (parsedSlots.reminder && (currentDraft.reminder === null || currentDraft.reminder === undefined)) {
-      currentDraft.reminder = parsedSlots.reminder;
-      currentDraft.reminderSettings = parsedSlots.reminder;
+      currentDraft.reminder = Boolean(parsedSlots.reminder);
+      const isEvery30 = /30\s*min/i.test(trimmedMessage);
+      const is1Hour = /1\s*ghant|hourly|1\s*hour/i.test(trimmedMessage);
+      const is2Hours = /2\s*ghant|2\s*hour/i.test(trimmedMessage);
+      const option = isEvery30 ? 'every30Minutes' : (is1Hour ? 'hourly' : (is2Hours ? 'every2Hours' : 'every10Minutes'));
+      const interval = isEvery30 ? 30 : (is1Hour ? 60 : (is2Hours ? 120 : 10));
+      currentDraft.reminderOption = option;
+      currentDraft.repeatIntervalMinutes = interval;
+      currentDraft.reminderSettings = {
+        enabled: true,
+        reminderOption: option,
+        repeatIntervalMinutes: interval
+      };
       if (!currentDraft.asked.includes('reminder')) currentDraft.asked.push('reminder');
     }
     if (Array.isArray(parsedSlots.checkpoints) && parsedSlots.checkpoints.length > 0 && (!currentDraft.checkpoints || currentDraft.checkpoints.length === 0)) {
@@ -5981,11 +6021,20 @@ const lastAskedField = currentDraft.asked.length > 0
     }
 
     // Both Client and Service are selected!
-    // Handle user inputs for subsequent fields (title, description, dueDateTime, assignee, priority, reminder, checkpoints)
+    // Assignee is ALWAYS the logged-in employee (self-assignment, no other users can be assigned)
+    currentDraft.assignee = req?.user?.name || req?.user?.userName || 'Logged-in employee';
+    currentDraft.assigneeId = String(req?.user?._id || req?.user?.id || '');
+    if (!currentDraft.asked.includes('assignee')) currentDraft.asked.push('assignee');
+
+    // Handle user inputs for subsequent fields (pending task selection, title, description, dueDateTime, priority, reminder, checkpoints)
     const lastAsked = lastAskedField || (currentDraft.asked.length > 0 ? currentDraft.asked[currentDraft.asked.length - 1] : null);
 
     if (!actionHandled && trimmedMessage) {
-      if (lastAsked === 'title' && !currentDraft.title) {
+      if (lastAsked === 'select_pending_task' && !currentDraft.title) {
+        currentDraft.title = trimmedMessage;
+        if (!currentDraft.asked.includes('title')) currentDraft.asked.push('title');
+        actionHandled = true;
+      } else if (lastAsked === 'title' && !currentDraft.title) {
         currentDraft.title = trimmedMessage;
         if (!currentDraft.asked.includes('title')) currentDraft.asked.push('title');
         actionHandled = true;
@@ -6011,25 +6060,6 @@ const lastAskedField = currentDraft.asked.length > 0
         }
         if (!currentDraft.asked.includes('dueDateTime')) currentDraft.asked.push('dueDateTime');
         actionHandled = true;
-      } else if (lastAsked === 'assignee' && !currentDraft.assignee && !currentDraft.asked.includes('assignee')) {
-        if (/mujhe|myself|self|khud|apne|skip|unassigned/i.test(trimmedMessage)) {
-          currentDraft.assignee = req?.user?.name || req?.user?.userName || 'Aap khud';
-          currentDraft.assigneeId = req?.user?._id || req?.user?.id || null;
-        } else {
-          const poolUsers = [
-            ...(Array.isArray(currentDraft.clientProjectManagers) ? currentDraft.clientProjectManagers : []),
-            ...(Array.isArray(deps.companyUsers) ? deps.companyUsers : [])
-          ];
-          const matchedU = poolUsers.find(u => u.name && trimmedMessage.toLowerCase().includes(u.name.toLowerCase()));
-          if (matchedU) {
-            currentDraft.assignee = matchedU.name;
-            currentDraft.assigneeId = String(matchedU._id || matchedU.id || '');
-          } else {
-            currentDraft.assignee = trimmedMessage;
-          }
-        }
-        if (!currentDraft.asked.includes('assignee')) currentDraft.asked.push('assignee');
-        actionHandled = true;
       } else if (lastAsked === 'priority' && !currentDraft.priority && !currentDraft.asked.includes('priority')) {
         if (/high/i.test(trimmedMessage)) currentDraft.priority = 'High';
         else if (/low/i.test(trimmedMessage)) currentDraft.priority = 'Low';
@@ -6042,15 +6072,22 @@ const lastAskedField = currentDraft.asked.length > 0
           currentDraft.reminderOption = 'off';
           currentDraft.reminderSettings = { enabled: false };
         } else {
-          const parsed = parseHinglishSlots(trimmedMessage, now);
-          if (parsed?.reminder) {
-            currentDraft.reminder = parsed.reminder;
-            currentDraft.reminderSettings = parsed.reminder;
-          } else {
-            currentDraft.reminder = true;
-            currentDraft.reminderOption = 'every10Minutes';
-            currentDraft.reminderSettings = { enabled: true, reminderOption: 'every10Minutes', repeatIntervalMinutes: 10 };
-          }
+          const isEvery30 = /30\s*min/i.test(trimmedMessage);
+          const is1Hour = /1\s*ghant|hourly|1\s*hour/i.test(trimmedMessage);
+          const is2Hours = /2\s*ghant|2\s*hour/i.test(trimmedMessage);
+          const option = isEvery30 ? 'every30Minutes' : (is1Hour ? 'hourly' : (is2Hours ? 'every2Hours' : 'every10Minutes'));
+          const interval = isEvery30 ? 30 : (is1Hour ? 60 : (is2Hours ? 120 : 10));
+          currentDraft.reminder = true;
+          currentDraft.reminderOption = option;
+          currentDraft.repeatIntervalMinutes = interval;
+          currentDraft.reminderSettings = {
+            enabled: true,
+            reminderOption: option,
+            repeatIntervalMinutes: interval,
+            reminderTime: null,
+            customTime: null,
+            minutesBeforeDue: null
+          };
         }
         if (!currentDraft.asked.includes('reminder')) currentDraft.asked.push('reminder');
         actionHandled = true;
@@ -6068,6 +6105,86 @@ const lastAskedField = currentDraft.asked.length > 0
     }
 
     // Now decide next slot to ask:
+    // Slot 3a: Pending Tasks check (matches TaskManagement modal)
+    const ClientTaskModel = deps.ClientTask || mongoose.models.ClientTask || (isDbReady ? require('../../HR-CDS/models/ClientTask') : null);
+    let servicePendingTasks = [];
+    if (Array.isArray(deps.servicePendingTasks)) {
+      servicePendingTasks = deps.servicePendingTasks;
+    } else if (ClientTaskModel && currentDraft.clientId && currentDraft.service && mongoose?.connection?.readyState === 1) {
+      try {
+        servicePendingTasks = await ClientTaskModel.find({
+          clientId: currentDraft.clientId,
+          service: currentDraft.service,
+          status: 'pending',
+          $or: [
+            { assigneeId: null },
+            { assignee: null },
+            { assignee: 'Unassigned' },
+            { assignee: '' },
+            { assignee: { $exists: false } }
+          ]
+        }).lean();
+      } catch (err) {}
+    }
+
+    if (servicePendingTasks.length > 0 && !currentDraft.title && !currentDraft.asked.includes('select_pending_task')) {
+      if (trimmedMessage) {
+        const matched = servicePendingTasks.find(t =>
+          (t.name || t.title || '').toLowerCase() === trimmedMessage.toLowerCase() ||
+          (t.name || t.title || '').toLowerCase().includes(trimmedMessage.toLowerCase())
+        );
+        if (matched) {
+          currentDraft.clientTaskId = String(matched._id || matched.id);
+          currentDraft.title = matched.name || matched.title;
+          currentDraft.description = matched.description || matched.name || matched.title;
+          if (matched.dueDate) {
+            currentDraft.dueDateTime = new Date(matched.dueDate).toISOString();
+            currentDraft.dueDate = new Date(matched.dueDate).toISOString().split('T')[0];
+          }
+          if (matched.priority) currentDraft.priority = matched.priority;
+          if (Array.isArray(matched.checkpoints)) currentDraft.checkpoints = matched.checkpoints;
+          if (!currentDraft.asked.includes('title')) currentDraft.asked.push('title');
+          if (!currentDraft.asked.includes('description')) currentDraft.asked.push('description');
+          if (!currentDraft.asked.includes('select_pending_task')) currentDraft.asked.push('select_pending_task');
+        }
+      }
+
+      if (!currentDraft.title) {
+        if (!currentDraft.asked.includes('select_pending_task')) currentDraft.asked.push('select_pending_task');
+        const pendingListText = servicePendingTasks.map((t, idx) => `${idx + 1}. **${t.name || t.title}**${t.dueDate ? ` (Due: ${new Date(t.dueDate).toLocaleDateString('en-GB')})` : ''}`).join('\n');
+        const askPendingReply = `Client "${currentDraft.client}" ki service "${currentDraft.service}" ke pending tasks ye hain:\n\n${pendingListText}\n\nAap kaun sa task apne liye select karna chahte hain? (Ya naya task likhein):`;
+        const pendingChips = servicePendingTasks.map(t => ({
+          label: t.name || t.title,
+          action: {
+            type: 'select_client_pending_task',
+            clientTaskId: String(t._id || t.id),
+            title: t.name || t.title,
+            description: t.description || t.name || t.title,
+            dueDate: t.dueDate ? new Date(t.dueDate).toISOString() : null,
+            priority: t.priority || 'Medium',
+            checkpoints: t.checkpoints || []
+          }
+        }));
+        pendingChips.push({ label: 'Naya task likhein', action: { type: 'new_client_task_title' } });
+        pendingChips.push({ label: 'Cancel', action: { type: 'cancel' } });
+
+        return {
+          success: true,
+          status: 'needs_input',
+          field: 'select_pending_task',
+          reply: askPendingReply,
+          speech: `Service ke pending tasks me se task select kijiye ya naya task likhein`,
+          speakText: askPendingReply,
+          draft: currentDraft,
+          missing: ['title'],
+          chips: pendingChips,
+          candidates: [],
+          notices,
+          canAssignOthers: false,
+        };
+      }
+    }
+
     // Slot 3: Task Title (REQUIRED)
     if (!currentDraft.title) {
       if (!currentDraft.asked.includes('title')) currentDraft.asked.push('title');
@@ -6084,7 +6201,7 @@ const lastAskedField = currentDraft.asked.length > 0
         chips: [{ label: 'Cancel', action: { type: 'cancel' } }],
         candidates: [],
         notices,
-        canAssignOthers,
+        canAssignOthers: false,
       };
     }
 
@@ -6106,7 +6223,7 @@ const lastAskedField = currentDraft.asked.length > 0
         ],
         candidates: [],
         notices,
-        canAssignOthers,
+        canAssignOthers: false,
       };
     }
 
@@ -6144,54 +6261,11 @@ const lastAskedField = currentDraft.asked.length > 0
         ],
         candidates: [],
         notices,
-        canAssignOthers,
+        canAssignOthers: false,
       };
     }
 
-    // Slot 6: Assignee (defaults to logged-in employee if skipped)
-    if (currentDraft.assignee === null || (!currentDraft.assignee && !currentDraft.asked.includes('assignee'))) {
-      if (!currentDraft.asked.includes('assignee')) currentDraft.asked.push('assignee');
-      const loggedUserName = req?.user?.name || req?.user?.userName || 'Aap khud';
-      const loggedUserId = String(req?.user?._id || req?.user?.id || '');
-      const assignReply = `Ye task kisse assign karna hai? (Default: ${loggedUserName} - Logged-in employee)`;
-      const assignChips = [
-        { label: `${loggedUserName} (Logged-in employee)`, action: { type: 'set_client_task_assignee', assignee: loggedUserName, assigneeId: loggedUserId } }
-      ];
-      const teamList = [
-        ...(Array.isArray(currentDraft.clientProjectManagers) ? currentDraft.clientProjectManagers : []),
-        ...(Array.isArray(deps.companyUsers) ? deps.companyUsers : [])
-      ];
-      const seen = new Set([loggedUserName.toLowerCase()]);
-      teamList.forEach(m => {
-        const mName = m.name || m.label || '';
-        const mId = String(m._id || m.id || '');
-        if (mName && !seen.has(mName.toLowerCase())) {
-          seen.add(mName.toLowerCase());
-          assignChips.push({
-            label: mName,
-            action: { type: 'set_client_task_assignee', assignee: mName, assigneeId: mId }
-          });
-        }
-      });
-      assignChips.push({ label: 'Unassigned', action: { type: 'skip_client_task_assignee' } });
-      assignChips.push({ label: 'Cancel', action: { type: 'cancel' } });
-      return {
-        success: true,
-        status: 'needs_input',
-        field: 'assignee',
-        reply: assignReply,
-        speech: assignReply,
-        speakText: assignReply,
-        draft: currentDraft,
-        missing: ['assignee'],
-        chips: assignChips,
-        candidates: [],
-        notices,
-        canAssignOthers,
-      };
-    }
-
-    // Slot 7: Priority (NO SKIP CHIP)
+    // Slot 6: Priority (NO SKIP CHIP)
     if (!currentDraft.priority && !currentDraft.asked.includes('priority')) {
       if (!currentDraft.asked.includes('priority')) currentDraft.asked.push('priority');
       const prioReply = 'Priority kya rakhein? High, Medium ya Low?';
@@ -6213,11 +6287,11 @@ const lastAskedField = currentDraft.asked.length > 0
         ],
         candidates: [],
         notices,
-        canAssignOthers,
+        canAssignOthers: false,
       };
     }
 
-    // Slot 8: Reminder Settings
+    // Slot 7: Reminder Settings
     if ((currentDraft.reminder === null || currentDraft.reminder === undefined) && !currentDraft.asked.includes('reminder')) {
       if (!currentDraft.asked.includes('reminder')) currentDraft.asked.push('reminder');
       const reminderReply = 'Kya task ke liye reminder lagana hai?';
@@ -6240,11 +6314,11 @@ const lastAskedField = currentDraft.asked.length > 0
         ],
         candidates: [],
         notices,
-        canAssignOthers,
+        canAssignOthers: false,
       };
     }
 
-    // Slot 9: Checkpoints
+    // Slot 8: Checkpoints
     if (!currentDraft.checkpointsAsked && !currentDraft.asked.includes('checkpoints')) {
       currentDraft.checkpointsAsked = true;
       if (!currentDraft.asked.includes('checkpoints')) currentDraft.asked.push('checkpoints');
@@ -6264,20 +6338,22 @@ const lastAskedField = currentDraft.asked.length > 0
         ],
         candidates: [],
         notices,
-        canAssignOthers,
+        canAssignOthers: false,
       };
     }
 
     // ALL SLOTS ARE FILLED! Move directly to READY state!
     currentDraft.priority = currentDraft.priority || 'Medium';
-    currentDraft.assignee = currentDraft.assignee || req?.user?.name || req?.user?.userName || '';
+    currentDraft.assignee = currentDraft.assignee || req?.user?.name || req?.user?.userName || 'Logged-in employee';
     currentDraft.assigneeId = currentDraft.assigneeId || req?.user?._id || req?.user?.id || null;
     currentDraft.checkpoints = Array.isArray(currentDraft.checkpoints) ? currentDraft.checkpoints : [];
     currentDraft.reminderSettings = buildReminderPayload(currentDraft.reminderSettings || currentDraft.reminder);
     const payload = FORM_REGISTRY.create_client_task.buildPayload(currentDraft, req?.user || {});
     const preview = FORM_REGISTRY.create_client_task.buildPreview(currentDraft, req?.user || {});
 
-    const readyReply = `Task "${currentDraft.title}" "${currentDraft.client}" ki "${currentDraft.service}" service ke liye ready hai. Kya ise create kar doon?`;
+    const readyReply = currentDraft.clientTaskId
+      ? `Task "${currentDraft.title}" "${currentDraft.client}" ki "${currentDraft.service}" service mein aapko assign karne ke liye ready hai. Kya ise assign/create kar doon?`
+      : `Task "${currentDraft.title}" "${currentDraft.client}" ki "${currentDraft.service}" service ke liye ready hai. Kya ise create kar doon?`;
     return {
       success: true,
       status: 'ready',
@@ -6288,13 +6364,13 @@ const lastAskedField = currentDraft.asked.length > 0
       draft: currentDraft,
       missing: [],
       chips: [
-        { label: 'Haan, create karo', action: { type: 'confirm' } },
+        { label: currentDraft.clientTaskId ? 'Haan, assign karo' : 'Haan, create karo', action: { type: 'confirm' } },
         { label: 'Kuch badalna hai', action: { type: 'edit' } },
         { label: 'Cancel', action: { type: 'cancel' } }
       ],
       candidates: [],
       notices,
-      canAssignOthers,
+      canAssignOthers: false,
       payload,
       preview,
       meta: { model: modelName },
