@@ -128,6 +128,28 @@ function sanitizeTranscript(rawText) {
     throw err;
   }
 
+  // 4. Reject known Whisper silence/noise hallucinations (Indonesian phrases, YouTube artifacts)
+  const lowerTrimmed = text.toLowerCase().trim();
+  const cleanPunct = lowerTrimmed.replace(/[.,!?;:।]+/gu, ' ').replace(/\s+/g, ' ').trim();
+  if (
+    /^(?:bersambungan|terima\s*kasih|dari\b.*meeting|subtitles?\s*by|amara\.org|thank\s*you\s*for\s*watching|please\s*subscribe|like\s*and\s*subscribe|nonton|selamat\s*menonton)\b/i.test(cleanPunct) ||
+    /\b(?:bersambungan|amara\.org|subtitles\s*by|thank\s*you\s*for\s*watching|terima\s*kasih)\b/i.test(cleanPunct)
+  ) {
+    const err = new Error('Awaaz saaf nahi aayi, dobara bolein');
+    err.code = 'STT_NO_SPEECH';
+    err.status = 400;
+    throw err;
+  }
+
+  // 5. Reject phrase/clause-level repetitive loops (e.g. "Dari, the next meeting is the meeting. Dari, the next meeting is the meeting.")
+  const clauses = cleanPunct.split(/\s{2,}|\.\s*/).map((s) => s.trim()).filter((s) => s.length > 5);
+  if (clauses.length >= 2 && clauses.some((c, idx) => clauses.indexOf(c) !== idx)) {
+    const err = new Error('Awaaz saaf nahi aayi, dobara bolein');
+    err.code = 'STT_NO_SPEECH';
+    err.status = 400;
+    throw err;
+  }
+
   // Check if text is just comma-separated repetitions like "kukku, kukku, kukku..."
   const commaTokens = text.split(/[,，]\s*/).map((t) => t.trim().toLowerCase()).filter(Boolean);
   if (commaTokens.length >= 4) {
@@ -330,6 +352,14 @@ async function transcribeAudio(audioBuffer, options = {}, deps = {}) {
 
     // Reject only if audio has zero length or no words returned at all
     if (!rawText) {
+      const err = new Error('Awaaz saaf nahi aayi, dobara bolein');
+      err.code = 'STT_NO_SPEECH';
+      err.status = 400;
+      throw err;
+    }
+
+    // Reject foreign hallucinated language (Indonesian/Malay/etc.) on silence/noise
+    if (data.language && ['id', 'ms', 'jw', 'su'].includes(String(data.language).toLowerCase())) {
       const err = new Error('Awaaz saaf nahi aayi, dobara bolein');
       err.code = 'STT_NO_SPEECH';
       err.status = 400;
