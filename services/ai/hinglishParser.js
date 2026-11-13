@@ -1019,7 +1019,8 @@ function parseHinglishSlots(rawText, now = new Date(), referenceDate = null) {
   }
 
   // 3b. Status Extraction
-  const statusMatch = normalized.match(/(?:task\s+)?(?:status|स्टेटस)\s*(?:is\s+|:\s*|\s*=\s*|rakho\s+|rakhein\s+|रखो\s+|रखें\s+|hoga\s+|chahiye\s+)?\s*(in\s*progress|inprogress|in-progress|completed|complete|done|khatam|on\s*hold|onhold|rejected|cancelled|cancel|overdue|reopen|pending|पेंडिंग|चालू|कम्प्लीट|पूरा|होल्ड|रद्द|खारिज)\b/i);
+  const statusMatch = normalized.match(/(?:change\s+|update\s+|set\s+)?(?:task\s+)?(?:status|स्टेटस)\s*(?:is\s+|to\s+|as\s+|make\s+it\s+|badlo\s+|change\s+to\s+|kardo\s+|kar\s*do\s+|:\s*|\s*=\s*|rakho\s+|rakhein\s+|रखो\s+|रखें\s+|hoga\s+|chahiye\s+)?\s*(in\s*progress|inprogress|in-progress|completed|complete|done|khatam|on\s*hold|onhold|rejected|cancelled|cancel|overdue|reopen|pending|पेंडिंग|चालू|कम्प्लीट|पूरा|होल्ड|रद्द|खारिज)\b/i) ||
+    normalized.match(/\b(?:make\s+it|mark\s+as|set\s+to)\s+(in\s*progress|inprogress|in-progress|completed|complete|done|khatam|pending|on\s*hold)\b/i);
   if (statusMatch && statusMatch[1]) {
     const rawStatus = statusMatch[1].toLowerCase().replace(/[\s_]/g, '-');
     if (rawStatus.includes('progress') || rawStatus.includes('चालू')) {
