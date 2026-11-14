@@ -103,6 +103,15 @@ const userSchema = new mongoose.Schema({
     required: [true, "Department is required"],
   },
 
+  // Which weekday(s) this employee's weekly off falls on: 1 = Monday … 7 = Sunday. How MANY days
+  // they get still comes from the department's working days; this only says which ones. Empty means
+  // the old behaviour — the off days sit at the end of the week. See HR-CDS/utils/weekOff.js.
+  weekOffDays: [{
+    type: Number,
+    min: [1, "Week off day must be between 1 (Monday) and 7 (Sunday)"],
+    max: [7, "Week off day must be between 1 (Monday) and 7 (Sunday)"]
+  }],
+
   departmentName: {
     type: String,
     trim: true,
