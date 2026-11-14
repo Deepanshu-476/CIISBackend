@@ -78,13 +78,29 @@ const normalizeFixedBreak = (raw, index) => {
 const normalizeLimits = raw => {
   const maxBreaks = Math.max(0, Math.floor(Number(raw?.maxBreaksPerDay) || 0));
   const maxMinutes = Math.max(0, Math.floor(Number(raw?.maxMinutesPerDay) || 0));
+  const minGap = Math.max(0, Math.floor(Number(raw?.minGapMinutes) || 0));
+  const maxSingle = Math.max(0, Math.floor(Number(raw?.maxSingleBreakMinutes) || 0));
   return {
-    enabled: Boolean(raw?.enabled) && (maxBreaks > 0 || maxMinutes > 0),
+    // The master switch: the numbers below only apply while this is on.
+    enabled: Boolean(raw?.enabled) && (maxBreaks > 0 || maxMinutes > 0 || minGap > 0 || maxSingle > 0),
     maxBreaksPerDay: maxBreaks,
     maxMinutesPerDay: maxMinutes,
+    // The next break may only start this many minutes after the last one ended.
+    minGapMinutes: minGap,
+    // One break longer than this is an overstay: the admin and the employee are told.
+    maxSingleBreakMinutes: maxSingle,
     // WARN lets the employee carry on and tells the admin; BLOCK refuses the next break.
     enforce: String(raw?.enforce || 'WARN').toUpperCase() === 'BLOCK' ? 'BLOCK' : 'WARN',
   };
+};
+
+// What a break was for. The admin keeps the list; "Other" is always understood.
+const DEFAULT_REASONS = ['Lunch', 'Tea', 'Personal', 'Meeting', 'Other'];
+const normalizeReasons = raw => {
+  const list = (Array.isArray(raw) ? raw : [])
+    .map(value => String(value || '').trim().slice(0, 40))
+    .filter(Boolean);
+  return [...new Set(list)].slice(0, 12);
 };
 
 /** A stored policy, cleaned up. `mode: 'INHERIT'` (the default) means "use the level above". */
@@ -95,12 +111,16 @@ const normalizeBreakPolicy = (raw = {}) => {
     .filter(Boolean)
     .sort((a, b) => minutesOfClock(a.start) - minutesOfClock(b.start))
     .slice(0, 10);
+  const reasons = normalizeReasons(raw?.reasons);
   return {
     mode: MODES.includes(mode) ? mode : INHERIT,
     fixedBreaks,
     allowExtraBreak: raw?.allowExtraBreak !== false,
     notifyAdmin: raw?.notifyAdmin !== false,
     limits: normalizeLimits(raw?.limits),
+    // Tags the employee picks from when starting a break; empty means the default list.
+    reasons: reasons.length ? reasons : [...DEFAULT_REASONS],
+    requireReason: Boolean(raw?.requireReason),
   };
 };
 
@@ -110,6 +130,8 @@ const OFF_POLICY = Object.freeze({
   allowExtraBreak: false,
   notifyAdmin: false,
   limits: normalizeLimits(null),
+  reasons: [...DEFAULT_REASONS],
+  requireReason: false,
   source: 'default',
 });
 
@@ -180,12 +202,15 @@ const breakTotalsFor = ({ policy, breaks = [], inTime, outTime = null, now = new
 
   let manualMs = 0;
   let runningMs = 0;
+  const byReason = {};
   entries.forEach(entry => {
     const entryStart = timeOf(entry.start);
     const entryEnd = breakSpanEnd(entry, now);
     const span = Math.max(0, entryEnd - entryStart);
     manualMs += span;
     if (!entry.end) runningMs += span;
+    const reason = String(entry.reason || entry.label || 'Break');
+    byReason[reason] = (byReason[reason] || 0) + Math.round(span / MINUTE_MS);
   });
 
   let autoMs = 0;
@@ -211,7 +236,23 @@ const breakTotalsFor = ({ policy, breaks = [], inTime, outTime = null, now = new
     totalMs,
     onBreak: entries.some(entry => !entry.end),
     count: entries.length,
+    byReason,
   };
+};
+
+/**
+ * The running break if it has gone past the single-break cap, so the admin and the employee can be
+ * told once. Returns null when nothing is overdue (or no cap is set).
+ */
+const overstayFor = ({ policy, breaks = [], now = new Date() } = {}) => {
+  const limits = policy?.limits || {};
+  const cap = limits.enabled ? Number(limits.maxSingleBreakMinutes) || 0 : 0;
+  if (cap <= 0) return null;
+  const running = (Array.isArray(breaks) ? breaks : []).find(entry => entry?.start && !entry?.end);
+  if (!running) return null;
+  const minutes = Math.floor((timeOf(now) - timeOf(running.start)) / MINUTE_MS);
+  if (minutes < cap) return null;
+  return { entry: running, minutes, cap, overBy: minutes - cap };
 };
 
 /** Working time with break time taken out; it never goes below zero. */
@@ -221,7 +262,7 @@ const netWorkedMs = (grossMs, breakMs = 0) => Math.max(0, Math.round(Number(gros
  * May another break start now? {ok, blocked, message}. With limits set to WARN the break still
  * starts and the message is what the admin and the employee are told.
  */
-const canStartBreak = ({ policy, breaks = [], inTime, now = new Date(), isClockedIn = true } = {}) => {
+const canStartBreak = ({ policy, breaks = [], inTime, now = new Date(), isClockedIn = true, reason = '' } = {}) => {
   if (!policy || policy.mode === 'OFF') {
     return { ok: false, blocked: true, message: 'Break tracking is off for your company.' };
   }
@@ -238,7 +279,34 @@ const canStartBreak = ({ policy, breaks = [], inTime, now = new Date(), isClocke
     return { ok: false, blocked: true, message: 'Only the scheduled breaks are allowed. Please wait for the next one.' };
   }
 
+  if (policy.requireReason) {
+    const allowed = (policy.reasons || []).map(value => String(value).toLowerCase());
+    const picked = String(reason || '').trim().toLowerCase();
+    if (!picked) {
+      return { ok: false, blocked: true, message: 'Pick what this break is for.' };
+    }
+    if (allowed.length && !allowed.includes(picked)) {
+      return { ok: false, blocked: true, message: `Pick one of: ${(policy.reasons || []).join(', ')}.` };
+    }
+  }
+
   const limits = policy.limits || {};
+  if (limits.enabled && limits.minGapMinutes > 0) {
+    // The gap is measured from the end of the last break that actually finished.
+    const lastEnd = entries
+      .filter(entry => entry?.end)
+      .reduce((latest, entry) => Math.max(latest, timeOf(entry.end)), 0);
+    if (lastEnd > 0) {
+      const sinceMinutes = Math.floor((timeOf(now) - lastEnd) / MINUTE_MS);
+      if (sinceMinutes < limits.minGapMinutes) {
+        const waitFor = limits.minGapMinutes - sinceMinutes;
+        const message = `Your last break ended ${sinceMinutes} minute${sinceMinutes === 1 ? '' : 's'} ago; breaks are ${limits.minGapMinutes} minutes apart (wait ${waitFor} more).`;
+        if (limits.enforce === 'BLOCK') return { ok: false, blocked: true, message };
+        return { ok: true, blocked: false, warning: message, message };
+      }
+    }
+  }
+
   if (limits.enabled) {
     const totals = breakTotalsFor({ policy, breaks: entries, inTime, now });
     const countReached = limits.maxBreaksPerDay > 0 && totals.count >= limits.maxBreaksPerDay;
@@ -257,6 +325,8 @@ const canStartBreak = ({ policy, breaks = [], inTime, now = new Date(), isClocke
 
 module.exports = {
   INDIA_OFFSET_MS,
+  MINUTE_MS,
+  DEFAULT_REASONS,
   MODES,
   INHERIT,
   POLICY_LEVELS,
@@ -270,7 +340,9 @@ module.exports = {
   classifyBreak,
   shouldNotifyAdmin,
   breakTotalsFor,
+  overstayFor,
   netWorkedMs,
   canStartBreak,
+  normalizeReasons,
   OFF_POLICY,
 };

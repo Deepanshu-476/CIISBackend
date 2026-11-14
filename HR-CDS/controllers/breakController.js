@@ -5,7 +5,7 @@ const Company = require('../../models/Company');
 const Branch = require('../../models/Branch');
 const Department = require('../../models/Department');
 const JobRole = require('../../models/JobRole');
-const { notifyPageUsers, getCompanyId } = require('../utils/systemNotificationService');
+const { notifyPageUsers, notifyDirectUsers, getCompanyId } = require('../utils/systemNotificationService');
 const {
   normalizeBreakPolicy,
   resolveBreakPolicy,
@@ -13,6 +13,7 @@ const {
   classifyBreak,
   shouldNotifyAdmin,
   breakTotalsFor,
+  overstayFor,
   canStartBreak,
   dateKeyOf,
 } = require('../utils/breaks');
@@ -38,6 +39,14 @@ const indiaDayRange = (value = new Date()) => {
   const start = new Date(new Date(`${key}T00:00:00.000Z`).getTime() - INDIA_OFFSET_MS);
   const end = new Date(start.getTime() + 24 * 60 * 60 * 1000 - 1);
   return { key, start, end };
+};
+
+/** 'YYYY-MM' plus the first and last India day of that month. */
+const monthRange = (month) => {
+  const text = /^\d{4}-\d{2}$/.test(String(month || '').trim()) ? String(month).trim() : dateKeyOf(new Date()).slice(0, 7);
+  const [year, monthNumber] = text.split('-').map(Number);
+  const lastDay = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+  return { month: text, from: `${text}-01`, to: `${text}-${String(lastDay).padStart(2, '0')}` };
 };
 
 /** Every level's stored policy for this employee, most specific first. */
@@ -77,6 +86,55 @@ const policyForUser = async (user) => {
   return { policy: resolveBreakPolicy(levels), levels };
 };
 
+/**
+ * One resolver for a whole company, instead of four queries per employee.
+ *
+ * Every branch, department and shift policy is read once, then each employee's policy is worked out
+ * in memory. A 200-person company used to mean ~800 queries for one report; now it is four.
+ */
+const buildCompanyPolicyResolver = async ({ company, companyCode }) => {
+  const scope = company ? { company } : { companyCode };
+  const [companyDoc, branches, departments, jobRoles] = await Promise.all([
+    company
+      ? Company.findById(company).select('breakPolicy companyCode').lean()
+      : Company.findOne({ companyCode }).select('breakPolicy companyCode').lean(),
+    Branch.find(scope).select('breakPolicy name').lean(),
+    Department.find(scope).select('breakPolicy name').lean(),
+    JobRole.find(scope).select('breakPolicy name').lean(),
+  ]);
+
+  const index = docs => {
+    const byId = new Map();
+    const byName = new Map();
+    (docs || []).forEach(doc => {
+      byId.set(String(doc._id), doc);
+      if (doc.name) byName.set(String(doc.name).trim().toLowerCase(), doc);
+    });
+    return { byId, byName };
+  };
+  const branchIndex = index(branches);
+  const departmentIndex = index(departments);
+  const jobRoleIndex = index(jobRoles);
+
+  // A user's department / job role can be stored as an id or as a name, so both are tried.
+  const lookup = ({ byId, byName }, value) => {
+    const raw = typeof value === 'object' ? (value?._id || value?.id || value?.name) : value;
+    if (!raw) return null;
+    const text = String(raw).trim();
+    return byId.get(text) || byName.get(text.toLowerCase()) || null;
+  };
+
+  return {
+    companyDoc,
+    policyFor: (user = {}) => resolveBreakPolicy({
+      jobRole: lookup(jobRoleIndex, user.jobRole)?.breakPolicy,
+      department: lookup(departmentIndex, user.department || user.departmentName)?.breakPolicy,
+      branch: lookup(branchIndex, user.branch || user.branchName)?.breakPolicy,
+      company: companyDoc?.breakPolicy,
+    }),
+  };
+};
+
 const todayRecordFor = async (userId, now = new Date()) => {
   const { start, end } = indiaDayRange(now);
   let record = await Attendance.findOne({ user: userId, date: { $gte: start, $lte: end } });
@@ -92,9 +150,11 @@ const buildState = (record, policy, now = new Date()) => {
   const breaks = (record?.breaks || []).map(entry => ({
     type: entry.type,
     label: entry.label,
+    reason: entry.reason || '',
     start: entry.start,
     end: entry.end || null,
     minutes: entry.minutes || 0,
+    overstayNotifiedAt: entry.overstayNotifiedAt || null,
   }));
   const totals = breakTotalsFor({
     policy,
@@ -117,6 +177,9 @@ const buildState = (record, policy, now = new Date()) => {
       allowExtraBreak: policy.allowExtraBreak,
       notifyAdmin: policy.notifyAdmin,
       limits: policy.limits,
+      // The app and the web show these as chips before a break starts.
+      reasons: policy.reasons,
+      requireReason: policy.requireReason,
     },
     isClockedIn: Boolean(record?.isClockedIn),
     onBreak: Boolean(running),
@@ -156,6 +219,28 @@ const applyBreakTotals = (record, policy, now = new Date()) => {
     if (record.outTime) record.totalTime = formatDuration(Math.max(0, grossMs - totals.totalMs));
   }
   return totals;
+};
+
+/**
+ * Let the company know somebody stepped away, so a colleague looking at chat or the team list sees
+ * "on break" instead of wondering why nobody answers. Presence only, no personal details.
+ */
+const broadcastBreakPresence = ({ user, companyId, onBreak, entry }) => {
+  try {
+    const io = global.io;
+    if (!io || !companyId) return;
+    io.to(`company:${companyId}`).emit('presence:break', {
+      userId: String(user?._id || user?.id || ''),
+      userName: user?.name || '',
+      onBreak: Boolean(onBreak),
+      label: entry?.label || '',
+      reason: entry?.reason || '',
+      since: onBreak ? (entry?.start || new Date()) : null,
+      at: Date.now(),
+    });
+  } catch (error) {
+    console.error('Failed to broadcast break presence:', error.message);
+  }
 };
 
 const notifyBreak = async ({ req, record, policy, entry, phase }) => {
@@ -221,23 +306,35 @@ exports.startBreak = async (req, res) => {
       return fail(res, 400, 'Clock in first, then start your break.');
     }
 
+    const reason = String(req.body?.reason || '').trim().slice(0, 40);
     const check = canStartBreak({
       policy,
       breaks: record.breaks || [],
       inTime: record.inTime,
       now,
       isClockedIn: Boolean(record.isClockedIn),
+      reason,
     });
     if (!check.ok) return fail(res, 400, check.message);
 
     const kind = classifyBreak(policy, now);
-    const entry = { type: kind.type, label: kind.label, start: now, end: null, minutes: 0, notified: false };
+    const entry = {
+      type: kind.type,
+      label: reason || kind.label,
+      reason: reason || (kind.type === 'FIXED' ? kind.label : ''),
+      start: now,
+      end: null,
+      minutes: 0,
+      notified: false,
+      overstayNotifiedAt: null,
+    };
     record.breaks = [...(record.breaks || []), entry];
     applyBreakTotals(record, policy, now);
     await record.save();
 
     const saved = record.breaks[record.breaks.length - 1];
     await notifyBreak({ req, record, policy, entry: saved, phase: 'start' });
+    broadcastBreakPresence({ user: req.user, companyId: companyOf(req.user), onBreak: true, entry: saved });
 
     return res.json({
       success: true,
@@ -268,6 +365,7 @@ exports.stopBreak = async (req, res) => {
     await record.save();
 
     await notifyBreak({ req, record, policy, entry: running, phase: 'end' });
+    broadcastBreakPresence({ user: req.user, companyId: companyOf(req.user), onBreak: false, entry: running });
 
     return res.json({
       success: true,
@@ -384,19 +482,23 @@ exports.getLive = async (req, res) => {
     const scope = company ? { company } : { companyCode };
     const users = await User.find({ ...scope, isActive: { $ne: false } })
       // company and companyCode are needed to resolve each person's policy, not just to show them.
-      .select('name employeeId department departmentName branch jobRole company companyCode')
+      .select('name employeeId department departmentName branch branchName jobRole company companyCode')
       .lean();
     const userIds = users.map(user => user._id);
-    const records = await Attendance.find({ user: { $in: userIds }, date: { $gte: start, $lte: end } })
-      .select('user inTime outTime isClockedIn breaks breakMinutes onBreak totalTime grossTime')
-      .lean();
+    const [records, resolver] = await Promise.all([
+      Attendance.find({ user: { $in: userIds }, date: { $gte: start, $lte: end } })
+        .select('user inTime outTime isClockedIn breaks breakMinutes onBreak totalTime grossTime')
+        .lean(),
+      // Four queries for the whole company instead of four per employee.
+      buildCompanyPolicyResolver({ company, companyCode }),
+    ]);
     const byUser = new Map(records.map(record => [String(record.user), record]));
 
     const items = [];
     for (const user of users) {
       const record = byUser.get(String(user._id));
       if (!record) continue;
-      const { policy } = await policyForUser(user);
+      const policy = resolver.policyFor(user);
       if (policy.mode === 'OFF') continue;
       const totals = breakTotalsFor({
         policy,
@@ -406,6 +508,7 @@ exports.getLive = async (req, res) => {
         now,
       });
       const running = (record.breaks || []).find(entry => entry.start && !entry.end) || null;
+      const overstay = overstayFor({ policy, breaks: record.breaks || [], now });
       items.push({
         userId: String(user._id),
         name: user.name || '',
@@ -415,10 +518,13 @@ exports.getLive = async (req, res) => {
         onBreak: Boolean(running),
         runningSince: running?.start || null,
         runningLabel: running?.label || '',
+        runningReason: running?.reason || '',
+        overstayMinutes: overstay ? overstay.overBy : 0,
         breakMinutes: totals.totalMinutes,
         punchedMinutes: totals.manualMinutes,
         autoMinutes: totals.autoMinutes,
         breakCount: totals.count,
+        byReason: totals.byReason,
         workingTime: record.totalTime || '00:00:00',
       });
     }
@@ -436,6 +542,228 @@ exports.getLive = async (req, res) => {
   }
 };
 
+/** GET /breaks/report?month=YYYY-MM — a month of break totals per employee, with a company summary. */
+exports.getReport = async (req, res) => {
+  try {
+    const company = companyOf(req.user);
+    const companyCode = companyCodeOf(req.user);
+    const { month, from, to } = monthRange(req.query?.month);
+    const start = new Date(new Date(`${from}T00:00:00.000Z`).getTime() - INDIA_OFFSET_MS);
+    const end = new Date(new Date(`${to}T00:00:00.000Z`).getTime() - INDIA_OFFSET_MS + 24 * 60 * 60 * 1000 - 1);
+
+    const scope = company ? { company } : { companyCode };
+    const userFilter = { ...scope, isActive: { $ne: false } };
+    if (req.query?.userId && mongoose.isValidObjectId(req.query.userId)) userFilter._id = req.query.userId;
+    if (req.query?.departmentId) userFilter.department = String(req.query.departmentId);
+
+    const users = await User.find(userFilter)
+      .select('name employeeId department departmentName branch branchName jobRole company companyCode')
+      .sort({ name: 1 })
+      .lean();
+    const userIds = users.map(user => user._id);
+
+    const [records, resolver] = await Promise.all([
+      Attendance.find({ user: { $in: userIds }, date: { $gte: start, $lte: end } })
+        .select('user date inTime outTime breaks breakMinutes totalTime grossTime')
+        .lean(),
+      buildCompanyPolicyResolver({ company, companyCode }),
+    ]);
+
+    const byUser = new Map();
+    records.forEach(record => {
+      const key = String(record.user);
+      byUser.set(key, [...(byUser.get(key) || []), record]);
+    });
+
+    const items = [];
+    const companyByReason = {};
+    users.forEach(user => {
+      const policy = resolver.policyFor(user);
+      if (policy.mode === 'OFF') return;
+      const days = byUser.get(String(user._id)) || [];
+      if (!days.length) return;
+
+      const limits = policy.limits || {};
+      let totalMinutes = 0;
+      let punchedMinutes = 0;
+      let autoMinutes = 0;
+      let breakCount = 0;
+      let daysWithBreak = 0;
+      let overLimitDays = 0;
+      let longestBreakMinutes = 0;
+      const byReason = {};
+
+      days.forEach(record => {
+        const totals = breakTotalsFor({
+          policy,
+          breaks: record.breaks || [],
+          inTime: record.inTime,
+          outTime: record.outTime,
+          now: record.outTime || new Date(),
+        });
+        totalMinutes += totals.totalMinutes;
+        punchedMinutes += totals.manualMinutes;
+        autoMinutes += totals.autoMinutes;
+        breakCount += totals.count;
+        if (totals.totalMinutes > 0) daysWithBreak += 1;
+        Object.entries(totals.byReason || {}).forEach(([reason, minutes]) => {
+          byReason[reason] = (byReason[reason] || 0) + minutes;
+          companyByReason[reason] = (companyByReason[reason] || 0) + minutes;
+        });
+        (record.breaks || []).forEach(entry => {
+          longestBreakMinutes = Math.max(longestBreakMinutes, Number(entry.minutes) || 0);
+        });
+        // A day counts as over the limit if it broke either daily cap the admin set.
+        if (limits.enabled) {
+          const overCount = limits.maxBreaksPerDay > 0 && totals.count > limits.maxBreaksPerDay;
+          const overMinutes = limits.maxMinutesPerDay > 0 && totals.totalMinutes > limits.maxMinutesPerDay;
+          if (overCount || overMinutes) overLimitDays += 1;
+        }
+      });
+
+      items.push({
+        userId: String(user._id),
+        name: user.name || '',
+        employeeId: user.employeeId || '',
+        departmentName: user.departmentName || '',
+        mode: policy.mode,
+        daysWorked: days.length,
+        daysWithBreak,
+        totalMinutes,
+        punchedMinutes,
+        autoMinutes,
+        breakCount,
+        averageMinutesPerDay: days.length ? Math.round(totalMinutes / days.length) : 0,
+        longestBreakMinutes,
+        overLimitDays,
+        limit: limits.enabled
+          ? {
+            maxBreaksPerDay: limits.maxBreaksPerDay,
+            maxMinutesPerDay: limits.maxMinutesPerDay,
+            minGapMinutes: limits.minGapMinutes,
+            maxSingleBreakMinutes: limits.maxSingleBreakMinutes,
+            enforce: limits.enforce,
+          }
+          : null,
+        byReason,
+      });
+    });
+
+    items.sort((a, b) => b.totalMinutes - a.totalMinutes);
+    const summary = items.reduce((acc, item) => ({
+      employees: acc.employees + 1,
+      totalMinutes: acc.totalMinutes + item.totalMinutes,
+      breakCount: acc.breakCount + item.breakCount,
+      overLimitDays: acc.overLimitDays + item.overLimitDays,
+    }), { employees: 0, totalMinutes: 0, breakCount: 0, overLimitDays: 0 });
+
+    return res.json({
+      success: true,
+      month,
+      from,
+      to,
+      summary: {
+        ...summary,
+        averageMinutesPerEmployee: summary.employees ? Math.round(summary.totalMinutes / summary.employees) : 0,
+        byReason: companyByReason,
+      },
+      items,
+    });
+  } catch (error) {
+    console.error('getReport (breaks) error:', error.message);
+    return fail(res, 500, 'Could not build the break report.');
+  }
+};
+
+/**
+ * Scheduled: tell the admin (and the employee) about a break that has run past the company's cap on
+ * one break. Each break is only reported once, and only companies that set a cap are looked at.
+ */
+const sendOverstayAlerts = async () => {
+  const now = new Date();
+  const { start, end } = indiaDayRange(now);
+  const openRecords = await Attendance.find({
+    date: { $gte: start, $lte: end },
+    onBreak: true,
+    'breaks.end': null,
+  })
+    .select('user companyCode breaks')
+    .populate('user', 'name company companyCode department departmentName branch branchName jobRole')
+    .lean();
+  if (!openRecords.length) return { checked: 0, alerted: 0 };
+
+  // One resolver per company, not per employee.
+  const resolvers = new Map();
+  const resolverFor = async (companyId, code) => {
+    const key = String(companyId || code || '');
+    if (!resolvers.has(key)) {
+      resolvers.set(key, await buildCompanyPolicyResolver({ company: companyId, companyCode: code }));
+    }
+    return resolvers.get(key);
+  };
+
+  let alerted = 0;
+  for (const record of openRecords) {
+    const user = record.user;
+    if (!user) continue;
+    const companyId = user.company?._id || user.company || null;
+    const resolver = await resolverFor(companyId, user.companyCode || record.companyCode);
+    const policy = resolver.policyFor(user);
+    const overstay = overstayFor({ policy, breaks: record.breaks || [], now });
+    if (!overstay || overstay.entry.overstayNotifiedAt) continue;
+
+    const minutes = overstay.minutes;
+    const label = overstay.entry.reason || overstay.entry.label || 'Break';
+    try {
+      if (companyId) {
+        await notifyPageUsers({
+          companyId,
+          targetPath: '/ciisUser/emp-attendance',
+          targetScreen: 'Employee Attendance',
+          excludeUserIds: [String(user._id)],
+          type: 'break_update',
+          title: 'Break running long',
+          message: `${user.name || 'An employee'} has been on a ${label.toLowerCase()} break for ${minutes} minutes (limit ${overstay.cap}).`,
+          actor: user._id,
+          data: {
+            userId: String(user._id),
+            userName: user.name || '',
+            minutes,
+            cap: overstay.cap,
+            overBy: overstay.overBy,
+            phase: 'overstay',
+          },
+          priority: 'medium',
+        });
+      }
+      await notifyDirectUsers({
+        userIds: [String(user._id)],
+        type: 'break_update',
+        title: 'Your break is running long',
+        message: `You have been on a break for ${minutes} minutes; the limit is ${overstay.cap}. Please end the break.`,
+        targetPath: '/ciisUser/attendance',
+        targetScreen: 'Attendance',
+        company: companyId,
+        data: { minutes, cap: overstay.cap, phase: 'overstay' },
+        priority: 'medium',
+      });
+    } catch (error) {
+      console.error('Break overstay alert failed:', error.message);
+    }
+
+    // Mark it so the alert goes out once per break.
+    await Attendance.updateOne(
+      { _id: record._id, 'breaks.start': overstay.entry.start },
+      { $set: { 'breaks.$.overstayNotifiedAt': now } },
+    ).catch(() => {});
+    alerted += 1;
+  }
+
+  return { checked: openRecords.length, alerted };
+};
+
+module.exports.sendOverstayAlerts = sendOverstayAlerts;
+module.exports.buildCompanyPolicyResolver = buildCompanyPolicyResolver;
 module.exports.policyForUser = policyForUser;
 module.exports.policyLevelsFor = policyLevelsFor;
 module.exports.applyBreakTotals = applyBreakTotals;

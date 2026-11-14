@@ -372,6 +372,172 @@ test('break flow', async t => {
         await Company.collection.updateOne({ _id: company }, { $set: { 'breakPolicy.notifyAdmin': true } });
     });
 
+    await t.test('the batch resolver gives the same policy as resolving one employee at a time', async () => {
+        const resolver = await controller.buildCompanyPolicyResolver({ company, companyCode: COMPANY_CODE });
+        for (const userId of [ids.fixed, ids.flex]) {
+            const userDoc = await User.findById(userId).lean();
+            const single = await controller.policyForUser(userDoc);
+            const batched = resolver.policyFor(userDoc);
+            assert.equal(batched.mode, single.policy.mode, `${userDoc.name}: mode`);
+            assert.equal(batched.source, single.policy.source, `${userDoc.name}: source`);
+            assert.deepEqual(batched.fixedBreaks, single.policy.fixedBreaks);
+        }
+    });
+
+    await t.test('a break can be tagged, and the tag can be made compulsory', async () => {
+        await Company.collection.updateOne({ _id: company }, {
+            $set: { 'breakPolicy.requireReason': true, 'breakPolicy.reasons': ['Lunch', 'Tea', 'Personal'] },
+        });
+        const user = employee(ids.flex, 'ZZTEST Flex', flexDept);
+        await clockIn(ids.flex, atClock('09:30'));
+
+        const noReason = await call(controller.startBreak, { user, body: {} });
+        assert.equal(noReason.statusCode, 400);
+        assert.match(noReason.body.message, /what this break is for/);
+
+        const wrongReason = await call(controller.startBreak, { user, body: { reason: 'Cricket' } });
+        assert.equal(wrongReason.statusCode, 400);
+        assert.match(wrongReason.body.message, /Lunch, Tea, Personal/);
+
+        const tagged = await call(controller.startBreak, { user, body: { reason: 'Tea' } });
+        assert.equal(tagged.statusCode, 200, JSON.stringify(tagged.body));
+        const entry = tagged.body.breaks[tagged.body.breaks.length - 1];
+        assert.equal(entry.reason, 'Tea');
+        assert.equal(entry.label, 'Tea');
+        await call(controller.stopBreak, { user, body: {} });
+
+        await Company.collection.updateOne({ _id: company }, { $set: { 'breakPolicy.requireReason': false } });
+    });
+
+    await t.test('breaks have to be a set number of minutes apart', async () => {
+        await Company.collection.updateOne({ _id: company }, {
+            $set: { 'breakPolicy.limits': { enabled: true, minGapMinutes: 60, enforce: 'BLOCK' } },
+        });
+        const user = employee(ids.flex, 'ZZTEST Flex', flexDept);
+        const record = await clockIn(ids.flex, atClock('09:30'));
+        // A break that ended a few minutes ago.
+        record.breaks = [{ type: 'FLEXIBLE', label: 'Break', start: new Date(Date.now() - 20 * 60000), end: new Date(Date.now() - 10 * 60000), minutes: 10 }];
+        await record.save();
+
+        const tooSoon = await call(controller.startBreak, { user, body: {} });
+        assert.equal(tooSoon.statusCode, 400);
+        assert.match(tooSoon.body.message, /60 minutes apart/);
+
+        // With the gap passed it is allowed again.
+        record.breaks = [{ type: 'FLEXIBLE', label: 'Break', start: new Date(Date.now() - 180 * 60000), end: new Date(Date.now() - 170 * 60000), minutes: 10 }];
+        await record.save();
+        const allowed = await call(controller.startBreak, { user, body: {} });
+        assert.equal(allowed.statusCode, 200, JSON.stringify(allowed.body));
+        await call(controller.stopBreak, { user, body: {} });
+    });
+
+    await t.test('a break running past the cap alerts the admin and the employee, once', async () => {
+        await Notification.deleteMany({ type: 'break_update' });
+        await Company.collection.updateOne({ _id: company }, {
+            $set: { 'breakPolicy.limits': { enabled: true, maxSingleBreakMinutes: 20, enforce: 'WARN' } },
+        });
+        const record = await clockIn(ids.flex, atClock('09:30'));
+        // A break that started 35 minutes ago and is still running.
+        record.breaks = [{ type: 'FLEXIBLE', label: 'Break', reason: 'Personal', start: new Date(Date.now() - 35 * 60000), end: null, minutes: 0 }];
+        record.onBreak = true;
+        await record.save();
+
+        const first = await controller.sendOverstayAlerts();
+        assert.equal(first.alerted, 1, JSON.stringify(first));
+        const notes = await breakNotifications();
+        assert.equal(notes.length, 2, 'one for the admin, one for the employee');
+        assert.equal(notes.some(note => note.title === 'Break running long'), true);
+        assert.equal(notes.some(note => note.title === 'Your break is running long'), true);
+
+        const marked = await Attendance.findById(record._id).lean();
+        assert.equal(Boolean(marked.breaks[0].overstayNotifiedAt), true, 'the break is marked as alerted');
+
+        const second = await controller.sendOverstayAlerts();
+        assert.equal(second.alerted, 0, 'the same break is not reported twice');
+        assert.equal((await breakNotifications()).length, 2);
+
+        // The live report shows how far over it is.
+        const live = await call(controller.getLive, { user: admin, query: {} });
+        const row = live.body.items.find(item => item.userId === String(ids.flex));
+        assert.equal(row.overstayMinutes >= 14, true, `overBy ${row.overstayMinutes}`);
+
+        await call(controller.stopBreak, { user: employee(ids.flex, 'ZZTEST Flex', flexDept), body: {} });
+        await Company.collection.updateOne({ _id: company }, { $unset: { 'breakPolicy.limits': '' } });
+    });
+
+    await t.test('a break under the cap is not reported', async () => {
+        await Notification.deleteMany({ type: 'break_update' });
+        await Company.collection.updateOne({ _id: company }, {
+            $set: { 'breakPolicy.limits': { enabled: true, maxSingleBreakMinutes: 60, enforce: 'WARN' } },
+        });
+        const record = await clockIn(ids.flex, atClock('09:30'));
+        record.breaks = [{ type: 'FLEXIBLE', label: 'Break', start: new Date(Date.now() - 10 * 60000), end: null, minutes: 0 }];
+        record.onBreak = true;
+        await record.save();
+        const result = await controller.sendOverstayAlerts();
+        assert.equal(result.alerted, 0);
+        await call(controller.stopBreak, { user: employee(ids.flex, 'ZZTEST Flex', flexDept), body: {} });
+        await Company.collection.updateOne({ _id: company }, { $unset: { 'breakPolicy.limits': '' } });
+    });
+
+    await t.test('the monthly report adds up break time per employee and per reason', async () => {
+        const monthKey = dateKeyOf(new Date()).slice(0, 7);
+        const record = await clockIn(ids.flex, atClock('09:30'));
+        record.breaks = [
+            { type: 'FLEXIBLE', label: 'Lunch', reason: 'Lunch', start: atClock('13:00'), end: atClock('13:40'), minutes: 40 },
+            { type: 'FLEXIBLE', label: 'Tea', reason: 'Tea', start: atClock('16:00'), end: atClock('16:10'), minutes: 10 },
+        ];
+        record.outTime = atClock('18:30');
+        record.isClockedIn = false;
+        record.onBreak = false;
+        await record.save();
+
+        const res = await call(controller.getReport, { user: admin, query: { month: monthKey } });
+        assert.equal(res.body.success, true, JSON.stringify(res.body));
+        const row = res.body.items.find(item => item.userId === String(ids.flex));
+        assert.equal(Boolean(row), true, 'the employee is in the report');
+        assert.equal(row.totalMinutes, 50);
+        assert.equal(row.byReason.Lunch, 40);
+        assert.equal(row.byReason.Tea, 10);
+        assert.equal(row.breakCount, 2);
+        assert.equal(row.longestBreakMinutes, 40);
+        assert.equal(row.averageMinutesPerDay, 50, 'one day of records');
+        assert.equal(res.body.summary.byReason.Lunch >= 40, true);
+        assert.equal(res.body.month, monthKey);
+    });
+
+    await t.test('the report counts the days that went over the daily limit', async () => {
+        await Company.collection.updateOne({ _id: company }, {
+            $set: { 'breakPolicy.limits': { enabled: true, maxMinutesPerDay: 30, enforce: 'WARN' } },
+        });
+        const monthKey = dateKeyOf(new Date()).slice(0, 7);
+        const res = await call(controller.getReport, { user: admin, query: { month: monthKey } });
+        const row = res.body.items.find(item => item.userId === String(ids.flex));
+        assert.equal(row.overLimitDays, 1, '50 minutes against a 30 minute limit');
+        assert.equal(row.limit.maxMinutesPerDay, 30);
+        await Company.collection.updateOne({ _id: company }, { $unset: { 'breakPolicy.limits': '' } });
+    });
+
+    await t.test('starting and ending a break tells the company who stepped away', async () => {
+        const events = [];
+        const previousIo = global.io;
+        global.io = { to: room => ({ emit: (event, payload) => events.push({ room, event, payload }) }) };
+        try {
+            const user = employee(ids.flex, 'ZZTEST Flex', flexDept);
+            await clockIn(ids.flex, atClock('09:30'));
+            await call(controller.startBreak, { user, body: { reason: 'Tea' } });
+            await call(controller.stopBreak, { user, body: {} });
+        } finally {
+            global.io = previousIo;
+        }
+        const presence = events.filter(item => item.event === 'presence:break');
+        assert.equal(presence.length, 2, `expected a start and an end broadcast, got ${presence.length}`);
+        assert.equal(presence[0].room, `company:${company}`);
+        assert.equal(presence[0].payload.onBreak, true);
+        assert.equal(presence[0].payload.reason, 'Tea');
+        assert.equal(presence[1].payload.onBreak, false);
+    });
+
     await t.test('breaks are off unless somebody switches them on', async () => {
         await Company.collection.updateOne({ _id: company }, { $unset: { breakPolicy: '' } });
         const res = await call(controller.getToday, { user: employee(ids.flex, 'ZZTEST Flex', flexDept), query: {} });

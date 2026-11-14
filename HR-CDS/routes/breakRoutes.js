@@ -57,5 +57,6 @@ const checkBreakAdminAccess = (requiredPermission = 'view') => async (req, res, 
 router.get('/settings', checkBreakAdminAccess('view'), breakController.getSettings);
 router.put('/settings/:level/:id', checkBreakAdminAccess('edit'), breakController.updateSettings);
 router.get('/live', checkBreakAdminAccess('view'), breakController.getLive);
+router.get('/report', checkBreakAdminAccess('view'), breakController.getReport);
 
 module.exports = router;

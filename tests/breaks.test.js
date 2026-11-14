@@ -5,6 +5,9 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const {
+  overstayFor,
+  normalizeReasons,
+  DEFAULT_REASONS,
   normalizeBreakPolicy,
   resolveBreakPolicy,
   fixedWindowsFor,
@@ -212,4 +215,100 @@ test('under the limit, a break starts without a warning', () => {
   const result = canStartBreak({ policy, breaks, inTime: IN, now: at('15:00') });
   assert.equal(result.ok, true);
   assert.equal(result.warning, undefined);
+});
+
+// ---- the gap between breaks, the cap on one break, and what a break was for ----------------
+
+test('a policy comes with a default list of reasons, which the admin can replace', () => {
+  assert.deepEqual(normalizeBreakPolicy({ mode: 'FLEXIBLE' }).reasons, DEFAULT_REASONS);
+  const custom = normalizeBreakPolicy({ mode: 'FLEXIBLE', reasons: ['Lunch', 'Lunch', ' Prayer ', ''], requireReason: true });
+  assert.deepEqual(custom.reasons, ['Lunch', 'Prayer'], 'trimmed, de-duplicated, blanks dropped');
+  assert.equal(custom.requireReason, true);
+  assert.equal(normalizeReasons(['a'.repeat(80)])[0].length, 40, 'a very long tag is cut');
+});
+
+test('a reason is demanded only when the admin asks for one', () => {
+  const optional = flexiblePolicy();
+  assert.equal(canStartBreak({ policy: optional, breaks: [], inTime: IN, now: at('11:00') }).ok, true);
+
+  const required = flexiblePolicy({ requireReason: true, reasons: ['Lunch', 'Tea'] });
+  const missing = canStartBreak({ policy: required, breaks: [], inTime: IN, now: at('11:00') });
+  assert.equal(missing.ok, false);
+  assert.match(missing.message, /what this break is for/);
+
+  const wrong = canStartBreak({ policy: required, breaks: [], inTime: IN, now: at('11:00'), reason: 'Cricket' });
+  assert.equal(wrong.ok, false);
+  assert.match(wrong.message, /Lunch, Tea/);
+
+  const right = canStartBreak({ policy: required, breaks: [], inTime: IN, now: at('11:00'), reason: 'tea' });
+  assert.equal(right.ok, true, 'the tag is matched without caring about case');
+});
+
+test('breaks have to be a set number of minutes apart', () => {
+  const policy = flexiblePolicy({ limits: { enabled: true, minGapMinutes: 60, enforce: 'BLOCK' } });
+  const breaks = [{ start: at('11:00'), end: at('11:15') }];
+  const tooSoon = canStartBreak({ policy, breaks, inTime: IN, now: at('11:40') });
+  assert.equal(tooSoon.ok, false);
+  assert.match(tooSoon.message, /25 minutes ago/);
+  assert.match(tooSoon.message, /wait 35 more/);
+
+  const longEnough = canStartBreak({ policy, breaks, inTime: IN, now: at('12:20') });
+  assert.equal(longEnough.ok, true);
+});
+
+test('the gap can warn instead of blocking', () => {
+  const policy = flexiblePolicy({ limits: { enabled: true, minGapMinutes: 60, enforce: 'WARN' } });
+  const breaks = [{ start: at('11:00'), end: at('11:15') }];
+  const result = canStartBreak({ policy, breaks, inTime: IN, now: at('11:40') });
+  assert.equal(result.ok, true);
+  assert.match(result.warning, /60 minutes apart/);
+});
+
+test('the gap is measured from the last break that ended, and the first break is always free', () => {
+  const policy = flexiblePolicy({ limits: { enabled: true, minGapMinutes: 60, enforce: 'BLOCK' } });
+  assert.equal(canStartBreak({ policy, breaks: [], inTime: IN, now: at('11:00') }).ok, true);
+  const breaks = [
+    { start: at('10:00'), end: at('10:10') },
+    { start: at('12:00'), end: at('12:10') },
+  ];
+  assert.equal(canStartBreak({ policy, breaks, inTime: IN, now: at('12:30') }).ok, false, 'measured from 12:10, not 10:10');
+  assert.equal(canStartBreak({ policy, breaks, inTime: IN, now: at('13:15') }).ok, true);
+});
+
+test('a break that runs past the cap is an overstay, once', () => {
+  const policy = flexiblePolicy({ limits: { enabled: true, maxSingleBreakMinutes: 20 } });
+  const breaks = [{ start: at('14:00'), end: null }];
+  assert.equal(overstayFor({ policy, breaks, now: at('14:15') }), null, 'still inside the cap');
+  const over = overstayFor({ policy, breaks, now: at('14:35') });
+  assert.equal(over.minutes, 35);
+  assert.equal(over.cap, 20);
+  assert.equal(over.overBy, 15);
+  assert.equal(over.entry, breaks[0]);
+});
+
+test('no cap, no limits or no running break means no overstay', () => {
+  const breaks = [{ start: at('14:00'), end: null }];
+  assert.equal(overstayFor({ policy: flexiblePolicy(), breaks, now: at('15:00') }), null, 'no cap set');
+  assert.equal(overstayFor({
+    policy: flexiblePolicy({ limits: { enabled: false, maxSingleBreakMinutes: 20 } }),
+    breaks,
+    now: at('15:00'),
+  }), null, 'limits switched off');
+  assert.equal(overstayFor({
+    policy: flexiblePolicy({ limits: { enabled: true, maxSingleBreakMinutes: 20 } }),
+    breaks: [{ start: at('14:00'), end: at('14:10') }],
+    now: at('15:00'),
+  }), null, 'the break already ended');
+});
+
+test('break time is also totalled per reason, for the monthly report', () => {
+  const breaks = [
+    { reason: 'Lunch', start: at('13:00'), end: at('13:30') },
+    { reason: 'Tea', start: at('16:00'), end: at('16:10') },
+    { reason: 'Tea', start: at('17:00'), end: at('17:05') },
+  ];
+  const totals = breakTotalsFor({ policy: flexiblePolicy(), breaks, inTime: IN, outTime: OUT });
+  assert.equal(totals.byReason.Lunch, 30);
+  assert.equal(totals.byReason.Tea, 15, 'both tea breaks add up');
+  assert.equal(totals.totalMinutes, 45);
 });
