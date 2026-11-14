@@ -1,5 +1,6 @@
 
 const mongoose = require("mongoose");
+const { breakPolicySchema } = require("../HR-CDS/models/breakPolicySchema");
 const validator = require("validator");
 
 const companySchema = new mongoose.Schema( 
@@ -335,5 +336,8 @@ companySchema.pre("save", async function (next) {
 });
 
 
+
+// How breaks work here (company → branch → department → shift, most specific wins).
+companySchema.add({ breakPolicy: { type: breakPolicySchema, default: () => ({}) } });
 
 module.exports = mongoose.model("Company", companySchema);

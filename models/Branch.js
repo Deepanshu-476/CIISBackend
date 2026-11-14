@@ -1,5 +1,6 @@
 
 const mongoose = require("mongoose");
+const { breakPolicySchema } = require("../HR-CDS/models/breakPolicySchema");
 
 const branchSchema = new mongoose.Schema(
   {
@@ -127,5 +128,8 @@ branchSchema.post('save', async function(doc) {
     console.error('Branch post-save cascade error:', err.message);
   }
 });
+
+// How breaks work here (company → branch → department → shift, most specific wins).
+branchSchema.add({ breakPolicy: { type: breakPolicySchema, default: () => ({}) } });
 
 module.exports = mongoose.model("Branch", branchSchema);
