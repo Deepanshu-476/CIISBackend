@@ -1003,6 +1003,8 @@ scheduleDbJob('0 9 * * *', 'Daily overdue summary', dailyOverdueSummary);
 scheduleDbJob('30 10 * * *', 'Daily absent marking', markDailyAbsent);
 
 scheduleDbJob('* * * * *', 'Pending task reminders', sendConfiguredTaskReminders);
+// A break that runs past the company's cap: the admin and the employee are told once.
+scheduleDbJob('* * * * *', 'Break overstay alerts', () => require('./HR-CDS/controllers/breakController').sendOverstayAlerts());
 
 scheduleDbJob('* * * * *', 'CRM follow-up reminders', sendCrmFollowUpReminders);
 

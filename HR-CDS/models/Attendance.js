@@ -73,10 +73,14 @@ const attendanceSchema = new mongoose.Schema({
   breaks: [{
     type: { type: String, enum: ['FIXED', 'EXTRA', 'FLEXIBLE'], default: 'FLEXIBLE' },
     label: { type: String, trim: true, default: 'Break' },
+    // What the break was for (Lunch, Tea, Personal…), from the company's list.
+    reason: { type: String, trim: true, default: '' },
     start: { type: Date, required: true },
     end: { type: Date, default: null },
     minutes: { type: Number, default: 0 },
     notified: { type: Boolean, default: false },
+    // Set when the "this break is running long" alert has gone out, so it only goes once.
+    overstayNotifiedAt: { type: Date, default: null },
   }],
   onBreak: {
     type: Boolean,
