@@ -1218,6 +1218,8 @@ app.use("/api/app-version", require("./routes/appVersionRoutes.js"));
 app.use("/api/attendance", require("./HR-CDS/routes/attendanceRoutes.js"));
 app.use("/api/overtime", require("./HR-CDS/routes/overtimeRoutes.js"));
 app.use("/overtime", require("./HR-CDS/routes/overtimeRoutes.js"));
+app.use("/api/week-off", require("./HR-CDS/routes/weekOffRoutes.js"));
+app.use("/week-off", require("./HR-CDS/routes/weekOffRoutes.js"));
 app.use("/api/leaves", require("./HR-CDS/routes/LeaveRoutes.js"));
 app.use("/api/asset-requests", require("./HR-CDS/routes/assetRequestRoutes.js"));
 // Any write that can change a task (task, project, client and client-task routes) clears the

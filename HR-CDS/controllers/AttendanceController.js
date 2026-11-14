@@ -1,5 +1,6 @@
 const Attendance = require("../models/Attendance");
 const OvertimeRequest = require("../models/OvertimeRequest");
+const WeekOffRequest = require("../models/WeekOffRequest");
 const Leave = require("../models/Leave");
 const Holiday = require("../models/Holiday");
 const User = require("../../models/User");
@@ -10,6 +11,7 @@ const JobRole = require("../../models/JobRole");
 const PagePermission = require("../../models/PagePermission");
 const mongoose = require("mongoose");
 const {notifyPageUsers, getCompanyId} = require("../utils/systemNotificationService");
+const {isOffDayFor, effectiveWorkingDays: getEffectiveWorkingDays} = require("../utils/weekOff");
 const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagination");
 const { runAutoClockOutSweepIfStale } = require("../cron/forceClockOut");
 const { cleanRecurringTasksForAbsentUser } = require("../cron/recurringTasks");
@@ -187,39 +189,26 @@ const getIndiaDayEnd = (value = new Date()) => {
   return indiaDateTimeToUtc(year, monthIndex, day, 23, 59, 59, 999);
 };
 
-const normalizeWorkingDays = value => {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 7) return 5;
-  return parsed;
-};
-
-const getEffectiveWorkingDays = (department, date) => {
-  if (!department) return 5;
-  const targetTime = getIndiaDayStart(date).getTime();
-  const history = Array.isArray(department.workingDayHistory)
-    ? department.workingDayHistory
-        .filter(entry => entry?.effectiveFrom)
-        .sort((a, b) => new Date(a.effectiveFrom) - new Date(b.effectiveFrom))
-    : [];
-
-  let effectiveDays = normalizeWorkingDays(department.workingDays);
-  for (const entry of history) {
-    if (getIndiaDayStart(entry.effectiveFrom).getTime() <= targetTime) {
-      effectiveDays = normalizeWorkingDays(entry.workingDays);
-    } else {
-      break;
+// Weekly offs are per employee now: their own weekday(s) when set, plus any approved swap for that
+// week, and otherwise the department's end-of-week pattern. The rules live in HR-CDS/utils/weekOff.js
+// so attendance and payroll agree. Build the context once per employee, then ask it per date.
+const buildWeekOffContext = async (user, department) => {
+  const userId = user?._id || user?.id || null;
+  let swaps = [];
+  if (userId) {
+    try {
+      swaps = await WeekOffRequest.find({ user: userId, status: 'Approved' })
+        .select('weekStartKey fromDateKey toDateKey status')
+        .lean();
+    } catch (error) {
+      console.error('Could not load approved week off swaps:', error.message);
+      swaps = [];
     }
   }
-
-  return effectiveDays;
+  return { department: department || null, weekOffDays: user?.weekOffDays || [], swaps };
 };
 
-const isDepartmentWeekend = (department, date) => {
-  const workingDays = getEffectiveWorkingDays(department, date);
-  const dayOfWeek = new Date(date.getTime() + INDIA_OFFSET_MS).getUTCDay();
-  const mondayBasedDay = dayOfWeek === 0 ? 7 : dayOfWeek;
-  return mondayBasedDay > workingDays;
-};
+const isWeekOffDay = (context, date) => (context ? isOffDayFor(context, date) : false);
 
 const resolveUserDepartmentDoc = async (user = {}) => {
   const dept = user?.department;
@@ -1318,7 +1307,8 @@ const getTodayStatus = async (req, res) => {
 
       const isLeaveToday = leaveKeys.has(todayKey);
       const isHolidayToday = Boolean(holidayDoc);
-      const isWeekendToday = isDepartmentWeekend(deptDoc, now);
+      const weekOffContext = await buildWeekOffContext(userObj || req.user, deptDoc);
+      const isWeekendToday = isWeekOffDay(weekOffContext, now);
 
       if (isLeaveToday || isHolidayToday || isWeekendToday) {
         const offStatus = isHolidayToday ? "HOLIDAY" : isLeaveToday ? "LEAVE" : "WEEKEND";
@@ -1430,7 +1420,7 @@ const getAttendanceList = async (req, res) => {
     
     
     const targetUser = await User.findById(targetUserId)
-      .select('name email employeeType companyCode company jobRole shiftId shiftName shiftType department departmentName createdAt')
+      .select('name email employeeType companyCode company jobRole shiftId shiftName shiftType department departmentName weekOffDays createdAt')
       .populate('department', 'name workingDays workingDayHistory');
     if (!targetUser || targetUser.companyCode !== userCompanyCode) {
       return res.status(403).json({ 
@@ -1438,6 +1428,7 @@ const getAttendanceList = async (req, res) => {
       });
     }
     const resolvedTargetDept = await resolveUserDepartmentDoc(targetUser);
+    const targetWeekOffContext = await buildWeekOffContext(targetUser, resolvedTargetDept);
     
     let query = { 
       user: targetUserId,
@@ -1565,7 +1556,7 @@ const getAttendanceList = async (req, res) => {
         const hasPunch = Boolean(recordObject.inTime || recordObject.outTime);
         const isLeaveCoveredDay = leaveCoverageDateKeys.has(dateKey) && !hasPunch;
         const isHolidayDay = holidayDateMap.has(dateKey) && !hasPunch;
-        const isWeekendDay = isDepartmentWeekend(resolvedTargetDept, date);
+        const isWeekendDay = isWeekOffDay(targetWeekOffContext, date);
         const isClockedIn = recordObject.isClockedIn === true || (!recordObject.outTime && Boolean(recordObject.inTime));
         const formattedLogin = recordObject.inTime ? formatTime(recordObject.inTime) : "";
         const formattedLogout = (!isClockedIn && recordObject.outTime) ? formatTime(recordObject.outTime) : "";
@@ -1653,7 +1644,7 @@ const getAttendanceList = async (req, res) => {
         };
       } else {
         const isHoliday = holidayDateMap.has(dateKey);
-        const isWeekend = isDepartmentWeekend(resolvedTargetDept, date);
+        const isWeekend = isWeekOffDay(targetWeekOffContext, date);
         const fallbackSchedule = buildShiftSchedule(date, targetShiftSettings);
         const fallbackShift = buildShiftSnapshot(targetShiftSettings || {}, fallbackSchedule);
         const fallbackShiftTime = fallbackShift.shiftTime || formatShiftTimeWindow(fallbackShift.shiftStart, fallbackShift.shiftEnd);
@@ -2357,6 +2348,7 @@ const getAttendanceByUser = async (req, res) => {
       });
     }
     const resolvedUserDept = await resolveUserDepartmentDoc(user);
+    const userWeekOffContext = await buildWeekOffContext(user, resolvedUserDept);
 
     const isSelf = String(req.user._id) === String(userId);
     if (!isSelf && !isPrivilegedAttendanceUser(req.user, true)) {
@@ -2428,7 +2420,7 @@ const getAttendanceByUser = async (req, res) => {
         if (savedRecord) return savedRecord;
 
         const isHol = holidayDateMap.has(dateKey);
-        const isWknd = isDepartmentWeekend(resolvedUserDept, date);
+        const isWknd = isWeekOffDay(userWeekOffContext, date);
         return {
           _id: `calendar-${dateKey}`,
           date,
@@ -2453,7 +2445,7 @@ const getAttendanceByUser = async (req, res) => {
         const hasPunch = Boolean(record.inTime || record.outTime);
         const isLeave = leaveCoverageKeysForRange.has(dateKey) && !hasPunch;
         const isHol = holidayDateMap.has(dateKey) && !hasPunch;
-        const isWknd = isDepartmentWeekend(resolvedUserDept, record.date);
+        const isWknd = isWeekOffDay(userWeekOffContext, record.date);
         let finalStatus = record.status || 'ABSENT';
         if (isLeave) {
           finalStatus = 'LEAVE';
@@ -2525,8 +2517,10 @@ const markDailyAbsent = async () => {
         });
         
         if (!existingAttendance) {
-          // 2. Check if target date is a weekend for this user's department
-          if (isDepartmentWeekend(user.department, targetDate)) {
+          // 2. Skip the employee's own weekly off (their day, or an approved swap, or the
+          // department's default pattern) — marking that absent is exactly the old bug.
+          const sweepWeekOffContext = await buildWeekOffContext(user, user.department);
+          if (isWeekOffDay(sweepWeekOffContext, targetDate)) {
             continue;
           }
 
