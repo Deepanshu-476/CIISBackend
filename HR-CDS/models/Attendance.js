@@ -68,6 +68,30 @@ const attendanceSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  // Breaks punched during this day. A fixed window the employee did not punch is deducted on its
+  // own and is not stored here (see HR-CDS/utils/breaks.js), so nothing is ever counted twice.
+  breaks: [{
+    type: { type: String, enum: ['FIXED', 'EXTRA', 'FLEXIBLE'], default: 'FLEXIBLE' },
+    label: { type: String, trim: true, default: 'Break' },
+    start: { type: Date, required: true },
+    end: { type: Date, default: null },
+    minutes: { type: Number, default: 0 },
+    notified: { type: Boolean, default: false },
+  }],
+  onBreak: {
+    type: Boolean,
+    default: false
+  },
+  // Punched break time plus the automatically deducted windows, in minutes.
+  breakMinutes: {
+    type: Number,
+    default: 0
+  },
+  // Gross in-to-out time; totalTime is this minus breakMinutes, which is what "working time" means.
+  grossTime: {
+    type: String,
+    default: "00:00:00"
+  },
   totalTime: {
     type: String,
     default: "00:00:00"

@@ -12,6 +12,8 @@ const PagePermission = require("../../models/PagePermission");
 const mongoose = require("mongoose");
 const {notifyPageUsers, getCompanyId} = require("../utils/systemNotificationService");
 const {isOffDayFor, effectiveWorkingDays: getEffectiveWorkingDays} = require("../utils/weekOff");
+const {breakTotalsFor, resolveBreakPolicy, netWorkedMs} = require("../utils/breaks");
+const {policyForUser: breakPolicyForUser} = require("./breakController");
 const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagination");
 const { runAutoClockOutSweepIfStale } = require("../cron/forceClockOut");
 const { cleanRecurringTasksForAbsentUser } = require("../cron/recurringTasks");
@@ -424,7 +426,10 @@ const normalizeAttendanceStatusForSave = (value, fallback = "") => {
   return statusMap[compact] || fallback || "ABSENT";
 };
 
-const calculateAttendanceByShift = ({ inTime, outTime, shiftSettings, currentStatus, hasOvertimeApproved = false }) => {
+// Break time is taken out of the working time, never out of the status rules: a long lunch must not
+// turn a full day into a half day. So totalTime is net of breaks while the half-day / short-leave
+// thresholds keep looking at the clock-in to clock-out span, exactly as before.
+const calculateAttendanceByShift = ({ inTime, outTime, shiftSettings, currentStatus, hasOvertimeApproved = false, breakMs = 0 }) => {
   if (!inTime) {
     return {
       status: currentStatus || "ABSENT",
@@ -479,7 +484,9 @@ const calculateAttendanceByShift = ({ inTime, outTime, shiftSettings, currentSta
     lateBy,
     earlyLeave: outTime < schedule.shiftEnd ? formatDuration(schedule.shiftEnd - outTime) : "00:00:00",
     overTime: (hasOvertimeApproved && outTime > schedule.shiftEnd) ? formatDuration(outTime - schedule.shiftEnd) : "00:00:00",
-    totalTime: formatDuration(Math.max(totalMs, 0))
+    grossTime: formatDuration(Math.max(totalMs, 0)),
+    breakMs,
+    totalTime: formatDuration(netWorkedMs(Math.max(totalMs, 0), breakMs))
   };
 };
 
@@ -1163,10 +1170,29 @@ const clockOut = async (req, res) => {
 
     const totalMs = now - new Date(record.inTime);
 
+    // Clocking out while still on a break ends that break at the same moment.
+    const {policy: breakPolicy} = await breakPolicyForUser(userObj || req.user);
+    (record.breaks || []).forEach(entry => {
+      if (entry?.start && !entry.end) {
+        entry.end = now;
+        entry.minutes = Math.max(0, Math.round((now - new Date(entry.start)) / 60000));
+      }
+    });
+    const breakTotals = breakTotalsFor({
+      policy: breakPolicy,
+      breaks: record.breaks || [],
+      inTime: record.inTime,
+      outTime: now,
+      now,
+    });
+    record.breakMinutes = breakTotals.totalMinutes;
+    record.onBreak = false;
+
     record.outTime = now;
     record.clockOutMode = 'MANUAL';
     record.isClockedIn = false;
-    record.totalTime = formatDuration(totalMs);
+    record.grossTime = formatDuration(totalMs);
+    record.totalTime = formatDuration(netWorkedMs(totalMs, breakTotals.totalMs));
 
     // Check overtime approval status
     const hasApprovedOvertime = record.hasOvertimeApproved || (await isOvertimeApprovedForUserDate(userId, record.inTime || record.date || now));
@@ -1190,7 +1216,8 @@ const clockOut = async (req, res) => {
       outTime: now,
       shiftSettings,
       currentStatus: record.status,
-      hasOvertimeApproved: Boolean(hasApprovedOvertime)
+      hasOvertimeApproved: Boolean(hasApprovedOvertime),
+      breakMs: breakTotals.totalMs
     });
 
     record.status = shiftCalc.status;
@@ -1377,6 +1404,21 @@ const getTodayStatus = async (req, res) => {
 
     const shiftTime = formatShiftTimeWindow(shiftStart, shiftEnd);
 
+    // Break state, so the working-time timer can stop while a break is running.
+    const {userObj: breakUserObj} = await getAttendanceSettingsContext({companyCode: userCompanyCode, userId});
+    const {policy: breakPolicy} = await breakPolicyForUser(breakUserObj || req.user);
+    const liveBreaks = breakTotalsFor({
+      policy: breakPolicy,
+      breaks: today.breaks || [],
+      inTime: today.inTime,
+      outTime: isClockedInNow ? null : today.outTime,
+      now,
+    });
+    const liveGrossMs = today.inTime
+      ? Math.max(0, (isClockedInNow ? now.getTime() : new Date(today.outTime || now).getTime()) - new Date(today.inTime).getTime())
+      : 0;
+    const runningBreak = (today.breaks || []).find(entry => entry?.start && !entry.end) || null;
+
     res.status(200).json({
       ...today.toObject(),
       shiftId,
@@ -1389,7 +1431,15 @@ const getTodayStatus = async (req, res) => {
       logout: formattedLogout,
       outTime: isClockedInNow ? null : today.outTime,
       isClockedIn: isClockedInNow,
-      status: today.status
+      status: today.status,
+      breakMode: breakPolicy.mode,
+      onBreak: Boolean(runningBreak),
+      breakStartedAt: runningBreak?.start || null,
+      breakLabel: runningBreak?.label || '',
+      breakMinutes: liveBreaks.totalMinutes,
+      grossTime: formatDuration(liveGrossMs),
+      workingTime: formatDuration(netWorkedMs(liveGrossMs, liveBreaks.totalMs)),
+      workingSeconds: Math.floor(netWorkedMs(liveGrossMs, liveBreaks.totalMs) / 1000)
     });
   } catch (err) {
     console.error("Get Today Status Error:", err.message);
@@ -1973,7 +2023,10 @@ const updateAttendanceRecord = async (req, res) => {
         outTime: record.outTime,
         shiftSettings,
         currentStatus: explicitStatus || record.status,
-        hasOvertimeApproved: Boolean(record.hasOvertimeApproved)
+        hasOvertimeApproved: Boolean(record.hasOvertimeApproved),
+        // Keep the break time this day already has, so an admin editing the in/out time does not
+        // silently give back the lunch break.
+        breakMs: Math.max(0, Number(record.breakMinutes) || 0) * 60 * 1000
       });
 
       record.status = explicitStatus || recalculated.status;
@@ -1988,6 +2041,7 @@ const updateAttendanceRecord = async (req, res) => {
         record.overTime = recalculated.overTime;
       }
       record.totalTime = recalculated.totalTime;
+      record.grossTime = recalculated.grossTime || record.grossTime;
     }
 
     if (updateData.notes !== undefined) {
