@@ -253,8 +253,20 @@ const FORM_REGISTRY = {
         status: draft.status || 'pending',
         priorityDays: String(draft.priorityDays || '1'),
         repeatPattern: draft.repeatPattern || 'none',
-        repeatDays: JSON.stringify(draft.repeatDays || []),
-        recurrenceEndDate: draft.recurrenceEndDate || '',
+        repeatDays: JSON.stringify(
+          draft.repeatPattern && draft.repeatPattern !== 'none'
+            ? ((Array.isArray(draft.repeatDays) && draft.repeatDays.length > 0)
+              ? draft.repeatDays
+              : ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'])
+            : (draft.repeatDays || [])
+        ),
+        recurrenceEndDate: draft.repeatPattern && draft.repeatPattern !== 'none'
+          ? (draft.recurrenceEndDate || (() => {
+              const baseDue = draft.dueDateTime ? new Date(draft.dueDateTime) : new Date();
+              const end = new Date(baseDue.getTime() + 30 * 24 * 60 * 60 * 1000);
+              return end.toISOString().slice(0, 10) + 'T23:59:59.999Z';
+            })())
+          : '',
         checkpoints: JSON.stringify(cleanedCheckpoints),
         reminderSettings: JSON.stringify(reminderPayload),
       };
@@ -274,6 +286,14 @@ const FORM_REGISTRY = {
      */
     buildPreview: (draft) => {
       const cleanedCheckpoints = getCleanCheckpoints(draft.checkpoints);
+      const isDailyRepeat = draft.repeatPattern && draft.repeatPattern !== 'none';
+      const daysText = (Array.isArray(draft.repeatDays) && draft.repeatDays.length > 0)
+        ? draft.repeatDays.map((d) => String(d).slice(0, 3).toUpperCase()).join(', ')
+        : 'Mon-Sun';
+      const repeatLabel = isDailyRepeat
+        ? `Daily (${daysText})${draft.recurrenceEndDate ? ` tak ${formatHumanIstDate(draft.recurrenceEndDate)}` : ''}`
+        : 'No repeat';
+
       return {
         title: draft.title || '—',
         description: draft.description || '—',
@@ -289,8 +309,10 @@ const FORM_REGISTRY = {
         repeatIntervalMinutes: draft.repeatIntervalMinutes || null,
         minutesBeforeDue: draft.minutesBeforeDue || null,
         customTime: draft.customTime || null,
-        repeat: draft.repeatPattern || null,
-        repeatPattern: draft.repeatPattern || null,
+        repeat: repeatLabel,
+        repeatPattern: draft.repeatPattern || 'none',
+        recurrenceEndDate: draft.recurrenceEndDate || null,
+        repeatDays: draft.repeatDays || [],
         checkpointsCount: cleanedCheckpoints.length,
         checkpoints: cleanedCheckpoints.length > 0 ? cleanedCheckpoints.map((c) => c.title) : [],
         attachmentsCount: draft.attachmentsCount || 0,
@@ -1987,6 +2009,10 @@ function getIntentSlots(intentKey, draft = {}) {
   }
   activeFields.push('priorityDays');
   activeFields.push('repeatPattern');
+  if (draft.repeatPattern === 'daily') {
+    activeFields.push('repeatDays');
+    activeFields.push('recurrenceEndDate');
+  }
   activeFields.push('checkpoints');
   activeFields.push('attachments');
 

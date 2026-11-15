@@ -137,8 +137,10 @@ function mergeDraft(previous = {}, extracted = {}, deterministic = {}, rawMessag
 
   const priorityDays = det.priorityDays || ext.priorityDays || prev.priorityDays || null;
   const repeatPattern = det.repeatPattern || ext.repeatPattern || prev.repeatPattern || null;
-  const repeatDays = ext.repeatDays || prev.repeatDays || [];
-  const recurrenceEndDate = ext.recurrenceEndDate || prev.recurrenceEndDate || null;
+  const repeatDays = (Array.isArray(det.repeatDays) && det.repeatDays.length > 0)
+    ? det.repeatDays
+    : ((Array.isArray(ext.repeatDays) && ext.repeatDays.length > 0) ? ext.repeatDays : (prev.repeatDays || []));
+  const recurrenceEndDate = det.recurrenceEndDate || ext.recurrenceEndDate || prev.recurrenceEndDate || null;
 
   // Assignee: never overwrite a resolved assigneeId with null from a subsequent merge/turn
   let assigneeName = prev.assigneeName || null;
@@ -147,7 +149,7 @@ function mergeDraft(previous = {}, extracted = {}, deterministic = {}, rawMessag
 
   const isExplicitAssignCommand = /\b(?:assign\s+to|kisi\s+aur\s+ko|others?\s+ko|ko\s+assign\s+karo)\b/i.test(rawMessage);
   const isPersonalTask = prev.intent === 'self_task' || prev.taskFor === 'self';
-  const isAnsweringNonAssigneeField = Boolean(lastAskedField && ['dueDateTime', 'dueDate', 'description', 'title', 'priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'checkpoints', 'attachments', 'file'].includes(lastAskedField));
+  const isAnsweringNonAssigneeField = Boolean(lastAskedField && ['dueDateTime', 'dueDate', 'description', 'title', 'priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'repeatDays', 'recurrenceEndDate', 'checkpoints', 'attachments', 'file'].includes(lastAskedField));
   const shouldIgnoreExtractedAssignee = (isPersonalTask && !isExplicitAssignCommand) || (isAnsweringNonAssigneeField && !isExplicitAssignCommand);
 
   const rawExtAssignee = shouldIgnoreExtractedAssignee ? null : (ext.assigneeName || det.assigneeName);

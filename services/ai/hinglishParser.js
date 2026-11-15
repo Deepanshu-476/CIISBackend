@@ -1154,10 +1154,63 @@ function parseHinglishSlots(rawText, now = new Date(), referenceDate = null) {
   }
 
   // 5. Repeat Extraction
-  if (/\b(repeat\s+roz|daily|har\s+roz|har\s+din)\b/i.test(normalized)) {
-    slots.repeatPattern = 'daily';
-  } else if (/\b(no\s+repeat|repeat\s+nahi|nahi\s+karna)\b/i.test(normalized)) {
+  if (/\b(no\s+repeat|repeat\s+nahi|nahi\s+karna|don't\s+repeat|none)\b/i.test(normalized)) {
     slots.repeatPattern = 'none';
+  } else if (/\b(repeat|dohrana|daily|roz|har\s+din|har\s+roz|weekdays|som\s*se\s*shukr)\b/i.test(normalized)) {
+    slots.repeatPattern = 'daily';
+  }
+
+  // Repeat Days Extraction
+  if (/\b(weekdays|som\s*(?:se|-)\s*shukr|somvaar\s*se\s*shukravaar|mon\s*(?:to|-)\s*fri)\b/i.test(normalized)) {
+    slots.repeatDays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
+    if (!slots.repeatPattern) slots.repeatPattern = 'daily';
+  } else if (/\b(har\s+din|all\s+7\s+days|every\s+day|all\s+days|saaton\s+din)\b/i.test(normalized)) {
+    slots.repeatDays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+    if (!slots.repeatPattern) slots.repeatPattern = 'daily';
+  } else {
+    const days = [];
+    if (/\b(monday|somvaar|somwar|som)\b/i.test(normalized)) days.push('monday');
+    if (/\b(tuesday|mangalvaar|mangalwar|mangal)\b/i.test(normalized)) days.push('tuesday');
+    if (/\b(wednesday|budhvaar|budhwar|budh)\b/i.test(normalized)) days.push('wednesday');
+    if (/\b(thursday|guruvaar|guruwar|guru|veervaar)\b/i.test(normalized)) days.push('thursday');
+    if (/\b(friday|shukravaar|shukrawar|shukr)\b/i.test(normalized)) days.push('friday');
+    if (/\b(saturday|shanivaar|shaniwar|shani)\b/i.test(normalized)) days.push('saturday');
+    if (/\b(sunday|ravivaar|raviwar|ravi|itvaar|itwar)\b/i.test(normalized)) days.push('sunday');
+    if (days.length > 0) {
+      slots.repeatDays = days;
+      if (!slots.repeatPattern) slots.repeatPattern = 'daily';
+    }
+  }
+
+  // Recurrence End Date Extraction
+  const baseTime = (now instanceof Date && !isNaN(now.getTime())) ? now : new Date();
+  const monthMatch = normalized.match(/\b(\d+)\s*(?:mahine|mahina|months?)\s*(?:tak)?\b/i);
+  const yearMatch = normalized.match(/\b(?:1|ek)\s*(?:saal|year)\s*(?:tak)?\b/i);
+  if (monthMatch && monthMatch[1]) {
+    const months = parseInt(monthMatch[1], 10);
+    const d = new Date(baseTime.getTime() + months * 30 * 24 * 60 * 60 * 1000);
+    slots.recurrenceEndDate = d.toISOString().slice(0, 10) + 'T23:59:59.999Z';
+    if (!slots.repeatPattern) slots.repeatPattern = 'daily';
+  } else if (yearMatch) {
+    const d = new Date(baseTime.getTime() + 365 * 24 * 60 * 60 * 1000);
+    slots.recurrenceEndDate = d.toISOString().slice(0, 10) + 'T23:59:59.999Z';
+    if (!slots.repeatPattern) slots.repeatPattern = 'daily';
+  } else if (normalized.includes('+1month')) {
+    const d = new Date(baseTime.getTime() + 30 * 24 * 60 * 60 * 1000);
+    slots.recurrenceEndDate = d.toISOString().slice(0, 10) + 'T23:59:59.999Z';
+    if (!slots.repeatPattern) slots.repeatPattern = 'daily';
+  } else if (normalized.includes('+3months')) {
+    const d = new Date(baseTime.getTime() + 90 * 24 * 60 * 60 * 1000);
+    slots.recurrenceEndDate = d.toISOString().slice(0, 10) + 'T23:59:59.999Z';
+    if (!slots.repeatPattern) slots.repeatPattern = 'daily';
+  } else if (normalized.includes('+6months')) {
+    const d = new Date(baseTime.getTime() + 180 * 24 * 60 * 60 * 1000);
+    slots.recurrenceEndDate = d.toISOString().slice(0, 10) + 'T23:59:59.999Z';
+    if (!slots.repeatPattern) slots.repeatPattern = 'daily';
+  } else if (normalized.includes('+1year')) {
+    const d = new Date(baseTime.getTime() + 365 * 24 * 60 * 60 * 1000);
+    slots.recurrenceEndDate = d.toISOString().slice(0, 10) + 'T23:59:59.999Z';
+    if (!slots.repeatPattern) slots.repeatPattern = 'daily';
   }
 
   // 6. Checkpoints Extraction
