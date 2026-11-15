@@ -3042,12 +3042,26 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
     return ALL_INTENTS;
   }
 
+  const flattenItems = (items) => {
+    const res = [];
+    if (!Array.isArray(items)) return res;
+    items.forEach((item) => {
+      if (!item) return;
+      res.push(item);
+      if (Array.isArray(item.children)) res.push(...flattenItems(item.children));
+      if (Array.isArray(item.subItems)) res.push(...flattenItems(item.subItems));
+      if (Array.isArray(item.subMenu)) res.push(...flattenItems(item.subMenu));
+      if (Array.isArray(item.items)) res.push(...flattenItems(item.items));
+    });
+    return res;
+  };
+
   const userPerms = [
     ...(Array.isArray(user?.allowedPages) ? user.allowedPages : []),
     ...(Array.isArray(user?.pagePermissions) ? user.pagePermissions : []),
     ...(Array.isArray(user?.permissions) ? user.permissions : []),
-    ...(Array.isArray(deps?.sidebarMenuItems) ? deps.sidebarMenuItems : []),
-    ...(Array.isArray(deps?.menuItems) ? deps.menuItems : []),
+    ...flattenItems(deps?.sidebarMenuItems),
+    ...flattenItems(deps?.menuItems),
   ];
 
   const hasExplicitRestrictions = Boolean(
@@ -3149,15 +3163,8 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
   }
 
   if (Array.isArray(deps.allowedIntents) && deps.allowedIntents.length > 0) {
-    if (deps.allowedIntents.includes('create_client_task') && !allowed.includes('create_client_task')) {
-      allowed.push('create_client_task');
-    }
-    const valid = new Set(allowed);
-    const result = deps.allowedIntents.filter((i) => valid.has(i));
-    if (allowed.includes('create_client_task') && !result.includes('create_client_task')) {
-      result.push('create_client_task');
-    }
-    return result;
+    const merged = new Set([...allowed, ...deps.allowedIntents.filter((i) => ALL_INTENTS.includes(i))]);
+    return ALL_INTENTS.filter((i) => merged.has(i));
   }
 
   return allowed;
@@ -3417,13 +3424,42 @@ async function parseTaskRequest({
   if (sidebarMenuItems.length === 0 && (deps.SidebarConfig || (mongoose && mongoose.connection && mongoose.connection.readyState === 1))) {
     try {
       const SCModel = deps.SidebarConfig || (mongoose && mongoose.models && mongoose.models.SidebarConfig) || SidebarConfig;
-      const roleId = req?.user?.jobRole?._id || req?.user?.jobRole || req?.user?.role;
       const compId = req?.user?.company?._id || req?.user?.company || req?.user?.companyId;
-      if (SCModel && compId && roleId) {
-        const scDoc = await SCModel.findOne({ companyId: compId, role: String(roleId) }).lean();
-        if (scDoc && Array.isArray(scDoc.menuItems)) {
-          sidebarMenuItems = scDoc.menuItems;
+      const branchId = req?.user?.branch?._id || req?.user?.branch || req?.user?.branchId;
+      const departmentId = req?.user?.department?._id || req?.user?.department || req?.user?.departmentId;
+      const role = req?.user?.jobRoleId || req?.user?.jobRole || req?.user?.jobRoleName || req?.user?.companyRole || req?.user?.role;
+
+      let scDoc = null;
+      try {
+        const { findSidebarConfig } = require('../../routes/sidebarConfigs');
+        if (typeof findSidebarConfig === 'function' && compId && role) {
+          scDoc = await findSidebarConfig({
+            companyId: compId,
+            branchId,
+            departmentId,
+            role
+          });
         }
+      } catch (_) {}
+
+      if (!scDoc && SCModel && compId) {
+        const candidateRoles = [
+          req?.user?.jobRoleId,
+          req?.user?.jobRole,
+          req?.user?.jobRoleName,
+          req?.user?.companyRole,
+          req?.user?.role
+        ].filter(Boolean).map(String);
+        if (candidateRoles.length > 0) {
+          scDoc = await SCModel.findOne({
+            companyId: compId,
+            role: { $in: candidateRoles }
+          }).sort({ updatedAt: -1 }).lean();
+        }
+      }
+
+      if (scDoc && Array.isArray(scDoc.menuItems)) {
+        sidebarMenuItems = scDoc.menuItems;
       }
     } catch (err) {
       // Ignore DB lookup error
@@ -5381,8 +5417,8 @@ const lastAskedField = currentDraft.asked.length > 0
           : (currentDraft.intent === 'create_client'
             ? ['email', 'phone', 'industry', 'gst', 'pan', 'website', 'address', 'state', 'country', 'pincode', 'description', 'notes', 'more_details']
             : (currentDraft.intent === 'self_task'
-              ? (currentDraft.description ? ['priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'checkpoints', 'attachments', 'file'] : ['priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'checkpoints', 'attachments', 'file'])
-              : ['description', 'priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'checkpoints', 'attachments', 'file']));
+              ? (currentDraft.description ? ['priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'repeatDays', 'recurrenceEndDate', 'checkpoints', 'attachments', 'file'] : ['priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'repeatDays', 'recurrenceEndDate', 'checkpoints', 'attachments', 'file'])
+              : ['description', 'priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'repeatDays', 'recurrenceEndDate', 'checkpoints', 'attachments', 'file']));
         if (currentDraft.intent === 'create_client') {
           currentDraft.moreDetailsDone = true;
         }
@@ -5405,6 +5441,20 @@ const lastAskedField = currentDraft.asked.length > 0
             if (fieldKey === 'reminder') currentDraft.reminder = false;
             if (fieldKey === 'priorityDays') currentDraft.priorityDays = '1';
             if (fieldKey === 'repeatPattern') currentDraft.repeatPattern = 'none';
+            if (fieldKey === 'repeatDays') {
+              currentDraft.repeatDays = currentDraft.repeatPattern === 'daily'
+                ? ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+                : [];
+            }
+            if (fieldKey === 'recurrenceEndDate') {
+              if (currentDraft.repeatPattern === 'daily') {
+                const baseDue = currentDraft.dueDateTime ? new Date(currentDraft.dueDateTime) : new Date();
+                const end = new Date(baseDue.getTime() + 30 * 24 * 60 * 60 * 1000);
+                currentDraft.recurrenceEndDate = end.toISOString().slice(0, 10) + 'T23:59:59.999Z';
+              } else {
+                currentDraft.recurrenceEndDate = null;
+              }
+            }
             if (fieldKey === 'checkpoints') currentDraft.checkpoints = [];
             if (fieldKey === 'attachments' || fieldKey === 'file') {
               currentDraft.attachmentsCount = 0;
@@ -8252,8 +8302,8 @@ const lastAskedField = currentDraft.asked.length > 0
           : (currentDraft.intent === 'create_client'
             ? ['email', 'phone', 'industry', 'gst', 'pan', 'website', 'address', 'state', 'country', 'pincode', 'description', 'notes', 'more_details']
             : (currentDraft.intent === 'self_task'
-              ? (currentDraft.description ? ['priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'checkpoints', 'attachments', 'file', 'pdfFile'] : ['priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'checkpoints', 'attachments', 'file', 'pdfFile'])
-              : ['description', 'priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'checkpoints', 'attachments', 'file', 'pdfFile']));
+              ? (currentDraft.description ? ['priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'repeatDays', 'recurrenceEndDate', 'checkpoints', 'attachments', 'file', 'pdfFile'] : ['priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'repeatDays', 'recurrenceEndDate', 'checkpoints', 'attachments', 'file', 'pdfFile'])
+              : ['description', 'priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'repeatDays', 'recurrenceEndDate', 'checkpoints', 'attachments', 'file', 'pdfFile']));
         if (currentDraft.intent === 'create_client') {
           currentDraft.moreDetailsDone = true;
         }
@@ -8266,6 +8316,20 @@ const lastAskedField = currentDraft.asked.length > 0
             if (fieldKey === 'reminder') currentDraft.reminder = false;
             if (fieldKey === 'priorityDays') currentDraft.priorityDays = '1';
             if (fieldKey === 'repeatPattern') currentDraft.repeatPattern = 'none';
+            if (fieldKey === 'repeatDays') {
+              currentDraft.repeatDays = currentDraft.repeatPattern === 'daily'
+                ? ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+                : [];
+            }
+            if (fieldKey === 'recurrenceEndDate') {
+              if (currentDraft.repeatPattern === 'daily') {
+                const baseDue = currentDraft.dueDateTime ? new Date(currentDraft.dueDateTime) : new Date();
+                const end = new Date(baseDue.getTime() + 30 * 24 * 60 * 60 * 1000);
+                currentDraft.recurrenceEndDate = end.toISOString().slice(0, 10) + 'T23:59:59.999Z';
+              } else {
+                currentDraft.recurrenceEndDate = null;
+              }
+            }
             if (fieldKey === 'checkpoints') currentDraft.checkpoints = [];
             if (fieldKey === 'attachments' || fieldKey === 'file' || fieldKey === 'pdfFile') {
               currentDraft.attachmentsCount = 0;
@@ -8610,8 +8674,8 @@ const lastAskedField = currentDraft.asked.length > 0
         // Apply intent AFTER extraction (when message contains both extraction AND intent)
         if (detectedIntent?.type === 'skip_all' || isSkipAll(trimmedMessage)) {
           const allOptional = (currentDraft.intent === 'self_task' && (!currentDraft.description || !String(currentDraft.description).trim()))
-            ? ['priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'checkpoints', 'attachments', 'file', 'pdfFile']
-            : ['description', 'priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'checkpoints', 'attachments', 'file', 'pdfFile'];
+            ? ['priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'repeatDays', 'recurrenceEndDate', 'checkpoints', 'attachments', 'file', 'pdfFile']
+            : ['description', 'priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'repeatDays', 'recurrenceEndDate', 'checkpoints', 'attachments', 'file', 'pdfFile'];
           allOptional.forEach((fieldKey) => {
             if (!currentDraft.skipped.includes(fieldKey)) currentDraft.skipped.push(fieldKey);
             if (currentDraft[fieldKey] === null || currentDraft[fieldKey] === undefined) {
@@ -8621,6 +8685,20 @@ const lastAskedField = currentDraft.asked.length > 0
               if (fieldKey === 'reminder') currentDraft.reminder = false;
               if (fieldKey === 'priorityDays') currentDraft.priorityDays = '1';
               if (fieldKey === 'repeatPattern') currentDraft.repeatPattern = 'none';
+              if (fieldKey === 'repeatDays') {
+                currentDraft.repeatDays = currentDraft.repeatPattern === 'daily'
+                  ? ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+                  : [];
+              }
+              if (fieldKey === 'recurrenceEndDate') {
+                if (currentDraft.repeatPattern === 'daily') {
+                  const baseDue = currentDraft.dueDateTime ? new Date(currentDraft.dueDateTime) : new Date();
+                  const end = new Date(baseDue.getTime() + 30 * 24 * 60 * 60 * 1000);
+                  currentDraft.recurrenceEndDate = end.toISOString().slice(0, 10) + 'T23:59:59.999Z';
+                } else {
+                  currentDraft.recurrenceEndDate = null;
+                }
+              }
               if (fieldKey === 'checkpoints') currentDraft.checkpoints = [];
               if (fieldKey === 'attachments') currentDraft.attachmentsCount = 0;
               if (fieldKey === 'file') currentDraft.file = null;
@@ -9766,6 +9844,16 @@ const lastAskedField = currentDraft.asked.length > 0
         nextFieldKey = fieldKey;
         break;
       }
+    } else if (fieldKey === 'repeatDays') {
+      if (currentDraft.repeatPattern === 'daily' && (!Array.isArray(currentDraft.repeatDays) || currentDraft.repeatDays.length === 0) && !currentDraft.asked.includes('repeatDays') && !currentDraft.skipped.includes('repeatDays')) {
+        nextFieldKey = fieldKey;
+        break;
+      }
+    } else if (fieldKey === 'recurrenceEndDate') {
+      if (currentDraft.repeatPattern === 'daily' && !currentDraft.recurrenceEndDate && !currentDraft.asked.includes('recurrenceEndDate') && !currentDraft.skipped.includes('recurrenceEndDate')) {
+        nextFieldKey = fieldKey;
+        break;
+      }
     } else if (fieldKey === 'checkpoints') {
       if (!currentDraft.asked.includes('checkpoints') && (!currentDraft.checkpoints || currentDraft.checkpoints.length === 0)) {
         nextFieldKey = fieldKey;
@@ -9820,6 +9908,10 @@ const lastAskedField = currentDraft.asked.length > 0
     } else if (f === 'serviceTasks' && (currentDraft.serviceTasksDone || currentDraft.serviceTasksSkipped)) {
       done += 1;
     } else if (f === 'repeatPattern' && currentDraft.repeatPattern) {
+      done += 1;
+    } else if (f === 'repeatDays' && (currentDraft.repeatPattern !== 'daily' || (Array.isArray(currentDraft.repeatDays) && currentDraft.repeatDays.length > 0) || currentDraft.asked.includes('repeatDays'))) {
+      done += 1;
+    } else if (f === 'recurrenceEndDate' && (currentDraft.repeatPattern !== 'daily' || currentDraft.recurrenceEndDate || currentDraft.asked.includes('recurrenceEndDate'))) {
       done += 1;
     } else if (f === 'checkpoints' && (currentDraft.asked.includes('checkpoints') || (currentDraft.checkpoints && currentDraft.checkpoints.length > 0))) {
       done += 1;
@@ -9883,6 +9975,15 @@ const lastAskedField = currentDraft.asked.length > 0
     } else if (nextFieldKey === 'reminder') {
       defaultEnReply = 'Would you like to set a reminder? (Yes or No)';
       defaultEnSpeech = 'Would you like to set a reminder?';
+    } else if (nextFieldKey === 'repeatPattern') {
+      defaultEnReply = 'Should this task repeat? (No repeat / Repeat daily)';
+      defaultEnSpeech = 'Should this task repeat?';
+    } else if (nextFieldKey === 'repeatDays') {
+      defaultEnReply = 'Which days should the task repeat? Select weekdays (e.g. "Every day", "Mon-Fri" or specific days):';
+      defaultEnSpeech = 'Which days should the task repeat? Select weekdays below.';
+    } else if (nextFieldKey === 'recurrenceEndDate') {
+      defaultEnReply = 'Until when should this task repeat? Specify Repeat End Date (e.g. "1 month", "3 months" or date):';
+      defaultEnSpeech = 'Until when should this task repeat? Specify repeat end date.';
     } else if (nextFieldKey === 'checkpoints') {
       defaultEnReply = 'Would you like to add checkpoints? You can list them separated by commas (e.g. "test 1, checking crm, testing") or tap Skip:';
       defaultEnSpeech = 'Would you like to add checkpoints? You can list them separated by commas or tap Skip.';
@@ -10837,6 +10938,16 @@ const lastAskedField = currentDraft.asked.length > 0
   }
 
   // All fields are handled -> Status: READY
+  if (currentDraft.repeatPattern === 'daily') {
+    if (!currentDraft.recurrenceEndDate) {
+      const baseDue = currentDraft.dueDateTime ? new Date(currentDraft.dueDateTime) : new Date();
+      const end = new Date(baseDue.getTime() + 30 * 24 * 60 * 60 * 1000);
+      currentDraft.recurrenceEndDate = end.toISOString().slice(0, 10) + 'T23:59:59.999Z';
+    }
+    if (!Array.isArray(currentDraft.repeatDays) || currentDraft.repeatDays.length === 0) {
+      currentDraft.repeatDays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+    }
+  }
   const cleanedCheckpoints = getCleanCheckpoints(currentDraft.checkpoints);
   const isFinalOthers = Boolean(
     (currentDraft.assigneeId || (Array.isArray(currentDraft.assignedUsers) && currentDraft.assignedUsers.length > 0)) &&

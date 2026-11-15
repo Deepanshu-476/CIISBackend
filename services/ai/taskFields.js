@@ -19,6 +19,8 @@ const TASK_FIELD_ORDER = [
   'reminderOption',
   'priorityDays',
   'repeatPattern',
+  'repeatDays',
+  'recurrenceEndDate',
   'checkpoints',
   'attachments',
 ];
@@ -476,11 +478,13 @@ const TASK_FIELDS = {
     chips: () => [
       { label: 'No repeat', action: { type: 'set', field: 'repeatPattern', value: 'none' } },
       { label: 'Repeat Task (Daily)', action: { type: 'set', field: 'repeatPattern', value: 'daily' } },
+      { label: 'Som-Shukr (Mon-Fri)', action: { type: 'set', field: 'repeatPattern', value: 'daily' } },
       { label: 'Baaki sab default', action: { type: 'skip_all' } },
     ],
     reAskChips: () => [
       { label: 'No repeat', action: { type: 'set', field: 'repeatPattern', value: 'none' } },
       { label: 'Repeat Task (Daily)', action: { type: 'set', field: 'repeatPattern', value: 'daily' } },
+      { label: 'Som-Shukr (Mon-Fri)', action: { type: 'set', field: 'repeatPattern', value: 'daily' } },
       { label: 'Baaki sab default', action: { type: 'skip_all' } },
     ],
     default: 'none',
@@ -490,6 +494,80 @@ const TASK_FIELDS = {
       return 'none';
     },
     normalise: (val) => (val === 'daily' ? 'daily' : 'none'),
+  },
+
+  repeatDays: {
+    key: 'repeatDays',
+    required: false,
+    askOrder: 9.1,
+    question: {
+      reply: 'Task kin dino repeat hona chahiye? Weekdays chunein (jaise "Har din", "Som-Shukr" ya specific din):',
+      replyEn: 'Which days should the task repeat? Select weekdays (e.g. "Every day", "Mon-Fri" or specific days):',
+      speech: 'टास्क किन दिनों रिपीट होना चाहिए? नीचे विकल्प चुनें।',
+      speechEn: 'Which days should the task repeat? Select weekdays below.',
+      speakText: 'Task kin dino repeat hona chahiye? Weekdays chunein.',
+      speakTextHi: 'Task किन दिनों repeat होना चाहिए? Weekdays चुनें।',
+    },
+    reAskQuestion: {
+      reply: 'Weekdays chunein ya "All Days (Default)" dabayein:',
+      replyEn: 'Please choose weekdays or tap "All Days (Default)":',
+      speech: 'दिन चुनें या ऑल डेज़ दबाएं।',
+      speechEn: 'Please choose weekdays or tap "All Days".',
+      speakText: 'Weekdays chunein ya All Days dabayein.',
+      speakTextHi: 'Weekdays चुनें या All Days दबाएं।',
+    },
+    chips: () => [
+      { label: 'Har din (All 7 days)', action: { type: 'set', field: 'repeatDays', value: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] } },
+      { label: 'Som-Shukr (Mon-Fri / Weekdays)', action: { type: 'set', field: 'repeatDays', value: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'] } },
+      { label: 'Som, Budh, Shukr (Mon, Wed, Fri)', action: { type: 'set', field: 'repeatDays', value: ['monday', 'wednesday', 'friday'] } },
+      { label: 'All Days (Default)', action: { type: 'skip', field: 'repeatDays' } },
+    ],
+    reAskChips: () => [
+      { label: 'Har din (All 7 days)', action: { type: 'set', field: 'repeatDays', value: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] } },
+      { label: 'Som-Shukr (Mon-Fri / Weekdays)', action: { type: 'set', field: 'repeatDays', value: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'] } },
+      { label: 'Som, Budh, Shukr (Mon, Wed, Fri)', action: { type: 'set', field: 'repeatDays', value: ['monday', 'wednesday', 'friday'] } },
+      { label: 'All Days (Default)', action: { type: 'skip', field: 'repeatDays' } },
+    ],
+    default: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
+    parse: (val) => (Array.isArray(val) ? val : []),
+    normalise: (val) => (Array.isArray(val) ? val : []),
+  },
+
+  recurrenceEndDate: {
+    key: 'recurrenceEndDate',
+    required: false,
+    askOrder: 9.2,
+    question: {
+      reply: 'Repeat kab tak chalega? Repeat End Date batayein (jaise "1 mahine tak", "3 mahine tak" ya date):',
+      replyEn: 'Until when should this task repeat? Specify Repeat End Date (e.g. "1 month", "3 months" or date):',
+      speech: 'टास्क कब तक रिपीट होगा? रिपीट एंड डेट बताएं।',
+      speechEn: 'Until when should this task repeat? Specify repeat end date.',
+      speakText: 'Repeat kab tak chalega? End Date batayein.',
+      speakTextHi: 'Repeat कब तक चलेगा? End Date बताएं।',
+    },
+    reAskQuestion: {
+      reply: 'Repeat End Date chunein (jaise "1 mahine tak", "3 mahine tak" ya date):',
+      replyEn: 'Please choose Repeat End Date (e.g. "1 month", "3 months" or date):',
+      speech: 'रिपीट एंड डेट चुनें।',
+      speechEn: 'Please choose repeat end date.',
+      speakText: 'Repeat End Date chunein.',
+      speakTextHi: 'Repeat End Date चुनें।',
+    },
+    chips: () => [
+      { label: '1 mahine tak / 1 Month', action: { type: 'set', field: 'recurrenceEndDate', value: '+1month' } },
+      { label: '3 mahine tak / 3 Months', action: { type: 'set', field: 'recurrenceEndDate', value: '+3months' } },
+      { label: '6 mahine tak / 6 Months', action: { type: 'set', field: 'recurrenceEndDate', value: '+6months' } },
+      { label: 'Saal ke aakhri tak / 1 Year', action: { type: 'set', field: 'recurrenceEndDate', value: '+1year' } },
+    ],
+    reAskChips: () => [
+      { label: '1 mahine tak / 1 Month', action: { type: 'set', field: 'recurrenceEndDate', value: '+1month' } },
+      { label: '3 mahine tak / 3 Months', action: { type: 'set', field: 'recurrenceEndDate', value: '+3months' } },
+      { label: '6 mahine tak / 6 Months', action: { type: 'set', field: 'recurrenceEndDate', value: '+6months' } },
+      { label: 'Saal ke aakhri tak / 1 Year', action: { type: 'set', field: 'recurrenceEndDate', value: '+1year' } },
+    ],
+    default: null,
+    parse: (val) => String(val || ''),
+    normalise: (val) => String(val || ''),
   },
 
   checkpoints: {
