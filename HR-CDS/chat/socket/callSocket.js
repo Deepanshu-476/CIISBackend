@@ -163,7 +163,7 @@ const closeCallRoom = async (callId, ioInstance = null) => {
         room.finishedAt = Date.now();
         callHistory.recordCallFinished(room);
     }
-    await callStore.remove(callId);
+    await callStore.remove(callId, Object.keys(room.participants || {}));
     Object.keys(room.participants || {}).forEach(userId => {
         getIo(ioInstance)?.to(`user:${userId}`).emit("call:rejoin-closed", { callId: room.callId });
     });
@@ -206,7 +206,25 @@ const broadcastRoster = (io, room) => {
         callId: room.callId,
         hostUserId: room.hostUserId,
         participants: rosterOf(room),
+        screenShareUserId: room.screenShareUserId ? String(room.screenShareUserId) : null,
     });
+};
+// Google-Meet-style screen share: one person's screen is the stage, the cameras shrink. The room
+// remembers who that is so people who join (or reconnect) mid-share see the same stage.
+const clearScreenShare = (room, userId) => {
+    if (!room || !room.screenShareUserId) return false;
+    if (String(room.screenShareUserId) !== String(userId)) return false;
+    room.screenShareUserId = null;
+    return true;
+};
+const broadcastScreenShare = (io, room, userId, sharing) => {
+    if (!room?.callId) return;
+    emitToJoinedParticipants(io, room, "call:screen-share", {
+        callId: room.callId,
+        userId: String(userId),
+        sharing: Boolean(sharing),
+        screenShareUserId: room.screenShareUserId ? String(room.screenShareUserId) : null,
+    }, null);
 };
 const emitCallNotice = (io, room, notice) => {
     if (!room?.callId) return;
@@ -238,6 +256,7 @@ const scheduleInviteTimeout = (io, callId, userId, expiresAt) => {
             const room = await callStore.get(callId);
             const participant = room?.participants?.[userId];
             if (!room || participant?.status !== "invited") return;
+            await callStore.releaseAnswer(callId, userId);
             room.participants[userId] = { ...participant, status: "missed" };
             await callStore.save(room);
             clearCallPush([userId], callId);
@@ -507,6 +526,7 @@ const callSocket = (io, socket) => {
                 title: room.title,
                 isGroupCall: Boolean(room.isGroupCall),
                 answeredAt: room.answeredAt,
+                screenShareUserId: room.screenShareUserId ? String(room.screenShareUserId) : null,
             });
             // Notify already-joined participants
             emitToJoinedParticipants(io, room, "call:participant-joined", {
@@ -661,6 +681,7 @@ const callSocket = (io, socket) => {
                     fromUserId: socket.userId,
                 });
             }
+            await callStore.releaseAnswer(callId, socket.userId);
             room.participants[socket.userId] = {
                 ...myParticipant,
                 status: "rejected",
@@ -683,6 +704,30 @@ const callSocket = (io, socket) => {
                 });
             }
             await maybeCloseRoom(callId, io);
+        });
+    });
+    // Someone started or stopped sharing their screen. Everyone else switches to the shared screen
+    // as the stage and shrinks the camera tiles.
+    socket.on("call:screen-share", async (data = {}) => {
+        const callId = data.callId?.toString();
+        if (!callId) return;
+        const sharing = Boolean(data.sharing);
+        await callStore.withCallLock(callId, async () => {
+            const room = await callStore.get(callId);
+            const me = room?.participants?.[socket.userId];
+            if (!room || me?.status !== "joined") return;
+            if (sharing) {
+                room.screenShareUserId = String(socket.userId);
+            } else if (!clearScreenShare(room, socket.userId)) {
+                return;   // nobody stops someone else's share
+            }
+            await callStore.save(room);
+            broadcastScreenShare(io, room, socket.userId, sharing);
+            emitCallNotice(io, room, {
+                type: sharing ? "screen-share-started" : "screen-share-stopped",
+                targetUserId: socket.userId,
+                text: `${getPublicUser(socket.user)?.name || "Someone"} ${sharing ? "started" : "stopped"} sharing their screen`,
+            });
         });
     });
     socket.on("call:rebind", async (data = {}) => {
@@ -735,12 +780,17 @@ const callSocket = (io, socket) => {
                 return;
             }
             clearCallPush([socket.userId], callId);
+            // Leaving frees the answer claim, so "Call again" on this same call can ring and be
+            // picked up again instead of looking like it was answered on another device.
+            await callStore.releaseAnswer(callId, socket.userId);
+            const stoppedScreenShare = clearScreenShare(room, socket.userId);
             room.participants[socket.userId] = {
                 ...myParticipant,
                 status: "ended",
                 user: getPublicUser(socket.user),
             };
             await callStore.save(room);
+            if (stoppedScreenShare) broadcastScreenShare(io, room, socket.userId, false);
             // In a 1-to-1 call, either user ending the call terminates it for both
             if (!room.isGroupCall) {
                 emitToCallParticipants(io, room, "call:ended", {
@@ -805,6 +855,8 @@ const callSocket = (io, socket) => {
             const remover = getPublicUser(socket.user) || {};
             const targetName = nameOf(room, targetUserId);
             clearTimeout(invitedTimers.get(`${callId}:${targetUserId}`));
+            await callStore.releaseAnswer(callId, targetUserId);
+            const removedWasSharing = clearScreenShare(room, targetUserId);
             room.participants[targetUserId] = {
                 ...target,
                 status: "removed",
@@ -812,6 +864,7 @@ const callSocket = (io, socket) => {
                 removedByName: remover.name || "",
             };
             await callStore.save(room);
+            if (removedWasSharing) broadcastScreenShare(io, room, targetUserId, false);
             clearCallPush([targetUserId], callId);
             // The removed person's devices end the call (ringing ones stop ringing).
             io.to(`user:${targetUserId}`).emit("call:removed", {
@@ -837,7 +890,12 @@ const callSocket = (io, socket) => {
     socket.on("call:get-roster", async (data = {}, callback) => {
         const room = await callStore.get(data.callId?.toString());
         const payload = room?.participants?.[socket.userId]
-            ? { callId: room.callId, hostUserId: room.hostUserId, participants: rosterOf(room) }
+            ? {
+                callId: room.callId,
+                hostUserId: room.hostUserId,
+                participants: rosterOf(room),
+                screenShareUserId: room.screenShareUserId ? String(room.screenShareUserId) : null,
+            }
             : null;
         if (typeof callback === "function") callback(payload);
         else if (payload) socket.emit("call:roster", payload);
@@ -929,6 +987,7 @@ const callSocket = (io, socket) => {
                 isGroupCall: Boolean(room.isGroupCall),
                 answeredAt: room.answeredAt,
                 conversationId: room.conversationId,
+                screenShareUserId: room.screenShareUserId ? String(room.screenShareUserId) : null,
             };
             if (typeof callback === "function") {
                 callback({ success: true, ...payload });
@@ -983,12 +1042,15 @@ const callSocket = (io, socket) => {
                                 }, socket.userId);
                                 await closeCallRoom(latestRoom.callId, io);
                             } else {
+                                await callStore.releaseAnswer(latestRoom.callId, socket.userId);
+                                const wasSharing = clearScreenShare(latestRoom, socket.userId);
                                 latestRoom.participants[socket.userId] = {
                                     ...latestP,
                                     status: "ended",
                                     user: getPublicUser(socket.user),
                                 };
                                 await callStore.save(latestRoom);
+                                if (wasSharing) broadcastScreenShare(io, latestRoom, socket.userId, false);
                                 emitToJoinedParticipants(io, latestRoom, "call:ended", {
                                     callId: latestRoom.callId,
                                     fromUserId: socket.userId,
