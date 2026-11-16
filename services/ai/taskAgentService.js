@@ -3070,10 +3070,6 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
     ...(Array.isArray(user?.allowedPages) ? user.allowedPages : []),
     ...(Array.isArray(user?.pagePermissions) ? user.pagePermissions : []),
     ...(Array.isArray(user?.permissions) ? user.permissions : []),
-    ...(Array.isArray(user?.company?.allowedPages) ? user.company.allowedPages : []),
-    ...(Array.isArray(scope?.company?.allowedPages) ? scope.company.allowedPages : []),
-    ...(Array.isArray(scope?.companyAllowedPages) ? scope.companyAllowedPages : []),
-    ...(Array.isArray(deps?.companyAllowedPages) ? deps.companyAllowedPages : []),
     ...flattenItems(deps?.sidebarMenuItems),
     ...flattenItems(deps?.menuItems),
   ];
@@ -3178,6 +3174,11 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
     normalizedPerms.has('clientplanmanagement') ||
     normalizedPerms.has('ciisuser/clientplans') ||
     normalizedPerms.has('ciisuser/client-plans') ||
+    (Array.isArray(scope?.companyAllowedPages) && scope.companyAllowedPages.some(p => {
+      const norm = String(p).toLowerCase().replace(/^\/+/, '').replace(/^ciisuser\//, '').replace(/[\s_-]+/g, '');
+      return norm === 'clientplans' || norm === 'clientplan' || norm === 'client-plans';
+    })) ||
+    (Array.isArray(deps?.allowedIntents) && deps.allowedIntents.includes('create_client_plan')) ||
     normalizedPerms.has('empclient') ||
     normalizedPerms.has('emp-client') ||
     normalizedPerms.has('clientmanagement');
