@@ -8,6 +8,13 @@ const validateRequest = require('../../middleware/validateRequest.js');
 
 router.use(authMiddleware.protect);
 
+// Branch rule: approving / deleting a leave needs its employee to be in the viewer's branches.
+const Leave = require('../models/Leave');
+const { requireRecordInBranches } = require('../../utils/branchScope');
+const leaveInBranches = requireRecordInBranches(
+  async req => (await Leave.findById(req.params.id).select('user').lean())?.user,
+  { label: 'leaves' }
+);
 
 
 router.post('/apply', 
@@ -52,13 +59,14 @@ router.post('/sync',
 router.get('/stats', leaveController.getLeaveStats);
 
 
-router.get('/all', leaveController.getAllLeaves);
+router.get('/all', require('../../middleware/pageAccess').blockClientLogins, leaveController.getAllLeaves);
 
 router.get('/approval-options/:id',
   [
     param('id').isMongoId().withMessage('Invalid leave ID format'),
     validateRequest
   ],
+  leaveInBranches,
   leaveController.getLeaveApprovalOptions
 );
 
@@ -77,6 +85,7 @@ router.patch('/status/:id',
     body('payType').optional().isIn(['Paid', 'Unpaid']).withMessage('Pay type must be Paid or Unpaid'),
     validateRequest
   ],
+  leaveInBranches,
   leaveController.updateLeaveStatus
 );
 
@@ -95,6 +104,7 @@ router.delete('/:id',
     param('id').isMongoId().withMessage('Invalid leave ID format'),
     validateRequest
   ],
+  leaveInBranches,
   leaveController.deleteLeave
 );
 
@@ -125,58 +135,5 @@ router.get('/balance', leaveController.getLeaveBalance);
 
 router.get('/export', leaveController.exportLeaves);
 
-
-router.get('/test', (req, res, next) => {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(404).json({ success: false, message: 'Not found' });
-  }
-  next();
-}, async (req, res) => {
-    try {
-      const User = require('../../models/User');
-      const Company = require('../../models/Company');
-      
-      const userCompanyId = req.user.company || req.user.companyId;
-      const userCompanyName = req.user.companyName;
-      
-      
-      const testUser = await User.findById(req.user._id).select('name email company companyId department');
-      const testCompany = await Company.findById(userCompanyId).select('companyName companyCode address');
-      
-      
-      const companyUsers = await User.find({ 
-        company: userCompanyId 
-      }).select('name email department').limit(5);
-      
-      res.status(200).json({
-        message: "Company filter test successful",
-        data: {
-          user: {
-            id: req.user._id,
-            name: req.user.name,
-            email: req.user.email,
-            companyId: userCompanyId,
-            companyName: userCompanyName,
-            department: req.user.department
-          },
-          company: testCompany || { message: "Company not found" },
-          companyUsersCount: companyUsers.length,
-          sampleCompanyUsers: companyUsers,
-          testInfo: {
-            timestamp: new Date().toISOString(),
-            endpoint: "/api/leaves/test/company-filter",
-            purpose: "Test company-based data isolation"
-          }
-        }
-      });
-    } catch (error) {
-      console.error("❌ Test route error:", error);
-      res.status(500).json({ 
-        message: "Test failed", 
-        error: error.message 
-      });
-    }
-  }
-);
 
 module.exports = router;

@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { breakPolicySchema } = require("../HR-CDS/models/breakPolicySchema");
 
 const shiftDefaults = () => ({
   shiftId: new mongoose.Types.ObjectId().toString(),
@@ -120,5 +121,8 @@ jobRoleSchema.pre('save', async function(next) {
   }
   next();
 });
+
+// How breaks work here (company → branch → department → shift, most specific wins).
+jobRoleSchema.add({ breakPolicy: { type: breakPolicySchema, default: () => ({}) } });
 
 module.exports = mongoose.model("JobRole", jobRoleSchema);

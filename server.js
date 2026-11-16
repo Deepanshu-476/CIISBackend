@@ -20,7 +20,8 @@ if (missingEnvVars.length > 0) {
 }
 
 require('./services/subscriptionReminderService');
-const { runWorkAnniversaryEmails } = require('./services/workAnniversaryService');
+// Registers the hourly work-anniversary email job.
+require('./services/workAnniversaryService');
 const { runAutoClockOutSweep } = require('./HR-CDS/cron/forceClockOut');
 const { cleanRecurringTasksForAbsentUser } = require('./HR-CDS/cron/recurringTasks');
 
@@ -159,6 +160,14 @@ const REMINDER_LABELS = {
 
 process.on('unhandledRejection', error => {
   console.error('Unhandled promise rejection:', error);
+});
+
+process.on('uncaughtException', error => {
+  console.error('Uncaught exception:', error);
+  if (error?.code === 'ECONNRESET' || error?.code === 'EPIPE' || error?.code === 'ETIMEDOUT' || isTransientMongoError(error)) {
+    console.warn('Recovered from transient connection error:', error.message);
+    return;
+  }
 });
 
 const isDbReady = () => mongoose.connection.readyState === 1;
@@ -413,7 +422,6 @@ const sendReminderForTask = async ({ task, recipients, title, taskTitle, taskTyp
 };
 
 
-
 const io = socketIo(server, {
   cors: {
     origin: (origin, callback) => {
@@ -426,7 +434,7 @@ const io = socketIo(server, {
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Permanent-Delete", "x-company-code", "companyCode", "X-Company-Code"]
+    allowedHeaders: ["Content-Type", "Authorization", "X-Permanent-Delete", "x-company-code", "companyCode", "X-Company-Code", "X-Page-Path", "X-Client-App"]
   },
   transports: ['websocket', 'polling'],
   allowEIO3: true,
@@ -443,8 +451,6 @@ const initializeSocket = require('./HR-CDS/socket/index.js');
 
 
 initializeSocket(io);
-
-
 
 
 const checkAndMarkOverdueTasks = async () => {
@@ -983,8 +989,6 @@ const markPastAbsentRecords = async () => {
 const { markDailyAbsent } = require('./HR-CDS/controllers/AttendanceController');
 
 
-
-
 const { syncOnHoldTaskOverdue } = require('./HR-CDS/utils/onHoldOverdueService');
 const { autoRejectExpiredLeaves } = require('./HR-CDS/controllers/LeaveController');
 scheduleDbJob('* * * * *', 'On hold attendance overdue check', syncOnHoldTaskOverdue);
@@ -1000,6 +1004,8 @@ scheduleDbJob('0 9 * * *', 'Daily overdue summary', dailyOverdueSummary);
 scheduleDbJob('30 10 * * *', 'Daily absent marking', markDailyAbsent);
 
 scheduleDbJob('* * * * *', 'Pending task reminders', sendConfiguredTaskReminders);
+// A break that runs past the company's cap: the admin and the employee are told once.
+scheduleDbJob('* * * * *', 'Break overstay alerts', () => require('./HR-CDS/controllers/breakController').sendOverstayAlerts());
 
 scheduleDbJob('* * * * *', 'CRM follow-up reminders', sendCrmFollowUpReminders);
 
@@ -1043,7 +1049,7 @@ const corsOptions = {
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "Cache-Control", "X-Permanent-Delete", "x-company-code", "companyCode", "X-Company-Code"],
+  allowedHeaders: ["Content-Type", "Authorization", "Cache-Control", "X-Permanent-Delete", "x-company-code", "companyCode", "X-Company-Code", "X-Page-Path", "X-Client-App"],
   exposedHeaders: ["Content-Disposition"]
 };
 
@@ -1194,8 +1200,11 @@ app.use((req, res, next) => {
   next();
 });
 
-const dashboardRoutes = require('./HR-CDS/routes/dashboardRoutes.js');
+// User Activity: every successful write by a logged-in company user is logged against the page
+// the client says it was on (X-Page-Path). Written in batches; see utils/activityTracker.js.
+app.use(require('./utils/activityTracker').trackWrites);
 
+const dashboardRoutes = require('./HR-CDS/routes/dashboardRoutes.js');
 
 
 app.use("/api/auth", require("./routes/authRoutes.js"));
@@ -1212,6 +1221,10 @@ app.use("/api/app-version", require("./routes/appVersionRoutes.js"));
 app.use("/api/attendance", require("./HR-CDS/routes/attendanceRoutes.js"));
 app.use("/api/overtime", require("./HR-CDS/routes/overtimeRoutes.js"));
 app.use("/overtime", require("./HR-CDS/routes/overtimeRoutes.js"));
+app.use("/api/week-off", require("./HR-CDS/routes/weekOffRoutes.js"));
+app.use("/week-off", require("./HR-CDS/routes/weekOffRoutes.js"));
+app.use("/api/breaks", require("./HR-CDS/routes/breakRoutes.js"));
+app.use("/breaks", require("./HR-CDS/routes/breakRoutes.js"));
 app.use("/api/leaves", require("./HR-CDS/routes/LeaveRoutes.js"));
 app.use("/api/asset-requests", require("./HR-CDS/routes/assetRequestRoutes.js"));
 // Any write that can change a task (task, project, client and client-task routes) clears the
@@ -1237,7 +1250,9 @@ app.use("/api/department", require("./routes/Department.routes.js"));
 app.use("/departments", require("./routes/Department.routes.js"));
 app.use("/department", require("./routes/Department.routes.js"));
 app.use("/api/alerts", require("./HR-CDS/routes/alertRoutes.js"));
+app.use("/api/promos", require("./HR-CDS/routes/promoRoutes.js"));
 app.use("/api/badges", require("./routes/badgeRoutes.js"));
+app.use("/api/activity", require("./routes/activityRoutes.js"));
 app.use("/api/notifications", require("./HR-CDS/routes/notificationRoutes.js"));
 app.use("/api/feedback", require("./HR-CDS/routes/feedbackRoutes.js"));
 app.use("/api/groups", require("./HR-CDS/routes/groupRoutes.js"));
@@ -1263,7 +1278,6 @@ app.use("/api/tasks", require("./HR-CDS/routes/clientTask.js"));
 app.use("/api/tasks", require("./HR-CDS/routes/taskRoute.js"));
 // Client task routes dedicated namespace
 app.use("/api/client-tasks", require("./HR-CDS/routes/clientTask.js"));
-
 
 
 app.use('/api/dashboard', dashboardRoutes);
@@ -1300,8 +1314,6 @@ app.use('/api/leave-policies', require('./routes/leavePolicyRoutes.js'));
 app.use('/api/salary-components', require('./routes/salaryComponentRoutes.js'));
 app.use('/api/salary-structures', require('./routes/salaryStructureRoutes.js'));
 app.use('/api/employee-salaries', require('./routes/employeeSalaryRoutes.js'));
-
-
 
 
 app.get("/", (req, res) => {
@@ -1389,25 +1401,6 @@ app.get("/api/manual-attendance-check", protect, restrictTo("super_admin"), sens
 });
 
 
-app.get("/api/tasks/test", (req, res) => {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(404).json({ success: false, message: 'Not found' });
-  }
-  res.json({
-    success: true,
-    message: "Tasks API is working",
-    endpoints: {
-      assignedToMe: "/api/tasks/assigned-to-me",
-      clientTasks: "/api/tasks/client/:clientId",
-      serviceTasks: "/api/tasks/client/:clientId/service/:service"
-    },
-    timestamp: new Date().toISOString()
-  });
-});
-
-
-
-
 app.use((req, res) => {
   void 0;
   res.status(404).json({
@@ -1450,19 +1443,21 @@ const startServer = async () => {
     console.error('[socket] Redis adapter failed, falling back to memory:', e.message);
   }
 
+  // Calling depends on two pieces of configuration that fail silently when they are missing: without
+  // Redis the web and app backends cannot signal to each other, and without the Coturn secret
+  // /api/chat/turn-credentials answers 503 and calls across networks never relay. Say so at boot.
+  if (!process.env.REDIS_URL) {
+    console.warn('[calls] REDIS_URL is not set: calls only work between users connected to THIS backend process (web <-> app calling will fail).');
+  }
+  if (!String(process.env.COTURN_STATIC_AUTH_SECRET || process.env.TURN_STATIC_AUTH_SECRET || '').trim()) {
+    console.warn('[calls] COTURN_STATIC_AUTH_SECRET is not set: /api/chat/turn-credentials returns 503 and calls fall back to STUN only, so calls across different networks will drop.');
+  }
+
   // Uniqueness is a prerequisite for safe concurrent group/event delivery.
   for (const model of [require('./HR-CDS/chat/models/Conversation'), require('./HR-CDS/chat/models/Message'), require('./HR-CDS/models/Notification')]) await model.createIndexes();
   require('./HR-CDS/utils/projectChatWorker').start();
 
   server.listen(PORT, async () => {
-
-    // Temporarily enabled for work-anniversary email template testing.
-    if (scheduledJobsEnabled()) try {
-      const anniversarySummary = await runWorkAnniversaryEmails();
-      console.log("Startup work anniversary test completed:", anniversarySummary);
-    } catch (err) {
-      console.error("Startup work anniversary test failed:", err);
-    }
 
     try {
       const migrateTenantIndexes = require("./utils/tenantIndexMigration");

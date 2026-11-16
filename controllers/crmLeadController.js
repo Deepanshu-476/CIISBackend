@@ -61,10 +61,11 @@ exports.options = async (req, res, next) => {
     res.json({ types, sources });
   } catch (error) { next(error); }
 };
-exports.create = async (req, res, next) => {
+// Shared by the admin Add Lead page (lead stays unassigned) and the telecaller's own Add Lead
+// (assignToSelf: the lead is assigned to the telecaller who adds it).
+const createLead = async (req, res, next, { company, assignToSelf = false }) => {
   try {
     const { data, errors } = validate(req.body);
-    const company = req.crmCompany;
     // Custom fields named by the admin are checked against their type (number, date, dropdown, required).
     const pipeline = require('./crmPipelineController');
     if (typeof pipeline.loadFieldConfig === 'function') {
@@ -95,12 +96,32 @@ exports.create = async (req, res, next) => {
       leadTypeName: type.name,
       status: 'new',
       assignedTo: null,
+      ...(assignToSelf ? {
+        assignedTo: req.user._id || req.user.id,
+        assignedToName: req.user.name || '',
+        assignedToEmail: req.user.email || '',
+        assignedToRole: req.user.role || req.user.companyRole || '',
+        assignedAt: new Date(),
+      } : {}),
       createdBy: req.user._id || req.user.id,
       createdByName: req.user.name || ''
     });
+    if (assignToSelf) {
+      try {
+        const LeadAssignmentHistory = require('../models/LeadAssignmentHistory');
+        await LeadAssignmentHistory.create({ company, lead: item._id, fromUser: null,
+          toUser: item.assignedTo, toUserName: item.assignedToName, toUserEmail: item.assignedToEmail,
+          performedBy: item.assignedTo, performedByName: item.assignedToName, performedByEmail: item.assignedToEmail,
+          action: 'assigned', method: 'single' });
+      } catch (historyError) {
+        console.error('Self-added lead assignment history failed:', historyError.message);
+      }
+    }
     res.status(201).json({ item });
   } catch (error) { next(error); }
 };
+exports.createLead = createLead;
+exports.create = (req, res, next) => createLead(req, res, next, { company: req.crmCompany });
 exports.list = async (req, res, next) => {
   try {
     if (typeof crmListQuery.isPagedRequest === 'function' && crmListQuery.isPagedRequest(req)) {

@@ -9,6 +9,24 @@ router.post('/register', protect, userController.register);
 
 router.use(protect);
 
+// Branch rule for register requests: same as the list (utils/branchScope) - a branch-limited
+// viewer may act on requests for their branches and on requests without a branch yet.
+const RegisterUser = require('../../models/User');
+const { allowedBranchIds, registerRequestBranchCondition } = require('../../utils/branchScope');
+// Editing / deleting / restoring an employee: owner/admin, or the employee is in your branches.
+const userInBranches = require('../../utils/branchScope').requireRecordInBranches(req => req.params.id, { message: 'This employee is not in your branches.' });
+const registerRequestInBranches = async (req, res, next) => {
+  try {
+    if (allowedBranchIds(req.user) === null) return next();
+    if (!require('mongoose').isValidObjectId(req.params.id)) return next();
+    const ok = await RegisterUser.exists({ _id: req.params.id, ...registerRequestBranchCondition(req.user) });
+    if (ok) return next();
+    return res.status(403).json({ success: false, message: 'This registration request belongs to another branch.' });
+  } catch (error) {
+    return next(error);
+  }
+};
+
 
 router.get('/me', userController.getMe);
 router.put('/me', userController.updateMe);
@@ -19,22 +37,19 @@ router.get('/department-users', userController.getCompanydepartmentUsers);
 router.get('/company-users', userController.getCompanyUsers);
 
 
-
-
-
-
 router.get('/all', userController.getAllUsers);
 router.get('/deleted', userController.getDeletedUsers);
 router.get('/register-requests', userController.getRegisterRequests);
-router.put('/register-requests/:id', userController.updateRegisterRequest);
-router.patch('/register-requests/:id/verify-section', userController.verifyRegisterRequestSection);
-router.patch('/register-requests/:id/activate', userController.activateRegisterRequest);
-router.patch('/register-requests/:id/status', userController.setRegisterRequestStatus);
-router.delete('/register-requests/:id', userController.rejectRegisterRequest);
-router.put('/restore/:id', userController.restoreUser);
-router.put('/admin-update/:id', userController.updateUser);
+router.get('/register-requests/count', userController.getRegisterRequestsCount);
+router.put('/register-requests/:id', registerRequestInBranches, userController.updateRegisterRequest);
+router.patch('/register-requests/:id/verify-section', registerRequestInBranches, userController.verifyRegisterRequestSection);
+router.patch('/register-requests/:id/activate', registerRequestInBranches, userController.activateRegisterRequest);
+router.patch('/register-requests/:id/status', registerRequestInBranches, userController.setRegisterRequestStatus);
+router.delete('/register-requests/:id', registerRequestInBranches, userController.rejectRegisterRequest);
+router.put('/restore/:id', userInBranches, userController.restoreUser);
+router.put('/admin-update/:id', userInBranches, userController.updateUser);
 router.put('/admin-update-by-email', userController.updateUser);
-router.delete('/:id', userController.deleteUser);
+router.delete('/:id', userInBranches, userController.deleteUser);
 router.get('/:id/groups', require('../controllers/groupController').getUserGroups);
 
 
@@ -42,154 +57,6 @@ router.get('/search', userController.searchUsers);
 
 router.use('/:id/documents', require('./employeeDocumentRoutes'));
 
-router.get('/test', (req, res, next) => {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(404).json({ success: false, message: 'Not found' });
-  }
-  next();
-}, protect, async (req, res) => {
-  try {
-    const User = require('../../models/User');
-    const Department = require('../../models/Department');
-    
-    
-    const currentUser = req.user;
-    
-    
-    const userFromDB = await User.findById(currentUser._id)
-      .select('name email company department jobRole')
-      .populate('company', 'name companyCode')
-      .populate('department', 'name description')
-      .lean();
-    
-    
-    const userCompany = userFromDB?.company;
-    const userCompanyId = userCompany?._id || userCompany;
-    const userDepartmentId = userFromDB?.department?._id || userFromDB?.department;
-    
-    
-    const sameCompanyUsers = await User.find({
-      company: userCompanyId,
-      isActive: true
-    })
-    .select('name email jobRole department')
-    .populate('department', 'name')
-    .limit(5)
-    .lean();
-    
-    
-    const sameDepartmentUsers = userDepartmentId ? 
-      await User.find({
-        company: userCompanyId,
-        department: userDepartmentId,
-        isActive: true
-      })
-      .select('name email jobRole')
-      .limit(5)
-      .lean() : [];
-    
-    
-    const companyUsersCount = await User.countDocuments({
-      company: userCompanyId,
-      isActive: true
-    });
-    
-    
-    const companyDepartments = await Department.find({
-      company: userCompanyId,
-      isActive: true
-    })
-    .select('name description')
-    .lean();
-    
-    
-    const otherCompanyUsers = await User.findOne({
-      company: { $ne: userCompanyId },
-      company: { $exists: true },
-      isActive: true
-    })
-    .select('name email company')
-    .populate('company', 'name')
-    .lean();
-    
-    res.status(200).json({
-      success: true,
-      message: 'Company filter test results',
-      userInfo: {
-        id: currentUser._id,
-        name: currentUser.name,
-        email: currentUser.email,
-        jobRole: currentUser.jobRole,
-        company: userCompany,
-        department: userFromDB?.department
-      },
-      testResults: {
-        sameCompanyUsers: {
-          count: sameCompanyUsers.length,
-          totalInCompany: companyUsersCount,
-          sample: sameCompanyUsers.map(u => ({
-            name: u.name,
-            email: u.email,
-            jobRole: u.jobRole,
-            department: u.department?.name || 'Not set'
-          }))
-        },
-        sameDepartmentUsers: {
-          count: sameDepartmentUsers.length,
-          sample: sameDepartmentUsers.map(u => ({
-            name: u.name,
-            email: u.email,
-            jobRole: u.jobRole
-          }))
-        },
-        companyDepartments: {
-          count: companyDepartments.length,
-          list: companyDepartments.map(d => ({
-            name: d.name,
-            description: d.description
-          }))
-        },
-        securityTest: {
-          canAccessOtherCompanyData: otherCompanyUsers ? true : false,
-          otherCompanyUser: otherCompanyUsers ? {
-            name: otherCompanyUsers.name,
-            email: otherCompanyUsers.email,
-            company: otherCompanyUsers.company?.name || 'Other Company'
-          } : null,
-          securityLevel: otherCompanyUsers ? '⚠️ LOW - Can see other company users' : '✅ HIGH - Data isolation working'
-        }
-      },
-      databaseInfo: {
-        totalUsersInDatabase: await User.countDocuments({ isActive: true }),
-        usersWithCompanyField: await User.countDocuments({ 
-          company: { $exists: true },
-          isActive: true 
-        }),
-        usersWithoutCompanyField: await User.countDocuments({ 
-          company: { $exists: false },
-          isActive: true 
-        })
-      },
-      recommendations: otherCompanyUsers ? [
-        '🚨 SECURITY ISSUE: Can access users from other companies',
-        'Add company filtering to all user queries',
-        'Verify User model has company field',
-        'Update middleware to enforce company filtering'
-      ] : [
-        '✅ Company filtering appears to be working correctly',
-        'Ensure all user endpoints filter by company'
-      ]
-    });
-    
-  } catch (error) {
-    console.error('❌ Company filter test error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Test failed',
-      error: error.message
-    });
-  }
-});
 
 router.get('/profile', (req, res, next) => {
   req.params.id = req.user._id.toString();
@@ -200,6 +67,6 @@ router.get('/profile/:id', (req, res, next) => {
 });
 router.get('/:id', userController.getUser);
 router.put('/profile-update/:id', userController.updateSelfUser);
-router.put('/:id', userController.updateUser);
+router.put('/:id', userInBranches, userController.updateUser);
 
 module.exports = router;

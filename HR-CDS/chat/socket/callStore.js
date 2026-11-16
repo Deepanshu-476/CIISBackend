@@ -21,10 +21,28 @@ const get = async (callId) => {
   return raw ? JSON.parse(raw) : null;
 };
 
-const remove = async (callId) => {
+const ANSWER_KEY = (callId, userId) => `ciis:call:${callId}:answer:${userId}`;
+
+// The answer claim must die with the participant's place in the call. While it lives, that user's
+// next accept in the SAME call (re-invited from "Add people"/"Call again") loses the claim and the
+// server tells their phone the call was answered elsewhere, so they can never pick up again.
+const releaseAnswer = async (callId, userId) => {
+  const r = getRedis();
+  if (!r || !callId || !userId) return;
+  await r.del(ANSWER_KEY(callId, userId)).catch(() => {});
+};
+
+const releaseAnswers = async (callId, userIds = []) => {
+  const r = getRedis();
+  if (!r || !callId || !userIds.length) return;
+  await Promise.all(userIds.filter(Boolean).map(userId => r.del(ANSWER_KEY(callId, userId)).catch(() => {})));
+};
+
+const remove = async (callId, participantIds = []) => {
   if (!callId) return;
   const r = getRedis();
   if (!r) { memory.delete(String(callId)); return; }
+  await releaseAnswers(callId, participantIds);
   await r.del(KEY(callId));
   await r.sRem('ciis:calls', String(callId));
 };
@@ -42,7 +60,7 @@ const listAll = async () => {               // used by sync-incoming / disconnec
 const claimAnswer = async (callId, userId, socketId) => {
   const r = getRedis();
   if (!r) return true;   // single process: JS is single-threaded, handled by status check
-  const ok = await r.set(`ciis:call:${callId}:answer:${userId}`, socketId, { NX: true, EX: TTL_SEC });
+  const ok = await r.set(ANSWER_KEY(callId, userId), socketId, { NX: true, EX: TTL_SEC });
   return ok === 'OK';
 };
 
@@ -65,4 +83,4 @@ const withCallLock = async (callId, fn) => {
   return await fn();
 };
 
-module.exports = { save, get, remove, listAll, claimAnswer, withCallLock };
+module.exports = { save, get, remove, listAll, claimAnswer, releaseAnswer, releaseAnswers, withCallLock };

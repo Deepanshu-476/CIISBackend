@@ -3083,78 +3083,6 @@ const getTaskStats = async (req, res) => {
   }
 };
 
-const debugActivityLogs = async (req, res) => {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(404).json({ success: false, message: 'Not found' });
-  }
-
-  try {
-    const { taskId } = req.params;
-    const { isSuperAdminUser } = require('../../middleware/authMiddleware');
-    const isCompanyAdminOrOwner = (user) => {
-      if (!user) return false;
-      const role = String(user.role || '').toLowerCase();
-      const jobRole = String(user.jobRole || '').toLowerCase();
-      const companyRole = String(user.companyRole || '').toLowerCase();
-      return role === 'admin' || role === 'owner' || jobRole === 'admin' || jobRole === 'owner' || companyRole === 'owner' || companyRole === 'admin';
-    };
-
-    const isSuper = isSuperAdminUser && isSuperAdminUser(req.user);
-    if (!isSuper && !isCompanyAdminOrOwner(req.user)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Access denied: Admin or Owner privileges required'
-      });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(taskId)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid task ID format'
-      });
-    }
-
-    const task = await Task.findById(taskId)
-      .select('activityLogs name remarks companyCode')
-      .populate('activityLogs.user', 'name email')
-      .lean();
-
-    if (!task) {
-      return res.status(404).json({
-        success: false,
-        message: 'Task not found'
-      });
-    }
-
-    if (!isSuper) {
-      const userCompanyCode = req.user?.companyCode || (req.user?.company && req.user.company.companyCode) || '';
-      if (task.companyCode && userCompanyCode && task.companyCode.toUpperCase() !== userCompanyCode.toUpperCase()) {
-        return res.status(403).json({
-          success: false,
-          message: 'Access denied: Task belongs to another company'
-        });
-      }
-    }
-
-    res.json({
-      success: true,
-      data: {
-        taskId: task._id,
-        taskName: task.name,
-        activityLogsCount: task.activityLogs?.length || 0,
-        activityLogs: task.activityLogs || [],
-        remarksCount: task.remarks?.length || 0,
-        remarks: task.remarks || []
-      }
-    });
-  } catch (error) {
-    console.error('❌ Error in debug endpoint:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-};
 
 module.exports = {
   addClientRemark,
@@ -3176,7 +3104,6 @@ module.exports = {
   getAssignedToMeTasks,
   getAssignedToMeTaskStats,
   updateAssignedTaskStatus,
-  debugActivityLogs,
   getAssignedTasksByUserId
 };
 
