@@ -7280,26 +7280,31 @@ const lastAskedField = currentDraft.asked.length > 0
           } else if (selServices.length === 1) {
             const singleSvc = selServices[0];
             const cleanName = trimmedMessage.replace(/^(?:task\s*ka\s*naam|task\s*title|task\s*name|task)\s*[:=\-]?\s*/i, '').trim();
-            const tName = cleanName || trimmedMessage;
+            const taskTitles = splitServiceTasks(cleanName || trimmedMessage);
             if (!currentDraft.serviceTasks) currentDraft.serviceTasks = {};
             if (!Array.isArray(currentDraft.serviceTasks[singleSvc])) currentDraft.serviceTasks[singleSvc] = [];
-            currentDraft.serviceTasks[singleSvc].push({
-              name: tName,
-              description: '',
-              priority: 'Medium',
-              dueInDays: 30
-            });
             if (!Array.isArray(currentDraft.customTasks)) currentDraft.customTasks = [];
-            currentDraft.customTasks.push({
-              service: singleSvc,
-              name: tName,
-              description: '',
-              priority: 'Medium',
-              dueInDays: 30
-            });
+            for (const tName of taskTitles) {
+              currentDraft.serviceTasks[singleSvc].push({
+                name: tName,
+                description: '',
+                priority: 'Medium',
+                dueInDays: 30
+              });
+              currentDraft.customTasks.push({
+                service: singleSvc,
+                name: tName,
+                description: '',
+                priority: 'Medium',
+                dueInDays: 30
+              });
+            }
             currentDraft.lastAddedService = singleSvc;
             currentDraft.activeTaskService = null;
-            ackPrefix = `"${tName}" task "${singleSvc}" mein add ho gaya. `;
+            const formattedTitles = taskTitles.map(t => `"${t}"`).join(', ');
+            ackPrefix = taskTitles.length > 1
+              ? `${formattedTitles} tasks "${singleSvc}" mein add ho gaye. `
+              : `"${taskTitles[0]}" task "${singleSvc}" mein add ho gaya. `;
             actionHandled = true;
           }
         }
@@ -8002,26 +8007,31 @@ const lastAskedField = currentDraft.asked.length > 0
             } else if (selServices.length === 1) {
               const singleSvc = selServices[0];
               const cleanName = trimmedMessage.replace(/^(?:task\s*ka\s*naam|task\s*title|task\s*name|task)\s*[:=\-]?\s*/i, '').trim();
-              const tName = cleanName || trimmedMessage;
+              const taskTitles = splitServiceTasks(cleanName || trimmedMessage);
               if (!currentDraft.serviceTasks) currentDraft.serviceTasks = {};
               if (!Array.isArray(currentDraft.serviceTasks[singleSvc])) currentDraft.serviceTasks[singleSvc] = [];
-              currentDraft.serviceTasks[singleSvc].push({
-                name: tName,
-                description: '',
-                priority: 'Medium',
-                dueInDays: 30
-              });
               if (!Array.isArray(currentDraft.customTasks)) currentDraft.customTasks = [];
-              currentDraft.customTasks.push({
-                service: singleSvc,
-                name: tName,
-                description: '',
-                priority: 'Medium',
-                dueInDays: 30
-              });
+              for (const tName of taskTitles) {
+                currentDraft.serviceTasks[singleSvc].push({
+                  name: tName,
+                  description: '',
+                  priority: 'Medium',
+                  dueInDays: 30
+                });
+                currentDraft.customTasks.push({
+                  service: singleSvc,
+                  name: tName,
+                  description: '',
+                  priority: 'Medium',
+                  dueInDays: 30
+                });
+              }
               currentDraft.lastAddedService = singleSvc;
               currentDraft.activeTaskService = null;
-              ackPrefix = `"${tName}" task "${singleSvc}" mein add ho gaya. `;
+              const formattedTitles = taskTitles.map(t => `"${t}"`).join(', ');
+              ackPrefix = taskTitles.length > 1
+                ? `${formattedTitles} tasks "${singleSvc}" mein add ho gaye. `
+                : `"${taskTitles[0]}" task "${singleSvc}" mein add ho gaya. `;
               actionHandled = true;
             }
           }
@@ -8742,7 +8752,7 @@ const lastAskedField = currentDraft.asked.length > 0
 
         // Intent promotion: ONLY if user explicitly commanded assigning to others
         const isExplicitAssignCommand = /\b(?:assign\s+to|kisi\s+aur\s+ko|others?\s+ko|ko\s+assign\s+karo)\b/i.test(trimmedMessage);
-        const isRepeatInstruction = /(?:repeat|dohrana|daily|roz|har\s+din|weekdays|recurrence)/i.test(trimmedMessage) || /\b(?:monda[yt]|tuesda[yt]|wednesda[yt]|thursda[yt]|frida[yt]|saturda[yt]|sunda[yt])\b/i.test(trimmedMessage) || Boolean(detSlots.repeatDays?.length > 0);
+        const isRepeatInstruction = /(?:repeat|dohrana|daily|roz|har\s+din|weekdays|recurrence)/i.test(trimmedMessage) || /\b(?:monda[yt]|tuesda[yt]|wednesda[yt]|thursda[yt]|frida[yt]|saturda[yt]|sunda[yt])\b/i.test(trimmedMessage) || Boolean(currentDraft?.repeatDays?.length > 0);
         if (currentDraft.assigneeName && canAssignOthers && currentDraft.intent === 'self_task' && isExplicitAssignCommand) {
           currentDraft.intent = 'task_assigned_user';
           currentDraft.taskFor = 'others';
@@ -9334,7 +9344,7 @@ const lastAskedField = currentDraft.asked.length > 0
   } else if ((currentDraft.intent !== 'create_project' && currentDraft.intent !== 'create_client' && currentDraft.intent !== 'create_client_plan') || ((currentDraft.intent === 'create_project' || currentDraft.intent === 'create_client') && (currentDraft.asked.includes('members') || currentDraft.asked.includes('projectManager') || lastAskedField === 'members' || lastAskedField === 'projectManager' || (Array.isArray(currentDraft.assigneeLedger) && currentDraft.assigneeLedger.length > 0)))) {
     // 3c. Regular Assignee disambiguation & scope validation (self_task & task_assigned_user, or create_project members / create_client team)
     const isExplicitAssignCommand = /\b(?:assign\s+to|kisi\s+aur\s+ko|others?\s+ko|ko\s+assign\s+karo)\b/i.test(trimmedMessage);
-    const isRepeatInstruction = /(?:repeat|dohrana|daily|roz|har\s+din|weekdays|recurrence)/i.test(trimmedMessage) || /\b(?:monda[yt]|tuesda[yt]|wednesda[yt]|thursda[yt]|frida[yt]|saturda[yt]|sunda[yt])\b/i.test(trimmedMessage) || Boolean(detSlots.repeatDays?.length > 0);
+    const isRepeatInstruction = /(?:repeat|dohrana|daily|roz|har\s+din|weekdays|recurrence)/i.test(trimmedMessage) || /\b(?:monda[yt]|tuesda[yt]|wednesda[yt]|thursda[yt]|frida[yt]|saturda[yt]|sunda[yt])\b/i.test(trimmedMessage) || Boolean(currentDraft?.repeatDays?.length > 0);
     const isSelfTask = (isRepeatInstruction && !isExplicitAssignCommand) || currentDraft.intent === 'self_task' || currentDraft.taskFor === 'self';
 
     if (isSelfTask && !isExplicitAssignCommand) {
