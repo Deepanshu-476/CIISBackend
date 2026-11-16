@@ -7,6 +7,7 @@ const User = require('../models/User');
 const Client = require('../HR-CDS/models/Client');
 const Branch = require('../models/Branch');
 const Department = require('../models/Department');
+const Leave = require('../HR-CDS/models/Leave');
 const { protect, isCompanyOwner } = require('../middleware/authMiddleware');
 const { notifyDirectUsers } = require('../HR-CDS/utils/systemNotificationService');
 const { getCacheKey, getOrSetCached, invalidateCache } = require('../utils/inMemoryCache');
@@ -821,6 +822,44 @@ router.put('/:pageKey', isCompanyOwner, async (req, res) => {
       priority: 'medium',
       push: true
     });
+
+    if (page.pageKey === 'emp-leaves') {
+      try {
+        const approverUserIds = approvers.map(a => a.user).filter(Boolean);
+        if (approverUserIds.length > 0) {
+          const pendingLeaves = await Leave.find({
+            company: companyId,
+            status: 'Pending'
+          });
+
+          for (const leaveDoc of pendingLeaves) {
+            let modified = false;
+            leaveDoc.approvalSteps = leaveDoc.approvalSteps || [];
+            const existingUserIds = new Set(leaveDoc.approvalSteps.map(s => String(s.user)));
+            const leaveOwnerId = String(leaveDoc.user);
+
+            for (const appUserId of approverUserIds) {
+              const appUserIdStr = String(appUserId);
+              if (appUserIdStr !== leaveOwnerId && !existingUserIds.has(appUserIdStr)) {
+                leaveDoc.approvalSteps.push({
+                  user: appUserId,
+                  status: 'Pending',
+                  remarks: ''
+                });
+                existingUserIds.add(appUserIdStr);
+                modified = true;
+              }
+            }
+
+            if (modified) {
+              await Leave.updateOne({ _id: leaveDoc._id }, { $set: { approvalSteps: leaveDoc.approvalSteps } });
+            }
+          }
+        }
+      } catch (syncErr) {
+        console.error('Failed to sync approvers to pending leaves:', syncErr.message);
+      }
+    }
 
     res.json({
       success: true,
