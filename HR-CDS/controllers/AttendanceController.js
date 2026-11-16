@@ -11,7 +11,8 @@ const JobRole = require("../../models/JobRole");
 const PagePermission = require("../../models/PagePermission");
 const mongoose = require("mongoose");
 const {notifyPageUsers, getCompanyId} = require("../utils/systemNotificationService");
-const {isOffDayFor, effectiveWorkingDays: getEffectiveWorkingDays} = require("../utils/weekOff");
+const {isOffDayFor, weekStartKeyOf, effectiveWorkingDays: getEffectiveWorkingDays} = require("../utils/weekOff");
+const {weeklyOffUserIdsForDate} = require("../utils/attendanceWeekOffSummary");
 const {breakTotalsFor, resolveBreakPolicy, netWorkedMs} = require("../utils/breaks");
 const {policyForUser: breakPolicyForUser} = require("./breakController");
 const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagination");
@@ -1811,6 +1812,24 @@ const getAllUsersAttendance = async (req, res) => {
       filter.date = { $gte: start, $lte: end };
     }
 
+    // Return schedule metadata even for employees with no persisted attendance row.
+    // Keep it on page 1 so paginated exports do not repeat these company-scoped queries.
+    let weeklyOffUserIds;
+    if (date && page === 1) {
+      const userFilter = { companyCode: userCompanyCode };
+      if (filter.user !== undefined) userFilter._id = filter.user;
+      const users = await User.find(userFilter).select('_id department departmentName weekOffDays').lean();
+      const [departments, swaps] = await Promise.all([
+        Department.find({ companyCode: userCompanyCode }).select('name workingDays workingDayHistory').lean(),
+        WeekOffRequest.find({
+          user: { $in: users.map(user => user._id) },
+          status: 'Approved',
+          weekStartKey: weekStartKeyOf(date),
+        }).select('user weekStartKey fromDateKey toDateKey status').lean(),
+      ]);
+      weeklyOffUserIds = weeklyOffUserIdsForDate(users, departments, swaps, date);
+    }
+
     const [records, total] = await Promise.all([
       Attendance.find(filter)
         .populate({
@@ -1909,6 +1928,7 @@ const getAllUsersAttendance = async (req, res) => {
           status: isFullDayOt ? 'PRESENT' : (record.status || 'ABSENT')
         };
       }),
+      ...(weeklyOffUserIds ? { weeklyOffUserIds } : {}),
       count: records.length,
       total,
       pagination: buildPaginationMeta({ page, limit, total })
