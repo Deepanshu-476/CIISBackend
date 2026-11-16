@@ -1339,8 +1339,11 @@ function parseHinglishSlots(rawText, now = new Date(), referenceDate = null, las
     }
   }
 
-  // 8. Date & Time (Do not overwrite due date when answering repeat slots)
-  if (lastAskedField !== 'recurrenceEndDate' && lastAskedField !== 'repeatDays') {
+  // 8. Date & Time (Do not overwrite due date when answering non-date slots)
+  const isDateSlot = !lastAskedField || lastAskedField === 'dueDateTime' || lastAskedField === 'dueDate' || lastAskedField === 'welcome';
+  const hasExplicitDueCommand = /\b(?:due\s*(?:date|time)?|deadline|kab\s*tak|taareekh\s*badlo|date\s*change|due\s+badlo)\b/i.test(normalized);
+
+  if (isDateSlot || hasExplicitDueCommand) {
     const dueDateTime = parseHinglishDateTime(normalized, now, referenceDate);
     if (dueDateTime) {
       const parsedDate = new Date(dueDateTime);

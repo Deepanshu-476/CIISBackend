@@ -292,7 +292,7 @@ const FORM_REGISTRY = {
         : '';
       const formattedEnd = draft.recurrenceEndDate ? formatDateOnly(draft.recurrenceEndDate) : '';
       const repeatLabel = isDailyRepeat
-        ? `${daysText || 'Daily'}${formattedEnd ? ` tak ${formattedEnd}` : ''}`
+        ? `${daysText || 'Daily'}${formattedEnd ? `, ${formattedEnd}` : ''}`
         : 'No repeat';
 
       return {

@@ -8723,7 +8723,7 @@ const lastAskedField = currentDraft.asked.length > 0
         }
 
         // Merge extracted slots into draft
-        const merged = mergeDraft(currentDraft, extracted, detSlots, trimmedMessage);
+        const merged = mergeDraft(currentDraft, extracted, detSlots, trimmedMessage, lastAskedField);
         Object.assign(currentDraft, merged);
         if (currentDraft.intent === 'create_project') {
           currentDraft.title = null;
