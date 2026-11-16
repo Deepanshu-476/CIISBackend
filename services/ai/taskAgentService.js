@@ -3070,6 +3070,10 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
     ...(Array.isArray(user?.allowedPages) ? user.allowedPages : []),
     ...(Array.isArray(user?.pagePermissions) ? user.pagePermissions : []),
     ...(Array.isArray(user?.permissions) ? user.permissions : []),
+    ...(Array.isArray(user?.company?.allowedPages) ? user.company.allowedPages : []),
+    ...(Array.isArray(scope?.company?.allowedPages) ? scope.company.allowedPages : []),
+    ...(Array.isArray(scope?.companyAllowedPages) ? scope.companyAllowedPages : []),
+    ...(Array.isArray(deps?.companyAllowedPages) ? deps.companyAllowedPages : []),
     ...flattenItems(deps?.sidebarMenuItems),
     ...flattenItems(deps?.menuItems),
   ];

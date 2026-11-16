@@ -22,13 +22,27 @@ function getTaskPageScopeFn() {
  */
 async function getScopeInfo(req, deps = {}) {
   const fn = deps.getAdminTaskPageScope || getTaskPageScopeFn();
-  if (typeof fn !== 'function') {
-    return { hasAccess: false, isOwner: false, branchIds: [], departmentIds: [] };
+  let scope = { hasAccess: false, isOwner: false, branchIds: [], departmentIds: [] };
+  if (typeof fn === 'function') {
+    if (mongoose.connection.readyState === 0 && !deps.getAdminTaskPageScope) {
+      scope = { hasAccess: true, isOwner: false, branchIds: ['all'], departmentIds: ['all'] };
+    } else {
+      scope = (await fn(req)) || scope;
+    }
   }
-  if (mongoose.connection.readyState === 0 && !deps.getAdminTaskPageScope) {
-    return { hasAccess: true, isOwner: false, branchIds: ['all'], departmentIds: ['all'] };
+  if (req?.user?.company) {
+    try {
+      const CompanyModel = deps.Company || require('../../models/Company');
+      const companyId = req.user.company._id || req.user.company;
+      if (mongoose.Types.ObjectId.isValid(companyId)) {
+        const comp = await CompanyModel.findById(companyId).select('allowedPages').lean();
+        if (comp && Array.isArray(comp.allowedPages)) {
+          scope.companyAllowedPages = comp.allowedPages;
+        }
+      }
+    } catch (_) {}
   }
-  return await fn(req);
+  return scope;
 }
 
 /**

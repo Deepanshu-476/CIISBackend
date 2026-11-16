@@ -1276,7 +1276,7 @@ const createClientPlanFormConfig = {
   method: 'POST',
   isMultipart: false,
   roleRules: {
-    allowedRoles: ['owner', 'admin', 'super_admin', 'super-admin', 'manager', 'hr'],
+    allowedRoles: ['owner', 'admin', 'super_admin', 'super-admin', 'manager', 'hr', 'staff', 'employee', 'user'],
     pageScopeCheck: true,
   },
   slots: {
@@ -2622,6 +2622,20 @@ function checkIntentAccess(intentKey, { user = {}, scope = {} } = {}) {
   }
   if (intentKey === 'create_client') {
     return canCreateClient(user, scope);
+  }
+  if (intentKey === 'create_client_plan') {
+    const isOwner = Boolean(user.isSuperAdmin || user.isPlatformOwner || scope.isOwner);
+    if (isOwner) return true;
+    const compPages = Array.isArray(scope.companyAllowedPages) ? scope.companyAllowedPages : (Array.isArray(user.company?.allowedPages) ? user.company.allowedPages : []);
+    const hasCompanyPlanAccess = compPages.some(p => {
+      const norm = String(p).toLowerCase().replace(/^\/+/, '').replace(/^ciisuser\//, '').replace(/[\s_-]+/g, '');
+      return norm === 'clientplans' || norm === 'clientplan' || norm === 'client-plans';
+    });
+    if (hasCompanyPlanAccess) return true;
+    if (Array.isArray(scope.allowedIntents) && scope.allowedIntents.includes('create_client_plan')) return true;
+    const userRole = String(user.companyRole || user.jobRoleName || user.role || '').toLowerCase();
+    if (config.roleRules.allowedRoles && config.roleRules.allowedRoles.includes(userRole)) return true;
+    return Boolean(scope.hasAccess || scope.isOwner);
   }
   if (!config.roleRules.pageScopeCheck) return true;
   return Boolean(scope.hasAccess || scope.isOwner);
