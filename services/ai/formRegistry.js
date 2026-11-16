@@ -729,7 +729,7 @@ function canCreateProject(user = {}, scope = {}) {
     : (Array.isArray(user.permissions) ? user.permissions : []));
 
   const normalizedPerms = userPerms.map((p) => String(typeof p === 'object' ? p.page || p.name || p.path || '' : p).trim().toLowerCase().replace(/[\s_-]+/g, ''));
-  const PROJECT_PAGE_KEYS = new Set(['manageprojects', 'adminproject', 'projects', 'project', 'manageproject', 'ciisuser/adminproject']);
+  const PROJECT_PAGE_KEYS = new Set(['manageprojects', 'adminproject', 'manageproject', 'ciisuser/adminproject', 'ciisuser/manageprojects', 'ciisuser/admin-project', 'admin-project']);
 
   if (normalizedPerms.some((p) => PROJECT_PAGE_KEYS.has(p))) {
     return true;
@@ -776,7 +776,7 @@ function canCreateClient(user = {}, scope = {}) {
     : (Array.isArray(user.permissions) ? user.permissions : []));
 
   const normalizedPerms = userPerms.map((p) => String(typeof p === 'object' ? p.page || p.name || p.path || '' : p).trim().toLowerCase().replace(/[\s_-]+/g, ''));
-  const CLIENT_PAGE_KEYS = new Set(['empclient', 'clientmanagement', 'clients', 'client', 'emp-client', 'client-management', 'ciisuser/emp-client']);
+  const CLIENT_PAGE_KEYS = new Set(['empclient', 'clientmanagement', 'emp-client', 'client-management', 'ciisuser/emp-client', 'ciisuser/empclient', 'ciisuser/clientmanagement', 'ciisuser/client-management']);
 
   if (normalizedPerms.some((p) => CLIENT_PAGE_KEYS.has(p))) {
     return true;
