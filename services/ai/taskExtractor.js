@@ -148,7 +148,8 @@ function mergeDraft(previous = {}, extracted = {}, deterministic = {}, rawMessag
   let assigneeLabel = prev.assigneeLabel || null;
 
   const isExplicitAssignCommand = /\b(?:assign\s+to|kisi\s+aur\s+ko|others?\s+ko|ko\s+assign\s+karo)\b/i.test(rawMessage);
-  const isPersonalTask = prev.intent === 'self_task' || prev.taskFor === 'self';
+  const isRepeatInstruction = /(?:repeat|dohrana|daily|roz|har\s+din|weekdays|recurrence)/i.test(rawMessage) || /\b(?:monda[yt]|tuesda[yt]|wednesda[yt]|thursda[yt]|frida[yt]|saturda[yt]|sunda[yt])\b/i.test(rawMessage) || Boolean(det.repeatDays?.length > 0);
+  const isPersonalTask = (isRepeatInstruction && !isExplicitAssignCommand) || prev.intent === 'self_task' || prev.taskFor === 'self';
   const isAnsweringNonAssigneeField = Boolean(lastAskedField && ['dueDateTime', 'dueDate', 'description', 'title', 'priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'repeatDays', 'recurrenceEndDate', 'checkpoints', 'attachments', 'file'].includes(lastAskedField));
   const shouldIgnoreExtractedAssignee = (isPersonalTask && !isExplicitAssignCommand) || (isAnsweringNonAssigneeField && !isExplicitAssignCommand);
 
@@ -177,7 +178,14 @@ function mergeDraft(previous = {}, extracted = {}, deterministic = {}, rawMessag
 
   let taskFor = prev.taskFor || 'self';
   let wantsOthers = Boolean(prev.wantsOthers);
-  if (prev.intent === 'task_project' || prev.projectId || prev.taskFor === 'project' || det.projectName || ext.projectName) {
+  if (isRepeatInstruction && !isExplicitAssignCommand) {
+    taskFor = 'self';
+    wantsOthers = false;
+    assigneeName = null;
+    assigneeId = null;
+    assigneeLabel = null;
+    assigneeLedger = [];
+  } else if (prev.intent === 'task_project' || prev.projectId || prev.taskFor === 'project' || det.projectName || ext.projectName) {
     taskFor = 'project';
   } else if (!isPersonalTask || isExplicitAssignCommand) {
     if (assigneeName || validExtAssignee || (assigneeLedger && assigneeLedger.length > 0)) {
