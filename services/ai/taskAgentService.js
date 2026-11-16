@@ -3157,7 +3157,16 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
     }
   }
 
-  const canPlan = normalizedPerms.has('clientplans') || normalizedPerms.has('clientplan') || normalizedPerms.has('ciisuser/clientplans');
+  const canPlan = canClient ||
+    normalizedPerms.has('clientplans') ||
+    normalizedPerms.has('clientplan') ||
+    normalizedPerms.has('client-plans') ||
+    normalizedPerms.has('clientplanmanagement') ||
+    normalizedPerms.has('ciisuser/clientplans') ||
+    normalizedPerms.has('ciisuser/client-plans') ||
+    normalizedPerms.has('empclient') ||
+    normalizedPerms.has('emp-client') ||
+    normalizedPerms.has('clientmanagement');
   if (canPlan) {
     allowed.push('create_client_plan');
   }
@@ -6141,7 +6150,7 @@ const lastAskedField = currentDraft.asked.length > 0
     }
 
     // Extract any slots present in trimmedMessage:
-    const parsedSlots = parseHinglishSlots(trimmedMessage, now);
+    const parsedSlots = parseHinglishSlots(trimmedMessage, now, null, lastAskedField);
 
     // EDIT / UPDATE INTERCEPTION for create_client_task
     if (trimmedMessage) {
@@ -6353,7 +6362,7 @@ const lastAskedField = currentDraft.asked.length > 0
         if (!currentDraft.asked.includes('description')) currentDraft.asked.push('description');
         actionHandled = true;
       } else if ((lastAsked === 'dueDateTime' || lastAsked === 'dueDate') && !currentDraft.dueDateTime && !currentDraft.dueDate) {
-        const parsed = parseHinglishSlots(trimmedMessage, now);
+        const parsed = parseHinglishSlots(trimmedMessage, now, null, lastAsked);
         const parsedDt = parsed?.dueDateTime || (typeof parseHinglishDateTime === 'function' ? parseHinglishDateTime(trimmedMessage, now) : null);
         if (parsedDt) {
           currentDraft.dueDateTime = parsedDt;
@@ -8430,7 +8439,7 @@ const lastAskedField = currentDraft.asked.length > 0
         }
 
         // Deterministic extraction runs first
-        const detSlots = parseHinglishSlots(trimmedMessage, now, currentDraft.dueDateTime);
+        const detSlots = parseHinglishSlots(trimmedMessage, now, currentDraft.dueDateTime, lastAskedField);
 
         if (!actionHandled && lastAskedField === 'title' && (isSkip(trimmedMessage) || isSkipAll(trimmedMessage))) {
           currentDraft.title = null;
@@ -8518,6 +8527,36 @@ const lastAskedField = currentDraft.asked.length > 0
           currentDraft.repeatPattern = detSlots.repeatPattern;
           if (!currentDraft.asked.includes('repeatPattern')) currentDraft.asked.push('repeatPattern');
           currentDraft.skipped = (currentDraft.skipped || []).filter((f) => f !== 'repeatPattern');
+          actionHandled = true;
+        }
+
+        if (!actionHandled && lastAskedField === 'repeatDays') {
+          if (Array.isArray(detSlots.repeatDays) && detSlots.repeatDays.length > 0) {
+            currentDraft.repeatDays = detSlots.repeatDays;
+            if (!currentDraft.repeatPattern) currentDraft.repeatPattern = 'daily';
+          }
+          if (!currentDraft.asked.includes('repeatDays')) currentDraft.asked.push('repeatDays');
+          currentDraft.skipped = (currentDraft.skipped || []).filter((f) => f !== 'repeatDays');
+          actionHandled = true;
+        }
+
+        if (!actionHandled && lastAskedField === 'recurrenceEndDate') {
+          let parsedEnd = detSlots.recurrenceEndDate;
+          if (!parsedEnd) {
+            const dt = parseHinglishDateTime(trimmedMessage, now);
+            if (dt) {
+              const d = new Date(dt);
+              if (!isNaN(d.getTime())) {
+                parsedEnd = d.toISOString().slice(0, 10) + 'T23:59:59.999Z';
+              }
+            }
+          }
+          if (parsedEnd) {
+            currentDraft.recurrenceEndDate = parsedEnd;
+            if (!currentDraft.repeatPattern) currentDraft.repeatPattern = 'daily';
+          }
+          if (!currentDraft.asked.includes('recurrenceEndDate')) currentDraft.asked.push('recurrenceEndDate');
+          currentDraft.skipped = (currentDraft.skipped || []).filter((f) => f !== 'recurrenceEndDate');
           actionHandled = true;
         }
 
