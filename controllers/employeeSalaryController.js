@@ -9,6 +9,8 @@ const Attendance = require("../HR-CDS/models/Attendance");
 const OvertimeRequest = require("../HR-CDS/models/OvertimeRequest");
 const Leave = require("../HR-CDS/models/Leave");
 const Holiday = require("../HR-CDS/models/Holiday");
+const WeekOffRequest = require("../HR-CDS/models/WeekOffRequest");
+const { resolveOffDayKeys, weekStartKeyOf } = require("../HR-CDS/utils/weekOff");
 const PayrollRun = require("../models/PayrollRun");
 const Company = require("../models/Company");
 const { validateBulkEmployeeStatuses, applyBulkEmployeeTransition, deriveRunStatus } = require("../utils/payrollFlow");
@@ -20,7 +22,7 @@ const getActorName = (req) => req.user?.name || req.user?.fullName || req.user?.
 
 const populateQuery = (query) =>
   query
-    .populate("user", "name email department jobRole employeeId empId phone profileImage status employeeStatus isActive registrationStatus dateOfJoining bankName accountNumber ifsc bankHolderName panCard panNo pan aadharCard aadharNo aadhar aadhaar aadhaarCard dob")
+    .populate("user", "name email department jobRole employeeId empId phone profileImage status employeeStatus isActive registrationStatus dateOfJoining weekOffDays bankName accountNumber ifsc bankHolderName panCard panNo pan aadharCard aadharNo aadhar aadhaar aadhaarCard dob")
     .populate("salaryStructure", "name code salaryType salaryInputType effectiveFrom status description components")
     .populate("components.component", "name code type proRata taxable grossSalary pfWage esiWage ptWage")
     .populate("createdBy", "name email")
@@ -239,18 +241,6 @@ const indiaDateKey = (value) => new Intl.DateTimeFormat("en-CA", {
   timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit"
 }).format(new Date(value));
 
-const effectiveWorkingDays = (department, date) => {
-  let days = Number(department?.workingDays || 5);
-  const target = new Date(date).getTime();
-  const history = [...(department?.workingDayHistory || [])]
-    .filter(item => item?.effectiveFrom)
-    .sort((a, b) => new Date(a.effectiveFrom) - new Date(b.effectiveFrom));
-  history.forEach(item => {
-    if (new Date(item.effectiveFrom).getTime() <= target) days = Number(item.workingDays || days);
-  });
-  return Number.isInteger(days) && days >= 1 && days <= 7 ? days : 5;
-};
-
 const attendanceRecordScore = (record = {}) => {
   const status = String(record.status || "").trim().toUpperCase();
   let score = 0;
@@ -308,13 +298,25 @@ exports.payrollPreview = async (req, res) => {
     const userIds = assignments.map(item => item.user?._id || item.user).filter(Boolean);
     const departmentIds = [...new Set(assignments.map(item => item.user?.department).filter(id => mongoose.isValidObjectId(id)).map(String))];
 
-    const [attendances, leaves, holidays, departments, approvedOtRequests] = await Promise.all([
+    const [attendances, leaves, holidays, departments, approvedOtRequests, weekOffSwaps] = await Promise.all([
       Attendance.find({ user: { $in: userIds }, date: { $gte: start, $lte: end } }).lean(),
       Leave.find({ user: { $in: userIds }, status: "Approved", startDate: { $lte: end }, endDate: { $gte: start } }).lean(),
       Holiday.find({ company, isActive: { $ne: false }, date: { $gte: start, $lte: end } }).lean(),
       Department.find({ _id: { $in: departmentIds } }).select("name workingDays workingDayHistory").lean(),
-      OvertimeRequest.find({ user: { $in: userIds }, status: "Approved" }).lean()
+      OvertimeRequest.find({ user: { $in: userIds }, status: "Approved" }).lean(),
+      // Approved weekly-off swaps: the employee took that week's off on another day.
+      WeekOffRequest.find({
+        user: { $in: userIds },
+        status: "Approved",
+        weekStartKey: { $gte: weekStartKeyOf(start), $lte: weekStartKeyOf(end) }
+      }).select("user weekStartKey fromDateKey toDateKey status").lean()
     ]);
+
+    const weekOffSwapsByUser = new Map();
+    (weekOffSwaps || []).forEach(swap => {
+      const uId = String(swap.user);
+      weekOffSwapsByUser.set(uId, [...(weekOffSwapsByUser.get(uId) || []), swap]);
+    });
 
     const userApprovedOtMap = new Map();
     approvedOtRequests.forEach(req => {
@@ -387,6 +389,15 @@ exports.payrollPreview = async (req, res) => {
         ? indiaDateKey(assignment.dateOfJoining || assignment.user.dateOfJoining)
         : "";
       const userOt = userApprovedOtMap.get(userId) || { fullDayDates: new Set(), hourlyDates: new Map() };
+      // The employee's own weekly off day(s) plus any approved swap; with nothing set this is the
+      // department's end-of-week pattern, exactly as before.
+      const weekOffKeys = resolveOffDayKeys({
+        department: departmentDoc,
+        weekOffDays: assignment.user?.weekOffDays,
+        swaps: weekOffSwapsByUser.get(userId) || [],
+        from: start,
+        to: end
+      });
       const approvedFullDayCount = userOt.fullDayDates.size;
       let totalOvertimeMinutes = 0;
       let overtimeDays = approvedFullDayCount;
@@ -437,7 +448,7 @@ exports.payrollPreview = async (req, res) => {
           rawStatus = "PRESENT";
         }
         const isHoliday = holidayKeys.has(key) || rawStatus === "HOLIDAY";
-        const isWeekOff = dayOfWeek > effectiveWorkingDays(departmentDoc, date);
+        const isWeekOff = weekOffKeys.has(key);
         const isOffDay = isWeekOff || isHoliday;
 
         let workingStatus = "";

@@ -1003,6 +1003,8 @@ scheduleDbJob('0 9 * * *', 'Daily overdue summary', dailyOverdueSummary);
 scheduleDbJob('30 10 * * *', 'Daily absent marking', markDailyAbsent);
 
 scheduleDbJob('* * * * *', 'Pending task reminders', sendConfiguredTaskReminders);
+// A break that runs past the company's cap: the admin and the employee are told once.
+scheduleDbJob('* * * * *', 'Break overstay alerts', () => require('./HR-CDS/controllers/breakController').sendOverstayAlerts());
 
 scheduleDbJob('* * * * *', 'CRM follow-up reminders', sendCrmFollowUpReminders);
 
@@ -1218,6 +1220,10 @@ app.use("/api/app-version", require("./routes/appVersionRoutes.js"));
 app.use("/api/attendance", require("./HR-CDS/routes/attendanceRoutes.js"));
 app.use("/api/overtime", require("./HR-CDS/routes/overtimeRoutes.js"));
 app.use("/overtime", require("./HR-CDS/routes/overtimeRoutes.js"));
+app.use("/api/week-off", require("./HR-CDS/routes/weekOffRoutes.js"));
+app.use("/week-off", require("./HR-CDS/routes/weekOffRoutes.js"));
+app.use("/api/breaks", require("./HR-CDS/routes/breakRoutes.js"));
+app.use("/breaks", require("./HR-CDS/routes/breakRoutes.js"));
 app.use("/api/leaves", require("./HR-CDS/routes/LeaveRoutes.js"));
 app.use("/api/asset-requests", require("./HR-CDS/routes/assetRequestRoutes.js"));
 // Any write that can change a task (task, project, client and client-task routes) clears the
