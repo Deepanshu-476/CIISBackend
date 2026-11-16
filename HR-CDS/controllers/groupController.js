@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const Group = require('../models/Group');
 const Task = require('../models/Task');
 const User = require('../../models/User');
+const Conversation = require('../chat/models/Conversation');
 const {notifyDirectUsers} = require('../utils/systemNotificationService');
 const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
 
@@ -285,7 +286,19 @@ exports.updateGroup = async (req, res) => {
     const { name, description } = req.body;
     const rawMembers = req.body.members || req.body['members[]'];
     const members = Array.isArray(rawMembers) ? rawMembers : (rawMembers ? [rawMembers] : undefined);
-    const groupImage = req.file ? `/api/uploads/chat/${encodeURIComponent(req.file.filename)}` : (req.body.avatar || req.body.profileImage || req.body.image);
+    const removeAvatar = req.body.removeAvatar === true || req.body.removeAvatar === 'true' || req.body.avatar === '';
+    let groupImage;
+    if (req.file) {
+      groupImage = `/api/uploads/chat/${encodeURIComponent(req.file.filename)}`;
+    } else if (removeAvatar) {
+      groupImage = '';
+    } else if (req.body.avatar !== undefined) {
+      groupImage = req.body.avatar || '';
+    } else if (req.body.profileImage !== undefined) {
+      groupImage = req.body.profileImage || '';
+    } else if (req.body.image !== undefined) {
+      groupImage = req.body.image || '';
+    }
 
     const group = await Group.findOne({
       _id: groupId,
@@ -347,6 +360,10 @@ exports.updateGroup = async (req, res) => {
       group.avatar = groupImage || '';
       group.profileImage = groupImage || '';
       group.image = groupImage || '';
+      await Conversation.updateMany(
+        { groupId: group._id },
+        { $set: { groupImage: groupImage || '' } }
+      );
     }
 
     await group.save();
@@ -373,7 +390,10 @@ exports.updateGroup = async (req, res) => {
     res.json({
       success: true,
       message: 'Group updated successfully',
-      group
+      group: {
+        ...group.toObject(),
+        groupImage: groupImage !== undefined ? (groupImage || '') : (group.profileImage || group.avatar || group.image || '')
+      }
     });
 
   } catch (error) {

@@ -4,6 +4,7 @@ const crypto = require("crypto");
 const rateLimit = require("express-rate-limit");
 
 const {
+  markMessagesDelivered,
   createConversation,
   createGroupConversation,
   getConversations,
@@ -104,12 +105,6 @@ const createCoturnIceServers = () => {
   ];
 };
 
-router.get("/test", (req, res) => {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(404).json({ success: false, message: 'Not found' });
-  }
-  res.json({success: true, message: "Chat API Working"});
-});
 
 router.use(authMiddleware, require("../middleware/projectChatGuard"));
 
@@ -128,6 +123,7 @@ router.patch("/message/:messageId/delete-for-me", deleteMessageForMe);
 router.patch("/message/:messageId/delete-for-everyone", deleteMessageForEveryone);
 router.post("/message/:messageId/forward", forwardMessage);
 router.patch("/message/:messageId/seen", markMessageSeen);
+router.post("/messages/delivered", markMessagesDelivered);
 router.get("/message/:messageId/info", getMessageInfo);
 router.patch("/conversation/:id/mute", updateConversationMute);
 router.patch("/conversation/:id/disappearing-messages", updateDisappearingMessages);
@@ -156,9 +152,15 @@ router.get("/turn-credentials", turnCredentialsLimiter, async (_req, res) => {
 
   const coturnIceServers = createCoturnIceServers();
   if (!coturnIceServers || !coturnIceServers.length) {
+    // Naming the missing variable turns "calls keep dropping" into a one-line server fix.
+    const missing = [
+      String(process.env.COTURN_STATIC_AUTH_SECRET || process.env.TURN_STATIC_AUTH_SECRET || "").trim() ? null : "COTURN_STATIC_AUTH_SECRET",
+      getCoturnUrls().length ? null : "COTURN_URLS or COTURN_HOST",
+    ].filter(Boolean);
     return res.status(503).json({
       success: false,
-      message: "Self-hosted TURN server is not configured",
+      message: `Self-hosted TURN server is not configured (missing: ${missing.join(", ")})`,
+      missing,
     });
   }
 

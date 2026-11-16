@@ -74,8 +74,9 @@ const scheduleRange = schedule => {
 
 const addClause = (filter, clause) => {
   if (!clause) return;
-  filter.$and = filter.$and || [];
-  filter.$and.push(clause);
+  // New array every time: filters are shallow copies of a base that may already have $and
+  // (branch scope), and that base is reused for the cached summary.
+  filter.$and = [...(filter.$and || []), clause];
 };
 
 // "#LD-1A2B" codes shown in the UI are the last characters of the record id.
@@ -121,6 +122,19 @@ const cachedSummary = (name, company, extra, loader) => getOrSetCached(
 );
 
 const invalidateCrmListSummaries = () => invalidateCache(SUMMARY_CACHE_PREFIX);
+
+// Branch rule (utils/branchScope, set as req.crmUserScope by requireCrmPagePermission):
+// a CRM viewer who is not owner/admin sees records of the telecallers in their branches.
+// Leads that nobody has been given yet stay visible so they can still be assigned.
+const scopeKey = req => (Array.isArray(req?.crmUserScope) ? `scope:${req.crmUserScope.map(String).sort().join(',')}` : '');
+const withUserScope = (req, matchBase, field, { includeUnassigned = false } = {}) => {
+  if (!Array.isArray(req?.crmUserScope)) return matchBase;
+  const ids = req.crmUserScope.map(toObjectId);
+  const clause = includeUnassigned
+    ? { $or: [{ [field]: { $in: ids } }, { [field]: null }] }
+    : { [field]: { $in: ids } };
+  return { ...matchBase, $and: [...(matchBase.$and || []), clause] };
+};
 
 const sendPage = (res, { items, total, page, limit, stats, options }) => res.json({
   items,
@@ -251,12 +265,12 @@ const LEAD_PAGE_PROJECTION = [
 // name: cache namespace for this list; base: list-defining filter (company + list condition).
 const sendLeadPage = async (req, res, { name, base, sort }) => {
   const { page, limit, skip } = pageParams(req);
-  const matchBase = { ...base, company: toObjectId(base.company) };
+  const matchBase = withUserScope(req, { ...base, company: toObjectId(base.company) }, 'assignedTo', { includeUnassigned: true });
   const filter = applyLeadFilters(req, matchBase);
   const [items, total, summary] = await Promise.all([
     Lead.aggregate([{ $match: filter }, { $sort: sort }, { $skip: skip }, { $limit: limit }, ...LEAD_PAGE_PROJECTION]),
     Lead.countDocuments(filter),
-    cachedSummary(name, String(base.company), '', () => leadSummary(name, matchBase))
+    cachedSummary(name, String(base.company), scopeKey(req), () => leadSummary(name, matchBase))
   ]);
   return sendPage(res, { items: items.map(formatLeadForClient), total, page, limit, ...summary });
 };
@@ -314,7 +328,7 @@ const callSummary = async base => {
 
 const sendCallLogPage = async (req, res, { name, base }) => {
   const { page, limit, skip } = pageParams(req);
-  const matchBase = { ...base, company: toObjectId(base.company) };
+  const matchBase = withUserScope(req, { ...base, company: toObjectId(base.company) }, 'agent');
   const filter = applyCallFilters(req, matchBase);
   const [items, total, summary] = await Promise.all([
     CallLog.find(filter)
@@ -329,7 +343,7 @@ const sendCallLogPage = async (req, res, { name, base }) => {
       .populate('agent', 'name email role companyRole jobRole')
       .lean(),
     CallLog.countDocuments(filter),
-    cachedSummary(name, String(base.company), '', () => callSummary(matchBase))
+    cachedSummary(name, String(base.company), scopeKey(req), () => callSummary(matchBase))
   ]);
   return sendPage(res, { items: items.map(formatCallLogForClient), total, page, limit, ...summary });
 };
@@ -405,7 +419,7 @@ const followUpSummary = async base => {
 
 const sendFollowUpPage = async (req, res, { name, base }) => {
   const { page, limit, skip } = pageParams(req);
-  const matchBase = { ...base, company: toObjectId(base.company) };
+  const matchBase = withUserScope(req, { ...base, company: toObjectId(base.company) }, 'agent');
   const filter = applyFollowUpFilters(req, matchBase);
   const [items, total, summary] = await Promise.all([
     FollowUp.find(filter)
@@ -416,7 +430,7 @@ const sendFollowUpPage = async (req, res, { name, base }) => {
       .populate('agent', 'name')
       .lean(),
     FollowUp.countDocuments(filter),
-    cachedSummary(name, String(base.company), '', () => followUpSummary(matchBase))
+    cachedSummary(name, String(base.company), scopeKey(req), () => followUpSummary(matchBase))
   ]);
   return sendPage(res, { items: items.map(formatFollowUpForClient), total, page, limit, ...summary });
 };

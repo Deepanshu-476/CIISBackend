@@ -136,6 +136,25 @@ async function adminFlow(ctx) {
   await T.call('Badges', 'GET', '/api/badges', { ...std, expect: '200' }, is(200));
   await T.call('Asset requests (admin)', 'GET', '/api/asset-requests/all', { ...o, expect: '200' }, is(200));
   await T.call('My asset requests', 'GET', '/api/asset-requests/my-requests', { ...std, expect: '200' }, is(200));
+
+  // ---------- Calls: TURN credentials ----------
+  // Calls without TURN fall back to STUN and drop audio, so a missing setup is a failure here.
+  T.setModule('Calls: TURN credentials');
+  await T.call('Employee gets TURN credentials for calls', 'GET', '/api/chat/turn-credentials', { ...std, expect: '200 + turn server' }, r => {
+    if (r.status === 503) return `got 503: ${messageOf(r)} — set COTURN_HOST and COTURN_STATIC_AUTH_SECRET in the backend .env`;
+    if (r.status !== 200 || !Array.isArray(r.data)) return `expected 200 with a list of ICE servers, got ${r.status}: ${messageOf(r)}`;
+    const turn = r.data.find(s => [].concat(s.urls || []).some(u => /^turns?:/i.test(u)));
+    if (!turn || !turn.username || !turn.credential) return 'no turn: server with username + credential in the response';
+    const expiresAt = Number(turn.username);
+    if (!(expiresAt * 1000 > Date.now())) return `credential username "${turn.username}" is not a future expiry time`;
+    const secret = String(process.env.COTURN_STATIC_AUTH_SECRET || '').trim();
+    if (secret) {
+      const expected = require('crypto').createHmac('sha1', secret).update(String(turn.username)).digest('base64');
+      if (expected !== turn.credential) return 'credential does not match COTURN_STATIC_AUTH_SECRET (backend and coturn secrets differ)';
+    }
+    return true;
+  });
+  await T.call('TURN credentials need a login', 'GET', '/api/chat/turn-credentials', { token: '', as: 'none', expect: '401' }, is(401));
 }
 
 module.exports = { adminFlow };

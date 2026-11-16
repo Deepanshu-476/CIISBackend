@@ -1482,6 +1482,9 @@ const getClientById = async (req, res) => {
         message: 'Client not found'
       });
     }
+    if (!(await require('../../middleware/pageAccess').canSeeClient(req.user, client._id))) {
+      return res.status(403).json({ success: false, message: 'You can only see your own client account.' });
+    }
 
     res.json({
       success: true,

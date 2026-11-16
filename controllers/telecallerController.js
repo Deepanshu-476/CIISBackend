@@ -341,6 +341,51 @@ exports.callLogs = async (req, res, next) => {
   } catch (error) { next(error); }
 };
 
+// The app's call-log sweep asks, for a batch of numbers from the phone's call log, which ones are
+// leads of this user and which of their calls are already stored (and already have a recording).
+// That is what lets a recording found minutes later - a short call, or an incoming one - be attached
+// to the call that was already logged, without uploading anything twice.
+const PHONE_BATCH_LIMIT = 200;
+const SWEEP_MAX_DAYS = 30;
+exports.matchPhones = async (req, res, next) => {
+  try {
+    const raw = Array.isArray(req.body?.phones) ? req.body.phones : [];
+    if (!raw.length) return res.json({ items: [] });
+    const digitsOf = value => String(value || '').replace(/\D/g, '').slice(-10);
+    const keys = [...new Set(raw.map(digitsOf).filter(value => value.length >= 6))].slice(0, PHONE_BATCH_LIMIT);
+    if (!keys.length) return res.json({ items: [] });
+    const days = Math.min(Math.max(parseInt(req.body?.sinceDays, 10) || 7, 1), SWEEP_MAX_DAYS);
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    const patterns = keys.map(key => new RegExp(`${key.split('').join('\\D*')}\\D*$`));
+    const leads = await Lead.find({ ...scope(req), phone: { $in: patterns } })
+      .select('name phone callHistory.id callHistory.recordingUrl callHistory.date')
+      .lean();
+
+    const items = [];
+    const claimed = new Set();
+    keys.forEach(key => {
+      // The newest lead wins when two leads share a number, same as the caller-ID lookup.
+      const lead = leads.find(candidate => digitsOf(candidate.phone) === key)
+        || leads.find(candidate => {
+          const leadKey = digitsOf(candidate.phone);
+          return leadKey.length >= 6 && (key.endsWith(leadKey) || leadKey.endsWith(key));
+        });
+      if (!lead || claimed.has(`${key}:${lead._id}`)) return;
+      claimed.add(`${key}:${lead._id}`);
+      const recent = (lead.callHistory || []).filter(call => !call?.date || new Date(call.date) >= since);
+      items.push({
+        phone: key,
+        leadId: String(lead._id),
+        leadName: lead.name || '',
+        callIds: recent.map(call => call.id).filter(Boolean),
+        recordedCallIds: recent.filter(call => cleanRecordingUrl(call.recordingUrl)).map(call => call.id).filter(Boolean),
+      });
+    });
+    res.json({ items, sinceDays: days });
+  } catch (error) { next(error); }
+};
+
 exports.recordingLead = async (req, res, next) => {
   try {
     if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ message: 'Invalid lead ID.' });

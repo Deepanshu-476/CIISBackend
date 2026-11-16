@@ -5,8 +5,6 @@ const Company = require('../../models/Company');
 const PagePermission = require('../../models/PagePermission');
 const LeavePolicy = require('../../models/LeavePolicy');
 const nodemailer = require('nodemailer');
-const fs = require('fs');
-const path = require('path');
 const mongoose = require('mongoose');
 
 
@@ -20,6 +18,7 @@ const { emitLeaveEvents } = require('../socket/handlers/leaveHandlers');
 const {notifyPageUsers, notifyDirectUsers} = require('../utils/systemNotificationService');
 const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
 const { cleanRecurringTasksForAbsentUserRange } = require('../cron/recurringTasks');
+const { userBranchCondition } = require('../../utils/branchScope');
 
 const APPROVAL_ROLES = ['manager', 'hr', 'owner'];
 
@@ -183,18 +182,6 @@ const autoRejectExpiredLeaves = async (scopeFilter = {}) => {
   }
 };
 
-const writeLeaveDebugLog = (label, data) => {
-  try {
-    const logPath = path.join(__dirname, '../../leave-debug.log');
-    fs.appendFileSync(
-      logPath,
-      `${new Date().toISOString()} ${label} ${JSON.stringify(data, null, 2)}\n`,
-      'utf8'
-    );
-  } catch {
-    
-  }
-};
 
 const normalizeId = (value) => {
   if (!value) return '';
@@ -433,34 +420,19 @@ const getEmployeeLeavesPageAccess = async (companyId, userId) => {
   };
 };
 
-const getCompanyUserIds = async (companyId) => {
+// Users of this company whose leaves the viewer may see: owner/admin every branch, anyone
+// else only the branches assigned to them (utils/branchScope). `branchId` narrows it further.
+const getBranchScopedCompanyUserIds = async (companyId, branchId, viewer = null) => {
+  const branchCondition = viewer ? userBranchCondition(viewer, branchId) : (
+    branchId && mongoose.isValidObjectId(branchId)
+      ? { $or: [{ branch: branchId }, { branchId }, { assignedBranches: branchId }] }
+      : {}
+  );
   const companyUsers = await User.find({
-    $or: [
-      { company: companyId },
-      { companyId }
+    $and: [
+      { $or: [{ company: companyId }, { companyId }] },
+      branchCondition,
     ]
-  }).select('_id');
-
-  return companyUsers.map(user => user._id);
-};
-
-const getBranchScopedCompanyUserIds = async (companyId, branchId) => {
-  if (!branchId || !mongoose.isValidObjectId(branchId)) {
-    return getCompanyUserIds(companyId);
-  }
-
-  const companyUsers = await User.find({
-    $or: [
-      { company: companyId },
-      { companyId }
-    ],
-    $and: [{
-      $or: [
-        { branch: branchId },
-        { branchId },
-        { assignedBranches: branchId }
-      ]
-    }]
   }).select('_id');
 
   return companyUsers.map(user => user._id);
@@ -723,19 +695,6 @@ exports.applyLeave = async (req, res) => {
 
   } catch (err) {
     console.error("❌ Error in applyLeave controller:", err);
-    writeLeaveDebugLog('applyLeave-error', {
-      message: err.message,
-      stack: err.stack,
-      body: req.body,
-      user: {
-        id: req.user?._id,
-        email: req.user?.email,
-        company: req.user?.company,
-        companyCode: req.user?.companyCode,
-        jobRole: req.user?.jobRole,
-        companyRole: req.user?.companyRole
-      }
-    });
     res.status(500).json({ 
       success: false,
       message: err.message || 'Server error while applying leave',
@@ -822,7 +781,7 @@ exports.getAllLeaves = async (req, res) => {
 
     
     const requestedBranchId = req.query.branch || req.query.branchId;
-    const companyUserIds = await getBranchScopedCompanyUserIds(userCompanyId, requestedBranchId);
+    const companyUserIds = await getBranchScopedCompanyUserIds(userCompanyId, requestedBranchId, req.user);
     const pageAccess = await getEmployeeLeavesPageAccess(userCompanyId, req.user._id);
     
     void 0;
@@ -2126,7 +2085,7 @@ exports.getLeaveStats = async (req, res) => {
     let stats = {};
 
     if (isPrivileged && userCompanyId) {
-      const companyUserIds = await getBranchScopedCompanyUserIds(userCompanyId, req.query.branch);
+      const companyUserIds = await getBranchScopedCompanyUserIds(userCompanyId, req.query.branch, req.user);
       let filter = {
         user: { $in: companyUserIds }
       };

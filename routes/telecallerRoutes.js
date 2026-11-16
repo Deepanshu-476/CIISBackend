@@ -6,7 +6,7 @@ const controller = require('../controllers/telecallerController');
 const { requireCrmPagePermission } = require('../middleware/crmPagePermission');
 
 router.use(protect);
-const pages = ['dashboard', 'call-dashboard', 'assigned-calls', 'todays-calls', 'pending-calls', 'scheduled-calls', 'completed-calls', 'call-history', 'follow-ups', 'converted-leads', 'call-workspace', 'lead-detail'];
+const pages = ['dashboard', 'call-dashboard', 'assigned-calls', 'todays-calls', 'pending-calls', 'scheduled-calls', 'completed-calls', 'call-history', 'follow-ups', 'converted-leads', 'call-workspace', 'lead-detail', 'add-lead'];
 const enabled = (keys, slug) => [`admin-telecaller-${slug}`, `ciisuser/telecaller/${slug}`, `telecaller/${slug}`].some(key => keys.has(key));
 
 router.use(async (req, res, next) => {
@@ -36,12 +36,29 @@ const lookupHandler = typeof controller.lookup === 'function'
   ? controller.lookup
   : (req, res) => res.json({ found: false });
 router.get('/lookup', requireCrmPagePermission(telecallerPaths), lookupHandler);
+// The app's call-log sweep: which of these phone-log numbers are my leads, and what is already stored.
+const matchPhonesHandler = typeof controller.matchPhones === 'function'
+  ? controller.matchPhones
+  : (req, res) => res.json({ items: [] });
+router.post('/match-phones', requireCrmPagePermission(telecallerPaths), matchPhonesHandler);
 const workspaceEnabled = (req, res, next) => (enabled(req.telecallerPages, 'call-workspace')
   ? next()
   : res.status(403).json({ message: 'This call update page is not enabled for your company.' }));
 if (typeof controller.quickLead === 'function') {
   router.post('/quick-lead', workspaceEnabled, requireCrmPagePermission('/ciisUser/telecaller/call-workspace', 'edit'), controller.quickLead);
 }
+// A telecaller adds a lead of their own; it is assigned to them. Needs the "Add Lead" telecaller page
+// in Page Management. Companies that have the Call Workspace in their plan get it too.
+const addLeadEnabled = (req, res, next) => (enabled(req.telecallerPages, 'add-lead') || enabled(req.telecallerPages, 'call-workspace')
+  ? next()
+  : res.status(403).json({ message: 'Adding leads is not enabled for your company.' }));
+const crmLeads = require('../controllers/crmLeadController');
+router.get('/lead-options', addLeadEnabled, requireCrmPagePermission('/ciisUser/telecaller/add-lead'), (req, res, next) => {
+  req.crmCompany = req.telecallerCompany;
+  return crmLeads.options(req, res, next);
+});
+router.post('/leads', addLeadEnabled, requireCrmPagePermission('/ciisUser/telecaller/add-lead', 'edit'),
+  (req, res, next) => crmLeads.createLead(req, res, next, { company: req.telecallerCompany, assignToSelf: true }));
 if (typeof controller.fieldConfig === 'function') {
   router.get('/field-config', requireCrmPagePermission(telecallerPaths), controller.fieldConfig);
 }

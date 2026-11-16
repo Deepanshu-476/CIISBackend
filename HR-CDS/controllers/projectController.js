@@ -15,6 +15,7 @@ const User = require("../../models/User");
 const Branch = require("../../models/Branch");
 const mongoose = require("mongoose");
 const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagination");
+const { canSeeAllBranches, allowedBranchIds, scopedUserIds } = require('../../utils/branchScope');
 
 const PROJECT_USER_POPULATE_FIELDS = 'name email role jobRole companyRole profileImage avatar department branch assignedBranches';
 const PROJECT_TASK_USER_POPULATE_FIELDS = 'name email role jobRole companyRole';
@@ -31,10 +32,8 @@ const normalizeIdList = (value) => {
   )];
 };
 
-const canViewAllBranchData = (user = {}) => {
-  const roleText = String(user.companyRole || user.jobRole || user.role || '').trim().toLowerCase();
-  return ['owner', 'company_owner', 'companyowner', 'super_admin', 'superadmin'].includes(roleText);
-};
+// Same rule as every other people page (utils/branchScope): owner / company admin see all branches.
+const canViewAllBranchData = (user = {}) => canSeeAllBranches(user);
 
 const getUserBranchIds = (user = {}) => normalizeIdList([
   user.branch,
@@ -801,6 +800,24 @@ exports.listProjects = async (req, res) => {
       }
       : { $or: companyFilters };
 
+
+    // "All branches" for a branch-limited project admin = projects of their branches, plus
+    // projects without a branch that have someone from their branches.
+    const viewerBranches = allowedBranchIds(req.user);
+    if (!branchRequested && viewerBranches !== null && isProjectAdmin(req.user)) {
+      const branchPeople = (await scopedUserIds(req.user)) || [];
+      query = {
+        $and: [
+          query,
+          {
+            $or: [
+              { branch: { $in: viewerBranches } },
+              { branch: { $in: [null] }, $or: [{ users: { $in: branchPeople } }, { createdBy: { $in: branchPeople } }] }
+            ]
+          }
+        ]
+      };
+    }
 
     if (!isProjectAdmin(req.user)) {
       const userObjId = mongoose.Types.ObjectId.isValid(req.user.id) ? new mongoose.Types.ObjectId(req.user.id) : null;
@@ -1858,6 +1875,12 @@ exports.addTask = async (req, res) => {
       }
 
 
+      const isInitialInProgress = task.status === 'in-progress' || task.status === 'in progress';
+      if (isInitialInProgress) {
+        task.startedAt = now;
+        task.inProgressSince = now;
+      }
+
       const activityLog = {
         type: "creation",
         description: `Task "${safeTitle}" was created`,
@@ -1869,6 +1892,17 @@ exports.addTask = async (req, res) => {
       };
 
       task.activityLogs = [activityLog];
+
+      if (isInitialInProgress) {
+        task.activityLogs.push({
+          type: "status_change",
+          description: "Status changed from pending to in progress",
+          oldValue: "pending",
+          newValue: "in progress",
+          performedBy: req.user.id,
+          performedAt: now
+        });
+      }
 
 
       const updateResult = await Project.updateOne(
@@ -2563,8 +2597,7 @@ exports.updateTaskStatus = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Error updating task status",
-      error: error.message,
-      stack: error.stack
+      error: error.message
     });
   }
 };
