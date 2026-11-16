@@ -321,6 +321,62 @@ const FORBIDDEN_ASSIGNEE_NAMES = new Set([
   'so', 'than', 'too', 'very'
 ]);
 
+const WEEKDAY_CANONICAL = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+
+// Common typo regexes for weekdays (English and Hindi transliterations)
+const WEEKDAY_TYPO_MAP = [
+  { day: 'monday', regex: /\b(?:monda[yt]|mondate|mondey|mondy|somvaar|somwar|som|mon)\b/i },
+  { day: 'tuesday', regex: /\b(?:tuesda[yt]|tuesdate|tuseday|teusday|mangalvaar|mangalwar|mangal|tue)\b/i },
+  { day: 'wednesday', regex: /\b(?:wednesda[yt]|wednesdate|wednsday|wensday|wednesdya|budhvaar|budhwar|budh|wed)\b/i },
+  { day: 'thursday', regex: /\b(?:thursda[yt]|thursdate|thrusday|thurday|guruvaar|guruwar|guru|veervaar|veerwar|thu)\b/i },
+  { day: 'friday', regex: /\b(?:frida[yt]|fridate|firday|fryday|shukravaar|shukrawar|shukr|fri)\b/i },
+  { day: 'saturday', regex: /\b(?:saturda[yt]|saturdate|satday|shanivaar|shaniwar|shani|sat)\b/i },
+  { day: 'sunday', regex: /\b(?:sunda[yt]|sundate|ravivaar|raviwar|ravi|itvaar|itwar|sun)\b/i },
+];
+
+function levenshteinDistance(a, b) {
+  if (a === b) return 0;
+  if (!a || !b) return (a || b).length;
+  const m = a.length;
+  const n = b.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + cost
+      );
+    }
+  }
+  return dp[m][n];
+}
+
+function matchWeekdayFuzzy(rawToken) {
+  if (!rawToken || typeof rawToken !== 'string') return null;
+  const t = rawToken.toLowerCase().trim().replace(/^[,\s;:\-_/\\()]+|[,\s;:\-_/\\()]+$/g, '');
+  if (!t || t.length < 3) return null;
+
+  for (const entry of WEEKDAY_TYPO_MAP) {
+    if (entry.regex.test(t)) {
+      return entry.day;
+    }
+  }
+
+  if (t.length >= 4) {
+    for (const canonical of WEEKDAY_CANONICAL) {
+      const maxAllowed = canonical.length >= 7 ? 2 : 1;
+      if (levenshteinDistance(t, canonical) <= maxAllowed) {
+        return canonical;
+      }
+    }
+  }
+  return null;
+}
+
 const DATE_WORDS_SET = new Set([
   'jan', 'january', 'feb', 'february', 'mar', 'march', 'apr', 'april', 'may',
   'jun', 'june', 'jul', 'july', 'aug', 'august', 'sep', 'sept', 'september',
@@ -333,7 +389,8 @@ const DATE_WORDS_SET = new Set([
   'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
   'tarikh', 'tareekh', 'date', 'dates', 'day', 'days', 'din', 'mahina', 'mahine',
   'month', 'months', 'year', 'years', 'saal', 'sal', 'hafta', 'hafte', 'week', 'weeks',
-  'subah', 'sham', 'shaam', 'dopahar', 'raat', 'baje', 'time', 'am', 'pm'
+  'subah', 'sham', 'shaam', 'dopahar', 'raat', 'baje', 'time', 'am', 'pm',
+  'repeat', 'daily', 'roz', 'weekdays', 'recurrence', 'dohrana', 'interval'
 ]);
 
 function isDateLikeToken(cand) {
@@ -341,11 +398,11 @@ function isDateLikeToken(cand) {
   const clean = cand.trim().toLowerCase();
   // 1. Only digits and punctuation/whitespace: e.g. "2026", "3", "3/11/2026", "03-11-2026"
   if (/^[\d\s,.\/\-_:;]+$/.test(clean)) return true;
-  // 2. Exact match in DATE_WORDS_SET
-  if (DATE_WORDS_SET.has(clean)) return true;
-  // 3. Every word is either a digit, ordinal (1st, 2nd, etc.), or a date word (e.g. "november 3", "3 november", "november 2026")
+  // 2. Exact match in DATE_WORDS_SET or fuzzy weekday
+  if (DATE_WORDS_SET.has(clean) || Boolean(matchWeekdayFuzzy(clean))) return true;
+  // 3. Every word is either a digit, ordinal (1st, 2nd, etc.), a date word, or fuzzy weekday
   const words = clean.split(/[\s,.\/\-_]+/).filter(Boolean);
-  if (words.length > 0 && words.every(w => /^\d+(?:st|nd|rd|th)?$/i.test(w) || DATE_WORDS_SET.has(w))) {
+  if (words.length > 0 && words.every(w => /^\d+(?:st|nd|rd|th)?$/i.test(w) || DATE_WORDS_SET.has(w) || Boolean(matchWeekdayFuzzy(w)))) {
     return true;
   }
   return false;
@@ -397,7 +454,7 @@ function cleanAssigneeName(name) {
   clean = clean.replace(/^(?:team\s+members?|team\s+member|members?|users?|teammates?)[,\s]+/iu, '').trim();
   clean = clean.replace(/\s+(?:ko|co|koh|kor|ke\s+liye|को|के\s+लिए)$/iu, '').trim();
   clean = clean.replace(/^[.,;:!?'"\\/()\[\]{}]+|[.,;:!?'"\\/()\[\]{}]+$/g, '').trim();
-  if (isDateLikeToken(clean)) return null;
+  if (isDateLikeToken(clean) || matchWeekdayFuzzy(clean)) return null;
   if (isValidAssigneeCandidate(clean)) {
     return clean;
   }
@@ -499,7 +556,8 @@ function extractMultipleAssignees(text) {
         !/\d/.test(clean) &&
         !/[.!?:\\]/.test(clean) &&
         !isDateLikeToken(clean) &&
-        !/(?:project|task|task\s+ka\s+naam|title|description|due\s+date|priority|status|reminder|checkpoints?|चेकपॉइंट्स?|चेकपॉइंट|banao|create|kal|aaj|parso|am\b|pm\b|baje|time|date|प्रोजेक्ट|प्रजेक्ट|प्रोज़ेक्ट|प्रोजैक्ट|टास्क|बनाओ|बना\s*दो|बनाइए|बनाइये|क्रिएट|नया|नई|नयी|नाम)/iu.test(clean) &&
+        !clean.split(/[\s,;&+]+/).some(w => matchWeekdayFuzzy(w)) &&
+        !/(?:project|task|task\s+ka\s+naam|title|description|due\s+date|priority|status|reminder|checkpoints?|चेकपॉइंट्स?|चेकपॉइंट|banao|create|kal|aaj|parso|am\b|pm\b|baje|time|date|repeat|dohrana|daily|roz|har\s+din|weekdays|recurrence|प्रोजेक्ट|प्रजेक्ट|प्रोज़ेक्ट|प्रोजैक्ट|टास्क|बनाओ|बना\s*दो|बनाइए|बनाइये|क्रिएट|नया|नई|नयी|नाम)/iu.test(clean) &&
         (clean.includes(',') || clean.includes('&') || clean.includes('+') || clean.includes('और') || clean.includes('तथा') || /\b(?:and|aur|or|plus|tatha)\b/i.test(clean))
       ) {
         candidateSegment = clean;
@@ -523,12 +581,14 @@ function extractMultipleAssignees(text) {
       'project', 'mein', 'me', 'mai', 'main', 'में', 'प्रोजेक्ट', 'demo',
       'andar', 'ka', 'ki', 'ke', 'in', 'inside', 'hai', 'hain',
       'team', 'member', 'members',
-      'or', 'aur', 'and', 'plus', 'tatha', 'और', 'तथा'
+      'or', 'aur', 'and', 'plus', 'tatha', 'और', 'तथा',
+      'repeat', 'daily', 'roz', 'weekdays', 'dohrana', 'recurrence',
+      'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'
     ]);
 
     for (const rawToken of tokens) {
       const cleaned = cleanAssigneeName(rawToken.replace(/^(?:to|ko|mai|mein|me)\s+/i, ''));
-      if (cleaned && cleaned.length >= 2 && !nonNames.has(cleaned.toLowerCase()) && !isSelfPhrase(cleaned)) {
+      if (cleaned && cleaned.length >= 2 && !nonNames.has(cleaned.toLowerCase()) && !isSelfPhrase(cleaned) && !matchWeekdayFuzzy(cleaned)) {
         const lower = cleaned.toLowerCase();
         if (!seen.has(lower)) {
           seen.add(lower);
@@ -1169,13 +1229,21 @@ function parseHinglishSlots(rawText, now = new Date(), referenceDate = null, las
     if (!slots.repeatPattern) slots.repeatPattern = 'daily';
   } else {
     const days = [];
-    if (/\b(monday|somvaar|somwar|som)\b/i.test(normalized)) days.push('monday');
-    if (/\b(tuesday|mangalvaar|mangalwar|mangal)\b/i.test(normalized)) days.push('tuesday');
-    if (/\b(wednesday|budhvaar|budhwar|budh)\b/i.test(normalized)) days.push('wednesday');
-    if (/\b(thursday|guruvaar|guruwar|guru|veervaar)\b/i.test(normalized)) days.push('thursday');
-    if (/\b(friday|shukravaar|shukrawar|shukr)\b/i.test(normalized)) days.push('friday');
-    if (/\b(saturday|shanivaar|shaniwar|shani)\b/i.test(normalized)) days.push('saturday');
-    if (/\b(sunday|ravivaar|raviwar|ravi|itvaar|itwar)\b/i.test(normalized)) days.push('sunday');
+    const matchedSet = new Set();
+    const words = normalized.split(/[\s,;&/\\-]+/).filter(Boolean);
+    for (const w of words) {
+      const matched = matchWeekdayFuzzy(w);
+      if (matched && !matchedSet.has(matched)) {
+        matchedSet.add(matched);
+        days.push(matched);
+      }
+    }
+    for (const entry of WEEKDAY_TYPO_MAP) {
+      if (entry.regex.test(normalized) && !matchedSet.has(entry.day)) {
+        matchedSet.add(entry.day);
+        days.push(entry.day);
+      }
+    }
     if (days.length > 0) {
       slots.repeatDays = days;
       if (!slots.repeatPattern) slots.repeatPattern = 'daily';
@@ -1237,7 +1305,23 @@ function parseHinglishSlots(rawText, now = new Date(), referenceDate = null, las
   if (isSelfPhrase(normalized)) {
     slots.isSelf = true;
   }
-  if (!slots.checkpoints || slots.checkpoints.length === 0) {
+  const isRepeatSlot = lastAskedField === 'repeatPattern' || lastAskedField === 'repeatDays' || lastAskedField === 'recurrenceEndDate';
+  const hasRepeatData = Boolean((slots.repeatDays && slots.repeatDays.length > 0) || (slots.repeatPattern && slots.repeatPattern !== 'none') || slots.recurrenceEndDate);
+
+  if (isRepeatSlot || hasRepeatData || (slots.checkpoints && slots.checkpoints.length > 0)) {
+    // Checkpoints or repeat context: only extract assignee if explicit assignment syntax is present (e.g. "assign to Rahul" or "Rahul ko")
+    const assignToMatch = normalized.match(/\b(?:assign(?:ed)?\s+to|task\s+to)\s+([a-zA-Z\u0900-\u097F\s,&+]+?)(?=\s+(?:due|kal|aaj|priority|status|description|checkpoints|repeat|$))/i);
+    const koMatch = normalized.match(/(?:^|\s)([a-zA-Z\u0900-\u097F\s,&+]+?)\s+(?:ko|co|koh|kor|core|cor|के|को)\b/i);
+    if (assignToMatch || koMatch) {
+      const multiAssignee = extractMultipleAssignees(normalized);
+      if (multiAssignee.names && multiAssignee.names.length > 0) {
+        slots.assigneeName = multiAssignee.names.length > 1 ? multiAssignee.names.join(', ') : multiAssignee.names[0];
+        slots.pendingAssigneeNames = [...multiAssignee.names];
+        slots.wantsOthers = true;
+        slots.taskFor = 'others';
+      }
+    }
+  } else {
     const multiAssignee = extractMultipleAssignees(normalized);
     if (multiAssignee.names && multiAssignee.names.length > 0) {
       slots.assigneeName = multiAssignee.names.length > 1 ? multiAssignee.names.join(', ') : multiAssignee.names[0];
@@ -1249,19 +1333,6 @@ function parseHinglishSlots(rawText, now = new Date(), referenceDate = null, las
       if (assigneeMention) {
         slots.assigneeName = assigneeMention;
         slots.pendingAssigneeNames = [assigneeMention];
-        slots.wantsOthers = true;
-        slots.taskFor = 'others';
-      }
-    }
-  } else {
-    // Checkpoints present: only extract assignee if explicit assignment syntax is present (e.g. "assign to Rahul" or "Rahul ko")
-    const assignToMatch = normalized.match(/\b(?:assign(?:ed)?\s+to|task\s+to)\s+([a-zA-Z\u0900-\u097F\s,&+]+?)(?=\s+(?:due|kal|aaj|priority|status|description|checkpoints|$))/i);
-    const koMatch = normalized.match(/(?:^|\s)([a-zA-Z\u0900-\u097F\s,&+]+?)\s+(?:ko|co|koh|kor|core|cor|के|को)\b/i);
-    if (assignToMatch || koMatch) {
-      const multiAssignee = extractMultipleAssignees(normalized);
-      if (multiAssignee.names && multiAssignee.names.length > 0) {
-        slots.assigneeName = multiAssignee.names.length > 1 ? multiAssignee.names.join(', ') : multiAssignee.names[0];
-        slots.pendingAssigneeNames = [...multiAssignee.names];
         slots.wantsOthers = true;
         slots.taskFor = 'others';
       }
@@ -1682,6 +1753,7 @@ module.exports = {
   parseProjectStatusHinglish,
   parseProjectPriorityHinglish,
   parseCheckpointItems,
+  matchWeekdayFuzzy,
 };
 
 

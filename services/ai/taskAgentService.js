@@ -169,6 +169,16 @@ function getIstDateShifted(d = new Date()) {
   return new Date(d.getTime() + INDIA_OFFSET_MS);
 }
 
+function splitServiceTasks(input) {
+  if (!input || typeof input !== 'string') return [];
+  const cleaned = input.replace(/^(?:task\s*ka\s*naam|task\s*title|task\s*name|task)\s*[:=\-]?\s*/i, '').trim();
+  const parts = cleaned
+    .split(/(?:\s*,\s*|\s*;\s*|\r?\n+|\s+\baur\b\s+|\s+\band\b\s+)/i)
+    .map(t => t.replace(/^(?:task\s*ka\s*naam|task\s*title|task\s*name|task\s*\d*)\s*[:=\-]?\s*/i, '').trim())
+    .filter(t => t.length > 0 && !/^(?:and|aur|etc|skip)$/i.test(t));
+  return parts.length > 0 ? parts : (cleaned ? [cleaned] : []);
+}
+
 function hasExplicitFieldEditIntent(text) {
   if (!text || typeof text !== 'string') return false;
   const clean = text.toLowerCase();
@@ -7169,26 +7179,31 @@ const lastAskedField = currentDraft.asked.length > 0
         } else if (currentDraft.activeTaskService) {
           const sName = currentDraft.activeTaskService;
           const cleanName = trimmedMessage.replace(/^(?:task\s*ka\s*naam|task\s*title|task\s*name|task)\s*[:=\-]?\s*/i, '').trim();
-          const tName = cleanName || trimmedMessage;
+          const taskTitles = splitServiceTasks(cleanName || trimmedMessage);
           if (!currentDraft.serviceTasks) currentDraft.serviceTasks = {};
           if (!Array.isArray(currentDraft.serviceTasks[sName])) currentDraft.serviceTasks[sName] = [];
-          currentDraft.serviceTasks[sName].push({
-            name: tName,
-            description: '',
-            priority: 'Medium',
-            dueInDays: 30
-          });
           if (!Array.isArray(currentDraft.customTasks)) currentDraft.customTasks = [];
-          currentDraft.customTasks.push({
-            service: sName,
-            name: tName,
-            description: '',
-            priority: 'Medium',
-            dueInDays: 30
-          });
+          for (const tName of taskTitles) {
+            currentDraft.serviceTasks[sName].push({
+              name: tName,
+              description: '',
+              priority: 'Medium',
+              dueInDays: 30
+            });
+            currentDraft.customTasks.push({
+              service: sName,
+              name: tName,
+              description: '',
+              priority: 'Medium',
+              dueInDays: 30
+            });
+          }
           currentDraft.lastAddedService = sName;
           currentDraft.activeTaskService = null;
-          ackPrefix = `"${tName}" task "${sName}" mein add ho gaya. `;
+          const formattedTitles = taskTitles.map(t => `"${t}"`).join(', ');
+          ackPrefix = taskTitles.length > 1
+            ? `${formattedTitles} tasks "${sName}" mein add ho gaye. `
+            : `"${taskTitles[0]}" task "${sName}" mein add ho gaya. `;
           actionHandled = true;
         } else {
           const selServices = Array.isArray(currentDraft.services) ? currentDraft.services.map(s => typeof s === 'string' ? s : (s.service || s.name)) : [];
@@ -7201,50 +7216,61 @@ const lastAskedField = currentDraft.asked.length > 0
               currentDraft.lastAddedService = null;
               actionHandled = true;
             } else {
+              const taskTitles = splitServiceTasks(taskTitle);
               if (!currentDraft.serviceTasks) currentDraft.serviceTasks = {};
               if (!Array.isArray(currentDraft.serviceTasks[matchedService])) currentDraft.serviceTasks[matchedService] = [];
-              currentDraft.serviceTasks[matchedService].push({
-                name: taskTitle,
-                description: '',
-                priority: 'Medium',
-                dueInDays: 30
-              });
               if (!Array.isArray(currentDraft.customTasks)) currentDraft.customTasks = [];
-              currentDraft.customTasks.push({
-                service: matchedService,
-                name: taskTitle,
-                description: '',
-                priority: 'Medium',
-                dueInDays: 30
-              });
+              for (const tName of taskTitles) {
+                currentDraft.serviceTasks[matchedService].push({
+                  name: tName,
+                  description: '',
+                  priority: 'Medium',
+                  dueInDays: 30
+                });
+                currentDraft.customTasks.push({
+                  service: matchedService,
+                  name: tName,
+                  description: '',
+                  priority: 'Medium',
+                  dueInDays: 30
+                });
+              }
               currentDraft.lastAddedService = matchedService;
               currentDraft.activeTaskService = null;
-              ackPrefix = `"${taskTitle}" task "${matchedService}" mein add ho gaya. `;
+              const formattedTitles = taskTitles.map(t => `"${t}"`).join(', ');
+              ackPrefix = taskTitles.length > 1
+                ? `${formattedTitles} tasks "${matchedService}" mein add ho gaye. `
+                : `"${taskTitles[0]}" task "${matchedService}" mein add ho gaya. `;
               actionHandled = true;
             }
           } else if (currentDraft.lastAddedService && !/\b(?:kisi\s*aur|dusri|doosri|other)\b/i.test(trimmedMessage)) {
             const sName = currentDraft.lastAddedService;
             const cleanName = trimmedMessage.replace(/^(?:task\s*ka\s*naam|task\s*title|task\s*name|task)\s*[:=\-]?\s*/i, '').trim();
-            const tName = cleanName || trimmedMessage;
+            const taskTitles = splitServiceTasks(cleanName || trimmedMessage);
             if (!currentDraft.serviceTasks) currentDraft.serviceTasks = {};
             if (!Array.isArray(currentDraft.serviceTasks[sName])) currentDraft.serviceTasks[sName] = [];
-            currentDraft.serviceTasks[sName].push({
-              name: tName,
-              description: '',
-              priority: 'Medium',
-              dueInDays: 30
-            });
             if (!Array.isArray(currentDraft.customTasks)) currentDraft.customTasks = [];
-            currentDraft.customTasks.push({
-              service: sName,
-              name: tName,
-              description: '',
-              priority: 'Medium',
-              dueInDays: 30
-            });
+            for (const tName of taskTitles) {
+              currentDraft.serviceTasks[sName].push({
+                name: tName,
+                description: '',
+                priority: 'Medium',
+                dueInDays: 30
+              });
+              currentDraft.customTasks.push({
+                service: sName,
+                name: tName,
+                description: '',
+                priority: 'Medium',
+                dueInDays: 30
+              });
+            }
             currentDraft.lastAddedService = sName;
             currentDraft.activeTaskService = null;
-            ackPrefix = `"${tName}" task "${sName}" mein add ho gaya. `;
+            const formattedTitles = taskTitles.map(t => `"${t}"`).join(', ');
+            ackPrefix = taskTitles.length > 1
+              ? `${formattedTitles} tasks "${sName}" mein add ho gaye. `
+              : `"${taskTitles[0]}" task "${sName}" mein add ho gaya. `;
             actionHandled = true;
           } else if (/\b(?:kisi\s*aur|dusri|doosri|other|change)\b/i.test(trimmedMessage)) {
             currentDraft.addingServiceTasks = true;
@@ -7483,7 +7509,7 @@ const lastAskedField = currentDraft.asked.length > 0
         actionHandled = true;
       }
     } else if (mentionedNames && mentionedNames.length > 0 && canAssignOthers && currentDraft.intent !== 'create_project' && currentDraft.intent !== 'create_client' && currentDraft.intent !== 'create_client_plan') {
-      const isAnsweringOtherSlot = lastAskedField && lastAskedField !== 'assignee' && lastAskedField !== 'welcome' && ['title', 'description', 'dueDate', 'dueDateTime', 'priority', 'status', 'checkpoints', 'attachments'].includes(lastAskedField);
+      const isAnsweringOtherSlot = lastAskedField && lastAskedField !== 'assignee' && lastAskedField !== 'welcome';
       if (!isAnsweringOtherSlot) {
         currentDraft.assigneeLedger = mergeIntoLedger(currentDraft.assigneeLedger, mentionedNames);
         syncAssigneeLedgerDerivedFields(currentDraft);
@@ -7495,28 +7521,58 @@ const lastAskedField = currentDraft.asked.length > 0
         currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'assignee');
       }
     } else if (!mentionedNames?.length && lastAskedField === 'assignee' && canAssignOthers && currentDraft.intent !== 'create_project' && currentDraft.intent !== 'create_client' && currentDraft.intent !== 'create_client_plan' && !actionHandled) {
-      const cleanCandidate = cleanAssigneeName(trimmedMessage);
-      const isNegative = detectedIntent?.type === 'cancel' || detectedIntent?.type === 'confirm_no';
-      if (cleanCandidate && isValidAssigneeCandidate(cleanCandidate) && !isNegative && !isSkip(trimmedMessage) && !isSkipAll(trimmedMessage)) {
-        currentDraft.assigneeLedger = mergeIntoLedger(currentDraft.assigneeLedger, [cleanCandidate]);
-        syncAssigneeLedgerDerivedFields(currentDraft);
+      const isRepeatInstruction = /(?:repeat|dohrana|daily|roz|har\s+din|weekdays|recurrence)/i.test(trimmedMessage) || /\b(?:monda[yt]|tuesda[yt]|wednesda[yt]|thursda[yt]|frida[yt]|saturda[yt]|sunda[yt])\b/i.test(trimmedMessage);
+      if (isRepeatInstruction) {
+        currentDraft.intent = 'self_task';
+        currentDraft.taskFor = 'self';
+        currentDraft.wantsOthers = false;
+        currentDraft.assigneeName = null;
+        currentDraft.assigneeId = null;
+        currentDraft.assigneeLabel = null;
+        currentDraft.assignees = [];
+        currentDraft.assignedUsers = [];
+        currentDraft.pendingAssigneeNames = [];
+        currentDraft.assigneeLedger = [];
+        if (!currentDraft.asked.includes('assignee')) currentDraft.asked.push('assignee');
+        const detRepeat = parseHinglishSlots(trimmedMessage, now, currentDraft.dueDateTime, 'repeatPattern');
+        if (detRepeat.repeatDays && detRepeat.repeatDays.length > 0) {
+          currentDraft.repeatDays = detRepeat.repeatDays;
+          currentDraft.repeatPattern = 'daily';
+          if (!currentDraft.asked.includes('repeatPattern')) currentDraft.asked.push('repeatPattern');
+          if (!currentDraft.asked.includes('repeatDays')) currentDraft.asked.push('repeatDays');
+        } else if (detRepeat.repeatPattern) {
+          currentDraft.repeatPattern = detRepeat.repeatPattern;
+          if (!currentDraft.asked.includes('repeatPattern')) currentDraft.asked.push('repeatPattern');
+        }
+        if (detRepeat.recurrenceEndDate) {
+          currentDraft.recurrenceEndDate = detRepeat.recurrenceEndDate;
+          if (!currentDraft.asked.includes('recurrenceEndDate')) currentDraft.asked.push('recurrenceEndDate');
+        }
+        actionHandled = true;
+      } else {
+        const cleanCandidate = cleanAssigneeName(trimmedMessage);
+        const isNegative = detectedIntent?.type === 'cancel' || detectedIntent?.type === 'confirm_no';
+        if (cleanCandidate && isValidAssigneeCandidate(cleanCandidate) && !isNegative && !isSkip(trimmedMessage) && !isSkipAll(trimmedMessage)) {
+          currentDraft.assigneeLedger = mergeIntoLedger(currentDraft.assigneeLedger, [cleanCandidate]);
+          syncAssigneeLedgerDerivedFields(currentDraft);
 
-        if (currentDraft.intent === 'create_project' && Array.isArray(currentDraft.assigneeLedger)) {
-          const resolvedEntries = currentDraft.assigneeLedger.filter(e => e.status === 'resolved' && e.userId);
-          if (resolvedEntries.length > 0) {
-            currentDraft.members = resolvedEntries.map(e => ({
-              id: e.userId,
-              name: e.displayName || e.rawName,
-              label: e.displayName || e.rawName,
-            }));
+          if (currentDraft.intent === 'create_project' && Array.isArray(currentDraft.assigneeLedger)) {
+            const resolvedEntries = currentDraft.assigneeLedger.filter(e => e.status === 'resolved' && e.userId);
+            if (resolvedEntries.length > 0) {
+              currentDraft.members = resolvedEntries.map(e => ({
+                id: e.userId,
+                name: e.displayName || e.rawName,
+                label: e.displayName || e.rawName,
+              }));
+            }
           }
+          if (currentDraft.intent !== 'task_project') {
+            currentDraft.wantsOthers = true;
+            currentDraft.taskFor = 'others';
+            currentDraft.intent = 'task_assigned_user';
+          }
+          currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'assignee');
         }
-        if (currentDraft.intent !== 'task_project') {
-          currentDraft.wantsOthers = true;
-          currentDraft.taskFor = 'others';
-          currentDraft.intent = 'task_assigned_user';
-        }
-        currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'assignee');
       }
     }
 
@@ -7845,26 +7901,31 @@ const lastAskedField = currentDraft.asked.length > 0
           } else if (currentDraft.activeTaskService) {
             const sName = currentDraft.activeTaskService;
             const cleanName = trimmedMessage.replace(/^(?:task\s*ka\s*naam|task\s*title|task\s*name|task)\s*[:=\-]?\s*/i, '').trim();
-            const tName = cleanName || trimmedMessage;
+            const taskTitles = splitServiceTasks(cleanName || trimmedMessage);
             if (!currentDraft.serviceTasks) currentDraft.serviceTasks = {};
             if (!Array.isArray(currentDraft.serviceTasks[sName])) currentDraft.serviceTasks[sName] = [];
-            currentDraft.serviceTasks[sName].push({
-              name: tName,
-              description: '',
-              priority: 'Medium',
-              dueInDays: 30
-            });
             if (!Array.isArray(currentDraft.customTasks)) currentDraft.customTasks = [];
-            currentDraft.customTasks.push({
-              service: sName,
-              name: tName,
-              description: '',
-              priority: 'Medium',
-              dueInDays: 30
-            });
+            for (const tName of taskTitles) {
+              currentDraft.serviceTasks[sName].push({
+                name: tName,
+                description: '',
+                priority: 'Medium',
+                dueInDays: 30
+              });
+              currentDraft.customTasks.push({
+                service: sName,
+                name: tName,
+                description: '',
+                priority: 'Medium',
+                dueInDays: 30
+              });
+            }
             currentDraft.lastAddedService = sName;
             currentDraft.activeTaskService = null;
-            ackPrefix = `"${tName}" task "${sName}" mein add ho gaya. `;
+            const formattedTitles = taskTitles.map(t => `"${t}"`).join(', ');
+            ackPrefix = taskTitles.length > 1
+              ? `${formattedTitles} tasks "${sName}" mein add ho gaye. `
+              : `"${taskTitles[0]}" task "${sName}" mein add ho gaya. `;
             actionHandled = true;
           } else {
             const selServices = Array.isArray(currentDraft.services) ? currentDraft.services.map(s => typeof s === 'string' ? s : (s.service || s.name)) : [];
@@ -7877,50 +7938,61 @@ const lastAskedField = currentDraft.asked.length > 0
                 currentDraft.lastAddedService = null;
                 actionHandled = true;
               } else {
+                const taskTitles = splitServiceTasks(taskTitle);
                 if (!currentDraft.serviceTasks) currentDraft.serviceTasks = {};
                 if (!Array.isArray(currentDraft.serviceTasks[matchedService])) currentDraft.serviceTasks[matchedService] = [];
-                currentDraft.serviceTasks[matchedService].push({
-                  name: taskTitle,
-                  description: '',
-                  priority: 'Medium',
-                  dueInDays: 30
-                });
                 if (!Array.isArray(currentDraft.customTasks)) currentDraft.customTasks = [];
-                currentDraft.customTasks.push({
-                  service: matchedService,
-                  name: taskTitle,
-                  description: '',
-                  priority: 'Medium',
-                  dueInDays: 30
-                });
+                for (const tName of taskTitles) {
+                  currentDraft.serviceTasks[matchedService].push({
+                    name: tName,
+                    description: '',
+                    priority: 'Medium',
+                    dueInDays: 30
+                  });
+                  currentDraft.customTasks.push({
+                    service: matchedService,
+                    name: tName,
+                    description: '',
+                    priority: 'Medium',
+                    dueInDays: 30
+                  });
+                }
                 currentDraft.lastAddedService = matchedService;
                 currentDraft.activeTaskService = null;
-                ackPrefix = `"${taskTitle}" task "${matchedService}" mein add ho gaya. `;
+                const formattedTitles = taskTitles.map(t => `"${t}"`).join(', ');
+                ackPrefix = taskTitles.length > 1
+                  ? `${formattedTitles} tasks "${matchedService}" mein add ho gaye. `
+                  : `"${taskTitles[0]}" task "${matchedService}" mein add ho gaya. `;
                 actionHandled = true;
               }
             } else if (currentDraft.lastAddedService && !/\b(?:kisi\s*aur|dusri|doosri|other)\b/i.test(trimmedMessage)) {
               const sName = currentDraft.lastAddedService;
               const cleanName = trimmedMessage.replace(/^(?:task\s*ka\s*naam|task\s*title|task\s*name|task)\s*[:=\-]?\s*/i, '').trim();
-              const tName = cleanName || trimmedMessage;
+              const taskTitles = splitServiceTasks(cleanName || trimmedMessage);
               if (!currentDraft.serviceTasks) currentDraft.serviceTasks = {};
               if (!Array.isArray(currentDraft.serviceTasks[sName])) currentDraft.serviceTasks[sName] = [];
-              currentDraft.serviceTasks[sName].push({
-                name: tName,
-                description: '',
-                priority: 'Medium',
-                dueInDays: 30
-              });
               if (!Array.isArray(currentDraft.customTasks)) currentDraft.customTasks = [];
-              currentDraft.customTasks.push({
-                service: sName,
-                name: tName,
-                description: '',
-                priority: 'Medium',
-                dueInDays: 30
-              });
+              for (const tName of taskTitles) {
+                currentDraft.serviceTasks[sName].push({
+                  name: tName,
+                  description: '',
+                  priority: 'Medium',
+                  dueInDays: 30
+                });
+                currentDraft.customTasks.push({
+                  service: sName,
+                  name: tName,
+                  description: '',
+                  priority: 'Medium',
+                  dueInDays: 30
+                });
+              }
               currentDraft.lastAddedService = sName;
               currentDraft.activeTaskService = null;
-              ackPrefix = `"${tName}" task "${sName}" mein add ho gaya. `;
+              const formattedTitles = taskTitles.map(t => `"${t}"`).join(', ');
+              ackPrefix = taskTitles.length > 1
+                ? `${formattedTitles} tasks "${sName}" mein add ho gaye. `
+                : `"${taskTitles[0]}" task "${sName}" mein add ho gaya. `;
               actionHandled = true;
             } else if (/\b(?:kisi\s*aur|dusri|doosri|other|change)\b/i.test(trimmedMessage)) {
               currentDraft.addingServiceTasks = true;
@@ -8523,11 +8595,20 @@ const lastAskedField = currentDraft.asked.length > 0
           actionHandled = true;
         }
 
-        if (!actionHandled && lastAskedField === 'repeatPattern' && detSlots.repeatPattern) {
-          currentDraft.repeatPattern = detSlots.repeatPattern;
-          if (!currentDraft.asked.includes('repeatPattern')) currentDraft.asked.push('repeatPattern');
-          currentDraft.skipped = (currentDraft.skipped || []).filter((f) => f !== 'repeatPattern');
-          actionHandled = true;
+        if (!actionHandled && (lastAskedField === 'repeatPattern' || lastAskedField === 'repeatDays')) {
+          if (Array.isArray(detSlots.repeatDays) && detSlots.repeatDays.length > 0) {
+            currentDraft.repeatDays = detSlots.repeatDays;
+            currentDraft.repeatPattern = 'daily';
+            if (!currentDraft.asked.includes('repeatPattern')) currentDraft.asked.push('repeatPattern');
+            if (!currentDraft.asked.includes('repeatDays')) currentDraft.asked.push('repeatDays');
+            currentDraft.skipped = (currentDraft.skipped || []).filter((f) => f !== 'repeatPattern' && f !== 'repeatDays');
+            actionHandled = true;
+          } else if (detSlots.repeatPattern) {
+            currentDraft.repeatPattern = detSlots.repeatPattern;
+            if (!currentDraft.asked.includes('repeatPattern')) currentDraft.asked.push('repeatPattern');
+            currentDraft.skipped = (currentDraft.skipped || []).filter((f) => f !== 'repeatPattern');
+            actionHandled = true;
+          }
         }
 
         if (!actionHandled && lastAskedField === 'repeatDays') {
@@ -8561,7 +8642,25 @@ const lastAskedField = currentDraft.asked.length > 0
         }
 
         if (lastAskedField === 'assignee' && (!currentDraft.assigneeId) && (!currentDraft.assigneeName) && (!detSlots.assigneeName) && trimmedMessage.length <= 50 && !isSkip(trimmedMessage)) {
-          detSlots.assigneeName = trimmedMessage;
+          const isRepeatInstruction = /(?:repeat|dohrana|daily|roz|har\s+din|weekdays|recurrence)/i.test(trimmedMessage) || /\b(?:monda[yt]|tuesda[yt]|wednesda[yt]|thursda[yt]|frida[yt]|saturda[yt]|sunda[yt])\b/i.test(trimmedMessage);
+          if (!isRepeatInstruction) {
+            detSlots.assigneeName = trimmedMessage;
+          }
+        }
+
+        const isRepeatQuestion = ['repeatPattern', 'repeatDays', 'recurrenceEndDate'].includes(lastAskedField);
+        if (isRepeatQuestion) {
+          detSlots.assigneeName = null;
+          detSlots.pendingAssigneeNames = [];
+          if (currentDraft.intent === 'self_task' || currentDraft.taskFor === 'self') {
+            currentDraft.assigneeName = null;
+            currentDraft.assigneeId = null;
+            currentDraft.assigneeLabel = null;
+            currentDraft.assignees = [];
+            currentDraft.assignedUsers = [];
+            currentDraft.pendingAssigneeNames = [];
+            currentDraft.assigneeLedger = [];
+          }
         }
 
         const hasOtherFieldKeyword = /(?:priority|प्रायोरिटी|due|date|time|kal|aaj|today|tomorrow|title|naam|name|description|विवरण|डिस्क्रिप्शन|reminder|रिमाइंडर|attachment|file)/i.test(trimmedMessage);
@@ -8643,11 +8742,12 @@ const lastAskedField = currentDraft.asked.length > 0
 
         // Intent promotion: ONLY if user explicitly commanded assigning to others
         const isExplicitAssignCommand = /\b(?:assign\s+to|kisi\s+aur\s+ko|others?\s+ko|ko\s+assign\s+karo)\b/i.test(trimmedMessage);
+        const isRepeatInstruction = /(?:repeat|dohrana|daily|roz|har\s+din|weekdays|recurrence)/i.test(trimmedMessage) || /\b(?:monda[yt]|tuesda[yt]|wednesda[yt]|thursda[yt]|frida[yt]|saturda[yt]|sunda[yt])\b/i.test(trimmedMessage) || Boolean(detSlots.repeatDays?.length > 0);
         if (currentDraft.assigneeName && canAssignOthers && currentDraft.intent === 'self_task' && isExplicitAssignCommand) {
           currentDraft.intent = 'task_assigned_user';
           currentDraft.taskFor = 'others';
           currentDraft.wantsOthers = true;
-        } else if (currentDraft.intent === 'self_task' || currentDraft.taskFor === 'self' || (!canAssignOthers && currentDraft.intent !== 'task_project' && currentDraft.intent !== 'create_project' && currentDraft.intent !== 'create_client' && currentDraft.intent !== 'create_client_plan')) {
+        } else if ((isRepeatInstruction && !isExplicitAssignCommand) || currentDraft.intent === 'self_task' || currentDraft.taskFor === 'self' || (!canAssignOthers && currentDraft.intent !== 'task_project' && currentDraft.intent !== 'create_project' && currentDraft.intent !== 'create_client' && currentDraft.intent !== 'create_client_plan')) {
           currentDraft.intent = 'self_task';
           currentDraft.taskFor = 'self';
           currentDraft.wantsOthers = false;
@@ -9234,7 +9334,8 @@ const lastAskedField = currentDraft.asked.length > 0
   } else if ((currentDraft.intent !== 'create_project' && currentDraft.intent !== 'create_client' && currentDraft.intent !== 'create_client_plan') || ((currentDraft.intent === 'create_project' || currentDraft.intent === 'create_client') && (currentDraft.asked.includes('members') || currentDraft.asked.includes('projectManager') || lastAskedField === 'members' || lastAskedField === 'projectManager' || (Array.isArray(currentDraft.assigneeLedger) && currentDraft.assigneeLedger.length > 0)))) {
     // 3c. Regular Assignee disambiguation & scope validation (self_task & task_assigned_user, or create_project members / create_client team)
     const isExplicitAssignCommand = /\b(?:assign\s+to|kisi\s+aur\s+ko|others?\s+ko|ko\s+assign\s+karo)\b/i.test(trimmedMessage);
-    const isSelfTask = currentDraft.intent === 'self_task' || currentDraft.taskFor === 'self';
+    const isRepeatInstruction = /(?:repeat|dohrana|daily|roz|har\s+din|weekdays|recurrence)/i.test(trimmedMessage) || /\b(?:monda[yt]|tuesda[yt]|wednesda[yt]|thursda[yt]|frida[yt]|saturda[yt]|sunda[yt])\b/i.test(trimmedMessage) || Boolean(detSlots.repeatDays?.length > 0);
+    const isSelfTask = (isRepeatInstruction && !isExplicitAssignCommand) || currentDraft.intent === 'self_task' || currentDraft.taskFor === 'self';
 
     if (isSelfTask && !isExplicitAssignCommand) {
       currentDraft.assigneeName = null;

@@ -1402,7 +1402,7 @@ function detectIntent(opts = {}) {
 
   // 0. Ambiguous Project Plan check (Requirement 5)
   // "Project plan banao kal 5 baje" must not silently become create_project
-  if (AMBIGUOUS_PROJECT_PLAN_REGEX.test(text)) {
+  if (!draft?.lastAskedField && !draft?.intent && AMBIGUOUS_PROJECT_PLAN_REGEX.test(text)) {
     return {
       intent: 'ambiguous_project_plan',
       isSupported: true,
@@ -1421,7 +1421,7 @@ function detectIntent(opts = {}) {
   // "Client meeting ka task banao", "client call kal 5 baje" must not trigger create_client
   const hasTaskAssignment = /\b(?:assign\s+to|ko\s+assign|task\s+assign|assign\s+karo)\b/i.test(text);
   const hasServiceTask = /\b(?:service|services)\b.*(?:task|tasks|kaam)\b/i.test(text) || /\b(?:task|tasks|kaam)\b.*(?:service|services)\b/i.test(text);
-  if (!CREATE_CLIENT_TASK_REGEX.test(text) && !hasTaskAssignment && !hasServiceTask && !CREATE_CLIENT_EXPLICIT_REGEX.test(text) && AMBIGUOUS_CLIENT_TASK_REGEX.test(text) && draft?.intent !== 'create_client' && draft?.intent !== 'create_client_task') {
+  if (!draft?.lastAskedField && draft?.intent !== 'create_client' && draft?.intent !== 'create_client_task' && draft?.intent !== 'create_client_plan' && !CREATE_CLIENT_TASK_REGEX.test(text) && !hasTaskAssignment && !hasServiceTask && !CREATE_CLIENT_EXPLICIT_REGEX.test(text) && AMBIGUOUS_CLIENT_TASK_REGEX.test(text)) {
     return {
       intent: 'ambiguous_client_or_task',
       isSupported: true,
