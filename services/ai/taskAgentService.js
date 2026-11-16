@@ -498,10 +498,50 @@ function extractCandidateProjectName(text) {
     return null;
   }
 
+  // Pattern 0a: status/priority/name/description of <cand> [project] [to ...]
+  // e.g. "Change the status of asdfgb project to active" -> "asdfgb"
+  // e.g. "Change priority of asdfgb project to high" -> "asdfgb"
+  const mOf = lower.match(/(?:(?:change|update|set|make|badal|badlo)\s+)?(?:the\s+)?(?:status|priority|name|naam|title|description|desc)\s*(?:of\s+)(?:the\s+)?([a-z0-9\s_-]{2,40}?)(?:\s+(?:projects?|projekts?))?(?:\s+(?:to|as|ko|par|mein|me|mai|into)\s+|\s*$)/i);
+  if (mOf && mOf[1]) {
+    const cand = mOf[1].trim();
+    if (cand && !PROJECT_PRONOUNS.has(cand) && !['this', 'the', 'project', 'task'].includes(cand)) return cand;
+  }
+
+  // Pattern 0b: rename <cand> [project] to ...
+  const mRename = lower.match(/\brename\s+(?:the\s+)?(?:project\s+)?([a-z0-9\s_-]{2,40}?)(?:\s+(?:projects?|projekts?))?\s+to\b/i);
+  if (mRename && mRename[1]) {
+    const cand = mRename[1].trim();
+    if (cand && !PROJECT_PRONOUNS.has(cand)) return cand;
+  }
+
+  // Pattern 0c: <cand> [project] (ka|ki|ke) status/priority/name/description ...
+  // e.g. "asdfgb project ka status active kardo" -> "asdfgb"
+  const mHindi = lower.match(/^(?:kya|please)?\s*([a-z0-9\s_-]{2,40}?)(?:\s+(?:projects?|projekts?))?\s+(?:ka|ki|ke)\s+(?:status|priority|name|naam|description|desc)/i);
+  if (mHindi && mHindi[1]) {
+    const cand = mHindi[1].trim();
+    if (cand && !PROJECT_PRONOUNS.has(cand)) return cand;
+  }
+
+  // Pattern 0d: make/set <cand> [project] (active|planning|high|...)
+  const mMake = lower.match(/(?:make|set)\s+([a-z0-9\s_-]{2,40}?)(?:\s+(?:projects?|projekts?))\s+(?:to\s+)?(planning|active|completed|on[- ]?hold|cancelled|high|medium|low)/i);
+  if (mMake && mMake[1]) {
+    const cand = mMake[1].trim();
+    if (cand && !PROJECT_PRONOUNS.has(cand)) return cand;
+  }
+
+  // Pattern 0e: <cand> project status/priority <status>
+  const mProjStatus = lower.match(/^(?:kya|please)?\s*([a-z0-9\s_-]{2,40}?)\s+(?:projects?|projekts?)\s+(?:status|priority)/i);
+  if (mProjStatus && mProjStatus[1]) {
+    const cand = mProjStatus[1].trim();
+    if (cand && !PROJECT_PRONOUNS.has(cand)) return cand;
+  }
+
   // Pattern 1: Leading candidate before "project": e.g. "zz ai testing project", "ciis netwrok project"
   const beforeProject = lower.match(/^(?:kya|show|view|check|dikhao|batao|details|please)?\s*([a-z0-9\s_-]{2,40}?)\s+\b(?:projects?|projekts?)\b/i);
   if (beforeProject && beforeProject[1]) {
-    const cand = beforeProject[1].trim();
+    let cand = beforeProject[1].trim();
+    cand = cand.replace(/^(?:(?:change|update|set|make|edit|modify)\s+)?(?:the\s+)?(?:status|priority)\s+(?:of\s+)?(?:the\s+)?/i, '').trim();
+    cand = cand.replace(/^(?:(?:change|update|set|make|edit|modify)\s+)/i, '').trim();
     if (cand && !PROJECT_PRONOUNS.has(cand)) return cand;
     if (PROJECT_PRONOUNS.has(cand)) return null;
   }
@@ -783,6 +823,14 @@ function isCrmTaskUpdate(text) {
     /\b(?:personal\s+task\s+create|task\s+create\s+karo)\b/i.test(clean)
   );
   if (hasCreationIntent) return false;
+
+  const isProjectMutation = (
+    /(?:change|update|set|make|badal|badlo|rename)\s+(?:the\s+)?(?:status|priority|name|naam|title|description|desc)\b/i.test(clean) ||
+    /(?:status|priority|name|naam|description|desc)\s*(?:ko\s*)?(?:badal\s*kar\s*)?(?:high|low|medium|in[- ]progress|pending|completed?|done|on[- ]?hold|planning|active|cancelled|inactive)/i.test(clean) ||
+    /(?:(?:status|priority|name|naam|description|desc)\s+(?:badal|badlo|change|update|set|kardo|kar\s*do))/i.test(clean) ||
+    /(?:rename\s+.*?to)/i.test(clean)
+  );
+  if (isProjectMutation) return true;
 
   return CRM_TASK_COMPLETE_REGEX.test(clean) || CRM_TASK_UPDATE_REGEX.test(clean) || CRM_TASK_EDIT_REGEX.test(clean);
 }
@@ -2157,12 +2205,16 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
   const clients = context.accessibleClients || deps.accessibleClients || [];
   const projects = context.accessibleProjects || deps.accessibleProjects || [];
   const isDbConnected = Boolean(mongoose && mongoose.connection && mongoose.connection.readyState === 1);
+  const ProjectModel = deps.Project || DefaultProjectModel || (mongoose?.models?.Project) || (isDbConnected ? require('../../HR-CDS/models/Project').Project : null);
 
-  // 0. Check Project Status / Priority Update:
+  // 0. Check Project Status / Priority / Name / Description Update:
+  // e.g. "Change the status of asdfgb project to active"
   // e.g. "Change the status of this project, make it planning."
   // e.g. "Change the status of ai agent project to planning"
   // e.g. "ai agent project ka status planning kardo"
   // e.g. "make project active", "status planning kardo"
+  // e.g. "Change priority of asdfgb project to high"
+  // e.g. "Change name of asdfgb project to New Title"
   let targetProjectStatus = null;
   if (/\b(?:planning|plan)\b/i.test(message)) targetProjectStatus = 'planning';
   else if (/\b(?:active)\b/i.test(message)) targetProjectStatus = 'active';
@@ -2175,20 +2227,75 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
   else if (/\b(?:medium|normal)\b/i.test(message)) targetProjectPriority = 'medium';
   else if (/\b(?:low)\b/i.test(message)) targetProjectPriority = 'low';
 
-  const targetProject = findReferencedProject(message, projects, context.draft) ||
+  let targetProjectNewName = null;
+  const mRename = message.match(/\brename\s+(?:the\s+)?(?:project\s+)?([a-z0-9\s_-]+?)\s+(?:project\s+)?to\s+["']?([^"'\n]+?)["']?$/i);
+  if (mRename) {
+    targetProjectNewName = mRename[2].trim();
+  }
+  if (!targetProjectNewName) {
+    const mNameOf = message.match(/(?:change|update|set|badal\s*(?:kar)?|badlo)\s*(?:the\s+)?(?:project\s+)?(?:name|naam|title)\s*(?:of\s+)(?:the\s+)?([a-z0-9\s_-]+?)\s*(?:project\s*)?\s+to\s+["']?([^"'\n]+?)["']?$/i);
+    if (mNameOf) {
+      targetProjectNewName = mNameOf[2].trim();
+    }
+  }
+  if (!targetProjectNewName && !targetProjectStatus && !targetProjectPriority) {
+    const mHindiName = message.match(/(?:ka|ki|ke)?\s*(?:naam|name|title)\s*(?:ko\s*)?(?:badal\s*kar)?\s*["']?([^"'\n]+?)["']?\s*(?:kardo|kar\s*do|rakho|karo)/i);
+    if (mHindiName) {
+      targetProjectNewName = mHindiName[1].trim();
+    }
+  }
+
+  let targetProjectDescription = null;
+  const mDescOf = message.match(/(?:change|update|set|badal\s*(?:kar)?|badlo)\s*(?:the\s+)?(?:project\s+)?(?:description|desc|vivran)\s*(?:of\s+)(?:the\s+)?([a-z0-9\s_-]+?)\s*(?:project\s*)?\s+to\s+["']?([^"'\n]+?)["']?$/i);
+  if (mDescOf) {
+    targetProjectDescription = mDescOf[2].trim();
+  }
+  if (!targetProjectDescription && !targetProjectStatus && !targetProjectPriority) {
+    const mHindiDesc = message.match(/(?:ka|ki|ke)?\s*(?:description|desc|vivran)\s*(?:ko\s*)?(?:badal\s*kar)?\s*["']?([^"'\n]+?)["']?\s*(?:kardo|kar\s*do|rakho|karo)/i);
+    if (mHindiDesc) {
+      targetProjectDescription = mHindiDesc[1].trim();
+    }
+  }
+
+  let targetProject = findReferencedProject(message, projects, context.draft) ||
     (context.draft?.lastProjectId ? projects.find(p => String(p._id || p.id) === String(context.draft.lastProjectId)) : null);
+
+  if (!targetProject && isDbConnected && ProjectModel) {
+    try {
+      const cand = extractCandidateProjectName(message);
+      const companyId = req?.user?.company?._id || req?.user?.company || req?.user?.companyId;
+      const compCode = req?.user?.companyCode;
+      const q = {};
+      if (companyId) q.company = companyId;
+      else if (compCode) q.companyCode = compCode;
+
+      if (cand) {
+        targetProject = await ProjectModel.findOne({
+          ...q,
+          projectName: { $regex: new RegExp('^' + escapeRegex(cand) + '$', 'i') }
+        }).lean();
+        if (!targetProject) {
+          targetProject = await ProjectModel.findOne({
+            ...q,
+            projectName: { $regex: new RegExp(escapeRegex(cand), 'i') }
+          }).lean();
+        }
+      }
+      if (!targetProject && context.draft?.lastProjectId) {
+        targetProject = await ProjectModel.findById(context.draft.lastProjectId).lean();
+      }
+    } catch (err) {
+      console.warn('[taskAgentService] Error querying ProjectModel for targetProject:', err);
+    }
+  }
 
   const mentionsProjectExplicitly = /\b(?:project|projekts?)\b/i.test(message) || Boolean(context.draft?.lastProjectId);
   const mentionsTaskExplicitly = /\b(?:task|tasks|taks)\b/i.test(message);
 
   const isProjectUpdate = Boolean(
     targetProject &&
-    (targetProjectStatus || targetProjectPriority) &&
-    (
-      targetProjectStatus === 'planning' ||
-      targetProjectStatus === 'active' ||
-      (mentionsProjectExplicitly && !mentionsTaskExplicitly)
-    )
+    (targetProjectStatus || targetProjectPriority || targetProjectNewName || targetProjectDescription) &&
+    !mentionsTaskExplicitly
   );
 
   if (isProjectUpdate) {
@@ -2208,10 +2315,11 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
         chips: buildChips(null, 'welcome', { ...deps, language: lang, allowedIntents }),
       };
     }
-    const ProjectModel = deps.Project || DefaultProjectModel || (mongoose?.models?.Project) || (isDbConnected ? require('../../HR-CDS/models/Project').Project : null);
     const updatePayload = {};
     if (targetProjectStatus) updatePayload.status = targetProjectStatus;
     if (targetProjectPriority) updatePayload.priority = targetProjectPriority;
+    if (targetProjectNewName) updatePayload.projectName = targetProjectNewName;
+    if (targetProjectDescription) updatePayload.description = targetProjectDescription;
 
     if (isDbConnected && ProjectModel && targetProject._id) {
       try {
@@ -2224,23 +2332,48 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
       }
     }
 
+    const oldName = targetProject.projectName || targetProject.name || 'Project';
     if (targetProjectStatus) targetProject.status = targetProjectStatus;
     if (targetProjectPriority) targetProject.priority = targetProjectPriority;
+    if (targetProjectNewName) targetProject.projectName = targetProjectNewName;
+    if (targetProjectDescription) targetProject.description = targetProjectDescription;
 
-    const pName = targetProject.projectName || targetProject.name || 'Project';
-    const updatedValue = targetProjectStatus || targetProjectPriority;
-    const rep = isEn
-      ? `Project **"${pName}"** status has been successfully updated to **${updatedValue}**! ✅\n\nWould you like to check the project details or return to the main menu?`
-      : `Project **"${pName}"** ka status safaltapoorvak **${updatedValue}** update kar diya gaya hai! ✅\n\nKya aap is project ki details check karna chahte hain?`;
+    const pName = targetProjectNewName || targetProject.projectName || targetProject.name || 'Project';
+
+    let rep = '';
+    let speechText = '';
+    if (targetProjectStatus) {
+      const displayStatus = targetProjectStatus.charAt(0).toUpperCase() + targetProjectStatus.slice(1);
+      rep = isEn
+        ? `Project **"${pName}"** status has been successfully updated to **${displayStatus}**! ✅\n\nWould you like to check the project details or return to the main menu?`
+        : `Project **"${pName}"** ka status safaltapoorvak **${displayStatus}** update kar diya gaya hai! ✅\n\nKya aap is project ki details check karna chahte hain?`;
+      speechText = isEn ? `Project ${pName} status updated to ${displayStatus}.` : `Project ${pName} ka status ${displayStatus} update kar diya gaya hai.`;
+    } else if (targetProjectPriority) {
+      const displayPriority = targetProjectPriority.charAt(0).toUpperCase() + targetProjectPriority.slice(1);
+      rep = isEn
+        ? `Project **"${pName}"** priority has been successfully updated to **${displayPriority}**! ✅\n\nWould you like to check the project details or return to the main menu?`
+        : `Project **"${pName}"** ki priority safaltapoorvak **${displayPriority}** update kar di gayi hai! ✅\n\nKya aap is project ki details check karna chahte hain?`;
+      speechText = isEn ? `Project ${pName} priority updated to ${displayPriority}.` : `Project ${pName} ki priority ${displayPriority} update kar di gayi hai.`;
+    } else if (targetProjectNewName) {
+      rep = isEn
+        ? `Project **"${oldName}"** name has been successfully updated to **"${pName}"**! ✅\n\nWould you like to check the project details or return to the main menu?`
+        : `Project **"${oldName}"** ka naam safaltapoorvak **"${pName}"** update kar diya gaya hai! ✅\n\nKya aap is project ki details check karna chahte hain?`;
+      speechText = isEn ? `Project renamed to ${pName}.` : `Project ka naam ${pName} update kar diya gaya hai.`;
+    } else if (targetProjectDescription) {
+      rep = isEn
+        ? `Project **"${pName}"** description has been successfully updated! ✅\n\nWould you like to check the project details or return to the main menu?`
+        : `Project **"${pName}"** ka description safaltapoorvak update kar diya gaya hai! ✅\n\nKya aap is project ki details check karna chahte hain?`;
+      speechText = isEn ? `Project ${pName} description updated.` : `Project ${pName} ka description update kar diya gaya hai.`;
+    }
 
     return {
       success: true,
       status: 'open',
       field: 'welcome',
       reply: rep,
-      speech: isEn ? `Project ${pName} status updated to ${updatedValue}.` : `Project ${pName} ka status ${updatedValue} update kar diya gaya hai.`,
+      speech: speechText,
       speakText: rep,
-      speakTextHi: isEn ? null : `Project ${pName} ka status ${updatedValue} update kar diya gaya hai.`,
+      speakTextHi: isEn ? null : speechText,
       language: isEn ? 'en' : 'hinglish',
       draft: {
         lastProjectId: String(targetProject._id || targetProject.id),
@@ -2562,7 +2695,6 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
   const isValidObjectId = (id) => Boolean(id && mongoose && mongoose.Types && mongoose.Types.ObjectId && mongoose.Types.ObjectId.isValid(id));
   const ClientTaskModel = deps.ClientTask || (mongoose && mongoose.models && mongoose.models.ClientTask) || (isDbReady ? require('../../HR-CDS/models/ClientTask') : null);
   const TaskModel = deps.Task || (mongoose && mongoose.models && mongoose.models.Task) || (isDbReady ? require('../../HR-CDS/models/Task') : null);
-  const ProjectModel = deps.Project || DefaultProjectModel || (mongoose?.models?.Project) || (isDbReady ? require('../../HR-CDS/models/Project').Project : null);
 
   // SAFETY GUARD: If no task name could be extracted, prompt the user
   if (!taskCandidate) {
