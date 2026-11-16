@@ -116,6 +116,11 @@ const createRequest = async (req, res) => {
       return fail(res, 400, 'That week is already over. Pick a day in this week or a later one.');
     }
 
+    const userRole = String(req.user?.companyRole || req.user?.role || '').toLowerCase();
+    if (userRole === 'client') {
+      return fail(res, 403, 'Clients do not have employee weekly offs.');
+    }
+
     const userDoc = await User.findById(userId).select('name weekOffDays department departmentName company companyCode').lean();
     if (!userDoc) return fail(res, 404, 'User not found.');
     const department = await departmentOf({ ...userDoc, company: companyOf(req.user) || userDoc.company });
@@ -337,8 +342,36 @@ const getEmployeeSettings = async (req, res) => {
       const pattern = new RegExp(String(req.query.search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
       filter.$or = [{ name: pattern }, { email: pattern }, { employeeId: pattern }];
     }
-    const users = await User.find({ ...filter, isActive: { $ne: false } })
-      .select('name email employeeId department departmentName weekOffDays')
+
+    let clientUserIds = [];
+    try {
+      const Client = mongoose.models.Client || require('../models/Client');
+      const clients = await Client.find({
+        ...(company ? { company } : companyCode ? { companyCode } : {}),
+        userId: { $exists: true, $ne: null },
+      }).select('userId').lean();
+      clientUserIds = clients.map(c => String(c.userId)).filter(Boolean);
+    } catch (e) {
+      // ignore
+    }
+
+    const clientDepartments = await Department.find({
+      ...(company ? { company } : companyCode ? { companyCode } : {}),
+      name: { $regex: /^client$/i },
+    }).select('_id').lean();
+    const clientDeptIds = clientDepartments.map(d => String(d._id));
+
+    const users = await User.find({
+      ...filter,
+      isActive: { $ne: false },
+      companyRole: { $not: /^client$/i },
+      role: { $not: /^client$/i },
+      jobRole: { $not: /^client$/i },
+      departmentName: { $not: /^client$/i },
+      ...(clientUserIds.length ? { _id: { $nin: clientUserIds } } : {}),
+      ...(clientDeptIds.length ? { department: { $nin: clientDeptIds } } : {}),
+    })
+      .select('name email employeeId department departmentName weekOffDays role companyRole jobRole')
       .sort({ name: 1 })
       .limit(Math.min(Math.max(parseInt(req.query?.limit, 10) || 200, 1), 500))
       .lean();
@@ -350,24 +383,40 @@ const getEmployeeSettings = async (req, res) => {
     const byName = new Map(departments.map(item => [String(item.name || '').toLowerCase(), item]));
     const today = dateKeyOf(new Date());
 
-    const items = users.map(user => {
-      const raw = String(user.department || user.departmentName || '');
-      const department = byId.get(raw) || byName.get(raw.toLowerCase()) || null;
-      const entitlement = weekOffEntitlement(department, today);
-      const weekOffDays = normalizeWeekOffDays(user.weekOffDays, entitlement);
-      return {
-        userId: String(user._id),
-        name: user.name || '',
-        email: user.email || '',
-        employeeId: user.employeeId || '',
-        departmentName: department?.name || user.departmentName || raw,
-        workingDays: effectiveWorkingDays(department, today),
-        entitlement,
-        weekOffDays,
-        weekOffDayNames: weekOffDays.map(weekdayName),
-        usingDefault: weekOffDays.length === 0,
-      };
-    });
+    const isClientUser = user => {
+      const dept = String(user.departmentName || '').trim().toLowerCase();
+      const crole = String(user.companyRole || '').trim().toLowerCase();
+      const r = String(user.role || '').trim().toLowerCase();
+      const jrole = String(user.jobRole || '').trim().toLowerCase();
+      if (crole === 'client' || r === 'client' || jrole === 'client' || dept === 'client') return true;
+      if (clientUserIds.includes(String(user._id))) return true;
+      if (clientDeptIds.includes(String(user.department))) return true;
+      return false;
+    };
+
+    const items = users
+      .filter(user => !isClientUser(user))
+      .map(user => {
+        const raw = String(user.department || user.departmentName || '');
+        const department = byId.get(raw) || byName.get(raw.toLowerCase()) || null;
+        if (String(department?.name || '').trim().toLowerCase() === 'client') return null;
+        const entitlement = weekOffEntitlement(department, today);
+        const weekOffDays = normalizeWeekOffDays(user.weekOffDays, entitlement);
+        return {
+          userId: String(user._id),
+          name: user.name || '',
+          email: user.email || '',
+          employeeId: user.employeeId || '',
+          departmentName: department?.name || user.departmentName || raw,
+          workingDays: effectiveWorkingDays(department, today),
+          entitlement,
+          weekOffDays,
+          weekOffDayNames: weekOffDays.map(weekdayName),
+          usingDefault: weekOffDays.length === 0,
+        };
+      })
+      .filter(Boolean);
+
     return res.json({ success: true, data: items });
   } catch (error) {
     console.error('getEmployeeSettings (week off) error:', error.message);
