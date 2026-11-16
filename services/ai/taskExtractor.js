@@ -70,13 +70,16 @@ function mergeDraft(previous = {}, extracted = {}, deterministic = {}, rawMessag
   }
 
   // Due Date & Time: Deterministic wins for date/time, else LLM, else previous
-  let dueDateTime = null;
-  if (det.dueDateTime !== null && det.dueDateTime !== undefined) {
-    dueDateTime = det.dueDateTime;
-  } else if (ext.dueDateTime !== null && ext.dueDateTime !== undefined) {
-    dueDateTime = ext.dueDateTime;
-  } else {
-    dueDateTime = prev.dueDateTime || null;
+  const isExplicitDueDateCommand = /\b(?:due\s*(?:date|time)?|deadline|taareekh\s*badlo|date\s*change|due\s+badlo)\b/i.test(rawMessage);
+  const isAnsweringDueDate = !lastAskedField || lastAskedField === 'dueDateTime' || lastAskedField === 'dueDate' || lastAskedField === 'welcome';
+
+  let dueDateTime = prev.dueDateTime || null;
+  if (isAnsweringDueDate || isExplicitDueDateCommand || !prev.dueDateTime) {
+    if (det.dueDateTime !== null && det.dueDateTime !== undefined) {
+      dueDateTime = det.dueDateTime;
+    } else if (ext.dueDateTime !== null && ext.dueDateTime !== undefined) {
+      dueDateTime = ext.dueDateTime;
+    }
   }
 
   // Priority
