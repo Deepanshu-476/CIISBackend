@@ -288,10 +288,11 @@ const FORM_REGISTRY = {
       const cleanedCheckpoints = getCleanCheckpoints(draft.checkpoints);
       const isDailyRepeat = draft.repeatPattern && draft.repeatPattern !== 'none';
       const daysText = (Array.isArray(draft.repeatDays) && draft.repeatDays.length > 0)
-        ? draft.repeatDays.map((d) => String(d).slice(0, 3).toUpperCase()).join(', ')
-        : 'Mon-Sun';
+        ? draft.repeatDays.map((d) => String(d).charAt(0).toUpperCase() + String(d).slice(1).toLowerCase()).join(', ')
+        : '';
+      const formattedEnd = draft.recurrenceEndDate ? formatDateOnly(draft.recurrenceEndDate) : '';
       const repeatLabel = isDailyRepeat
-        ? `Daily (${daysText})${draft.recurrenceEndDate ? ` tak ${formatHumanIstDate(draft.recurrenceEndDate)}` : ''}`
+        ? `${daysText || 'Daily'}${formattedEnd ? ` tak ${formattedEnd}` : ''}`
         : 'No repeat';
 
       return {
@@ -310,6 +311,7 @@ const FORM_REGISTRY = {
         minutesBeforeDue: draft.minutesBeforeDue || null,
         customTime: draft.customTime || null,
         repeat: repeatLabel,
+        repeatLabel: repeatLabel,
         repeatPattern: draft.repeatPattern || 'none',
         recurrenceEndDate: draft.recurrenceEndDate || null,
         repeatDays: draft.repeatDays || [],

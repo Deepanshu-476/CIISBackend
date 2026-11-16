@@ -966,7 +966,7 @@ function parseCheckpointItems(text) {
 /**
  * Deterministically extract title, description, priority, etc. from common Hinglish patterns.
  */
-function parseHinglishSlots(rawText, now = new Date(), referenceDate = null) {
+function parseHinglishSlots(rawText, now = new Date(), referenceDate = null, lastAskedField = null) {
   if (!rawText || typeof rawText !== 'string') return {};
 
   const normalizedRaw = normalizeTranscript(rawText);
@@ -1211,6 +1211,17 @@ function parseHinglishSlots(rawText, now = new Date(), referenceDate = null) {
     const d = new Date(baseTime.getTime() + 365 * 24 * 60 * 60 * 1000);
     slots.recurrenceEndDate = d.toISOString().slice(0, 10) + 'T23:59:59.999Z';
     if (!slots.repeatPattern) slots.repeatPattern = 'daily';
+  } else if (lastAskedField === 'recurrenceEndDate' || /\b(?:repeat\s*(?:end\s*date|ends?|tak)?|end\s*date|until|tak)\b/i.test(normalized)) {
+    const explicitDateMatch = normalized.match(/\b(\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}|\d{4}[-/.]\d{1,2}[-/.]\d{1,2})\b/);
+    const dateStr = explicitDateMatch ? explicitDateMatch[1] : normalized;
+    const parsedDt = parseHinglishDateTime(dateStr, now);
+    if (parsedDt) {
+      const d = new Date(parsedDt);
+      if (!isNaN(d.getTime())) {
+        slots.recurrenceEndDate = d.toISOString().slice(0, 10) + 'T23:59:59.999Z';
+        if (!slots.repeatPattern) slots.repeatPattern = 'daily';
+      }
+    }
   }
 
   // 6. Checkpoints Extraction
@@ -1257,14 +1268,16 @@ function parseHinglishSlots(rawText, now = new Date(), referenceDate = null) {
     }
   }
 
-  // 8. Date & Time
-  const dueDateTime = parseHinglishDateTime(normalized, now, referenceDate);
-  if (dueDateTime) {
-    const parsedDate = new Date(dueDateTime);
-    if (parsedDate.getTime() < now.getTime()) {
-      slots.dueDateTimePast = true;
+  // 8. Date & Time (Do not overwrite due date when answering repeat slots)
+  if (lastAskedField !== 'recurrenceEndDate' && lastAskedField !== 'repeatDays') {
+    const dueDateTime = parseHinglishDateTime(normalized, now, referenceDate);
+    if (dueDateTime) {
+      const parsedDate = new Date(dueDateTime);
+      if (parsedDate.getTime() < now.getTime()) {
+        slots.dueDateTimePast = true;
+      }
+      slots.dueDateTime = dueDateTime;
     }
-    slots.dueDateTime = dueDateTime;
   }
 
   return slots;
