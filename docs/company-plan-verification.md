@@ -7,11 +7,11 @@ Verified locally on 17 November 2026. Production data and deployments were not c
 - Platform administrators create plans with a price, whole-number duration, features, employee pages and optional admin pages.
 - Registration copies the selected active plan into the company. Submitted client-side price/access overrides cannot replace it.
 - Login, OTP completion, company details and the subscription dialog receive the company's real plan metadata. The company screen no longer invents a 90-day expiry or treats every free plan as a 90-day trial.
-- An assigned plan with no optional admin pages does not grant every admin page. Company details and session/settings navigation remain available. The platform account retains platform controls.
+- Sidebar menu rules were restored to their pre-plan-fix behavior at the owner's request. Web retains its previous role/email visibility rules without the newly added admin-plan filter or route redirect. App retains its previous handling of empty and configured admin-page lists.
 - A subscription remains valid until the end of its expiry date in Asia/Kolkata. Expiry is checked on requests and socket packets; no cron or re-login is needed to enforce it.
 - Expiry preserves login, navigation, existing page entitlements, viewing and passive read receipts. Mutations are rejected with `SUBSCRIPTION_EXPIRED`. Web and app action guards display the active plan catalog.
 - Upgrade/Renew for company accounts displays available plans. Actual assignment/renewal remains a platform operation.
-- Renewal copies the selected plan's price, duration, features and pages, clears menu caches, and unlocks the existing session. Subscription polling refreshes open-session company metadata and menu access. Renewal does not reactivate deliberately disabled employees.
+- Renewal copies the selected plan's price, duration, features and pages, clears menu caches, and unlocks the existing session. Subscription polling refreshes open-session company metadata. Renewal does not reactivate deliberately disabled employees.
 - Existing subscriptions use their assigned company snapshot; changing a plan definition does not silently replace an existing company's contract. Assign/renew to apply the new definition.
 
 ## Automated verification
@@ -28,7 +28,7 @@ Verified locally on 17 November 2026. Production data and deployments were not c
 
 The seven backend lifecycle tests use a temporary local MongoDB replica set, a localhost HTTP server, and mocked registration emails. They exercise plan creation, public company registration, entitlement copying, platform-only plan operations, expired logins, all HTTP mutation methods, socket mutations, preserved viewing/sidebar pages, renewal, immediate updated menu access and inactive-plan exclusion.
 
-The web/app dialog tests render the real guard components in a DOM harness; native primitives and API responses are mocked. They verify action blocking, continued viewing, display of created plans and renewal refresh. Native tests also exercise the production Babel action transform, shared expiry/access policy, plan duration and empty-admin-page behavior.
+The web/app dialog tests render the real guard components in a DOM harness; native primitives and API responses are mocked. They verify action blocking, continued viewing, display of created plans and renewal refresh. Native tests also exercise the production Babel action transform, shared expiry policy, plan duration and the restored admin-menu behavior.
 
 Existing app test fixtures were updated for current screen dependencies and the already-established Promotions/Employee Activity defaults. The generated app menu access aliases were synchronized with the web source. Temporary database tests use ports outside the OS ephemeral range to avoid local port collisions.
 
