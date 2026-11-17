@@ -74,29 +74,274 @@ const testGroqApiKey = async (apiKey) => {
   }
 };
 
-// GET /api/ai-settings: Super Admin retrieves current AI settings
+const formatSettingsResponse = (settings) => {
+  const activePrimaryVaultId = settings.primaryVaultId || null;
+  const activeSecondaryVaultId = settings.secondaryVaultId || null;
+
+  const vault = (settings.keyVault || []).map((item) => {
+    const isPrimary = activePrimaryVaultId
+      ? activePrimaryVaultId === item.id
+      : Boolean(settings.primaryApiKey && settings.primaryApiKey === item.apiKey);
+    const isSecondary = activeSecondaryVaultId
+      ? activeSecondaryVaultId === item.id
+      : Boolean(settings.secondaryApiKey && settings.secondaryApiKey === item.apiKey);
+
+    return {
+      id: item.id,
+      label: item.label,
+      apiKeyMasked: maskApiKey(item.apiKey),
+      isPrimary,
+      isSecondary,
+      status: item.status,
+      lastTestedAt: item.lastTestedAt,
+      addedAt: item.addedAt,
+    };
+  });
+
+  const activePrimaryItem = (settings.keyVault || []).find((k) =>
+    activePrimaryVaultId ? k.id === activePrimaryVaultId : k.apiKey === settings.primaryApiKey
+  );
+
+  return {
+    _id: settings._id,
+    primaryApiKeyMasked: maskApiKey(settings.primaryApiKey),
+    secondaryApiKeyMasked: maskApiKey(settings.secondaryApiKey),
+    hasPrimaryApiKey: Boolean(settings.primaryApiKey),
+    hasSecondaryApiKey: Boolean(settings.secondaryApiKey),
+    primaryVaultId: settings.primaryVaultId,
+    secondaryVaultId: settings.secondaryVaultId,
+    primaryLabel: activePrimaryItem ? activePrimaryItem.label : "",
+    keyVault: vault,
+    selectedModel: settings.selectedModel || "qwen/qwen3.8-27b",
+    selectedSttModel: settings.selectedSttModel || "whisper-large-v3-turbo",
+    isEnabled: settings.isEnabled !== false,
+    lastTestedAt: settings.lastTestedAt,
+    testStatus: settings.testStatus,
+    testMessage: settings.testMessage,
+    updatedAt: settings.updatedAt,
+  };
+};
+
+// GET /api/ai-settings: Super Admin retrieves current AI settings + Key Vault
 router.get("/", protect, restrictTo("super_admin"), async (req, res) => {
   try {
     const settings = await AiSettings.getOrCreateSettings();
-    const result = {
-      _id: settings._id,
-      primaryApiKeyMasked: maskApiKey(settings.primaryApiKey),
-      secondaryApiKeyMasked: maskApiKey(settings.secondaryApiKey),
-      hasPrimaryApiKey: Boolean(settings.primaryApiKey),
-      hasSecondaryApiKey: Boolean(settings.secondaryApiKey),
-      selectedModel: settings.selectedModel || "qwen/qwen3.8-27b",
-      selectedSttModel: settings.selectedSttModel || "whisper-large-v3-turbo",
-      isEnabled: settings.isEnabled !== false,
-      lastTestedAt: settings.lastTestedAt,
-      testStatus: settings.testStatus,
-      testMessage: settings.testMessage,
-      updatedAt: settings.updatedAt,
-    };
-
-    return res.json({ success: true, settings: result });
+    return res.json({ success: true, settings: formatSettingsResponse(settings) });
   } catch (error) {
     console.error("❌ Get AI settings error:", error);
     return res.status(500).json({ success: false, message: "Failed to fetch AI settings" });
+  }
+});
+
+// POST /api/ai-settings/vault/add: Add a new API key to the Vault
+router.post("/vault/add", protect, restrictTo("super_admin"), async (req, res) => {
+  try {
+    const { label, apiKey, setAsPrimary, setAsSecondary } = req.body;
+
+    if (!label || typeof label !== "string" || !label.trim()) {
+      return res.status(400).json({ success: false, message: "Please provide a friendly label for this key." });
+    }
+    if (!apiKey || typeof apiKey !== "string" || !apiKey.trim().startsWith("gsk_")) {
+      return res.status(400).json({ success: false, message: "API Key must start with 'gsk_' and be a valid Groq API key." });
+    }
+
+    const settings = await AiSettings.getOrCreateSettings();
+    const cleanKey = apiKey.trim();
+    const cleanLabel = label.trim();
+
+    // Check duplicate key
+    const duplicate = (settings.keyVault || []).find((k) => k.apiKey === cleanKey);
+    if (duplicate) {
+      return res.status(400).json({
+        success: false,
+        message: `This API Key already exists in the vault under the name "${duplicate.label}".`,
+      });
+    }
+
+    // Live test key
+    const testResult = await testGroqApiKey(cleanKey);
+    const newId = new require("mongoose").Types.ObjectId().toString();
+
+    const vaultItem = {
+      id: newId,
+      label: cleanLabel,
+      apiKey: cleanKey,
+      status: testResult.isValid ? "valid" : "invalid",
+      lastTestedAt: new Date(),
+      addedAt: new Date(),
+    };
+
+    if (!settings.keyVault) settings.keyVault = [];
+    settings.keyVault.push(vaultItem);
+
+    if (setAsPrimary) {
+      settings.primaryApiKey = cleanKey;
+      settings.primaryVaultId = newId;
+      settings.testStatus = vaultItem.status;
+      settings.testMessage = testResult.message;
+      settings.lastTestedAt = new Date();
+      if (settings.secondaryVaultId === newId) {
+        settings.secondaryVaultId = null;
+        settings.secondaryApiKey = "";
+      }
+    } else if (setAsSecondary) {
+      settings.secondaryApiKey = cleanKey;
+      settings.secondaryVaultId = newId;
+      if (settings.primaryVaultId === newId) {
+        settings.primaryVaultId = null;
+        settings.primaryApiKey = "";
+      }
+    }
+
+    settings.updatedBy = req.user?._id || null;
+    await settings.save();
+
+    if (setAsPrimary || setAsSecondary) {
+      await refreshKeyCache();
+    }
+
+    return res.json({
+      success: true,
+      message: `Key "${cleanLabel}" saved to vault successfully!`,
+      settings: formatSettingsResponse(settings),
+    });
+  } catch (error) {
+    console.error("❌ Add to vault error:", error);
+    return res.status(500).json({ success: false, message: "Failed to add key to vault" });
+  }
+});
+
+// POST /api/ai-settings/vault/set-active: One-click switch Primary or Secondary key
+router.post("/vault/set-active", protect, restrictTo("super_admin"), async (req, res) => {
+  try {
+    const { vaultId, target } = req.body;
+    if (!vaultId || !["primary", "secondary"].includes(target)) {
+      return res.status(400).json({ success: false, message: "Invalid vaultId or target (must be 'primary' or 'secondary')." });
+    }
+
+    const settings = await AiSettings.getOrCreateSettings();
+    const item = (settings.keyVault || []).find((k) => k.id === vaultId);
+    if (!item) {
+      return res.status(404).json({ success: false, message: "Key not found in vault." });
+    }
+
+    if (target === "primary") {
+      // If was secondary, clear secondary
+      if (settings.secondaryVaultId === item.id) {
+        settings.secondaryVaultId = null;
+        settings.secondaryApiKey = "";
+      }
+      settings.primaryApiKey = item.apiKey;
+      settings.primaryVaultId = item.id;
+
+      // Retest key connectivity
+      const test = await testGroqApiKey(item.apiKey);
+      item.status = test.isValid ? "valid" : "invalid";
+      item.lastTestedAt = new Date();
+      settings.testStatus = item.status;
+      settings.testMessage = test.message;
+      settings.lastTestedAt = item.lastTestedAt;
+    } else if (target === "secondary") {
+      if (settings.primaryVaultId === item.id) {
+        return res.status(400).json({
+          success: false,
+          message: "This key is currently active as Primary. Select another key for Primary before setting it as Secondary.",
+        });
+      }
+      settings.secondaryApiKey = item.apiKey;
+      settings.secondaryVaultId = item.id;
+    }
+
+    settings.updatedBy = req.user?._id || null;
+    await settings.save();
+    await refreshKeyCache();
+
+    return res.json({
+      success: true,
+      message: `Key "${item.label}" is now set as ${target === "primary" ? "Active Primary" : "Secondary Fallback"}!`,
+      settings: formatSettingsResponse(settings),
+    });
+  } catch (error) {
+    console.error("❌ Set active key error:", error);
+    return res.status(500).json({ success: false, message: "Failed to switch active key" });
+  }
+});
+
+// POST /api/ai-settings/vault/:id/test: Test a specific key in the vault
+router.post("/vault/:id/test", protect, restrictTo("super_admin"), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const settings = await AiSettings.getOrCreateSettings();
+    const item = (settings.keyVault || []).find((k) => k.id === id);
+    if (!item) {
+      return res.status(404).json({ success: false, message: "Key not found in vault." });
+    }
+
+    const testResult = await testGroqApiKey(item.apiKey);
+    item.status = testResult.isValid ? "valid" : "invalid";
+    item.lastTestedAt = new Date();
+
+    if (settings.primaryVaultId === item.id || settings.primaryApiKey === item.apiKey) {
+      settings.testStatus = item.status;
+      settings.testMessage = testResult.message;
+      settings.lastTestedAt = item.lastTestedAt;
+    }
+
+    await settings.save();
+
+    return res.json({
+      success: true,
+      isValid: testResult.isValid,
+      message: testResult.message,
+      item: {
+        id: item.id,
+        label: item.label,
+        status: item.status,
+        lastTestedAt: item.lastTestedAt,
+      },
+    });
+  } catch (error) {
+    console.error("❌ Test vault key error:", error);
+    return res.status(500).json({ success: false, message: "Failed to test key" });
+  }
+});
+
+// DELETE /api/ai-settings/vault/:id: Remove a key from vault
+router.delete("/vault/:id", protect, restrictTo("super_admin"), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const settings = await AiSettings.getOrCreateSettings();
+    const itemIndex = (settings.keyVault || []).findIndex((k) => k.id === id);
+    if (itemIndex === -1) {
+      return res.status(404).json({ success: false, message: "Key not found in vault." });
+    }
+
+    const item = settings.keyVault[itemIndex];
+    if (settings.primaryVaultId === item.id || settings.primaryApiKey === item.apiKey) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot delete active Primary key "${item.label}". Please set another key as Primary before deleting.`,
+      });
+    }
+
+    if (settings.secondaryVaultId === item.id || settings.secondaryApiKey === item.apiKey) {
+      settings.secondaryVaultId = null;
+      settings.secondaryApiKey = "";
+    }
+
+    settings.keyVault.splice(itemIndex, 1);
+    settings.updatedBy = req.user?._id || null;
+    await settings.save();
+    await refreshKeyCache();
+
+    return res.json({
+      success: true,
+      message: `Key "${item.label}" deleted from vault.`,
+      settings: formatSettingsResponse(settings),
+    });
+  } catch (error) {
+    console.error("❌ Delete vault key error:", error);
+    return res.status(500).json({ success: false, message: "Failed to delete key from vault" });
   }
 });
 
@@ -179,19 +424,7 @@ router.put("/", protect, restrictTo("super_admin"), async (req, res) => {
     return res.json({
       success: true,
       message: "AI settings saved and switched successfully!",
-      settings: {
-        _id: settings._id,
-        primaryApiKeyMasked: maskApiKey(settings.primaryApiKey),
-        secondaryApiKeyMasked: maskApiKey(settings.secondaryApiKey),
-        hasPrimaryApiKey: Boolean(settings.primaryApiKey),
-        hasSecondaryApiKey: Boolean(settings.secondaryApiKey),
-        selectedModel: settings.selectedModel,
-        selectedSttModel: settings.selectedSttModel,
-        isEnabled: settings.isEnabled,
-        testStatus: settings.testStatus,
-        testMessage: settings.testMessage,
-        lastTestedAt: settings.lastTestedAt,
-      },
+      settings: formatSettingsResponse(settings),
     });
   } catch (error) {
     console.error("❌ Save AI settings error:", error);
