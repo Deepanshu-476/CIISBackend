@@ -23,6 +23,14 @@ const keyVaultItemSchema = new mongoose.Schema(
       enum: ["valid", "invalid", "untested"],
       default: "untested",
     },
+    isDeleted: {
+      type: Boolean,
+      default: false,
+    },
+    deletedAt: {
+      type: Date,
+      default: null,
+    },
     lastTestedAt: {
       type: Date,
       default: null,

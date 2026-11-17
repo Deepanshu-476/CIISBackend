@@ -79,7 +79,10 @@ const formatSettingsResponse = (settings) => {
   const activePrimaryVaultId = settings.primaryVaultId || null;
   const activeSecondaryVaultId = settings.secondaryVaultId || null;
 
-  const vault = (settings.keyVault || []).map((item) => {
+  const activeVault = [];
+  const deletedVault = [];
+
+  (settings.keyVault || []).forEach((item) => {
     const isPrimary = activePrimaryVaultId
       ? activePrimaryVaultId === item.id
       : Boolean(settings.primaryApiKey && settings.primaryApiKey === item.apiKey);
@@ -87,16 +90,24 @@ const formatSettingsResponse = (settings) => {
       ? activeSecondaryVaultId === item.id
       : Boolean(settings.secondaryApiKey && settings.secondaryApiKey === item.apiKey);
 
-    return {
+    const formatted = {
       id: item.id,
       label: item.label,
       apiKeyMasked: maskApiKey(item.apiKey),
       isPrimary,
       isSecondary,
       status: item.status,
+      isDeleted: Boolean(item.isDeleted),
+      deletedAt: item.deletedAt || null,
       lastTestedAt: item.lastTestedAt,
       addedAt: item.addedAt,
     };
+
+    if (item.isDeleted) {
+      deletedVault.push(formatted);
+    } else {
+      activeVault.push(formatted);
+    }
   });
 
   const activePrimaryItem = (settings.keyVault || []).find((k) =>
@@ -112,7 +123,8 @@ const formatSettingsResponse = (settings) => {
     primaryVaultId: settings.primaryVaultId,
     secondaryVaultId: settings.secondaryVaultId,
     primaryLabel: activePrimaryItem ? activePrimaryItem.label : "",
-    keyVault: vault,
+    keyVault: activeVault,
+    deletedVault: deletedVault,
     selectedModel: settings.selectedModel || "qwen/qwen3.8-27b",
     selectedSttModel: settings.selectedSttModel || "whisper-large-v3-turbo",
     isEnabled: settings.isEnabled !== false,
@@ -307,17 +319,16 @@ router.post("/vault/:id/test", protect, restrictTo("super_admin"), async (req, r
   }
 });
 
-// DELETE /api/ai-settings/vault/:id: Remove a key from vault
+// DELETE /api/ai-settings/vault/:id: Soft-delete a key from vault
 router.delete("/vault/:id", protect, restrictTo("super_admin"), async (req, res) => {
   try {
     const { id } = req.params;
     const settings = await AiSettings.getOrCreateSettings();
-    const itemIndex = (settings.keyVault || []).findIndex((k) => k.id === id);
-    if (itemIndex === -1) {
+    const item = (settings.keyVault || []).find((k) => k.id === id);
+    if (!item) {
       return res.status(404).json({ success: false, message: "Key not found in vault." });
     }
 
-    const item = settings.keyVault[itemIndex];
     if (settings.primaryVaultId === item.id || settings.primaryApiKey === item.apiKey) {
       return res.status(400).json({
         success: false,
@@ -330,19 +341,47 @@ router.delete("/vault/:id", protect, restrictTo("super_admin"), async (req, res)
       settings.secondaryApiKey = "";
     }
 
-    settings.keyVault.splice(itemIndex, 1);
+    // SOFT DELETE
+    item.isDeleted = true;
+    item.deletedAt = new Date();
     settings.updatedBy = req.user?._id || null;
     await settings.save();
     await refreshKeyCache();
 
     return res.json({
       success: true,
-      message: `Key "${item.label}" deleted from vault.`,
+      message: `Key "${item.label}" moved to trash (soft-deleted). You can restore it anytime!`,
       settings: formatSettingsResponse(settings),
     });
   } catch (error) {
     console.error("❌ Delete vault key error:", error);
     return res.status(500).json({ success: false, message: "Failed to delete key from vault" });
+  }
+});
+
+// POST /api/ai-settings/vault/:id/restore: Restore a soft-deleted key back to active vault
+router.post("/vault/:id/restore", protect, restrictTo("super_admin"), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const settings = await AiSettings.getOrCreateSettings();
+    const item = (settings.keyVault || []).find((k) => k.id === id);
+    if (!item) {
+      return res.status(404).json({ success: false, message: "Key not found in vault." });
+    }
+
+    item.isDeleted = false;
+    item.deletedAt = null;
+    settings.updatedBy = req.user?._id || null;
+    await settings.save();
+
+    return res.json({
+      success: true,
+      message: `Key "${item.label}" restored to active vault successfully!`,
+      settings: formatSettingsResponse(settings),
+    });
+  } catch (error) {
+    console.error("❌ Restore vault key error:", error);
+    return res.status(500).json({ success: false, message: "Failed to restore key" });
   }
 });
 
@@ -390,10 +429,50 @@ router.put("/", protect, restrictTo("super_admin"), async (req, res) => {
     const settings = await AiSettings.getOrCreateSettings();
 
     if (primaryApiKey !== undefined && primaryApiKey !== "") {
-      settings.primaryApiKey = String(primaryApiKey).trim();
+      const cleanPrimary = String(primaryApiKey).trim();
+      settings.primaryApiKey = cleanPrimary;
+      // Sync into vault
+      const existing = (settings.keyVault || []).find((k) => k.apiKey === cleanPrimary);
+      if (!existing) {
+        const newId = new mongoose.Types.ObjectId().toString();
+        settings.keyVault.push({
+          id: newId,
+          label: "Primary Production Key",
+          apiKey: cleanPrimary,
+          status: "untested",
+          isDeleted: false,
+          addedAt: new Date(),
+        });
+        settings.primaryVaultId = newId;
+      } else {
+        existing.isDeleted = false;
+        settings.primaryVaultId = existing.id;
+      }
     }
+
     if (secondaryApiKey !== undefined) {
-      settings.secondaryApiKey = String(secondaryApiKey || "").trim();
+      const cleanSecondary = String(secondaryApiKey || "").trim();
+      settings.secondaryApiKey = cleanSecondary;
+      if (cleanSecondary) {
+        const existingSec = (settings.keyVault || []).find((k) => k.apiKey === cleanSecondary);
+        if (!existingSec) {
+          const newId = new mongoose.Types.ObjectId().toString();
+          settings.keyVault.push({
+            id: newId,
+            label: "Secondary Fallback Key",
+            apiKey: cleanSecondary,
+            status: "untested",
+            isDeleted: false,
+            addedAt: new Date(),
+          });
+          settings.secondaryVaultId = newId;
+        } else {
+          existingSec.isDeleted = false;
+          settings.secondaryVaultId = existingSec.id;
+        }
+      } else {
+        settings.secondaryVaultId = null;
+      }
     }
     if (selectedModel) {
       settings.selectedModel = String(selectedModel).trim();

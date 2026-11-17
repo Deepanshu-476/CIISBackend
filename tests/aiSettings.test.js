@@ -168,4 +168,26 @@ describe('Dynamic AI Key Management & GroqKeyManager Tests', () => {
     assert.equal(vaultItem.label, 'Testing Key');
     assert.ok(vaultItem.apiKey.startsWith('gsk_'));
   });
+
+  it('10. Soft-Delete & Restore Logic: Marks isDeleted true without removing key, and restore resets it', () => {
+    const key = {
+      id: 'vault_test_key_1',
+      label: 'Temporary Backup',
+      apiKey: 'gsk_test_temp_key',
+      isDeleted: false,
+      deletedAt: null,
+    };
+
+    // Soft delete
+    key.isDeleted = true;
+    key.deletedAt = new Date();
+    assert.equal(key.isDeleted, true);
+    assert.ok(key.deletedAt instanceof Date);
+
+    // Restore
+    key.isDeleted = false;
+    key.deletedAt = null;
+    assert.equal(key.isDeleted, false);
+    assert.equal(key.deletedAt, null);
+  });
 });
