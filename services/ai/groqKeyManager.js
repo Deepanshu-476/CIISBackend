@@ -11,11 +11,13 @@ if (!process.env.GROQ_API_KEY) {
 const keyCooldowns = new Map(); // key -> cooldownExpiryTimestamp
 
 let cachedSettingsKeys = null;
+let cachedModel = null;
+let cachedSttModel = null;
 let lastCacheTime = 0;
 const CACHE_TTL_MS = 30000;
 
 /**
- * Refreshes active keys from MongoDB AiSettings.
+ * Refreshes active keys and models from MongoDB AiSettings.
  * Can be called explicitly after super admin updates keys in frontend.
  */
 async function refreshKeyCache() {
@@ -36,6 +38,8 @@ async function refreshKeyCache() {
         ) {
           keys.push(doc.secondaryApiKey.trim());
         }
+        cachedModel = doc.selectedModel || null;
+        cachedSttModel = doc.selectedSttModel || null;
         if (keys.length > 0) {
           cachedSettingsKeys = keys;
           lastCacheTime = Date.now();
@@ -47,8 +51,18 @@ async function refreshKeyCache() {
     // Non-fatal, fallback to .env
   }
   cachedSettingsKeys = null;
+  cachedModel = null;
+  cachedSttModel = null;
   lastCacheTime = Date.now();
   return null;
+}
+
+function getActiveModelName() {
+  return cachedModel || (process.env.GROQ_MODEL && process.env.GROQ_MODEL.trim()) || 'qwen/qwen3.8-27b';
+}
+
+function getActiveSttModelName() {
+  return cachedSttModel || (process.env.GROQ_STT_MODEL && process.env.GROQ_STT_MODEL.trim()) || 'whisper-large-v3-turbo';
 }
 
 /**
@@ -208,6 +222,8 @@ async function executeWithGroqFallback(operation, options = {}) {
 module.exports = {
   getGroqApiKeys,
   getOrderedKeys,
+  getActiveModelName,
+  getActiveSttModelName,
   refreshKeyCache,
   isKeyRotationError,
   reportKeyFailure,
