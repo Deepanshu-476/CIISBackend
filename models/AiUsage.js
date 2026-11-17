@@ -30,6 +30,11 @@ const aiUsageSchema = new mongoose.Schema(
       required: true,
       default: 0,
     },
+    tokensUsed: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
   },
   {
     timestamps: true,

@@ -251,6 +251,12 @@ const companySchema = new mongoose.Schema(
       monthly: { type: Number, min: 0, default: 2000 },
     },
 
+    // AI Assistant limits for company users, synced from Plan or configured by Super Admin
+    aiDailyTokenLimit: { type: Number, min: 0, default: 25000 },
+    aiDailyCallLimit: { type: Number, min: 0, default: 35 },
+    aiDailySttLimit: { type: Number, min: 0, default: 100 },
+    aiExtraTokens: { type: Number, min: 0, default: 0 },
+
     moduleDashboardConfig: {
       type: mongoose.Schema.Types.Mixed,
       default: () => ({

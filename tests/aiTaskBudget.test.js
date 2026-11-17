@@ -71,6 +71,9 @@ const createMockAiUsageModel = () => {
       if (update?.$inc?.count) {
         doc.count += update.$inc.count;
       }
+      if (update?.$inc?.tokensUsed) {
+        doc.tokensUsed = (doc.tokensUsed || 0) + update.$inc.tokensUsed;
+      }
 
       return { ...doc };
     },
@@ -314,5 +317,137 @@ describe('aiTaskBudget middleware tests', () => {
     const today = aiTaskBudget.getTodayIstDate();
     const stored = mockAiUsage.store.get(`company-alpha:user-action-01:${today}:task_agent`);
     assert.equal(stored, undefined, 'No budget entry created for free turn');
+  });
+
+  it('9. Plan Token Limit: Blocks user when daily tokens are exhausted', async () => {
+    const today = aiTaskBudget.getTodayIstDate();
+    const company = {
+      _id: 'company-token-test',
+      aiDailyTokenLimit: 20000,
+      aiDailyCallLimit: 25,
+      aiExtraTokens: 0,
+    };
+    mockAiUsage.store.set(`company-token-test:user-tok-01:${today}:task_agent`, {
+      company: 'company-token-test',
+      user: 'user-tok-01',
+      date: today,
+      feature: 'task_agent',
+      count: 10,
+      tokensUsed: 20050, // Exceeded 20,000 tokens
+    });
+
+    const req = {
+      user: {
+        _id: 'user-tok-01',
+        company,
+        companyRole: 'employee',
+      },
+      body: { message: 'create a meeting tomorrow' },
+      _deps: { AiUsage: mockAiUsage },
+    };
+    const res = createMockRes();
+    let nextCalled = false;
+
+    await aiTaskBudget(req, res, () => {
+      nextCalled = true;
+    });
+
+    assert.equal(nextCalled, false, 'Turn must be blocked when token limit is exceeded');
+    assert.equal(res.statusCode, 429, 'HTTP 429 returned');
+    assert.equal(res.body.code, 'AI_TOKEN_LIMIT_REACHED');
+  });
+
+  it('10. Extra Top-Up Tokens: Allows exceeding base plan tokens if company has extra top-up tokens', async () => {
+    const today = aiTaskBudget.getTodayIstDate();
+    const company = {
+      _id: 'company-topup-test',
+      aiDailyTokenLimit: 20000,
+      aiDailyCallLimit: 50,
+      aiExtraTokens: 10000, // Total allowed = 30,000 tokens
+    };
+    mockAiUsage.store.set(`company-topup-test:user-tok-02:${today}:task_agent`, {
+      company: 'company-topup-test',
+      user: 'user-tok-02',
+      date: today,
+      feature: 'task_agent',
+      count: 15,
+      tokensUsed: 22000, // Above 20,000 but under 30,000!
+    });
+
+    const req = {
+      user: {
+        _id: 'user-tok-02',
+        company,
+        companyRole: 'employee',
+      },
+      body: { message: 'create project task' },
+      _deps: { AiUsage: mockAiUsage },
+    };
+    const res = createMockRes();
+    let nextCalled = false;
+
+    await aiTaskBudget(req, res, () => {
+      nextCalled = true;
+    });
+
+    assert.equal(nextCalled, true, 'Turn must be permitted due to extra top-up token buffer');
+    assert.equal(res.statusCode, 200);
+  });
+
+  it('11. Deterministic Chips & Action turns bypass token exhaustion', async () => {
+    const today = aiTaskBudget.getTodayIstDate();
+    const company = {
+      _id: 'company-chips-test',
+      aiDailyTokenLimit: 20000,
+      aiDailyCallLimit: 25,
+      aiExtraTokens: 0,
+    };
+    mockAiUsage.store.set(`company-chips-test:user-tok-03:${today}:task_agent`, {
+      company: 'company-chips-test',
+      user: 'user-tok-03',
+      date: today,
+      feature: 'task_agent',
+      count: 30,
+      tokensUsed: 25000, // Completely exhausted
+    });
+
+    const deterministicMessages = ['skip', 'cancel', 'Create task'];
+    for (const msg of deterministicMessages) {
+      const req = {
+        user: {
+          _id: 'user-tok-03',
+          company,
+          companyRole: 'employee',
+        },
+        body: { message: msg },
+        _deps: { AiUsage: mockAiUsage },
+      };
+      const res = createMockRes();
+      let nextCalled = false;
+
+      await aiTaskBudget(req, res, () => {
+        nextCalled = true;
+      });
+
+      assert.equal(nextCalled, true, `Deterministic message '${msg}' must not be blocked by token limits`);
+    }
+  });
+
+  it('12. consumeTaskBudget atomically increments count and tokensUsed', async () => {
+    const today = aiTaskBudget.getTodayIstDate();
+    const req = {
+      user: {
+        _id: 'user-tok-04',
+        company: 'company-consume-test',
+        companyRole: 'employee',
+      },
+      _deps: { AiUsage: mockAiUsage },
+    };
+
+    await aiTaskBudget.consumeTaskBudget(req, 820);
+    const stored = mockAiUsage.store.get(`company-consume-test:user-tok-04:${today}:task_agent`);
+    assert.ok(stored, 'Record created in usage store');
+    assert.equal(stored.count, 1, 'Count incremented to 1');
+    assert.equal(stored.tokensUsed, 820, 'Tokens used recorded as 820');
   });
 });
