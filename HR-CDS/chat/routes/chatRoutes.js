@@ -152,9 +152,15 @@ router.get("/turn-credentials", turnCredentialsLimiter, async (_req, res) => {
 
   const coturnIceServers = createCoturnIceServers();
   if (!coturnIceServers || !coturnIceServers.length) {
+    // Naming the missing variable turns "calls keep dropping" into a one-line server fix.
+    const missing = [
+      String(process.env.COTURN_STATIC_AUTH_SECRET || process.env.TURN_STATIC_AUTH_SECRET || "").trim() ? null : "COTURN_STATIC_AUTH_SECRET",
+      getCoturnUrls().length ? null : "COTURN_URLS or COTURN_HOST",
+    ].filter(Boolean);
     return res.status(503).json({
       success: false,
-      message: "Self-hosted TURN server is not configured",
+      message: `Self-hosted TURN server is not configured (missing: ${missing.join(", ")})`,
+      missing,
     });
   }
 

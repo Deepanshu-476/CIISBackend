@@ -1,0 +1,70 @@
+const express = require('express');
+const router = express.Router();
+const weekOffController = require('../controllers/weekOffController');
+const { protect } = require('../../middleware/authMiddleware');
+const PagePermission = require('../../models/PagePermission');
+
+router.use(protect);
+
+// Employee routes
+router.get('/my-schedule', weekOffController.getMySchedule);
+router.post('/request', weekOffController.createRequest);
+router.get('/my-requests', weekOffController.getMyRequests);
+router.delete('/request/:id', weekOffController.cancelRequest);
+
+const normalizeRole = value => String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, '_');
+
+// Same approvers as an overtime request: the people who already manage employee attendance.
+const privilegedRoles = [
+  'super_admin', 'superadmin',
+  'owner', 'company_owner', 'companyowner',
+  'admin', 'company_admin', 'companyadmin',
+  'hr', 'hr_manager', 'manager'
+];
+
+const checkWeekOffAdminAccess = (requiredPermission = 'view') => async (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: 'Not authorized' });
+  }
+  if (req.user.isSuperAdmin || req.user.isCompanyOwner) return next();
+
+  const userRoles = [req.user.jobRole, req.user.jobRoleName, req.user.companyRole, req.user.role, req.user.userType]
+    .filter(Boolean)
+    .map(normalizeRole);
+  if (userRoles.some(role => privilegedRoles.includes(role))) return next();
+
+  try {
+    const company = req.user?.company?._id || req.user?.company || req.user?.companyId;
+    const userId = String(req.user?._id || req.user?.id || '');
+    if (company && userId) {
+      const page = await PagePermission.findOne({ company, path: '/ciisUser/emp-attendance' }).lean();
+      if (page) {
+        const idsOf = (list = []) => list.map(entry => String(entry?.user?._id || entry?.user || ''));
+        const viewIds = new Set([
+          ...idsOf(page.viewUsers),
+          ...idsOf(page.editUsers),
+          ...idsOf(page.deleteUsers),
+          ...idsOf(page.approvers)
+        ]);
+        const editIds = new Set([...idsOf(page.editUsers), ...idsOf(page.approvers)]);
+        if (requiredPermission === 'view' && viewIds.has(userId)) return next();
+        if (requiredPermission === 'edit' && editIds.has(userId)) return next();
+      }
+    }
+  } catch (error) {
+    console.error('Error checking week off admin page permission:', error.message);
+  }
+
+  return res.status(403).json({
+    success: false,
+    message: 'Access denied. Only authorized Admin or HR can manage weekly off requests.'
+  });
+};
+
+// Admin / HR routes
+router.get('/admin-requests', checkWeekOffAdminAccess('view'), weekOffController.getAdminRequests);
+router.put('/admin-action/:id', checkWeekOffAdminAccess('edit'), weekOffController.reviewRequest);
+router.get('/employees', checkWeekOffAdminAccess('view'), weekOffController.getEmployeeSettings);
+router.put('/employees/:userId', checkWeekOffAdminAccess('edit'), weekOffController.updateEmployeeSettings);
+
+module.exports = router;

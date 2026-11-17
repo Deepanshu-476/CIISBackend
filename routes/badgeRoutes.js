@@ -91,6 +91,8 @@ const countPendingRegisterRequests = async (req) => {
       }
     ];
 
+    const branchCondition = require('../utils/branchScope').registerRequestBranchCondition(user);
+    if (Object.keys(branchCondition).length) filter.$and = [branchCondition];
     return await User.countDocuments(filter);
   } catch (err) {
     console.error('Badge count pending register requests error:', err.message);

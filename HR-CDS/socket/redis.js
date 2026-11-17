@@ -24,4 +24,12 @@ const attachRedisAdapter = async (io) => {
 
 const getRedis = () => (pubClient?.isReady ? pubClient : null);
 
-module.exports = { attachRedisAdapter, getRedis };
+// Used by tests and by a graceful shutdown: without this the two clients keep the process alive.
+const closeRedisAdapter = async () => {
+  const clients = [pubClient, subClient].filter(Boolean);
+  pubClient = null;
+  subClient = null;
+  await Promise.all(clients.map(client => client.quit().catch(() => client.disconnect?.())));
+};
+
+module.exports = { attachRedisAdapter, getRedis, closeRedisAdapter };
