@@ -266,6 +266,8 @@ const companySchema = new mongoose.Schema(
     aiDailyCallLimit: { type: Number, min: 0, default: 35 },
     aiDailySttLimit: { type: Number, min: 0, default: 100 },
     aiExtraTokens: { type: Number, min: 0, default: 0 },
+    byokDefaultEmployeeDailyTokens: { type: Number, min: 0, default: 10000 },
+    byokDefaultEmployeeDailyCalls: { type: Number, min: 0, default: 30 },
 
     moduleDashboardConfig: {
       type: mongoose.Schema.Types.Mixed,

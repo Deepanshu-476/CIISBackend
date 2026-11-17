@@ -130,4 +130,5 @@ router.get("/:id/location", protect, companyController.getCompanyLocation);
 router.put("/:id/location", protect, companyController.updateCompanyLocation);
 
 
+router.requireCompanyAdminOrSuperAdmin = requireCompanyAdminOrSuperAdmin;
 module.exports = router;

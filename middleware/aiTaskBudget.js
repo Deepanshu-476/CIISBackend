@@ -34,25 +34,36 @@ const isOwnerOrAdmin = (user) => {
  * - aiExtraTokens: Top-up token pool for company
  */
 const getCompanyAiLimits = async (companyRef) => {
-  if (companyRef && typeof companyRef === 'object' && companyRef.aiDailyTokenLimit !== undefined) {
+  if (companyRef && typeof companyRef === 'object' && (companyRef.aiDailyTokenLimit !== undefined || companyRef.aiApiKeySource !== undefined)) {
     return {
       aiApiKeySource: companyRef.aiApiKeySource || 'platform',
       tokenLimit: companyRef.aiDailyTokenLimit ?? 25000,
       callLimit: companyRef.aiDailyCallLimit ?? 35,
       sttLimit: companyRef.aiDailySttLimit ?? 100,
       extraTokens: companyRef.aiExtraTokens ?? 0,
+      byokDefaultEmployeeDailyTokens: companyRef.byokDefaultEmployeeDailyTokens ?? 10000,
+      byokDefaultEmployeeDailyCalls: companyRef.byokDefaultEmployeeDailyCalls ?? 30,
       isExplicit: true,
     };
   }
 
   const companyId = companyRef?._id || companyRef;
   if (!companyId || !mongoose.Types.ObjectId.isValid(companyId)) {
-    return { aiApiKeySource: 'platform', tokenLimit: 25000, callLimit: 35, sttLimit: 100, extraTokens: 0, isExplicit: false };
+    return {
+      aiApiKeySource: 'platform',
+      tokenLimit: 25000,
+      callLimit: 35,
+      sttLimit: 100,
+      extraTokens: 0,
+      byokDefaultEmployeeDailyTokens: 10000,
+      byokDefaultEmployeeDailyCalls: 30,
+      isExplicit: false,
+    };
   }
 
   try {
     const doc = await Company.findById(companyId)
-      .select('aiApiKeySource aiDailyTokenLimit aiDailyCallLimit aiDailySttLimit aiExtraTokens')
+      .select('aiApiKeySource aiDailyTokenLimit aiDailyCallLimit aiDailySttLimit aiExtraTokens byokDefaultEmployeeDailyTokens byokDefaultEmployeeDailyCalls')
       .lean();
     if (doc) {
       return {
@@ -61,6 +72,8 @@ const getCompanyAiLimits = async (companyRef) => {
         callLimit: doc.aiDailyCallLimit ?? 35,
         sttLimit: doc.aiDailySttLimit ?? 100,
         extraTokens: doc.aiExtraTokens ?? 0,
+        byokDefaultEmployeeDailyTokens: doc.byokDefaultEmployeeDailyTokens ?? 10000,
+        byokDefaultEmployeeDailyCalls: doc.byokDefaultEmployeeDailyCalls ?? 30,
         isExplicit: true,
       };
     }
@@ -68,7 +81,16 @@ const getCompanyAiLimits = async (companyRef) => {
     console.error('getCompanyAiLimits error:', err.message);
   }
 
-  return { aiApiKeySource: 'platform', tokenLimit: 25000, callLimit: 35, sttLimit: 100, extraTokens: 0, isExplicit: false };
+  return {
+    aiApiKeySource: 'platform',
+    tokenLimit: 25000,
+    callLimit: 35,
+    sttLimit: 100,
+    extraTokens: 0,
+    byokDefaultEmployeeDailyTokens: 10000,
+    byokDefaultEmployeeDailyCalls: 30,
+    isExplicit: false,
+  };
 };
 
 const getLimit = (user, companyLimits = null) => {
@@ -151,12 +173,86 @@ const aiTaskBudget = async (req, res, next) => {
     const limits = await getCompanyAiLimits(req.user.company);
 
     if (limits.aiApiKeySource === 'client') {
+      const isOwnerAdmin = isOwnerOrAdmin(req.user);
+      const aiConfig = req.user.aiConfig;
+
+      // Access explicitly disabled by company admin for this employee
+      if (!isOwnerAdmin && aiConfig && aiConfig.enabled === false) {
+        return res.status(403).json({
+          success: false,
+          code: 'AI_ACCESS_DISABLED_BY_ADMIN',
+          message: 'Aapki company ke admin ne aapka AI Assistant access disable kiya hua hai. Kripya company admin se sampark karein.',
+        });
+      }
+
+      // Owner/Admin or explicitly marked isUnlimited gets unmetered access
+      if (isOwnerAdmin || (aiConfig && aiConfig.isUnlimited)) {
+        req.aiTaskUsage = {
+          isClientApiKey: true,
+          limit: Infinity,
+          tokenLimit: Infinity,
+          current: 0,
+          tokensUsed: 0,
+          todayIst,
+        };
+        return next();
+      }
+
+      // Regular employee in BYOK mode: enforce company admin's allocated limits
+      const userTokenLimit = aiConfig?.customDailyTokenLimit ?? limits.byokDefaultEmployeeDailyTokens ?? 10000;
+      const userCallLimit = aiConfig?.customDailyCallLimit ?? limits.byokDefaultEmployeeDailyCalls ?? 30;
+
+      const filter = {
+        company: companyId,
+        user: userId,
+        date: todayIst,
+        feature: 'task_agent',
+      };
+
+      const AiUsageModel = req?._deps?.AiUsage || AiUsage;
+      const record = await AiUsageModel.findOne
+        ? await AiUsageModel.findOne(filter)
+        : (await AiUsageModel.findOneAndUpdate(filter, { $setOnInsert: filter }, { upsert: true, new: true }));
+
+      const currentCount = record ? record.count || 0 : 0;
+      const currentTokens = record ? record.tokensUsed || 0 : 0;
+
+      const isActionOrDeterministic = Boolean(
+        req.body?.action ||
+        req.body?.pick ||
+        req.body?.pickProject ||
+        (req.body?.message && /^(?:create\s+(?:personal\s+)?task|create\s+task\s+in\s+project|assign\s+task\s+to\s+someone|view\s+tasks|skip|cancel|edit)$/i.test(String(req.body.message).trim()))
+      );
+
+      if (!isActionOrDeterministic) {
+        if (currentTokens >= userTokenLimit) {
+          return res.status(429).json({
+            success: false,
+            code: 'EMPLOYEE_TOKEN_LIMIT_REACHED',
+            message: `Aapka daily AI token quota (${userTokenLimit.toLocaleString()} tokens) pura ho chuka hai. Kripya apne company admin se limit badhwane ke liye sampark karein.`,
+            limit: userCallLimit,
+            tokenLimit: userTokenLimit,
+            tokensUsed: currentTokens,
+          });
+        }
+
+        if (currentCount >= userCallLimit) {
+          return res.status(429).json({
+            success: false,
+            code: 'EMPLOYEE_CALL_LIMIT_REACHED',
+            message: `Aapki company ke admin dwara set kiye gaye daily AI requests (${userCallLimit}) pure ho chuke hain. Kripya kal dobara koshish karein.`,
+            limit: userCallLimit,
+            current: currentCount,
+          });
+        }
+      }
+
       req.aiTaskUsage = {
         isClientApiKey: true,
-        limit: Infinity,
-        tokenLimit: Infinity,
-        current: 0,
-        tokensUsed: 0,
+        limit: userCallLimit,
+        tokenLimit: userTokenLimit,
+        current: currentCount,
+        tokensUsed: currentTokens,
         todayIst,
       };
       return next();
