@@ -1,12 +1,9 @@
 const path = require('path');
 const dotenv = require('dotenv');
 
-// Ensure .env is loaded
-if (!process.env.GROQ_API_KEY) {
-  try {
-    dotenv.config({ path: path.resolve(__dirname, '../../.env') });
-  } catch {}
-}
+try {
+  dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+} catch {}
 
 const keyCooldowns = new Map(); // key -> cooldownExpiryTimestamp
 
@@ -18,7 +15,7 @@ const CACHE_TTL_MS = 30000;
 
 /**
  * Refreshes active keys and models from MongoDB AiSettings.
- * Can be called explicitly after super admin updates keys in frontend.
+ * Managed exclusively by Super Admin via the AI Management frontend.
  */
 async function refreshKeyCache() {
   try {
@@ -38,59 +35,43 @@ async function refreshKeyCache() {
         ) {
           keys.push(doc.secondaryApiKey.trim());
         }
-        cachedModel = doc.selectedModel || null;
-        cachedSttModel = doc.selectedSttModel || null;
-        if (keys.length > 0) {
-          cachedSettingsKeys = keys;
-          lastCacheTime = Date.now();
-          return cachedSettingsKeys;
-        }
+        cachedModel = doc.selectedModel || 'qwen/qwen3.8-27b';
+        cachedSttModel = doc.selectedSttModel || 'whisper-large-v3-turbo';
+        cachedSettingsKeys = keys;
+        lastCacheTime = Date.now();
+        return cachedSettingsKeys;
       }
     }
   } catch (err) {
-    // Non-fatal, fallback to .env
+    console.error('[groqKeyManager] Failed to refresh key cache from database:', err?.message);
   }
-  cachedSettingsKeys = null;
-  cachedModel = null;
-  cachedSttModel = null;
+  cachedSettingsKeys = [];
   lastCacheTime = Date.now();
-  return null;
+  return [];
 }
 
 function getActiveModelName() {
-  return cachedModel || (process.env.GROQ_MODEL && process.env.GROQ_MODEL.trim()) || 'qwen/qwen3.8-27b';
+  return cachedModel || 'qwen/qwen3.8-27b';
 }
 
 function getActiveSttModelName() {
-  return cachedSttModel || (process.env.GROQ_STT_MODEL && process.env.GROQ_STT_MODEL.trim()) || 'whisper-large-v3-turbo';
+  return cachedSttModel || 'whisper-large-v3-turbo';
 }
 
 /**
- * Returns an array of configured Groq API keys in priority order.
- * Priority 1: Dynamic keys saved in MongoDB AiSettings by Super Admin
- * Priority 2: Fallback to .env (GROQ_API_KEY, GROQ_API_KEY_SECONDARY)
+ * Returns an array of configured Groq API keys strictly from database AiSettings.
+ * Managed exclusively from Super Admin Frontend Key Vault.
  */
 function getGroqApiKeys() {
   if (cachedSettingsKeys && cachedSettingsKeys.length > 0) {
     return [...cachedSettingsKeys];
   }
+  return [];
+}
 
-  const keys = [];
-  const primary = (process.env.GROQ_API_KEY || '').trim();
-  const secondary = (process.env.GROQ_API_KEY_SECONDARY || '').trim();
-
-  if (primary) keys.push(primary);
-  if (secondary && secondary !== primary) keys.push(secondary);
-
-  // Also support comma-separated GROQ_API_KEYS if ever provided
-  if (process.env.GROQ_API_KEYS) {
-    const extras = process.env.GROQ_API_KEYS.split(',')
-      .map(k => k.trim())
-      .filter(k => k && !keys.includes(k));
-    keys.push(...extras);
-  }
-
-  return keys;
+function setCachedKeysForTesting(keys) {
+  cachedSettingsKeys = Array.isArray(keys) ? [...keys] : [];
+  lastCacheTime = Date.now();
 }
 
 /**
@@ -193,7 +174,7 @@ async function executeWithGroqFallback(operation, options = {}) {
 
   const keys = await getOrderedKeys();
   if (keys.length === 0) {
-    throw new Error('No GROQ_API_KEY configured.');
+    throw new Error('No Groq API Key configured. Please add and set an active Primary key in Super Admin AI Management.');
   }
 
   let lastError = null;
@@ -225,6 +206,7 @@ module.exports = {
   getActiveModelName,
   getActiveSttModelName,
   refreshKeyCache,
+  setCachedKeysForTesting,
   isKeyRotationError,
   reportKeyFailure,
   reportKeySuccess,
