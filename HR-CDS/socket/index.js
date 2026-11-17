@@ -16,6 +16,7 @@ const initializeSocket = (io) => {
   io.use(authSocket);
 
   io.on('connection', (socket) => {
+    socket.use(require('../../middleware/subscriptionSocket')(socket));
     void 0;
 
     

@@ -18,6 +18,7 @@ const planSchema = new mongoose.Schema(
       type: Number,
       required: [true, "Plan duration is required"],
       min: [1, "Plan duration must be at least 1 day"],
+      validate: {validator: Number.isInteger, message: 'Plan duration must be a whole number of days'},
     },
     description: {
       type: String,

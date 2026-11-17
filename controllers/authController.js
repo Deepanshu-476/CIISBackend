@@ -1,3 +1,4 @@
+const { subscriptionFields, subscriptionState, companyDetails: serializeCompanyDetails } = require('../utils/companySubscription');
 const User = require("../models/User");
 const Company = require("../models/Company");
 const Client = require("../HR-CDS/models/Client");
@@ -343,23 +344,7 @@ const isValidLoginOTP = (otpRecord, submittedOTP) => {
   return otpRecord.otp === normalizedOTP;
 };
 
-const buildCompanyDetails = (company) => {
-  const isPlanActive = company && company.isActive && company.subscriptionExpiry && new Date() <= new Date(company.subscriptionExpiry);
-  return company ? {
-    _id: company._id,
-    companyName: company.companyName,
-    companyCode: company.companyCode,
-    companyEmail: company.companyEmail,
-    companyPhone: company.companyPhone,
-    companyAddress: company.companyAddress,
-    logo: company.logo,
-    isActive: company.isActive,
-    subscriptionExpiry: company.subscriptionExpiry,
-    allowedPages: isPlanActive ? (company.allowedPages || []) : [],
-    loginUrl: company.loginUrl,
-    dbIdentifier: company.dbIdentifier,
-  } : null;
-};
+const buildCompanyDetails = serializeCompanyDetails;
 
 const SENSITIVE_PII_KEYS = new Set([
   'aadhaar', 'aadhar', 'aadharcard', 'aadhaarcard',
@@ -409,7 +394,7 @@ const completeStandardLogin = async (userId, res, { message = "Login successful"
     .populate("department", "name")
     .populate("branch", "name branchCode")
     .populate("assignedBranches", "name branchCode")
-    .populate("company", "companyName companyCode logo companyEmail companyPhone companyAddress isActive subscriptionExpiry allowedPages loginUrl dbIdentifier");
+    .populate("company", subscriptionFields);
 
   if (!user) {
     return res.status(404).json({
@@ -698,21 +683,7 @@ exports.companyLogin = async (req, res) => {
     }
 
     
-    if (company.subscriptionExpiry && new Date() > new Date(company.subscriptionExpiry)) {
-      console.warn("[company-login] company subscription expired", {
-        ...loginDebugBase,
-        companyCode: company.companyCode,
-        subscriptionExpiry: company.subscriptionExpiry,
-      });
-      return res.status(403).json({
-        success: false,
-        message: "Company subscription has expired",
-        errorCode: "SUBSCRIPTION_EXPIRED",
-        expiryDate: company.subscriptionExpiry,
-      });
-    }
 
-    
     const userQuery = {
       email: cleanEmail,
       $or: [
@@ -730,7 +701,7 @@ exports.companyLogin = async (req, res) => {
       .populate("department", "name")
       .populate("branch", "name branchCode")
       .populate("assignedBranches", "name branchCode")
-      .populate("company", "companyName companyCode logo")
+      .populate("company", subscriptionFields)
 
     if (!user) {
       const companyEmailUser = await User.findOne({
@@ -1072,7 +1043,7 @@ exports.register = async (req, res) => {
     }
 
     
-    if (new Date() > new Date(companyExists.subscriptionExpiry)) {
+    if (subscriptionState(companyExists).expired) {
       return abortAndError(403, "Company subscription has expired", "SUBSCRIPTION_EXPIRED");
     }
 
@@ -1321,7 +1292,7 @@ exports.login = async (req, res) => {
       .populate("department", "name")
       .populate("branch", "name branchCode")
       .populate("assignedBranches", "name branchCode")
-      .populate("company", "companyName companyCode isActive subscriptionExpiry logo companyEmail companyPhone companyAddress dbIdentifier loginUrl");
+      .populate("company", subscriptionFields);
 
     if (!user) {
       void 0;
@@ -1432,19 +1403,7 @@ exports.login = async (req, res) => {
       }
 
       
-      if (company && company.subscriptionExpiry) {
-        const expiryDate = new Date(company.subscriptionExpiry);
-        if (expiryDate < new Date()) {
-          return res.status(403).json({
-            success: false,
-            message: "Company subscription has expired",
-            errorCode: "SUBSCRIPTION_EXPIRED",
-            expiryDate: expiryDate.toISOString(),
-          });
-        }
-      }
 
-      
       const cleanProvidedCode = providedCompanyCode.toLowerCase().trim();
       const userCompanyCode = (user.companyCode || (company && company.companyCode) || '').toLowerCase();
       
@@ -1691,7 +1650,7 @@ exports.verifyLoginOTP = async (req, res) => {
       .populate("department", "name")
       .populate("branch", "name branchCode")
       .populate("assignedBranches", "name branchCode")
-      .populate("company", "companyName companyCode logo companyEmail companyPhone companyAddress isActive subscriptionExpiry allowedPages loginUrl dbIdentifier");
+      .populate("company", subscriptionFields);
 
     if (!user) {
       return res.status(404).json({
@@ -1738,23 +1697,9 @@ exports.verifyLoginOTP = async (req, res) => {
     await LoginOTP.deleteMany({ email });
 
     
-    const isPlanActive = user.company && user.company.isActive && user.company.subscriptionExpiry && new Date() <= new Date(user.company.subscriptionExpiry);
-    const companyDetails = user.company ? {
-      _id: user.company._id,
-      companyName: user.company.companyName,
-      companyCode: user.company.companyCode,
-      companyEmail: user.company.companyEmail,
-      companyPhone: user.company.companyPhone,
-      companyAddress: user.company.companyAddress,
-      logo: user.company.logo,
-      isActive: user.company.isActive,
-      subscriptionExpiry: user.company.subscriptionExpiry,
-      allowedPages: isPlanActive ? (user.company.allowedPages || []) : [],
-      loginUrl: user.company.loginUrl,
-      dbIdentifier: user.company.dbIdentifier,
-    } : null;
+    const companyDetails = buildCompanyDetails(user.company);
 
-    
+
     const response = {
       success: true,
       message: "Login successful",
@@ -2201,7 +2146,7 @@ const isSuperAdminUser = (user) => {
 const completeSuperAdminLogin = async (userId, res, { message = "Super Admin login successful" } = {}) => {
   const user = await User.findById(userId)
     .select("-password -loginAttempts -lockUntil")
-    .populate("company", "companyName companyCode logo allowedPages allowedSuperAdminPages");
+    .populate("company", subscriptionFields);
 
   if (!user) {
     return res.status(404).json({
@@ -2268,14 +2213,7 @@ const completeSuperAdminLogin = async (userId, res, { message = "Super Admin log
       profileImage: user.profileImage,
       loginType: "superadmin",
     },
-    companyDetails: user.company ? {
-      _id: user.company._id,
-      companyName: user.company.companyName,
-      companyCode: user.company.companyCode,
-      logo: user.company.logo,
-      allowedPages: (user.company.isActive && user.company.subscriptionExpiry && new Date() <= new Date(user.company.subscriptionExpiry)) ? (user.company.allowedPages || []) : [],
-      allowedSuperAdminPages: (user.company.isActive && user.company.subscriptionExpiry && new Date() <= new Date(user.company.subscriptionExpiry)) ? (user.company.allowedSuperAdminPages || []) : [],
-    } : null,
+    companyDetails: buildCompanyDetails(user.company),
   });
 };
 
@@ -2299,7 +2237,7 @@ exports.superAdminLogin = async (req, res) => {
     
     const user = await User.findOne({ email: cleanEmail })
       .select("+password +isActive +loginAttempts +lockUntil +companyRole +jobRole +department +role +isSuperAdmin +superAdmin +userType")
-      .populate("company", "companyName companyCode logo");
+      .populate("company", subscriptionFields);
 
     if (!user) {
       void 0;
@@ -2543,7 +2481,7 @@ exports.verifySuperAdminOTP = async (req, res) => {
 
     const user = await User.findOne({ email })
       .select("-password -loginAttempts -lockUntil")
-      .populate("company", "companyName companyCode logo");
+      .populate("company", subscriptionFields);
 
     if (!user) {
       return res.status(404).json({
@@ -3242,13 +3180,6 @@ exports.getCompanyDetailsByIdentifier = async (req, res) => {
     }
 
     
-    if (new Date() > new Date(company.subscriptionExpiry)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Company subscription has expired',
-        expiryDate: company.subscriptionExpiry
-      });
-    }
 
     void 0;
     
@@ -3265,6 +3196,7 @@ exports.getCompanyDetailsByIdentifier = async (req, res) => {
         companyDomain: company.companyDomain,
         companyCode: company.companyCode,
         isActive: company.isActive,
+        ...buildCompanyDetails(company),
         subscriptionExpiry: company.subscriptionExpiry,
         loginUrl: company.loginUrl,
         dbIdentifier: company.dbIdentifier,

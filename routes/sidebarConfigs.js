@@ -144,8 +144,8 @@ const getCompanyPlanAccess = async (companyId) => {
 
 const filterMenuItemsByCompanyAccess = async (companyId, menuItems) => {
   const company = await getCompanyPlanAccess(companyId);
-  const isPlanActive = company && company.isActive && company.subscriptionExpiry && new Date() <= new Date(company.subscriptionExpiry);
-  const allowedPages = isPlanActive && Array.isArray(company?.allowedPages) ? company.allowedPages : [];
+  const isPlanActive = company && company.isActive;
+  const allowedPages = Array.isArray(company?.allowedPages) ? company.allowedPages : [];
 
   if (!isPlanActive) return [];
   if (allowedPages.length === 0) return menuItems;
@@ -771,3 +771,4 @@ router.get('/user-config', async (req, res) => {
 router.findSidebarConfig = findSidebarConfig;
 module.exports = router;
 module.exports.findSidebarConfig = findSidebarConfig;
+module.exports.invalidateSidebarCache = invalidateSidebarCache;
