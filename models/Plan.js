@@ -40,6 +40,11 @@ const planSchema = new mongoose.Schema(
       type: [String],
       default: [],
     },
+    aiApiKeySource: {
+      type: String,
+      enum: ["platform", "client"],
+      default: "platform",
+    },
     aiDailyTokenLimit: {
       type: Number,
       default: 25000,

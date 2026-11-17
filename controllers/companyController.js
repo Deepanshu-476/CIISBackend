@@ -428,6 +428,8 @@ exports.createCompany = async (req, res) => {
         planFeatures: cleanFeatures,
         allowedPages: cleanAllowedPages,
         allowedSuperAdminPages: cleanAllowedSuperAdminPages,
+        aiApiKeySource: selectedPlan.aiApiKeySource || "platform",
+        customGroqApiKey: null,
         aiDailyTokenLimit: selectedPlan.aiDailyTokenLimit ?? 25000,
         aiDailyCallLimit: selectedPlan.aiDailyCallLimit ?? 35,
         aiDailySttLimit: selectedPlan.aiDailySttLimit ?? 100,
@@ -1491,6 +1493,9 @@ exports.renewCompanySubscription = async (req, res) => {
       updateData.planFeatures = planFeatures;
       updateData.allowedPages = planAllowedPages;
       updateData.allowedSuperAdminPages = planAllowedSuperAdminPages;
+      if (selectedPlan.aiApiKeySource) {
+        updateData.aiApiKeySource = selectedPlan.aiApiKeySource;
+      }
       if (selectedPlan.aiDailyTokenLimit !== undefined) {
         updateData.aiDailyTokenLimit = selectedPlan.aiDailyTokenLimit;
       }
@@ -1500,6 +1505,15 @@ exports.renewCompanySubscription = async (req, res) => {
       if (selectedPlan.aiDailySttLimit !== undefined) {
         updateData.aiDailySttLimit = selectedPlan.aiDailySttLimit;
       }
+    }
+
+    if (req.body.customGroqApiKey !== undefined) {
+      updateData.customGroqApiKey = req.body.customGroqApiKey ? String(req.body.customGroqApiKey).trim() : null;
+    }
+
+    if (req.body.aiApiKeySource !== undefined) {
+      const mode = String(req.body.aiApiKeySource).trim().toLowerCase();
+      updateData.aiApiKeySource = mode === "client" ? "client" : "platform";
     }
 
     if (req.body.aiExtraTokens !== undefined && req.body.aiExtraTokens !== "") {

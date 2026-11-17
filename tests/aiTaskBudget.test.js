@@ -450,4 +450,71 @@ describe('aiTaskBudget middleware tests', () => {
     assert.equal(stored.count, 1, 'Count incremented to 1');
     assert.equal(stored.tokensUsed, 820, 'Tokens used recorded as 820');
   });
+
+  it('13. BYOK Mode (User API): Bypasses platform budget and marks isClientApiKey true', async () => {
+    const today = aiTaskBudget.getTodayIstDate();
+    const company = {
+      _id: 'company-byok-test',
+      aiApiKeySource: 'client',
+      customGroqApiKey: 'gsk_custom_user_key_123',
+      aiDailyTokenLimit: 20000,
+      aiDailyCallLimit: 25,
+      aiExtraTokens: 0,
+    };
+    // Pretend tokens are already maxed out
+    mockAiUsage.store.set(`company-byok-test:user-byok-01:${today}:task_agent`, {
+      company: 'company-byok-test',
+      user: 'user-byok-01',
+      date: today,
+      feature: 'task_agent',
+      count: 999,
+      tokensUsed: 999999,
+    });
+
+    const req = {
+      user: {
+        _id: 'user-byok-01',
+        company,
+        companyRole: 'employee',
+      },
+      body: { message: 'create meeting with client' },
+      _deps: { AiUsage: mockAiUsage },
+    };
+    const res = createMockRes();
+    let nextCalled = false;
+
+    await aiTaskBudget(req, res, () => {
+      nextCalled = true;
+    });
+
+    assert.equal(nextCalled, true, 'User API plan must bypass platform quota');
+    assert.equal(req.aiTaskUsage?.isClientApiKey, true, 'Flagged as client API key');
+  });
+
+  it('14. GroqKeyManager: Client API key is strictly isolated and NEVER touches platform keys', async () => {
+    const { executeWithGroqFallback } = require('../services/ai/groqKeyManager');
+
+    let keyUsed = null;
+    const testOp = async (apiKey) => {
+      keyUsed = apiKey;
+      return 'ok';
+    };
+
+    // 1. Valid custom key -> strictly uses that key
+    const res = await executeWithGroqFallback(testOp, { customApiKey: 'gsk_client_custom_999', strictCustomOnly: true });
+    assert.equal(res, 'ok');
+    assert.equal(keyUsed, 'gsk_client_custom_999', 'Must execute strictly with client custom key');
+
+    // 2. Missing custom key when strictCustomOnly -> must throw BYOK_KEY_MISSING without calling platform keys
+    await assert.rejects(
+      async () => {
+        await executeWithGroqFallback(testOp, { customApiKey: null, strictCustomOnly: true });
+      },
+      (err) => {
+        assert.equal(err.code, 'BYOK_KEY_MISSING');
+        return true;
+      },
+      'Must strictly reject when custom key is missing in BYOK mode'
+    );
+  });
 });

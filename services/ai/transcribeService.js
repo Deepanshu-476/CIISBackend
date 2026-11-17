@@ -320,6 +320,13 @@ async function transcribeAudio(audioBuffer, options = {}, deps = {}) {
     formData.append('prompt', resolvedPrompt);
     formData.append('response_format', 'verbose_json');
 
+    const companyObj = options?.req?.user?.company || options?.company;
+    const isClientApiKey = companyObj?.aiApiKeySource === 'client';
+    const customGroqKey = companyObj?.customGroqApiKey;
+    const keyOptions = isClientApiKey
+      ? { customApiKey: customGroqKey, strictCustomOnly: true }
+      : {};
+
     const data = await executeWithGroqFallback(async (activeKey) => {
       const response = await fetchFn(GROQ_AUDIO_URL, {
         method: 'POST',
@@ -342,7 +349,7 @@ async function transcribeAudio(audioBuffer, options = {}, deps = {}) {
       }
 
       return await response.json();
-    });
+    }, keyOptions);
     if (!data || typeof data.text !== 'string') {
       const err = new Error('Groq STT returned invalid response without text field');
       err.code = 'STT_BAD_OUTPUT';

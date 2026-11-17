@@ -252,6 +252,16 @@ const companySchema = new mongoose.Schema(
     },
 
     // AI Assistant limits for company users, synced from Plan or configured by Super Admin
+    aiApiKeySource: {
+      type: String,
+      enum: ["platform", "client"],
+      default: "platform",
+    },
+    customGroqApiKey: {
+      type: String,
+      default: null,
+      trim: true,
+    },
     aiDailyTokenLimit: { type: Number, min: 0, default: 25000 },
     aiDailyCallLimit: { type: Number, min: 0, default: 35 },
     aiDailySttLimit: { type: Number, min: 0, default: 100 },

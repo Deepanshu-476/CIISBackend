@@ -36,6 +36,7 @@ const isOwnerOrAdmin = (user) => {
 const getCompanyAiLimits = async (companyRef) => {
   if (companyRef && typeof companyRef === 'object' && companyRef.aiDailyTokenLimit !== undefined) {
     return {
+      aiApiKeySource: companyRef.aiApiKeySource || 'platform',
       tokenLimit: companyRef.aiDailyTokenLimit ?? 25000,
       callLimit: companyRef.aiDailyCallLimit ?? 35,
       sttLimit: companyRef.aiDailySttLimit ?? 100,
@@ -46,15 +47,16 @@ const getCompanyAiLimits = async (companyRef) => {
 
   const companyId = companyRef?._id || companyRef;
   if (!companyId || !mongoose.Types.ObjectId.isValid(companyId)) {
-    return { tokenLimit: 25000, callLimit: 35, sttLimit: 100, extraTokens: 0, isExplicit: false };
+    return { aiApiKeySource: 'platform', tokenLimit: 25000, callLimit: 35, sttLimit: 100, extraTokens: 0, isExplicit: false };
   }
 
   try {
     const doc = await Company.findById(companyId)
-      .select('aiDailyTokenLimit aiDailyCallLimit aiDailySttLimit aiExtraTokens')
+      .select('aiApiKeySource aiDailyTokenLimit aiDailyCallLimit aiDailySttLimit aiExtraTokens')
       .lean();
     if (doc) {
       return {
+        aiApiKeySource: doc.aiApiKeySource || 'platform',
         tokenLimit: doc.aiDailyTokenLimit ?? 25000,
         callLimit: doc.aiDailyCallLimit ?? 35,
         sttLimit: doc.aiDailySttLimit ?? 100,
@@ -66,7 +68,7 @@ const getCompanyAiLimits = async (companyRef) => {
     console.error('getCompanyAiLimits error:', err.message);
   }
 
-  return { tokenLimit: 25000, callLimit: 35, sttLimit: 100, extraTokens: 0, isExplicit: false };
+  return { aiApiKeySource: 'platform', tokenLimit: 25000, callLimit: 35, sttLimit: 100, extraTokens: 0, isExplicit: false };
 };
 
 const getLimit = (user, companyLimits = null) => {
@@ -147,6 +149,19 @@ const aiTaskBudget = async (req, res, next) => {
     const companyId = req.user.company?._id || req.user.company;
     const todayIst = getTodayIstDate();
     const limits = await getCompanyAiLimits(req.user.company);
+
+    if (limits.aiApiKeySource === 'client') {
+      req.aiTaskUsage = {
+        isClientApiKey: true,
+        limit: Infinity,
+        tokenLimit: Infinity,
+        current: 0,
+        tokensUsed: 0,
+        todayIst,
+      };
+      return next();
+    }
+
     const callLimit = getLimit(req.user, limits);
     const totalAllowedTokens = limits.tokenLimit + (limits.extraTokens || 0);
 
@@ -291,6 +306,17 @@ const aiSttBudget = async (req, res, next) => {
     const companyId = req.user.company?._id || req.user.company;
     const todayIst = getTodayIstDate();
     const limits = await getCompanyAiLimits(req.user.company);
+
+    if (limits.aiApiKeySource === 'client') {
+      req.aiSttUsage = {
+        isClientApiKey: true,
+        limit: Infinity,
+        current: 0,
+        todayIst,
+      };
+      return next();
+    }
+
     const limit = getSttLimit(req.user, limits);
 
     const filter = {
