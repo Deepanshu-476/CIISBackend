@@ -142,6 +142,26 @@ router.put("/:id", protect, requirePlatformOwner, async (req, res) => {
       return res.status(404).json({ success: false, message: "Plan not found" });
     }
 
+    try {
+      const Company = require("../models/Company");
+      await Company.updateMany(
+        { selectedPlan: plan._id },
+        {
+          $set: {
+            subscriptionPlan: plan.name,
+            planDurationDays: plan.durationDays,
+            planFeatures: plan.features || [],
+            aiApiKeySource: plan.aiApiKeySource || "platform",
+            aiDailyTokenLimit: plan.aiDailyTokenLimit ?? 25000,
+            aiDailyCallLimit: plan.aiDailyCallLimit ?? 35,
+            aiDailySttLimit: plan.aiDailySttLimit ?? 100,
+          }
+        }
+      );
+    } catch (syncError) {
+      console.warn("⚠️ Failed to cascade plan updates to companies:", syncError?.message);
+    }
+
     res.json({ success: true, message: "Plan updated successfully", plan });
   } catch (error) {
     console.error("❌ Update plan error:", error);

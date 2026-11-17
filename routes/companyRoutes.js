@@ -109,7 +109,7 @@ router.get('/subscription/current', protect, async (req, res, next) => {
     const Company = require('../models/Company');
     const { subscriptionFields, companyDetails } = require('../utils/companySubscription');
     const companyId = req.user.company?._id || req.user.company;
-    const company = companyId ? await Company.findById(companyId).select(subscriptionFields).lean() : null;
+    const company = companyId ? await Company.findById(companyId).select(subscriptionFields).populate('selectedPlan', 'name price durationDays features allowedPages aiApiKeySource aiDailyTokenLimit aiDailyCallLimit aiDailySttLimit').lean() : null;
     if (!company) return res.status(404).json({success: false, message: 'Company not found'});
     res.set('Cache-Control', 'no-store');
     return res.json({success: true, company: companyDetails(company)});

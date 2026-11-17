@@ -1,6 +1,6 @@
 const { endOfIstDay } = require('../HR-CDS/utils/subscriptionDates');
 
-const subscriptionFields = 'companyName companyCode companyEmail companyPhone companyAddress companyDomain ownerName createdAt updatedAt logo isActive subscriptionExpiry subscriptionPlan selectedPlan subscriptionAmount planDurationDays planFeatures allowedPages allowedSuperAdminPages loginUrl dbIdentifier';
+const subscriptionFields = 'companyName companyCode companyEmail companyPhone companyAddress companyDomain ownerName createdAt updatedAt logo isActive subscriptionExpiry subscriptionPlan selectedPlan subscriptionAmount planDurationDays planFeatures allowedPages allowedSuperAdminPages loginUrl dbIdentifier aiApiKeySource aiDailyTokenLimit aiDailyCallLimit aiDailySttLimit customGroqApiKey byokDefaultEmployeeDailyTokens byokDefaultEmployeeDailyCalls';
 
 const subscriptionState = (company, now = new Date()) => {
   const expiry = company?.subscriptionExpiry ? endOfIstDay(company.subscriptionExpiry) : null;
