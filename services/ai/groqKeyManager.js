@@ -10,12 +10,57 @@ if (!process.env.GROQ_API_KEY) {
 
 const keyCooldowns = new Map(); // key -> cooldownExpiryTimestamp
 
+let cachedSettingsKeys = null;
+let lastCacheTime = 0;
+const CACHE_TTL_MS = 30000;
+
+/**
+ * Refreshes active keys from MongoDB AiSettings.
+ * Can be called explicitly after super admin updates keys in frontend.
+ */
+async function refreshKeyCache() {
+  try {
+    const mongoose = require('mongoose');
+    if (mongoose.connection && mongoose.connection.readyState === 1) {
+      const AiSettings = require('../../models/AiSettings');
+      const doc = await AiSettings.findOne().lean();
+      if (doc && doc.isEnabled !== false) {
+        const keys = [];
+        if (doc.primaryApiKey && String(doc.primaryApiKey).trim()) {
+          keys.push(doc.primaryApiKey.trim());
+        }
+        if (
+          doc.secondaryApiKey &&
+          String(doc.secondaryApiKey).trim() &&
+          doc.secondaryApiKey.trim() !== doc.primaryApiKey?.trim()
+        ) {
+          keys.push(doc.secondaryApiKey.trim());
+        }
+        if (keys.length > 0) {
+          cachedSettingsKeys = keys;
+          lastCacheTime = Date.now();
+          return cachedSettingsKeys;
+        }
+      }
+    }
+  } catch (err) {
+    // Non-fatal, fallback to .env
+  }
+  cachedSettingsKeys = null;
+  lastCacheTime = Date.now();
+  return null;
+}
+
 /**
  * Returns an array of configured Groq API keys in priority order.
- * Primary: GROQ_API_KEY
- * Secondary: GROQ_API_KEY_SECONDARY
+ * Priority 1: Dynamic keys saved in MongoDB AiSettings by Super Admin
+ * Priority 2: Fallback to .env (GROQ_API_KEY, GROQ_API_KEY_SECONDARY)
  */
 function getGroqApiKeys() {
+  if (cachedSettingsKeys && cachedSettingsKeys.length > 0) {
+    return [...cachedSettingsKeys];
+  }
+
   const keys = [];
   const primary = (process.env.GROQ_API_KEY || '').trim();
   const secondary = (process.env.GROQ_API_KEY_SECONDARY || '').trim();
@@ -75,11 +120,14 @@ function reportKeySuccess(key) {
 /**
  * Returns available keys ordered with healthy keys first.
  */
-function getOrderedKeys() {
+async function getOrderedKeys() {
+  const now = Date.now();
+  if (now - lastCacheTime > CACHE_TTL_MS) {
+    await refreshKeyCache().catch(() => {});
+  }
   const allKeys = getGroqApiKeys();
   if (allKeys.length === 0) return [];
 
-  const now = Date.now();
   const healthy = [];
   const cooling = [];
 
@@ -129,7 +177,7 @@ async function executeWithGroqFallback(operation, options = {}) {
     throw err;
   }
 
-  const keys = getOrderedKeys();
+  const keys = await getOrderedKeys();
   if (keys.length === 0) {
     throw new Error('No GROQ_API_KEY configured.');
   }
@@ -160,6 +208,7 @@ async function executeWithGroqFallback(operation, options = {}) {
 module.exports = {
   getGroqApiKeys,
   getOrderedKeys,
+  refreshKeyCache,
   isKeyRotationError,
   reportKeyFailure,
   reportKeySuccess,
