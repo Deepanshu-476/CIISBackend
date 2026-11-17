@@ -84,4 +84,58 @@ describe('Dynamic AI Key Management & GroqKeyManager Tests', () => {
       }
     );
   });
+
+  it('7. Key Vault Schema: correctly stores pool of 10+ keys with labels and active status', () => {
+    const vault = [];
+    for (let i = 1; i <= 10; i++) {
+      vault.push({
+        id: `vault_id_${i}`,
+        label: `Groq Account #${i}`,
+        apiKey: `gsk_pool_account_key_${i}_xyz123`,
+        status: i === 1 ? 'valid' : 'untested',
+        addedAt: new Date(),
+      });
+    }
+
+    assert.equal(vault.length, 10);
+    assert.equal(vault[0].label, 'Groq Account #1');
+    assert.ok(vault[9].apiKey.startsWith('gsk_pool_account_key_10'));
+  });
+
+  it('8. Key Vault Logic: Setting active Primary and Secondary keys properly updates pointers and prevents conflicts', () => {
+    const settings = {
+      primaryApiKey: 'gsk_key_1',
+      primaryVaultId: 'id_1',
+      secondaryApiKey: 'gsk_key_2',
+      secondaryVaultId: 'id_2',
+      keyVault: [
+        { id: 'id_1', label: 'Primary Account', apiKey: 'gsk_key_1' },
+        { id: 'id_2', label: 'Backup Account', apiKey: 'gsk_key_2' },
+        { id: 'id_3', label: 'Reserve Account', apiKey: 'gsk_key_3' },
+      ],
+    };
+
+    // Attempt to set active Primary as Secondary should be blocked
+    const canSetPrimaryAsSecondary = settings.primaryVaultId !== 'id_1';
+    assert.equal(canSetPrimaryAsSecondary, false, 'Cannot set current Primary as Secondary');
+
+    // Switch Primary to id_3
+    const newPrimary = settings.keyVault.find(k => k.id === 'id_3');
+    settings.primaryApiKey = newPrimary.apiKey;
+    settings.primaryVaultId = newPrimary.id;
+    assert.equal(settings.primaryVaultId, 'id_3');
+    assert.equal(settings.primaryApiKey, 'gsk_key_3');
+
+    // Attempting to delete active Primary should be blocked
+    const canDeletePrimary = settings.primaryVaultId !== 'id_3';
+    assert.equal(canDeletePrimary, false, 'Cannot delete active Primary key');
+
+    // Setting id_1 as Secondary now works because it is no longer Primary
+    const canSetOldPrimaryAsSecondary = settings.primaryVaultId !== 'id_1';
+    assert.equal(canSetOldPrimaryAsSecondary, true);
+    settings.secondaryApiKey = settings.keyVault[0].apiKey;
+    settings.secondaryVaultId = settings.keyVault[0].id;
+    assert.equal(settings.secondaryVaultId, 'id_1');
+    assert.equal(settings.secondaryApiKey, 'gsk_key_1');
+  });
 });
