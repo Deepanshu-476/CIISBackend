@@ -99,11 +99,36 @@ function getOrderedKeys() {
 /**
  * Executes an operation with automatic fallback across configured Groq keys.
  * If the primary key hits a rate limit or auth error, it seamlessly jumps to the secondary key.
+ * If a customApiKey is provided (BYOK mode), it strictly executes with that key and NEVER falls back to platform keys.
  *
  * @param {Function} operation - async (apiKey) => result
+ * @param {Object|string} [options] - { customApiKey, strictCustomOnly } or customApiKey string
  * @returns {Promise<any>}
  */
-async function executeWithGroqFallback(operation) {
+async function executeWithGroqFallback(operation, options = {}) {
+  const customApiKey = typeof options === 'string' ? options : options?.customApiKey;
+  const strictCustomOnly = Boolean(options?.strictCustomOnly || (typeof options === 'string' && options));
+
+  // If client-provided API key mode is active
+  if (customApiKey && String(customApiKey).trim()) {
+    const cleanKey = String(customApiKey).trim();
+    try {
+      const masked = cleanKey.slice(0, 7) + '...' + cleanKey.slice(-4);
+      console.log(`[groqKeyManager] Executing with client custom Groq API key (${masked})`);
+      return await operation(cleanKey);
+    } catch (err) {
+      console.error('[groqKeyManager] Error with client custom Groq API key:', err?.response?.data?.error?.message || err?.message);
+      // Strict isolation: NEVER fall back to platform keys on BYOK failure
+      throw err;
+    }
+  }
+
+  if (strictCustomOnly) {
+    const err = new Error('Company has selected User Own API Key mode, but Groq API key is not configured.');
+    err.code = 'BYOK_KEY_MISSING';
+    throw err;
+  }
+
   const keys = getOrderedKeys();
   if (keys.length === 0) {
     throw new Error('No GROQ_API_KEY configured.');

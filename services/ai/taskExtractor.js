@@ -622,22 +622,32 @@ Output:
   ];
 
   let rawResult;
+  const companyObj = req?.user?.company;
+  const isClientApiKey = companyObj?.aiApiKeySource === 'client';
+  const customGroqKey = companyObj?.customGroqApiKey;
+
   try {
     if (model) {
       const structuredLlm = model.withStructuredOutput(schema, { name: 'task_draft' });
       rawResult = await structuredLlm.invoke(inputMessages);
     } else {
+      const keyOptions = isClientApiKey
+        ? { customApiKey: customGroqKey, strictCustomOnly: true }
+        : {};
       rawResult = await executeWithGroqFallback(async (activeApiKey) => {
         const llmInstance = getModel({ temperature: 0, maxTokens: 1500, apiKey: activeApiKey });
         const structuredLlm = llmInstance.withStructuredOutput(schema, { name: 'task_draft' });
         return await structuredLlm.invoke(inputMessages);
-      });
+      }, keyOptions);
     }
-    // Increment budget ONLY on successful LLM call
-    if (req) {
+    // Increment budget ONLY on successful LLM call AND when using platform key
+    if (req && !isClientApiKey) {
       await consumeTaskBudget(req).catch(err => console.error('consumeTaskBudget error:', err.message));
     }
   } catch (err) {
+    if (err?.code === 'BYOK_KEY_MISSING') {
+      throw err;
+    }
     const providerErr = classifyAndLogGroqError(err);
     if (providerErr && (providerErr.code === 'LLM_AUTH' || providerErr.code === 'LLM_MODEL')) {
       throw providerErr;

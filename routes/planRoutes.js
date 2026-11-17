@@ -21,6 +21,10 @@ const buildPlanPayload = body => {
   const allowedPages = cleanStringArray(body.allowedPages);
   const allowedSuperAdminPages = cleanStringArray(body.allowedSuperAdminPages);
 
+  const aiApiKeySource = String(body.aiApiKeySource || "").trim().toLowerCase() === "client"
+    ? "client"
+    : "platform";
+
   const aiDailyTokenLimit = body.aiDailyTokenLimit !== undefined && body.aiDailyTokenLimit !== ""
     ? Math.max(0, Number(body.aiDailyTokenLimit))
     : 25000;
@@ -39,6 +43,7 @@ const buildPlanPayload = body => {
     features,
     allowedPages,
     allowedSuperAdminPages,
+    aiApiKeySource,
     aiDailyTokenLimit,
     aiDailyCallLimit,
     aiDailySttLimit,
