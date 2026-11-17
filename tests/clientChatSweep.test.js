@@ -12,7 +12,7 @@ const { syncClient, resolveMember } = require('../HR-CDS/utils/clientChatService
 const oid = () => new mongoose.Types.ObjectId();
 
 test('client chat sweep shares company users across clients and reports a missing name once', async t => {
-  const mongo = await MongoMemoryServer.create();
+  const mongo = await MongoMemoryServer.create({instance: {port: 20000 + process.pid % 20000}});
   await mongoose.connect(mongo.getUri());
   const originalWarn = console.warn;
   const warnings = [];

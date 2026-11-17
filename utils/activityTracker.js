@@ -96,6 +96,58 @@ const record = (user, row) => {
 
 const isClientPortalUser = user => /^client$/i.test(String(user?.companyRole || user?.role || ''));
 
+const SENSITIVE_KEYS = new Set(['password', 'newpassword', 'oldpassword', 'token', 'refreshtoken', 'secret', 'otp', 'pin', 'authorization', 'hash']);
+
+const inferModule = (apiPath = '', pagePath = '') => {
+  const combined = `${apiPath} ${pagePath}`.toLowerCase();
+  if (/crm|lead/.test(combined)) return 'CRM Leads';
+  if (/task/.test(combined)) return 'Task Management';
+  if (/attendance|clock/.test(combined)) return 'Attendance';
+  if (/leave/.test(combined)) return 'Leaves & HR';
+  if (/payroll|salary|payslip/.test(combined)) return 'Payroll';
+  if (/chat|message|conversation/.test(combined)) return 'Team Chat';
+  if (/telecall/.test(combined)) return 'Telecalling';
+  if (/profile|users\/me/.test(combined)) return 'Profile';
+  if (/user|employee|staff/.test(combined)) return 'User Management';
+  if (/branch/.test(combined)) return 'Branch Settings';
+  if (/department/.test(combined)) return 'Department Settings';
+  if (/role|permission/.test(combined)) return 'Permissions';
+  return 'General';
+};
+
+const extractSafeSummary = (req) => {
+  const body = req.body;
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return '';
+  const pieces = [];
+
+  // Helper to safely get clean string
+  const val = (k) => {
+    const v = body[k];
+    if (v === null || v === undefined) return '';
+    if (typeof v === 'string') return v.trim();
+    if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+    if (typeof v === 'object' && v.name) return String(v.name).trim();
+    if (typeof v === 'object' && v.title) return String(v.title).trim();
+    return '';
+  };
+
+  const title = val('title') || val('taskName') || val('taskTitle') || val('name') || val('subject');
+  const client = val('clientName') || val('leadName') || val('customerName') || val('client');
+  const status = val('status') || val('stage') || val('leadStatus') || val('taskStatus') || val('callStatus');
+  const remark = val('remark') || val('remarks') || val('reason') || val('comment') || val('note');
+  const leaveType = val('leaveType');
+  const amount = val('amount') || val('salary');
+
+  if (title) pieces.push(`"${title.slice(0, 40)}"`);
+  if (client && client !== title) pieces.push(`Client: ${client.slice(0, 30)}`);
+  if (status) pieces.push(`Status: ${status}`);
+  if (leaveType) pieces.push(`Type: ${leaveType}`);
+  if (amount) pieces.push(`₹${amount}`);
+  if (remark && pieces.length < 2) pieces.push(`Remark: ${remark.slice(0, 40)}`);
+
+  return pieces.join(' · ').slice(0, 120);
+};
+
 // Express middleware: log successful writes made by logged-in company users.
 const trackWrites = (req, res, next) => {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
@@ -104,13 +156,16 @@ const trackWrites = (req, res, next) => {
   res.on('finish', () => {
     const user = req.user;
     if (!user || res.statusCode >= 400 || isClientPortalUser(user)) return;
+    const pagePath = req.get('x-page-path') || '';
     record(user, {
       type: 'action',
-      path: normalizePath(req.get('x-page-path')),
+      path: normalizePath(pagePath),
       method: req.method,
       endpoint: normalizePath(apiPath),
       status: res.statusCode,
       source: clientSource(req),
+      summary: extractSafeSummary(req),
+      module: inferModule(apiPath, pagePath),
     });
   });
   next();
@@ -128,6 +183,7 @@ const recordViews = (user, views = [], source = 'unknown') => {
       type: 'view',
       path,
       source,
+      module: inferModule('', path),
       ...(Number.isFinite(durationMs) && durationMs > 0 ? { durationMs: Math.min(durationMs, 12 * 60 * 60 * 1000) } : {}),
       // Clients batch views; keep the time the page was opened when it is recent and sane.
       ...(at && !Number.isNaN(at.getTime()) && Math.abs(Date.now() - at.getTime()) < 24 * 60 * 60 * 1000 ? { createdAt: at } : {}),
@@ -139,7 +195,7 @@ const recordViews = (user, views = [], source = 'unknown') => {
 
 const recordLogin = (user, req) => {
   if (isClientPortalUser(user)) return;
-  record(user, { type: 'login', path: '', source: clientSource(req) });
+  record(user, { type: 'login', path: '', source: clientSource(req), module: 'Security & Auth' });
 };
 
 module.exports = { trackWrites, recordViews, recordLogin, normalizePath, flush };
