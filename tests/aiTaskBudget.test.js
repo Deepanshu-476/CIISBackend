@@ -475,7 +475,7 @@ describe('aiTaskBudget middleware tests', () => {
       user: {
         _id: 'user-byok-01',
         company,
-        companyRole: 'employee',
+        companyRole: 'admin',
       },
       body: { message: 'create meeting with client' },
       _deps: { AiUsage: mockAiUsage },
@@ -516,5 +516,73 @@ describe('aiTaskBudget middleware tests', () => {
       },
       'Must strictly reject when custom key is missing in BYOK mode'
     );
+  });
+
+  it('15. BYOK Mode: Blocks regular employee when their allocated tokens are exhausted', async () => {
+    const today = aiTaskBudget.getTodayIstDate();
+    const company = {
+      _id: 'company-byok-test-2',
+      aiApiKeySource: 'client',
+      customGroqApiKey: 'gsk_custom_user_key_456',
+      byokDefaultEmployeeDailyTokens: 5000,
+      byokDefaultEmployeeDailyCalls: 20,
+    };
+    mockAiUsage.store.set(`company-byok-test-2:emp-limited-01:${today}:task_agent`, {
+      company: 'company-byok-test-2',
+      user: 'emp-limited-01',
+      date: today,
+      feature: 'task_agent',
+      count: 10,
+      tokensUsed: 5200, // Exceeded 5000
+    });
+
+    const req = {
+      user: {
+        _id: 'emp-limited-01',
+        company,
+        companyRole: 'employee',
+        aiConfig: { enabled: true, customDailyTokenLimit: 5000 },
+      },
+      body: { message: 'create meeting with client' },
+      _deps: { AiUsage: mockAiUsage },
+    };
+    const res = createMockRes();
+    let nextCalled = false;
+
+    await aiTaskBudget(req, res, () => {
+      nextCalled = true;
+    });
+
+    assert.equal(nextCalled, false, 'Employee must be blocked when allocated quota is reached');
+    assert.equal(res.statusCode, 429, 'Returns HTTP 429');
+    assert.equal(res.body?.code, 'EMPLOYEE_TOKEN_LIMIT_REACHED');
+  });
+
+  it('16. BYOK Mode: Returns 403 when company admin has disabled AI access for employee', async () => {
+    const company = {
+      _id: 'company-byok-test-3',
+      aiApiKeySource: 'client',
+      customGroqApiKey: 'gsk_custom_user_key_789',
+    };
+    const req = {
+      user: {
+        _id: 'emp-disabled-01',
+        company,
+        companyRole: 'employee',
+        aiConfig: { enabled: false },
+      },
+      body: { message: 'parse new project requirement note' },
+      _deps: { AiUsage: mockAiUsage },
+    };
+    const res = createMockRes();
+    let nextCalled = false;
+
+    await aiTaskBudget(req, res, () => {
+      nextCalled = true;
+    });
+
+    assert.equal(nextCalled, false, 'Disabled employee must be blocked');
+    assert.equal(res.statusCode, 403, 'Returns HTTP 403');
+    assert.equal(res.body?.code, 'AI_ACCESS_DISABLED_BY_ADMIN');
   });
 });
