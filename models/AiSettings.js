@@ -103,74 +103,16 @@ const aiSettingsSchema = new mongoose.Schema(
 aiSettingsSchema.statics.getOrCreateSettings = async function () {
   let settings = await this.findOne();
   if (!settings) {
-    const defaultPrimary = (process.env.GROQ_API_KEY || "").trim();
-    const defaultSecondary = (process.env.GROQ_API_KEY_SECONDARY || "").trim();
-    const initialVault = [];
-    let pVaultId = null;
-    let sVaultId = null;
-
-    if (defaultPrimary) {
-      pVaultId = new mongoose.Types.ObjectId().toString();
-      initialVault.push({
-        id: pVaultId,
-        label: "Environment Primary Key",
-        apiKey: defaultPrimary,
-        status: "untested",
-        addedAt: new Date(),
-      });
-    }
-
-    if (defaultSecondary) {
-      sVaultId = new mongoose.Types.ObjectId().toString();
-      initialVault.push({
-        id: sVaultId,
-        label: "Environment Secondary Fallback",
-        apiKey: defaultSecondary,
-        status: "untested",
-        addedAt: new Date(),
-      });
-    }
-
     settings = await this.create({
-      primaryApiKey: defaultPrimary,
-      secondaryApiKey: defaultSecondary,
-      primaryVaultId: pVaultId,
-      secondaryVaultId: sVaultId,
-      keyVault: initialVault,
-      selectedModel: process.env.GROQ_MODEL || "qwen/qwen3.8-27b",
-      selectedSttModel: process.env.GROQ_STT_MODEL || "whisper-large-v3-turbo",
+      primaryApiKey: "",
+      secondaryApiKey: "",
+      primaryVaultId: null,
+      secondaryVaultId: null,
+      keyVault: [],
+      selectedModel: "qwen/qwen3.8-27b",
+      selectedSttModel: "whisper-large-v3-turbo",
       testStatus: "untested",
     });
-  } else {
-    // If settings already existed from previous version but keyVault is empty and primaryApiKey exists, migrate it
-    if ((!settings.keyVault || settings.keyVault.length === 0) && (settings.primaryApiKey || settings.secondaryApiKey)) {
-      const initialVault = [];
-      if (settings.primaryApiKey) {
-        const pId = new mongoose.Types.ObjectId().toString();
-        settings.primaryVaultId = pId;
-        initialVault.push({
-          id: pId,
-          label: "Primary Production Key",
-          apiKey: settings.primaryApiKey,
-          status: settings.testStatus || "untested",
-          lastTestedAt: settings.lastTestedAt || null,
-          addedAt: new Date(),
-        });
-      }
-      if (settings.secondaryApiKey) {
-        const sId = new mongoose.Types.ObjectId().toString();
-        settings.secondaryVaultId = sId;
-        initialVault.push({
-          id: sId,
-          label: "Secondary Fallback Key",
-          apiKey: settings.secondaryApiKey,
-          status: "untested",
-          addedAt: new Date(),
-        });
-      }
-      settings.keyVault = initialVault;
-      await settings.save();
-    }
   }
   return settings;
 };

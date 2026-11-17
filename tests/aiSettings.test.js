@@ -4,8 +4,7 @@ const groqKeyManager = require('../services/ai/groqKeyManager');
 
 describe('Dynamic AI Key Management & GroqKeyManager Tests', () => {
   beforeEach(() => {
-    process.env.GROQ_API_KEY = 'gsk_env_primary_key_111';
-    process.env.GROQ_API_KEY_SECONDARY = 'gsk_env_secondary_key_222';
+    groqKeyManager.setCachedKeysForTesting(['gsk_vault_primary_111', 'gsk_vault_secondary_222']);
   });
 
   it('1. Mask helper formats keys safely', () => {
@@ -21,12 +20,11 @@ describe('Dynamic AI Key Management & GroqKeyManager Tests', () => {
     assert.equal(mask(''), '');
   });
 
-  it('2. Fallback to .env when dynamic database cache is empty', () => {
-    // getGroqApiKeys should return .env keys when no DB keys cached
+  it('2. Pure Database Key Vault: getGroqApiKeys returns keys configured from frontend vault', () => {
     const keys = groqKeyManager.getGroqApiKeys();
-    assert.ok(keys.length >= 2, 'Should have at least 2 keys from .env');
-    assert.equal(keys[0], 'gsk_env_primary_key_111');
-    assert.equal(keys[1], 'gsk_env_secondary_key_222');
+    assert.equal(keys.length, 2);
+    assert.equal(keys[0], 'gsk_vault_primary_111');
+    assert.equal(keys[1], 'gsk_vault_secondary_222');
   });
 
   it('3. Key Rotation Error detection identifies 429 and rate limit messages', () => {
@@ -40,7 +38,7 @@ describe('Dynamic AI Key Management & GroqKeyManager Tests', () => {
     assert.equal(groqKeyManager.isKeyRotationError(errParam), false);
   });
 
-  it('4. Zero-downtime execution: executeWithGroqFallback uses active key', async () => {
+  it('4. Zero-downtime execution: executeWithGroqFallback uses active primary key from vault', async () => {
     let executedWithKey = null;
     const testOp = async (key) => {
       executedWithKey = key;
@@ -49,7 +47,22 @@ describe('Dynamic AI Key Management & GroqKeyManager Tests', () => {
 
     const res = await groqKeyManager.executeWithGroqFallback(testOp);
     assert.equal(res.success, true);
-    assert.ok(executedWithKey && executedWithKey.startsWith('gsk_'));
+    assert.equal(executedWithKey, 'gsk_vault_primary_111');
+  });
+
+  it('5. Throws clear error when no key is configured in AI Management vault', async () => {
+    groqKeyManager.setCachedKeysForTesting([]);
+    const testOp = async () => ({ success: true });
+
+    await assert.rejects(
+      async () => {
+        await groqKeyManager.executeWithGroqFallback(testOp);
+      },
+      (err) => {
+        assert.ok(err.message.includes('No Groq API Key configured'));
+        return true;
+      }
+    );
   });
 
   it('5. BYOK Client Key Mode: strictly executes with client key and never falls back to platform key', async () => {
