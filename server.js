@@ -88,6 +88,13 @@ app.use((req, res, next) => {
 
 
 const dbConnectionPromise = connectDB();
+if (dbConnectionPromise && typeof dbConnectionPromise.then === 'function') {
+  dbConnectionPromise.then(() => {
+    try {
+      require('./services/ai/groqKeyManager').refreshKeyCache().catch(() => {});
+    } catch {}
+  }).catch(() => {});
+}
 
 const envOrigins = (process.env.ALLOWED_ORIGINS || "")
   .split(",")
@@ -1282,6 +1289,7 @@ app.use("/api/client-tasks", require("./HR-CDS/routes/clientTask.js"));
 
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/ai', require('./routes/aiRoutes.js'));
+app.use('/api/ai-settings', require('./routes/aiSettingsRoutes.js'));
 app.use('/api/dashboard-overview', require("./routes/dashboardOverviewRoutes.js"));
 app.use('/api/company/dashboard-overview', require("./routes/dashboardOverviewRoutes.js"));
 
