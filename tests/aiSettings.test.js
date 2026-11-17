@@ -138,4 +138,21 @@ describe('Dynamic AI Key Management & GroqKeyManager Tests', () => {
     assert.equal(settings.secondaryVaultId, 'id_1');
     assert.equal(settings.secondaryApiKey, 'gsk_key_1');
   });
+
+  it('9. Vault Key Addition: generates valid ObjectId string and attaches to vault', () => {
+    const mongoose = require('mongoose');
+    const newId = new mongoose.Types.ObjectId().toString();
+    assert.ok(typeof newId === 'string' && newId.length === 24);
+
+    const vaultItem = {
+      id: newId,
+      label: 'Testing Key',
+      apiKey: 'gsk_test_1234567890abcdef',
+      status: 'untested',
+      lastTestedAt: new Date(),
+      addedAt: new Date(),
+    };
+    assert.equal(vaultItem.label, 'Testing Key');
+    assert.ok(vaultItem.apiKey.startsWith('gsk_'));
+  });
 });

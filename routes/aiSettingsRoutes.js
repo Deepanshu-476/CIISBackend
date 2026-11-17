@@ -1,5 +1,6 @@
 const express = require("express");
 const router = express.Router();
+const mongoose = require("mongoose");
 const AiSettings = require("../models/AiSettings");
 const { protect, restrictTo } = require("../middleware/authMiddleware");
 const { refreshKeyCache } = require("../services/ai/groqKeyManager");
@@ -160,7 +161,7 @@ router.post("/vault/add", protect, restrictTo("super_admin"), async (req, res) =
 
     // Live test key
     const testResult = await testGroqApiKey(cleanKey);
-    const newId = new require("mongoose").Types.ObjectId().toString();
+    const newId = new mongoose.Types.ObjectId().toString();
 
     const vaultItem = {
       id: newId,
