@@ -23,7 +23,7 @@ let replSet;
 
 test.before(async () => {
   // Renewal runs in a transaction, which needs a replica set.
-  replSet = await MongoMemoryReplSet.create({ replSet: { count: 1 } });
+  replSet = await MongoMemoryReplSet.create({ replSet: { count: 1 }, instanceOpts: [{port: 20000 + process.pid % 20000}] });
   await mongoose.connect(replSet.getUri());
   // Build indexes up front: a fresh database builds them on first use, and that blocks transactions.
   await Promise.all([Client, ClientPlan, ClientTask, Conversation, Message, Notification, User].map(model => model.init()));

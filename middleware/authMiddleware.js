@@ -3,6 +3,8 @@ const mongoose = require("mongoose");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const JobRole = require("../models/JobRole");
+const Company = require('../models/Company');
+const { subscriptionState, isReadOnlyRequest, expiredResponse } = require('../utils/companySubscription');
 
 
 exports.verify = async (req, res) => {
@@ -71,7 +73,7 @@ exports.verify = async (req, res) => {
 const AUTH_USER_FIELDS = [
   'name', 'email', 'companyRole', 'jobRole', 'employeeId', 'phone', 'branch', 'assignedBranches', 'branchCode',
   'department', 'company', 'companyCode', 'isActive', 'lastLogin', 'createdAt', 'employeeType', 'workLocation',
-  'clientId', 'clientUserId', 'additionalDetails', 'lastPasswordChange', 'passwordChangedAt',
+  'clientId', 'clientUserId', 'additionalDetails', 'lastPasswordChange', 'passwordChangedAt', 'isSuperAdmin', 'superAdmin',
 ].join(' ');
 const AUTH_USER_CACHE_TTL_MS = Number(process.env.AUTH_USER_CACHE_TTL_MS ?? 10000);
 const AUTH_USER_CACHE_MAX = 5000;
@@ -218,6 +220,8 @@ exports.protect = async (req, res, next) => {
         jobRoleId: user.jobRole,
         jobRoleName: jobRoleName,
         companyRole: user.companyRole,
+        isSuperAdmin: user.isSuperAdmin === true,
+        superAdmin: user.superAdmin === true,
         employeeId: user.employeeId,
         phone: user.phone,
         branch: user.branch,
@@ -240,6 +244,14 @@ exports.protect = async (req, res, next) => {
       };
       
       
+      if (!isReadOnlyRequest(req) && !exports.isPlatformOwner(req.user)) {
+        // Read current state for every write: expiry and renewal must also apply to existing sessions.
+        const companyId = user.company?._id || user.company;
+        const company = companyId ? await Company.findById(companyId).select('subscriptionExpiry').lean() : null;
+        if (subscriptionState(company).expired) {
+          return res.status(403).json(expiredResponse(company));
+        }
+      }
       next();
       
     } catch (error) {
