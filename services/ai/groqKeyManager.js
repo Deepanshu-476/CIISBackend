@@ -37,14 +37,24 @@ async function refreshKeyCache() {
         }
         cachedModel = doc.selectedModel || 'qwen/qwen3.8-27b';
         cachedSttModel = doc.selectedSttModel || 'whisper-large-v3-turbo';
-        cachedSettingsKeys = keys;
-        lastCacheTime = Date.now();
-        return cachedSettingsKeys;
+        if (keys.length > 0) {
+          cachedSettingsKeys = keys;
+          lastCacheTime = Date.now();
+          return cachedSettingsKeys;
+        }
       }
     }
   } catch (err) {
     console.error('[groqKeyManager] Failed to refresh key cache from database:', err?.message);
   }
+
+  // Fallback for test harnesses if no database settings exist
+  if (process.env.GROQ_API_KEY && process.env.GROQ_API_KEY.trim()) {
+    cachedSettingsKeys = [process.env.GROQ_API_KEY.trim()];
+    lastCacheTime = Date.now();
+    return cachedSettingsKeys;
+  }
+
   cachedSettingsKeys = [];
   lastCacheTime = Date.now();
   return [];
@@ -65,6 +75,9 @@ function getActiveSttModelName() {
 function getGroqApiKeys() {
   if (cachedSettingsKeys && cachedSettingsKeys.length > 0) {
     return [...cachedSettingsKeys];
+  }
+  if (process.env.GROQ_API_KEY && process.env.GROQ_API_KEY.trim()) {
+    return [process.env.GROQ_API_KEY.trim()];
   }
   return [];
 }
