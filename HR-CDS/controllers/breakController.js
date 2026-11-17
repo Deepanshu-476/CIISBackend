@@ -49,23 +49,31 @@ const monthRange = (month) => {
   return { month: text, from: `${text}-01`, to: `${text}-${String(lastDay).padStart(2, '0')}` };
 };
 
+const findLevelDoc = async (model, value, scope) => {
+  if (!value) return null;
+  const raw = typeof value === 'object' ? (value?._id || value?.id || value?.name) : value;
+  if (!raw) return null;
+  const text = String(raw).trim();
+  if (mongoose.isValidObjectId(text)) {
+    const byId = await model.findById(text).select('breakPolicy name').lean();
+    if (byId) return byId;
+  }
+  const filter = { ...scope, name: { $regex: new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } };
+  return model.findOne(filter).select('breakPolicy name').lean();
+};
+
 /** Every level's stored policy for this employee, most specific first. */
 const policyLevelsFor = async (user) => {
   const company = companyOf(user);
   const companyCode = companyCodeOf(user);
+  const scope = company ? { company } : { companyCode };
   const [companyDoc, branchDoc, departmentDoc, jobRoleDoc] = await Promise.all([
     company
       ? Company.findById(company).select('breakPolicy companyCode').lean()
       : (companyCode ? Company.findOne({ companyCode }).select('breakPolicy companyCode').lean() : null),
-    user?.branch && mongoose.isValidObjectId(String(user.branch))
-      ? Branch.findById(user.branch).select('breakPolicy name').lean()
-      : null,
-    user?.department && mongoose.isValidObjectId(String(user.department))
-      ? Department.findById(user.department).select('breakPolicy name').lean()
-      : null,
-    user?.jobRole && mongoose.isValidObjectId(String(user.jobRole))
-      ? JobRole.findById(user.jobRole).select('breakPolicy name').lean()
-      : null,
+    findLevelDoc(Branch, user?.branch || user?.branchName, scope),
+    findLevelDoc(Department, user?.department || user?.departmentName, scope),
+    findLevelDoc(JobRole, user?.jobRole || user?.jobRoleName, scope),
   ]);
   return {
     jobRole: jobRoleDoc?.breakPolicy,

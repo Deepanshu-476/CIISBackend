@@ -8,6 +8,11 @@ const { protect } = require('../../middleware/authMiddleware');
 router.use(protect);
 const callerCompanyCode = req => String(req.user?.companyCode || req.user?.company?.companyCode || '').trim().toUpperCase();
 
+const isClientPlanAdmin = req => {
+  const role = String(req.user?.companyRole || req.user?.jobRole || req.user?.role || '').toLowerCase().replace(/[\s-]+/g, '_');
+  return ['owner', 'admin', 'super_admin', 'superadmin', 'company_owner', 'companyowner'].includes(role);
+};
+
 const cleanServices = services => (
   Array.isArray(services)
     ? services.map(item => ({
@@ -49,6 +54,9 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
+    if (!isClientPlanAdmin(req)) {
+      return res.status(403).json({ success: false, message: 'Access denied. Only company administrators and owners can manage client plans.' });
+    }
     const payload = buildPayload(req.body, callerCompanyCode(req));
     if (!payload.companyCode || !payload.name) {
       return res.status(400).json({ success: false, message: 'Company code and plan name are required' });
@@ -66,6 +74,9 @@ router.post('/', async (req, res) => {
 
 router.put('/:id', async (req, res) => {
   try {
+    if (!isClientPlanAdmin(req)) {
+      return res.status(403).json({ success: false, message: 'Access denied. Only company administrators and owners can manage client plans.' });
+    }
     const payload = buildPayload(req.body, callerCompanyCode(req));
     const plan = await ClientPlan.findOneAndUpdate({ _id: req.params.id, companyCode: payload.companyCode }, payload, { new: true, runValidators: true });
     if (!plan) return res.status(404).json({ success: false, message: 'Plan not found' });

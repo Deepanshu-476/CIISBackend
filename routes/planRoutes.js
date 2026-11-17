@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 const Plan = require("../models/Plan");
 const mongoose = require("mongoose");
-const { protect, restrictTo, isSuperAdminUser } = require("../middleware/authMiddleware");
+const { protect, requirePlatformOwner } = require("../middleware/authMiddleware");
 
 const cleanStringArray = value => (
   Array.isArray(value)
@@ -59,7 +59,7 @@ const validatePlanPayload = payload => {
   const errors = [];
   if (!payload.name) errors.push("Plan name is required");
   if (!Number.isFinite(payload.price) || payload.price < 0) errors.push("Valid plan price is required");
-  if (!Number.isFinite(payload.durationDays) || payload.durationDays < 1) errors.push("Valid plan duration is required");
+  if (!Number.isInteger(payload.durationDays) || payload.durationDays < 1) errors.push("Plan duration must be a positive whole number of days");
   if (!payload.allowedPages.length) errors.push("Select at least one page for this plan");
   if (payload.aiDailyTokenLimit !== undefined && (!Number.isFinite(payload.aiDailyTokenLimit) || payload.aiDailyTokenLimit < 0)) {
     errors.push("AI daily token limit must be a non-negative number");
@@ -77,25 +77,16 @@ const validatePlanPayload = payload => {
 // Inactive plans are only returned if includeInactive=true AND caller is authenticated SuperAdmin.
 router.get("/", async (req, res) => {
   try {
-    let canViewInactive = false;
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith("Bearer ")) {
-      try {
-        await new Promise((resolve) => {
-          protect(req, res, () => {
-            if (req.user && isSuperAdminUser(req.user)) {
-              canViewInactive = true;
-            }
-            resolve();
-          });
-        });
-      } catch {
-        canViewInactive = false;
-      }
+    if (req.query.includeInactive === 'true') {
+      return protect(req, res, () => requirePlatformOwner(req, res, async () => {
+        try {
+          const plans = await populatePlanAudit(Plan.find({}).sort({createdAt: -1}));
+          return res.json({success: true, count: plans.length, plans});
+        } catch (error) { return res.status(500).json({success: false, message: 'Failed to fetch plans'}); }
+      }));
     }
 
-    const wantsInactive = req.query.includeInactive === "true";
-    const query = (wantsInactive && canViewInactive) ? {} : { isActive: true };
+    const query = { isActive: true };
     const plans = await populatePlanAudit(Plan.find(query).sort({ createdAt: -1 }));
     res.json({ success: true, count: plans.length, plans });
   } catch (error) {
@@ -105,7 +96,7 @@ router.get("/", async (req, res) => {
 });
 
 // Mutating endpoints strictly restricted to Platform SuperAdmin
-router.post("/", protect, restrictTo("super_admin"), async (req, res) => {
+router.post("/", protect, requirePlatformOwner, async (req, res) => {
   try {
     const payload = buildPlanPayload(req.body);
     const errors = validatePlanPayload(payload);
@@ -128,7 +119,7 @@ router.post("/", protect, restrictTo("super_admin"), async (req, res) => {
   }
 });
 
-router.put("/:id", protect, restrictTo("super_admin"), async (req, res) => {
+router.put("/:id", protect, requirePlatformOwner, async (req, res) => {
   try {
     if (!isValidObjectId(req.params.id)) {
       return res.status(400).json({ success: false, message: "Invalid plan id" });
@@ -161,7 +152,7 @@ router.put("/:id", protect, restrictTo("super_admin"), async (req, res) => {
   }
 });
 
-router.patch("/:id/status", protect, restrictTo("super_admin"), async (req, res) => {
+router.patch("/:id/status", protect, requirePlatformOwner, async (req, res) => {
   try {
     if (!isValidObjectId(req.params.id)) {
       return res.status(400).json({ success: false, message: "Invalid plan id" });

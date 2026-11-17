@@ -8,7 +8,7 @@ const { Project } = require('../HR-CDS/models/Project');
 const oid = () => new mongoose.Types.ObjectId();
 
 test('adding a task or remark reads only the affected task and still records its chat event', async t => {
-  const mongo = await MongoMemoryServer.create();
+  const mongo = await MongoMemoryServer.create({instance: {port: 20000 + process.pid % 20000}});
   await mongoose.connect(mongo.getUri());
   t.after(async () => {
     mongoose.set('debug', false);

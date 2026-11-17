@@ -1,4 +1,6 @@
 const Company = require("../models/Company");
+const { subscriptionState, companyDetails: serializeCompanyDetails } = require('../utils/companySubscription');
+const { endOfIstDay } = require('../HR-CDS/utils/subscriptionDates');
 const { isPlatformOwner } = require("../middleware/authMiddleware");
 const User = require("../models/User");
 const Branch = require("../models/Branch");
@@ -898,16 +900,10 @@ exports.getCompanyDetailsByIdentifier = async (req, res) => {
     }
 
     
-    if (new Date() > new Date(company.subscriptionExpiry)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Company subscription has expired'
-      });
-    }
-
     res.json({
       success: true,
       company: {
+        ...serializeCompanyDetails(company),
         _id: company._id,
         companyName: company.companyName,
         companyEmail: company.companyEmail,
@@ -1187,7 +1183,7 @@ exports.getSelfRegistrationConfig = async (req, res) => {
       });
     }
 
-    if (new Date() > new Date(company.subscriptionExpiry)) {
+    if (subscriptionState(company).expired) {
       return res.status(403).json({
         success: false,
         message: "Company subscription has expired",
@@ -1404,8 +1400,8 @@ exports.renewCompanySubscription = async (req, res) => {
       });
     }
 
-    const expiryDate = new Date(subscriptionExpiry);
-    if (Number.isNaN(expiryDate.getTime())) {
+    let expiryDate = endOfIstDay(subscriptionExpiry);
+    if (!expiryDate) {
       return res.status(400).json({
         success: false,
         message: "Invalid subscription expiry date",
@@ -1443,7 +1439,11 @@ exports.renewCompanySubscription = async (req, res) => {
           message: "Selected plan not found or inactive",
         });
       }
+      // The assigned plan controls duration, even when a client submits a different expiry.
+      expiryDate = endOfIstDay(new Date(startDate.getTime() + selectedPlan.durationDays * 86400000));
     }
+
+    if (expiryDate < startDate) return res.status(400).json({success: false, message: 'Subscription expiry must be after its start date'});
 
     const paymentAmount = Number(selectedPlan ? selectedPlan.price : amount || 0);
     if (!Number.isFinite(paymentAmount) || paymentAmount < 0) {
@@ -1548,16 +1548,7 @@ exports.renewCompanySubscription = async (req, res) => {
       });
     }
 
-    if (company.isActive) {
-      await User.updateMany(
-        { company: id },
-        {
-          isActive: true,
-          $unset: { lockUntil: 1 },
-        }
-      );
-    }
-
+    require('../routes/sidebarConfigs').invalidateSidebarCache();
     return res.status(200).json({
       success: true,
       message: "Company subscription updated successfully",

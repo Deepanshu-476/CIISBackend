@@ -38,6 +38,7 @@ const visibleUserIds = async (req) => {
   if (!branches) return null;
   const rows = await User.find({
     company: companyId,
+    isActive: { $ne: false },
     $or: [{ branch: { $in: branches } }, { assignedBranches: { $in: branches } }],
   }).select('_id').lean();
   return rows.map(row => String(row._id));
@@ -71,7 +72,12 @@ router.get('/feed', protect, viewAccess, async (req, res, next) => {
     const data = await activityFeed(companyId, {
       range: parseRange(req.query, 7),
       userIds,
-      filters: { userId: req.query.userId, path: req.query.path, type: req.query.type },
+      filters: {
+        userId: req.query.userId,
+        path: req.query.path,
+        type: req.query.type,
+        search: req.query.search || req.query.q,
+      },
       page: req.query.page,
       limit: req.query.limit,
     });

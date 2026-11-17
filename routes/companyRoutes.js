@@ -104,6 +104,17 @@ router.get("/self-registration/:companyCode", companyController.getSelfRegistrat
 
 // Company overview (authenticated)
 router.get("/overview/current", protect, companyController.getCompanyOverview);
+router.get('/subscription/current', protect, async (req, res, next) => {
+  try {
+    const Company = require('../models/Company');
+    const { subscriptionFields, companyDetails } = require('../utils/companySubscription');
+    const companyId = req.user.company?._id || req.user.company;
+    const company = companyId ? await Company.findById(companyId).select(subscriptionFields).lean() : null;
+    if (!company) return res.status(404).json({success: false, message: 'Company not found'});
+    res.set('Cache-Control', 'no-store');
+    return res.json({success: true, company: companyDetails(company)});
+  } catch (error) { next(error); }
+});
 router.get("/:id/overview", protect, requireCompanyAdminOrSuperAdmin, companyController.getCompanyOverview);
 
 // Company statistics and users (Company Admin or SuperAdmin)
