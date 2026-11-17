@@ -14,7 +14,7 @@
  */
 
 const path = require('path');
-const { executeWithGroqFallback, getGroqApiKeys } = require('./groqKeyManager');
+const { executeWithGroqFallback, getGroqApiKeys, getActiveSttModelName } = require('./groqKeyManager');
 const GROQ_AUDIO_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
 const DEFAULT_MODEL = 'whisper-large-v3-turbo';
 
@@ -271,7 +271,7 @@ async function transcribeAudio(audioBuffer, options = {}, deps = {}) {
     throw classifyAndLogGroqError(err);
   }
 
-  const model = deps.model || process.env.GROQ_STT_MODEL || DEFAULT_MODEL;
+  const model = deps.model || (getActiveSttModelName && getActiveSttModelName()) || process.env.GROQ_STT_MODEL || DEFAULT_MODEL;
 
   // Resolve language:
   // 'auto' = omit language from Groq request

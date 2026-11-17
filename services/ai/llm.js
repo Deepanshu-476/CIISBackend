@@ -1,11 +1,15 @@
 const path = require('path');
 const dotenv = require('dotenv');
 const { ChatGroq } = require('@langchain/groq');
-const { getGroqApiKeys, getOrderedKeys } = require('./groqKeyManager');
+const { getGroqApiKeys, getOrderedKeys, getActiveModelName } = require('./groqKeyManager');
 
 const DEFAULT_MODEL = 'qwen/qwen3.8-27b';
 
 const getModelName = () => {
+  if (getActiveModelName) {
+    const active = getActiveModelName();
+    if (active) return active;
+  }
   return (process.env.GROQ_MODEL && process.env.GROQ_MODEL.trim()) || DEFAULT_MODEL;
 };
 
