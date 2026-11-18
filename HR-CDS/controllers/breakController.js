@@ -104,9 +104,9 @@ const buildCompanyPolicyResolver = async ({ company, companyCode }) => {
   const scope = company ? { company } : { companyCode };
   const [companyDoc, branches, departments, jobRoles] = await Promise.all([
     company
-      ? Company.findById(company).select('breakPolicy companyCode').lean()
-      : Company.findOne({ companyCode }).select('breakPolicy companyCode').lean(),
-    Branch.find(scope).select('breakPolicy name').lean(),
+      ? Company.findById(company).select('breakPolicy companyCode dashboardConfig').lean()
+      : Company.findOne({ companyCode }).select('breakPolicy companyCode dashboardConfig').lean(),
+    Branch.find(scope).select('breakPolicy name dashboardConfig').lean(),
     Department.find(scope).select('breakPolicy name').lean(),
     JobRole.find(scope).select('breakPolicy name').lean(),
   ]);
@@ -134,8 +134,13 @@ const buildCompanyPolicyResolver = async ({ company, companyCode }) => {
 
   return {
     companyDoc,
+    attendanceModeFor: (user = {}) => {
+      const branch = branchIndex.byId.get(String(user.branch?._id || user.branch || user.branchId || ''));
+      return ((branch || companyDoc)?.dashboardConfig || [])
+        .find(item => item.componentId === 'clock-in')?.settings?.attendanceMode || 'normal';
+    },
     policyFor: (user = {}) => resolveBreakPolicy({
-      jobRole: lookup(jobRoleIndex, user.jobRole)?.breakPolicy,
+      jobRole: lookup(jobRoleIndex, user.jobRole || user.jobRoleName)?.breakPolicy,
       department: lookup(departmentIndex, user.department || user.departmentName)?.breakPolicy,
       branch: lookup(branchIndex, user.branch || user.branchName)?.breakPolicy,
       company: companyDoc?.breakPolicy,

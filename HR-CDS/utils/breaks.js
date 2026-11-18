@@ -214,6 +214,7 @@ const breakTotalsFor = ({ policy, breaks = [], inTime, outTime = null, now = new
   });
 
   let autoMs = 0;
+  const autoBreaks = [];
   const windows = fixedWindowsFor(policy, inTime || now);
   windows.forEach(window => {
     if (!window.autoDeduct) return;
@@ -222,13 +223,24 @@ const breakTotalsFor = ({ policy, breaks = [], inTime, outTime = null, now = new
     ));
     if (punched) return;   // their own punch already covers this window
     if (!start) return;
-    autoMs += overlapMs(start, end, window.startTime, window.endTime);
+    const overlapStart = Math.max(start, window.startTime);
+    const overlapEnd = Math.min(end, window.endTime);
+    if (overlapEnd <= overlapStart) return;
+    const span = overlapEnd - overlapStart;
+    autoMs += span;
+    autoBreaks.push({
+      label: window.name,
+      start: new Date(overlapStart),
+      end: new Date(overlapEnd),
+      minutes: Math.round(span / MINUTE_MS),
+    });
   });
 
   const totalMs = manualMs + autoMs;
   return {
     manualMinutes: Math.round(manualMs / MINUTE_MS),
     autoMinutes: Math.round(autoMs / MINUTE_MS),
+    autoBreaks,
     totalMinutes: Math.round(totalMs / MINUTE_MS),
     runningMinutes: Math.round(runningMs / MINUTE_MS),
     manualMs,

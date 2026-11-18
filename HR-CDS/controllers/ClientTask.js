@@ -1,3 +1,5 @@
+const { OVERDUE_STATUS_MESSAGE, isOverdueStatus, isCompanyTaskWrite, isCompanyTaskWriteRequest } = require('../utils/companyTaskStatus');
+const { CHECKPOINT_LOCKED_MESSAGE, CHECKPOINT_CONFLICT_MESSAGE, isCheckpointStatus, isCheckpointWriteConflict, preserveCheckpointProgress } = require('../utils/taskCheckpoints');
 const Task = require('../models/ClientTask');
 const Client = require('../models/Client');
 const mongoose = require('mongoose');
@@ -130,7 +132,7 @@ const serializeClientTask = task => {
   };
 };
 
-const parseTaskCheckpoints = value => {
+const parseTaskCheckpoints = (value, includeId = false) => {
   if (!value || value === 'null') return [];
   const raw = typeof value === 'string' ? JSON.parse(value) : value;
   if (!Array.isArray(raw)) return [];
@@ -143,6 +145,7 @@ const parseTaskCheckpoints = value => {
 
       const completed = Boolean(typeof item === 'object' ? item.completed : false);
       return {
+        ...(includeId ? { _id: item?._id || item?.id } : {}),
         title: cleanTitle,
         completed,
         completedAt: completed ? (item?.completedAt ? new Date(item.completedAt) : new Date()) : null,
@@ -1377,23 +1380,11 @@ const updateAssignedTaskStatus = async (req, res) => {
       targetStatus = 'in-progress';
     }
 
-    if (
-      targetStatus !== 'overdue' &&
-      targetStatus !== 'reopen' &&
-      (previousStatus === 'overdue' || (previousStatus !== 'completed' && isClientTaskOverdue(task))) &&
-      !isCompanyAllTaskEdit(req)
-    ) {
-      if (previousStatus !== 'overdue' && isClientTaskOverdue(task)) {
-        task.status = 'overdue';
-        task.completed = false;
-        await task.save();
-      }
-      return res.status(400).json({
-        success: false,
-        message: 'Cannot change status of an overdue task'
-      });
+    if (!isOverdueStatus(targetStatus) && (isOverdueStatus(previousStatus) || isClientTaskOverdue(task))) {
+      return res.status(409).json({ success: false, message: OVERDUE_STATUS_MESSAGE });
     }
 
+    task.$where = { updatedAt: task.updatedAt ?? null };
 
     let elapsedSeconds = 0;
     const holdSeconds = applyClientTaskHoldTransition(task, previousStatus, targetStatus, now);
@@ -2389,11 +2380,17 @@ const updateTask = async (req, res) => {
       });
     }
 
+    const companyWrite = isCompanyTaskWriteRequest(req) &&
+      isCompanyTaskWrite(req, await Client.findById(task.clientId).select('company companyCode').lean());
+    if (isCompanyTaskWriteRequest(req) && !companyWrite) {
+      return res.status(403).json({ success: false, message: 'Task belongs to another company' });
+    }
+
     const isAlreadyAssigned = task.assigneeId || (task.assignee && task.assignee !== 'Unassigned');
     const hasReminderUpdate = updates.reminderSettings !== undefined || updates.reminderEnabled !== undefined || updates.reminderOptions !== undefined;
     const isEditingCoreFields = ['name', 'description', 'dueDate', 'dueDateTime', 'priority'].some(field => Object.prototype.hasOwnProperty.call(updates, field));
     if (isAlreadyAssigned && isEditingCoreFields) {
-      const canEdit = await hasCompanyAllTaskEditPermission(req);
+      const canEdit = companyWrite || await hasCompanyAllTaskEditPermission(req);
       if (!canEdit) {
         return res.status(403).json({
           success: false,
@@ -2449,23 +2446,13 @@ const updateTask = async (req, res) => {
       updates.assigneeId = user ? user._id : null;
     }
 
-    if (
-      (updates.status || updates.completed !== undefined) &&
-      updates.status !== 'overdue' &&
-      (previousStatus === 'overdue' || isClientTaskOverdue(task)) &&
-      !isCompanyAllTaskEdit(req)
-    ) {
-      if (previousStatus !== 'overdue' && isClientTaskOverdue(task)) {
-        task.status = 'overdue';
-        task.completed = false;
-        await task.save({ validateModifiedOnly: true });
-      }
-      return res.status(400).json({
-        success: false,
-        message: 'Cannot change status of an overdue task'
-      });
+    if ((updates.status || updates.completed !== undefined) &&
+        (isOverdueStatus(previousStatus) || isClientTaskOverdue(task)) &&
+        (updates.completed !== undefined || !isOverdueStatus(updates.status)) && !companyWrite) {
+      return res.status(409).json({ success: false, message: OVERDUE_STATUS_MESSAGE });
     }
 
+    if (updates.status || updates.completed !== undefined) task.$where = { updatedAt: task.updatedAt ?? null };
 
     if (updates.mentions !== undefined) task.mentions = updates.mentions;
     for (const key of Object.keys(updates)) {
@@ -2558,9 +2545,9 @@ const updateTask = async (req, res) => {
         task.dueDate = parsedDueDate;
         task.dueDateSource = 'manual';
       } else if (key === 'checkpoints') {
-        const parsedCheckpoints = parseTaskCheckpoints(newValue);
+        const parsedCheckpoints = parseTaskCheckpoints(newValue, true);
         changes.push(`checkpoints updated`);
-        task.checkpoints = parsedCheckpoints;
+        task.checkpoints = preserveCheckpointProgress(task.checkpoints, parsedCheckpoints);
       } else if (key === 'reminderSettings') {
         task.reminderSettings = newValue;
         changes.push('reminder settings updated');
@@ -2690,6 +2677,12 @@ const toggleTaskCompletion = async (req, res) => {
       });
     }
 
+    if (isOverdueStatus(task.status) || isClientTaskOverdue(task)) {
+      return res.status(409).json({ success: false, message: OVERDUE_STATUS_MESSAGE });
+    }
+
+    task.$where = { updatedAt: task.updatedAt ?? null };
+
     const previousCompleted = task.completed;
     const previousStatus = task.status;
     const now = new Date();
@@ -2794,6 +2787,14 @@ const updateTaskCheckpoint = async (req, res) => {
       return res.status(403).json({ success: false, message: 'You are not authorized to update this task' });
     }
 
+    if (task.completed || !isCheckpointStatus(task.status)) {
+      return res.status(409).json({ success: false, message: CHECKPOINT_LOCKED_MESSAGE });
+    }
+
+    if (isClientTaskOverdue(task)) {
+      return res.status(409).json({ success: false, message: OVERDUE_STATUS_MESSAGE });
+    }
+
     const checkpoint = task.checkpoints.id(checkpointId);
     if (!checkpoint) {
       return res.status(404).json({ success: false, message: 'Checkpoint not found' });
@@ -2801,6 +2802,7 @@ const updateTaskCheckpoint = async (req, res) => {
 
     const previousStatus = task.status;
     const previousCompleted = task.completed;
+    task.$where = { status: previousStatus, updatedAt: task.updatedAt ?? null };
     const now = new Date();
     const isCompleted = completed !== false;
 
@@ -2814,13 +2816,6 @@ const updateTaskCheckpoint = async (req, res) => {
       task.completedAt = task.completedAt || now;
       task.status = 'completed';
       task.inProgressSince = null;
-    } else if (previousCompleted) {
-      task.completed = false;
-      task.completedAt = null;
-      task.status = 'in-progress';
-    } else if (previousStatus === 'pending' && isCompleted) {
-      task.status = 'in-progress';
-      task.inProgressSince = task.inProgressSince || now;
     }
 
     await addClientActivityLogHelper(task, {
@@ -2844,6 +2839,9 @@ const updateTaskCheckpoint = async (req, res) => {
       data: task
     });
   } catch (error) {
+    if (isCheckpointWriteConflict(error)) {
+      return res.status(409).json({ success: false, message: CHECKPOINT_CONFLICT_MESSAGE });
+    }
     console.error('Error updating task checkpoint:', error);
     res.status(500).json({
       success: false,

@@ -82,6 +82,15 @@ const attendanceSchema = new mongoose.Schema({
     // Set when the "this break is running long" alert has gone out, so it only goes once.
     overstayNotifiedAt: { type: Date, default: null },
   }],
+  breakMode: { type: String, enum: ['OFF', 'FIXED', 'FLEXIBLE'] },
+  scheduledBreaks: {
+    type: [{ _id: false, name: String, start: String, end: String, autoDeduct: Boolean }],
+    default: undefined,
+  },
+  autoBreaks: {
+    type: [{ _id: false, label: String, start: Date, end: Date, minutes: Number }],
+    default: undefined,
+  },
   onBreak: {
     type: Boolean,
     default: false
@@ -167,6 +176,8 @@ const attendanceSchema = new mongoose.Schema({
     accuracy: { type: Number },
     distanceFromOfficeMeters: { type: Number }
   },
+  inAttendanceMode: { type: String, enum: ['normal', 'location', 'image', 'both'] },
+  outAttendanceMode: { type: String, enum: ['normal', 'location', 'image', 'both'] },
   inSelfieUrl: { type: String },
   outSelfieUrl: { type: String },
   companyCode: {

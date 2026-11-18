@@ -119,6 +119,9 @@ test('a punched break inside a window replaces the automatic deduction', () => {
 test('an employee who leaves before a window only loses the part they were there for', () => {
   const earlyOut = at('13:10');
   const totals = breakTotalsFor({ policy: fixedPolicy(), breaks: [], inTime: IN, outTime: earlyOut });
+  assert.equal(totals.autoBreaks.length, 1);
+  assert.deepEqual(totals.autoBreaks[0].start, at('13:00'));
+  assert.deepEqual(totals.autoBreaks[0].end, earlyOut);
   assert.equal(totals.autoMinutes, 10, 'only the 10 minutes of lunch inside their day');
 });
 
