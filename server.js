@@ -1463,7 +1463,13 @@ const startServer = async () => {
   }
 
   // Uniqueness is a prerequisite for safe concurrent group/event delivery.
-  for (const model of [require('./HR-CDS/chat/models/Conversation'), require('./HR-CDS/chat/models/Message'), require('./HR-CDS/models/Notification')]) await model.createIndexes();
+  try {
+    for (const model of [require('./HR-CDS/chat/models/Conversation'), require('./HR-CDS/chat/models/Message'), require('./HR-CDS/models/Notification')]) {
+      await model.createIndexes();
+    }
+  } catch (err) {
+    console.warn('[server] Non-fatal index creation error at boot:', err.message);
+  }
   require('./HR-CDS/utils/projectChatWorker').start();
 
   server.listen(PORT, async () => {
