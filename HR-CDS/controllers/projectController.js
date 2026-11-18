@@ -1,3 +1,5 @@
+const { OVERDUE_STATUS_MESSAGE, isOverdueStatus, isCompanyTaskWrite, isCompanyTaskWriteRequest } = require('../utils/companyTaskStatus');
+const { CHECKPOINT_LOCKED_MESSAGE, CHECKPOINT_CONFLICT_MESSAGE, isCheckpointStatus, isCheckpointWriteConflict, preserveCheckpointProgress } = require('../utils/taskCheckpoints');
 const { Project, TASK_STATUS, PROJECT_STATUS, PRIORITY_LEVELS, NOTIFICATION_TYPES } = require("../models/Project");
 const multer = require("multer");
 const path = require("path");
@@ -198,7 +200,7 @@ const isCompanyAllTaskEdit = (req) => (
   req.headers?.["x-company-all-task-edit"] === "true"
 );
 
-const parseTaskCheckpoints = value => {
+const parseTaskCheckpoints = (value, includeId = false) => {
   if (!value || value === "null") return [];
   const raw = typeof value === "string" ? JSON.parse(value) : value;
   if (!Array.isArray(raw)) return [];
@@ -211,6 +213,7 @@ const parseTaskCheckpoints = value => {
 
       const completed = Boolean(typeof item === "object" ? item.completed : false);
       return {
+        ...(includeId ? { _id: item?._id || item?.id } : {}),
         title: cleanTitle,
         completed,
         completedAt: completed ? (item?.completedAt ? new Date(item.completedAt) : new Date()) : null,
@@ -2020,7 +2023,12 @@ exports.updateTask = async (req, res) => {
     }
 
 
-    if (!hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
+    const companyWrite = isCompanyTaskWrite(req, project);
+    if (isCompanyTaskWriteRequest(req) && !companyWrite) {
+      return res.status(403).json({ success: false, message: 'Task belongs to another company' });
+    }
+
+    if (!companyWrite && !hasProjectAccess(project, req.user.id, req.user.role, req.user)) {
       return res.status(403).json({
         success: false,
         message: "Access denied to update task"
@@ -2033,6 +2041,15 @@ exports.updateTask = async (req, res) => {
         success: false,
         message: "Task not found"
       });
+    }
+
+    project.$where = {
+      tasks: { $elemMatch: { _id: task._id, status: task.status, updatedAt: task.updatedAt ?? null } },
+    };
+    const wasOverdue = isOverdueStatus(task.status);
+    if (updateData.status && !isOverdueStatus(updateData.status) &&
+        (wasOverdue || isPendingTaskPastDue(task)) && !companyWrite) {
+      return res.status(409).json({ success: false, message: OVERDUE_STATUS_MESSAGE });
     }
 
     const hadAssignedToField = Object.prototype.hasOwnProperty.call(updateData, "assignedTo");
@@ -2086,7 +2103,7 @@ exports.updateTask = async (req, res) => {
       }
 
       if (key === 'checkpoints') {
-        task.checkpoints = parseTaskCheckpoints(updateData[key]);
+        task.checkpoints = preserveCheckpointProgress(task.checkpoints, parseTaskCheckpoints(updateData[key], true));
         return;
       }
 
@@ -2097,7 +2114,7 @@ exports.updateTask = async (req, res) => {
 
       task[key] = updateData[key];
     });
-    syncTaskStatusWithDueDate(task);
+    if (!wasOverdue || companyWrite) syncTaskStatusWithDueDate(task);
     task.updatedAt = new Date();
     project.markModified("tasks");
 
@@ -2361,8 +2378,13 @@ exports.updateTaskStatus = async (req, res) => {
       });
     }
 
+    const companyWrite = isCompanyTaskWrite(req, project);
+    if (isCompanyTaskWriteRequest(req) && !companyWrite) {
+      return res.status(403).json({ success: false, message: 'Task belongs to another company' });
+    }
+
     const isAssignedUser = isTaskAssignedToUser(task, req.user.id);
-    const hasAccessToProject = hasProjectAccess(project, req.user.id, req.user.role, req.user);
+    const hasAccessToProject = companyWrite || hasProjectAccess(project, req.user.id, req.user.role, req.user);
     const canManageTaskStatus =
       isAssignedUser ||
       hasAccessToProject ||
@@ -2393,14 +2415,9 @@ exports.updateTaskStatus = async (req, res) => {
       });
     }
 
-    const allowCompanyAllEdit = isCompanyAllTaskEdit(req);
-    const isOverdueTransitionAllowed = ['in-progress', 'completed', 'onhold', 'cancelled', 'rejected', 'reopen'].includes(nextStatus);
-
-    if (nextStatus !== "overdue" && normalizedOldStatus === "overdue" && !allowCompanyAllEdit && !isOverdueTransitionAllowed) {
-      return res.status(400).json({
-        success: false,
-        message: "Cannot change status of an overdue task"
-      });
+    const allowCompanyAllEdit = companyWrite || isCompanyAllTaskEdit(req);
+    if (nextStatus !== "overdue" && (isOverdueStatus(oldStatus) || isPendingTaskPastDue(task)) && !companyWrite) {
+      return res.status(409).json({ success: false, message: OVERDUE_STATUS_MESSAGE });
     }
 
     if (normalizedOldStatus === 'completed' && nextStatus !== 'completed' && nextStatus !== 'reopen' && !allowCompanyAllEdit) {
@@ -2412,33 +2429,6 @@ exports.updateTaskStatus = async (req, res) => {
 
     const isResumedFromHold = (normalizedOldStatus === "onhold" || normalizedOldStatus === "on hold") && nextStatus === "in-progress";
 
-    if (!["overdue", "onhold", "reopen"].includes(nextStatus) && !isResumedFromHold && !isOverdueTransitionAllowed && isPendingTaskPastDue(task) && !allowCompanyAllEdit) {
-      if (isPendingTaskPastDue(task)) {
-        await Project.updateOne(
-          { _id: projectId, "tasks._id": taskId },
-          {
-            $set: {
-              "tasks.$.status": "overdue",
-              "tasks.$.updatedAt": new Date()
-            },
-            $push: {
-              "tasks.$.activityLogs": {
-                type: "status_change",
-                description: "Automatically marked overdue after due time passed",
-                oldValue: oldStatus,
-                newValue: "overdue",
-                performedBy: req.user.id,
-                remark: "Automatically marked overdue after due time passed"
-              }
-            }
-          }
-        );
-      }
-      return res.status(400).json({
-        success: false,
-        message: "Cannot change status of an overdue task"
-      });
-    }
 
     const now = new Date();
     const updateFields = {
@@ -2482,8 +2472,8 @@ exports.updateTaskStatus = async (req, res) => {
       createdAt: now
     } : null;
 
-    await Project.updateOne(
-      { _id: projectId, "tasks._id": taskId },
+    const result = await Project.updateOne(
+      { _id: projectId, tasks: { $elemMatch: { _id: taskId, status: oldStatus, updatedAt: task.updatedAt ?? null } } },
       {
         $set: updateFields,
         $push: {
@@ -2492,6 +2482,10 @@ exports.updateTaskStatus = async (req, res) => {
         }
       }
     );
+
+    if (!result.matchedCount) {
+      return res.status(409).json({ success: false, message: "The task changed. Refresh it before updating the status." });
+    }
 
     task.status = nextProjectStatus;
     task.updatedAt = now;
@@ -2623,12 +2617,19 @@ exports.updateTaskCheckpoint = async (req, res) => {
       return res.status(403).json({ success: false, message: "Access denied to update checkpoint" });
     }
 
+    if (!isCheckpointStatus(task.status)) {
+      return res.status(409).json({ success: false, message: CHECKPOINT_LOCKED_MESSAGE });
+    }
+
     const checkpoint = task.checkpoints.id(checkpointId);
     if (!checkpoint) {
       return res.status(404).json({ success: false, message: "Checkpoint not found" });
     }
 
-    const oldStatus = task.status || "pending";
+    const oldStatus = task.status;
+    project.$where = {
+      tasks: { $elemMatch: { _id: task._id, status: oldStatus, updatedAt: task.updatedAt ?? null } },
+    };
     const isCompleted = completed !== false;
     const now = new Date();
 
@@ -2639,10 +2640,6 @@ exports.updateTaskCheckpoint = async (req, res) => {
     const allCompleted = task.checkpoints.length > 0 && task.checkpoints.every(item => item.completed);
     if (allCompleted) {
       task.status = "completed";
-    } else if (normalizeTaskStatus(oldStatus) === "completed") {
-      task.status = "in progress";
-    } else if (normalizeTaskStatus(oldStatus) === "pending" && isCompleted) {
-      task.status = "in progress";
     }
     task.updatedAt = now;
 
@@ -2663,6 +2660,9 @@ exports.updateTaskCheckpoint = async (req, res) => {
       task
     });
   } catch (error) {
+    if (isCheckpointWriteConflict(error)) {
+      return res.status(409).json({ success: false, message: CHECKPOINT_CONFLICT_MESSAGE });
+    }
     console.error("❌ Error updating project task checkpoint:", error);
     res.status(500).json({
       success: false,

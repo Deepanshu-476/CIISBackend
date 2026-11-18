@@ -14,7 +14,7 @@ const {notifyPageUsers, getCompanyId} = require("../utils/systemNotificationServ
 const {isOffDayFor, weekStartKeyOf, effectiveWorkingDays: getEffectiveWorkingDays} = require("../utils/weekOff");
 const {weeklyOffUserIdsForDate} = require("../utils/attendanceWeekOffSummary");
 const {breakTotalsFor, resolveBreakPolicy, netWorkedMs} = require("../utils/breaks");
-const {policyForUser: breakPolicyForUser} = require("./breakController");
+const {policyForUser: breakPolicyForUser, buildCompanyPolicyResolver} = require("./breakController");
 const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagination");
 const { runAutoClockOutSweepIfStale } = require("../cron/forceClockOut");
 const { cleanRecurringTasksForAbsentUser } = require("../cron/recurringTasks");
@@ -704,6 +704,28 @@ const getAttendanceSettingsContext = async ({ companyCode, userId }) => {
   };
 };
 
+const attendanceModeForSettings = settings => {
+  const mode = settings?.dashboardConfig?.find(item => item.componentId === 'clock-in')?.settings?.attendanceMode;
+  return ['normal', 'location', 'image', 'both'].includes(mode) ? mode : 'normal';
+};
+
+const reportBreakFields = (record, policy, now) => {
+  const isOpen = record.inTime && !record.outTime && record.isClockedIn !== false;
+  const live = isOpen && breakTotalsFor({ policy, breaks: record.breaks, inTime: record.inTime, now });
+  const grossMs = isOpen ? Math.max(0, now - new Date(record.inTime)) : 0;
+  return {
+    breakMode: record.breakMode || policy.mode,
+    scheduledBreaks: record.scheduledBreaks ?? (policy.mode === 'FIXED' && record.inTime ? policy.fixedBreaks : []),
+    scheduledBreaksFromCurrentPolicy: !record.scheduledBreaks,
+    autoBreaks: live ? live.autoBreaks : record.autoBreaks,
+    ...(live ? {
+      breakMinutes: live.totalMinutes,
+      grossTime: formatDuration(grossMs),
+      totalTime: formatDuration(netWorkedMs(grossMs, live.totalMs)),
+    } : {}),
+  };
+};
+
 const resolveSelectedShiftSettings = async (userObj) => {
   if (!userObj?.jobRole) return null;
 
@@ -916,8 +938,7 @@ const clockIn = async (req, res) => {
       return res.status(403).json({ message: "Access denied. Cross-company attendance is forbidden." });
     }
 
-    const clockInConfig = attendanceSettings?.dashboardConfig?.find(c => c.componentId === 'clock-in');
-    const attendanceMode = clockInConfig?.settings?.attendanceMode || 'normal';
+    const attendanceMode = attendanceModeForSettings(attendanceSettings);
 
     const { latitude, longitude, accuracy, selfieUrl } = req.body;
 
@@ -1008,6 +1029,7 @@ const clockIn = async (req, res) => {
     const attendanceRecord = existingRecord || new Attendance({ user: userId });
     attendanceRecord.date = schedule.dateStart;
     attendanceRecord.inTime = now;
+    attendanceRecord.inAttendanceMode = attendanceMode;
     attendanceRecord.outTime = null;
     attendanceRecord.lateBy = lateBy;
     attendanceRecord.status = status;
@@ -1040,7 +1062,7 @@ const clockIn = async (req, res) => {
     const populatedRecord = await Attendance.findById(attendanceRecord._id)
       .populate({
         path: "user",
-        select: "name email employeeType companyCode jobRole jobRoleName shiftId shiftName shiftType department departmentName branch branchName",
+        select: "name email employeeId employeeType companyCode jobRole jobRoleName shiftId shiftName shiftType department departmentName branch branchName",
         populate: {
           path: "company",
           select: "companyCode companyName"
@@ -1092,8 +1114,7 @@ const clockOut = async (req, res) => {
       return res.status(403).json({ message: "Access denied. Cross-company attendance is forbidden." });
     }
 
-    const clockInConfig = attendanceSettings?.dashboardConfig?.find(c => c.componentId === 'clock-in');
-    const attendanceMode = clockInConfig?.settings?.attendanceMode || 'normal';
+    const attendanceMode = attendanceModeForSettings(attendanceSettings);
 
     const { latitude, longitude, accuracy, selfieUrl } = req.body;
 
@@ -1187,10 +1208,14 @@ const clockOut = async (req, res) => {
       now,
     });
     record.breakMinutes = breakTotals.totalMinutes;
+    record.breakMode = breakPolicy.mode;
+    record.autoBreaks = breakTotals.autoBreaks;
+    record.scheduledBreaks = breakPolicy.mode === 'FIXED' ? breakPolicy.fixedBreaks : [];
     record.onBreak = false;
 
     record.outTime = now;
     record.clockOutMode = 'MANUAL';
+    record.outAttendanceMode = attendanceMode;
     record.isClockedIn = false;
     record.grossTime = formatDuration(totalMs);
     record.totalTime = formatDuration(netWorkedMs(totalMs, breakTotals.totalMs));
@@ -1249,7 +1274,7 @@ const clockOut = async (req, res) => {
     const populatedRecord = await Attendance.findById(record._id)
       .populate({
         path: "user",
-        select: "name email employeeType companyCode jobRole jobRoleName shiftId shiftName shiftType department departmentName branch branchName",
+        select: "name email employeeId employeeType companyCode jobRole jobRoleName shiftId shiftName shiftType department departmentName branch branchName",
         populate: {
           path: "company",
           select: "companyCode companyName"
@@ -1406,7 +1431,7 @@ const getTodayStatus = async (req, res) => {
     const shiftTime = formatShiftTimeWindow(shiftStart, shiftEnd);
 
     // Break state, so the working-time timer can stop while a break is running.
-    const {userObj: breakUserObj} = await getAttendanceSettingsContext({companyCode: userCompanyCode, userId});
+    const {userObj: breakUserObj, attendanceSettings} = await getAttendanceSettingsContext({companyCode: userCompanyCode, userId});
     const {policy: breakPolicy} = await breakPolicyForUser(breakUserObj || req.user);
     const liveBreaks = breakTotalsFor({
       policy: breakPolicy,
@@ -1433,7 +1458,11 @@ const getTodayStatus = async (req, res) => {
       outTime: isClockedInNow ? null : today.outTime,
       isClockedIn: isClockedInNow,
       status: today.status,
-      breakMode: breakPolicy.mode,
+      attendanceMode: attendanceModeForSettings(attendanceSettings),
+      breakMode: today.breakMode || breakPolicy.mode,
+      scheduledBreaks: today.scheduledBreaks ?? (breakPolicy.mode === 'FIXED' && today.inTime ? breakPolicy.fixedBreaks : []),
+      scheduledBreaksFromCurrentPolicy: !today.scheduledBreaks,
+      autoBreaks: isClockedInNow ? liveBreaks.autoBreaks : today.autoBreaks,
       onBreak: Boolean(runningBreak),
       breakStartedAt: runningBreak?.start || null,
       breakLabel: runningBreak?.label || '',
@@ -1471,7 +1500,7 @@ const getAttendanceList = async (req, res) => {
     
     
     const targetUser = await User.findById(targetUserId)
-      .select('name email employeeType companyCode company jobRole shiftId shiftName shiftType department departmentName weekOffDays createdAt')
+      .select('name email employeeType companyCode company jobRole jobRoleName shiftId shiftName shiftType department departmentName branch branchName weekOffDays createdAt')
       .populate('department', 'name workingDays workingDayHistory');
     if (!targetUser || targetUser.companyCode !== userCompanyCode) {
       return res.status(403).json({ 
@@ -1529,7 +1558,13 @@ const getAttendanceList = async (req, res) => {
     void 0;
 
     
-    const targetShiftSettings = await resolveSelectedShiftSettings(targetUser);
+    const [targetShiftSettings, { policy: targetBreakPolicy }, { attendanceSettings }] = await Promise.all([
+      resolveSelectedShiftSettings(targetUser),
+      breakPolicyForUser(targetUser),
+      getAttendanceSettingsContext({ companyCode: userCompanyCode, userId: targetUserId }),
+    ]);
+    const attendanceMode = attendanceModeForSettings(attendanceSettings);
+    const reportNow = new Date();
     const leaveCoverageDateKeys = await getLeaveCoverageDateKeys({
       userId: targetUserId,
       companyCode: userCompanyCode,
@@ -1540,7 +1575,7 @@ const getAttendanceList = async (req, res) => {
     const list = await Attendance.find(query)
       .populate({
         path: "user",
-        select: "name email employeeType companyCode jobRole jobRoleName shiftId shiftName shiftType department departmentName branch branchName",
+        select: "name email employeeId employeeType companyCode jobRole jobRoleName shiftId shiftName shiftType department departmentName branch branchName",
         populate: {
           path: "company",
           select: "companyCode companyName"
@@ -1668,6 +1703,9 @@ const getAttendanceList = async (req, res) => {
 
         return {
           ...recordObject,
+          ...reportBreakFields(recordObject, targetBreakPolicy, reportNow),
+          attendanceMode,
+          isWeeklyOff: isWeekendDay,
           dateKey,
           hasOvertimeApproved: effectiveHasOvertimeApproved,
           overtimeCalculationType: approvedOtInfo?.calculationType || 'BY_HOURS',
@@ -1723,6 +1761,8 @@ const getAttendanceList = async (req, res) => {
           inTime: null,
           outTime: null,
           status,
+          attendanceMode,
+          isWeeklyOff: isWeekend,
           holidayName: isHoliday ? holidayDateMap.get(dateKey) : undefined,
           lateBy: "00:00:00",
           earlyLeave: "00:00:00",
@@ -1814,27 +1854,44 @@ const getAllUsersAttendance = async (req, res) => {
 
     // Return schedule metadata even for employees with no persisted attendance row.
     // Keep it on page 1 so paginated exports do not repeat these company-scoped queries.
-    let weeklyOffUserIds;
+    let weeklyOffUserIds, approvedLeaveUserIds, holidayName;
     if (date && page === 1) {
       const userFilter = { companyCode: userCompanyCode };
       if (filter.user !== undefined) userFilter._id = filter.user;
       const users = await User.find(userFilter).select('_id department departmentName weekOffDays').lean();
-      const [departments, swaps] = await Promise.all([
+      const [departments, swaps, leaves, holiday] = await Promise.all([
         Department.find({ companyCode: userCompanyCode }).select('name workingDays workingDayHistory').lean(),
         WeekOffRequest.find({
           user: { $in: users.map(user => user._id) },
           status: 'Approved',
           weekStartKey: weekStartKeyOf(date),
         }).select('user weekStartKey fromDateKey toDateKey status').lean(),
+        Leave.find({
+          user: { $in: users.map(user => user._id) },
+          companyCode: userCompanyCode,
+          status: 'Approved',
+          startDate: { $lte: filter.date.$lte },
+          endDate: { $gte: filter.date.$gte },
+        }).select('user').lean(),
+        Holiday.findOne({
+          $or: [
+            { companyCode: userCompanyCode },
+            ...(req.user.company ? [{ company: req.user.company._id || req.user.company }] : []),
+          ],
+          isActive: { $ne: false },
+          date: filter.date,
+        }).select('title').lean(),
       ]);
       weeklyOffUserIds = weeklyOffUserIdsForDate(users, departments, swaps, date);
+      approvedLeaveUserIds = [...new Set(leaves.map(leave => String(leave.user)))];
+      holidayName = holiday && (holiday.title || 'Holiday');
     }
 
-    const [records, total] = await Promise.all([
+    const [records, total, reportPolicies] = await Promise.all([
       Attendance.find(filter)
         .populate({
           path: "user",
-          select: "name email employeeType companyCode jobRole jobRoleName shiftId shiftName shiftType department departmentName branch branchName",
+          select: "name email employeeId employeeType companyCode jobRole jobRoleName shiftId shiftName shiftType department departmentName branch branchName",
           populate: {
             path: "company",
             select: "companyCode companyName"
@@ -1844,7 +1901,8 @@ const getAllUsersAttendance = async (req, res) => {
         .skip(skip)
         .limit(limit)
         .lean(),
-      Attendance.countDocuments(filter)
+      Attendance.countDocuments(filter),
+      buildCompanyPolicyResolver({ company: req.user.company?._id || req.user.company || req.user.companyId, companyCode: userCompanyCode }),
     ]);
 
     const userIdsInRecords = [...new Set(records.map(r => String(r.user?._id || r.user)).filter(Boolean))];
@@ -1881,6 +1939,7 @@ const getAllUsersAttendance = async (req, res) => {
       }
     });
 
+    const reportNow = new Date();
     res.status(200).json({ 
       message: "All attendance records fetched successfully",
       data: records.map(record => {
@@ -1920,6 +1979,8 @@ const getAllUsersAttendance = async (req, res) => {
 
         return {
           ...record,
+          ...reportBreakFields(record, reportPolicies.policyFor(record.user || {}), reportNow),
+          attendanceMode: reportPolicies.attendanceModeFor(record.user),
           hasOvertimeApproved: effectiveHasOvertimeApproved,
           overtimeCalculationType: otInfo?.calculationType || 'BY_HOURS',
           isFullDayOt,
@@ -1928,7 +1989,7 @@ const getAllUsersAttendance = async (req, res) => {
           status: isFullDayOt ? 'PRESENT' : (record.status || 'ABSENT')
         };
       }),
-      ...(weeklyOffUserIds ? { weeklyOffUserIds } : {}),
+      ...(weeklyOffUserIds ? { weeklyOffUserIds, approvedLeaveUserIds, holidayName } : {}),
       count: records.length,
       total,
       pagination: buildPaginationMeta({ page, limit, total })
@@ -2121,7 +2182,7 @@ const updateAttendanceRecord = async (req, res) => {
     const populatedRecord = await Attendance.findById(record._id)
       .populate({
         path: "user",
-        select: "name email employeeType companyCode jobRole jobRoleName shiftId shiftName shiftType department departmentName branch branchName",
+        select: "name email employeeId employeeType companyCode jobRole jobRoleName shiftId shiftName shiftType department departmentName branch branchName",
         populate: {
           path: "company",
           select: "companyCode companyName"
@@ -2311,7 +2372,7 @@ const createManualAttendance = async (req, res) => {
     const populatedAttendance = await Attendance.findById(attendance._id)
       .populate({
         path: "user",
-        select: "name email employeeType companyCode jobRole jobRoleName shiftId shiftName shiftType department departmentName branch branchName",
+        select: "name email employeeId employeeType companyCode jobRole jobRoleName shiftId shiftName shiftType department departmentName branch branchName",
         populate: {
           path: "company",
           select: "companyCode companyName"
@@ -2400,7 +2461,7 @@ const deleteAttendanceRecord = async (req, res) => {
 const getAttendanceByUser = async (req, res) => {
   try {
     const { userId } = req.params;
-    const { date, month, year } = req.query;
+    const { date, month, year, includePunchDetails } = req.query;
     const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     
     if (!userCompanyCode) {
@@ -2424,8 +2485,11 @@ const getAttendanceByUser = async (req, res) => {
     const resolvedUserDept = await resolveUserDepartmentDoc(user);
     const userWeekOffContext = await buildWeekOffContext(user, resolvedUserDept);
 
-    const isSelf = String(req.user._id) === String(userId);
-    if (!isSelf && !isPrivilegedAttendanceUser(req.user, true)) {
+    const isSelf = String(req.user._id || req.user.id) === String(userId);
+    const withPunchDetails = includePunchDetails === 'true';
+    if (!isSelf && !(withPunchDetails
+      ? await hasAttendancePageAccess(req.user, 'view')
+      : isPrivilegedAttendanceUser(req.user, true))) {
       return res.status(403).json({
         message: "Access denied. You can only view your own attendance."
       });
@@ -2437,6 +2501,21 @@ const getAttendanceByUser = async (req, res) => {
       });
     }
     
+    if (!isSelf && withPunchDetails) {
+      const branchUserIds = await getBranchScopedUserIds(req, userCompanyCode);
+      if (branchUserIds && !branchUserIds.some(id => String(id) === String(userId))) {
+        return res.status(403).json({ message: "Access denied for this employee's branch." });
+      }
+    }
+
+    const details = withPunchDetails ? await buildCompanyPolicyResolver({
+      company: req.user.company?._id || req.user.company || req.user.companyId,
+      companyCode: userCompanyCode,
+    }) : null;
+    const reportNow = new Date();
+    const attendanceMode = details?.attendanceModeFor(user);
+    const breakPolicy = details?.policyFor(user);
+
     let query = { 
       user: userId,
       companyCode: userCompanyCode
@@ -2459,7 +2538,8 @@ const getAttendanceByUser = async (req, res) => {
     }
     
     const records = await Attendance.find(query)
-      .select('date status inTime outTime totalTime lateBy earlyLeave overTime notes clockOutMode')
+      .select('date status inTime outTime totalTime lateBy earlyLeave overTime notes clockOutMode' +
+        (withPunchDetails ? ' inLocation outLocation inSelfieUrl outSelfieUrl inAttendanceMode outAttendanceMode breaks scheduledBreaks autoBreaks breakMode breakMinutes grossTime isClockedIn' : ''))
       .sort({ date: -1 })
       .lean();
 
@@ -2534,6 +2614,11 @@ const getAttendanceByUser = async (req, res) => {
         }
         return {
           ...record,
+          ...(details ? {
+            ...reportBreakFields(record, breakPolicy, reportNow),
+            attendanceMode,
+            isWeeklyOff: isWknd,
+          } : {}),
           status: finalStatus,
           holidayName: isHol ? holidayDateMap.get(dateKey) : record.holidayName
         };

@@ -159,7 +159,7 @@ const canChangeFromOnHold = nextStatus => {
   return ['in-progress', 'completed'].includes(normalizeTaskStatus(nextStatus));
 };
 
-const parseTaskCheckpoints = value => {
+const parseTaskCheckpoints = (value, includeId = false) => {
   if (!value || value === 'null') return [];
   let raw = value;
   if (typeof value === 'string') {
@@ -179,6 +179,7 @@ const parseTaskCheckpoints = value => {
 
       const completed = Boolean(typeof item === 'object' ? item.completed : false);
       return {
+        ...(includeId ? { _id: item?._id || item?.id } : {}),
         title: cleanTitle,
         completed,
         completedAt: completed ? (item?.completedAt ? new Date(item.completedAt) : new Date()) : null,
