@@ -585,4 +585,61 @@ describe('aiTaskBudget middleware tests', () => {
     assert.equal(res.statusCode, 403, 'Returns HTTP 403');
     assert.equal(res.body?.code, 'AI_ACCESS_DISABLED_BY_ADMIN');
   });
+
+  it('17. Non-AI Plan: Returns 403 AI_SUBSCRIPTION_REQUIRED when company has 0 tokens and no AI plan', async () => {
+    const company = {
+      _id: 'company-free-plan',
+      aiApiKeySource: 'platform',
+      aiDailyTokenLimit: 0,
+      aiExtraTokens: 0,
+    };
+    const req = {
+      user: {
+        _id: 'emp-free-01',
+        company,
+        companyRole: 'employee',
+      },
+      body: { message: 'create personal task write report tomorrow' },
+      _deps: { AiUsage: mockAiUsage },
+    };
+    const res = createMockRes();
+    let nextCalled = false;
+
+    await aiTaskBudget(req, res, () => {
+      nextCalled = true;
+    });
+
+    assert.equal(nextCalled, false, 'Non-AI company user must be blocked');
+    assert.equal(res.statusCode, 403, 'Returns HTTP 403');
+    assert.equal(res.body?.code, 'AI_SUBSCRIPTION_REQUIRED');
+  });
+
+  it('18. Non-AI Plan: Voice STT returns 403 AI_SUBSCRIPTION_REQUIRED when company has 0 tokens and no AI plan', async () => {
+    const company = {
+      _id: 'company-free-plan-stt',
+      aiApiKeySource: 'platform',
+      aiDailyTokenLimit: 0,
+      aiDailySttLimit: 0,
+      aiExtraTokens: 0,
+      aiExtraStt: 0,
+    };
+    const req = {
+      user: {
+        _id: 'emp-free-02',
+        company,
+        companyRole: 'employee',
+      },
+      _deps: { AiUsage: mockAiUsage },
+    };
+    const res = createMockRes();
+    let nextCalled = false;
+
+    await aiTaskBudget.aiSttBudget(req, res, () => {
+      nextCalled = true;
+    });
+
+    assert.equal(nextCalled, false, 'Non-AI company STT must be blocked');
+    assert.equal(res.statusCode, 403, 'Returns HTTP 403');
+    assert.equal(res.body?.code, 'AI_SUBSCRIPTION_REQUIRED');
+  });
 });

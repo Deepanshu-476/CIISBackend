@@ -432,9 +432,9 @@ exports.createCompany = async (req, res) => {
         allowedSuperAdminPages: cleanAllowedSuperAdminPages,
         aiApiKeySource: selectedPlan.aiApiKeySource || "platform",
         customGroqApiKey: null,
-        aiDailyTokenLimit: selectedPlan.aiDailyTokenLimit ?? 25000,
-        aiDailyCallLimit: selectedPlan.aiDailyCallLimit ?? 35,
-        aiDailySttLimit: selectedPlan.aiDailySttLimit ?? 100,
+        aiDailyTokenLimit: selectedPlan.aiDailyTokenLimit ?? 0,
+        aiDailyCallLimit: selectedPlan.aiDailyCallLimit ?? 0,
+        aiDailySttLimit: selectedPlan.aiDailySttLimit ?? 0,
         aiExtraTokens: 0,
         accessConfiguredAt: new Date(),
         subscriptionPayments: [{
