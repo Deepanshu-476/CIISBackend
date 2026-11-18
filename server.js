@@ -1087,11 +1087,24 @@ const uploadStaticDirs = [
 const embeddableStaticHeaders = (req, res, next) => {
   res.removeHeader("X-Frame-Options");
   res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+  // Always vary on Origin so a non-CORS <video> cache entry never blocks a later CORS fetch download.
+  res.vary("Origin");
   const origin = req.headers.origin;
   if (origin && isAllowedOrigin(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Credentials", "true");
+  }
+  const forceDownload = req.query?.download === "1" || req.query?.download === "true";
+  if (forceDownload) {
+    const rawName = String(req.query?.filename || path.basename(req.path || "") || "attachment")
+      .replace(/[\r\n\\/:*?"<>|]+/g, "_")
+      .trim()
+      .slice(-150) || "attachment";
+    const asciiName = rawName.replace(/[^\x20-\x7E]/g, "_").replace(/"/g, "") || "attachment";
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(rawName)}`
+    );
   }
   res.setHeader(
     "Content-Security-Policy",
