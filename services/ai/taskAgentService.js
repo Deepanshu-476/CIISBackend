@@ -8903,11 +8903,12 @@ const lastAskedField = currentDraft.asked.length > 0
         // Intent promotion: ONLY if user explicitly commanded assigning to others
         const isExplicitAssignCommand = /\b(?:assign\s+to|kisi\s+aur\s+ko|others?\s+ko|ko\s+assign\s+karo)\b/i.test(trimmedMessage);
         const isRepeatInstruction = /(?:repeat|dohrana|daily|roz|har\s+din|weekdays|recurrence)/i.test(trimmedMessage) || /\b(?:monda[yt]|tuesda[yt]|wednesda[yt]|thursda[yt]|frida[yt]|saturda[yt]|sunda[yt])\b/i.test(trimmedMessage) || Boolean(currentDraft?.repeatDays?.length > 0);
+        const hasExistingAssignee = Boolean(currentDraft.assigneeId || currentDraft.assigneeName || (Array.isArray(currentDraft.assignees) && currentDraft.assignees.length > 0) || (Array.isArray(currentDraft.assignedUsers) && currentDraft.assignedUsers.length > 0) || currentDraft.wantsOthers || currentDraft.taskFor === 'others' || currentDraft.intent === 'task_assigned_user');
         if (currentDraft.assigneeName && canAssignOthers && currentDraft.intent === 'self_task' && isExplicitAssignCommand) {
           currentDraft.intent = 'task_assigned_user';
           currentDraft.taskFor = 'others';
           currentDraft.wantsOthers = true;
-        } else if ((isRepeatInstruction && !isExplicitAssignCommand) || currentDraft.intent === 'self_task' || currentDraft.taskFor === 'self' || (!canAssignOthers && currentDraft.intent !== 'task_project' && currentDraft.intent !== 'create_project' && currentDraft.intent !== 'create_client' && currentDraft.intent !== 'create_client_plan')) {
+        } else if (!hasExistingAssignee && ((isRepeatInstruction && !isExplicitAssignCommand) || currentDraft.intent === 'self_task' || currentDraft.taskFor === 'self' || (!canAssignOthers && currentDraft.intent !== 'task_project' && currentDraft.intent !== 'create_project' && currentDraft.intent !== 'create_client' && currentDraft.intent !== 'create_client_plan'))) {
           currentDraft.intent = 'self_task';
           currentDraft.taskFor = 'self';
           currentDraft.wantsOthers = false;
@@ -9495,9 +9496,10 @@ const lastAskedField = currentDraft.asked.length > 0
     // 3c. Regular Assignee disambiguation & scope validation (self_task & task_assigned_user, or create_project members / create_client team)
     const isExplicitAssignCommand = /\b(?:assign\s+to|kisi\s+aur\s+ko|others?\s+ko|ko\s+assign\s+karo)\b/i.test(trimmedMessage);
     const isRepeatInstruction = /(?:repeat|dohrana|daily|roz|har\s+din|weekdays|recurrence)/i.test(trimmedMessage) || /\b(?:monda[yt]|tuesda[yt]|wednesda[yt]|thursda[yt]|frida[yt]|saturda[yt]|sunda[yt])\b/i.test(trimmedMessage) || Boolean(currentDraft?.repeatDays?.length > 0);
-    const isSelfTask = (isRepeatInstruction && !isExplicitAssignCommand) || currentDraft.intent === 'self_task' || currentDraft.taskFor === 'self';
+    const hasExistingAssignee = Boolean(currentDraft.assigneeId || currentDraft.assigneeName || (Array.isArray(currentDraft.assignees) && currentDraft.assignees.length > 0) || (Array.isArray(currentDraft.assignedUsers) && currentDraft.assignedUsers.length > 0) || currentDraft.wantsOthers || currentDraft.taskFor === 'others' || currentDraft.intent === 'task_assigned_user');
+    const isSelfTask = (!hasExistingAssignee && isRepeatInstruction && !isExplicitAssignCommand) || currentDraft.intent === 'self_task' || currentDraft.taskFor === 'self';
 
-    if (isSelfTask && !isExplicitAssignCommand) {
+    if (isSelfTask && !isExplicitAssignCommand && !hasExistingAssignee) {
       currentDraft.assigneeName = null;
       currentDraft.assigneeId = null;
       currentDraft.assigneeLabel = null;
@@ -9948,7 +9950,17 @@ const lastAskedField = currentDraft.asked.length > 0
   // Check which field is missing next
   let nextFieldKey = null;
 
-  for (const fieldKey of activeFields) {
+  // PRIORITY RULE: When repeatPattern is 'daily', ask repeatDays and recurrenceEndDate consecutively without interruption
+  if (currentDraft.repeatPattern === 'daily') {
+    if ((!Array.isArray(currentDraft.repeatDays) || currentDraft.repeatDays.length === 0) && !currentDraft.asked.includes('repeatDays') && !currentDraft.skipped.includes('repeatDays')) {
+      nextFieldKey = 'repeatDays';
+    } else if (!currentDraft.recurrenceEndDate && !currentDraft.asked.includes('recurrenceEndDate') && !currentDraft.skipped.includes('recurrenceEndDate')) {
+      nextFieldKey = 'recurrenceEndDate';
+    }
+  }
+
+  if (!nextFieldKey) {
+    for (const fieldKey of activeFields) {
     if (currentDraft.skipped.includes(fieldKey)) {
       if (currentDraft.intent === 'self_task' && fieldKey === 'description' && (!currentDraft.description || !String(currentDraft.description).trim())) {
         currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'description');
@@ -10165,6 +10177,7 @@ const lastAskedField = currentDraft.asked.length > 0
         break;
       }
     }
+  }
   }
 
   // Calculate progress
