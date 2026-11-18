@@ -70,6 +70,9 @@ const buildDateChips = (refTime = new Date(), isEn = false) => {
 function resolveRecurrenceEndDate(val, baseDate = new Date()) {
   if (!val) return null;
   const str = String(val).trim();
+  if (str.includes('T') && !isNaN(new Date(str).getTime())) {
+    return str;
+  }
   const clean = str.toLowerCase();
 
   let base = new Date();
@@ -482,35 +485,39 @@ const TASK_FIELDS = {
     required: false,
     askOrder: 8,
     question: {
-      reply: 'Priority Days kitne rakhein? (default 1)',
-      replyEn: 'How many priority days should we set? (default 1)',
-      speech: 'प्रायोरिटी डेज कितने रखें? (डिफ़ॉल्ट एक)',
-      speechEn: 'How many priority days should we set? Default is 1.',
-      speakText: 'Priority days kitne rakhne hain? Jaise 1, 2 ya 3 din.',
-      speakTextHi: 'Priority days कितने रखने हैं? जैसे 1, 2, या 3 दिन।',
+      reply: 'Priority Days kitne rakhne hain? (1, 2, 3, 5, 11 ya koi bhi number bol/likh sakte hain, default 1)',
+      replyEn: 'How many priority days should we set? (e.g. 1, 2, 3, 5, 11 or any number, default 1)',
+      speech: 'प्रायोरिटी डेज कितने रखें? जैसे 1, 2, 3, 5, 11 या कोई भी नंबर बोल सकते हैं, डिफ़ॉल्ट एक है।',
+      speechEn: 'How many priority days should we set? You can say or type any number, default is 1.',
+      speakText: 'Priority days kitne rakhne hain? Jaise 1, 2, 3, 5, 11 ya koi bhi number bol sakte hain.',
+      speakTextHi: 'Priority days कितने रखने हैं? जैसे 1, 2, 3, 5, 11 या कोई भी नंबर बोल सकते हैं।',
     },
     reAskQuestion: {
-      reply: 'Priority days kitne din rakhne hain? Niche se chun lein.',
-      replyEn: 'Please select how many priority days to set from the options below.',
-      speech: 'प्रायोरिटी डेज नीचे से चुन लें।',
-      speechEn: 'Please select how many priority days to set.',
-      speakText: 'Priority days niche se chun lein.',
-      speakTextHi: 'Priority days नीचे से चुन लें।',
+      reply: 'Priority days kitne din rakhne hain? Niche se chun lein ya koi bhi number likhein/bolein.',
+      replyEn: 'Please select or type how many priority days to set (any number, e.g. 1, 2, 3, 5, 11).',
+      speech: 'प्रायोरिटी डेज नीचे से चुनें या कोई भी नंबर लिखें।',
+      speechEn: 'Please select or type how many priority days to set.',
+      speakText: 'Priority days niche se chun lein ya number likhein.',
+      speakTextHi: 'Priority days नीचे से चुन लें या नंबर लिखें।',
     },
     chips: () => [
       { label: '1 (Default)', action: { type: 'set', field: 'priorityDays', value: '1' } },
       { label: '2', action: { type: 'set', field: 'priorityDays', value: '2' } },
       { label: '3', action: { type: 'set', field: 'priorityDays', value: '3' } },
+      { label: '5', action: { type: 'set', field: 'priorityDays', value: '5' } },
+      { label: '7', action: { type: 'set', field: 'priorityDays', value: '7' } },
     ],
     reAskChips: () => [
       { label: '1 (Default)', action: { type: 'set', field: 'priorityDays', value: '1' } },
       { label: '2', action: { type: 'set', field: 'priorityDays', value: '2' } },
       { label: '3', action: { type: 'set', field: 'priorityDays', value: '3' } },
+      { label: '5', action: { type: 'set', field: 'priorityDays', value: '5' } },
+      { label: '7', action: { type: 'set', field: 'priorityDays', value: '7' } },
     ],
     default: '1',
     parse: (val) => {
       const num = parseInt(val, 10);
-      return !isNaN(num) && num >= 1 ? String(num) : '1';
+      return !isNaN(num) && num >= 1 ? String(Math.min(30, num)) : '1';
     },
     normalise: (val) => String(val || '1'),
   },

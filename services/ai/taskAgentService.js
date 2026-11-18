@@ -104,7 +104,7 @@ const { resolveAssignee, escapeRegex } = require('./assigneeResolver');
 const { getModelName } = require('./llm');
 const { answerWithGroqCRM } = require('./groqCrmHelper');
 const { TASK_FIELDS, TASK_FIELD_ORDER, resolveRecurrenceEndDate } = require('./taskFields');
-const { parseHinglishSlots, isSkip, isSkipAll, isSelfPhrase, isFillerPhrase, extractAssigneeMention, extractMultipleAssignees, isInvalidOrCommandTitle, cleanAssigneeName, isValidAssigneeCandidate, detectPersonInActionTitle, parseCheckpointItems } = require('./hinglishParser');
+const { parseHinglishSlots, isSkip, isSkipAll, isSelfPhrase, isFillerPhrase, extractAssigneeMention, extractMultipleAssignees, isInvalidOrCommandTitle, cleanAssigneeName, isValidAssigneeCandidate, detectPersonInActionTitle, parseCheckpointItems, parsePriorityDays } = require('./hinglishParser');
 const { detectUserIntent, normalizeTranscript } = require('./sttNormalizer');
 const User = require('../../models/User');
 const Department = require('../../models/Department');
@@ -8760,11 +8760,14 @@ const lastAskedField = currentDraft.asked.length > 0
           actionHandled = true;
         }
 
-        if (!actionHandled && lastAskedField === 'priorityDays' && detSlots.priorityDays) {
-          currentDraft.priorityDays = detSlots.priorityDays;
-          if (!currentDraft.asked.includes('priorityDays')) currentDraft.asked.push('priorityDays');
-          currentDraft.skipped = (currentDraft.skipped || []).filter((f) => f !== 'priorityDays');
-          actionHandled = true;
+        if (!actionHandled && lastAskedField === 'priorityDays') {
+          const pDays = detSlots.priorityDays || parsePriorityDays(trimmedMessage, 'priorityDays');
+          if (pDays) {
+            currentDraft.priorityDays = String(pDays);
+            if (!currentDraft.asked.includes('priorityDays')) currentDraft.asked.push('priorityDays');
+            currentDraft.skipped = (currentDraft.skipped || []).filter((f) => f !== 'priorityDays');
+            actionHandled = true;
+          }
         }
 
         if (!actionHandled && (lastAskedField === 'repeatPattern' || lastAskedField === 'repeatDays')) {
