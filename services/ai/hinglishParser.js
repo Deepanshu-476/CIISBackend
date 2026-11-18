@@ -211,6 +211,88 @@ const WEEKDAY_NAMES = {
   इतवार: 0,
 };
 
+const ENGLISH_NUMBER_WORDS = {
+  one: 1, two: 2, three: 3, four: 4, five: 5,
+  six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15,
+  sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20,
+  'twenty one': 21, 'twenty-one': 21,
+  'twenty two': 22, 'twenty-two': 22,
+  'twenty three': 23, 'twenty-three': 23,
+  'twenty four': 24, 'twenty-four': 24,
+  'twenty five': 25, 'twenty-five': 25,
+  'twenty six': 26, 'twenty-six': 26,
+  'twenty seven': 27, 'twenty-seven': 27,
+  'twenty eight': 28, 'twenty-eight': 28,
+  'twenty nine': 29, 'twenty-nine': 29,
+  thirty: 30
+};
+
+function parseNumberToken(token) {
+  if (!token) return null;
+  const clean = String(token).trim().toLowerCase();
+  if (/^\d+$/.test(clean)) {
+    const n = parseInt(clean, 10);
+    return (n >= 1 && n <= 365) ? n : null;
+  }
+  if (ENGLISH_NUMBER_WORDS[clean]) return ENGLISH_NUMBER_WORDS[clean];
+  if (HINDI_NUMBER_WORDS && HINDI_NUMBER_WORDS[clean]) return HINDI_NUMBER_WORDS[clean];
+  return null;
+}
+
+function parsePriorityDays(text, lastAskedField = null) {
+  if (!text || typeof text !== 'string') return null;
+  const raw = text.trim();
+  const lower = raw.toLowerCase();
+
+  // If last asked field was priorityDays
+  if (lastAskedField === 'priorityDays') {
+    // Check default / skip keywords
+    if (/^(?:default(?:\s*1)?|normal|pehle\s*jaisa|standard|1\s*hi(?:\s*rakho)?|koi\s*nahi|nahi|nahin|none|skip|rehne\s*do|chhod\s*do)$/i.test(lower)) {
+      return '1';
+    }
+    // Check direct number or number + unit (e.g., '4', '4 days', '11 din', 'chaar din', 'eleven')
+    const directMatch = lower.match(/^(?:priority\s*(?:days?|din)?\s*[:=]?\s*)?(\d+|[a-zA-Z\u0900-\u097F-]+)(?:\s*(?:days?|dins?|din|दिन|d))?(?:\s*(?:rakhein|rakho|karein|karo|bhi|hi|ka|ke\s*liye|tak))?\.?$/i);
+    if (directMatch) {
+      const parsed = parseNumberToken(directMatch[1]);
+      if (parsed) return String(Math.min(30, Math.max(1, parsed)));
+    }
+    // Any embedded number when answering priorityDays question: e.g. 'priority days 4 rakho' or '4 din rakh do'
+    const numMatch = lower.match(/\b(\d+)\s*(?:days?|dins?|din|दिन)?\b/i);
+    if (numMatch) {
+      const parsed = parseNumberToken(numMatch[1]);
+      if (parsed) return String(Math.min(30, Math.max(1, parsed)));
+    }
+    // Check words tokens in string
+    const tokens = lower.split(/[\s,]+/);
+    for (const t of tokens) {
+      const parsed = parseNumberToken(t);
+      if (parsed) return String(Math.min(30, Math.max(1, parsed)));
+    }
+  }
+
+  // General text or initial prompt (e.g. 'priority days 4', 'priority days: 11', 'priority 4 days', '4 din priority')
+  const explicitMatch = lower.match(/(?:priority\s*days?|prioritydays|प्रायोरिटी\s*डेज़|प्रायोरिटी\s*डेज)\s*(?:is|to|as|:|kitne|rakho|rakhein|रखो|रखें|=|\s)\s*(\d+|[a-zA-Z\u0900-\u097F-]+)/i);
+  if (explicitMatch) {
+    const parsed = parseNumberToken(explicitMatch[1]);
+    if (parsed) return String(Math.min(30, Math.max(1, parsed)));
+  }
+
+  const daysFirstMatch = lower.match(/\b(\d+|[a-zA-Z\u0900-\u097F-]+)\s*(?:days?|din|दिन)\s*(?:ki\s+)?(?:priority\s*days?|प्रायोरिटी\s*डेज़|प्रायोरिटी\s*डेज)\b/i);
+  if (daysFirstMatch) {
+    const parsed = parseNumberToken(daysFirstMatch[1]);
+    if (parsed) return String(Math.min(30, Math.max(1, parsed)));
+  }
+
+  const priorityNdaysMatch = lower.match(/\bpriority\s+(\d+|[a-zA-Z\u0900-\u097F-]+)\s*(?:days?|din|दिन)\b/i);
+  if (priorityNdaysMatch) {
+    const parsed = parseNumberToken(priorityNdaysMatch[1]);
+    if (parsed) return String(Math.min(30, Math.max(1, parsed)));
+  }
+
+  return null;
+}
+
 // Check for deterministic skip phrases
 const SKIP_PHRASES = [
   'koi nahi / skip',
@@ -1213,6 +1295,12 @@ function parseHinglishSlots(rawText, now = new Date(), referenceDate = null, las
     }
   }
 
+  // 4b. Priority Days Extraction
+  const pDays = parsePriorityDays(normalized, lastAskedField);
+  if (pDays) {
+    slots.priorityDays = pDays;
+  }
+
   // 5. Repeat Extraction
   if (/\b(no\s+repeat|repeat\s+nahi|nahi\s+karna|don't\s+repeat|none)\b/i.test(normalized)) {
     slots.repeatPattern = 'none';
@@ -1757,6 +1845,7 @@ module.exports = {
   parseProjectPriorityHinglish,
   parseCheckpointItems,
   matchWeekdayFuzzy,
+  parsePriorityDays,
 };
 
 
