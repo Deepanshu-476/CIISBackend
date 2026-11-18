@@ -1319,6 +1319,13 @@ exports.updateCompanyAccess = async (req, res) => {
       updateData.bulkEmailLimits = { daily, monthly };
     }
 
+    if (req.body.aiExtraTokens !== undefined && req.body.aiExtraTokens !== "") {
+      const extra = Number(req.body.aiExtraTokens);
+      if (Number.isFinite(extra) && extra >= 0) {
+        updateData.aiExtraTokens = extra;
+      }
+    }
+
     const company = await Company.findByIdAndUpdate(
       id,
       { $set: updateData },
