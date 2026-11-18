@@ -103,7 +103,7 @@ const { getScopeInfo, isAssigneeInScope } = require('./taskScope');
 const { resolveAssignee, escapeRegex } = require('./assigneeResolver');
 const { getModelName } = require('./llm');
 const { answerWithGroqCRM } = require('./groqCrmHelper');
-const { TASK_FIELDS, TASK_FIELD_ORDER } = require('./taskFields');
+const { TASK_FIELDS, TASK_FIELD_ORDER, resolveRecurrenceEndDate } = require('./taskFields');
 const { parseHinglishSlots, isSkip, isSkipAll, isSelfPhrase, isFillerPhrase, extractAssigneeMention, extractMultipleAssignees, isInvalidOrCommandTitle, cleanAssigneeName, isValidAssigneeCandidate, detectPersonInActionTitle, parseCheckpointItems } = require('./hinglishParser');
 const { detectUserIntent, normalizeTranscript } = require('./sttNormalizer');
 const User = require('../../models/User');
@@ -5395,6 +5395,18 @@ const lastAskedField = currentDraft.asked.length > 0
           currentDraft.checkpoints = parsed;
           if (!currentDraft.asked.includes('checkpoints')) currentDraft.asked.push('checkpoints');
           currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'checkpoints');
+        } else if (action.field === 'recurrenceEndDate') {
+          const base = currentDraft.dueDateTime ? new Date(currentDraft.dueDateTime) : now;
+          const resolvedDate = resolveRecurrenceEndDate(action.value, base);
+          currentDraft.recurrenceEndDate = resolvedDate;
+          if (!currentDraft.repeatPattern) currentDraft.repeatPattern = 'daily';
+          if (!currentDraft.asked.includes('recurrenceEndDate')) currentDraft.asked.push('recurrenceEndDate');
+          currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'recurrenceEndDate');
+        } else if (action.field === 'repeatDays') {
+          currentDraft.repeatDays = Array.isArray(action.value) ? action.value : [action.value];
+          if (!currentDraft.repeatPattern) currentDraft.repeatPattern = 'daily';
+          if (!currentDraft.asked.includes('repeatDays')) currentDraft.asked.push('repeatDays');
+          currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'repeatDays');
         } else if (action.field) {
           currentDraft[action.field] = action.value;
           if (!currentDraft.asked.includes(action.field)) currentDraft.asked.push(action.field);
@@ -8782,7 +8794,8 @@ const lastAskedField = currentDraft.asked.length > 0
         }
 
         if (!actionHandled && lastAskedField === 'recurrenceEndDate') {
-          let parsedEnd = detSlots.recurrenceEndDate;
+          const base = currentDraft.dueDateTime ? new Date(currentDraft.dueDateTime) : now;
+          let parsedEnd = resolveRecurrenceEndDate(detSlots.recurrenceEndDate || trimmedMessage, base);
           if (!parsedEnd) {
             const dt = parseHinglishDateTime(trimmedMessage, now);
             if (dt) {
