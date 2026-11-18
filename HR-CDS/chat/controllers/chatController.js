@@ -560,30 +560,12 @@ exports.sendMessage = async (req, res) => {
 
     await emitUnreadCounts(conversation, senderId);
 
-    const recipients = conversation.members
-      .map(member => member.toString())
-      .filter(memberId => memberId !== senderId)
-      .filter(memberId => !getConversationMuteState(conversation, memberId).muted);
-
-    void 0;
-
-    notifyDirectUsers({
-      userIds: recipients,
-      targetPath: '/ciisUser/chat',
-      type: conversation.isGroup ? 'group_chat_message' : 'chat_message',
-      title: conversation.isGroup ? `New message in ${conversation.groupName || 'Group'}` : 'New Chat Message',
-      message: `${req.user.name || 'User'}: ${text || (file ? 'Sent an attachment' : 'New message')}`,
-      actor: senderId,
-      company: req.user.company,
-      data: {
-        conversationId,
-        messageId: message._id,
-        mentionedUserIds: [...new Set(mentions.map(mention => mention.user))],
-        isGroup: conversation.isGroup,
-        groupId: conversation.groupId,
-      },
-      priority: 'medium',
-    })
+    const notificationBatches = require('../utils/chatMessageNotifications').chatMessageNotifications({
+      conversation, senderId, senderName: req.user.name, text, file,
+      messageId: message._id, mentions,
+      isMuted: memberId => getConversationMuteState(conversation, memberId).muted,
+    });
+    Promise.all(notificationBatches.map(batch => notifyDirectUsers(batch)))
       .then(notifications => {
         void 0;
       })

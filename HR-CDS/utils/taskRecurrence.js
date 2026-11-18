@@ -181,7 +181,7 @@ const normalizeTaskRecurrenceFields = (task = {}) => {
   };
 };
 
-const buildRecurringTaskClone = (templateTask, occurrenceDate) => {
+const buildRecurringTaskClone = (templateTask, occurrenceDate, options = {}) => {
   const baseTask = typeof templateTask?.toObject === 'function' ? templateTask.toObject() : { ...(templateTask || {}) };
   const normalized = normalizeTaskRecurrenceFields(baseTask);
   const dueDateTime = toValidDate(occurrenceDate);
@@ -189,9 +189,12 @@ const buildRecurringTaskClone = (templateTask, occurrenceDate) => {
 
   const sourceId = baseTask.recurrenceSourceId || baseTask._id || null;
   const nextRecurringDate = getNextRecurringDate(dueDateTime, normalized.repeatPattern, normalized.repeatDays);
-  const assignedUsers = Array.isArray(baseTask.assignedUsers) && baseTask.assignedUsers.length > 0
-    ? baseTask.assignedUsers.map(user => user?._id || user).filter(Boolean)
-    : (baseTask.createdBy ? [baseTask.createdBy] : []);
+  const rawAssignedUsers = Array.isArray(options.assignedUsers)
+    ? options.assignedUsers
+    : (Array.isArray(baseTask.assignedUsers) && baseTask.assignedUsers.length > 0
+      ? baseTask.assignedUsers
+      : (baseTask.taskFor === 'self' && baseTask.createdBy ? [baseTask.createdBy] : []));
+  const assignedUsers = rawAssignedUsers.map(user => user?._id || user).filter(Boolean);
   const checkpoints = Array.isArray(baseTask.checkpoints)
     ? baseTask.checkpoints.map(checkpoint => ({
         title: String(checkpoint?.title || '').trim(),
@@ -210,6 +213,19 @@ const buildRecurringTaskClone = (templateTask, occurrenceDate) => {
   const occurrenceCreatedAt = baseTask.startDateTime
     ? cloneDateTimeForOccurrence(dueDateTime, baseTask.startDateTime)
     : dueDateTime;
+  const clonedReminderSettings = baseTask.reminderSettings
+    ? {
+        enabled: Boolean(baseTask.reminderSettings.enabled),
+        options: Array.isArray(baseTask.reminderSettings.options) ? [...baseTask.reminderSettings.options] : [],
+        reminderTime: baseTask.reminderSettings.reminderTime
+          ? cloneDateTimeForOccurrence(dueDateTime, baseTask.reminderSettings.reminderTime)
+          : null,
+        customTime: baseTask.reminderSettings.customTime || null,
+        repeatIntervalMinutes: baseTask.reminderSettings.repeatIntervalMinutes ?? null,
+        minutesBeforeDue: baseTask.reminderSettings.minutesBeforeDue ?? null,
+        sentKeys: [],
+      }
+    : undefined;
 
   return {
     title: baseTask.title,
@@ -234,11 +250,12 @@ const buildRecurringTaskClone = (templateTask, occurrenceDate) => {
       changedAt: occurrenceCreatedAt || new Date()
     }],
     checkpoints,
+    ...(clonedReminderSettings ? { reminderSettings: clonedReminderSettings } : {}),
     remarks: [],
     files: Array.isArray(baseTask.files) ? [...baseTask.files] : [],
     voiceNote: baseTask.voiceNote ? { ...baseTask.voiceNote } : null,
     createdBy: baseTask.createdBy,
-    taskFor: 'self',
+    taskFor: baseTask.taskFor || 'self',
     isRecurring: normalized.isRecurring,
     repeatPattern: normalized.repeatPattern,
     repeatDays: normalized.repeatDays,
