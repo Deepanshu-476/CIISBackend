@@ -32,7 +32,7 @@ exports.getCompanyAiSettings = async (req, res) => {
   try {
     const { companyId } = req.params;
     const company = await Company.findById(companyId)
-      .select('companyName companyCode aiApiKeySource customGroqApiKey byokDefaultEmployeeDailyTokens byokDefaultEmployeeDailyCalls aiDailyTokenLimit aiDailyCallLimit aiDailySttLimit aiExtraTokens selectedPlan')
+      .select('companyName companyCode aiApiKeySource customGroqApiKey byokDefaultEmployeeDailyTokens byokDefaultEmployeeDailyCalls aiDailyTokenLimit aiDailyCallLimit aiDailySttLimit aiExtraTokens aiExtraCalls aiExtraStt selectedPlan')
       .populate('selectedPlan', 'name aiDailyTokenLimit aiDailyCallLimit aiDailySttLimit aiApiKeySource')
       .lean();
 
@@ -44,6 +44,8 @@ exports.getCompanyAiSettings = async (req, res) => {
     const companyDailyCallLimit = company.aiDailyCallLimit ?? company.selectedPlan?.aiDailyCallLimit ?? 35;
     const companyDailySttLimit = company.aiDailySttLimit ?? company.selectedPlan?.aiDailySttLimit ?? 100;
     const companyExtraTokens = Number(company.aiExtraTokens || 0);
+    const companyExtraCalls = Number(company.aiExtraCalls || 0);
+    const companyExtraStt = Number(company.aiExtraStt || 0);
 
     const todayIst = getTodayIstDate();
     const todayUsage = await AiUsage.aggregate([
@@ -81,6 +83,8 @@ exports.getCompanyAiSettings = async (req, res) => {
         companyDailyCallLimit,
         companyDailySttLimit,
         companyExtraTokens,
+        companyExtraCalls,
+        companyExtraStt,
         todayUsage: {
           date: todayIst,
           totalTokens: stats.totalTokens,

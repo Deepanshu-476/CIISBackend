@@ -724,7 +724,7 @@ exports.getAllCompanies = async (req, res) => {
       Company.find(filter)
       .select(
         "_id companyName companyEmail companyAddress companyPhone ownerName logo companyDomain loginToken isActive deactivatedAt subscriptionExpiry createdAt updatedAt companyCode dbIdentifier loginUrl"
-          + " allowedPages allowedSuperAdminPages moduleDashboardConfig bulkEmailLimits aiDailyTokenLimit aiDailyCallLimit aiDailySttLimit aiExtraTokens accessConfiguredAt accessUpdatedBy selectedPlan subscriptionPlan subscriptionAmount subscriptionPaymentStatus subscriptionPayments planDurationDays planFeatures"
+          + " allowedPages allowedSuperAdminPages moduleDashboardConfig bulkEmailLimits aiDailyTokenLimit aiDailyCallLimit aiDailySttLimit aiExtraTokens aiExtraCalls aiExtraStt accessConfiguredAt accessUpdatedBy selectedPlan subscriptionPlan subscriptionAmount subscriptionPaymentStatus subscriptionPayments planDurationDays planFeatures"
       )
       .populate("selectedPlan", "name price durationDays features allowedPages allowedSuperAdminPages aiDailyTokenLimit aiDailyCallLimit aiDailySttLimit")
         .sort({ createdAt: -1 })
@@ -1326,6 +1326,20 @@ exports.updateCompanyAccess = async (req, res) => {
       }
     }
 
+    if (req.body.aiExtraCalls !== undefined && req.body.aiExtraCalls !== "") {
+      const extraCalls = Number(req.body.aiExtraCalls);
+      if (Number.isFinite(extraCalls) && extraCalls >= 0) {
+        updateData.aiExtraCalls = extraCalls;
+      }
+    }
+
+    if (req.body.aiExtraStt !== undefined && req.body.aiExtraStt !== "") {
+      const extraStt = Number(req.body.aiExtraStt);
+      if (Number.isFinite(extraStt) && extraStt >= 0) {
+        updateData.aiExtraStt = extraStt;
+      }
+    }
+
     const company = await Company.findByIdAndUpdate(
       id,
       { $set: updateData },
@@ -1527,6 +1541,20 @@ exports.renewCompanySubscription = async (req, res) => {
       const extra = Number(req.body.aiExtraTokens);
       if (Number.isFinite(extra) && extra >= 0) {
         updateData.aiExtraTokens = extra;
+      }
+    }
+
+    if (req.body.aiExtraCalls !== undefined && req.body.aiExtraCalls !== "") {
+      const extraCalls = Number(req.body.aiExtraCalls);
+      if (Number.isFinite(extraCalls) && extraCalls >= 0) {
+        updateData.aiExtraCalls = extraCalls;
+      }
+    }
+
+    if (req.body.aiExtraStt !== undefined && req.body.aiExtraStt !== "") {
+      const extraStt = Number(req.body.aiExtraStt);
+      if (Number.isFinite(extraStt) && extraStt >= 0) {
+        updateData.aiExtraStt = extraStt;
       }
     }
 

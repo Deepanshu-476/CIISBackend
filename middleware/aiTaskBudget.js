@@ -41,6 +41,8 @@ const getCompanyAiLimits = async (companyRef) => {
       callLimit: companyRef.aiDailyCallLimit ?? 35,
       sttLimit: companyRef.aiDailySttLimit ?? 100,
       extraTokens: companyRef.aiExtraTokens ?? 0,
+      extraCalls: companyRef.aiExtraCalls ?? 0,
+      extraStt: companyRef.aiExtraStt ?? 0,
       byokDefaultEmployeeDailyTokens: companyRef.byokDefaultEmployeeDailyTokens ?? 10000,
       byokDefaultEmployeeDailyCalls: companyRef.byokDefaultEmployeeDailyCalls ?? 30,
       isExplicit: true,
@@ -55,6 +57,8 @@ const getCompanyAiLimits = async (companyRef) => {
       callLimit: 35,
       sttLimit: 100,
       extraTokens: 0,
+      extraCalls: 0,
+      extraStt: 0,
       byokDefaultEmployeeDailyTokens: 10000,
       byokDefaultEmployeeDailyCalls: 30,
       isExplicit: false,
@@ -63,7 +67,7 @@ const getCompanyAiLimits = async (companyRef) => {
 
   try {
     const doc = await Company.findById(companyId)
-      .select('aiApiKeySource aiDailyTokenLimit aiDailyCallLimit aiDailySttLimit aiExtraTokens byokDefaultEmployeeDailyTokens byokDefaultEmployeeDailyCalls')
+      .select('aiApiKeySource aiDailyTokenLimit aiDailyCallLimit aiDailySttLimit aiExtraTokens aiExtraCalls aiExtraStt byokDefaultEmployeeDailyTokens byokDefaultEmployeeDailyCalls')
       .lean();
     if (doc) {
       return {
@@ -72,6 +76,8 @@ const getCompanyAiLimits = async (companyRef) => {
         callLimit: doc.aiDailyCallLimit ?? 35,
         sttLimit: doc.aiDailySttLimit ?? 100,
         extraTokens: doc.aiExtraTokens ?? 0,
+        extraCalls: doc.aiExtraCalls ?? 0,
+        extraStt: doc.aiExtraStt ?? 0,
         byokDefaultEmployeeDailyTokens: doc.byokDefaultEmployeeDailyTokens ?? 10000,
         byokDefaultEmployeeDailyCalls: doc.byokDefaultEmployeeDailyCalls ?? 30,
         isExplicit: true,
@@ -87,6 +93,8 @@ const getCompanyAiLimits = async (companyRef) => {
     callLimit: 35,
     sttLimit: 100,
     extraTokens: 0,
+    extraCalls: 0,
+    extraStt: 0,
     byokDefaultEmployeeDailyTokens: 10000,
     byokDefaultEmployeeDailyCalls: 30,
     isExplicit: false,
@@ -258,7 +266,8 @@ const aiTaskBudget = async (req, res, next) => {
       return next();
     }
 
-    const callLimit = getLimit(req.user, limits);
+    const baseCallLimit = getLimit(req.user, limits);
+    const callLimit = baseCallLimit + (limits.extraCalls || 0);
     const totalAllowedTokens = limits.tokenLimit + (limits.extraTokens || 0);
 
     // Multi-tenant isolation: every query MUST include { company: companyId }
