@@ -30,6 +30,12 @@ const {
   getUserStatusChangedAt
 } = require('./taskHelper');
 const { enqueueCompletionJob, enqueueBackgroundJob } = require('../utils/backgroundJobQueue');
+const {
+  normalizeTaskRecurrenceFields,
+  getNextRecurringDate,
+  validateRecurrenceSettings,
+} = require('../utils/taskRecurrence');
+const { generateRecurringOccurrences } = require('../cron/recurringTasks');
 const mongoose = require('mongoose');
 
 const getRequestedTaskBranchId = req => {
@@ -115,6 +121,17 @@ exports.createTaskForOthers = async (req, res) => {
 
     const statusByUser = parsedUsers.map(uid => ({ user: uid, status: 'pending' }));
     const parsedCheckpoints = parseTaskCheckpoints(checkpoints);
+    const normalizedRecurrence = normalizeTaskRecurrenceFields(req.body);
+    const recurringSettings = {
+      repeatPattern: normalizedRecurrence.repeatPattern,
+      repeatDays: normalizedRecurrence.repeatDays,
+      recurrenceEndDate: normalizedRecurrence.recurrenceEndDate,
+      isRecurring: normalizedRecurrence.repeatPattern !== 'none' && normalizedRecurrence.isRecurring,
+    };
+    const recurrenceError = validateRecurrenceSettings(recurringSettings, parsedDue);
+    if (recurrenceError) {
+      return res.status(400).json({ success: false, error: recurrenceError, message: recurrenceError });
+    }
 
     const task = await Task.create({
       title,
@@ -133,12 +150,29 @@ exports.createTaskForOthers = async (req, res) => {
       voiceNote,
       createdBy: req.user._id,
       taskFor: 'others',
+      isRecurring: recurringSettings.isRecurring,
+      repeatPattern: recurringSettings.repeatPattern,
+      repeatDays: recurringSettings.repeatDays,
+      recurringPattern: recurringSettings.repeatPattern,
+      recurrenceEndDate: recurringSettings.recurrenceEndDate,
+      recurrenceStoppedAt: null,
+      nextRecurringDate: recurringSettings.isRecurring && parsedDue
+        ? getNextRecurringDate(parsedDue, recurringSettings.repeatPattern, recurringSettings.repeatDays)
+        : null,
       statusHistory: [{ status: 'pending', changedBy: req.user._id, remarks: 'Task assigned to others' }]
     });
 
     await task.populate('assignedUsers', TASK_USER_POPULATE_FIELDS);
     await task.populate('assignedGroups', TASK_GROUP_POPULATE_FIELDS);
     await task.populate('createdBy', TASK_CREATOR_POPULATE_FIELDS);
+
+    if (task.isRecurring) {
+      try {
+        await generateRecurringOccurrences(task);
+      } catch (recErr) {
+        console.error(`Failed to auto-generate recurring occurrences for task ${task._id}:`, recErr);
+      }
+    }
 
     await createActivityLog(req.user, 'task_created_for_others', task._id, `Created task for others: ${title}`, null, task.toObject(), req);
 
