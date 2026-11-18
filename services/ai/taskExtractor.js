@@ -152,7 +152,8 @@ function mergeDraft(previous = {}, extracted = {}, deterministic = {}, rawMessag
 
   const isExplicitAssignCommand = /\b(?:assign\s+to|kisi\s+aur\s+ko|others?\s+ko|ko\s+assign\s+karo)\b/i.test(rawMessage);
   const isRepeatInstruction = /(?:repeat|dohrana|daily|roz|har\s+din|weekdays|recurrence)/i.test(rawMessage) || /\b(?:monda[yt]|tuesda[yt]|wednesda[yt]|thursda[yt]|frida[yt]|saturda[yt]|sunda[yt])\b/i.test(rawMessage) || Boolean(det.repeatDays?.length > 0);
-  const isPersonalTask = (isRepeatInstruction && !isExplicitAssignCommand) || prev.intent === 'self_task' || prev.taskFor === 'self';
+  const hasExistingAssignee = Boolean(prev.assigneeId || prev.assigneeName || (Array.isArray(prev.assigneeLedger) && prev.assigneeLedger.length > 0) || prev.wantsOthers || prev.taskFor === 'others' || prev.intent === 'task_assigned_user');
+  const isPersonalTask = (!hasExistingAssignee && isRepeatInstruction && !isExplicitAssignCommand) || prev.intent === 'self_task' || prev.taskFor === 'self';
   const isAnsweringNonAssigneeField = Boolean(lastAskedField && ['dueDateTime', 'dueDate', 'description', 'title', 'priority', 'status', 'reminder', 'reminderOption', 'priorityDays', 'repeatPattern', 'repeatDays', 'recurrenceEndDate', 'checkpoints', 'attachments', 'file'].includes(lastAskedField));
   const shouldIgnoreExtractedAssignee = (isPersonalTask && !isExplicitAssignCommand) || (isAnsweringNonAssigneeField && !isExplicitAssignCommand);
 
@@ -181,7 +182,7 @@ function mergeDraft(previous = {}, extracted = {}, deterministic = {}, rawMessag
 
   let taskFor = prev.taskFor || 'self';
   let wantsOthers = Boolean(prev.wantsOthers);
-  if (isRepeatInstruction && !isExplicitAssignCommand) {
+  if (isRepeatInstruction && !isExplicitAssignCommand && !hasExistingAssignee) {
     taskFor = 'self';
     wantsOthers = false;
     assigneeName = null;
