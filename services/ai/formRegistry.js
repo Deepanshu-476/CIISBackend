@@ -16,7 +16,7 @@
  * - 'create_project'       - Create a new project (Part 3)
  */
 
-const { TASK_FIELDS } = require('./taskFields');
+const { TASK_FIELDS, resolveRecurrenceEndDate } = require('./taskFields');
 const { extractAssigneeMention } = require('./hinglishParser');
 const { matchProjects, formatCandidateDate, LOCATIVE_REGEX, PROJECT_WORD_REGEX, idsEqual } = require('./projectResolver');
 
@@ -261,7 +261,7 @@ const FORM_REGISTRY = {
             : (draft.repeatDays || [])
         ),
         recurrenceEndDate: draft.repeatPattern && draft.repeatPattern !== 'none'
-          ? (draft.recurrenceEndDate || (() => {
+          ? (resolveRecurrenceEndDate(draft.recurrenceEndDate, draft.dueDateTime) || (() => {
               const baseDue = draft.dueDateTime ? new Date(draft.dueDateTime) : new Date();
               const end = new Date(baseDue.getTime() + 30 * 24 * 60 * 60 * 1000);
               return end.toISOString().slice(0, 10) + 'T23:59:59.999Z';
@@ -290,7 +290,9 @@ const FORM_REGISTRY = {
       const daysText = (Array.isArray(draft.repeatDays) && draft.repeatDays.length > 0)
         ? draft.repeatDays.map((d) => String(d).charAt(0).toUpperCase() + String(d).slice(1).toLowerCase()).join(', ')
         : '';
-      const formattedEnd = draft.recurrenceEndDate ? formatDateOnly(draft.recurrenceEndDate) : '';
+      const baseDue = draft.dueDateTime ? new Date(draft.dueDateTime) : new Date();
+      const resolvedEnd = resolveRecurrenceEndDate(draft.recurrenceEndDate, baseDue);
+      const formattedEnd = resolvedEnd ? formatDateOnly(resolvedEnd) : (draft.recurrenceEndDate ? formatDateOnly(draft.recurrenceEndDate) : '');
       const repeatLabel = isDailyRepeat
         ? `${daysText || 'Daily'}${formattedEnd ? `, ${formattedEnd}` : ''}`
         : 'No repeat';
@@ -412,7 +414,7 @@ const FORM_REGISTRY = {
             : (draft.repeatDays || [])
         ),
         recurrenceEndDate: isDailyRepeat
-          ? (draft.recurrenceEndDate || (() => {
+          ? (resolveRecurrenceEndDate(draft.recurrenceEndDate, draft.dueDateTime) || (() => {
               const baseDue = draft.dueDateTime ? new Date(draft.dueDateTime) : new Date();
               const end = new Date(baseDue.getTime() + 30 * 24 * 60 * 60 * 1000);
               return end.toISOString().slice(0, 10) + 'T23:59:59.999Z';
@@ -457,7 +459,9 @@ const FORM_REGISTRY = {
       const daysText = (Array.isArray(draft.repeatDays) && draft.repeatDays.length > 0)
         ? draft.repeatDays.map((d) => String(d).charAt(0).toUpperCase() + String(d).slice(1).toLowerCase()).join(', ')
         : '';
-      const formattedEnd = draft.recurrenceEndDate ? formatDateOnly(draft.recurrenceEndDate) : '';
+      const baseDue = draft.dueDateTime ? new Date(draft.dueDateTime) : new Date();
+      const resolvedEnd = resolveRecurrenceEndDate(draft.recurrenceEndDate, baseDue);
+      const formattedEnd = resolvedEnd ? formatDateOnly(resolvedEnd) : (draft.recurrenceEndDate ? formatDateOnly(draft.recurrenceEndDate) : '');
       const repeatLabel = isDailyRepeat
         ? `${daysText || 'Daily'}${formattedEnd ? `, ${formattedEnd}` : ''}`
         : 'No repeat';

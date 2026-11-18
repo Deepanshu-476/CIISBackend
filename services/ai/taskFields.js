@@ -67,6 +67,66 @@ const buildDateChips = (refTime = new Date(), isEn = false) => {
   return chips;
 };
 
+function resolveRecurrenceEndDate(val, baseDate = new Date()) {
+  if (!val) return null;
+  const str = String(val).trim();
+  const clean = str.toLowerCase();
+
+  let base = new Date();
+  if (baseDate) {
+    const parsedBase = new Date(baseDate);
+    if (!isNaN(parsedBase.getTime())) {
+      base = parsedBase;
+    }
+  }
+
+  if (clean === '+1month' || clean === '1 month' || clean === '1month' || clean === '1 mahina' || clean === '1 mahine' || clean === 'ek mahina') {
+    const d = new Date(base.getTime() + 30 * 24 * 60 * 60 * 1000);
+    return d.toISOString().slice(0, 10) + 'T23:59:59.999Z';
+  }
+  if (clean === '+3months' || clean === '3 months' || clean === '3months' || clean === '3 mahine' || clean === 'teen mahine') {
+    const d = new Date(base.getTime() + 90 * 24 * 60 * 60 * 1000);
+    return d.toISOString().slice(0, 10) + 'T23:59:59.999Z';
+  }
+  if (clean === '+6months' || clean === '6 months' || clean === '6months' || clean === '6 mahine' || clean === 'chheh mahine' || clean === 'che mahine') {
+    const d = new Date(base.getTime() + 180 * 24 * 60 * 60 * 1000);
+    return d.toISOString().slice(0, 10) + 'T23:59:59.999Z';
+  }
+  if (clean === '+1year' || clean === '1 year' || clean === '1year' || clean === '1 saal' || clean === 'ek saal') {
+    const d = new Date(base.getTime() + 365 * 24 * 60 * 60 * 1000);
+    return d.toISOString().slice(0, 10) + 'T23:59:59.999Z';
+  }
+
+  const monthMatch = clean.match(/^(\d+)\s*(?:months?|mahine|mahina)$/i);
+  if (monthMatch) {
+    const count = parseInt(monthMatch[1], 10);
+    const d = new Date(base.getTime() + count * 30 * 24 * 60 * 60 * 1000);
+    return d.toISOString().slice(0, 10) + 'T23:59:59.999Z';
+  }
+
+  const yearMatch = clean.match(/^(\d+)\s*(?:years?|saal)$/i);
+  if (yearMatch) {
+    const count = parseInt(yearMatch[1], 10);
+    const d = new Date(base.getTime() + count * 365 * 24 * 60 * 60 * 1000);
+    return d.toISOString().slice(0, 10) + 'T23:59:59.999Z';
+  }
+
+  const isoMatch = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (isoMatch) {
+    const y = parseInt(isoMatch[1], 10);
+    const m = String(isoMatch[2]).padStart(2, '0');
+    const day = String(isoMatch[3]).padStart(2, '0');
+    return `${y}-${m}-${day}T23:59:59.999Z`;
+  }
+
+  const parsed = new Date(str);
+  if (!isNaN(parsed.getTime())) {
+    return parsed.toISOString().slice(0, 10) + 'T23:59:59.999Z';
+  }
+
+  return null;
+}
+
 const TASK_FIELDS = {
   project: {
     key: 'project',
@@ -564,8 +624,8 @@ const TASK_FIELDS = {
       { label: '1 Year', action: { type: 'set', field: 'recurrenceEndDate', value: '+1year' } },
     ],
     default: null,
-    parse: (val) => String(val || ''),
-    normalise: (val) => String(val || ''),
+    parse: (val) => resolveRecurrenceEndDate(val) || String(val || ''),
+    normalise: (val) => resolveRecurrenceEndDate(val) || String(val || ''),
   },
 
   checkpoints: {
@@ -758,4 +818,5 @@ module.exports = {
   TASK_FIELD_ORDER,
   TASK_FIELDS,
   validateAttachmentFile,
+  resolveRecurrenceEndDate,
 };

@@ -48,9 +48,26 @@ const normalizeRepeatDays = (value) => {
   return [...new Set(rawValues.map(normalizeRepeatDay).filter(Boolean))];
 };
 
-const toValidDate = (value) => {
+const toValidDate = (value, referenceDate = new Date()) => {
   if (!value) return null;
-  const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : new Date(value.getTime());
+  }
+  const clean = String(value).trim().toLowerCase();
+  const ref = referenceDate instanceof Date && !Number.isNaN(referenceDate.getTime()) ? referenceDate : new Date();
+  if (clean === '+1month' || clean === '1 month' || clean === '1month' || clean === '1 mahina' || clean === 'ek mahina') {
+    return new Date(ref.getTime() + 30 * DAY_MS);
+  }
+  if (clean === '+3months' || clean === '3 months' || clean === '3months' || clean === '3 mahine' || clean === 'teen mahine') {
+    return new Date(ref.getTime() + 90 * DAY_MS);
+  }
+  if (clean === '+6months' || clean === '6 months' || clean === '6months' || clean === '6 mahine' || clean === 'chheh mahine' || clean === 'che mahine') {
+    return new Date(ref.getTime() + 180 * DAY_MS);
+  }
+  if (clean === '+1year' || clean === '1 year' || clean === '1year' || clean === '1 saal' || clean === 'ek saal') {
+    return new Date(ref.getTime() + 365 * DAY_MS);
+  }
+  const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
 };
 
