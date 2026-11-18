@@ -32,12 +32,18 @@ exports.getCompanyAiSettings = async (req, res) => {
   try {
     const { companyId } = req.params;
     const company = await Company.findById(companyId)
-      .select('companyName companyCode aiApiKeySource customGroqApiKey byokDefaultEmployeeDailyTokens byokDefaultEmployeeDailyCalls aiDailyTokenLimit aiDailyCallLimit')
+      .select('companyName companyCode aiApiKeySource customGroqApiKey byokDefaultEmployeeDailyTokens byokDefaultEmployeeDailyCalls aiDailyTokenLimit aiDailyCallLimit aiDailySttLimit aiExtraTokens selectedPlan')
+      .populate('selectedPlan', 'name aiDailyTokenLimit aiDailyCallLimit aiDailySttLimit aiApiKeySource')
       .lean();
 
     if (!company) {
       return res.status(404).json({ success: false, message: 'Company not found' });
     }
+
+    const companyDailyTokenLimit = company.aiDailyTokenLimit ?? company.selectedPlan?.aiDailyTokenLimit ?? 25000;
+    const companyDailyCallLimit = company.aiDailyCallLimit ?? company.selectedPlan?.aiDailyCallLimit ?? 35;
+    const companyDailySttLimit = company.aiDailySttLimit ?? company.selectedPlan?.aiDailySttLimit ?? 100;
+    const companyExtraTokens = Number(company.aiExtraTokens || 0);
 
     const todayIst = getTodayIstDate();
     const todayUsage = await AiUsage.aggregate([
@@ -70,7 +76,11 @@ exports.getCompanyAiSettings = async (req, res) => {
         maskedKey: company.customGroqApiKey ? maskApiKey(company.customGroqApiKey) : null,
         byokDefaultEmployeeDailyTokens: company.byokDefaultEmployeeDailyTokens ?? 10000,
         byokDefaultEmployeeDailyCalls: company.byokDefaultEmployeeDailyCalls ?? 30,
-        platformPlanTokenLimit: company.aiDailyTokenLimit ?? 25000,
+        platformPlanTokenLimit: companyDailyTokenLimit,
+        companyDailyTokenLimit,
+        companyDailyCallLimit,
+        companyDailySttLimit,
+        companyExtraTokens,
         todayUsage: {
           date: todayIst,
           totalTokens: stats.totalTokens,
