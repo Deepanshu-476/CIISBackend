@@ -2353,9 +2353,8 @@ function buildChips(intent, slot, ctx = {}) {
 
   if (slot === 'repeatPattern') {
     return [
-      { label: 'No repeat', action: { type: 'set', field: 'repeatPattern', value: 'none' } },
+      { label: 'No Repeat', action: { type: 'set', field: 'repeatPattern', value: 'none' } },
       { label: 'Repeat Task (Daily)', action: { type: 'set', field: 'repeatPattern', value: 'daily' } },
-      { label: 'Som-Shukr (Mon-Fri)', action: { type: 'set', field: 'repeatPattern', value: 'daily' } },
       { label: 'Cancel', action: { type: 'cancel' } },
     ];
   }

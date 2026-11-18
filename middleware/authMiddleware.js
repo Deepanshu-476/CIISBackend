@@ -87,7 +87,7 @@ const loadAuthUser = async (userId) => {
 
   const user = await User.findById(userId)
     .select(AUTH_USER_FIELDS)
-    .populate('company', 'companyName companyCode logo isActive aiApiKeySource customGroqApiKey aiDailyTokenLimit aiDailyCallLimit aiDailySttLimit aiExtraTokens byokDefaultEmployeeDailyTokens byokDefaultEmployeeDailyCalls selectedPlan')
+    .populate('company', 'companyName companyCode logo isActive aiApiKeySource customGroqApiKey aiDailyTokenLimit aiDailyCallLimit aiDailySttLimit aiExtraTokens aiExtraCalls aiExtraStt byokDefaultEmployeeDailyTokens byokDefaultEmployeeDailyCalls selectedPlan')
     .populate('assignedBranches', 'name branchCode')
     .populate('department', 'name')
     .lean();
