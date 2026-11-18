@@ -3358,6 +3358,27 @@ function getPermissionDeniedReply(intent, allowedIntents = ['self_task'], user =
   return { reply, speech, speakText: reply, speakTextHi };
 }
 
+const tenantMetaCache = new Map();
+const TENANT_CACHE_TTL_MS = 60 * 1000;
+
+function getCachedTenantMeta(key) {
+  const entry = tenantMetaCache.get(key);
+  if (entry && (Date.now() - entry.ts < TENANT_CACHE_TTL_MS)) {
+    return entry.data;
+  }
+  return null;
+}
+
+function setCachedTenantMeta(key, data) {
+  tenantMetaCache.set(key, { ts: Date.now(), data });
+  if (tenantMetaCache.size > 200) {
+    const now = Date.now();
+    for (const [k, v] of tenantMetaCache.entries()) {
+      if (now - v.ts > TENANT_CACHE_TTL_MS) tenantMetaCache.delete(k);
+    }
+  }
+}
+
 async function parseTaskRequest({
   req,
   message,
@@ -3557,8 +3578,32 @@ async function parseTaskRequest({
   const notices = [];
   let candidates = [];
 
-  // Determine user scope
-  const scope = await scopeInfoFn(req, deps);
+  const rawCompanyCode = req?.user?.companyCode || req?.user?.company?.companyCode || '';
+  const cleanCompanyCode = rawCompanyCode;
+  const baseCode = typeof rawCompanyCode === 'string' ? rawCompanyCode.split('-')[0].trim() : '';
+  const companyCodeFilter = (baseCode && baseCode !== rawCompanyCode)
+    ? { $regex: new RegExp('^' + escapeRegex(baseCode) + '(-|$)', 'i') }
+    : (rawCompanyCode || undefined);
+  const companyId = req?.user?.company?._id || req?.user?.company || req?.user?.companyId;
+
+  const userId = String(req?.user?._id || req?.user?.id || '');
+  const userCacheKey = `${cleanCompanyCode}:${userId}`;
+  const cachedMeta = (!deps._noCache && !deps.scope && !deps.accessibleProjects) ? getCachedTenantMeta(userCacheKey) : null;
+
+  // Retrieve user scope & accessible projects in parallel (or from short-lived RAM cache)
+  let scope = deps.scope || cachedMeta?.scope;
+  let accessibleProjects = Array.isArray(deps.accessibleProjects) ? deps.accessibleProjects : cachedMeta?.accessibleProjects;
+
+  if (!scope || !accessibleProjects) {
+    const [fetchedScope, fetchedProjects] = await Promise.all([
+      scope ? Promise.resolve(scope) : scopeInfoFn(req, deps),
+      accessibleProjects ? Promise.resolve(accessibleProjects) : getAccessibleProjects(req, deps)
+    ]);
+    if (!scope) scope = fetchedScope;
+    if (!accessibleProjects) accessibleProjects = fetchedProjects;
+  }
+  deps.accessibleProjects = accessibleProjects;
+
   const uRole = String(req?.user?.role || req?.user?.userRole || '').toLowerCase();
   const cRole = String(req?.user?.companyRole || '').toLowerCase();
   const isPrivilegedUser = Boolean(
@@ -3570,13 +3615,8 @@ async function parseTaskRequest({
     cRole.includes('owner') ||
     req?.user?.permissions?.includes?.('admin-task-create')
   );
-  // Retrieve accessible projects tenant-safely
-  const accessibleProjects = Array.isArray(deps.accessibleProjects)
-    ? deps.accessibleProjects
-    : await getAccessibleProjects(req, deps);
-  deps.accessibleProjects = accessibleProjects;
 
-  let sidebarMenuItems = Array.isArray(deps.sidebarMenuItems) ? deps.sidebarMenuItems : [];
+  let sidebarMenuItems = Array.isArray(deps.sidebarMenuItems) ? deps.sidebarMenuItems : (cachedMeta?.sidebarMenuItems || []);
   if (sidebarMenuItems.length === 0 && (deps.SidebarConfig || (mongoose && mongoose.connection && mongoose.connection.readyState === 1))) {
     try {
       const SCModel = deps.SidebarConfig || (mongoose && mongoose.models && mongoose.models.SidebarConfig) || SidebarConfig;
@@ -3635,91 +3675,85 @@ async function parseTaskRequest({
     userAllowedIntents.includes('task_assigned_user')
   );
 
-  const companyId = req?.user?.company?._id || req?.user?.company || req?.user?.companyId;
-  const rawCompanyCode = req?.user?.companyCode || req?.user?.company?.companyCode || '';
-  const cleanCompanyCode = rawCompanyCode;
-  const baseCode = typeof rawCompanyCode === 'string' ? rawCompanyCode.split('-')[0].trim() : '';
-  const companyCodeFilter = (baseCode && baseCode !== rawCompanyCode)
-    ? { $regex: new RegExp('^' + escapeRegex(baseCode) + '(-|$)', 'i') }
-    : (rawCompanyCode || undefined);
-
   // Determine the active field that was asked on the previous turn
   // Ensure companyUsers, services, clientPlans, and accessibleClients are populated
   const isDbConnected = Boolean(mongoose && mongoose.connection && mongoose.connection.readyState === 1);
-  let companyUsers = Array.isArray(deps.companyUsers) ? deps.companyUsers : (Array.isArray(scope?.users) ? scope.users : []);
-  let companyServices = Array.isArray(deps.services) ? deps.services : (Array.isArray(scope?.services) ? scope.services : []);
-  let companyPlans = Array.isArray(deps.clientPlans) ? deps.clientPlans : (Array.isArray(scope?.clientPlans) ? scope.clientPlans : []);
-  let accessibleClients = Array.isArray(deps.accessibleClients) ? deps.accessibleClients : [];
+  let companyUsers = Array.isArray(deps.companyUsers) ? deps.companyUsers : (cachedMeta?.companyUsers || (Array.isArray(scope?.users) ? scope.users : []));
+  let companyServices = Array.isArray(deps.services) ? deps.services : (cachedMeta?.services || (Array.isArray(scope?.services) ? scope.services : []));
+  let companyPlans = Array.isArray(deps.clientPlans) ? deps.clientPlans : (cachedMeta?.clientPlans || (Array.isArray(scope?.clientPlans) ? scope.clientPlans : []));
+  let accessibleClients = Array.isArray(deps.accessibleClients) ? deps.accessibleClients : (cachedMeta?.accessibleClients || []);
 
-  await Promise.all([
-    (async () => {
-      if ((!companyUsers || companyUsers.length === 0) && (deps.User || isDbConnected)) {
-        const UModel = deps.User || (mongoose && mongoose.models && mongoose.models.User) || User;
-        if (UModel && typeof UModel.find === 'function') {
-          try {
-            const uQuery = {
-              isActive: { $ne: false },
-              companyRole: { $not: /^client$/i },
-              role: { $not: /^client$/i },
-              ...(companyCodeFilter ? { companyCode: companyCodeFilter } : (cleanCompanyCode ? { companyCode: cleanCompanyCode } : {}))
-            };
-            companyUsers = await UModel.find(uQuery)
-              .select('name department role jobRole companyRole email company companyCode')
-              .populate('department', 'name')
-              .lean();
-          } catch (err) {
-            console.warn('[taskAgentService] Error loading companyUsers:', err);
+  if (!companyUsers.length || !accessibleClients.length) {
+    await Promise.all([
+      (async () => {
+        if ((!companyUsers || companyUsers.length === 0) && (deps.User || isDbConnected)) {
+          const UModel = deps.User || (mongoose && mongoose.models && mongoose.models.User) || User;
+          if (UModel && typeof UModel.find === 'function') {
+            try {
+              const uQuery = {
+                isActive: { $ne: false },
+                companyRole: { $not: /^client$/i },
+                role: { $not: /^client$/i },
+                ...(companyCodeFilter ? { companyCode: companyCodeFilter } : (cleanCompanyCode ? { companyCode: cleanCompanyCode } : {}))
+              };
+              companyUsers = await UModel.find(uQuery)
+                .select('name department role jobRole companyRole email company companyCode')
+                .populate('department', 'name')
+                .lean();
+            } catch (err) {
+              console.warn('[taskAgentService] Error loading companyUsers:', err);
+            }
           }
         }
-      }
-    })(),
-    (async () => {
-      if ((!companyServices || companyServices.length === 0) && (deps.Service || isDbConnected)) {
-        const SModel = deps.Service || (mongoose && mongoose.models && mongoose.models.Service);
-        if (SModel && typeof SModel.find === 'function') {
-          try {
-            const sQuery = cleanCompanyCode ? { companyCode: cleanCompanyCode } : {};
-            const docs = await SModel.find(sQuery).select('servicename name').lean();
-            companyServices = docs.map(d => d.servicename || d.name).filter(Boolean);
-          } catch (err) {
-            console.warn('[taskAgentService] Error loading services:', err);
+      })(),
+      (async () => {
+        if ((!companyServices || companyServices.length === 0) && (deps.Service || isDbConnected)) {
+          const SModel = deps.Service || (mongoose && mongoose.models && mongoose.models.Service);
+          if (SModel && typeof SModel.find === 'function') {
+            try {
+              const sQuery = cleanCompanyCode ? { companyCode: cleanCompanyCode } : {};
+              const docs = await SModel.find(sQuery).select('servicename name').lean();
+              companyServices = docs.map(d => d.servicename || d.name).filter(Boolean);
+            } catch (err) {
+              console.warn('[taskAgentService] Error loading services:', err);
+            }
           }
         }
-      }
-    })(),
-    (async () => {
-      if ((!companyPlans || companyPlans.length === 0) && (deps.ClientPlan || isDbConnected)) {
-        const PModel = deps.ClientPlan || (mongoose && mongoose.models && mongoose.models.ClientPlan) || ClientPlan;
-        if (PModel && typeof PModel.find === 'function') {
-          try {
-            const pQuery = {
-              isActive: { $ne: false },
-              ...(cleanCompanyCode ? { companyCode: cleanCompanyCode } : {})
-            };
-            companyPlans = await PModel.find(pQuery).lean();
-          } catch (err) {
-            console.warn('[taskAgentService] Error loading clientPlans:', err);
+      })(),
+      (async () => {
+        if ((!companyPlans || companyPlans.length === 0) && (deps.ClientPlan || isDbConnected)) {
+          const PModel = deps.ClientPlan || (mongoose && mongoose.models && mongoose.models.ClientPlan) || ClientPlan;
+          if (PModel && typeof PModel.find === 'function') {
+            try {
+              const pQuery = {
+                isActive: { $ne: false },
+                ...(cleanCompanyCode ? { companyCode: cleanCompanyCode } : {})
+              };
+              companyPlans = await PModel.find(pQuery).lean();
+            } catch (err) {
+              console.warn('[taskAgentService] Error loading clientPlans:', err);
+            }
           }
         }
-      }
-    })(),
-    (async () => {
-      if ((!accessibleClients || accessibleClients.length === 0) && (deps.Client || isDbConnected)) {
-        const CModel = deps.Client || (mongoose && mongoose.models && mongoose.models.Client) || Client;
-        if (CModel && typeof CModel.find === 'function') {
-          try {
-            const cQuery = cleanCompanyCode ? { companyCode: cleanCompanyCode } : {};
-            accessibleClients = await CModel.find(cQuery)
-              .select('client company services activeClientPlan projectManager status email phone progress')
-              .populate('activeClientPlan', 'name price services')
-              .lean();
-          } catch (err) {
-            console.warn('[taskAgentService] Error loading accessibleClients:', err);
+      })(),
+      (async () => {
+        if ((!accessibleClients || accessibleClients.length === 0) && (deps.Client || isDbConnected)) {
+          const CModel = deps.Client || (mongoose && mongoose.models && mongoose.models.Client) || Client;
+          if (CModel && typeof CModel.find === 'function') {
+            try {
+              const cQuery = cleanCompanyCode ? { companyCode: cleanCompanyCode } : {};
+              accessibleClients = await CModel.find(cQuery)
+                .select('client company services activeClientPlan projectManager status email phone progress')
+                .populate('activeClientPlan', 'name price services')
+                .lean();
+            } catch (err) {
+              console.warn('[taskAgentService] Error loading accessibleClients:', err);
+            }
           }
         }
-      }
-    })()
-  ]);
+      })()
+    ]);
+  }
 
   if (Array.isArray(companyUsers)) {
     companyUsers = companyUsers.filter(u => {
@@ -3737,18 +3771,40 @@ async function parseTaskRequest({
   deps.clientPlans = companyPlans;
   deps.accessibleClients = accessibleClients;
 
+  if (!deps._noCache) {
+    setCachedTenantMeta(userCacheKey, {
+      scope,
+      accessibleProjects,
+      sidebarMenuItems,
+      companyUsers,
+      services: companyServices,
+      clientPlans: companyPlans,
+      accessibleClients,
+    });
+  }
+
   let clientTasks = Array.isArray(deps.clientTasks) ? deps.clientTasks : [];
-  if ((!clientTasks || clientTasks.length === 0) && (deps.ClientTask || isDbConnected)) {
+  const isClientRelated = currentDraft.intent === 'create_client_task' ||
+    Boolean(currentDraft.clientId) ||
+    Boolean(currentDraft.clientServices && currentDraft.clientServices.length > 0) ||
+    Boolean(currentDraft.activeTaskService) ||
+    (typeof message === 'string' && /\b(?:client\s*task|client\s*ki\s*service|client\s*tasks)\b/i.test(message));
+
+  if (isClientRelated && (!clientTasks || clientTasks.length === 0) && (deps.ClientTask || isDbConnected)) {
     const CTModel = deps.ClientTask || (mongoose && mongoose.models && mongoose.models.ClientTask) || ClientTask;
     if (CTModel && typeof CTModel.find === 'function') {
       try {
         const clientIds = (accessibleClients || []).map(c => c._id || c.id).filter(Boolean);
-        const ctQuery = clientIds.length > 0 ? { clientId: { $in: clientIds } } : {};
-        clientTasks = await CTModel.find(ctQuery)
-          .select('clientId service name status assignee dueDate priority')
-          .sort({ updatedAt: -1, createdAt: -1 })
-          .limit(100)
-          .lean();
+        const ctQuery = currentDraft.clientId
+          ? { clientId: currentDraft.clientId }
+          : (clientIds.length > 0 ? { clientId: { $in: clientIds } } : null);
+        if (ctQuery) {
+          clientTasks = await CTModel.find(ctQuery)
+            .select('clientId service name status assignee dueDate priority')
+            .sort({ createdAt: -1 })
+            .limit(100)
+            .lean();
+        }
       } catch (err) {
         console.warn('[taskAgentService] Error loading clientTasks:', err);
       }
@@ -5419,6 +5475,7 @@ const lastAskedField = currentDraft.asked.length > 0
             notices.push(`Logo "${action.value}" attach ho gaya.`);
           }
         }
+        actionHandled = true;
         break;
       case 'pickProject':
         // Project selection handled by targetPickedProjectId above
