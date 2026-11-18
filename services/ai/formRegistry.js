@@ -369,6 +369,7 @@ const FORM_REGISTRY = {
       'description',
       'priority',
       'priorityDays',
+      'repeatPattern',
       'checkpoints',
       'attachments',
     ],
@@ -394,6 +395,7 @@ const FORM_REGISTRY = {
           ? draft.assignees.map(a => String(a.id || a._id))
           : (draft.assigneeId ? [String(draft.assigneeId)] : []));
 
+      const isDailyRepeat = draft.repeatPattern && draft.repeatPattern !== 'none';
       const fields = {
         title: draft.title || '',
         description: draft.description || '',
@@ -402,8 +404,20 @@ const FORM_REGISTRY = {
         status: draft.status || 'pending',
         priorityDays: String(draft.priorityDays || '1'),
         repeatPattern: draft.repeatPattern || 'none',
-        repeatDays: JSON.stringify(draft.repeatDays || []),
-        recurrenceEndDate: draft.recurrenceEndDate || '',
+        repeatDays: JSON.stringify(
+          isDailyRepeat
+            ? ((Array.isArray(draft.repeatDays) && draft.repeatDays.length > 0)
+              ? draft.repeatDays
+              : ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'])
+            : (draft.repeatDays || [])
+        ),
+        recurrenceEndDate: isDailyRepeat
+          ? (draft.recurrenceEndDate || (() => {
+              const baseDue = draft.dueDateTime ? new Date(draft.dueDateTime) : new Date();
+              const end = new Date(baseDue.getTime() + 30 * 24 * 60 * 60 * 1000);
+              return end.toISOString().slice(0, 10) + 'T23:59:59.999Z';
+            })())
+          : '',
         checkpoints: JSON.stringify(cleanedCheckpoints),
         reminderSettings: JSON.stringify(reminderPayload),
         assignedUsers: JSON.stringify(assignedUserIds),
@@ -439,6 +453,15 @@ const FORM_REGISTRY = {
             department: draft.assigneeDepartment || '',
           }] : []);
 
+      const isDailyRepeat = draft.repeatPattern && draft.repeatPattern !== 'none';
+      const daysText = (Array.isArray(draft.repeatDays) && draft.repeatDays.length > 0)
+        ? draft.repeatDays.map((d) => String(d).charAt(0).toUpperCase() + String(d).slice(1).toLowerCase()).join(', ')
+        : '';
+      const formattedEnd = draft.recurrenceEndDate ? formatDateOnly(draft.recurrenceEndDate) : '';
+      const repeatLabel = isDailyRepeat
+        ? `${daysText || 'Daily'}${formattedEnd ? `, ${formattedEnd}` : ''}`
+        : 'No repeat';
+
       return {
         title: draft.title || '—',
         description: draft.description || '—',
@@ -454,8 +477,11 @@ const FORM_REGISTRY = {
         repeatIntervalMinutes: null,
         minutesBeforeDue: null,
         customTime: null,
-        repeat: null,
-        repeatPattern: null,
+        repeat: repeatLabel,
+        repeatLabel: repeatLabel,
+        repeatPattern: draft.repeatPattern || 'none',
+        recurrenceEndDate: draft.recurrenceEndDate || null,
+        repeatDays: draft.repeatDays || [],
         checkpointsCount: cleanedCheckpoints.length,
         checkpoints: cleanedCheckpoints.length > 0 ? cleanedCheckpoints.map((c) => c.title) : [],
         attachmentsCount: draft.attachmentsCount || 0,
@@ -475,6 +501,7 @@ const FORM_REGISTRY = {
       'dueDateTime',
       'priority',
       'status',
+      'repeatPattern',
       'checkpoints',
       'reminder',
       'attachmentsCount',
@@ -1823,8 +1850,8 @@ function migrateDraftBetweenIntents(sourceIntentKey, targetIntentKey, currentDra
     carried.push('priorityDays');
   }
 
-  // 8. Recurrence: only valid on self_task
-  if (targetIntentKey === 'self_task') {
+  // 8. Recurrence: valid on self_task and task_assigned_user
+  if (targetIntentKey === 'self_task' || targetIntentKey === 'task_assigned_user') {
     if (currentDraft.repeatPattern && currentDraft.repeatPattern !== 'none') {
       newDraft.repeatPattern = currentDraft.repeatPattern;
       newDraft.repeatDays = Array.isArray(currentDraft.repeatDays) ? [...currentDraft.repeatDays] : [];
@@ -1994,6 +2021,11 @@ function getIntentSlots(intentKey, draft = {}) {
     activeFields.push('description');
     activeFields.push('priority');
     activeFields.push('priorityDays');
+    activeFields.push('repeatPattern');
+    if (draft.repeatPattern === 'daily') {
+      activeFields.push('repeatDays');
+      activeFields.push('recurrenceEndDate');
+    }
     activeFields.push('checkpoints');
     activeFields.push('attachments');
     return activeFields;
@@ -2321,10 +2353,9 @@ function buildChips(intent, slot, ctx = {}) {
 
   if (slot === 'repeatPattern') {
     return [
-      { label: 'Daily', action: { type: 'set', field: 'repeatPattern', value: 'Daily' } },
-      { label: 'Weekly', action: { type: 'set', field: 'repeatPattern', value: 'Weekly' } },
-      { label: 'Monthly', action: { type: 'set', field: 'repeatPattern', value: 'Monthly' } },
-      { label: 'Nahi', action: { type: 'set', field: 'repeatPattern', value: 'None' } },
+      { label: 'No repeat', action: { type: 'set', field: 'repeatPattern', value: 'none' } },
+      { label: 'Repeat Task (Daily)', action: { type: 'set', field: 'repeatPattern', value: 'daily' } },
+      { label: 'Som-Shukr (Mon-Fri)', action: { type: 'set', field: 'repeatPattern', value: 'daily' } },
       { label: 'Cancel', action: { type: 'cancel' } },
     ];
   }

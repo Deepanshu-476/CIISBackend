@@ -216,6 +216,48 @@ describe('AI Form Registry Suite (Part 1B)', () => {
       assert.equal(typeof parsedReminder, 'object');
       assert.equal(parsedReminder.enabled, true);
       assert.ok(parsedReminder.options.includes('oneHourBefore'));
+
+      // Verify recurrence fields match AdminTaskCreate.jsx
+      assert.equal(f.repeatPattern, 'none');
+      assert.equal(f.repeatDays, '[]');
+      assert.equal(f.recurrenceEndDate, '');
+    });
+
+    it('task_assigned_user.buildPayload & buildPreview support recurrence matching AdminTaskCreate.jsx', () => {
+      const recurringDraft = {
+        assigneeId: '654321098765432109876543',
+        assigneeName: 'Aarav Sharma',
+        title: 'Weekly KPI review',
+        description: 'Review KPIs with team',
+        dueDateTime: '2026-11-20T17:00:00.000Z',
+        priority: 'high',
+        repeatPattern: 'daily',
+        repeatDays: ['monday', 'friday'],
+        recurrenceEndDate: '2026-12-31T23:59:59.999Z',
+      };
+
+      const payload = FORM_REGISTRY.task_assigned_user.buildPayload(recurringDraft);
+      assert.equal(payload.fields.repeatPattern, 'daily');
+      assert.deepEqual(JSON.parse(payload.fields.repeatDays), ['monday', 'friday']);
+      assert.equal(payload.fields.recurrenceEndDate, '2026-12-31T23:59:59.999Z');
+
+      const preview = FORM_REGISTRY.task_assigned_user.buildPreview(recurringDraft);
+      assert.equal(preview.repeatPattern, 'daily');
+      assert.ok(preview.repeat.includes('Monday, Friday'));
+      assert.ok(preview.repeatLabel.includes('Monday, Friday'));
+      assert.deepEqual(preview.repeatDays, ['monday', 'friday']);
+      assert.equal(preview.recurrenceEndDate, '2026-12-31T23:59:59.999Z');
+
+      // Verify getIntentSlots includes repeatPattern and conditional slots
+      const baseSlots = getIntentSlots('task_assigned_user', { assigneeId: '123' });
+      assert.ok(baseSlots.includes('repeatPattern'));
+      assert.ok(!baseSlots.includes('repeatDays'));
+      assert.ok(!baseSlots.includes('recurrenceEndDate'));
+
+      const recSlots = getIntentSlots('task_assigned_user', { assigneeId: '123', repeatPattern: 'daily' });
+      assert.ok(recSlots.includes('repeatPattern'));
+      assert.ok(recSlots.includes('repeatDays'));
+      assert.ok(recSlots.includes('recurrenceEndDate'));
     });
   });
 
@@ -323,7 +365,7 @@ describe('AI Form Registry Suite (Part 1B)', () => {
       assert.equal(res.newDraft.dueDateTime, '2026-11-01T10:00:00.000Z');
     });
 
-    it('migrating self_task -> task_assigned_user preserves common fields and drops recurrence', () => {
+    it('migrating self_task -> task_assigned_user preserves common fields and carries recurrence', () => {
       const selfDraft = {
         title: 'Weekly Sync',
         description: 'Discuss KPI metrics',
@@ -350,9 +392,11 @@ describe('AI Form Registry Suite (Part 1B)', () => {
       assert.equal(res.newDraft.reminder, true);
       assert.equal(res.newDraft.reminderOption, 'hourly');
 
-      // Verify repeatPattern was dropped because assigned tasks do not support recurrence
-      assert.ok(res.dropped.includes('repeatPattern'), 'repeatPattern must be in dropped list');
-      assert.equal(res.newDraft.repeatPattern, null);
+      // Verify repeatPattern is carried because assigned tasks support recurrence
+      assert.ok(res.carried.includes('repeatPattern'), 'repeatPattern must be in carried list');
+      assert.equal(res.newDraft.repeatPattern, 'daily');
+      assert.deepEqual(res.newDraft.repeatDays, ['Monday']);
+      assert.equal(res.newDraft.recurrenceEndDate, '2026-12-01T00:00:00.000Z');
 
       // Verify carried list
       assert.ok(res.carried.includes('title'));
