@@ -34,15 +34,30 @@ const isOwnerOrAdmin = (user) => {
  * - aiExtraTokens: Top-up token pool for company
  */
 const getCompanyAiLimits = async (companyRef) => {
-  if (companyRef && typeof companyRef === 'object' && (companyRef.aiDailyTokenLimit !== undefined || companyRef.aiApiKeySource !== undefined)) {
+  if (companyRef && typeof companyRef === 'object') {
+    const plan = companyRef.selectedPlan;
+    const planTokenLimit = (plan && typeof plan === 'object' && plan.aiDailyTokenLimit !== undefined) ? Number(plan.aiDailyTokenLimit) : 0;
+    const planCallLimit = (plan && typeof plan === 'object' && plan.aiDailyCallLimit !== undefined) ? Number(plan.aiDailyCallLimit) : 0;
+    const planSttLimit = (plan && typeof plan === 'object' && plan.aiDailySttLimit !== undefined) ? Number(plan.aiDailySttLimit) : 0;
+
+    const tokenLimit = (companyRef.aiDailyTokenLimit !== undefined && companyRef.aiDailyTokenLimit !== null)
+      ? Number(companyRef.aiDailyTokenLimit)
+      : planTokenLimit;
+    const callLimit = (companyRef.aiDailyCallLimit !== undefined && companyRef.aiDailyCallLimit !== null)
+      ? Number(companyRef.aiDailyCallLimit)
+      : planCallLimit;
+    const sttLimit = (companyRef.aiDailySttLimit !== undefined && companyRef.aiDailySttLimit !== null)
+      ? Number(companyRef.aiDailySttLimit)
+      : planSttLimit;
+
     return {
-      aiApiKeySource: companyRef.aiApiKeySource || 'platform',
-      tokenLimit: companyRef.aiDailyTokenLimit ?? 25000,
-      callLimit: companyRef.aiDailyCallLimit ?? 35,
-      sttLimit: companyRef.aiDailySttLimit ?? 100,
-      extraTokens: companyRef.aiExtraTokens ?? 0,
-      extraCalls: companyRef.aiExtraCalls ?? 0,
-      extraStt: companyRef.aiExtraStt ?? 0,
+      aiApiKeySource: companyRef.aiApiKeySource || (plan && plan.aiApiKeySource) || 'platform',
+      tokenLimit,
+      callLimit,
+      sttLimit,
+      extraTokens: Number(companyRef.aiExtraTokens || 0),
+      extraCalls: Number(companyRef.aiExtraCalls || 0),
+      extraStt: Number(companyRef.aiExtraStt || 0),
       byokDefaultEmployeeDailyTokens: companyRef.byokDefaultEmployeeDailyTokens ?? 10000,
       byokDefaultEmployeeDailyCalls: companyRef.byokDefaultEmployeeDailyCalls ?? 30,
       isExplicit: true,
@@ -50,7 +65,23 @@ const getCompanyAiLimits = async (companyRef) => {
   }
 
   const companyId = companyRef?._id || companyRef;
-  if (!companyId || !mongoose.Types.ObjectId.isValid(companyId)) {
+  if (!companyId) {
+    return {
+      aiApiKeySource: 'platform',
+      tokenLimit: 0,
+      callLimit: 0,
+      sttLimit: 0,
+      extraTokens: 0,
+      extraCalls: 0,
+      extraStt: 0,
+      byokDefaultEmployeeDailyTokens: 10000,
+      byokDefaultEmployeeDailyCalls: 30,
+      isExplicit: false,
+    };
+  }
+
+  // In offline mock unit tests where no MongoDB connection is open
+  if (mongoose.connection.readyState !== 1 && !mongoose.Types.ObjectId.isValid(companyId)) {
     return {
       aiApiKeySource: 'platform',
       tokenLimit: 25000,
@@ -67,17 +98,33 @@ const getCompanyAiLimits = async (companyRef) => {
 
   try {
     const doc = await Company.findById(companyId)
-      .select('aiApiKeySource aiDailyTokenLimit aiDailyCallLimit aiDailySttLimit aiExtraTokens aiExtraCalls aiExtraStt byokDefaultEmployeeDailyTokens byokDefaultEmployeeDailyCalls')
+      .select('aiApiKeySource aiDailyTokenLimit aiDailyCallLimit aiDailySttLimit aiExtraTokens aiExtraCalls aiExtraStt byokDefaultEmployeeDailyTokens byokDefaultEmployeeDailyCalls selectedPlan')
+      .populate('selectedPlan', 'name aiDailyTokenLimit aiDailyCallLimit aiDailySttLimit aiApiKeySource')
       .lean();
     if (doc) {
+      const plan = doc.selectedPlan;
+      const planTokenLimit = (plan && typeof plan === 'object' && plan.aiDailyTokenLimit !== undefined) ? Number(plan.aiDailyTokenLimit) : 0;
+      const planCallLimit = (plan && typeof plan === 'object' && plan.aiDailyCallLimit !== undefined) ? Number(plan.aiDailyCallLimit) : 0;
+      const planSttLimit = (plan && typeof plan === 'object' && plan.aiDailySttLimit !== undefined) ? Number(plan.aiDailySttLimit) : 0;
+
+      const tokenLimit = (doc.aiDailyTokenLimit !== undefined && doc.aiDailyTokenLimit !== null)
+        ? Number(doc.aiDailyTokenLimit)
+        : planTokenLimit;
+      const callLimit = (doc.aiDailyCallLimit !== undefined && doc.aiDailyCallLimit !== null)
+        ? Number(doc.aiDailyCallLimit)
+        : planCallLimit;
+      const sttLimit = (doc.aiDailySttLimit !== undefined && doc.aiDailySttLimit !== null)
+        ? Number(doc.aiDailySttLimit)
+        : planSttLimit;
+
       return {
-        aiApiKeySource: doc.aiApiKeySource || 'platform',
-        tokenLimit: doc.aiDailyTokenLimit ?? 25000,
-        callLimit: doc.aiDailyCallLimit ?? 35,
-        sttLimit: doc.aiDailySttLimit ?? 100,
-        extraTokens: doc.aiExtraTokens ?? 0,
-        extraCalls: doc.aiExtraCalls ?? 0,
-        extraStt: doc.aiExtraStt ?? 0,
+        aiApiKeySource: doc.aiApiKeySource || (plan && plan.aiApiKeySource) || 'platform',
+        tokenLimit,
+        callLimit,
+        sttLimit,
+        extraTokens: Number(doc.aiExtraTokens || 0),
+        extraCalls: Number(doc.aiExtraCalls || 0),
+        extraStt: Number(doc.aiExtraStt || 0),
         byokDefaultEmployeeDailyTokens: doc.byokDefaultEmployeeDailyTokens ?? 10000,
         byokDefaultEmployeeDailyCalls: doc.byokDefaultEmployeeDailyCalls ?? 30,
         isExplicit: true,
@@ -89,9 +136,9 @@ const getCompanyAiLimits = async (companyRef) => {
 
   return {
     aiApiKeySource: 'platform',
-    tokenLimit: 25000,
-    callLimit: 35,
-    sttLimit: 100,
+    tokenLimit: 0,
+    callLimit: 0,
+    sttLimit: 0,
     extraTokens: 0,
     extraCalls: 0,
     extraStt: 0,
@@ -104,12 +151,17 @@ const getCompanyAiLimits = async (companyRef) => {
 const getLimit = (user, companyLimits = null) => {
   const isPrivileged = isOwnerOrAdmin(user);
   if (isPrivileged) {
+    if (companyLimits && companyLimits.tokenLimit <= 0 && (!companyLimits.extraTokens || companyLimits.extraTokens <= 0) && companyLimits.aiApiKeySource !== 'client') {
+      return 0;
+    }
     const adminVal = process.env.AI_TASK_DAILY_LIMIT_ADMIN;
     if (adminVal !== undefined && adminVal !== null && adminVal !== '') {
       const parsed = parseInt(adminVal, 10);
       if (!isNaN(parsed) && parsed >= 0) return parsed;
     }
-    return 150;
+    return companyLimits && typeof companyLimits.callLimit === 'number' && companyLimits.callLimit > 0
+      ? companyLimits.callLimit
+      : 150;
   }
 
   if (companyLimits?.isExplicit && typeof companyLimits.callLimit === 'number') {
@@ -125,18 +177,23 @@ const getLimit = (user, companyLimits = null) => {
   if (companyLimits && typeof companyLimits.callLimit === 'number') {
     return companyLimits.callLimit;
   }
-  return 35;
+  return 0;
 };
 
 const getSttLimit = (user, companyLimits = null) => {
   const isPrivileged = isOwnerOrAdmin(user);
   if (isPrivileged) {
+    if (companyLimits && companyLimits.tokenLimit <= 0 && (!companyLimits.extraTokens || companyLimits.extraTokens <= 0) && companyLimits.aiApiKeySource !== 'client') {
+      return 0;
+    }
     const adminVal = process.env.AI_STT_DAILY_LIMIT_ADMIN;
     if (adminVal !== undefined && adminVal !== null && adminVal !== '') {
       const parsed = parseInt(adminVal, 10);
       if (!isNaN(parsed) && parsed >= 0) return parsed;
     }
-    return 300;
+    return companyLimits && typeof companyLimits.sttLimit === 'number' && companyLimits.sttLimit > 0
+      ? companyLimits.sttLimit
+      : 300;
   }
 
   if (companyLimits?.isExplicit && typeof companyLimits.sttLimit === 'number') {
@@ -152,7 +209,7 @@ const getSttLimit = (user, companyLimits = null) => {
   if (companyLimits && typeof companyLimits.sttLimit === 'number') {
     return companyLimits.sttLimit;
   }
-  return 100;
+  return 0;
 };
 
 /**
@@ -269,6 +326,15 @@ const aiTaskBudget = async (req, res, next) => {
     const baseCallLimit = getLimit(req.user, limits);
     const callLimit = baseCallLimit + (limits.extraCalls || 0);
     const totalAllowedTokens = limits.tokenLimit + (limits.extraTokens || 0);
+
+    // AI Plan Entitlement Gate: Strictly block companies without an active AI plan or allocated tokens
+    if (limits.aiApiKeySource !== 'client' && totalAllowedTokens <= 0) {
+      return res.status(403).json({
+        success: false,
+        code: 'AI_SUBSCRIPTION_REQUIRED',
+        message: 'Aapki company ke active plan mein AI Assistant shamil nahi hai. Kripya AI Assistant activate karne ke liye Super Admin se plan upgrade karwayein.',
+      });
+    }
 
     // Multi-tenant isolation: every query MUST include { company: companyId }
     const filter = {
@@ -420,6 +486,14 @@ const aiSttBudget = async (req, res, next) => {
         todayIst,
       };
       return next();
+    }
+
+    if (limits.aiApiKeySource !== 'client' && limits.sttLimit <= 0 && limits.extraStt <= 0 && limits.tokenLimit <= 0 && limits.extraTokens <= 0) {
+      return res.status(403).json({
+        success: false,
+        code: 'AI_SUBSCRIPTION_REQUIRED',
+        message: 'Aapki company ke active plan mein AI Assistant shamil nahi hai. Kripya AI Assistant activate karne ke liye Super Admin se plan upgrade karwayein.',
+      });
     }
 
     const limit = getSttLimit(req.user, limits);

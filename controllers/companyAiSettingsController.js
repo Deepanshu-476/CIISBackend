@@ -40,9 +40,20 @@ exports.getCompanyAiSettings = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Company not found' });
     }
 
-    const companyDailyTokenLimit = company.aiDailyTokenLimit ?? company.selectedPlan?.aiDailyTokenLimit ?? 25000;
-    const companyDailyCallLimit = company.aiDailyCallLimit ?? company.selectedPlan?.aiDailyCallLimit ?? 35;
-    const companyDailySttLimit = company.aiDailySttLimit ?? company.selectedPlan?.aiDailySttLimit ?? 100;
+    const plan = company.selectedPlan;
+    const planTokenLimit = (plan && typeof plan === 'object' && plan.aiDailyTokenLimit !== undefined) ? Number(plan.aiDailyTokenLimit) : 0;
+    const planCallLimit = (plan && typeof plan === 'object' && plan.aiDailyCallLimit !== undefined) ? Number(plan.aiDailyCallLimit) : 0;
+    const planSttLimit = (plan && typeof plan === 'object' && plan.aiDailySttLimit !== undefined) ? Number(plan.aiDailySttLimit) : 0;
+
+    const companyDailyTokenLimit = (company.aiDailyTokenLimit !== undefined && company.aiDailyTokenLimit !== null)
+      ? Number(company.aiDailyTokenLimit)
+      : planTokenLimit;
+    const companyDailyCallLimit = (company.aiDailyCallLimit !== undefined && company.aiDailyCallLimit !== null)
+      ? Number(company.aiDailyCallLimit)
+      : planCallLimit;
+    const companyDailySttLimit = (company.aiDailySttLimit !== undefined && company.aiDailySttLimit !== null)
+      ? Number(company.aiDailySttLimit)
+      : planSttLimit;
     const companyExtraTokens = Number(company.aiExtraTokens || 0);
     const companyExtraCalls = Number(company.aiExtraCalls || 0);
     const companyExtraStt = Number(company.aiExtraStt || 0);

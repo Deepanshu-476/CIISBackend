@@ -48,17 +48,17 @@ const planSchema = new mongoose.Schema(
     },
     aiDailyTokenLimit: {
       type: Number,
-      default: 25000,
+      default: 0,
       min: [0, "AI daily token limit cannot be negative"],
     },
     aiDailyCallLimit: {
       type: Number,
-      default: 35,
+      default: 0,
       min: [0, "AI daily call limit cannot be negative"],
     },
     aiDailySttLimit: {
       type: Number,
-      default: 100,
+      default: 0,
       min: [0, "AI daily STT limit cannot be negative"],
     },
     isActive: {
