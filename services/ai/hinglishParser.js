@@ -325,13 +325,13 @@ const WEEKDAY_CANONICAL = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday
 
 // Common typo regexes for weekdays (English and Hindi transliterations)
 const WEEKDAY_TYPO_MAP = [
-  { day: 'monday', regex: /\b(?:monda[yt]|mondate|mondey|mondy|somvaar|somwar|som|mon)\b/i },
-  { day: 'tuesday', regex: /\b(?:tuesda[yt]|tuesdate|tuseday|teusday|mangalvaar|mangalwar|mangal|tue)\b/i },
-  { day: 'wednesday', regex: /\b(?:wednesda[yt]|wednesdate|wednsday|wensday|wednesdya|budhvaar|budhwar|budh|wed)\b/i },
-  { day: 'thursday', regex: /\b(?:thursda[yt]|thursdate|thrusday|thurday|guruvaar|guruwar|guru|veervaar|veerwar|thu)\b/i },
-  { day: 'friday', regex: /\b(?:frida[yt]|fridate|firday|fryday|shukravaar|shukrawar|shukr|fri)\b/i },
-  { day: 'saturday', regex: /\b(?:saturda[yt]|saturdate|satday|shanivaar|shaniwar|shani|sat)\b/i },
-  { day: 'sunday', regex: /\b(?:sunda[yt]|sundate|ravivaar|raviwar|ravi|itvaar|itwar|sun)\b/i },
+  { day: 'monday', regex: /\b(?:monda[yt]|mondate|mondey|mondy|somvaar|somwar|somvar|som|mon)\b/i },
+  { day: 'tuesday', regex: /\b(?:tuesda[yt]|tuesdate|tuseday|teusday|mangalvaar|mangalwar|mangalvar|mangal|tue)\b/i },
+  { day: 'wednesday', regex: /\b(?:wednesda[yt]|wednesdate|wednsday|wensday|wednesdya|budhvaar|budhwar|budhvar|budh|wed)\b/i },
+  { day: 'thursday', regex: /\b(?:thursda[yt]|thursdate|thrusday|thurday|guruvaar|guruwar|guruvar|guru|veervaar|veerwar|veer|thu)\b/i },
+  { day: 'friday', regex: /\b(?:frida[yt]|fridate|firday|fryday|shukravaar|shukrawar|shukravar|shukr|fri)\b/i },
+  { day: 'saturday', regex: /\b(?:saturda[yt]|saturdate|satday|shanivaar|shaniwar|shanivar|shani|sat)\b/i },
+  { day: 'sunday', regex: /\b(?:sunda[yt]|sundate|ravivaar|raviwar|ravivar|ravi|itvaar|itwar|itvar|sun)\b/i },
 ];
 
 function levenshteinDistance(a, b) {
