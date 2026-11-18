@@ -653,7 +653,7 @@ describe('Chips per Flow, Form Registry, Member Chips & Info Questions Suite', (
     assert.equal(step1.draft.intent, 'task_assigned_user');
     assert.equal(step1.draft.taskFor, 'others');
     assert.equal(step1.field, 'assignee');
-    assert.match(step1.reply, /Task kisse assign karna hai/i);
+    assert.match(step1.reply, /(?:Task kisse assign karna hai|Who should this task be assigned to)/i);
 
     // Member chips should have Vansh Test, Aarav Sharma, Diya Patel + Done + Cancel
     const chipLabels = step1.chips.map(c => c.label);
@@ -672,7 +672,7 @@ describe('Chips per Flow, Form Registry, Member Chips & Info Questions Suite', (
     assert.equal(step2.draft.assignees.length, 1);
     assert.equal(step2.draft.assignees[0].name, 'Vansh Test');
     assert.equal(step2.field, 'title');
-    assert.match(step2.reply, /Task ka naam/i);
+    assert.match(step2.reply, /(?:Task ka naam|What should be the task title)/i);
 
     // Step 3: Multi-select via set_team_members also works and advances to title
     const step3 = await parseTaskRequest({
@@ -684,12 +684,12 @@ describe('Chips per Flow, Form Registry, Member Chips & Info Questions Suite', (
     assert.equal(step3.draft.intent, 'task_assigned_user');
     assert.equal(step3.draft.assignees.length, 2);
     assert.equal(step3.field, 'title');
-    assert.match(step3.reply, /Task ka naam/i);
+    assert.match(step3.reply, /(?:Task ka naam|What should be the task title)/i);
 
-    // Step 4: Verify slots in task_assigned_user do NOT contain reminder or repeat
+    // Step 4: Verify slots in task_assigned_user contains repeatPattern
     const slots = FORM_REGISTRY.task_assigned_user.slots;
     assert.ok(!slots.includes('reminder'), 'reminder should not be in slots');
-    assert.ok(!slots.includes('repeatPattern'), 'repeatPattern should not be in slots');
+    assert.ok(slots.includes('repeatPattern'), 'repeatPattern should be in slots');
     assert.ok(!slots.includes('status'), 'status should not be in slots');
 
     // Step 5: Test preview output
@@ -706,7 +706,8 @@ describe('Chips per Flow, Form Registry, Member Chips & Info Questions Suite', (
     assert.equal(preview.assignees.length, 1);
     assert.equal(preview.assignees[0].name, 'Vansh Test');
     assert.equal(preview.reminder, null);
-    assert.equal(preview.repeat, null);
+    assert.equal(preview.repeat, 'No repeat');
+    assert.equal(preview.repeatPattern, 'none');
   });
 
   after(() => {

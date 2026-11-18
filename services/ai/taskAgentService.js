@@ -5637,6 +5637,13 @@ const lastAskedField = currentDraft.asked.length > 0
             currentDraft.minutesBeforeDue = null;
             currentDraft.customTime = null;
           }
+          if (action.field === 'repeatPattern') {
+            currentDraft.repeatPattern = null;
+            currentDraft.repeatDays = [];
+            currentDraft.recurrenceEndDate = null;
+            currentDraft.asked = currentDraft.asked.filter((f) => !['repeatPattern', 'repeatDays', 'recurrenceEndDate'].includes(f));
+            currentDraft.skipped = currentDraft.skipped.filter((f) => !['repeatPattern', 'repeatDays', 'recurrenceEndDate'].includes(f));
+          }
           currentDraft.asked = currentDraft.asked.filter((f) => f !== action.field);
         }
         break;
@@ -5667,6 +5674,12 @@ const lastAskedField = currentDraft.asked.length > 0
           currentDraft.checkpoints = [];
           currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'checkpoints');
           currentDraft.asked = currentDraft.asked.filter((f) => f !== 'checkpoints');
+        } else if (action.field === 'repeatPattern') {
+          currentDraft.repeatPattern = null;
+          currentDraft.repeatDays = [];
+          currentDraft.recurrenceEndDate = null;
+          currentDraft.skipped = currentDraft.skipped.filter((f) => !['repeatPattern', 'repeatDays', 'recurrenceEndDate'].includes(f));
+          currentDraft.asked = currentDraft.asked.filter((f) => !['repeatPattern', 'repeatDays', 'recurrenceEndDate'].includes(f));
         } else if (action.field) {
           currentDraft.skipped = currentDraft.skipped.filter((f) => f !== action.field);
           currentDraft[action.field] = null;
@@ -11308,6 +11321,7 @@ const lastAskedField = currentDraft.asked.length > 0
             { label: 'Priority badlo', action: { type: 'ask', field: 'priority' } },
             { label: 'Date/Time badlo', action: { type: 'ask', field: 'dueDateTime' } },
             { label: 'Reminder badlo', action: { type: 'ask', field: 'reminder' } },
+            { label: 'Repeat badlo', action: { type: 'ask', field: 'repeatPattern' } },
             { label: 'Haan, create karo', action: { type: 'confirm' } },
           ]));
 
@@ -11318,6 +11332,7 @@ const lastAskedField = currentDraft.asked.length > 0
         if (lbl === 'Priority badlo') return { ...c, label: 'Change priority' };
         if (lbl === 'Date/Time badlo' || lbl === 'Date badlo' || lbl === 'Dates badlo') return { ...c, label: 'Change date/time' };
         if (lbl === 'Reminder badlo') return { ...c, label: 'Change reminder' };
+        if (lbl === 'Repeat badlo') return { ...c, label: 'Change repeat' };
         if (lbl === 'Status badlo') return { ...c, label: 'Change status' };
         if (lbl === 'Name badlo') return { ...c, label: 'Change name' };
         if (lbl.startsWith('Haan')) return { ...c, label: 'Yes, create it' };
