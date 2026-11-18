@@ -17,7 +17,6 @@ const RECURRENCE_HORIZON_DAYS = 7;
 const isRecurringTemplate = task => (
   task &&
   task.isActive !== false &&
-  task.taskFor === 'self' &&
   (!task.recurrenceSourceId || String(task.recurrenceSourceId) === 'null')
 );
 
@@ -81,6 +80,50 @@ const isUserAbsentOnDate = async (userId, dateValue, options = {}) => {
   }
 };
 
+const cleanRecurringTasksForAbsentUserWindow = async (userId, startBound, endBound) => {
+  const selfDelete = await Task.deleteMany({
+    taskFor: 'self',
+    recurrenceSourceId: { $ne: null },
+    overallStatus: 'pending',
+    $or: [
+      { assignedUsers: userId },
+      { createdBy: userId }
+    ],
+    dueDateTime: { $gte: startBound, $lte: endBound }
+  });
+
+  const assignedMatches = await Task.find({
+    taskFor: { $ne: 'self' },
+    recurrenceSourceId: { $ne: null },
+    overallStatus: 'pending',
+    assignedUsers: userId,
+    dueDateTime: { $gte: startBound, $lte: endBound }
+  }).select('_id assignedUsers assignedGroups').lean();
+
+  let assignedCleaned = 0;
+  for (const item of assignedMatches) {
+    const remainingUsers = (item.assignedUsers || []).filter(id => String(id) !== String(userId));
+    const hasGroups = Array.isArray(item.assignedGroups) && item.assignedGroups.length > 0;
+    if (remainingUsers.length === 0 && !hasGroups) {
+      await Task.deleteOne({ _id: item._id });
+      assignedCleaned += 1;
+    } else {
+      await Task.updateOne(
+        { _id: item._id },
+        {
+          $pull: {
+            assignedUsers: userId,
+            statusByUser: { user: userId }
+          }
+        }
+      );
+      assignedCleaned += 1;
+    }
+  }
+
+  return (selfDelete.deletedCount || 0) + assignedCleaned;
+};
+
 const cleanRecurringTasksForAbsentUser = async (userId, targetDate, options = {}) => {
   if (!userId || !targetDate) return 0;
   if (mongoose.connection?.readyState === 0 && !options.mockAbsence) return 0;
@@ -92,17 +135,7 @@ const cleanRecurringTasksForAbsentUser = async (userId, targetDate, options = {}
   if (!bounds) return 0;
 
   try {
-    const result = await Task.deleteMany({
-      taskFor: 'self',
-      recurrenceSourceId: { $ne: null },
-      overallStatus: 'pending',
-      $or: [
-        { assignedUsers: userId },
-        { createdBy: userId }
-      ],
-      dueDateTime: { $gte: bounds.start, $lte: bounds.end }
-    });
-    return result.deletedCount || 0;
+    return await cleanRecurringTasksForAbsentUserWindow(userId, bounds.start, bounds.end);
   } catch (err) {
     console.error(`Error cleaning recurring tasks for absent user ${userId}:`, err);
     return 0;
@@ -122,17 +155,7 @@ const cleanRecurringTasksForAbsentUserRange = async (userId, startDate, endDate,
   if (!startBounds || !endBounds) return 0;
 
   try {
-    const result = await Task.deleteMany({
-      taskFor: 'self',
-      recurrenceSourceId: { $ne: null },
-      overallStatus: 'pending',
-      $or: [
-        { assignedUsers: userId },
-        { createdBy: userId }
-      ],
-      dueDateTime: { $gte: startBounds.start, $lte: endBounds.end }
-    });
-    return result.deletedCount || 0;
+    return await cleanRecurringTasksForAbsentUserWindow(userId, startBounds.start, endBounds.end);
   } catch (err) {
     console.error(`Error cleaning recurring tasks for absent user leave range ${userId}:`, err);
     return 0;
@@ -140,28 +163,60 @@ const cleanRecurringTasksForAbsentUserRange = async (userId, startDate, endDate,
 };
 
 const createOccurrenceIfMissing = async (templateTask, occurrenceDate, options = {}) => {
-  const targetUserId = templateTask.assignedUsers?.[0]?._id
-    || templateTask.assignedUsers?.[0]
-    || templateTask.createdBy;
+  const occurrenceKey = occurrenceDate.toISOString();
+  const isSelfTask = !templateTask.taskFor || templateTask.taskFor === 'self';
+  let cloneAssignedUsers;
 
-  if (targetUserId) {
-    const isAbsent = await isUserAbsentOnDate(targetUserId, occurrenceDate, options);
-    if (isAbsent) {
-      const occurrenceKey = occurrenceDate.toISOString();
-      try {
-        await Task.deleteOne({
-          recurrenceSourceId: templateTask._id,
-          recurrenceOccurrenceKey: occurrenceKey,
-          overallStatus: 'pending',
-        });
-      } catch (delErr) {
-        // Ignored if disconnected or buffering
+  if (isSelfTask) {
+    const targetUserId = templateTask.assignedUsers?.[0]?._id
+      || templateTask.assignedUsers?.[0]
+      || templateTask.createdBy;
+
+    if (targetUserId) {
+      const isAbsent = await isUserAbsentOnDate(targetUserId, occurrenceDate, options);
+      if (isAbsent) {
+        try {
+          await Task.deleteOne({
+            recurrenceSourceId: templateTask._id,
+            recurrenceOccurrenceKey: occurrenceKey,
+            overallStatus: 'pending',
+          });
+        } catch (delErr) {
+          // Ignored if disconnected or buffering
+        }
+        return { created: false, skipped: true, reason: 'user_absent' };
       }
-      return { created: false, skipped: true, reason: 'user_absent' };
+    }
+  } else {
+    const assignedUserIds = (templateTask.assignedUsers || [])
+      .map(u => u?._id || u)
+      .filter(Boolean);
+    const hasGroups = Array.isArray(templateTask.assignedGroups) && templateTask.assignedGroups.length > 0;
+
+    if (assignedUserIds.length > 0) {
+      const presentUsers = [];
+      for (const uid of assignedUserIds) {
+        const isAbsent = await isUserAbsentOnDate(uid, occurrenceDate, options);
+        if (!isAbsent) {
+          presentUsers.push(uid);
+        }
+      }
+      if (presentUsers.length === 0 && !hasGroups) {
+        try {
+          await Task.deleteOne({
+            recurrenceSourceId: templateTask._id,
+            recurrenceOccurrenceKey: occurrenceKey,
+            overallStatus: 'pending',
+          });
+        } catch (delErr) {
+          // Ignored if disconnected or buffering
+        }
+        return { created: false, skipped: true, reason: 'user_absent' };
+      }
+      cloneAssignedUsers = presentUsers;
     }
   }
 
-  const occurrenceKey = occurrenceDate.toISOString();
   const existing = await Task.findOne({
     recurrenceSourceId: templateTask._id,
     recurrenceOccurrenceKey: occurrenceKey,
@@ -171,7 +226,11 @@ const createOccurrenceIfMissing = async (templateTask, occurrenceDate, options =
     return { created: false, exists: true };
   }
 
-  const clonePayload = buildRecurringTaskClone(templateTask, occurrenceDate);
+  const clonePayload = buildRecurringTaskClone(
+    templateTask,
+    occurrenceDate,
+    cloneAssignedUsers !== undefined ? { assignedUsers: cloneAssignedUsers } : {}
+  );
   if (!clonePayload) {
     return { created: false, skipped: true };
   }
@@ -283,7 +342,6 @@ const processRecurringTemplate = async (templateTask, now = new Date()) => {
 const runRecurringTaskSweep = async (filter = {}) => {
   const now = new Date();
   const query = {
-    taskFor: 'self',
     isRecurring: true,
     isActive: true,
     $or: [
@@ -294,7 +352,7 @@ const runRecurringTaskSweep = async (filter = {}) => {
   };
 
   const templates = await Task.find(query).select(
-    '_id title description startDateTime dueDateTime nextRecurringDate recurrenceEndDate repeatPattern repeatDays recurringPattern isRecurring createdAt taskFor recurrenceSourceId isActive whatsappNumber priorityDays priority companyCode branch assignedUsers assignedGroups statusByUser checkpoints remarks files voiceNote createdBy'
+    '_id title description startDateTime dueDateTime nextRecurringDate recurrenceEndDate repeatPattern repeatDays recurringPattern isRecurring createdAt taskFor recurrenceSourceId isActive whatsappNumber priorityDays priority companyCode branch assignedUsers assignedGroups statusByUser checkpoints reminderSettings remarks files voiceNote createdBy'
   ).lean();
 
   let processed = 0;

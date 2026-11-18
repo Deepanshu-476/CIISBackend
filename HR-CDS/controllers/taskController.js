@@ -2191,11 +2191,7 @@ const handleTaskCreation = async (req, res, isSelf) => {
   const statusByUser = parsedUsers.map(uid => ({ user: uid, status: safeStatus, updatedAt: new Date() }));
   const parsedCheckpoints = parseTaskCheckpoints(checkpoints);
   const reminderSettings = normalizeTaskReminderSettings(req.body);
-  const recurringSettings = isSelf ? parseRecurringSettingsFromBody(req.body) : {
-    repeatPattern: 'none',
-    repeatDays: [],
-    isRecurring: false,
-  };
+  const recurringSettings = parseRecurringSettingsFromBody(req.body);
   const recurrenceError = validateRecurrenceSettings(recurringSettings, parsedDue);
   if (recurrenceError) return res.status(400).json({ success: false, error: recurrenceError, message: recurrenceError });
 
@@ -2258,7 +2254,7 @@ const handleTaskCreation = async (req, res, isSelf) => {
     }
   }
 
-  if (isSelf && task.isRecurring) {
+  if (task.isRecurring) {
     try {
       await generateRecurringOccurrences(task);
     } catch (recErr) {
@@ -2429,7 +2425,13 @@ exports.updateTask = async (req, res) => {
 
     await task.save();
 
-    if (task.isRecurring && !task.recurrenceSourceId) {
+    if (hasRecurringUpdate && !task.isRecurring && !oldTask.recurrenceSourceId && oldTask.isRecurring) {
+      await Task.deleteMany({
+        recurrenceSourceId: task._id,
+        overallStatus: 'pending',
+        dueDateTime: { $gt: new Date() }
+      });
+    } else if (task.isRecurring && !task.recurrenceSourceId) {
       try {
         await generateRecurringOccurrences(task);
       } catch (recErr) {
@@ -2489,8 +2491,8 @@ exports.stopRecurringTask = async (req, res) => {
       task = await Task.findById(task.recurrenceSourceId);
       if (!task) return res.status(404).json({ success: false, error: 'Recurring source task not found' });
     }
-    if (task.createdBy.toString() !== req.user._id.toString()) return res.status(403).json({ success: false, error: 'Not authorized' });
-    if (task.taskFor !== 'self') return res.status(400).json({ success: false, error: 'Only personal recurring tasks can be stopped' });
+    const allowCompanyAllEdit = await canManageTaskFromCompanyAll(req, task);
+    if (task.createdBy.toString() !== req.user._id.toString() && !allowCompanyAllEdit) return res.status(403).json({ success: false, error: 'Not authorized' });
 
     const oldTask = task.toObject();
     task.isRecurring = false;
