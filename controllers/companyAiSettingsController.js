@@ -683,3 +683,73 @@ exports.getCompanyAiUsageHistory = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/company/:companyId/ai-settings/my-access
+ * Lightweight endpoint for any logged-in user to check if they currently have AI access.
+ */
+exports.getMyAiAccess = async (req, res) => {
+  try {
+    const user = req.user;
+    if (!user) {
+      return res.status(401).json({ success: false, hasAccess: false, message: 'Unauthorized' });
+    }
+
+    const roles = [user.companyRole, user.jobRole, user.role]
+      .filter(Boolean)
+      .map((r) => String(r).trim().toLowerCase().replace(/[\s_-]+/g, ''));
+
+    const isClient = roles.includes('client');
+    if (isClient) {
+      return res.status(200).json({
+        success: true,
+        hasAccess: false,
+        isClient: true,
+        reason: 'Client accounts do not have AI access',
+      });
+    }
+
+    const isPrivileged = roles.some((r) =>
+      ['owner', 'admin', 'companyowner', 'companyadmin', 'superadmin'].includes(r)
+    ) || Boolean(user.isSuperAdmin || user.isPlatformOwner);
+
+    if (isPrivileged) {
+      return res.status(200).json({
+        success: true,
+        hasAccess: true,
+        isPrivileged: true,
+      });
+    }
+
+    // Fetch fresh user from DB if connected to avoid any stale cached aiConfig
+    let aiConfig = user.aiConfig || { enabled: true };
+    if (mongoose.connection.readyState === 1 && user._id) {
+      try {
+        const dbUser = await User.findById(user._id).select('aiConfig company').lean();
+        if (dbUser?.aiConfig) {
+          aiConfig = dbUser.aiConfig;
+        }
+      } catch (err) {
+        console.warn('[getMyAiAccess] DB lookup fallback to session user:', err.message);
+      }
+    }
+
+    const isEnabled = aiConfig.enabled !== false;
+    const isZeroLimit = aiConfig.customDailyTokenLimit === 0;
+    const hasAccess = isEnabled && !isZeroLimit;
+
+    return res.status(200).json({
+      success: true,
+      hasAccess,
+      aiConfig: {
+        enabled: isEnabled,
+        customDailyTokenLimit: aiConfig.customDailyTokenLimit,
+        isUnlimited: Boolean(aiConfig.isUnlimited),
+      },
+    });
+  } catch (error) {
+    console.error('[getMyAiAccess] Error:', error);
+    return res.status(500).json({ success: false, hasAccess: true, error: error.message });
+  }
+};
+
+

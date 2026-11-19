@@ -31,6 +31,9 @@ const requireCompanyAdmin = (req, res, next) => {
   });
 };
 
+// Employee Self-Access Check (Available to any authenticated company employee)
+router.get('/my-access', protect, companyAiController.getMyAiAccess);
+
 router.use(protect, requireCompanyAdmin);
 
 // Settings and Key Management
