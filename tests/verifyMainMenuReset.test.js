@@ -24,13 +24,14 @@ const assert = require('node:assert');
   assert.equal(res1.status, 'open');
   assert.equal(res1.field, 'welcome');
   assert.equal(res1.draft, null);
-  assert.equal(res1.chips.length, 6);
+  assert.equal(res1.chips.length, 7);
   assert.equal(res1.chips[0].label, 'Personal task banana');
   assert.equal(res1.chips[1].label, 'Kisi ko task assign karna');
   assert.equal(res1.chips[2].label, 'Naya project banana');
   assert.equal(res1.chips[3].label, 'Project mein task banana/assign karna');
-  assert.equal(res1.chips[4].label, 'Naya client add karna');
-  assert.equal(res1.chips[5].label, 'Client plan banana');
+  assert.equal(res1.chips[4].label, 'Client task banana');
+  assert.equal(res1.chips[5].label, 'Naya client add karna');
+  assert.equal(res1.chips[6].label, 'Client plan banana');
 
   console.log('\n--- Test 2: User types "main menu" ---');
   const res2 = await parseTaskRequest({
@@ -48,7 +49,7 @@ const assert = require('node:assert');
   assert.equal(res2.status, 'open');
   assert.equal(res2.field, 'welcome');
   assert.equal(res2.draft, null);
-  assert.equal(res2.chips.length, 6);
+  assert.equal(res2.chips.length, 7);
 
   console.log('\n--- Test 3: User types "menu" ---');
   const res3 = await parseTaskRequest({
@@ -60,7 +61,7 @@ const assert = require('node:assert');
     }
   });
   assert.equal(res3.status, 'open');
-  assert.equal(res3.chips.length, 6);
+  assert.equal(res3.chips.length, 7);
 
   console.log('\n>>> ALL MAIN MENU RESET TESTS PASSED 100%! <<<');
   process.exit(0);

@@ -1,6 +1,6 @@
 const INDIA_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
-const VALID_REPEAT_PATTERNS = new Set(['none', 'daily']);
+const VALID_REPEAT_PATTERNS = new Set(['none', 'daily', 'weekly', 'monthly', 'yearly']);
 const WEEKDAY_TO_INDEX = {
   sunday: 0,
   monday: 1,
@@ -157,6 +157,39 @@ const getNextRecurringDate = (referenceDate, repeatPattern, repeatDays) => {
 
   const selectedDays = normalizeRepeatDays(repeatDays);
   const selectedIndexes = selectedDays.map(day => WEEKDAY_TO_INDEX[day]).filter(Number.isInteger);
+
+  if (pattern === 'weekly') {
+    const nextLocal = new Date(localMidnight.getTime() + 7 * DAY_MS);
+    return buildIndiaDateTime(getIndiaDateParts(nextLocal), timeParts);
+  }
+
+  if (pattern === 'monthly') {
+    const nextYear = localBase.monthIndex === 11 ? localBase.year + 1 : localBase.year;
+    const nextMonth = (localBase.monthIndex + 1) % 12;
+    const maxDaysInNextMonth = new Date(Date.UTC(nextYear, nextMonth + 1, 0)).getUTCDate();
+    const nextDay = Math.min(localBase.day, maxDaysInNextMonth);
+    return buildIndiaDateTime({
+      year: nextYear,
+      monthIndex: nextMonth,
+      day: nextDay,
+      hour: 0,
+      minute: 0,
+      second: 0,
+      millisecond: 0
+    }, timeParts);
+  }
+
+  if (pattern === 'yearly') {
+    return buildIndiaDateTime({
+      year: localBase.year + 1,
+      monthIndex: localBase.monthIndex,
+      day: localBase.day,
+      hour: 0,
+      minute: 0,
+      second: 0,
+      millisecond: 0
+    }, timeParts);
+  }
 
   if (pattern !== 'daily') return null;
 

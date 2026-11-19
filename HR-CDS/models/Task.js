@@ -249,7 +249,7 @@ const taskSchema = new mongoose.Schema(
     isRecurring: { type: Boolean, default: false },
     repeatPattern: {
       type: String,
-      enum: ["none", "daily"],
+      enum: ["none", "daily", "weekly", "monthly", "yearly"],
       default: "none",
     },
     repeatDays: {
