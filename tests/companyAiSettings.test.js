@@ -28,6 +28,7 @@ describe('Company AI Settings Controller Tests', () => {
     assert.equal(typeof companyAiController.getEmployeeTokenAllocations, 'function');
     assert.equal(typeof companyAiController.updateEmployeeTokenAllocation, 'function');
     assert.equal(typeof companyAiController.bulkUpdateEmployeeTokenAllocations, 'function');
+    assert.equal(typeof companyAiController.getCompanyAiUsageHistory, 'function');
   });
 
   it('2. testCompanyGroqKey returns 400 when no key provided', async () => {
@@ -41,5 +42,18 @@ describe('Company AI Settings Controller Tests', () => {
     assert.equal(res.statusCode, 400);
     assert.equal(res.body?.success, false);
     assert.match(res.body?.message, /No Groq API Key provided/i);
+  });
+
+  it('3. getCompanyAiUsageHistory validates invalid company ID', async () => {
+    const req = {
+      params: { companyId: 'invalid-id' },
+      query: {},
+    };
+    const res = createMockRes();
+
+    await companyAiController.getCompanyAiUsageHistory(req, res);
+    assert.equal(res.statusCode, 400);
+    assert.equal(res.body?.success, false);
+    assert.match(res.body?.message, /Invalid company ID/i);
   });
 });

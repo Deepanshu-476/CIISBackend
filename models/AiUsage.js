@@ -35,6 +35,32 @@ const aiUsageSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    keySource: {
+      type: String,
+      enum: ['platform', 'client'],
+      default: 'platform',
+      index: true,
+    },
+    tokensPlatform: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    tokensByok: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    callsPlatform: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    callsByok: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
   },
   {
     timestamps: true,
