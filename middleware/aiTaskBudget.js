@@ -423,6 +423,16 @@ const consumeTaskBudget = async (req, tokensUsed = 780) => {
   const actualTokens = Number.isFinite(tokensUsed) && tokensUsed > 0 ? Math.round(tokensUsed) : 780;
   const companyId = req.user.company?._id || req.user.company;
   const todayIst = getTodayIstDate();
+
+  let limits = null;
+  try {
+    limits = await getCompanyAiLimits(req.user.company);
+  } catch (err) {
+    // Non-fatal
+  }
+  const isClientKey = limits?.aiApiKeySource === 'client';
+  const keySource = isClientKey ? 'client' : 'platform';
+
   const filter = {
     company: companyId,
     user: userId,
@@ -430,8 +440,21 @@ const consumeTaskBudget = async (req, tokensUsed = 780) => {
     feature: 'task_agent',
   };
 
+  const incFields = {
+    count: 1,
+    tokensUsed: actualTokens,
+  };
+  if (isClientKey) {
+    incFields.tokensByok = actualTokens;
+    incFields.callsByok = 1;
+  } else {
+    incFields.tokensPlatform = actualTokens;
+    incFields.callsPlatform = 1;
+  }
+
   const update = {
-    $inc: { count: 1, tokensUsed: actualTokens },
+    $inc: incFields,
+    $set: { keySource },
     $setOnInsert: {
       company: companyId,
       user: userId,
@@ -448,10 +471,9 @@ const consumeTaskBudget = async (req, tokensUsed = 780) => {
   const AiUsageModel = req?._deps?.AiUsage || AiUsage;
   const updatedDoc = await AiUsageModel.findOneAndUpdate(filter, update, options);
 
-  // If company has extra top-up tokens and user exceeded plan limit, deduct from extra tokens
+  // If company has extra top-up tokens and user exceeded plan limit, deduct from extra tokens (Platform Key only)
   try {
-    const limits = await getCompanyAiLimits(req.user.company);
-    if (limits.extraTokens > 0 && updatedDoc && updatedDoc.tokensUsed > limits.tokenLimit) {
+    if (!isClientKey && limits && limits.extraTokens > 0 && updatedDoc && updatedDoc.tokensUsed > limits.tokenLimit) {
       const deduction = Math.min(limits.extraTokens, actualTokens);
       if (deduction > 0) {
         await Company.findByIdAndUpdate(companyId, { $inc: { aiExtraTokens: -deduction } });

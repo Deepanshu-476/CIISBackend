@@ -432,3 +432,254 @@ exports.bulkUpdateEmployeeTokenAllocations = async (req, res) => {
     return res.status(500).json({ success: false, message: 'Failed to bulk update employees' });
   }
 };
+
+/**
+ * GET /api/company/:companyId/ai-settings/history
+ * Returns historical AI token usage analytics, daily breakdown, and employee leaderboard.
+ * Supports date ranges, keySource filter (platform vs client BYOK), and department filters.
+ */
+exports.getCompanyAiUsageHistory = async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    let { startDate, endDate, keySource = 'all', department, search } = req.query;
+
+    const todayIst = getTodayIstDate();
+    if (!endDate || typeof endDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+      endDate = todayIst;
+    }
+    if (!startDate || typeof startDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
+      // Default: 30 days ago
+      const d = new Date();
+      d.setDate(d.getDate() - 30);
+      startDate = getTodayIstDate(d);
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(companyId)) {
+      return res.status(400).json({ success: false, message: 'Invalid company ID' });
+    }
+
+    const companyObjId = new mongoose.Types.ObjectId(companyId);
+
+    // Optional user pre-filtering by department or search
+    let targetUserIds = null;
+    if ((department && department !== 'ALL') || search) {
+      const userFilter = { company: companyObjId };
+      if (department && department !== 'ALL') {
+        if (mongoose.Types.ObjectId.isValid(department)) {
+          userFilter.department = department;
+        } else {
+          // If department name passed, find Department by name
+          const DepartmentModel = mongoose.models.Department;
+          if (DepartmentModel) {
+            const deptDoc = await DepartmentModel.findOne({ company: companyObjId, name: department }).select('_id');
+            if (deptDoc) userFilter.department = deptDoc._id;
+          }
+        }
+      }
+      if (search) {
+        userFilter.$or = [
+          { name: { $regex: search.trim(), $options: 'i' } },
+          { email: { $regex: search.trim(), $options: 'i' } },
+        ];
+      }
+      const matchedUsers = await User.find(userFilter).select('_id').lean();
+      targetUserIds = matchedUsers.map((u) => u._id);
+    }
+
+    const matchStage = {
+      company: companyObjId,
+      feature: 'task_agent',
+      date: { $gte: startDate, $lte: endDate },
+    };
+
+    if (targetUserIds !== null) {
+      matchStage.user = { $in: targetUserIds };
+    }
+
+    if (keySource === 'platform') {
+      matchStage.$or = [
+        { keySource: 'platform' },
+        { tokensPlatform: { $gt: 0 } },
+        { $and: [{ tokensByok: { $in: [0, null] } }, { tokensUsed: { $gt: 0 } }] },
+      ];
+    } else if (keySource === 'client') {
+      matchStage.$or = [
+        { keySource: 'client' },
+        { tokensByok: { $gt: 0 } },
+      ];
+    }
+
+    // 1. Group by Date for Daily Breakdown
+    const dailyAgg = await AiUsage.aggregate([
+      { $match: matchStage },
+      {
+        $group: {
+          _id: '$date',
+          totalTokens: { $sum: '$tokensUsed' },
+          platformTokens: {
+            $sum: {
+              $cond: [
+                { $gt: ['$tokensPlatform', 0] },
+                '$tokensPlatform',
+                {
+                  $cond: [
+                    { $eq: ['$keySource', 'client'] },
+                    0,
+                    { $ifNull: ['$tokensUsed', 0] }
+                  ]
+                }
+              ]
+            }
+          },
+          byokTokens: {
+            $sum: {
+              $cond: [
+                { $gt: ['$tokensByok', 0] },
+                '$tokensByok',
+                {
+                  $cond: [
+                    { $eq: ['$keySource', 'client'] },
+                    { $ifNull: ['$tokensUsed', 0] },
+                    0
+                  ]
+                }
+              ]
+            }
+          },
+          calls: { $sum: '$count' },
+          activeUsers: { $addToSet: '$user' },
+        },
+      },
+      { $sort: { _id: -1 } },
+    ]);
+
+    const dailyBreakdown = dailyAgg.map((d) => ({
+      date: d._id,
+      totalTokens: d.totalTokens || 0,
+      platformTokens: d.platformTokens || 0,
+      byokTokens: d.byokTokens || 0,
+      calls: d.calls || 0,
+      activeUsersCount: d.activeUsers?.length || 0,
+    }));
+
+    // 2. Group by User for Leaderboard
+    const userAgg = await AiUsage.aggregate([
+      { $match: matchStage },
+      {
+        $group: {
+          _id: '$user',
+          totalTokens: { $sum: '$tokensUsed' },
+          platformTokens: {
+            $sum: {
+              $cond: [
+                { $gt: ['$tokensPlatform', 0] },
+                '$tokensPlatform',
+                {
+                  $cond: [
+                    { $eq: ['$keySource', 'client'] },
+                    0,
+                    { $ifNull: ['$tokensUsed', 0] }
+                  ]
+                }
+              ]
+            }
+          },
+          byokTokens: {
+            $sum: {
+              $cond: [
+                { $gt: ['$tokensByok', 0] },
+                '$tokensByok',
+                {
+                  $cond: [
+                    { $eq: ['$keySource', 'client'] },
+                    { $ifNull: ['$tokensUsed', 0] },
+                    0
+                  ]
+                }
+              ]
+            }
+          },
+          calls: { $sum: '$count' },
+          daysActive: { $addToSet: '$date' },
+        },
+      },
+      { $sort: { totalTokens: -1 } },
+      { $limit: 100 },
+    ]);
+
+    const userIds = userAgg.map((u) => u._id);
+    const users = await User.find({ _id: { $in: userIds } })
+      .select('name email department jobRole companyRole')
+      .populate('department', 'name')
+      .lean();
+
+    const roleIds = users
+      .map((u) => u.jobRole)
+      .filter((id) => id && mongoose.Types.ObjectId.isValid(id));
+    const jobRoleDocs = await JobRole.find({ _id: { $in: roleIds } }).select('name').lean();
+    const roleMap = new Map(jobRoleDocs.map((r) => [String(r._id), r.name]));
+    const userMap = new Map(users.map((u) => [String(u._id), u]));
+
+    const grandTotalTokens = dailyBreakdown.reduce((sum, d) => sum + d.totalTokens, 0);
+    const grandPlatformTokens = dailyBreakdown.reduce((sum, d) => sum + d.platformTokens, 0);
+    const grandByokTokens = dailyBreakdown.reduce((sum, d) => sum + d.byokTokens, 0);
+    const grandCalls = dailyBreakdown.reduce((sum, d) => sum + d.calls, 0);
+
+    const allActiveUsersSet = new Set();
+    dailyAgg.forEach((d) => {
+      (d.activeUsers || []).forEach((uId) => allActiveUsersSet.add(String(uId)));
+    });
+
+    const employeeLeaderboard = userAgg.map((u, idx) => {
+      const userDoc = userMap.get(String(u._id)) || {};
+      const jobRoleName = roleMap.get(String(userDoc.jobRole)) || userDoc.jobRole || userDoc.companyRole || 'Employee';
+      const pct = grandTotalTokens > 0 ? Number(((u.totalTokens / grandTotalTokens) * 100).toFixed(1)) : 0;
+
+      return {
+        rank: idx + 1,
+        userId: u._id,
+        name: userDoc.name || 'Unknown User',
+        email: userDoc.email || '',
+        department: userDoc.department?.name || 'General',
+        jobRole: jobRoleName,
+        totalTokens: u.totalTokens || 0,
+        platformTokens: u.platformTokens || 0,
+        byokTokens: u.byokTokens || 0,
+        calls: u.calls || 0,
+        daysActiveCount: u.daysActive?.length || 0,
+        percentOfTotal: pct,
+      };
+    });
+
+    const topUser = employeeLeaderboard[0] || null;
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        dateRange: { startDate, endDate },
+        summary: {
+          totalTokens: grandTotalTokens,
+          platformTokens: grandPlatformTokens,
+          byokTokens: grandByokTokens,
+          totalCalls: grandCalls,
+          activeUsersCount: allActiveUsersSet.size,
+          topUser: topUser
+            ? {
+                name: topUser.name,
+                email: topUser.email,
+                department: topUser.department,
+                tokens: topUser.totalTokens,
+                percentOfTotal: topUser.percentOfTotal,
+              }
+            : null,
+        },
+        dailyBreakdown,
+        employeeLeaderboard,
+      },
+    });
+  } catch (error) {
+    console.error('[getCompanyAiUsageHistory] Error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to fetch AI usage history' });
+  }
+};
+

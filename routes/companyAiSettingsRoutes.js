@@ -35,6 +35,7 @@ router.use(protect, requireCompanyAdmin);
 
 // Settings and Key Management
 router.get('/', companyAiController.getCompanyAiSettings);
+router.get('/history', companyAiController.getCompanyAiUsageHistory);
 router.put('/key', companyAiController.updateCompanyAiKey);
 router.post('/test-key', companyAiController.testCompanyGroqKey);
 
