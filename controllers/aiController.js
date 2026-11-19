@@ -209,3 +209,68 @@ exports.transcribe = async (req, res, deps = {}) => {
     });
   }
 };
+
+exports.parseCsvTasks = async (req, res) => {
+  try {
+    const companyId = req.user?.company?._id || req.user?.company;
+    const taskType = req.body?.taskType || 'auto';
+
+    let csvBuffer = req.file?.buffer;
+    if (!csvBuffer && req.body?.csvText) {
+      csvBuffer = Buffer.from(req.body.csvText, 'utf8');
+    }
+
+    const { parseBulkTasksCsv } = require('../services/ai/bulkTaskCsvService');
+    const result = await parseBulkTasksCsv(csvBuffer, taskType, companyId, null, req.file?.originalname || '');
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    console.error('parseCsvTasks error:', error);
+    return res.status(400).json({
+      success: false,
+      message: error.message || 'CSV parse karne mein error aayi.',
+    });
+  }
+};
+
+exports.createBulkTasks = async (req, res) => {
+  try {
+    const companyId = req.user?.company?._id || req.user?.company;
+    const companyCode = req.user?.companyCode || req.user?.company?.companyCode;
+    const createdBy = req.user?._id || req.user?.id;
+    const { tasks, taskType } = req.body;
+
+    if (!Array.isArray(tasks) || tasks.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No tasks provided to create.',
+      });
+    }
+
+    const { createBulkTasks } = require('../services/ai/bulkTaskCsvService');
+    const result = await createBulkTasks({
+      companyCode,
+      companyId,
+      createdBy,
+      tasks,
+      taskType: taskType || 'self',
+      req,
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: `${result.count} tasks successfully create ho gaye!`,
+      count: result.count,
+      tasks: result.tasks,
+    });
+  } catch (error) {
+    console.error('createBulkTasks error:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Tasks create karne mein error aayi.',
+    });
+  }
+};

@@ -112,9 +112,41 @@ const handleAudioUpload = (req, res, next) => {
   });
 };
 
+const csvUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10 MB
+    files: 1,
+  },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    if (['.csv', '.txt', '.xlsx', '.xls'].includes(ext)) {
+      return cb(null, true);
+    }
+    const err = new Error('Invalid file format. Allowed: .csv, .xlsx, .txt');
+    err.code = 'INVALID_CSV_FORMAT';
+    return cb(err, false);
+  },
+}).single('file');
+
+const handleCsvUpload = (req, res, next) => {
+  csvUpload(req, res, (err) => {
+    if (err) {
+      return res.status(400).json({
+        success: false,
+        code: 'CSV_UPLOAD_ERROR',
+        message: err.message || 'CSV file upload failed',
+      });
+    }
+    next();
+  });
+};
+
 // ---- Voice Task Agent (time-gate yahan NAHI lagta: employee din mein bhi task bana sake) ----
 router.post('/task-agent/parse', protect, aiParseLimiter, aiTaskBudget, aiController.parseTask);
 router.post('/transcribe', protect, aiSttLimiter, aiTaskBudget.aiSttBudget, handleAudioUpload, aiController.transcribe);
+router.post('/task-agent/parse-csv', protect, aiParseLimiter, aiTaskBudget, handleCsvUpload, aiController.parseCsvTasks);
+router.post('/task-agent/bulk-create', protect, aiParseLimiter, aiTaskBudget, aiController.createBulkTasks);
 
 // ---- Insights ----
 // Employee wrap-up summary: employees ke liye 5-7 PM IST window, Owner/Admin 24/7 (aiTimeGate khud skip karta hai)

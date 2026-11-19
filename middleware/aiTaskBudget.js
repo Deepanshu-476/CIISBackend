@@ -237,19 +237,19 @@ const aiTaskBudget = async (req, res, next) => {
     const todayIst = getTodayIstDate();
     const limits = await getCompanyAiLimits(req.user.company);
 
+    const isOwnerAdmin = isOwnerOrAdmin(req.user);
+    const aiConfig = req.user.aiConfig;
+
+    // Access explicitly disabled by company admin for this employee (enforce across ALL modes)
+    if (!isOwnerAdmin && aiConfig && aiConfig.enabled === false) {
+      return res.status(403).json({
+        success: false,
+        code: 'AI_ACCESS_DISABLED_BY_ADMIN',
+        message: "You don't have access to use CIIS AI. Please contact your company administrator.",
+      });
+    }
+
     if (limits.aiApiKeySource === 'client') {
-      const isOwnerAdmin = isOwnerOrAdmin(req.user);
-      const aiConfig = req.user.aiConfig;
-
-      // Access explicitly disabled by company admin for this employee
-      if (!isOwnerAdmin && aiConfig && aiConfig.enabled === false) {
-        return res.status(403).json({
-          success: false,
-          code: 'AI_ACCESS_DISABLED_BY_ADMIN',
-          message: 'Aapki company ke admin ne aapka AI Assistant access disable kiya hua hai. Kripya company admin se sampark karein.',
-        });
-      }
-
       // Owner/Admin or explicitly marked isUnlimited gets unmetered access
       if (isOwnerAdmin || (aiConfig && aiConfig.isUnlimited)) {
         req.aiTaskUsage = {
@@ -327,6 +327,10 @@ const aiTaskBudget = async (req, res, next) => {
     const callLimit = baseCallLimit + (limits.extraCalls || 0);
     const totalAllowedTokens = limits.tokenLimit + (limits.extraTokens || 0);
 
+    const effectiveTokenLimit = (!isOwnerAdmin && aiConfig && !aiConfig.isUnlimited && typeof aiConfig.customDailyTokenLimit === 'number' && aiConfig.customDailyTokenLimit > 0)
+      ? Math.min(totalAllowedTokens, aiConfig.customDailyTokenLimit)
+      : totalAllowedTokens;
+
     // AI Plan Entitlement Gate: Strictly block companies without an active AI plan or allocated tokens
     if (limits.aiApiKeySource !== 'client' && totalAllowedTokens <= 0) {
       return res.status(403).json({
@@ -362,12 +366,15 @@ const aiTaskBudget = async (req, res, next) => {
 
     if (!isActionOrDeterministic) {
       // 1. Check token budget (Primary)
-      if (currentTokens >= totalAllowedTokens) {
+      if (currentTokens >= effectiveTokenLimit) {
+        const isCustomQuota = effectiveTokenLimit < totalAllowedTokens;
         return res.status(429).json({
           success: false,
-          code: 'AI_TOKEN_LIMIT_REACHED',
-          message: `Aaj ka daily AI token limit (${totalAllowedTokens.toLocaleString()} tokens) exceed ho gaya hai. Kripya kal dobara koshish karein ya extra tokens ke liye company admin se sampark karein.`,
-          limit: totalAllowedTokens,
+          code: isCustomQuota ? 'EMPLOYEE_TOKEN_LIMIT_REACHED' : 'AI_TOKEN_LIMIT_REACHED',
+          message: isCustomQuota
+            ? `Aapka daily AI token quota (${effectiveTokenLimit.toLocaleString()} tokens) pura ho chuka hai. Kripya apne company admin se limit badhwane ke liye sampark karein.`
+            : `Aaj ka daily AI token limit (${totalAllowedTokens.toLocaleString()} tokens) exceed ho gaya hai. Kripya kal dobara koshish karein ya extra tokens ke liye company admin se sampark karein.`,
+          limit: effectiveTokenLimit,
           current: currentTokens,
           tokensUsed: currentTokens,
         });
@@ -477,6 +484,18 @@ const aiSttBudget = async (req, res, next) => {
     const companyId = req.user.company?._id || req.user.company;
     const todayIst = getTodayIstDate();
     const limits = await getCompanyAiLimits(req.user.company);
+
+    const isOwnerAdmin = isOwnerOrAdmin(req.user);
+    const aiConfig = req.user.aiConfig;
+
+    // Access explicitly disabled by company admin for this employee
+    if (!isOwnerAdmin && aiConfig && aiConfig.enabled === false) {
+      return res.status(403).json({
+        success: false,
+        code: 'AI_ACCESS_DISABLED_BY_ADMIN',
+        message: "You don't have access to use CIIS AI. Please contact your company administrator.",
+      });
+    }
 
     if (limits.aiApiKeySource === 'client') {
       req.aiSttUsage = {

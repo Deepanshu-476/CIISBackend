@@ -49,7 +49,9 @@ exports.verify = async (req, res) => {
         jobRole: user.jobRole,
         department: user.department,
         company: user.company,
-        companyCode: user.companyCode
+        companyCode: user.companyCode,
+        companyRole: user.companyRole,
+        aiConfig: user.aiConfig
       }
     });
   } catch (err) {
@@ -240,7 +242,8 @@ exports.protect = async (req, res, next) => {
         workLocation: user.workLocation,
         clientId: user.clientId,
         clientUserId: user.clientUserId || user._id,
-        additionalDetails: user.additionalDetails
+        additionalDetails: user.additionalDetails,
+        aiConfig: user.aiConfig,
       };
       
       

@@ -197,6 +197,8 @@ function hasExplicitFieldEditIntent(text) {
 const INTENT_NAMES_HI = {
   self_task: 'Personal task',
   task_assigned_user: 'Kisi aur ko task assign karna',
+  bulk_self_task_csv: 'Personal tasks (CSV)',
+  bulk_assigned_task_csv: 'Assign tasks (CSV)',
   create_project: 'Project create karna',
   task_project: 'Project mein task banana',
   create_client: 'Client add karna',
@@ -3132,6 +3134,8 @@ const INTENT_PAGE_NAMES_EN = {
   task_project: 'Projects',
   task_assigned_user: 'Task Assignment',
   self_task: 'Personal Tasks',
+  bulk_self_task_csv: 'Personal Tasks (CSV)',
+  bulk_assigned_task_csv: 'Task Assignment (CSV)',
 };
 
 const INTENT_PAGE_NAMES_HI = {
@@ -3142,11 +3146,15 @@ const INTENT_PAGE_NAMES_HI = {
   task_project: 'Projects',
   task_assigned_user: 'Task Assignment',
   self_task: 'Personal Tasks',
+  bulk_self_task_csv: 'Personal Tasks (CSV)',
+  bulk_assigned_task_csv: 'Task Assignment (CSV)',
 };
 
 const INTENT_NAMES_EN = {
   self_task: 'Personal tasks',
   task_assigned_user: 'Assigning tasks',
+  bulk_self_task_csv: 'Personal tasks (CSV)',
+  bulk_assigned_task_csv: 'Assign tasks (CSV)',
   create_project: 'Creating projects',
   task_project: 'Project tasks',
   create_client: 'Client management',
@@ -3158,6 +3166,8 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
   const ALL_INTENTS = [
     'self_task',
     'task_assigned_user',
+    'bulk_self_task_csv',
+    'bulk_assigned_task_csv',
     'create_project',
     'task_project',
     'create_client',
@@ -3229,7 +3239,7 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
     }
   });
 
-  const allowed = ['self_task'];
+  const allowed = ['self_task', 'bulk_self_task_csv'];
 
   // Assigning tasks to others requires "Admin Create Task" permission (not general Task Management)
   const canAssign = Boolean(
@@ -3244,7 +3254,7 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
     user?.permissions?.includes?.('admin-create-task')
   );
   if (canAssign) {
-    allowed.push('task_assigned_user');
+    allowed.push('task_assigned_user', 'bulk_assigned_task_csv');
   }
 
   // Creating projects requires administrative project permission
@@ -3387,6 +3397,26 @@ async function parseTaskRequest({
   pick = null,
   action = null,
 }, deps = {}) {
+  const reqUser = req?.user;
+  const isPrivileged = reqUser && (
+    ['owner', 'admin', 'companyadmin', 'superadmin'].includes(String(reqUser.companyRole || '').toLowerCase().replace(/[\s_-]+/g, '')) ||
+    ['owner', 'admin', 'companyadmin', 'superadmin'].includes(String(reqUser.role || '').toLowerCase().replace(/[\s_-]+/g, '')) ||
+    ['owner', 'admin', 'companyadmin', 'superadmin'].includes(String(reqUser.jobRole || '').toLowerCase().replace(/[\s_-]+/g, '')) ||
+    Boolean(reqUser.isSuperAdmin)
+  );
+  if (reqUser && !isPrivileged && reqUser.aiConfig && reqUser.aiConfig.enabled === false) {
+    const disabledReply = "You don't have access to use CIIS AI. Please contact your company administrator.";
+    return {
+      status: 'blocked',
+      field: 'blocked',
+      reply: disabledReply,
+      speech: "You don't have access to use CIIS AI.",
+      speakTextHi: "You don't have access to use CIIS AI.",
+      draft: null,
+      chips: [],
+    };
+  }
+
   const now = deps.now instanceof Date ? deps.now : new Date();
   const extractFn = deps.extractFn || extractTaskDraft;
   const scopeInfoFn = deps.getScopeInfo || getScopeInfo;
@@ -3929,6 +3959,50 @@ const lastAskedField = currentDraft.asked.length > 0
             };
           }
           currentDraft.intent = action.intent;
+          if (action.intent === 'bulk_self_task_csv') {
+            currentDraft.intent = 'bulk_self_task_csv';
+            currentDraft.bulkTaskType = 'self';
+            return {
+              success: true,
+              status: 'needs_input',
+              field: 'csv_upload',
+              reply: isEn
+                ? 'Please attach your Personal Tasks CSV file using the paperclip 📎 icon. You can also download our sample CSV template below:'
+                : 'Kripya paperclip 📎 icon se apni Personal Tasks CSV file attach karein. Aap neeche diye gaye button se Sample CSV Template bhi download kar sakte hain:',
+              speech: isEn
+                ? 'Please attach your Personal Tasks CSV file using the paperclip.'
+                : 'कृपया पेपरक्लिप से अपनी पर्सनल टास्क सीएसवी फाइल अटैच करें।',
+              draft: currentDraft,
+              chips: [
+                { label: isEn ? '📥 Download Personal Task Template' : '📥 Download Sample CSV Template', action: { type: 'download_template', templateType: 'self' } },
+                { label: isEn ? 'Main Menu' : 'Main Menu', action: { type: 'reset' } }
+              ],
+              candidates: [],
+              notices: []
+            };
+          }
+          if (action.intent === 'bulk_assigned_task_csv') {
+            currentDraft.intent = 'bulk_assigned_task_csv';
+            currentDraft.bulkTaskType = 'assigned';
+            return {
+              success: true,
+              status: 'needs_input',
+              field: 'csv_upload',
+              reply: isEn
+                ? 'Please attach your Assigned Tasks CSV file using the paperclip 📎 icon. You can also download our sample CSV template with assignee columns below:'
+                : 'Kripya paperclip 📎 icon se apni Assigned Tasks CSV file attach karein. Aap neeche diye gaye button se Sample CSV Template bhi download kar sakte hain:',
+              speech: isEn
+                ? 'Please attach your Assigned Tasks CSV file.'
+                : 'कृपया अपनी असाइन टास्क सीएसवी फाइल अटैच करें।',
+              draft: currentDraft,
+              chips: [
+                { label: isEn ? '📥 Download Assigned Task Template' : '📥 Download Sample CSV Template', action: { type: 'download_template', templateType: 'assigned' } },
+                { label: isEn ? 'Main Menu' : 'Main Menu', action: { type: 'reset' } }
+              ],
+              candidates: [],
+              notices: []
+            };
+          }
           if (action.intent === 'self_task') {
             currentDraft.taskFor = 'self';
             currentDraft.wantsOthers = false;

@@ -476,6 +476,7 @@ const completeStandardLogin = async (userId, res, { message = "Login successful"
       isActive: user.isActive,
       lastLogin: user.lastLogin,
       companyRole: user.companyRole,
+      aiConfig: user.aiConfig,
       createdAt: user.createdAt,
       updatedAt: user.updatedAt
     },

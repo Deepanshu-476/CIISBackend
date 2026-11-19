@@ -642,4 +642,66 @@ describe('aiTaskBudget middleware tests', () => {
     assert.equal(res.statusCode, 403, 'Returns HTTP 403');
     assert.equal(res.body?.code, 'AI_SUBSCRIPTION_REQUIRED');
   });
+
+  it('19. Platform Mode: Returns 403 AI_ACCESS_DISABLED_BY_ADMIN when admin has disabled AI access for employee (even on action buttons)', async () => {
+    const company = {
+      _id: 'company-platform-career',
+      aiApiKeySource: 'platform',
+      aiDailyTokenLimit: 50000,
+      aiDailyCallLimit: 50,
+      aiExtraTokens: 0,
+    };
+    const req = {
+      user: {
+        _id: 'emp-pallavi-disabled',
+        company,
+        companyRole: 'employee',
+        jobRole: 'Manager',
+        aiConfig: { enabled: false, isUnlimited: false, customDailyTokenLimit: 10000 },
+      },
+      body: { message: 'Assign task to someone' }, // Deterministic action button click
+      _deps: { AiUsage: mockAiUsage },
+    };
+    const res = createMockRes();
+    let nextCalled = false;
+
+    await aiTaskBudget(req, res, () => {
+      nextCalled = true;
+    });
+
+    assert.equal(nextCalled, false, 'Disabled employee must be strictly blocked even on button clicks');
+    assert.equal(res.statusCode, 403, 'Returns HTTP 403');
+    assert.equal(res.body?.code, 'AI_ACCESS_DISABLED_BY_ADMIN');
+    assert.match(res.body?.message, /don't have access to use CIIS AI/i);
+  });
+
+  it('20. Platform Mode: Voice STT returns 403 AI_ACCESS_DISABLED_BY_ADMIN when admin has disabled AI access for employee', async () => {
+    const company = {
+      _id: 'company-platform-career',
+      aiApiKeySource: 'platform',
+      aiDailyTokenLimit: 50000,
+      aiDailySttLimit: 50,
+      aiExtraTokens: 0,
+    };
+    const req = {
+      user: {
+        _id: 'emp-pallavi-disabled',
+        company,
+        companyRole: 'employee',
+        jobRole: 'Manager',
+        aiConfig: { enabled: false, isUnlimited: false },
+      },
+      _deps: { AiUsage: mockAiUsage },
+    };
+    const res = createMockRes();
+    let nextCalled = false;
+
+    await aiTaskBudget.aiSttBudget(req, res, () => {
+      nextCalled = true;
+    });
+
+    assert.equal(nextCalled, false, 'Voice STT must be blocked for disabled employee');
+    assert.equal(res.statusCode, 403, 'Returns HTTP 403');
+    assert.equal(res.body?.code, 'AI_ACCESS_DISABLED_BY_ADMIN');
+  });
 });
