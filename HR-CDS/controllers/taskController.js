@@ -1,3 +1,5 @@
+const { OVERDUE_STATUS_MESSAGE, isOverdueStatus, isCompanyTaskWrite, isCompanyTaskWriteRequest } = require('../utils/companyTaskStatus');
+const { preserveCheckpointProgress } = require('../utils/taskCheckpoints');
 
 const Task = require('../models/Task');
 const ClientTask = require('../models/ClientTask');
@@ -666,6 +668,7 @@ const isSameCompanyTaskRequest = (req, task) => {
 };
 
 const canManageTaskFromCompanyAll = async (req, task) => {
+  if (isCompanyTaskWriteRequest(req)) return isCompanyTaskWrite(req, task);
   if (!isSameCompanyTaskRequest(req, task) || !isCompanyAllTaskEdit(req)) return false;
   const user = req.user;
   if (!user) return false;
@@ -711,7 +714,7 @@ const canManageTaskFromCompanyAll = async (req, task) => {
   }
 };
 
-const parseTaskCheckpoints = value => {
+const parseTaskCheckpoints = (value, includeId = false) => {
   if (!value || value === 'null') return [];
   const raw = typeof value === 'string' ? JSON.parse(value) : value;
   if (!Array.isArray(raw)) return [];
@@ -724,6 +727,7 @@ const parseTaskCheckpoints = value => {
 
       const completed = Boolean(typeof item === 'object' ? item.completed : false);
       return {
+        ...(includeId ? { _id: item?._id || item?.id } : {}),
         title: cleanTitle,
         completed,
         completedAt: completed ? (item?.completedAt ? new Date(item.completedAt) : new Date()) : null,
@@ -2305,6 +2309,9 @@ exports.updateTask = async (req, res) => {
     const task = await Task.findById(taskId);
     if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
 
+    if (isCompanyTaskWriteRequest(req) && !isCompanyTaskWrite(req, task)) {
+      return res.status(403).json({ success: false, error: 'Task belongs to another company' });
+    }
     const currentUserId = (req.user._id || req.user.id).toString();
     const isAssignedUser = (task.assignedUsers || []).some(u => String(u._id || u.id || u) === currentUserId);
     const isOnlyReminderUpdate = ['reminderSettings', 'reminderEnabled', 'reminderOptions', 'reminderTime', 'customTime']
@@ -2323,6 +2330,15 @@ exports.updateTask = async (req, res) => {
     if (hasStatusChangedFromPending && !allowCompanyAllEdit) {
       return res.status(400).json({ success: false, error: 'Task cannot be edited after its status has changed from pending' });
     }
+
+    if (req.body.status && req.body.status !== 'null' && !isOverdueStatus(req.body.status) &&
+        (isOverdueStatus(task.overallStatus) ||
+          isTaskOverdueForStatus(task.dueDateTime || task.dueDate, task.overallStatus, task)) &&
+        !isCompanyTaskWrite(req, task)) {
+      return res.status(409).json({ success: false, error: OVERDUE_STATUS_MESSAGE });
+    }
+
+    if (req.body.status && req.body.status !== 'null') task.$where = { updatedAt: task.updatedAt ?? null };
 
     const oldTask = task.toObject();
 
@@ -2404,7 +2420,7 @@ exports.updateTask = async (req, res) => {
       task.statusByUser = task.assignedUsers.map(uid => ({ user: uid, status: 'pending' }));
     }
     if (req.body.checkpoints !== undefined) {
-      task.checkpoints = parseTaskCheckpoints(req.body.checkpoints);
+      task.checkpoints = preserveCheckpointProgress(task.checkpoints, parseTaskCheckpoints(req.body.checkpoints, true));
     }
     if (
       req.body.reminderSettings !== undefined ||
@@ -2524,6 +2540,9 @@ exports.updateStatus = async (req, res) => {
     const task = await Task.findById(taskId);
     if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
 
+    if (isCompanyTaskWriteRequest(req) && !isCompanyTaskWrite(req, task)) {
+      return res.status(403).json({ success: false, error: 'Task belongs to another company' });
+    }
     const currentUserId = (req.user._id || req.user.id).toString();
     const isCreator = task.createdBy.toString() === currentUserId;
     const isAssigned = task.assignedUsers.some(uid => uid.toString() === currentUserId);
@@ -2554,30 +2573,12 @@ exports.updateStatus = async (req, res) => {
       });
     }
 
-    const isOverdueTransitionAllowed = ['in-progress', 'completed', 'onhold', 'cancelled', 'rejected'].includes(normalizedStatus);
-    if (
-      normalizedStatus !== 'overdue' &&
-      normalizeTaskStatus(oldStatus) === 'overdue' &&
-      !allowCompanyAllEdit &&
-      !isOverdueTransitionAllowed
-    ) {
-      return res.status(400).json({ success: false, error: 'Cannot change status of an overdue task' });
-    }
-
     const isResumedFromHold = isOnHoldStatus(oldStatus) && normalizedStatus === 'in-progress';
-
-    if (
-      !['overdue', 'onhold'].includes(normalizedStatus) &&
-      !isResumedFromHold &&
-      !isOverdueTransitionAllowed &&
-      isTaskOverdueForStatus(task.dueDateTime || task.dueDate, oldStatus, task) &&
-      !allowCompanyAllEdit
-    ) {
-      if (!['onhold', 'completed', 'approved', 'rejected', 'cancelled', 'overdue'].includes(normalizeTaskStatus(oldStatus))) {
-        task.markUserStatusOverdue(currentUserId, 'Automatically marked overdue after due time passed');
-        await task.save();
-      }
-      return res.status(400).json({ success: false, error: 'Cannot change status of an overdue task' });
+    if (normalizedStatus !== 'overdue' &&
+        (isOverdueStatus(task.overallStatus) || isOverdueStatus(oldStatus) ||
+          isTaskOverdueForStatus(task.dueDateTime || task.dueDate, oldStatus, task)) &&
+        !isCompanyTaskWrite(req, task)) {
+      return res.status(409).json({ success: false, error: OVERDUE_STATUS_MESSAGE });
     }
 
     if (oldStatus === 'completed' && status !== 'completed' && status !== 'reopen' && !allowCompanyAllEdit) {
@@ -2586,6 +2587,8 @@ exports.updateStatus = async (req, res) => {
     if (oldStatus === 'reopen' && status !== 'reopen' && status !== 'completed' && !allowCompanyAllEdit) {
       return res.status(400).json({ success: false, error: 'Reopened tasks can only be completed.' });
     }
+
+    task.$where = { updatedAt: task.updatedAt ?? null };
 
     const updateUserStatusInList = (targetUserId, newStatus, userRemarks) => {
       const idx = task.statusByUser.findIndex(s => s.user?.toString() === targetUserId.toString());
@@ -2613,7 +2616,7 @@ exports.updateStatus = async (req, res) => {
         task.completionDate = null;
       }
     } else {
-      const isUpdaterAssignee = isAssigned || isGroupAssigned;
+      const isUpdaterAssignee = !isCompanyTaskWrite(req, task) && (isAssigned || isGroupAssigned);
       if (isUpdaterAssignee) {
         updateUserStatusInList(currentUserId, status, remarks);
 
@@ -4164,9 +4167,12 @@ exports.updateCreatorStatus = async (req, res) => {
       return res.status(403).json({ success: false, error: 'Not authorized to change admin status' });
     }
 
-    if (task.overallStatus === 'overdue' && !['pending', 'completed', 'in-progress', 'approved', 'rejected'].includes(normalizeTaskStatus(status))) {
-      return res.status(400).json({ success: false, error: 'Cannot change status of an overdue task' });
+    if (isOverdueStatus(task.overallStatus) || task.statusByUser?.some(entry => isOverdueStatus(entry.status)) ||
+        isTaskOverdueForStatus(task.dueDateTime || task.dueDate, task.overallStatus, task)) {
+      return res.status(409).json({ success: false, error: OVERDUE_STATUS_MESSAGE });
     }
+
+    task.$where = { updatedAt: task.updatedAt ?? null };
 
     const oldCreatorStatus = (task.creatorStatus && typeof task.creatorStatus === 'object')
       ? task.creatorStatus.status

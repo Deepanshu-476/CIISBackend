@@ -5,6 +5,8 @@ const User = require('../../models/User');
 const JobRole = require('../../models/JobRole');
 const { notifyDirectUsers } = require('../utils/systemNotificationService');
 const { isOvertimeApprovedForUserDate } = require('../controllers/overtimeController');
+const { buildCompanyPolicyResolver } = require('../controllers/breakController');
+const { breakTotalsFor, netWorkedMs } = require('../utils/breaks');
 
 const ATTENDANCE_TIME_ZONE = 'Asia/Kolkata';
 const INDIA_OFFSET_MS = 5.5 * 60 * 60 * 1000;
@@ -308,7 +310,7 @@ const runAutoClockOutSweep = async () => {
       inTime: { $ne: null, $gte: scanFrom }
     }).populate({
       path: 'user',
-      select: 'name email company jobRole shiftId shiftName shiftType companyCode'
+      select: 'name email company jobRole jobRoleName shiftId shiftName shiftType companyCode branch branchName department departmentName'
     }).lean();
 
     const shiftLookups = new Map();
@@ -321,6 +323,7 @@ const runAutoClockOutSweep = async () => {
 
     let updated = 0;
 
+    const companyPolicies = new Map();
     for (const record of records) {
       try {
         const recordUser = record.user;
@@ -359,6 +362,21 @@ const runAutoClockOutSweep = async () => {
           currentStatus: record.status
         });
 
+        const { company, companyCode } = recordUser;
+        const companyKey = String(company || companyCode || '');
+        if (companyKey && !companyPolicies.has(companyKey)) {
+          companyPolicies.set(companyKey, buildCompanyPolicyResolver({ company, companyCode }));
+        }
+        const policies = await companyPolicies.get(companyKey);
+        const policy = policies?.policyFor(recordUser);
+        const breaks = (record.breaks || []).map(entry => entry.start && !entry.end ? {
+          ...entry,
+          end: new Date(Math.max(new Date(entry.start).getTime(), effectiveOutTime.getTime())),
+          minutes: Math.max(0, Math.round((effectiveOutTime - new Date(entry.start)) / 60000)),
+        } : entry);
+        const totals = breakTotalsFor({ policy, breaks, inTime: record.inTime, outTime: effectiveOutTime });
+        const grossMs = Math.max(0, effectiveOutTime - new Date(record.inTime));
+
         const autoNote = record.notes || 'Auto clocked out by system (Missed Punch — capped at shift end).';
         const updateSet = {
           shiftId: snapshot.shiftId,
@@ -375,7 +393,14 @@ const runAutoClockOutSweep = async () => {
           outTime: effectiveOutTime,
           clockOutMode: 'AUTO',
           isClockedIn: false,
-          totalTime: recalculated.totalTime,
+          breaks,
+          onBreak: false,
+          breakMode: policy?.mode || 'OFF',
+          scheduledBreaks: policy?.mode === 'FIXED' ? policy.fixedBreaks : [],
+          autoBreaks: totals.autoBreaks,
+          breakMinutes: totals.totalMinutes,
+          grossTime: formatDuration(grossMs),
+          totalTime: formatDuration(netWorkedMs(grossMs, totals.totalMs)),
           earlyLeave: recalculated.earlyLeave,
           overTime: '00:00:00',
           overTimeMinutes: 0,
@@ -388,7 +413,7 @@ const runAutoClockOutSweep = async () => {
         }
 
         const updatedRecord = await Attendance.findOneAndUpdate(
-          { _id: record._id, isClockedIn: true, outTime: null },
+          { _id: record._id, isClockedIn: true, outTime: null, updatedAt: record.updatedAt ?? null },
           { $set: updateSet },
           { new: true }
         );
