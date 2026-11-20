@@ -310,7 +310,7 @@ test('the web call overlay rings, accepts and can be rung again', async t => {
         callId,
         conversationId: String(new mongoose.Types.ObjectId()),
         participantIds: [String(ids.bob), String(ids.carol)],
-        callType: 'audio',
+        callType: 'video',
         isGroupCall: true,
         groupTitle: 'ZZ Client Test',
     });
@@ -327,6 +327,25 @@ test('the web call overlay rings, accepts and can be rung again', async t => {
     assert.equal(Boolean(buttonByTitle('End call')), true, 'the overlay should switch to the in-call screen');
     assert.equal(Boolean(buttonByTitle('Accept call')), false, 'the incoming screen should be gone');
 
+    const aliceMic = () => [...document.querySelectorAll('.call-remote-tile')]
+        .find(tile => tile.textContent.includes('ZZ Alice'))?.querySelector('.call-pill-mic');
+    aliceSocket.emit('call:mic-state', { callId, muted: true });
+    await waitFor(() => aliceMic()?.getAttribute('title') === 'Muted', { label: "Alice's muted video badge" });
+    aliceSocket.emit('call:mic-state', { callId, muted: false });
+    await waitFor(() => aliceMic()?.getAttribute('title') === 'Microphone active', { label: "Alice's unmuted video badge" });
+
+    const bobMuteUpdate = new Promise(resolve => {
+        const checkMute = data => {
+            if (!data.participants.some(p => p.userId === String(ids.bob) && p.muted === true)) return;
+            carolSocket.off('call:roster', checkMute);
+            resolve(data);
+        };
+        carolSocket.on('call:roster', checkMute);
+    });
+    await click('Mute');
+    await bobMuteUpdate;
+    assert.ok(buttonByTitle('Unmute'), "Bob's local mute control should agree with Carol's roster");
+
     // ---- Bob leaves: this is where the old bug started --------------------------------------
     await click('End call');
     await flush(250);
@@ -339,7 +358,7 @@ test('the web call overlay rings, accepts and can be rung again', async t => {
     aliceSocket.emit('call:add-participants', {
         callId,
         participantIds: [String(ids.bob)],
-        callType: 'audio',
+        callType: 'video',
         isGroupCall: true,
     });
     await waitFor(() => Boolean(buttonByTitle('Accept call')), { label: "Bob's second ring (Call again)" });
