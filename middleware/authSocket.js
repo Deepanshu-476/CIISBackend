@@ -16,9 +16,10 @@ const parseCookieToken = (cookieHeader = '') => {
 
 const authSocket = async (socket, next) => {
   try {
-    const token = socket.handshake.auth?.token || 
-                  socket.handshake.headers?.authorization?.split(' ')[1] ||
-                  parseCookieToken(socket.handshake.headers?.cookie);
+    const { auth, headers } = socket.handshake;
+    const token = auth?.token ||
+                  headers?.authorization?.split(' ')[1] ||
+                  (auth?.mode === 'tab' ? null : parseCookieToken(headers?.cookie));
     
     if (!token) { 
       void 0;
@@ -58,4 +59,4 @@ const authSocket = async (socket, next) => {
   }
 };
 
-module.exports = authSocket; 
+module.exports = authSocket;

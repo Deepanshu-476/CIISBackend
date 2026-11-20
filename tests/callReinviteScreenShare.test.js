@@ -231,6 +231,12 @@ test("call re-invite, rejoin and screen share", async t => {
     });
 
     await t.test("someone who left can also use the ongoing-call Join button", async () => {
+        const bobIsMuted = data => data.callId === callId &&
+            data.participants?.some(p => p.userId === String(ids.bob) && p.muted === true);
+        const aliceSawMute = waitFor(alice, "call:roster", { predicate: bobIsMuted, label: "Alice seeing Bob mute" });
+        bob.emit("call:mic-state", { callId, muted: true });
+        await aliceSawMute;
+
         const aliceSawLeave = waitFor(alice, "call:participant-left", {
             predicate: data => String(data.userId || data.fromUserId) === String(ids.carol),
             label: "Alice seeing Carol leave",
@@ -238,6 +244,7 @@ test("call re-invite, rejoin and screen share", async t => {
         carol.emit("call:end", { callId });
         await aliceSawLeave;
 
+        const carolSawMute = waitFor(carol, "call:roster", { predicate: bobIsMuted, label: "Carol seeing Bob's current mute state after rejoining" });
         const rejoined = await new Promise((resolve, reject) => {
             const timer = setTimeout(() => reject(new Error("call:rejoin never acknowledged")), 6000);
             carol.emit("call:rejoin", { callId }, response => {
@@ -246,6 +253,35 @@ test("call re-invite, rejoin and screen share", async t => {
             });
         });
         assert.equal(rejoined.success, true, `rejoin failed: ${rejoined.message}`);
+        await carolSawMute;
+
+        const rebindRoster = {
+            predicate: data => data.callId === callId &&
+                data.participants?.some(p => p.userId === String(ids.bob) && p.muted === false),
+            label: "other participants seeing Bob's latest mute state after socket rebind",
+        };
+        const sawRebind = Promise.all([alice, carol].map(client => waitFor(client, "call:roster", rebindRoster)));
+        bob.emit("call:rebind", { callId, muted: false });
+        await sawRebind;
+
+        const muteSequence = [];
+        const recordBobMute = data => {
+            if (data.callId !== callId) return;
+            const participant = data.participants.find(p => p.userId === String(ids.bob));
+            muteSequence.push(participant?.muted);
+        };
+        alice.on("call:roster", recordBobMute);
+        try {
+            const rapidUpdates = waitFor(alice, "call:roster", {
+                predicate: () => muteSequence.length >= 3,
+                label: "Alice seeing rapid mute toggles in order",
+            });
+            for (const muted of [true, false, true]) bob.emit("call:mic-state", { callId, muted });
+            await rapidUpdates;
+            assert.deepEqual(muteSequence, [true, false, true]);
+        } finally {
+            alice.off("call:roster", recordBobMute);
+        }
     });
 
     await t.test("screen share is announced to the other participants", async () => {
