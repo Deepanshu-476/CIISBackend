@@ -8620,6 +8620,25 @@ const lastAskedField = currentDraft.asked.length > 0
 
     // 2c. Intent & Extraction Handling
     if (!actionHandled) {
+      // Check for Natural Language Report Export requests (Attendance, Tasks, Projects, Clients Master)
+      try {
+        const { isExportQuery, handleExportRequest } = require('./aiExportReportHandler');
+        if (isExportQuery(trimmedMessage)) {
+          const exportResult = await handleExportRequest({
+            message: trimmedMessage,
+            req,
+            deps,
+            currentDraft,
+            isEn
+          });
+          if (exportResult) {
+            return exportResult;
+          }
+        }
+      } catch (exportErr) {
+        console.warn('[taskAgentService] Error in export report handler:', exportErr);
+      }
+
       const hasOtherFieldIntent = /(?:title|naam|नाम|description|विवरण|priority|प्रायोरिटी|status|स्टेटस|due|time|samay|समय|kal|कल|aaj|आज|tomorrow|today|tarikh|tareekh|तारीख|date|change|badal|badlo|बदलो)/i.test(trimmedMessage);
 
       // Direct answer to reminder question when reminder is pending
