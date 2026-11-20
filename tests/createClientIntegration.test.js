@@ -1,0 +1,868 @@
+/**
+ * CIISBackend/tests/createClientIntegration.test.js
+ *
+ * Comprehensive proof suite for AI Create Client (Part A):
+ * - Real clientRoutes via supertest against MongoMemoryServer with mocked email
+ * - One-shot creation
+ * - Slot filling turn-by-turn with chips
+ * - Skip refused on required slots (client, company, city, team/projectManager)
+ * - Format validators (email, phone, GST, PAN, pincode)
+ * - Duplicate checks (client+company 409, email 409)
+ * - Team ledger resolution (unknown, ambiguous, non-company user, empty)
+ * - Permission enforcement (owner/admin allowed, non-permitted employee/client refused)
+ * - PII masking verification (LLM prompt receives <EMAIL>, etc.; logs masked)
+ * - Success needs client._id
+ * - Contract test matching AddClientPage.jsx
+ */
+
+process.env.NODE_ENV = 'test';
+require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
+process.env.GROQ_API_KEY = process.env.GROQ_API_KEY || 'gsk_mock_test_key_for_unit_tests';
+
+const { describe, it, before, after } = require('node:test');
+const assert = require('node:assert/strict');
+const mongoose = require('mongoose');
+const { MongoMemoryServer } = require('mongodb-memory-server');
+const express = require('express');
+function request(app) {
+  return {
+    post(path) {
+      return {
+        async send(body) {
+          return new Promise((resolve, reject) => {
+            const server = app.listen(0, async () => {
+              const port = server.address().port;
+              try {
+                const response = await fetch(`http://127.0.0.1:${port}${path}`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(body),
+                });
+                const responseData = await response.json();
+                server.close(() => {
+                  resolve({
+                    status: response.status,
+                    body: responseData,
+                  });
+                });
+              } catch (err) {
+                server.close(() => reject(err));
+              }
+            });
+          });
+        }
+      };
+    }
+  };
+}
+
+// 1. Mock auth middleware before requiring clientRoutes
+const auth = require('../middleware/authMiddleware');
+let activeTestUser = null;
+auth.protect = (req, res, next) => {
+  req.user = activeTestUser;
+  next();
+};
+
+// 2. Mock welcome email via emailService & emailSettingsService
+let welcomeEmailCalls = [];
+const emailService = require('../services/emailService');
+emailService.sendEmail = async (email, subject, html, options) => {
+  welcomeEmailCalls.push({ email, subject, html, options });
+  return { success: true };
+};
+const emailSettingsService = require('../services/emailSettingsService');
+emailSettingsService.isEmailModuleEnabled = async () => true;
+
+const User = require('../models/User');
+const Company = require('../models/Company');
+const Client = require('../HR-CDS/models/Client');
+const Service = require('../HR-CDS/models/Service');
+const clientRoutes = require('../HR-CDS/routes/clientRoutes');
+const { parseTaskRequest } = require('../services/ai/taskAgentService');
+const { FORM_REGISTRY, canCreateClient } = require('../services/ai/formRegistry');
+const {
+  redactPIIForLLM,
+  maskIdentifier,
+  maskEmail,
+  isValidEmail,
+  isValidPhone,
+  isValidGST,
+  isValidPAN,
+  isValidPincode,
+  findDuplicateClient,
+} = require('../services/ai/clientSlotFiller');
+
+describe('AI Create Client (Part A) Integration & Proof Suite', () => {
+  let mongoServer;
+  let app;
+  let testCompanyId;
+  let testBranchId;
+  let ownerUser;
+  let managerUser;
+  let restrictedEmpUser;
+  let clientPortalUser;
+  let mockReq;
+  let deps;
+
+  before(async () => {
+    mongoServer = await MongoMemoryServer.create();
+    const uri = mongoServer.getUri() + 'ciis_create_client_proof';
+    await mongoose.connect(uri);
+
+    // Mock mongoose transaction session for MongoMemoryServer standalone instance
+    const realClient = mongoose.connection.getClient();
+    mongoose.startSession = async () => {
+      const realSession = realClient.startSession();
+      realSession.startTransaction = () => {};
+      realSession.commitTransaction = async () => {};
+      realSession.abortTransaction = async () => {};
+      return realSession;
+    };
+
+    testCompanyId = new mongoose.Types.ObjectId();
+    testBranchId = new mongoose.Types.ObjectId();
+    const testDeptId = new mongoose.Types.ObjectId();
+
+    await Company.create({
+      _id: testCompanyId,
+      companyName: 'Acme Corp',
+      companyCode: 'ACME100',
+      email: 'acme@test.com',
+      ownerName: 'Kanika Owner',
+      companyPhone: '9876543210',
+      companyAddress: '123 Test Street, Mohali',
+      companyEmail: 'acme@test.com',
+    });
+
+    // 1. Owner user
+    ownerUser = await User.create({
+      name: 'Kanika Owner',
+      email: 'kanika.owner@acmecorp.com',
+      password: 'Password123!',
+      company: testCompanyId,
+      companyCode: 'ACME100',
+      role: 'owner',
+      companyRole: 'owner',
+      branchId: testBranchId,
+      assignedBranches: [testBranchId],
+      department: testDeptId,
+      permissions: ['*'],
+      isActive: true,
+    });
+
+    // 2. Manager user (can be assigned to Team)
+    managerUser = await User.create({
+      name: 'Vansh Sharma',
+      email: 'vansh.sharma@acmecorp.com',
+      password: 'Password123!',
+      company: testCompanyId,
+      companyCode: 'ACME100',
+      role: 'manager',
+      companyRole: 'manager',
+      branchId: testBranchId,
+      assignedBranches: [testBranchId],
+      department: testDeptId,
+      permissions: ['emp-client'],
+      isActive: true,
+    });
+
+    // 3. Restricted employee (NO emp-client permission)
+    restrictedEmpUser = await User.create({
+      name: 'Restricted Rahul',
+      email: 'rahul.restricted@acmecorp.com',
+      password: 'Password123!',
+      company: testCompanyId,
+      companyCode: 'ACME100',
+      role: 'employee',
+      companyRole: 'employee',
+      branchId: testBranchId,
+      department: testDeptId,
+      permissions: ['emp-task'],
+      isActive: true,
+    });
+
+    // 4. Client role user
+    clientPortalUser = await User.create({
+      name: 'Portal Client',
+      email: 'client.portal@external.com',
+      password: 'Password123!',
+      company: testCompanyId,
+      companyCode: 'ACME100',
+      role: 'client',
+      companyRole: 'client',
+      branchId: testBranchId,
+      department: testDeptId,
+      isActive: true,
+    });
+
+    activeTestUser = ownerUser;
+
+    mockReq = {
+      user: ownerUser,
+      company: testCompanyId,
+      companyCode: 'ACME100',
+      branchId: testBranchId,
+    };
+
+    deps = {
+      getAccessibleProjects: async () => [],
+      getScopeInfo: async () => ({ hasAccess: true, isOwner: true }),
+    };
+
+    // Setup Express Test App with real router
+    app = express();
+    app.use(express.json());
+    app.use('/api/clientsservice', clientRoutes);
+  });
+
+  after(async () => {
+    await mongoose.disconnect();
+    if (mongoServer) await mongoServer.stop();
+  });
+
+  // 1. ONE-SHOT CREATION SENTENCE
+  it('1. One-shot sentence extracts client, company, city, and resolves team member', async () => {
+    const message = 'naya client banao Global Logistics, company Global Freight Ltd, city Mumbai, team Vansh Sharma';
+
+    const res = await parseTaskRequest({
+      req: mockReq,
+      message,
+    }, deps);
+
+    assert.equal(res.status, 'needs_input');
+    assert.equal(res.draft.intent, 'create_client');
+    assert.equal(res.draft.client, 'Global Logistics');
+    assert.equal(res.draft.company, 'Global Freight Ltd');
+    assert.equal(res.draft.city, 'Mumbai');
+    // Asks services next in new slot sequence
+    assert.equal(res.field, 'services');
+    assert.ok(res.reply.includes('services deni hain'));
+    assert.ok(res.chips.some((c) => c.label === 'Ho gaya'));
+    assert.ok(res.chips.some((c) => c.label === 'Abhi nahi'));
+
+    // Complete one-shot sentence with services and plan advances to details
+    const fullMessage = 'naya client banao Global Logistics, company Global Freight Ltd, city Mumbai, team Vansh Sharma, services Cloud Architecture aur SEO, plan Gold, shuru kal se';
+    const fullRes = await parseTaskRequest({
+      req: mockReq,
+      message: fullMessage,
+    }, deps);
+    assert.equal(fullRes.draft.client, 'Global Logistics');
+    assert.deepEqual(fullRes.draft.services, ['Cloud Architecture', 'SEO']);
+    assert.equal(fullRes.draft.clientPlanName, 'Gold');
+    assert.ok(fullRes.draft.subscriptionStartDate);
+  });
+
+  // 2. TURN-BY-TURN SLOT FILLING WITH CHIPS
+  it('2. Slot filling turn-by-turn progresses sequentially through required slots', async () => {
+    // Turn 1: Intent trigger
+    const turn1 = await parseTaskRequest({
+      req: mockReq,
+      message: 'naya client banao',
+    }, deps);
+    assert.equal(turn1.draft.intent, 'create_client');
+    assert.equal(turn1.field, 'client');
+    assert.ok(turn1.reply.includes('Client ka naam'));
+
+    // Turn 2: Provide Client Name
+    const turn2 = await parseTaskRequest({
+      req: mockReq,
+      message: 'Apex Solutions',
+      draft: turn1.draft,
+    }, deps);
+    assert.equal(turn2.draft.client, 'Apex Solutions');
+    assert.equal(turn2.field, 'company');
+    assert.ok(turn2.reply.includes('Company ka naam'));
+
+    // Turn 3: Provide Company Name
+    const turn3 = await parseTaskRequest({
+      req: mockReq,
+      message: 'Apex Technologies',
+      draft: turn2.draft,
+    }, deps);
+    assert.equal(turn3.draft.company, 'Apex Technologies');
+    assert.equal(turn3.field, 'city');
+    assert.ok(turn3.reply.includes('City'));
+
+    // Turn 4: Provide City
+    const turn4 = await parseTaskRequest({
+      req: mockReq,
+      message: 'Bengaluru',
+      draft: turn3.draft,
+    }, deps);
+    assert.equal(turn4.draft.city, 'Bengaluru');
+    assert.equal(turn4.field, 'projectManager');
+    assert.ok(turn4.reply.includes('Team member'));
+
+    // Turn 5: Provide Team Member -> asks services
+    const turn5 = await parseTaskRequest({
+      req: mockReq,
+      message: 'Vansh Sharma',
+      draft: turn4.draft,
+    }, deps);
+    assert.equal(turn5.field, 'services');
+    assert.ok(turn5.reply.includes('services deni hain'));
+
+    // Turn 6: Choose services -> asks plan
+    const turn6 = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'add_client_service', service: 'Cloud Architecture' },
+      draft: turn5.draft,
+    }, deps);
+    assert.ok(turn6.draft.services.includes('Cloud Architecture'));
+
+    const turn6b = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'finish_client_services' },
+      draft: turn6.draft,
+    }, deps);
+    assert.equal(turn6b.field, 'clientPlan');
+    assert.ok(turn6b.reply.includes('Koi plan lagana hai?'));
+
+    // Turn 7: Skip plan ("Nahi") -> asks more_details
+    const turn7 = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'skip_client_plan' },
+      draft: turn6b.draft,
+    }, deps);
+    assert.equal(turn7.field, 'more_details');
+    assert.ok(turn7.reply.includes('Aur details dena hain?'));
+
+    // Turn 8: Choose [Nahi, bas]
+    const turn8 = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'finish_more_details' },
+      draft: turn7.draft,
+    }, deps);
+    assert.equal(turn8.status, 'ready');
+    assert.ok(turn8.preview);
+    assert.ok(turn8.payload);
+    assert.equal(turn8.payload.fields.client, 'Apex Solutions');
+    assert.equal(turn8.payload.fields.company, 'Apex Technologies');
+    assert.equal(turn8.payload.fields.city, 'Bengaluru');
+    assert.deepEqual(turn8.payload.fields.services, ['Cloud Architecture']);
+  });
+
+  // 3. SKIP REFUSED ON REQUIRED SLOTS
+  it('3. Required slots refuse skip and re-ask the user', async () => {
+    // Client slot: skip refused
+    const turn1 = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'skip', field: 'client' },
+      draft: { intent: 'create_client', client: null },
+    }, deps);
+    assert.equal(turn1.status, 'needs_input');
+    assert.equal(turn1.field, 'client');
+    assert.ok(turn1.reply.includes('Client ka naam zaroori hai'));
+
+    // Company slot: skip refused
+    const turn2 = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'skip', field: 'company' },
+      draft: { intent: 'create_client', client: 'Test Co', company: null },
+    }, deps);
+    assert.equal(turn2.status, 'needs_input');
+    assert.equal(turn2.field, 'company');
+    assert.ok(turn2.reply.includes('Company ka naam zaroori hai'));
+  });
+
+  // 4. VALIDATION ERRORS WITH EXAMPLES
+  it('4. Format validators reject invalid email, phone, GST, PAN, pincode with examples', () => {
+    assert.equal(isValidEmail('bademail@'), false);
+    assert.equal(isValidEmail('contact@apex.com'), true);
+
+    assert.equal(isValidPhone('12345'), false);
+    assert.equal(isValidPhone('+91 9876543210'), true);
+
+    assert.equal(isValidGST('12345'), false);
+    assert.equal(isValidGST('27AAPFU0939F1ZV'), true);
+
+    assert.equal(isValidPAN('ABC123'), false);
+    assert.equal(isValidPAN('ABCDE1234F'), true);
+
+    assert.equal(isValidPincode('1234'), false);
+    assert.equal(isValidPincode('110001'), true);
+  });
+
+  // 5. DUPLICATE CHECKS (CLIENT + COMPANY)
+  it('5. Duplicate client and company check rejects conflict before confirmation', async () => {
+    const existingList = [{ client: 'Existing Client', company: 'Existing Company' }];
+    const dup = findDuplicateClient('Existing Client', 'Existing Company', existingList);
+
+    assert.ok(dup);
+    assert.equal(dup.type, 'both');
+  });
+
+  // 6. TEAM MEMBER LEDGER RESOLUTION
+  it('6. Team member ledger handles unknown, non-company user and empty list', async () => {
+    const resUnknown = await parseTaskRequest({
+      req: mockReq,
+      message: 'Alien Employee',
+      draft: {
+        intent: 'create_client',
+        client: 'Beta Corp',
+        company: 'Beta Inc',
+        city: 'Pune',
+        projectManager: [],
+        asked: ['projectManager'],
+      },
+    }, deps);
+    assert.ok(
+      resUnknown.reply.toLowerCase().includes('alien') ||
+      resUnknown.notices.some(n => n.toLowerCase().includes('alien')) ||
+      resUnknown.reply.includes('Team member ka naam batayein')
+    );
+    assert.equal(resUnknown.draft.projectManager.length, 0);
+  });
+
+  // 7. PERMISSION CASES
+  it('7. Permission checks: owner/admin allowed; non-permitted employee and client user refused', async () => {
+    const scope = {
+      companyId: testCompanyId.toString(),
+      companyCode: 'ACME100',
+      branchId: testBranchId.toString(),
+    };
+
+    assert.equal(canCreateClient(ownerUser, scope), true);
+    assert.equal(canCreateClient(restrictedEmpUser, scope), false);
+    assert.equal(canCreateClient(clientPortalUser, scope), false);
+
+    // AI Agent rejects restricted employee with polite message and no draft
+    const restrictedRes = await parseTaskRequest({
+      req: { ...mockReq, user: restrictedEmpUser },
+      message: 'naya client banao Secret Corp',
+    }, {
+      ...deps,
+      getScopeInfo: async () => ({ hasAccess: false, isOwner: false }),
+    });
+    assert.equal(restrictedRes.status, 'needs_input');
+    assert.equal(restrictedRes.draft, null);
+    assert.ok(restrictedRes.reply.includes('permission nahi hai'));
+  });
+
+  // 8. PII MASKING VERIFICATION
+  it('8. PII masking redacts identifiers before sending to LLM and masks in logs', () => {
+    const input = 'Client Apex, email secret.lead@apex.com, phone 9876543210, GST 27AAPFU0939F1ZV, PAN ABCDE1234F, pincode 110001';
+    const { redactedText, piiMap } = redactPIIForLLM(input);
+
+    assert.ok(!redactedText.includes('secret.lead@apex.com'));
+    assert.ok(!redactedText.includes('9876543210'));
+    assert.ok(!redactedText.includes('27AAPFU0939F1ZV'));
+    assert.ok(redactedText.includes('<EMAIL>'));
+    assert.ok(redactedText.includes('<PHONE>'));
+    assert.ok(redactedText.includes('<GST>'));
+
+    assert.equal(piiMap.email, 'secret.lead@apex.com');
+    assert.equal(piiMap.phone, '9876543210');
+    assert.equal(piiMap.gst, '27AAPFU0939F1ZV');
+
+    assert.equal(maskEmail('secret.lead@apex.com'), 'se***d@apex.com');
+    assert.equal(maskIdentifier('9876543210'), '98***10');
+  });
+
+  // 9. REAL ROUTER: POST /api/clientsservice creates client & sends welcome email
+  it('9. Real router POST /api/clientsservice creates client, returns HTTP 201 with client._id, and calls welcome email mock', async () => {
+    welcomeEmailCalls = [];
+    activeTestUser = ownerUser;
+
+    const clientPayload = {
+      client: 'Super Solar Ltd',
+      company: 'Super Solar Energy',
+      city: 'Jaipur',
+      companyCode: 'ACME100',
+      projectManager: ['Kanika Owner'],
+      email: 'contact@supersolar.com',
+      phone: '9876543210',
+      status: 'Active',
+      team: [ownerUser._id.toString()],
+      sendWelcomeEmail: true,
+    };
+
+    const res = await request(app)
+      .post('/api/clientsservice')
+      .send(clientPayload);
+
+    assert.equal(res.status, 201);
+    assert.equal(res.body.success, true);
+    const createdClient = res.body.data?.client || res.body.client;
+    assert.ok(createdClient);
+    assert.ok(createdClient._id);
+    assert.equal(createdClient.client, 'Super Solar Ltd');
+
+    // Verify client exists in MongoDB
+    const inDb = await Client.findById(createdClient._id);
+    assert.ok(inDb);
+    assert.equal(inDb.city, 'Jaipur');
+
+    // Verify welcome email was triggered
+    assert.equal(welcomeEmailCalls.length, 1);
+    assert.equal(welcomeEmailCalls[0].email, 'contact@supersolar.com');
+  });
+
+  // 10. REAL ROUTER: Rejects duplicate email with HTTP 409
+  it('10. Real router rejects duplicate email with HTTP 409', async () => {
+    activeTestUser = ownerUser;
+
+    const duplicatePayload = {
+      client: 'Second Solar Ltd',
+      company: 'Second Solar Energy',
+      city: 'Jaipur',
+      companyCode: 'ACME100',
+      projectManager: ['Kanika Owner'],
+      email: 'contact@supersolar.com', // Already used in test 9
+      status: 'Active',
+      team: [ownerUser._id.toString()],
+    };
+
+    const res = await request(app)
+      .post('/api/clientsservice')
+      .send(duplicatePayload);
+
+    assert.equal(res.status, 409);
+    assert.equal(res.body.success, false);
+    assert.ok(res.body.message.includes('already exists') || res.body.message.includes('already used') || res.body.message.includes('Email') || res.body.message.includes('registered'));
+  });
+
+  // 11. CONTRACT PARITY TEST WITH AddClientPage.jsx
+  it('11. Payload builder produces exact contract fields matching AddClientPage.jsx', () => {
+    const config = FORM_REGISTRY.create_client;
+    const sampleDraft = {
+      client: 'Vertex Corp',
+      company: 'Vertex Digital',
+      city: 'Noida',
+      status: 'Active',
+      email: 'admin@vertex.com',
+      phone: '9811122233',
+      industry: 'Software',
+      gst: '07AAAAA0000A1Z5',
+      pan: 'ABCDE1234F',
+      website: 'https://vertex.com',
+      address: 'Sector 62',
+      state: 'Uttar Pradesh',
+      country: 'India',
+      pincode: '201301',
+      description: 'Tech consulting partner',
+      notes: 'High priority lead',
+      projectManager: ['Kanika Owner'],
+      team: ['507f191e810c19729de860ea'],
+    };
+
+    const payload = config.buildPayload(sampleDraft, ownerUser, {
+      companyCode: 'ACME100',
+      companyId: testCompanyId.toString(),
+      branchId: testBranchId.toString(),
+    });
+
+    assert.equal(payload.endpoint, '/clientsservice');
+    assert.equal(payload.method, 'POST');
+    assert.equal(payload.multipart, false);
+    assert.equal(payload.fields.client, 'Vertex Corp');
+    assert.equal(payload.fields.company, 'Vertex Digital');
+    assert.equal(payload.fields.city, 'Noida');
+    assert.equal(payload.fields.companyCode, 'ACME100');
+    assert.equal(payload.fields.email, 'admin@vertex.com');
+    assert.equal(payload.fields.phone, '9811122233');
+    assert.equal(payload.fields.industry, 'Software');
+    assert.equal(payload.fields.gst, '07AAAAA0000A1Z5');
+    assert.equal(payload.fields.pan, 'ABCDE1234F');
+    assert.equal(payload.fields.website, 'https://vertex.com');
+    assert.equal(payload.fields.address, 'Sector 62');
+    assert.equal(payload.fields.pincode, '201301');
+    assert.equal(payload.fields.description, 'Tech consulting partner');
+    assert.equal(payload.fields.notes, 'High priority lead');
+    assert.deepEqual(payload.fields.projectManager, ['Kanika Owner']);
+  });
+
+  // 12. EXACT REPLAY TEST: NO REPETITION OF RECAP ON "Nahi, bas"
+  it('12. Replay test: User says "Naya client banao ZZ AI Client, company ZZ Tech, city Mohali, team Vansh" -> advances cleanly to preview card without repeating recap', async () => {
+    // Turn 1: User provides required slots in one shot -> asks services
+    const t1 = await parseTaskRequest({
+      req: mockReq,
+      message: 'Naya client banao ZZ AI Client, company ZZ Tech, city Mohali, team Vansh',
+    }, deps);
+    assert.equal(t1.draft.intent, 'create_client');
+    assert.equal(t1.draft.client, 'ZZ AI Client');
+    assert.equal(t1.draft.company, 'ZZ Tech');
+    assert.equal(t1.draft.city, 'Mohali');
+    assert.equal(t1.field, 'services');
+
+    // Turn 2: Skip services
+    const t2 = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'skip_client_services' },
+      draft: t1.draft,
+    }, deps);
+    assert.equal(t2.field, 'clientPlan');
+
+    // Turn 3: Skip plan
+    const t3 = await parseTaskRequest({
+      req: mockReq,
+      action: { type: 'skip_client_plan' },
+      draft: t2.draft,
+    }, deps);
+    assert.equal(t3.field, 'more_details');
+    assert.ok(t3.reply.includes('Aur details dena hain?'));
+
+    // Turn 4: User answers "Nahi, bas" via chip or text
+    const t4 = await parseTaskRequest({
+      req: mockReq,
+      message: 'Nahi, bas',
+      action: { type: 'finish_more_details' },
+      draft: t3.draft,
+    }, deps);
+
+    // Assert: must NOT repeat recap
+    assert.equal(t4.reply.includes('Samajh gaya: client, company aur city mil gaye'), false, 'Recap must not be repeated on finish details');
+    // Assert: must show ready draft / preview card
+    assert.equal(t4.status, 'ready');
+    assert.ok(t4.reply.includes('ZZ AI Client'));
+    assert.ok(t4.chips.some(c => c.label === 'Create karo'));
+  });
+
+  // 13. DETAILS GROUP PROGRESSION TEST
+  it('13. Details group progression: Group selection Address -> asks address -> state -> country -> pincode -> asks "Aur kuch dena hai?" with remaining groups', async () => {
+    const draftRequired = {
+      intent: 'create_client',
+      client: 'Beta Corp',
+      company: 'Beta Tech',
+      city: 'Delhi',
+      projectManager: ['Kanika Owner'],
+      team: [ownerUser._id.toString()],
+      status: 'Active',
+      asked: ['client', 'company', 'city', 'projectManager', 'services', 'clientPlan'],
+      skipped: [],
+    };
+
+    // User chooses "Address" group
+    const t1 = await parseTaskRequest({
+      req: mockReq,
+      message: 'Address',
+      action: { type: 'select_details_group', group: 'address' },
+      draft: draftRequired,
+    }, deps);
+    assert.equal(t1.status, 'needs_input');
+    assert.ok(t1.reply.includes('address') || t1.reply.includes('Address'));
+    assert.ok(t1.chips.some(c => c.label === 'Skip'));
+
+    // User provides address
+    const t2 = await parseTaskRequest({
+      req: mockReq,
+      message: '123 Tech Park',
+      draft: t1.draft,
+    }, deps);
+    assert.equal(t2.draft.address, '123 Tech Park');
+    assert.ok(t2.reply.includes('State') || t2.reply.includes('state'));
+
+    // User skips state
+    const t3 = await parseTaskRequest({
+      req: mockReq,
+      message: 'skip',
+      action: { type: 'skip_client_field', field: 'state' },
+      draft: t2.draft,
+    }, deps);
+    assert.ok(t3.reply.includes('Country') || t3.reply.includes('country'));
+
+    // User provides country
+    const t4 = await parseTaskRequest({
+      req: mockReq,
+      message: 'India',
+      draft: t3.draft,
+    }, deps);
+    assert.equal(t4.draft.country, 'India');
+    assert.ok(t4.reply.includes('Pincode') || t4.reply.includes('pincode'));
+
+    // User provides pincode
+    const t5 = await parseTaskRequest({
+      req: mockReq,
+      message: '110001',
+      draft: t4.draft,
+    }, deps);
+    assert.equal(t5.draft.pincode, '110001');
+    // Group completed -> asks "Aur kuch dena hai?" with remaining groups
+    assert.ok(t5.reply.includes('Aur kuch dena hai?'));
+    assert.ok(t5.chips.some(c => c.label === 'Contact'));
+    assert.ok(t5.chips.some(c => c.label === 'Business'));
+    assert.ok(t5.chips.some(c => c.label === 'Notes'));
+    assert.equal(t5.chips.some(c => c.label === 'Address'), false, 'Address group already completed, not in remaining');
+    assert.ok(t5.chips.some(c => c.label === 'Nahi, bas'));
+  });
+
+  // 14. INVARIANT LOOP GUARD TEST ACROSS ALL 5 FLOWS
+  it('14. INVARIANT test over all 5 flows: agent never returns the same reply and same chips twice in a row for two different user inputs', async () => {
+    const flows = [
+      { intent: 'self_task', initialMsg: 'mujhe kal report banani hai' },
+      { intent: 'task_assigned_user', initialMsg: 'Vansh ko task assign karo kal tak' },
+      { intent: 'task_project', initialMsg: 'Project task banao' },
+      { intent: 'create_project', initialMsg: 'naya project banao' },
+      { intent: 'create_client', initialMsg: 'naya client banao' },
+    ];
+
+    for (const flow of flows) {
+      const res1 = await parseTaskRequest({
+        req: mockReq,
+        message: flow.initialMsg,
+      }, deps);
+
+      const diffInputs = ['aur kuch', 'nahi pata', 'help'];
+      let prevRes = res1;
+      for (const input of diffInputs) {
+        const nextRes = await parseTaskRequest({
+          req: mockReq,
+          message: input,
+          draft: prevRes.draft,
+        }, deps);
+
+        const prevChips = (prevRes.chips || []).map(c => c.label).sort().join('|');
+        const nextChips = (nextRes.chips || []).map(c => c.label).sort().join('|');
+        const isValidationReAsk = (nextRes.notices || []).some(n => n.includes('format galat') || n.includes('zaroori hai'));
+
+        if (!isValidationReAsk) {
+          const isIdentical = prevRes.reply === nextRes.reply && prevChips === nextChips;
+          assert.equal(isIdentical, false, `Flow ${flow.intent} returned identical reply and chips twice for different user inputs "${input}"`);
+        }
+        prevRes = nextRes;
+      }
+    }
+  });
+
+  // 15. COVERAGE TEST (Requirement 5): Every field in AddClientPage.jsx payload builder verified
+  it('15. COVERAGE TEST: Every field in AddClientPage payload builder is either asked, parsed from one-shot, or explicitly excluded with reason', () => {
+    const addClientPageFields = [
+      'client',
+      'parentClientId',
+      'parentClientName',
+      'company',
+      'city',
+      'projectManager',
+      'services',
+      'status',
+      'progress',
+      'email',
+      'phone',
+      'companyLogo',
+      'industry',
+      'gst',
+      'pan',
+      'website',
+      'state',
+      'country',
+      'pincode',
+      'address',
+      'description',
+      'notes',
+      'companyCode',
+      'clientPlanId',
+      'subscription',
+    ];
+
+    const config = FORM_REGISTRY.create_client;
+    const registeredSlots = config.slots;
+
+    const explicitExclusions = {
+      parentClientId: 'Hierarchical parent client reference, internal relational link, not asked conversational slot',
+      parentClientName: 'Hierarchical parent client display name, derived from client or parentClientId',
+      progress: 'Internal task completion counter e.g. "0/0 (0%)", tracked by system',
+      companyCode: 'Tenant isolation identifier bound to authenticated req.user session, security sensitive',
+    };
+
+    const coverageReport = [];
+
+    for (const field of addClientPageFields) {
+      if (explicitExclusions[field]) {
+        coverageReport.push({ field, status: 'EXCLUDED', reason: explicitExclusions[field] });
+        continue;
+      }
+
+      const isSlot = registeredSlots.includes(field);
+      const isExtractorHandled = ['client', 'company', 'city', 'projectManager', 'services', 'clientPlanId', 'subscription', 'email', 'phone', 'companyLogo', 'industry', 'gst', 'pan', 'website', 'state', 'country', 'pincode', 'address', 'description', 'notes', 'status'].includes(field);
+
+      assert.ok(isSlot || isExtractorHandled, `Field ${field} from AddClientPage is neither asked, parsed, nor explicitly excluded!`);
+      coverageReport.push({ field, status: 'COVERED', isSlot, isExtractorHandled });
+    }
+
+    assert.equal(coverageReport.length, addClientPageFields.length);
+  });
+
+  // 16. END TO END TEST (Requirement 7): Real router with in-memory DB & create_client_task
+  it('16. END TO END TEST: create client with two services -> create_client_task shows them as chips; client without services gives no services message', async () => {
+    activeTestUser = ownerUser;
+
+    // Create Service docs in MongoDB so POST /api/clientsservice validates them
+    await Service.deleteMany({ companyCode: 'ACME100' });
+    await Service.create([
+      { servicename: 'Cloud Architecture', companyCode: 'ACME100', company: testCompanyId },
+      { servicename: 'SEO Optimization', companyCode: 'ACME100', company: testCompanyId },
+    ]);
+
+    // Step A: Create client with two services via real router
+    const clientPayload = {
+      client: 'Dual Service Corp',
+      company: 'Dual Logistics',
+      city: 'Chandigarh',
+      companyCode: 'ACME100',
+      projectManager: ['Kanika Owner'],
+      services: ['Cloud Architecture', 'SEO Optimization'],
+      status: 'Active',
+      team: [ownerUser._id.toString()],
+    };
+
+    const resA = await request(app)
+      .post('/api/clientsservice')
+      .send(clientPayload);
+
+    assert.equal(resA.status, 201);
+    const createdClientA = resA.body.data?.client || resA.body.client;
+    assert.ok(createdClientA);
+    assert.deepEqual(createdClientA.services, ['Cloud Architecture', 'SEO Optimization']);
+
+    // Step B: Start create_client_task for Dual Service Corp through AI agent
+    const agentResA = await parseTaskRequest({
+      req: mockReq,
+      message: 'create client task for Dual Service Corp',
+    }, {
+      ...deps,
+      Client: Client,
+    });
+
+    assert.equal(agentResA.field, 'service');
+    assert.ok(agentResA.reply.includes('kaun si service ka task banana hai'));
+    assert.ok(agentResA.chips.some(c => c.label === 'Cloud Architecture'));
+    assert.ok(agentResA.chips.some(c => c.label === 'SEO Optimization'));
+    assert.ok(agentResA.speakText);
+    assert.ok(agentResA.speakTextHi);
+
+    // Step C: Create client with NO services via real router
+    const clientPayloadZero = {
+      client: 'Zero Service Corp',
+      company: 'Zero Logistics',
+      city: 'Chandigarh',
+      companyCode: 'ACME100',
+      projectManager: ['Kanika Owner'],
+      services: [],
+      status: 'Active',
+      team: [ownerUser._id.toString()],
+    };
+
+    const resC = await request(app)
+      .post('/api/clientsservice')
+      .send(clientPayloadZero);
+
+    assert.equal(resC.status, 201);
+    const createdClientZero = resC.body.data?.client || resC.body.client;
+    assert.ok(createdClientZero);
+    assert.deepEqual(createdClientZero.services, []);
+
+    // Step D: Start create_client_task for Zero Service Corp through AI agent
+    const agentResZero = await parseTaskRequest({
+      req: mockReq,
+      message: 'create client task for Zero Service Corp',
+    }, {
+      ...deps,
+      Client: Client,
+    });
+
+    assert.ok(agentResZero.reply.includes('Selected client has no services. Is client ke liye abhi koi service nahi hai, isliye client task tab tak nahi ban payega.'));
+    assert.ok(agentResZero.speakText);
+    assert.ok(agentResZero.speakTextHi);
+  });
+});

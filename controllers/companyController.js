@@ -430,6 +430,12 @@ exports.createCompany = async (req, res) => {
         planFeatures: cleanFeatures,
         allowedPages: cleanAllowedPages,
         allowedSuperAdminPages: cleanAllowedSuperAdminPages,
+        aiApiKeySource: selectedPlan.aiApiKeySource || "platform",
+        customGroqApiKey: null,
+        aiDailyTokenLimit: selectedPlan.aiDailyTokenLimit ?? 0,
+        aiDailyCallLimit: selectedPlan.aiDailyCallLimit ?? 0,
+        aiDailySttLimit: selectedPlan.aiDailySttLimit ?? 0,
+        aiExtraTokens: 0,
         accessConfiguredAt: new Date(),
         subscriptionPayments: [{
           amount: selectedPlan.price,
@@ -718,9 +724,9 @@ exports.getAllCompanies = async (req, res) => {
       Company.find(filter)
       .select(
         "_id companyName companyEmail companyAddress companyPhone ownerName logo companyDomain loginToken isActive deactivatedAt subscriptionExpiry createdAt updatedAt companyCode dbIdentifier loginUrl"
-          + " allowedPages allowedSuperAdminPages moduleDashboardConfig bulkEmailLimits accessConfiguredAt accessUpdatedBy selectedPlan subscriptionPlan subscriptionAmount subscriptionPaymentStatus subscriptionPayments planDurationDays planFeatures"
+          + " allowedPages allowedSuperAdminPages moduleDashboardConfig bulkEmailLimits aiDailyTokenLimit aiDailyCallLimit aiDailySttLimit aiExtraTokens aiExtraCalls aiExtraStt accessConfiguredAt accessUpdatedBy selectedPlan subscriptionPlan subscriptionAmount subscriptionPaymentStatus subscriptionPayments planDurationDays planFeatures"
       )
-      .populate("selectedPlan", "name price durationDays features allowedPages allowedSuperAdminPages")
+      .populate("selectedPlan", "name price durationDays features allowedPages allowedSuperAdminPages aiDailyTokenLimit aiDailyCallLimit aiDailySttLimit")
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -777,7 +783,7 @@ exports.getCompanyById = async (req, res) => {
 
     const company = await Company.findById(id)
       .select("-loginToken")
-      .populate("selectedPlan", "name price durationDays features allowedPages allowedSuperAdminPages")
+      .populate("selectedPlan", "name price durationDays features allowedPages allowedSuperAdminPages aiDailyTokenLimit aiDailyCallLimit aiDailySttLimit")
       .lean();
 
     if (!company) {
@@ -1313,6 +1319,27 @@ exports.updateCompanyAccess = async (req, res) => {
       updateData.bulkEmailLimits = { daily, monthly };
     }
 
+    if (req.body.aiExtraTokens !== undefined && req.body.aiExtraTokens !== "") {
+      const extra = Number(req.body.aiExtraTokens);
+      if (Number.isFinite(extra) && extra >= 0) {
+        updateData.aiExtraTokens = extra;
+      }
+    }
+
+    if (req.body.aiExtraCalls !== undefined && req.body.aiExtraCalls !== "") {
+      const extraCalls = Number(req.body.aiExtraCalls);
+      if (Number.isFinite(extraCalls) && extraCalls >= 0) {
+        updateData.aiExtraCalls = extraCalls;
+      }
+    }
+
+    if (req.body.aiExtraStt !== undefined && req.body.aiExtraStt !== "") {
+      const extraStt = Number(req.body.aiExtraStt);
+      if (Number.isFinite(extraStt) && extraStt >= 0) {
+        updateData.aiExtraStt = extraStt;
+      }
+    }
+
     const company = await Company.findByIdAndUpdate(
       id,
       { $set: updateData },
@@ -1487,6 +1514,48 @@ exports.renewCompanySubscription = async (req, res) => {
       updateData.planFeatures = planFeatures;
       updateData.allowedPages = planAllowedPages;
       updateData.allowedSuperAdminPages = planAllowedSuperAdminPages;
+      if (selectedPlan.aiApiKeySource) {
+        updateData.aiApiKeySource = selectedPlan.aiApiKeySource;
+      }
+      if (selectedPlan.aiDailyTokenLimit !== undefined) {
+        updateData.aiDailyTokenLimit = selectedPlan.aiDailyTokenLimit;
+      }
+      if (selectedPlan.aiDailyCallLimit !== undefined) {
+        updateData.aiDailyCallLimit = selectedPlan.aiDailyCallLimit;
+      }
+      if (selectedPlan.aiDailySttLimit !== undefined) {
+        updateData.aiDailySttLimit = selectedPlan.aiDailySttLimit;
+      }
+    }
+
+    if (req.body.customGroqApiKey !== undefined) {
+      updateData.customGroqApiKey = req.body.customGroqApiKey ? String(req.body.customGroqApiKey).trim() : null;
+    }
+
+    if (req.body.aiApiKeySource !== undefined) {
+      const mode = String(req.body.aiApiKeySource).trim().toLowerCase();
+      updateData.aiApiKeySource = mode === "client" ? "client" : "platform";
+    }
+
+    if (req.body.aiExtraTokens !== undefined && req.body.aiExtraTokens !== "") {
+      const extra = Number(req.body.aiExtraTokens);
+      if (Number.isFinite(extra) && extra >= 0) {
+        updateData.aiExtraTokens = extra;
+      }
+    }
+
+    if (req.body.aiExtraCalls !== undefined && req.body.aiExtraCalls !== "") {
+      const extraCalls = Number(req.body.aiExtraCalls);
+      if (Number.isFinite(extraCalls) && extraCalls >= 0) {
+        updateData.aiExtraCalls = extraCalls;
+      }
+    }
+
+    if (req.body.aiExtraStt !== undefined && req.body.aiExtraStt !== "") {
+      const extraStt = Number(req.body.aiExtraStt);
+      if (Number.isFinite(extraStt) && extraStt >= 0) {
+        updateData.aiExtraStt = extraStt;
+      }
     }
 
     if (isActive !== undefined) {
@@ -1505,7 +1574,7 @@ exports.renewCompanySubscription = async (req, res) => {
       { new: true, runValidators: true }
     )
       .select("-loginToken")
-      .populate("selectedPlan", "name price durationDays features allowedPages allowedSuperAdminPages");
+      .populate("selectedPlan", "name price durationDays features allowedPages allowedSuperAdminPages aiDailyTokenLimit aiDailyCallLimit aiDailySttLimit");
 
     if (!company) {
       return res.status(404).json({

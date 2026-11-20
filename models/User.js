@@ -224,6 +224,25 @@ const userSchema = new mongoose.Schema({
   type: String,
   default: "employee"
 },
+
+  aiConfig: {
+    enabled: {
+      type: Boolean,
+      default: true,
+    },
+    customDailyTokenLimit: {
+      type: Number,
+      default: null,
+    },
+    customDailyCallLimit: {
+      type: Number,
+      default: null,
+    },
+    isUnlimited: {
+      type: Boolean,
+      default: false,
+    },
+  },
   
   
   resetToken: {
