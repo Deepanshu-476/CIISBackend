@@ -1048,7 +1048,7 @@ const corsOptions = {
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "Cache-Control", "X-Permanent-Delete", "x-company-code", "companyCode", "X-Company-Code", "X-Page-Path", "X-Client-App"],
+  allowedHeaders: ["Content-Type", "Authorization", "Cache-Control", "X-Permanent-Delete", "x-company-code", "companyCode", "X-Company-Code", "X-Page-Path", "X-Client-App", "X-CIIS-Auth-Mode"],
   exposedHeaders: ["Content-Disposition"]
 };
 
@@ -1065,6 +1065,7 @@ app.use(compression({
 
 const cookieParser = require("cookie-parser");
 app.use(cookieParser());
+app.use(require('./utils/tabAuth').scopeTabAuth);
 
 
 const requestBodyLimit = process.env.REQUEST_BODY_LIMIT || "15mb";

@@ -193,6 +193,7 @@ const invitedTimers = new Map();
 const rosterOf = (room) => Object.entries(room?.participants || {}).map(([userId, participant]) => ({
     userId,
     status: participant.status,
+    muted: participant.status === "joined" ? participant.muted : undefined,
     user: participant.user || participant.invitedUser || { _id: userId, name: "Participant" },
     addedBy: participant.addedBy || null,
     addedByName: participant.addedByName || "",
@@ -730,18 +731,28 @@ const callSocket = (io, socket) => {
             });
         });
     });
-    socket.on("call:rebind", async (data = {}) => {
-        const callId = data.callId?.toString();
-        if (!callId) return;
-        await callStore.withCallLock(callId, async () => {
+    let participantUpdates = Promise.resolve();
+    const updateParticipantSocket = (data, rebind = false) => {
+        const callId = data?.callId?.toString();
+        const muted = data?.muted;
+        if (!callId || (!rebind && typeof muted !== "boolean")) return;
+        // Preserve this socket's event order when rapid toggles contend for the room lock.
+        participantUpdates = participantUpdates.then(() => callStore.withCallLock(callId, async () => {
             const room = await callStore.get(callId);
-            const p = room?.participants?.[socket.userId];
-            if (room && p?.status === "joined") {
-                p.socketId = socket.id;
-                await callStore.save(room);
+            const participant = room?.participants?.[socket.userId];
+            if (participant?.status !== "joined") return;
+            if (rebind) {
+                participant.socketId = socket.id;
+            } else if (participant.socketId !== socket.id || participant.muted === muted) {
+                return;
             }
-        });
-    });
+            if (typeof muted === "boolean") participant.muted = muted;
+            await callStore.save(room);
+            broadcastRoster(io, room);
+        })).catch(error => console.error("Unable to update call participant", error));
+    };
+    socket.on("call:mic-state", (data = {}) => updateParticipantSocket(data));
+    socket.on("call:rebind", (data = {}) => updateParticipantSocket(data, true));
     socket.on("call:offer", async (data = {}) => {
         const room = await callStore.get(data.callId?.toString());
         emitToParticipant(io, room, data.toUserId?.toString(), "call:offer", {
