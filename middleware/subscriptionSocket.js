@@ -8,6 +8,7 @@ const readEvents = new Set([
   'notification:getUnreadCount', 'notification:markRead', 'notification:markAllRead',
   'leave:join', 'leave:leave', 'leave:get', 'call:check-availability',
   'call:sync-incoming', 'call:get-roster', 'call:get-ongoing', 'call:end', 'call:reject',
+  'call:mic-state', 'call:rebind',
 ]);
 
 module.exports = socket => async (packet, next) => {

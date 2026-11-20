@@ -25,6 +25,7 @@ const {
 const SidebarConfig = require("../models/SidebarConfig");
 const { findSidebarConfig } = require("../routes/sidebarConfigs");
 const { recordLogin } = require("../utils/activityTracker");
+const { usesTabAuth } = require("../utils/tabAuth");
 
 const resolveUserAssignedDashboard = async (user, companyDetails) => {
   try {
@@ -369,6 +370,8 @@ const ACCESS_COOKIE_MAX_AGE = 24 * 60 * 60 * 1000;
 const REFRESH_COOKIE_MAX_AGE = 7 * 24 * 60 * 60 * 1000;
 
 const setAuthCookies = (res, accessToken, refreshToken) => {
+  if (usesTabAuth(res.req)) return;
+
   const isProd = process.env.NODE_ENV === "production";
   const cookieOpts = {
     httpOnly: true,
@@ -3106,9 +3109,11 @@ exports.logout = async (req, res) => {
       );
     }
 
-    res.clearCookie('auth_token');
-    res.clearCookie('access_token');
-    res.clearCookie('refresh_token');
+    if (!usesTabAuth(req)) {
+      res.clearCookie('auth_token');
+      res.clearCookie('access_token');
+      res.clearCookie('refresh_token');
+    }
 
     return res.status(200).json({
       success: true,
