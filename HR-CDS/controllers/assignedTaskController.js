@@ -90,7 +90,7 @@ const fetchAssignedToMeTaskList = async (req) => {
 
 exports.createTaskForOthers = async (req, res) => {
   try {
-    const { title, description, dueDateTime, whatsappNumber, priorityDays, priority, assignedUsers, assignedGroups, checkpoints } = req.body;
+    const { title, description, dueDateTime, whatsappNumber, priorityDays, priority, assignedUsers, assignedGroups, checkpoints, status } = req.body;
     const companyCode = getRequestCompanyCode(req);
     const branchId = getRequestedTaskBranchId(req);
 
@@ -121,7 +121,10 @@ exports.createTaskForOthers = async (req, res) => {
     const parsedDue = new Date(dueDateTime);
     if (isNaN(parsedDue.getTime())) return res.status(400).json({ success: false, error: 'Invalid due date format' });
 
-    const statusByUser = parsedUsers.map(uid => ({ user: uid, status: 'pending' }));
+    const rawStatus = normalizeTaskStatus(status || 'pending');
+    const validStatuses = ['pending', 'in-progress', 'completed', 'approved', 'rejected', 'onhold', 'reopen', 'cancelled', 'overdue'];
+    const safeStatus = validStatuses.includes(rawStatus) ? rawStatus : 'pending';
+    const statusByUser = parsedUsers.map(uid => ({ user: uid, status: safeStatus, updatedAt: new Date() }));
     const parsedCheckpoints = parseTaskCheckpoints(checkpoints);
     const normalizedRecurrence = normalizeTaskRecurrenceFields(req.body);
     const recurringSettings = {
@@ -147,6 +150,12 @@ exports.createTaskForOthers = async (req, res) => {
       assignedUsers: parsedUsers,
       assignedGroups: parsedGroups,
       statusByUser,
+      overallStatus: safeStatus,
+      creatorStatus: {
+        status: safeStatus === 'completed' ? 'completed' : 'pending',
+        updatedAt: new Date(),
+      },
+      completionDate: safeStatus === 'completed' ? new Date() : null,
       checkpoints: parsedCheckpoints,
       files,
       voiceNote,
@@ -161,7 +170,7 @@ exports.createTaskForOthers = async (req, res) => {
       nextRecurringDate: recurringSettings.isRecurring && parsedDue
         ? getNextRecurringDate(parsedDue, recurringSettings.repeatPattern, recurringSettings.repeatDays)
         : null,
-      statusHistory: [{ status: 'pending', changedBy: req.user._id, remarks: 'Task assigned to others' }]
+      statusHistory: [{ status: safeStatus, changedBy: req.user._id, remarks: `Task assigned to others with status: ${safeStatus}` }]
     });
 
     await task.populate('assignedUsers', TASK_USER_POPULATE_FIELDS);
@@ -176,6 +185,17 @@ exports.createTaskForOthers = async (req, res) => {
       }
     }
 
+    if (global.io) {
+      const assignees = task.assignedUsers || [];
+      const recipientIds = new Set();
+      for (const u of assignees) {
+        const uid = String(u?._id || u?.id || u);
+        if (uid) recipientIds.add(uid);
+      }
+      for (const assigneeId of recipientIds) {
+        global.io.to('user:' + assigneeId).emit('task:new', task);
+      }
+    }
     await createActivityLog(req.user, 'task_created_for_others', task._id, `Created task for others: ${title}`, null, task.toObject(), req);
 
     if (task.assignedUsers?.length > 0) {

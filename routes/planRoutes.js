@@ -21,6 +21,20 @@ const buildPlanPayload = body => {
   const allowedPages = cleanStringArray(body.allowedPages);
   const allowedSuperAdminPages = cleanStringArray(body.allowedSuperAdminPages);
 
+  const aiApiKeySource = String(body.aiApiKeySource || "").trim().toLowerCase() === "client"
+    ? "client"
+    : "platform";
+
+  const aiDailyTokenLimit = body.aiDailyTokenLimit !== undefined && body.aiDailyTokenLimit !== ""
+    ? Math.max(0, Number(body.aiDailyTokenLimit))
+    : 25000;
+  const aiDailyCallLimit = body.aiDailyCallLimit !== undefined && body.aiDailyCallLimit !== ""
+    ? Math.max(0, Number(body.aiDailyCallLimit))
+    : Math.max(1, Math.round(aiDailyTokenLimit / 780));
+  const aiDailySttLimit = body.aiDailySttLimit !== undefined && body.aiDailySttLimit !== ""
+    ? Math.max(0, Number(body.aiDailySttLimit))
+    : 100;
+
   return {
     name,
     price,
@@ -29,6 +43,10 @@ const buildPlanPayload = body => {
     features,
     allowedPages,
     allowedSuperAdminPages,
+    aiApiKeySource,
+    aiDailyTokenLimit,
+    aiDailyCallLimit,
+    aiDailySttLimit,
     isActive: body.isActive !== undefined ? Boolean(body.isActive) : true,
   };
 };
@@ -43,6 +61,15 @@ const validatePlanPayload = payload => {
   if (!Number.isFinite(payload.price) || payload.price < 0) errors.push("Valid plan price is required");
   if (!Number.isInteger(payload.durationDays) || payload.durationDays < 1) errors.push("Plan duration must be a positive whole number of days");
   if (!payload.allowedPages.length) errors.push("Select at least one page for this plan");
+  if (payload.aiDailyTokenLimit !== undefined && (!Number.isFinite(payload.aiDailyTokenLimit) || payload.aiDailyTokenLimit < 0)) {
+    errors.push("AI daily token limit must be a non-negative number");
+  }
+  if (payload.aiDailyCallLimit !== undefined && (!Number.isFinite(payload.aiDailyCallLimit) || payload.aiDailyCallLimit < 0)) {
+    errors.push("AI daily call limit must be a non-negative number");
+  }
+  if (payload.aiDailySttLimit !== undefined && (!Number.isFinite(payload.aiDailySttLimit) || payload.aiDailySttLimit < 0)) {
+    errors.push("AI daily STT limit must be a non-negative number");
+  }
   return errors;
 };
 
@@ -113,6 +140,26 @@ router.put("/:id", protect, requirePlatformOwner, async (req, res) => {
 
     if (!plan) {
       return res.status(404).json({ success: false, message: "Plan not found" });
+    }
+
+    try {
+      const Company = require("../models/Company");
+      await Company.updateMany(
+        { selectedPlan: plan._id },
+        {
+          $set: {
+            subscriptionPlan: plan.name,
+            planDurationDays: plan.durationDays,
+            planFeatures: plan.features || [],
+            aiApiKeySource: plan.aiApiKeySource || "platform",
+            aiDailyTokenLimit: plan.aiDailyTokenLimit ?? 25000,
+            aiDailyCallLimit: plan.aiDailyCallLimit ?? 35,
+            aiDailySttLimit: plan.aiDailySttLimit ?? 100,
+          }
+        }
+      );
+    } catch (syncError) {
+      console.warn("⚠️ Failed to cascade plan updates to companies:", syncError?.message);
     }
 
     res.json({ success: true, message: "Plan updated successfully", plan });
