@@ -1,0 +1,30 @@
+#!/bin/sh
+# Blocks a push when .env is not ignored or is tracked by git.
+# Set up automatically by `npm install` (see scripts/setup-git-hooks.cjs).
+
+root=$(git rev-parse --show-toplevel)
+cd "$root" || exit 1
+
+if ! grep -qxE '[[:space:]]*/?\.env[[:space:]]*' .gitignore 2>/dev/null; then
+  echo ""
+  echo "❌ PUSH BLOCKED: .gitignore mein .env nahi hai."
+  echo "   Pehle .gitignore mein '.env' wali line add karo, phir push karo."
+  echo ""
+  exit 1
+fi
+
+tracked=$(git ls-files | grep -E '(^|/)\.env(\.local|\.development|\.development\.local|\.production\.local|\.test\.local)?$')
+if [ -n "$tracked" ]; then
+  echo ""
+  echo "❌ PUSH BLOCKED: ye env file(s) git mein track ho rahi hain:"
+  echo "$tracked" | sed 's/^/     /'
+  echo ""
+  echo "   Inme passwords/secrets hote hain. Pehle inhe git se hatao (file computer par rahegi):"
+  echo "     git rm --cached <file>"
+  echo "     git commit -m \"Remove env file from git\""
+  echo "   Phir push karo."
+  echo ""
+  exit 1
+fi
+
+exit 0
