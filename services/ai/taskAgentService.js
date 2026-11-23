@@ -103,6 +103,7 @@ const { getScopeInfo, isAssigneeInScope } = require('./taskScope');
 const { resolveAssignee, escapeRegex } = require('./assigneeResolver');
 const { getModelName } = require('./llm');
 const { answerWithGroqCRM } = require('./groqCrmHelper');
+const { isExportQuery, handleExportRequest } = require('./aiExportReportHandler');
 const { TASK_FIELDS, TASK_FIELD_ORDER, resolveRecurrenceEndDate } = require('./taskFields');
 const { parseHinglishSlots, isSkip, isSkipAll, isSelfPhrase, isFillerPhrase, extractAssigneeMention, extractMultipleAssignees, isInvalidOrCommandTitle, cleanAssigneeName, isValidAssigneeCandidate, detectPersonInActionTitle, parseCheckpointItems, parsePriorityDays } = require('./hinglishParser');
 const { detectUserIntent, normalizeTranscript } = require('./sttNormalizer');
@@ -5967,6 +5968,27 @@ const lastAskedField = currentDraft.asked.length > 0
   currentDraft.language = userLang;
 
   // --------------------------------------------------------------------------
+  // NATURAL LANGUAGE REPORT EXPORT HANDLER (Attendance, Tasks, Projects, Clients)
+  // Evaluated before chit-chat, CRM queries, or Groq deflection
+  // --------------------------------------------------------------------------
+  if (!actionHandled && trimmedMessage && isExportQuery(trimmedMessage) && !isDraftInProgress) {
+    try {
+      const exportResult = await handleExportRequest({
+        message: trimmedMessage,
+        req,
+        deps,
+        currentDraft,
+        isEn: userLang === 'en'
+      });
+      if (exportResult) {
+        return exportResult;
+      }
+    } catch (exportErr) {
+      console.warn('[taskAgentService] Error in export report handler:', exportErr);
+    }
+  }
+
+  // --------------------------------------------------------------------------
   // CONVERSATIONAL ROUTER 1: Chit-chat & Greetings (ChatGPT-like natural replies)
   // --------------------------------------------------------------------------
   if (!actionHandled && trimmedMessage && isChitChatOrGreeting(trimmedMessage) && !isDraftInProgress) {
@@ -8803,20 +8825,57 @@ const lastAskedField = currentDraft.asked.length > 0
 
         // Direct answer to priority question
         if (!actionHandled && lastAskedField === 'priority' && (currentDraft.priority === null || currentDraft.priority === undefined) && !hasOtherFieldIntent) {
-          const cleanMsg = trimmedMessage.trim().toLowerCase().replace(/[.,!?;:]/g, '');
-          if (['low', 'kam', 'halka', 'लो'].includes(cleanMsg)) {
-            currentDraft.priority = 'low';
-            actionHandled = true;
-          } else if (['high', 'urgent', 'jaruri', 'zaroori', 'हाई', 'ज़रूरी'].includes(cleanMsg)) {
-            currentDraft.priority = 'high';
-            actionHandled = true;
-          } else if (['medium', 'normal', 'theek', 'मीडियम'].includes(cleanMsg)) {
-            currentDraft.priority = 'medium';
-            actionHandled = true;
+          const cleanMsg = trimmedMessage.trim().toLowerCase();
+          let matchedPriority = null;
+          if (/\b(?:high|urgent|zaroori|jaruri|emergency|danger|top|imp|important|अति\s*आवश्यक|जरूरी|ज़रूरी|हाई)\b/i.test(cleanMsg)) {
+            matchedPriority = 'high';
+          } else if (/\b(?:low|kam|halka|chota|धीमा|कम|हल्का|लो)\b/i.test(cleanMsg)) {
+            matchedPriority = 'low';
+          } else if (/\b(?:medium|normal|theek|mod|mid|average|standard|theek\s*thaak|औसत|मीडियम|नॉर्मल|ठीक)\b/i.test(cleanMsg)) {
+            matchedPriority = 'medium';
           }
-          if (actionHandled) {
+
+          if (matchedPriority) {
+            currentDraft.priority = matchedPriority;
+            actionHandled = true;
             if (!currentDraft.asked.includes('priority')) currentDraft.asked.push('priority');
             currentDraft.skipped = currentDraft.skipped.filter((f) => f !== 'priority');
+          } else {
+            // Unrecognized answer to priority question: STAY ON PRIORITY!
+            // Do NOT let slot filler jump back to title or corrupt draft
+            actionHandled = true;
+            const isEnTurn = (userLang === 'en');
+            const priorAskCount = currentDraft.askCounts['priority'] || 0;
+            currentDraft.askCounts['priority'] = priorAskCount + 1;
+
+            const fieldConfig = TASK_FIELDS.priority || {};
+            const rep = isEnTurn
+              ? (fieldConfig.reAskQuestion?.replyEn || 'Please choose one of the priorities: Low, Medium, or High.')
+              : (fieldConfig.reAskQuestion?.reply || 'Kripya inme se ek priority chun lein: Low, Medium ya High.');
+            const spk = isEnTurn
+              ? (fieldConfig.reAskQuestion?.speechEn || 'Please choose one of the priorities: Low, Medium, or High.')
+              : (fieldConfig.reAskQuestion?.speech || 'कृपया इनमें से एक Priority चुनें: Low, Medium ya High।');
+
+            return {
+              success: true,
+              status: 'needs_input',
+              field: 'priority',
+              reply: rep,
+              speech: spk,
+              speakText: rep,
+              speakTextHi: isEnTurn ? null : 'इनमें से एक Priority चुन लें: Low, Medium या High।',
+              draft: currentDraft,
+              missing: ['priority'],
+              chips: fieldConfig.chips ? fieldConfig.chips() : [],
+              candidates: [],
+              notices,
+              canAssignOthers,
+              progress: { done: 3, total: 10 },
+              payload: null,
+              preview: null,
+              intent: detectedIntent ? { type: detectedIntent.type, field: detectedIntent.field } : null,
+              meta: { model: modelName },
+            };
           }
         }
 
@@ -9210,8 +9269,9 @@ const lastAskedField = currentDraft.asked.length > 0
     }
   }
 
-  // Title sanity guard: reject command sentences/assignee echoes as task titles
-  if (currentDraft.title && isInvalidOrCommandTitle(currentDraft.title, rawMessage, currentDraft.assigneeName)) {
+  // Title sanity guard: reject command sentences/assignee echoes as task titles only if answering title
+  const isAnsweringTitleTurn = !lastAskedField || lastAskedField === 'title' || lastAskedField === 'welcome';
+  if (currentDraft.title && isAnsweringTitleTurn && isInvalidOrCommandTitle(currentDraft.title, rawMessage, currentDraft.assigneeName)) {
     currentDraft.title = null;
   }
 

@@ -310,13 +310,16 @@ const TASK_FIELDS = {
     default: 'medium',
     parse: (val) => {
       const clean = String(val || '').trim().toLowerCase();
-      if (['low', 'medium', 'high'].includes(clean)) return clean;
-      if (clean === 'urgent') return 'high';
+      if (/\b(?:high|urgent|zaroori|jaruri|emergency|danger|top|imp|important|अति\s*आवश्यक|जरूरी|ज़रूरी|हाई)\b/i.test(clean)) return 'high';
+      if (/\b(?:low|kam|halka|chota|धीमा|कम|हल्का|लो)\b/i.test(clean)) return 'low';
+      if (/\b(?:medium|normal|theek|mod|mid|average|standard|theek\s*thaak|औसत|मीडियम|नॉर्मल|ठीक)\b/i.test(clean)) return 'medium';
       return 'medium';
     },
     normalise: (val) => {
       const clean = String(val || 'medium').trim().toLowerCase();
-      return ['low', 'medium', 'high'].includes(clean) ? clean : 'medium';
+      if (['low', 'medium', 'high'].includes(clean)) return clean;
+      if (clean === 'urgent') return 'high';
+      return 'medium';
     },
   },
 

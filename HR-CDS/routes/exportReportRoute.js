@@ -29,4 +29,7 @@ router.get('/clients-master', exportReportController.exportClientsMasterReport);
 // 5. Specific Client Tasks Report
 router.get('/client/:clientId/tasks', exportReportController.exportClientTasksReport);
 
+// 6. Projects Master Report (Company-wide projects, status, manager, members, tasks stats, progress)
+router.get('/projects-master', exportReportController.exportProjectsMasterReport);
+
 module.exports = router;
