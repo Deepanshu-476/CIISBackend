@@ -1491,6 +1491,7 @@ const startServer = async () => {
   require('./HR-CDS/utils/projectChatWorker').start();
 
   server.listen(PORT, async () => {
+    console.log(`Server listening on port ${PORT}`);
 
     try {
       const migrateTenantIndexes = require("./utils/tenantIndexMigration");
