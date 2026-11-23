@@ -195,17 +195,75 @@ const SENSITIVE_USER_LIST_KEYS = [
   'documents',
 ];
 
+const hasProfileValue = (value) => {
+  if (value === null || value === undefined) return false;
+  if (value instanceof Date) {
+    return !isNaN(value.getTime());
+  }
+  if (typeof value === 'object') {
+    const label = value.name || value.roleName || value.departmentName || value.branchName || value.title || value._id || value.id || '';
+    if (String(label).trim().length > 0) return true;
+    if (typeof value.toString === 'function' && value.toString() !== '[object Object]') {
+      const s = value.toString().trim();
+      return s.length > 0 && s.toLowerCase() !== 'not provided' && s.toLowerCase() !== 'not added';
+    }
+    return false;
+  }
+  const str = String(value).trim();
+  return str.length > 0 && str.toLowerCase() !== 'not provided' && str.toLowerCase() !== 'not added';
+};
+
+const calculateProfileCompletion = (profile) => {
+  if (!profile || typeof profile !== 'object') return 0;
+  const fields = [
+    profile.name,
+    profile.phone || profile.mobile,
+    profile.dob,
+    profile.gender,
+    profile.address,
+    profile.city,
+    profile.state,
+    profile.pinCode || profile.zipCode,
+    profile.country,
+    profile.aadhaar || profile.aadhar || profile.aadharCard || profile.aadhaarNumber,
+    profile.panCard || profile.pan || profile.panNumber,
+    profile.bankHolderName,
+    profile.accountNumber,
+    profile.ifsc,
+    profile.bankName,
+    profile.maritalStatus,
+    profile.fatherName,
+    profile.motherName,
+    profile.emergencyName,
+    profile.emergencyPhone,
+    profile.emergencyRelation,
+    profile.emergencyAddress,
+  ];
+
+  if (String(profile.maritalStatus || '').trim().toLowerCase() === 'married') {
+    fields.push(profile.spouseName);
+  }
+
+  const completedFields = fields.filter(hasProfileValue).length;
+  return Math.round((completedFields / fields.length) * 100);
+};
+
 const sanitizeUserRecordForList = (userObj = {}, req = {}) => {
+  const plainObj = userObj && typeof userObj.toObject === 'function' ? userObj.toObject() : userObj;
+  const completion = typeof plainObj?.profileCompletion === 'number'
+    ? plainObj.profileCompletion
+    : calculateProfileCompletion(plainObj);
+
   const includeSensitive = String(req?.query?.includeSensitive || '').toLowerCase() === 'true';
   const requesterId = String(req?.user?._id || req?.user?.id || '');
-  const targetId = String(userObj?._id || userObj?.id || '');
+  const targetId = String(plainObj?._id || plainObj?.id || '');
   if (requesterId && targetId && requesterId === targetId) {
-    return userObj;
+    return { ...plainObj, profileCompletion: completion };
   }
   if (req?.allowSensitiveEmployeeDetails === true || (includeSensitive && isPrivilegedPiiViewer(req?.user))) {
-    return userObj;
+    return { ...plainObj, profileCompletion: completion };
   }
-  const cloned = { ...userObj };
+  const cloned = { ...plainObj, profileCompletion: completion };
   SENSITIVE_USER_LIST_KEYS.forEach(key => {
     delete cloned[key];
   });
@@ -936,6 +994,8 @@ exports.updateMe = async (req, res) => {
       }
     }
     
+    updateData.profileCompletion = calculateProfileCompletion({ ...existingUser, ...updateData });
+
     const updatedUser = await User.findByIdAndUpdate(
       userId,
       { $set: updateData },
@@ -1347,6 +1407,9 @@ exports.updateRegisterRequest = async (req, res) => {
     updateData['registrationVerification.lastUpdatedBy'] = req.user.id || req.user._id;
     updateData['registrationVerification.lastUpdatedByName'] = getRequestUserName(req.user);
     updateData['registrationVerification.lastUpdatedAt'] = new Date();
+
+    const userPlain = user && typeof user.toObject === 'function' ? user.toObject() : (user || {});
+    updateData.profileCompletion = calculateProfileCompletion({ ...userPlain, ...updateData });
 
     const updatedUser = await User.findByIdAndUpdate(
       user._id,
@@ -2093,6 +2156,9 @@ exports.updateUser = async (req, res) => {
     }
 
     
+    const userPlain = user && typeof user.toObject === 'function' ? user.toObject() : (user || {});
+    updateData.profileCompletion = calculateProfileCompletion({ ...userPlain, ...updateData });
+
     const updatedUser = await User.findByIdAndUpdate(
       user._id,
       { $set: updateData },

@@ -224,6 +224,10 @@ const userSchema = new mongoose.Schema({
   type: String,
   default: "employee"
 },
+  profileCompletion: {
+    type: Number,
+    default: 0
+  },
 
   aiConfig: {
     enabled: {

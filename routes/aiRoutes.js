@@ -23,7 +23,8 @@ const aiParseLimiter = rateLimit({
 
 const aiSttLimiter = rateLimit({
   windowMs: 60 * 1000,
-  limit: 10,
+  limit: 100,
+  skipFailedRequests: true,
   keyGenerator: (req) => String(req.user?._id || req.user?.id || 'anon'),
   validate: { keyGeneratorIpFallback: false },
   message: {
