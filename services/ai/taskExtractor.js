@@ -38,11 +38,16 @@ function mergeDraft(previous = {}, extracted = {}, deterministic = {}, rawMessag
   const ext = extracted || {};
   const det = deterministic || {};
 
-  // Title: LLM wins unless empty, else deterministic wins, else title fallback
+  // Title: If previously set and user is answering another slot, preserve existing title!
   let title = null;
   const rawCand = ext.assigneeName || det.assigneeName || prev.assigneeName || '';
   const candidateAssignee = (rawCand && isValidAssigneeCandidate(rawCand)) ? cleanAssigneeName(rawCand) : '';
-  if (ext.title !== null && ext.title !== undefined && String(ext.title).trim() !== '') {
+  const isExplicitTitleCommand = /\b(?:title\s*badlo|change\s*title|rename|naam\s*badlo|title\s*:|title\s+is)\b/i.test(rawMessage);
+  const isAnsweringTitle = !lastAskedField || lastAskedField === 'title' || lastAskedField === 'welcome';
+
+  if (prev.title && !isAnsweringTitle && !isExplicitTitleCommand) {
+    title = String(prev.title).trim();
+  } else if (ext.title !== null && ext.title !== undefined && String(ext.title).trim() !== '') {
     title = String(ext.title).trim();
   } else if (det.title !== null && det.title !== undefined && String(det.title).trim() !== '') {
     title = String(det.title).trim();
@@ -52,11 +57,13 @@ function mergeDraft(previous = {}, extracted = {}, deterministic = {}, rawMessag
     title = applyTitleFallback(null, rawMessage);
   }
 
-  if (title && isInvalidOrCommandTitle(title, rawMessage, candidateAssignee)) {
-    title = null;
-  }
-  if (title && candidateAssignee && title.toLowerCase().trim() === candidateAssignee.toLowerCase().trim()) {
-    title = null;
+  if (isAnsweringTitle || isExplicitTitleCommand || !prev.title) {
+    if (title && isInvalidOrCommandTitle(title, rawMessage, candidateAssignee)) {
+      title = null;
+    }
+    if (title && candidateAssignee && title.toLowerCase().trim() === candidateAssignee.toLowerCase().trim()) {
+      title = null;
+    }
   }
 
   // Description: LLM wins unless empty, else deterministic wins, else previous

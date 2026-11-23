@@ -1395,9 +1395,10 @@ function parseHinglishSlots(rawText, now = new Date(), referenceDate = null, las
   }
   const isRepeatSlot = lastAskedField === 'repeatPattern' || lastAskedField === 'repeatDays' || lastAskedField === 'recurrenceEndDate';
   const hasRepeatData = Boolean((slots.repeatDays && slots.repeatDays.length > 0) || (slots.repeatPattern && slots.repeatPattern !== 'none') || slots.recurrenceEndDate);
+  const isNonAssigneeField = Boolean(lastAskedField && ['priority', 'priorityDays', 'status', 'dueDateTime', 'dueDate', 'description', 'title', 'reminder', 'reminderOption', 'repeatPattern', 'repeatDays', 'recurrenceEndDate', 'checkpoints', 'attachments', 'file'].includes(lastAskedField));
 
-  if (isRepeatSlot || hasRepeatData || (slots.checkpoints && slots.checkpoints.length > 0)) {
-    // Checkpoints or repeat context: only extract assignee if explicit assignment syntax is present (e.g. "assign to Rahul" or "Rahul ko")
+  if (isRepeatSlot || hasRepeatData || (slots.checkpoints && slots.checkpoints.length > 0) || isNonAssigneeField) {
+    // Checkpoints, repeat, or non-assignee slot (priority, due date, description): only extract assignee if explicit assignment syntax is present (e.g. "assign to Rahul" or "Rahul ko")
     const assignToMatch = normalized.match(/\b(?:assign(?:ed)?\s+to|task\s+to)\s+([a-zA-Z\u0900-\u097F\s,&+]+?)(?=\s+(?:due|kal|aaj|priority|status|description|checkpoints|repeat|$))/i);
     const koMatch = normalized.match(/(?:^|\s)([a-zA-Z\u0900-\u097F\s,&+]+?)\s+(?:ko|co|koh|kor|core|cor|के|को)\b/i);
     if (assignToMatch || koMatch) {
