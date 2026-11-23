@@ -437,6 +437,7 @@ exports.createCompany = async (req, res) => {
         aiDailySttLimit: selectedPlan.aiDailySttLimit ?? 0,
         aiExtraTokens: 0,
         accessConfiguredAt: new Date(),
+        leadIntegrations: req.body.leadIntegrations || undefined,
         subscriptionPayments: [{
           amount: selectedPlan.price,
           paymentDate: new Date(),
@@ -1010,6 +1011,7 @@ exports.updateCompany = async (req, res) => {
       "subscriptionPlan",
       "subscriptionAmount",
       "subscriptionPaymentStatus",
+      "leadIntegrations",
     ];
 
     const updateData = {};

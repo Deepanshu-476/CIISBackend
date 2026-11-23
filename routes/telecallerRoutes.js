@@ -7,7 +7,9 @@ const { requireCrmPagePermission } = require('../middleware/crmPagePermission');
 
 router.use(protect);
 const pages = ['dashboard', 'call-dashboard', 'assigned-calls', 'todays-calls', 'pending-calls', 'scheduled-calls', 'completed-calls', 'call-history', 'follow-ups', 'converted-leads', 'call-workspace', 'lead-detail', 'add-lead'];
-const enabled = (keys, slug) => [`admin-telecaller-${slug}`, `ciisuser/telecaller/${slug}`, `telecaller/${slug}`].some(key => keys.has(key));
+const enabled = (keys, slug) => !keys.size ||
+  ['crm', 'admin-telecaller', 'telecaller', `admin-telecaller-${slug}`, `ciisuser/telecaller/${slug}`, `telecaller/${slug}`]
+    .some(key => keys.has(key));
 
 router.use(async (req, res, next) => {
   try {

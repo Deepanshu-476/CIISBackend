@@ -40,6 +40,7 @@ router.get('/company-users', userController.getCompanyUsers);
 router.get('/all', userController.getAllUsers);
 router.get('/deleted', userController.getDeletedUsers);
 router.get('/register-requests', userController.getRegisterRequests);
+router.get('/register-requests/access', userController.getRegisterRequestAccess);
 router.get('/register-requests/count', userController.getRegisterRequestsCount);
 router.put('/register-requests/:id', registerRequestInBranches, userController.updateRegisterRequest);
 router.patch('/register-requests/:id/verify-section', registerRequestInBranches, userController.verifyRegisterRequestSection);

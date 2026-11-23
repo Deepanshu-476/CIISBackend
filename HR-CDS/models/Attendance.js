@@ -168,13 +168,19 @@ const attendanceSchema = new mongoose.Schema({
     latitude: { type: Number },
     longitude: { type: Number },
     accuracy: { type: Number },
-    distanceFromOfficeMeters: { type: Number }
+    distanceFromOfficeMeters: { type: Number },
+    address: { type: String, trim: true },
+    placeName: { type: String, trim: true },
+    branchName: { type: String, trim: true }
   },
   outLocation: {
     latitude: { type: Number },
     longitude: { type: Number },
     accuracy: { type: Number },
-    distanceFromOfficeMeters: { type: Number }
+    distanceFromOfficeMeters: { type: Number },
+    address: { type: String, trim: true },
+    placeName: { type: String, trim: true },
+    branchName: { type: String, trim: true }
   },
   inAttendanceMode: { type: String, enum: ['normal', 'location', 'image', 'both'] },
   outAttendanceMode: { type: String, enum: ['normal', 'location', 'image', 'both'] },

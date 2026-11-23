@@ -9,6 +9,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const net = require('net');
+process.env.DISABLE_SCHEDULED_JOBS = 'true';
 
 const MONGO_URI = process.env.TEST_MONGO_URI || 'mongodb://127.0.0.1:27030/ciiscalltest';
 
@@ -187,6 +188,85 @@ test('break flow', async t => {
         const res = await call(controller.stopBreak, { user: employee(ids.flex, 'ZZTEST Flex', flexDept), body: {} });
         assert.equal(res.statusCode, 400);
         assert.match(res.body.message, /No break is running/);
+    });
+
+    await t.test('in-progress task logs show the break and the client timer excludes it from saved work', async sub => {
+        const ClientTask = require('../HR-CDS/models/ClientTask');
+        const Client = require('../HR-CDS/models/Client');
+        const Task = require('../HR-CDS/models/Task');
+        const { Project } = require('../HR-CDS/models/Project');
+        const tasks = require('../HR-CDS/controllers/ClientTask');
+        const personalTasks = require('../HR-CDS/controllers/taskController');
+        const projects = require('../HR-CDS/controllers/projectController');
+        sub.mock.method(require('../HR-CDS/utils/clientChatService'), 'drainTask', async () => {});
+        const user = employee(ids.flex, 'ZZTEST Flex', flexDept);
+        const clientId = new mongoose.Types.ObjectId();
+        const taskId = new mongoose.Types.ObjectId();
+        const personalId = new mongoose.Types.ObjectId();
+        const projectId = new mongoose.Types.ObjectId();
+        const projectTaskId = new mongoose.Types.ObjectId();
+        const previousAttendance = await Attendance.collection.findOne({ user: ids.flex });
+        sub.after(async () => {
+            await ClientTask.collection.deleteOne({ _id: taskId });
+            await Client.collection.deleteOne({ _id: clientId });
+            await Task.collection.deleteOne({ _id: personalId });
+            await Project.collection.deleteOne({ _id: projectId });
+            await Attendance.deleteMany({ user: ids.flex });
+            if (previousAttendance) await Attendance.collection.insertOne(previousAttendance);
+        });
+        const start = new Date(Date.now() - 30 * 60000);
+        const record = await clockIn(ids.flex, start);
+        await Client.collection.insertOne({ _id: clientId, company, companyCode: COMPANY_CODE, client: 'Test client' });
+        await ClientTask.create({
+            _id: taskId, clientId, name: 'Test task timer', service: 'Test service', assigneeId: ids.flex, dueDate: new Date(Date.now() + 3600000),
+            status: 'in-progress', inProgressSince: start, createdAt: start,
+            activityLogs: [{ action: 'status_updated', newValues: { status: 'in-progress' }, createdAt: start }],
+        });
+        await Task.collection.insertOne({
+            _id: personalId, title: 'Test personal timer', companyCode: COMPANY_CODE, createdBy: ids.flex, taskFor: 'self',
+            overallStatus: 'in-progress', createdAt: start, statusHistory: [{ status: 'in-progress', changedAt: start, changedBy: ids.flex }],
+        });
+        await Project.collection.insertOne({
+            _id: projectId, company, companyCode: COMPANY_CODE, createdBy: ids.flex, projectName: 'Test project',
+            tasks: [{ _id: projectTaskId, title: 'Test project timer', assignedTo: ids.flex, status: 'in-progress', createdAt: start,
+                activityLogs: [{ type: 'status_change', newValue: 'in-progress', performedAt: start, performedBy: ids.flex }] }],
+        });
+        const req = { user, params: { taskId }, query: {}, get: () => '', headers: {} };
+        const started = await call(controller.startBreak, { user, body: {} });
+        assert.equal(started.statusCode, 200);
+        const during = await call(tasks.getClientTaskActivityLogs, req);
+        const pause = during.body.data.find(log => log.action === 'task_break');
+        assert.ok(pause, JSON.stringify(during.body));
+        assert.equal(pause.breakEnd, null);
+        for (const [handler, params] of [
+            [personalTasks.getTaskActivityLogs, { taskId: personalId }],
+            [projects.getTaskActivityLogs, { projectId, taskId: projectTaskId }]
+        ]) {
+            const result = await call(handler, { user, params, query: {} });
+            assert.equal(result.statusCode, 200, JSON.stringify(result.body));
+            assert.equal(result.body.logs.find(log => log.action === 'task_break')?.breakEnd, null);
+        }
+        const outside = await call(tasks.getClientTaskActivityLogs, {
+            ...req, user: { ...user, company: otherCompany, companyCode: 'ZZOTHER' }
+        });
+        assert.ok(!outside.body.data.some(log => log.action === 'task_break'));
+
+        const breakStart = new Date(Date.now() - 5 * 60000);
+        await Attendance.updateOne({ _id: record._id }, { $set: { 'breaks.0.start': breakStart } });
+        const stopped = await call(controller.stopBreak, { user, body: {} });
+        assert.equal(stopped.statusCode, 200);
+        const after = await call(tasks.getClientTaskActivityLogs, req);
+        const ended = after.body.data.filter(log => log.action === 'task_break');
+        assert.equal(ended.length, 1);
+        assert.equal(+ended[0].breakStart, +breakStart);
+        assert.ok(ended[0].durationSeconds >= 300);
+        assert.match(ended[0].description, /paused for a break from .* to .* IST/);
+
+        const moved = await call(tasks.updateAssignedTaskStatus, { ...req, body: { status: 'onhold' } });
+        assert.equal(moved.statusCode, 200, JSON.stringify(moved.body));
+        const task = await ClientTask.findById(taskId).lean();
+        assert.equal(task.inProgressSince, null);
+        assert.ok(Math.abs(task.timeSpent - 25 * 60) <= 2, `Expected about 25 minutes of work, got ${task.timeSpent}s`);
     });
 
     await t.test('a soft limit warns but still lets the break start', async () => {

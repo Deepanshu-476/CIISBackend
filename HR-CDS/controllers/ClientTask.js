@@ -15,6 +15,8 @@ const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagin
 const { normalizeTaskReminderSettings } = require('../utils/taskReminderSettings');
 const { subscriptionExpiresAt } = require('../utils/subscriptionDates');
 const { postSubscriptionTasksMessage } = require('../utils/subscriptionChat');
+const { elapsedTaskSeconds, getTaskBreakActivity } = require('../utils/taskBreaks');
+const { isClientLogin } = require('../../middleware/pageAccess');
 
 void 0;
 
@@ -408,6 +410,21 @@ const resolveAssigneeUser = async (assignee, companyCode = '') => {
     ...companyCondition,
     $or: aliases.map(name => ({ name: { $regex: `^${escapeRegex(name)}(?:\\s|$)`, $options: 'i' } }))
   }).select('_id');
+};
+
+const getClientTaskWorker = async (task, companyCode) => (
+  task.assigneeId || (companyCode && (await resolveAssigneeUser(task.assignee, companyCode))?._id)
+);
+
+const stopClientTaskTimer = async (task, now) => {
+  if (!task.inProgressSince) return 0;
+  const client = await Client.findById(task.clientId).select('companyCode').lean();
+  const companyCode = client?.companyCode;
+  const worker = await getClientTaskWorker(task, companyCode);
+  const elapsed = await elapsedTaskSeconds(worker, companyCode, task.inProgressSince, now);
+  task.timeSpent = (task.timeSpent || 0) + elapsed;
+  task.inProgressSince = null;
+  return elapsed;
 };
 
 const getAssignedClientTaskFilter = async (currentUser) => {
@@ -1289,7 +1306,7 @@ const getClientTaskActivityLogs = async (req, res) => {
     }
 
     const task = await Task.findById(taskId)
-      .select('activityLogs')
+      .select('activityLogs clientId assignee assigneeId status createdAt completedAt statusChangedAt inProgressSince')
       .populate('activityLogs.user', 'name email')
       .lean();
 
@@ -1300,7 +1317,17 @@ const getClientTaskActivityLogs = async (req, res) => {
       });
     }
 
-    let logs = task.activityLogs || [];
+    const logs = task.activityLogs || [];
+    const companyCode = String(req.user?.companyCode || req.user?.company?.companyCode || '').trim();
+    if (companyCode && !isClientLogin(req.user)) {
+      const client = await Client.findById(task.clientId).select('companyCode company').lean();
+      const viewerCompany = getId(req.user?.company);
+      if (client?.companyCode?.toUpperCase() === companyCode.toUpperCase() &&
+          (!client.company || !viewerCompany || getId(client.company) === viewerCompany)) {
+        const user = await getClientTaskWorker(task, client.companyCode);
+        logs.push(...await getTaskBreakActivity({ task, workers: [{ user }], companyCode: client.companyCode }));
+      }
+    }
     logs.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
     const startIndex = (page - 1) * limit;
@@ -1391,9 +1418,7 @@ const updateAssignedTaskStatus = async (req, res) => {
 
     if (previousStatus === 'in-progress' && targetStatus !== 'in-progress') {
       if (task.inProgressSince) {
-        elapsedSeconds = Math.max(0, Math.floor((now - new Date(task.inProgressSince)) / 1000));
-        task.timeSpent = (task.timeSpent || 0) + elapsedSeconds;
-        task.inProgressSince = null;
+        elapsedSeconds = await stopClientTaskTimer(task, now);
         void 0;
       }
     }
@@ -2478,9 +2503,7 @@ const updateTask = async (req, res) => {
 
         if (oldValue === 'in-progress') {
           if (task.inProgressSince) {
-            const elapsed = Math.max(0, Math.floor((now - new Date(task.inProgressSince)) / 1000));
-            task.timeSpent = (task.timeSpent || 0) + elapsed;
-            task.inProgressSince = null;
+            const elapsed = await stopClientTaskTimer(task, now);
             changes.push(`timer stopped (session duration: ${formatDuration(elapsed)}, total: ${formatDuration(task.timeSpent)})`);
           }
         }
@@ -2510,9 +2533,7 @@ const updateTask = async (req, res) => {
 
 
         if (task.completed && task.status === 'in-progress' && task.inProgressSince) {
-          const elapsed = Math.max(0, Math.floor((now - new Date(task.inProgressSince)) / 1000));
-          task.timeSpent = (task.timeSpent || 0) + elapsed;
-          task.inProgressSince = null;
+          const elapsed = await stopClientTaskTimer(task, now);
           changes.push(`timer stopped (session duration: ${formatDuration(elapsed)}, total: ${formatDuration(task.timeSpent)})`);
         }
 
@@ -2567,6 +2588,7 @@ const updateTask = async (req, res) => {
       await addClientActivityLogHelper(task, {
         action: 'edited',
         description: `Edited by ${editorName}: ${changeText}`,
+        ...(previousStatus !== task.status && { oldValues: { status: previousStatus }, newValues: { status: task.status } }),
         user: currentUser?.id || currentUser?._id,
         userName: editorName
       }, req);
@@ -2690,9 +2712,7 @@ const toggleTaskCompletion = async (req, res) => {
     let elapsedSeconds = 0;
     if (previousStatus === 'in-progress') {
       if (task.inProgressSince) {
-        elapsedSeconds = Math.max(0, Math.floor((now - new Date(task.inProgressSince)) / 1000));
-        task.timeSpent = (task.timeSpent || 0) + elapsedSeconds;
-        task.inProgressSince = null;
+        elapsedSeconds = await stopClientTaskTimer(task, now);
       }
     }
 
@@ -2812,6 +2832,7 @@ const updateTaskCheckpoint = async (req, res) => {
 
     const allCompleted = task.checkpoints.length > 0 && task.checkpoints.every(item => item.completed);
     if (allCompleted) {
+      if (previousStatus === 'in-progress') await stopClientTaskTimer(task, now);
       task.completed = true;
       task.completedAt = task.completedAt || now;
       task.status = 'completed';

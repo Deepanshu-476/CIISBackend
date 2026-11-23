@@ -271,6 +271,21 @@ const companySchema = new mongoose.Schema(
     byokDefaultEmployeeDailyTokens: { type: Number, min: 0, default: 10000 },
     byokDefaultEmployeeDailyCalls: { type: Number, min: 0, default: 30 },
 
+    // B2B & Directory Lead Integrations (IndiaMART & Justdial)
+    leadIntegrations: {
+      indiamart: {
+        crmKey: { type: String, trim: true, default: '' },
+        mobileNumber: { type: String, trim: true, default: '' },
+        isEnabled: { type: Boolean, default: true },
+        lastLeadReceivedAt: { type: Date, default: null }
+      },
+      justdial: {
+        apiKey: { type: String, trim: true, default: '' },
+        isEnabled: { type: Boolean, default: true },
+        lastLeadReceivedAt: { type: Date, default: null }
+      }
+    },
+
     moduleDashboardConfig: {
       type: mongoose.Schema.Types.Mixed,
       default: () => ({
