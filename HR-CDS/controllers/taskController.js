@@ -6,6 +6,8 @@ const ClientTask = require('../models/ClientTask');
 const Client = require('../models/Client');
 const { Project } = require('../models/Project');
 const Attendance = require('../models/Attendance');
+const { breakIntervals, subtractBreakIntervals, getTaskBreakActivity } = require('../utils/taskBreaks');
+const { isClientLogin } = require('../../middleware/pageAccess');
 const User = require('../../models/User');
 const Group = require('../models/Group');
 const Notification = require('../models/Notification');
@@ -405,9 +407,11 @@ const buildProgressSessions = (events = [], currentStatus, windowEnd) => {
   return sessions;
 };
 
-const getTaskStatusEvents = task => {
+const getTaskStatusEvents = (task, userId) => {
   if (Array.isArray(task.statusHistory) && task.statusHistory.length > 0) {
-    return task.statusHistory.map(entry => ({
+    const hasMultipleWorkers = task.statusByUser?.length > 1;
+    return task.statusHistory.filter(entry => !hasMultipleWorkers || entry.changedByType === 'system' ||
+      normalizeId(entry.changedBy) === String(userId)).map(entry => ({
       status: entry.status,
       at: entry.changedAt || entry.createdAt || entry.updatedAt
     }));
@@ -448,7 +452,7 @@ const parseDurationStringToSeconds = (str) => {
   return 0;
 };
 
-const calculateTaskWork = (task, workWindow, fallbackRange) => {
+const calculateTaskWork = (task, workWindow, fallbackRange, userId) => {
   const windowStart = workWindow?.start || fallbackRange?.start;
   // The report window can end later today (end of the day without attendance);
   // never count time that has not happened yet.
@@ -464,7 +468,7 @@ const calculateTaskWork = (task, workWindow, fallbackRange) => {
   }
 
   const sessions = buildProgressSessions(
-    getTaskStatusEvents(task),
+    getTaskStatusEvents(task, userId),
     task.userStatus || task.status || task.overallStatus,
     windowEnd
   );
@@ -488,7 +492,8 @@ const calculateTaskWork = (task, workWindow, fallbackRange) => {
       total = activeSeconds > 0 ? activeSeconds : (task.timeSpent || 0);
       intervals = activeIntervals;
     } else if (normalizeTaskStatus(task.status || task.userStatus) === 'in-progress' && (task.updatedAt || task.createdAt)) {
-      const startCandidate = task.inProgressSince || task.updatedAt || task.createdAt;
+      const userStatus = task.statusByUser?.find(entry => normalizeId(entry.user) === String(userId));
+      const startCandidate = task.inProgressSince || userStatus?.updatedAt || task.updatedAt || task.createdAt;
       const activeIntervals = workIntervals
         .map(workInterval => getClippedInterval(startCandidate, windowEnd, workInterval.start, workInterval.end))
         .filter(Boolean);
@@ -506,6 +511,10 @@ const calculateTaskWork = (task, workWindow, fallbackRange) => {
     total = Number(task.timeSpent);
   }
 
+  if (intervals.length && workWindow?.breaks?.length) {
+    intervals = subtractBreakIntervals(intervals, workWindow.breaks);
+    total = getMergedIntervalSeconds(intervals);
+  }
   return { seconds: Math.max(0, total), intervals };
 };
 
@@ -533,7 +542,7 @@ const getUserWorkWindow = async (userId, query, companyCode = '') => {
       { createdAt: { $gte: searchStart, $lte: searchEnd } },
       { updatedAt: { $gte: searchStart, $lte: searchEnd } }
     ]
-  }).select('date inTime outTime isClockedIn status totalTime lateBy earlyLeave createdAt updatedAt companyCode').sort({ updatedAt: -1, inTime: -1, date: -1 }).lean();
+  }).select('date inTime outTime isClockedIn breaks status totalTime lateBy earlyLeave createdAt updatedAt companyCode').sort({ updatedAt: -1, inTime: -1, date: -1 }).lean();
 
   let attendance = pickBestAttendanceRecord(attendanceCandidates, requestedDateKey);
 
@@ -563,7 +572,7 @@ const getUserWorkWindow = async (userId, query, companyCode = '') => {
           }
         }
       ]
-    }).select('date inTime outTime isClockedIn status totalTime lateBy earlyLeave createdAt updatedAt companyCode').sort({ updatedAt: -1, inTime: -1, date: -1 }).lean();
+    }).select('date inTime outTime isClockedIn breaks status totalTime lateBy earlyLeave createdAt updatedAt companyCode').sort({ updatedAt: -1, inTime: -1, date: -1 }).lean();
 
     attendance = pickBestAttendanceRecord(nearbyAttendance, requestedDateKey);
   }
@@ -574,7 +583,7 @@ const getUserWorkWindow = async (userId, query, companyCode = '') => {
       user: userQuery,
       ...(attendanceCompanyCode ? { companyCode: buildExactCompanyCodeFilter(attendanceCompanyCode) } : {}),
       isClockedIn: true
-    }).select('date inTime outTime isClockedIn status totalTime lateBy earlyLeave createdAt updatedAt companyCode').sort({ updatedAt: -1 }).lean();
+    }).select('date inTime outTime isClockedIn breaks status totalTime lateBy earlyLeave createdAt updatedAt companyCode').sort({ updatedAt: -1 }).lean();
   }
 
   // Aggregate one attendance interval per India calendar day. Earlier code
@@ -610,6 +619,7 @@ const getUserWorkWindow = async (userId, query, companyCode = '') => {
     start,
     end,
     intervals,
+    breaks: breakIntervals([...byDay.values()], now),
     attendance,
     summary: {
       hasAttendance: Boolean(attendance),
@@ -2817,13 +2827,24 @@ exports.getTaskActivityLogs = async (req, res) => {
         .limit(100)
         .lean(),
       Task.findById(taskId)
-        .select('title taskFor isSelfTask createdAt statusHistory createdBy assignedUsers')
+        .select('title taskFor isSelfTask createdAt updatedAt completionDate overallStatus statusHistory statusByUser createdBy assignedUsers companyCode')
         .populate('createdBy', 'name email role')
         .populate('statusHistory.changedBy', 'name email role')
         .lean()
     ]);
 
     const combinedMap = new Map();
+    const requesterCode = normalizeCompanyCodeStrict(req.user.companyCode || req.user.company?.companyCode);
+    const taskCompanyCode = normalizeCompanyCodeStrict(task?.companyCode);
+    if (task && requesterCode && requesterCode === taskCompanyCode && !isClientLogin(req.user)) {
+      const selfTask = task.taskFor === 'self' || task.isSelfTask;
+      const workers = selfTask
+        ? [{ user: task.createdBy, status: task.overallStatus }]
+        : (task.statusByUser || []).map(entry => ({ user: entry.user, status: entry.status, startedAt: entry.updatedAt }));
+      if (!workers.length && task.assignedUsers?.length === 1) workers.push({ user: task.assignedUsers[0] });
+      const breaks = await getTaskBreakActivity({ task, workers, companyCode: taskCompanyCode, individual: !selfTask });
+      for (const log of breaks) combinedMap.set(log._id, log);
+    }
 
     // 1. Add all explicit ActivityLog records
     if (Array.isArray(dbLogs)) {
@@ -3827,9 +3848,10 @@ exports.getUserAllTasksPaginated = async (req, res) => {
     const workWindow = await getUserWorkWindow(userId, req.query, getRequestCompanyCode(req));
 
     const allTasksWithWorkTime = allTasks.map(task => {
-      const work = calculateTaskWork(task, workWindow, range);
+      const work = calculateTaskWork(task, workWindow, range, userId);
       return {
         ...task,
+        trackingUserId: userId,
         workTime: {
           seconds: work.seconds,
           label: secondsToDurationLabel(work.seconds)

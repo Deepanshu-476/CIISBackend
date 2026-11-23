@@ -16,7 +16,7 @@ const AssetRequest = require('../HR-CDS/models/AssetRequest');
 const Leave = require('../HR-CDS/models/Leave');
 const Meeting = require('../HR-CDS/models/Meeting');
 const User = require('../models/User');
-const PagePermission = require('../models/PagePermission');
+const { getRegisterRequestAccess } = require('../utils/registerRequestAccess');
 const { autoRejectExpiredLeaves } = require('../HR-CDS/controllers/LeaveController');
 
 // Assets, leaves and meetings used to load the user's full lists (with populates) only to
@@ -50,32 +50,12 @@ const countPendingRegisterRequests = async (req) => {
   try {
     const user = req.user || {};
     const role = String(user.companyRole || user.jobRole || user.role || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
-    const isAdminRole = ['owner', 'admin', 'hr', 'super_admin', 'superadmin', 'company_owner', 'companyowner', 'managing_director', 'director'].includes(role);
-
-    if (!isAdminRole) {
-      const company = user.company;
-      const companyId = company?._id || company?.id || company;
-      if (!companyId) return 0;
-
-      const page = await PagePermission.findOne({ company: companyId, path: '/ciisUser/register-request' }).lean();
-      if (!page) return 0;
-
-      const currentUserId = String(user._id || user.id || '');
-      const pageUserIds = key => (page[key] || []).map(item => String(item?.user?._id || item?.user || '')).filter(Boolean);
-      const allowedIds = new Set([
-        ...pageUserIds('viewUsers'),
-        ...pageUserIds('editUsers'),
-        ...pageUserIds('approvers'),
-        ...pageUserIds('deleteUsers')
-      ]);
-
-      if (!allowedIds.has(currentUserId)) return 0;
-    }
-
     const company = user.company;
     const companyId = company?._id || company?.id || company;
     const filter = {};
     if (companyId) {
+      const { canView } = await getRegisterRequestAccess(user);
+      if (!canView) return 0;
       filter.company = companyId;
     } else if (!['super_admin', 'superadmin'].includes(role)) {
       return 0;

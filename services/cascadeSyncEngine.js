@@ -871,6 +871,7 @@ function formatLeadForClient(item) {
 
 function formatCallLogForClient(item) {
   if (!item) return item;
+  if (typeof item.toObject === 'function') item = item.toObject();
 
   const leadId = item.lead?._id || item.leadId || (isObjectId(item.lead) ? item.lead : null);
   const agentId = item.agent?._id || item.agentId || (isObjectId(item.agent) ? item.agent : null);

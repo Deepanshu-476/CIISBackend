@@ -16,14 +16,15 @@ try {
 const outcomes = ['Connected', 'Interested', 'Not Interested', 'Need Callback', 'Follow-up', 'Call Later', 'No Answer', 'Busy', 'Switched Off', 'Not Reachable', 'Wrong Number', 'Wrong Person', 'Invalid Number', 'Language Barrier', 'Do Not Call', 'Duplicate', 'Spam', 'Call Closed', 'Converted', 'Note Added'];
 const callbacks = ['Need Callback', 'Follow-up', 'Call Later'];
 const terminal = ['Converted', 'Call Closed'];
-const scope = req => {
+const scope = (req, company = req.telecallerCompany) => {
   const role = String(req.user?.role || req.user?.companyRole || '').toLowerCase();
   const isAdmin = ['admin', 'owner', 'superadmin', 'company_admin', 'company admin'].includes(role);
   if (isAdmin) {
-    return { company: req.telecallerCompany };
+    return { company };
   }
-  return { company: req.telecallerCompany, assignedTo: req.user._id || req.user.id };
+  return { company, assignedTo: req.user._id || req.user.id };
 };
+exports.leadScope = scope;
 const populated = query => query.populate('leadSource', 'name').populate('leadType', 'name').populate('assignedTo', 'name').populate('campaign', 'name outcomes status').lean();
 const CUSTOM_FIELD_KEYS = ['customField1', 'customField2', 'customField3', 'customField4', 'customField5'];
 
@@ -57,7 +58,7 @@ const cleanRecordingUrl = value => {
   return /^\/uploads\/recordings\/[\w.-]+$/.test(url) || /^https?:\/\/[^\s"'<>]+$/i.test(url) ? url : '';
 };
 
-const syncCallArtifacts = async (req, { id, outcome, notes, nextDate, noteOnly }, leadDoc = null) => {
+const syncCallArtifacts = async (req, { id, outcome, notes, nextDate, noteOnly, activeLog }, leadDoc = null) => {
   if (noteOnly) return;
   const CallLog = require('../models/CallLog');
   const FollowUp = require('../models/Followup');
@@ -88,7 +89,7 @@ const syncCallArtifacts = async (req, { id, outcome, notes, nextDate, noteOnly }
     agentEmail: req.user?.email || '',
     agentRole: req.user?.role || req.user?.companyRole || '',
     clientCallId: id,
-    startTime: parseDate(req.body.startTime) || parseDate(req.body.endTime) || new Date(),
+    startTime: activeLog?.startTime || parseDate(req.body.startTime) || parseDate(req.body.endTime) || new Date(),
     endTime: parseDate(req.body.endTime) || new Date(),
     duration: Number(req.body.duration) || 0,
     status,
@@ -97,8 +98,8 @@ const syncCallArtifacts = async (req, { id, outcome, notes, nextDate, noteOnly }
   };
   // A retry or edit without a recording must not wipe one saved earlier.
   if (cleanRecordingUrl(req.body.recordingUrl)) values.recordingUrl = cleanRecordingUrl(req.body.recordingUrl);
-  if (req.body.callLogId && mongoose.isValidObjectId(req.body.callLogId)) {
-    const log = await CallLog.findOneAndUpdate({ _id: req.body.callLogId, agent }, { $set: values }, { new: true });
+  if (activeLog) {
+    const log = await CallLog.findOneAndUpdate({ _id: activeLog._id, company: req.telecallerCompany, lead: req.params.id, agent }, { $set: values }, { new: true });
     if (!log) throw new Error('The active call log could not be finalized.');
   } else {
     await CallLog.findOneAndUpdate(
@@ -409,16 +410,29 @@ exports.save = async (req, res, next) => {
     if (!existing) return res.status(404).json({ message: 'Assigned lead not found.' });
     // A retry after a lost response must not record the same call twice.
     const noteOnly = outcome === 'Note Added';
-    if (!noteOnly && ['converted', 'closed'].includes(existing.status)) return res.status(409).json({ message: 'This lead is already converted or closed.' });
+    const savedCall = existing.callHistory?.find(call => call.id === id);
+    let activeLog;
+    if (req.body.callLogId && !noteOnly) {
+      if (!mongoose.isValidObjectId(req.body.callLogId)) return res.status(400).json({ message: 'Invalid active call ID.' });
+      const CallLog = require('../models/CallLog');
+      activeLog = await CallLog.findOne({
+        _id: req.body.callLogId, company: req.telecallerCompany, lead: existing._id,
+        agent: req.user._id || req.user.id,
+        $or: [{ clientCallId: id }, { clientCallId: { $exists: false } }]
+      }).select('startTime').lean();
+      if (!activeLog) return res.status(409).json({ message: 'The active call log does not belong to this lead or was already finalized.' });
+    }
+
+    if (!noteOnly && (!savedCall || req.body.updateOutcome === true) && ['converted', 'closed'].includes(existing.status)) return res.status(409).json({ message: 'This lead is already converted or closed.' });
     const nextDate = followUp ? new Date(followUp) : null;
     if (!noteOnly && !terminal.includes(outcome) && ((callbacks.includes(outcome) && !nextDate) || (nextDate && (!Number.isFinite(nextDate.getTime()) || nextDate <= new Date())))) return res.status(400).json({ message: 'Choose a future follow-up date and time.' });
-    if (existing.callHistory?.some(call => call.id === id)) {
+    if (savedCall) {
       const setExistingCall = {};
       if (cleanRecordingUrl(req.body.recordingUrl)) setExistingCall['callHistory.$.recordingUrl'] = cleanRecordingUrl(req.body.recordingUrl);
       if (Number(req.body.duration) >= 0) setExistingCall['callHistory.$.duration'] = Number(req.body.duration) || 0;
       if (notes.trim()) setExistingCall['callHistory.$.notes'] = notes.trim();
       if (callType) setExistingCall['callHistory.$.callType'] = callType;
-      const callDate = parseDate(req.body.startTime) || parseDate(req.body.endTime);
+      const callDate = activeLog?.startTime || parseDate(req.body.startTime) || parseDate(req.body.endTime);
       if (callDate) setExistingCall['callHistory.$.date'] = callDate;
       // updateOutcome: the caller ID popup corrects the outcome of a call the call-log sync saved first.
       if (req.body.updateOutcome === true && !noteOnly) {
@@ -435,11 +449,11 @@ exports.save = async (req, res, next) => {
           cascadeLeadUpdate(req.params.id, { status: setExistingCall.status }).catch(() => {});
         }
       }
-      await syncCallArtifacts(req, { id, outcome, notes, nextDate, noteOnly }, existing);
+      await syncCallArtifacts(req, { id, outcome, notes, nextDate, noteOnly, activeLog }, existing);
       const latestExisting = await populated(Lead.findOne(filter));
       return res.json({ item: formatLeadForClient(latestExisting) });
     }
-    const callDate = parseDate(req.body.startTime) || parseDate(req.body.endTime) || new Date();
+    const callDate = activeLog?.startTime || parseDate(req.body.startTime) || parseDate(req.body.endTime) || new Date();
     const call = { id, outcome, callType, notes: notes.trim(), agent: req.user._id || req.user.id, createdByName: req.user.name || 'User', date: callDate, followUp: noteOnly || terminal.includes(outcome) ? null : nextDate, recordingUrl: cleanRecordingUrl(req.body.recordingUrl), duration: Number(req.body.duration) || 0 };
     const mutation = { $push: { callHistory: call }, $inc: { __v: 1 } };
     if (!noteOnly) {
@@ -457,7 +471,7 @@ exports.save = async (req, res, next) => {
       return res.status(409).json({ message: 'The lead changed while saving. Refresh and try again.' });
     }
 
-    await syncCallArtifacts(req, { id, outcome, notes, nextDate, noteOnly }, item || existing);
+    await syncCallArtifacts(req, { id, outcome, notes, nextDate, noteOnly, activeLog }, item || existing);
     if (mutation.$set?.status) {
       cascadeLeadUpdate(req.params.id, { status: mutation.$set.status }).catch(() => {});
     }

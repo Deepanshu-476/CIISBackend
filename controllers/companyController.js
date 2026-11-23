@@ -431,6 +431,7 @@ exports.createCompany = async (req, res) => {
         allowedPages: cleanAllowedPages,
         allowedSuperAdminPages: cleanAllowedSuperAdminPages,
         accessConfiguredAt: new Date(),
+        leadIntegrations: req.body.leadIntegrations || undefined,
         subscriptionPayments: [{
           amount: selectedPlan.price,
           paymentDate: new Date(),
@@ -1004,6 +1005,7 @@ exports.updateCompany = async (req, res) => {
       "subscriptionPlan",
       "subscriptionAmount",
       "subscriptionPaymentStatus",
+      "leadIntegrations",
     ];
 
     const updateData = {};

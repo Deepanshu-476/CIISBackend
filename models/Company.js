@@ -251,6 +251,21 @@ const companySchema = new mongoose.Schema(
       monthly: { type: Number, min: 0, default: 2000 },
     },
 
+    // B2B & Directory Lead Integrations (IndiaMART & Justdial)
+    leadIntegrations: {
+      indiamart: {
+        crmKey: { type: String, trim: true, default: '' },
+        mobileNumber: { type: String, trim: true, default: '' },
+        isEnabled: { type: Boolean, default: true },
+        lastLeadReceivedAt: { type: Date, default: null }
+      },
+      justdial: {
+        apiKey: { type: String, trim: true, default: '' },
+        isEnabled: { type: Boolean, default: true },
+        lastLeadReceivedAt: { type: Date, default: null }
+      }
+    },
+
     moduleDashboardConfig: {
       type: mongoose.Schema.Types.Mixed,
       default: () => ({

@@ -1068,6 +1068,8 @@ app.use(cookieParser());
 app.use(require('./utils/tabAuth').scopeTabAuth);
 
 
+app.use('/api/integrations', require('./routes/adWebhookRoutes'));
+
 const requestBodyLimit = process.env.REQUEST_BODY_LIMIT || "15mb";
 app.use(express.json({ limit: requestBodyLimit }));
 app.use(express.urlencoded({ extended: true, limit: requestBodyLimit }));
@@ -1223,6 +1225,7 @@ const dashboardRoutes = require('./HR-CDS/routes/dashboardRoutes.js');
 app.use("/api/auth", require("./routes/authRoutes.js"));
 app.use('/api/crm/lead-types', require('./routes/leadTypeRoutes.js'));
 app.use('/api/crm/lead-sources', require('./routes/leadSourceRoutes.js'));
+app.use('/api/crm/marketing-ads', require('./routes/marketingAdsRoutes'));
 app.use('/api/crm/leads', require('./routes/crmLeadRoutes.js'));
 app.use('/api/crm/assignments', require('./routes/crmAssignmentRoutes.js'));
 app.use('/api/crm/reports', require('./routes/crmReportRoutes.js'));
@@ -1316,6 +1319,7 @@ app.use("/api/bulk-email", require("./HR-CDS/routes/bulkEmailRoutes.js"));
 app.use('/api/branches', require('./routes/branchRoutes.js'));
 app.use('/api/support', require('./routes/supportRoutes.js'));
 app.use('/api/email-settings', require('./routes/emailSettingsRoutes.js'));
+app.use('/api/marketing-ads-settings', require('./routes/marketingAdsSettingsRoutes.js'));
 app.use('/api/demo-requests', require('./routes/demoRequestRoutes.js'));
 app.use('/api/leave-types', require('./routes/leaveTypeRoutes.js'));
 app.use('/api/leave-policies', require('./routes/leavePolicyRoutes.js'));
@@ -1464,6 +1468,18 @@ const startServer = async () => {
   // Uniqueness is a prerequisite for safe concurrent group/event delivery.
   for (const model of [require('./HR-CDS/chat/models/Conversation'), require('./HR-CDS/chat/models/Message'), require('./HR-CDS/models/Notification')]) await model.createIndexes();
   require('./HR-CDS/utils/projectChatWorker').start();
+
+  try {
+    await require('./services/marketingAdsConfigService').init();
+  } catch (err) {
+    console.error('Failed to initialize PlatformAdsConfig:', err.message);
+  }
+
+  if (process.env.ADS_INTEGRATION_ENCRYPTION_KEY) {
+    for (const model of [require('./models/AdIntegration'), require('./models/AdOAuthSession'),
+      require('./models/AdLeadWebhookLog'), require('./models/Lead')]) await model.createIndexes();
+    require('./services/marketingAds/ingest').start();
+  }
 
   server.listen(PORT, async () => {
 

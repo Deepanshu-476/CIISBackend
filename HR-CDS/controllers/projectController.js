@@ -18,6 +18,8 @@ const Branch = require("../../models/Branch");
 const mongoose = require("mongoose");
 const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagination");
 const { canSeeAllBranches, allowedBranchIds, scopedUserIds } = require('../../utils/branchScope');
+const { getTaskBreakActivity } = require('../utils/taskBreaks');
+const { isClientLogin } = require('../../middleware/pageAccess');
 
 const PROJECT_USER_POPULATE_FIELDS = 'name email role jobRole companyRole profileImage avatar department branch assignedBranches';
 const PROJECT_TASK_USER_POPULATE_FIELDS = 'name email role jobRole companyRole';
@@ -2729,6 +2731,13 @@ exports.getTaskActivityLogs = async (req, res) => {
         createdAt: log.performedAt || log.createdAt || null
       };
     });
+
+    const companyCode = project.companyCode || req.user.companyCode || req.user.company?.companyCode;
+    if (!isClientLogin(req.user)) {
+      const workers = [task.assignedTo, ...(task.assignedUsers || [])].filter(Boolean).map(user => ({ user }));
+      activityLogs.push(...await getTaskBreakActivity({ task, workers, companyCode }));
+    }
+    activityLogs.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
 
     res.status(200).json({
       success: true,

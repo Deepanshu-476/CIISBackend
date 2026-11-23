@@ -258,7 +258,7 @@ const buildRoleQuery = async (companyId, departmentId, role) => {
   };
 };
 
-const findSidebarConfig = async ({ companyId, branchId, departmentId, role }) => {
+const findSidebarConfig = async ({ companyId, branchId, departmentId, role, allowOtherBranches = true }) => {
   const { query: roleQuery, resolvedDepartmentId } = await buildRoleQuery(companyId, departmentId, role);
   const activeDeptId = departmentId || resolvedDepartmentId;
   
@@ -276,6 +276,7 @@ const findSidebarConfig = async ({ companyId, branchId, departmentId, role }) =>
       $or: [{ branchId: null }, { branchId: { $exists: false } }]
     }).sort({ updatedAt: -1 });
     if (globalConfig) return globalConfig;
+    if (!allowOtherBranches) return null;
 
     const anyBranchConfig = await SidebarConfig.findOne(baseQuery).sort({ updatedAt: -1 });
     if (anyBranchConfig) return anyBranchConfig;
@@ -285,6 +286,7 @@ const findSidebarConfig = async ({ companyId, branchId, departmentId, role }) =>
       $or: [{ branchId: null }, { branchId: { $exists: false } }]
     }).sort({ updatedAt: -1 });
     if (globalConfig) return globalConfig;
+    if (!allowOtherBranches) return null;
 
     const anyConfig = await SidebarConfig.findOne(baseQuery).sort({ updatedAt: -1 });
     if (anyConfig) return anyConfig;
@@ -769,6 +771,7 @@ router.get('/user-config', async (req, res) => {
   }
 });
 router.findSidebarConfig = findSidebarConfig;
+router.filterMenuItemsByCompanyAccess = filterMenuItemsByCompanyAccess;
 module.exports = router;
 module.exports.findSidebarConfig = findSidebarConfig;
 module.exports.invalidateSidebarCache = invalidateSidebarCache;
