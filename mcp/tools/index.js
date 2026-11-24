@@ -26,11 +26,11 @@ function getAvailableTools(ctx) {
 
   const isTechSoft = companyCode === 'TECH334753' || companyCode.includes('TECH');
   const companyAliases = isTechSoft
-    ? 'TechSoft / Tech Soft / Tech Soft Admin / techsoft-admin / TechSoft Admin'
+    ? 'TechSoft / Tech Soft / Tech Soft Admin / techsoft-admin / TechSoft Admin / Text Soft / Text Soft Admin'
     : 'CIIS / CIIS Network / Career';
 
   const searchKeywords = isTechSoft
-    ? 'techsoft, tech soft, tech soft admin, techsoft-admin, techsoft admin, test admin, tech334753'
+    ? 'techsoft, tech soft, tech soft admin, techsoft-admin, techsoft admin, textsoft, text soft, text soft admin, textsoft admin, test admin, tech334753'
     : 'ciis, ciis network, career, ciis-employee, ciis-owner';
 
   return allTools.filter(t => {

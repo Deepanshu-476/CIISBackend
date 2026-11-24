@@ -20,7 +20,7 @@ function createMcpServer(authContext) {
       capabilities: {
         tools: {}
       },
-      instructions: `You are connected to the CIIS Network MCP Server for company '${companyCode}' authenticated as '${userName}' (Role: ${role}).
+      instructions: `You are connected to the CIIS Network MCP Server for company '${companyCode}' (also referred to by users as TechSoft, Tech Soft, Tech Soft Admin, techsoft-admin, Text Soft, Text Soft Admin) authenticated as '${userName}' (Role: ${role}).
 This server is 100% compatible with both Text Chat AND Claude Voice Mode / Live Voice Calls.
 Rules for task operations:
 1. Always present the CIIS Task Preview Card first with the 3 options (1. Create / Confirm, 2. Edit, 3. Cancel).
