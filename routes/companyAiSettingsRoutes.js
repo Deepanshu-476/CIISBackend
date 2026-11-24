@@ -7,17 +7,18 @@ const companyAiController = require('../controllers/companyAiSettingsController'
 const isOwnerOrAdmin = (user, targetCompanyId) => {
   if (!user) return false;
   const userCompanyId = String(user.company?._id || user.company || user.companyId || '');
-  const roles = [user.companyRole, user.jobRole, user.role]
+  const roles = [user.companyRole, user.jobRole, user.role, user.jobRoleName]
     .filter(Boolean)
     .map((r) => String(r).trim().toLowerCase().replace(/[\s_-]+/g, ''));
 
   // Platform SuperAdmin bypass
-  if (roles.includes('superadmin') && user.email === 'ashutoshrai130@gmail.com') return true;
-  if (roles.includes('superadmin') && !userCompanyId) return true;
+  if (user.isSuperAdmin || roles.includes('superadmin') || roles.includes('super_admin') || roles.includes('platformowner')) {
+    return true;
+  }
 
   // Company owner / admin check
   const isMatch = targetCompanyId ? userCompanyId === String(targetCompanyId) : true;
-  return isMatch && roles.some((r) => ['owner', 'admin', 'companyowner', 'companyadmin', 'superadmin'].includes(r));
+  return isMatch && roles.some((r) => ['owner', 'admin', 'companyowner', 'companyadmin', 'superadmin', 'super_admin'].includes(r));
 };
 
 const requireCompanyAdmin = (req, res, next) => {

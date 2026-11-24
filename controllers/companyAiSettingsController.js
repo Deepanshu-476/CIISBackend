@@ -24,13 +24,17 @@ function isOwnerOrAdminUser(user) {
   );
 }
 
+function getCompanyIdFromReq(req) {
+  return req.params.companyId || req.params.id || req.user?.company?._id || req.user?.company || req.user?.companyId || null;
+}
+
 /**
  * GET /api/company/:companyId/ai-settings
  * Returns company BYOK settings, masked key, and today's total usage.
  */
 exports.getCompanyAiSettings = async (req, res) => {
   try {
-    const { companyId } = req.params;
+    const companyId = getCompanyIdFromReq(req);
     const company = await Company.findById(companyId)
       .select('companyName companyCode aiApiKeySource customGroqApiKey byokDefaultEmployeeDailyTokens byokDefaultEmployeeDailyCalls aiDailyTokenLimit aiDailyCallLimit aiDailySttLimit aiExtraTokens aiExtraCalls aiExtraStt selectedPlan')
       .populate('selectedPlan', 'name aiDailyTokenLimit aiDailyCallLimit aiDailySttLimit aiApiKeySource')
@@ -116,7 +120,7 @@ exports.getCompanyAiSettings = async (req, res) => {
  */
 exports.updateCompanyAiKey = async (req, res) => {
   try {
-    const { companyId } = req.params;
+    const companyId = getCompanyIdFromReq(req);
     const {
       customGroqApiKey,
       aiApiKeySource,
@@ -191,7 +195,7 @@ exports.updateCompanyAiKey = async (req, res) => {
  */
 exports.testCompanyGroqKey = async (req, res) => {
   try {
-    const { companyId } = req.params;
+    const companyId = getCompanyIdFromReq(req);
     let { apiKey } = req.body;
 
     if (!apiKey || typeof apiKey !== 'string' || apiKey.includes('...')) {
@@ -240,7 +244,7 @@ exports.testCompanyGroqKey = async (req, res) => {
  */
 exports.getEmployeeTokenAllocations = async (req, res) => {
   try {
-    const { companyId } = req.params;
+    const companyId = getCompanyIdFromReq(req);
     const company = await Company.findById(companyId).select('byokDefaultEmployeeDailyTokens byokDefaultEmployeeDailyCalls');
     if (!company) {
       return res.status(404).json({ success: false, message: 'Company not found' });
@@ -333,7 +337,8 @@ exports.getEmployeeTokenAllocations = async (req, res) => {
  */
 exports.updateEmployeeTokenAllocation = async (req, res) => {
   try {
-    const { companyId, userId } = req.params;
+    const { userId } = req.params;
+    const companyId = getCompanyIdFromReq(req);
     const { enabled, customDailyTokenLimit, customDailyCallLimit, isUnlimited } = req.body;
 
     const user = await User.findOne({ _id: userId, company: companyId });
@@ -399,7 +404,7 @@ exports.updateEmployeeTokenAllocation = async (req, res) => {
  */
 exports.bulkUpdateEmployeeTokenAllocations = async (req, res) => {
   try {
-    const { companyId } = req.params;
+    const companyId = getCompanyIdFromReq(req);
     const { userIds, updates } = req.body;
 
     if (!Array.isArray(userIds) || userIds.length === 0) {
@@ -440,7 +445,7 @@ exports.bulkUpdateEmployeeTokenAllocations = async (req, res) => {
  */
 exports.getCompanyAiUsageHistory = async (req, res) => {
   try {
-    const { companyId } = req.params;
+    const companyId = getCompanyIdFromReq(req);
     let { startDate, endDate, keySource = 'all', department, search } = req.query;
 
     const todayIst = getTodayIstDate();
