@@ -3287,7 +3287,14 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
     allowed.push('task_project');
   }
 
-  const canClient = scope.hasClientManagementAccess || normalizedPerms.has('empclient') || normalizedPerms.has('clientmanagement') || normalizedPerms.has('emp-client') || normalizedPerms.has('ciisuser/empclient');
+  const canClient = scope.hasClientManagementAccess ||
+    normalizedPerms.has('empclient') ||
+    normalizedPerms.has('clientmanagement') ||
+    normalizedPerms.has('emp-client') ||
+    normalizedPerms.has('ciisuser/empclient') ||
+    normalizedPerms.has('activeclients') ||
+    normalizedPerms.has('active-clients') ||
+    (Array.isArray(deps?.allowedIntents) && deps.allowedIntents.includes('create_client'));
   if (canClient) {
     allowed.push('create_client');
   }
@@ -6296,14 +6303,32 @@ const lastAskedField = currentDraft.asked.length > 0
   const mentionsOtherOrProject = !hasExplicitSelfPhrase && (
     /\b(?:assign|kisi\s+aur|dusre|someone\s+else|project|member)\b/i.test(trimmedMessage) ||
     detectedIntentResult.intent === 'task_assigned_user' ||
-    detectedIntentResult.intent === 'task_project'
+    detectedIntentResult.intent === 'task_project' ||
+    detectedIntentResult.intent === 'create_client' ||
+    detectedIntentResult.intent === 'create_client_plan' ||
+    detectedIntentResult.intent === 'create_client_task' ||
+    detectedIntentResult.intent === 'create_project'
   );
 
-  const isExplicitPersonalTask = (hasExplicitSelfPhrase && !mentionsProjectLocative) ||
+  const isNonTaskIntent = [
+    'create_client',
+    'create_client_plan',
+    'create_client_task',
+    'create_project',
+    'task_project'
+  ].includes(detectedIntentResult.intent) || [
+    'create_client',
+    'create_client_plan',
+    'create_client_task',
+    'create_project',
+    'task_project'
+  ].includes(currentDraft.intent);
+
+  const isExplicitPersonalTask = !isNonTaskIntent && ((hasExplicitSelfPhrase && !mentionsProjectLocative) ||
     (!mentionsOtherOrProject && (
       (detectedIntentResult.intent === 'self_task' && detectedIntentResult.isExplicit) ||
       (draft?.intent === 'self_task' && !mentionsOtherOrProject)
-    ));
+    )));
 
   if (isExplicitPersonalTask) {
     currentDraft.intent = 'self_task';
@@ -7081,7 +7106,7 @@ const lastAskedField = currentDraft.asked.length > 0
 
     // Permission enforcement for create_project:
   if (currentDraft.intent === 'create_project' || detectedIntentResult.intent === 'create_project') {
-    const allowedIntents = resolveUserAllowedIntents(req?.user, scope, deps);
+    const allowedIntents = resolveUserAllowedIntents(req?.user, scope, { ...deps, allowedIntents: req?.body?.allowedIntents || deps?.allowedIntents });
     if (!allowedIntents.includes('create_project')) {
       const denial = getPermissionDeniedReply('create_project', allowedIntents, req?.user, userLang);
       const welcomeChips = buildChips(null, 'welcome', { ...deps, allowedIntents, language: userLang });
@@ -7110,7 +7135,7 @@ const lastAskedField = currentDraft.asked.length > 0
 
   // Permission enforcement for create_client (Item 8):
   if (currentDraft.intent === 'create_client' || detectedIntentResult.intent === 'create_client') {
-    const allowedIntents = resolveUserAllowedIntents(req?.user, scope, deps);
+    const allowedIntents = resolveUserAllowedIntents(req?.user, scope, { ...deps, allowedIntents: req?.body?.allowedIntents || deps?.allowedIntents });
     if (!allowedIntents.includes('create_client')) {
       const denial = getPermissionDeniedReply('create_client', allowedIntents, req?.user, userLang);
       const welcomeChips = buildChips(null, 'welcome', { ...deps, allowedIntents, language: userLang });
@@ -7200,7 +7225,7 @@ const lastAskedField = currentDraft.asked.length > 0
 
   // Permission enforcement for create_client_plan:
   if (currentDraft.intent === 'create_client_plan' || detectedIntentResult.intent === 'create_client_plan') {
-    const allowedIntents = resolveUserAllowedIntents(req?.user, scope, deps);
+    const allowedIntents = resolveUserAllowedIntents(req?.user, scope, { ...deps, allowedIntents: req?.body?.allowedIntents || deps?.allowedIntents });
     if (!allowedIntents.includes('create_client_plan')) {
       const denial = getPermissionDeniedReply('create_client_plan', allowedIntents, req?.user, userLang);
       const welcomeChips = buildChips(null, 'welcome', { ...deps, allowedIntents, language: userLang });
@@ -9135,24 +9160,34 @@ const lastAskedField = currentDraft.asked.length > 0
         }
 
         // Intent promotion: ONLY if user explicitly commanded assigning to others
-        const isExplicitAssignCommand = /\b(?:assign\s+to|kisi\s+aur\s+ko|others?\s+ko|ko\s+assign\s+karo)\b/i.test(trimmedMessage);
-        const isRepeatInstruction = /(?:repeat|dohrana|daily|roz|har\s+din|weekdays|recurrence)/i.test(trimmedMessage) || /\b(?:monda[yt]|tuesda[yt]|wednesda[yt]|thursda[yt]|frida[yt]|saturda[yt]|sunda[yt])\b/i.test(trimmedMessage) || Boolean(currentDraft?.repeatDays?.length > 0);
-        const hasExistingAssignee = Boolean(currentDraft.assigneeId || currentDraft.assigneeName || (Array.isArray(currentDraft.assignees) && currentDraft.assignees.length > 0) || (Array.isArray(currentDraft.assignedUsers) && currentDraft.assignedUsers.length > 0) || currentDraft.wantsOthers || currentDraft.taskFor === 'others' || currentDraft.intent === 'task_assigned_user');
-        if (currentDraft.assigneeName && canAssignOthers && currentDraft.intent === 'self_task' && isExplicitAssignCommand) {
-          currentDraft.intent = 'task_assigned_user';
-          currentDraft.taskFor = 'others';
-          currentDraft.wantsOthers = true;
-        } else if (!hasExistingAssignee && ((isRepeatInstruction && !isExplicitAssignCommand) || currentDraft.intent === 'self_task' || currentDraft.taskFor === 'self' || (!canAssignOthers && currentDraft.intent !== 'task_project' && currentDraft.intent !== 'create_project' && currentDraft.intent !== 'create_client' && currentDraft.intent !== 'create_client_plan'))) {
-          currentDraft.intent = 'self_task';
-          currentDraft.taskFor = 'self';
-          currentDraft.wantsOthers = false;
-          currentDraft.assigneeName = null;
-          currentDraft.assigneeId = null;
-          currentDraft.assigneeLabel = null;
-          currentDraft.assignees = [];
-          currentDraft.assignedUsers = [];
-          currentDraft.pendingAssigneeNames = [];
-          currentDraft.assigneeLedger = [];
+        const isNonPersonalTaskIntent = [
+          'create_client',
+          'create_client_plan',
+          'create_client_task',
+          'create_project',
+          'task_project'
+        ].includes(currentDraft.intent);
+
+        if (!isNonPersonalTaskIntent) {
+          const isExplicitAssignCommand = /\b(?:assign\s+to|kisi\s+aur\s+ko|others?\s+ko|ko\s+assign\s+karo)\b/i.test(trimmedMessage);
+          const isRepeatInstruction = /(?:repeat|dohrana|daily|roz|har\s+din|weekdays|recurrence)/i.test(trimmedMessage) || /\b(?:monda[yt]|tuesda[yt]|wednesda[yt]|thursda[yt]|frida[yt]|saturda[yt]|sunda[yt])\b/i.test(trimmedMessage) || Boolean(currentDraft?.repeatDays?.length > 0);
+          const hasExistingAssignee = Boolean(currentDraft.assigneeId || currentDraft.assigneeName || (Array.isArray(currentDraft.assignees) && currentDraft.assignees.length > 0) || (Array.isArray(currentDraft.assignedUsers) && currentDraft.assignedUsers.length > 0) || currentDraft.wantsOthers || currentDraft.taskFor === 'others' || currentDraft.intent === 'task_assigned_user');
+          if (currentDraft.assigneeName && canAssignOthers && currentDraft.intent === 'self_task' && isExplicitAssignCommand) {
+            currentDraft.intent = 'task_assigned_user';
+            currentDraft.taskFor = 'others';
+            currentDraft.wantsOthers = true;
+          } else if (!hasExistingAssignee && ((isRepeatInstruction && !isExplicitAssignCommand) || currentDraft.intent === 'self_task' || (!canAssignOthers))) {
+            currentDraft.intent = 'self_task';
+            currentDraft.taskFor = 'self';
+            currentDraft.wantsOthers = false;
+            currentDraft.assigneeName = null;
+            currentDraft.assigneeId = null;
+            currentDraft.assigneeLabel = null;
+            currentDraft.assignees = [];
+            currentDraft.assignedUsers = [];
+            currentDraft.pendingAssigneeNames = [];
+            currentDraft.assigneeLedger = [];
+          }
         }
 
         // If a previously skipped field was explicitly updated in this turn, remove it from skipped
