@@ -30,8 +30,10 @@ function createMcpServer(authContext) {
   // 2. Tool Invocation: execute tool with double-layer permission guard
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args = {} } = request.params;
+    console.error(`[MCP CALL] ${name} called with args:`, JSON.stringify(args));
     try {
       const result = await executeTool(name, args, authContext);
+      console.error(`[MCP SUCCESS] ${name}`);
       return {
         content: [
           {
@@ -41,6 +43,7 @@ function createMcpServer(authContext) {
         ]
       };
     } catch (error) {
+      console.error(`[MCP ERROR] ${name}:`, error.message);
       return {
         isError: true,
         content: [

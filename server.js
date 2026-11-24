@@ -1306,6 +1306,7 @@ app.use('/api/export-reports', require('./HR-CDS/routes/exportReportRoute.js'));
 // Model Context Protocol (MCP) Server for ChatGPT / Claude / External AI
 app.use('/api/mcp', require('./mcp/sseHandler.js'));
 app.use('/api/mcp', require('./routes/apiKeyRoutes.js'));
+app.use('/api/mcp', require('./mcp/chatgptActionRouter.js'));
 app.use('/api/ai', require('./routes/aiRoutes.js'));
 app.use('/api/ai-settings', require('./routes/aiSettingsRoutes.js'));
 app.use('/api/dashboard-overview', require("./routes/dashboardOverviewRoutes.js"));

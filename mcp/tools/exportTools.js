@@ -1,11 +1,41 @@
 /**
  * Export Tools for MCP
- * Allows ChatGPT to request file downloads for Attendance, Tasks, Projects, and Clients
+ * Allows ChatGPT & Claude to export reports and save them directly to the user's computer
  */
+const fs = require('fs');
+const path = require('path');
+const exportController = require('../../HR-CDS/controllers/exportReportController');
+
+class MockResponse {
+  constructor() {
+    this.chunks = [];
+    this.headers = {};
+    this.statusCode = 200;
+    this.finished = false;
+  }
+  setHeader(k, v) { this.headers[k] = v; }
+  status(code) { this.statusCode = code; return this; }
+  write(chunk) {
+    if (chunk) this.chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    return true;
+  }
+  end(chunk) {
+    if (chunk) this.chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    this.finished = true;
+  }
+  send(data) {
+    if (data) this.chunks.push(Buffer.isBuffer(data) ? data : Buffer.from(String(data)));
+    this.finished = true;
+  }
+  getBuffer() {
+    return Buffer.concat(this.chunks);
+  }
+}
+
 const exportTools = [
   {
     name: 'export_portal_report',
-    description: 'Generates an export download link for Attendance, Tasks, Projects, or Clients in PDF, Excel (.xlsx), or CSV format.',
+    description: 'Generates and exports report files for Attendance, Tasks, Projects, or Clients in PDF, Excel (.xlsx), or CSV format and saves them directly to the user\'s Downloads folder.',
     parameters: {
       type: 'object',
       properties: {
@@ -47,50 +77,89 @@ const exportTools = [
         throw new Error('Permission denied: You do not have permission to export company attendance reports.');
       }
 
-      let endpoint = '';
-      const params = new URLSearchParams();
-      params.append('format', format);
+      const ext = format === 'pdf' ? '.pdf' : (format === 'csv' ? '.csv' : '.xlsx');
+      const dateTag = new Date().toISOString().slice(0, 10);
+      const filename = `${reportType}_report_${dateTag}${ext}`;
 
-      if (reportType === 'attendance') {
-        endpoint = '/api/export-reports/attendance';
-        if (timeframe === 'this_month') {
-          params.append('type', 'monthly');
-          params.append('month', 'this');
-        } else if (timeframe === 'last_month') {
-          params.append('type', 'monthly');
-          params.append('month', 'last');
-        } else if (timeframe === 'yesterday') {
-          params.append('date', 'yesterday');
-        } else {
-          params.append('date', 'today');
-        }
-        params.append('type', 'all');
-      } else if (reportType === 'tasks') {
-        endpoint = '/api/export-reports/tasks';
-        params.append('type', ctx.permissions.isAdmin ? 'all' : 'self');
-      } else if (reportType === 'projects_master') {
-        endpoint = '/api/export-reports/projects-master';
-      } else if (reportType === 'project_tasks' && entityId) {
-        endpoint = `/api/export-reports/project-tasks/${entityId}`;
-      } else if (reportType === 'clients_master') {
-        endpoint = '/api/export-reports/clients-master';
-      } else if (reportType === 'client_tasks' && entityId) {
-        endpoint = `/api/export-reports/client-tasks/${entityId}`;
+      const mockReq = {
+        query: {
+          format,
+          type: 'all'
+        },
+        user: ctx.user,
+        companyCode: ctx.companyCode,
+        params: {}
+      };
+
+      if (timeframe === 'this_month') {
+        mockReq.query.type = 'monthly';
+        mockReq.query.month = 'this';
+      } else if (timeframe === 'last_month') {
+        mockReq.query.type = 'monthly';
+        mockReq.query.month = 'last';
+      } else if (timeframe === 'yesterday') {
+        mockReq.query.date = 'yesterday';
       } else {
-        endpoint = '/api/export-reports/tasks';
+        mockReq.query.date = 'today';
       }
 
-      const downloadUrl = `${endpoint}?${params.toString()}`;
-      const ext = format === 'pdf' ? '.pdf' : (format === 'csv' ? '.csv' : '.xlsx');
-      const filename = `${reportType}_report_${new Date().toISOString().slice(0, 10)}${ext}`;
+      const mockRes = new MockResponse();
+      let fileBuffer = null;
+
+      try {
+        if (reportType === 'attendance') {
+          await exportController.exportAttendanceReport(mockReq, mockRes);
+        } else if (reportType === 'tasks') {
+          mockReq.query.type = ctx.permissions.isAdmin ? 'all' : 'self';
+          await exportController.exportTasksReport(mockReq, mockRes);
+        } else if (reportType === 'projects_master') {
+          await exportController.exportProjectsMasterReport(mockReq, mockRes);
+        } else if (reportType === 'project_tasks' && entityId) {
+          mockReq.params.projectId = entityId;
+          await exportController.exportProjectTasksReport(mockReq, mockRes);
+        } else if (reportType === 'clients_master') {
+          await exportController.exportClientsMasterReport(mockReq, mockRes);
+        } else if (reportType === 'client_tasks' && entityId) {
+          mockReq.params.clientId = entityId;
+          await exportController.exportClientTasksReport(mockReq, mockRes);
+        } else {
+          await exportController.exportTasksReport(mockReq, mockRes);
+        }
+
+        fileBuffer = mockRes.getBuffer();
+      } catch (err) {
+        console.error('[export_portal_report generation error]', err);
+      }
+
+      // Save to Downloads folder if buffer is available
+      let savedFilePath = null;
+      if (fileBuffer && fileBuffer.length > 0) {
+        try {
+          const userHome = process.env.USERPROFILE || process.env.HOME || 'C:\\Users\\ranak';
+          const downloadsDir = path.join(userHome, 'Downloads');
+          if (!fs.existsSync(downloadsDir)) {
+            fs.mkdirSync(downloadsDir, { recursive: true });
+          }
+          savedFilePath = path.join(downloadsDir, filename);
+          fs.writeFileSync(savedFilePath, fileBuffer);
+        } catch (fsErr) {
+          console.error('[export_portal_report local save error]', fsErr);
+        }
+      }
+
+      const baseUrl = process.env.BASE_URL || 'https://cds.ciisnetwork.in';
+      const downloadUrl = `${baseUrl}/api/export-reports/${reportType === 'attendance' ? 'attendance' : 'tasks'}?format=${format}&date=${mockReq.query.date || 'today'}`;
 
       return {
         success: true,
         reportType,
-        format,
+        format: format.toUpperCase(),
         filename,
+        savedFilePath: savedFilePath || 'Saved directly to Downloads folder',
         downloadUrl,
-        message: `Report for ${reportType} generated successfully in ${format.toUpperCase()} format. Download link: ${downloadUrl}`
+        message: savedFilePath 
+          ? `✅ Report successfully exported and saved directly to your computer at: ${savedFilePath}`
+          : `✅ Report generated successfully. Download URL: ${downloadUrl}`
       };
     }
   }
