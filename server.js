@@ -10,6 +10,7 @@ const socketIo = require('socket.io');
 const mongoose = require('mongoose');
 const { protect, restrictTo, invalidateAuthUser } = require("./middleware/authMiddleware");
 
+dotenv.config({ path: path.join(__dirname, ".env") });
 dotenv.config();
 
 const requiredEnvVars = ["JWT_SECRET"];
@@ -87,6 +88,13 @@ app.use((req, res, next) => {
 
 
 const dbConnectionPromise = connectDB();
+if (dbConnectionPromise && typeof dbConnectionPromise.then === 'function') {
+  dbConnectionPromise.then(() => {
+    try {
+      require('./services/ai/groqKeyManager').refreshKeyCache().catch(() => {});
+    } catch {}
+  }).catch(() => {});
+}
 
 const envOrigins = (process.env.ALLOWED_ORIGINS || "")
   .split(",")
@@ -1275,11 +1283,15 @@ app.use("/api/groups", require("./HR-CDS/routes/groupRoutes.js"));
 app.use("/api/projects", require("./HR-CDS/routes/projectRoutes.js"));
 app.use("/api/clientsservice", require("./HR-CDS/routes/clientRoutes.js"));
 app.use("/api/client-plans", require("./HR-CDS/routes/clientPlanRoutes.js"));
+app.use("/client-plans", require("./HR-CDS/routes/clientPlanRoutes.js"));
+app.use("/api/api/client-plans", require("./HR-CDS/routes/clientPlanRoutes.js"));
 app.use("/api/chat", require("./HR-CDS/chat/routes/chatRoutes"));
 
 app.use("/api/tasks/self", require("./HR-CDS/routes/selfTaskRoute.js"));
 app.use("/api/tasks/assigned", require("./HR-CDS/routes/assignedTaskRoute.js"));
 app.use("/api/tasks/client-tasks", require("./HR-CDS/routes/clientTaskRoute.js"));
+app.use("/tasks/client-tasks", require("./HR-CDS/routes/clientTaskRoute.js"));
+app.use("/api/api/tasks/client-tasks", require("./HR-CDS/routes/clientTaskRoute.js"));
 app.use("/api/tasks/project", require("./HR-CDS/routes/projectTaskRoute.js"));
 app.use("/api/tasks/all", require("./HR-CDS/routes/allTaskRoute.js"));
 
@@ -1293,6 +1305,12 @@ app.use("/api/client-tasks", require("./HR-CDS/routes/clientTask.js"));
 
 
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/export-reports', require('./HR-CDS/routes/exportReportRoute.js'));
+// Model Context Protocol (MCP) Server for ChatGPT / Claude / External AI
+app.use('/api/mcp', require('./mcp/sseHandler.js'));
+app.use('/api/mcp', require('./routes/apiKeyRoutes.js'));
+app.use('/api/ai', require('./routes/aiRoutes.js'));
+app.use('/api/ai-settings', require('./routes/aiSettingsRoutes.js'));
 app.use('/api/dashboard-overview', require("./routes/dashboardOverviewRoutes.js"));
 app.use('/api/company/dashboard-overview', require("./routes/dashboardOverviewRoutes.js"));
 
@@ -1300,6 +1318,7 @@ app.use('/api/menu-access', require("./routes/menuAccess.js"));
 app.use('/api/menu-items', require("./routes/menuItems.js"));
 app.use('/api/page-permissions', require("./routes/pagePermissions.js"));
 app.use('/api/company', require("./routes/companyRoutes.js"));
+app.use('/api/company/:companyId/ai-settings', require('./routes/companyAiSettingsRoutes.js'));
 app.use('/api/company-registration-requests', require("./routes/companyRegistrationRequestRoutes.js"));
 app.use('/api/plans', require("./routes/planRoutes.js"));
 app.use('/api/job-roles', require("./routes/jobRoleRoutes.js"));
@@ -1466,7 +1485,13 @@ const startServer = async () => {
   }
 
   // Uniqueness is a prerequisite for safe concurrent group/event delivery.
-  for (const model of [require('./HR-CDS/chat/models/Conversation'), require('./HR-CDS/chat/models/Message'), require('./HR-CDS/models/Notification')]) await model.createIndexes();
+  try {
+    for (const model of [require('./HR-CDS/chat/models/Conversation'), require('./HR-CDS/chat/models/Message'), require('./HR-CDS/models/Notification')]) {
+      await model.createIndexes();
+    }
+  } catch (err) {
+    console.warn('[server] Non-fatal index creation error at boot:', err.message);
+  }
   require('./HR-CDS/utils/projectChatWorker').start();
 
   try {
@@ -1482,6 +1507,7 @@ const startServer = async () => {
   }
 
   server.listen(PORT, async () => {
+    console.log(`Server listening on port ${PORT}`);
 
     try {
       const migrateTenantIndexes = require("./utils/tenantIndexMigration");

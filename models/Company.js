@@ -251,6 +251,26 @@ const companySchema = new mongoose.Schema(
       monthly: { type: Number, min: 0, default: 2000 },
     },
 
+    // AI Assistant limits for company users, synced from Plan or configured by Super Admin
+    aiApiKeySource: {
+      type: String,
+      enum: ["platform", "client"],
+      default: "platform",
+    },
+    customGroqApiKey: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    aiDailyTokenLimit: { type: Number, min: 0, default: 0 },
+    aiDailyCallLimit: { type: Number, min: 0, default: 0 },
+    aiDailySttLimit: { type: Number, min: 0, default: 0 },
+    aiExtraTokens: { type: Number, min: 0, default: 0 },
+    aiExtraCalls: { type: Number, min: 0, default: 0 },
+    aiExtraStt: { type: Number, min: 0, default: 0 },
+    byokDefaultEmployeeDailyTokens: { type: Number, min: 0, default: 10000 },
+    byokDefaultEmployeeDailyCalls: { type: Number, min: 0, default: 30 },
+
     // B2B & Directory Lead Integrations (IndiaMART & Justdial)
     leadIntegrations: {
       indiamart: {

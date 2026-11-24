@@ -249,7 +249,7 @@ const taskSchema = new mongoose.Schema(
     isRecurring: { type: Boolean, default: false },
     repeatPattern: {
       type: String,
-      enum: ["none", "daily"],
+      enum: ["none", "daily", "weekly", "monthly", "yearly"],
       default: "none",
     },
     repeatDays: {
@@ -714,7 +714,6 @@ taskSchema.post("save", function (doc) {
 
 taskSchema.index({ overallStatus: 1, holdOverdueCheckAt: 1 });
 taskSchema.index({ 'statusByUser.status': 1, 'statusByUser.holdOverdueCheckAt': 1 });
-taskSchema.index({ companyCode: 1, taskFor: 1, isActive: 1, createdAt: -1 });
 taskSchema.index({ companyCode: 1, assignedUsers: 1, isActive: 1, createdAt: -1 });
 taskSchema.index({ companyCode: 1, createdBy: 1, isActive: 1, createdAt: -1 });
 taskSchema.index({ companyCode: 1, branch: 1, isActive: 1, createdAt: -1 });

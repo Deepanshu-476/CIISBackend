@@ -1,0 +1,832 @@
+/**
+ * services/ai/taskFields.js
+ *
+ * Single Source of Truth for task field definitions, slot-filling order,
+ * question templates (Roman Hinglish reply + Devanagari Hindi speech),
+ * anti-loop re-ask templates, chips, defaults, and normalisers.
+ */
+
+const { toIstIsoString, parseHinglishDateTime, parseCheckpointItems } = require('./hinglishParser');
+
+const TASK_FIELD_ORDER = [
+  'assignee',
+  'title',
+  'dueDateTime',
+  'description',
+  'priority',
+  'status',
+  'reminder',
+  'reminderOption',
+  'priorityDays',
+  'repeatPattern',
+  'repeatDays',
+  'recurrenceEndDate',
+  'checkpoints',
+  'attachments',
+];
+
+const buildDateChips = (refTime = new Date(), isEn = false) => {
+  const now = refTime instanceof Date ? refTime : new Date(refTime);
+  const istTimeMs = now.getTime() + (330 * 60 * 1000);
+  const istDate = new Date(istTimeMs);
+
+  const y = istDate.getUTCFullYear();
+  const m = istDate.getUTCMonth();
+  const d = istDate.getUTCDate();
+
+  // Aaj shaam 6 PM
+  const today6pmUtc = Date.UTC(y, m, d, 18, 0, 0) - (330 * 60 * 1000);
+  const today6pmIso = toIstIsoString(new Date(today6pmUtc));
+
+  // Kal subah 10 AM
+  const kal10amUtc = Date.UTC(y, m, d + 1, 10, 0, 0) - (330 * 60 * 1000);
+  const kal10amIso = toIstIsoString(new Date(kal10amUtc));
+
+  // Kal shaam 6 PM
+  const kal6pmUtc = Date.UTC(y, m, d + 1, 18, 0, 0) - (330 * 60 * 1000);
+  const kal6pmIso = toIstIsoString(new Date(kal6pmUtc));
+
+  const chips = [];
+  if (today6pmUtc > now.getTime()) {
+    chips.push({
+      label: isEn ? 'Today 6:00 PM' : 'Aaj shaam 6:00 PM',
+      value: today6pmIso,
+      action: { type: 'set', field: 'dueDateTime', value: today6pmIso },
+    });
+  }
+  chips.push({
+    label: isEn ? 'Tomorrow 10:00 AM' : 'Kal subah 10:00 AM',
+    value: kal10amIso,
+    action: { type: 'set', field: 'dueDateTime', value: kal10amIso },
+  });
+  chips.push({
+    label: isEn ? 'Tomorrow 6:00 PM' : 'Kal shaam 6:00 PM',
+    value: kal6pmIso,
+    action: { type: 'set', field: 'dueDateTime', value: kal6pmIso },
+  });
+  return chips;
+};
+
+function resolveRecurrenceEndDate(val, baseDate = new Date()) {
+  if (!val) return null;
+  const str = String(val).trim();
+  if (str.includes('T') && !isNaN(new Date(str).getTime())) {
+    return str;
+  }
+  const clean = str.toLowerCase();
+
+  let base = new Date();
+  if (baseDate) {
+    const parsedBase = new Date(baseDate);
+    if (!isNaN(parsedBase.getTime())) {
+      base = parsedBase;
+    }
+  }
+
+  if (clean === '+1month' || clean === '1 month' || clean === '1month' || clean === '1 mahina' || clean === '1 mahine' || clean === 'ek mahina') {
+    const d = new Date(base.getTime() + 30 * 24 * 60 * 60 * 1000);
+    return d.toISOString().slice(0, 10) + 'T23:59:59.999Z';
+  }
+  if (clean === '+3months' || clean === '3 months' || clean === '3months' || clean === '3 mahine' || clean === 'teen mahine') {
+    const d = new Date(base.getTime() + 90 * 24 * 60 * 60 * 1000);
+    return d.toISOString().slice(0, 10) + 'T23:59:59.999Z';
+  }
+  if (clean === '+6months' || clean === '6 months' || clean === '6months' || clean === '6 mahine' || clean === 'chheh mahine' || clean === 'che mahine') {
+    const d = new Date(base.getTime() + 180 * 24 * 60 * 60 * 1000);
+    return d.toISOString().slice(0, 10) + 'T23:59:59.999Z';
+  }
+  if (clean === '+1year' || clean === '1 year' || clean === '1year' || clean === '1 saal' || clean === 'ek saal') {
+    const d = new Date(base.getTime() + 365 * 24 * 60 * 60 * 1000);
+    return d.toISOString().slice(0, 10) + 'T23:59:59.999Z';
+  }
+
+  const monthMatch = clean.match(/^(\d+)\s*(?:months?|mahine|mahina)$/i);
+  if (monthMatch) {
+    const count = parseInt(monthMatch[1], 10);
+    const d = new Date(base.getTime() + count * 30 * 24 * 60 * 60 * 1000);
+    return d.toISOString().slice(0, 10) + 'T23:59:59.999Z';
+  }
+
+  const yearMatch = clean.match(/^(\d+)\s*(?:years?|saal)$/i);
+  if (yearMatch) {
+    const count = parseInt(yearMatch[1], 10);
+    const d = new Date(base.getTime() + count * 365 * 24 * 60 * 60 * 1000);
+    return d.toISOString().slice(0, 10) + 'T23:59:59.999Z';
+  }
+
+  const isoMatch = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (isoMatch) {
+    const y = parseInt(isoMatch[1], 10);
+    const m = String(isoMatch[2]).padStart(2, '0');
+    const day = String(isoMatch[3]).padStart(2, '0');
+    return `${y}-${m}-${day}T23:59:59.999Z`;
+  }
+
+  const parsed = new Date(str);
+  if (!isNaN(parsed.getTime())) {
+    return parsed.toISOString().slice(0, 10) + 'T23:59:59.999Z';
+  }
+
+  return null;
+}
+
+const TASK_FIELDS = {
+  project: {
+    key: 'project',
+    required: true,
+    askOrder: 0.5,
+    question: {
+      reply: 'Kis project mein task add karna hai? Project ka naam batayein.',
+      replyEn: 'Which project should this task be added to? Please provide the project name.',
+      speech: 'किस प्रोजेक्ट में टास्क जोड़ना है? प्रोजेक्ट का नाम बताएं।',
+      speechEn: 'Which project should this task be added to? Please provide the project name.',
+      speakText: 'Kis project mein task add karna hai? Project ka naam batayein.',
+      speakTextHi: 'किस Project में Task जोड़ना है? Project का नाम बताएं।',
+    },
+    reAskQuestion: {
+      reply: 'Kripya project ka sahi naam batayein ya options se chun lein.',
+      replyEn: 'Please provide the project name or select from the options.',
+      speech: 'कृपया प्रोजेक्ट का सही नाम बताएं।',
+      speechEn: 'Please provide the project name or select from the options.',
+      speakText: 'Kripya project ka sahi naam batayein.',
+      speakTextHi: 'कृपया Project का सही नाम बताएं।',
+    },
+    chips: () => [],
+    default: null,
+  },
+
+  assignee: {
+    key: 'assignee',
+    required: false, // Asked only if Owner/Admin explicitly requests others or mentions another name
+    askOrder: 1,
+    question: {
+      reply: 'Kiske liye task banana hai? Employee ka naam batayein.',
+      replyEn: 'Who is this task for? Please provide the employee name:',
+      speech: 'किसके लिए टास्क बनाना है? कर्मचारी का नाम बताएं।',
+      speechEn: 'Who is this task for? Please provide the employee name.',
+      speakText: 'Kiske liye task banana hai? Employee ka naam batayein.',
+      speakTextHi: 'किसके लिए Task बनाना है? Employee का नाम बताएं।',
+    },
+    reAskQuestion: {
+      reply: 'Kripya employee ka naam sahi se batayein, ya "khud ke liye" chun lein.',
+      replyEn: 'Please specify the employee name, or choose "For myself".',
+      speech: 'कृपया कर्मचारी का नाम सही से बताएं, या खुद के लिए चुन लें।',
+      speechEn: 'Please specify the employee name, or choose For myself.',
+      speakText: 'Kripya employee ka naam batayein ya khud ke liye chun lein.',
+      speakTextHi: 'कृपया employee का नाम बताएं या खुद के लिए चुन लें।',
+    },
+    chips: () => [],
+    reAskChips: () => [
+      { label: 'Khud ke liye', action: { type: 'set', field: 'taskFor', value: 'self' } },
+      { label: 'Naam type karein', action: { type: 'edit', field: 'assignee' } },
+    ],
+    default: null,
+    parse: (val) => (val ? String(val).trim() : null),
+    normalise: (val) => (val ? String(val).trim() : null),
+  },
+
+  title: {
+    key: 'title',
+    required: true,
+    askOrder: 2,
+    question: {
+      reply: 'Task ka naam kya rakhna hai?',
+      replyEn: 'What should be the task title?',
+      speech: 'टास्क का नाम क्या रखना है?',
+      speechEn: 'What should be the task title?',
+      speakText: 'Task ka naam kya rakhna hai?',
+      speakTextHi: 'Task का नाम क्या रखना है?',
+    },
+    reAskQuestion: {
+      reply: 'Task ka naam 2-3 shabdon mein seedhe likh dein (jaise "Client meeting" ya "Bug fix").',
+      replyEn: 'Please enter the task title directly (e.g. "Client meeting" or "Bug fix").',
+      speech: 'टास्क का नाम सीधे लिख दें, जैसे क्लाइंट मीटिंग या बग फिक्स।',
+      speechEn: 'Please enter the task title directly, such as Client meeting or Bug fix.',
+      speakText: 'Task ka naam seedhe likh dein, jaise Client meeting ya Bug fix.',
+      speakTextHi: 'Task का नाम सीधे लिख दें, जैसे Client meeting या Bug fix।',
+    },
+    chips: () => [],
+    reAskChips: () => [
+      { label: 'Client meeting', action: { type: 'set', field: 'title', value: 'Client meeting' } },
+      { label: 'Daily update', action: { type: 'set', field: 'title', value: 'Daily update' } },
+      { label: 'Bug fix', action: { type: 'set', field: 'title', value: 'Bug fix' } },
+    ],
+    default: null,
+    parse: (val) => (val ? String(val).trim() : null),
+    normalise: (val) => (val ? String(val).trim() : null),
+  },
+
+  description: {
+    key: 'description',
+    required: true,
+    askOrder: 3,
+    question: {
+      reply: 'Task ka description kya rakhna hai? (Zaroori hai):',
+      replyEn: 'What should be the task description? (Required):',
+      speech: 'टास्क का डिस्क्रिप्शन बताएं (जरूरी है)।',
+      speechEn: 'Please provide the task description.',
+      speakText: 'Task ka description batayein, yeh zaroori hai.',
+      speakTextHi: 'टास्क का Description बताएं (जरूरी है)।',
+    },
+    reAskQuestion: {
+      reply: 'Task ka description zaroori hai, isko skip nahi kar sakte. Kripya description batayein:',
+      replyEn: 'Task description is required and cannot be skipped. Please provide a description:',
+      speech: 'टास्क का डिस्क्रिप्शन जरूरी है, इसको स्किप नहीं कर सकते। कृपया डिस्क्रिप्शन बताएं।',
+      speechEn: 'Task description is required and cannot be skipped. Please provide a description.',
+      speakText: 'Task ka description zaroori hai, isko skip nahi kar sakte. Kripya description batayein:',
+      speakTextHi: 'टास्क का Description जरूरी है, इसको skip नहीं कर सकते। कृपया Description बताएं:',
+    },
+    chips: () => [],
+    reAskChips: () => [],
+    default: '',
+    parse: (val) => (val !== undefined && val !== null ? String(val).trim() : ''),
+    normalise: (val) => (val !== undefined && val !== null ? String(val).trim() : ''),
+  },
+
+  dueDateTime: {
+    key: 'dueDateTime',
+    required: true,
+    askOrder: 4,
+    question: {
+      reply: 'Ye task kab tak complete hona chahiye? Date aur time batayein.',
+      replyEn: 'When should this task be completed? Please specify the date and time.',
+      speech: 'यह टास्क कब तक पूरा होना चाहिए? तारीख और समय बताएं।',
+      speechEn: 'When should this task be completed? Please specify the date and time.',
+      speakText: 'Ye task kab tak complete hona chahiye? Due date aur time batayein.',
+      speakTextHi: 'यह Task कब तक complete होना चाहिए? Due date और समय बताएं।',
+    },
+    reAskQuestion: {
+      reply: 'Kripya niche diye options se direct date aur time chun lein.',
+      replyEn: 'Please select a date and time directly from the options below.',
+      speech: 'कृपया नीचे दिए विकल्पों से तारीख और समय चुन लें।',
+      speechEn: 'Please select a date and time directly from the options below.',
+      speakText: 'Kripya niche diye options se direct Due date chun lein.',
+      speakTextHi: 'कृपया नीचे दिए विकल्पों से Due date चुन लें।',
+    },
+    chips: buildDateChips,
+    reAskChips: buildDateChips,
+    default: null,
+    parse: (val) => {
+      if (!val) return null;
+      if (val instanceof Date) return toIstIsoString(val);
+      if (typeof val === 'string' && val.includes('T')) return val;
+      return parseHinglishDateTime(String(val));
+    },
+    normalise: (val) => val,
+  },
+
+  priority: {
+    key: 'priority',
+    required: false,
+    askOrder: 5,
+    question: {
+      reply: 'Priority kya rakhein? Low, Medium ya High?',
+      replyEn: 'What priority should we set? Low, Medium, or High?',
+      speech: 'Priority क्या रखें? Low, Medium ya High?',
+      speechEn: 'What priority should we set? Low, Medium, or High?',
+      speakText: 'Priority kya rakhein? Low, Medium ya High?',
+      speakTextHi: 'Priority क्या रखें? Low, Medium या High?',
+    },
+    reAskQuestion: {
+      reply: 'Kripya inme se ek priority chun lein: Low, Medium ya High.',
+      replyEn: 'Please choose one of the priorities: Low, Medium, or High.',
+      speech: 'कृपया इनमें से एक Priority चुनें: Low, Medium ya High।',
+      speechEn: 'Please choose one of the priorities: Low, Medium, or High.',
+      speakText: 'Inme se ek Priority chun lein: Low, Medium ya High.',
+      speakTextHi: 'इनमें से एक Priority चुन लें: Low, Medium या High।',
+    },
+    chips: () => [
+      { label: 'Low', action: { type: 'set', field: 'priority', value: 'low' } },
+      { label: 'Medium', action: { type: 'set', field: 'priority', value: 'medium' } },
+      { label: 'High', action: { type: 'set', field: 'priority', value: 'high' } },
+      { label: 'Baaki sab default', action: { type: 'skip_all' } },
+    ],
+    reAskChips: () => [
+      { label: 'Low', action: { type: 'set', field: 'priority', value: 'low' } },
+      { label: 'Medium', action: { type: 'set', field: 'priority', value: 'medium' } },
+      { label: 'High', action: { type: 'set', field: 'priority', value: 'high' } },
+      { label: 'Baaki sab default', action: { type: 'skip_all' } },
+    ],
+    default: 'medium',
+    parse: (val) => {
+      const clean = String(val || '').trim().toLowerCase();
+      if (/\b(?:high|urgent|zaroori|jaruri|emergency|danger|top|imp|important|अति\s*आवश्यक|जरूरी|ज़रूरी|हाई)\b/i.test(clean)) return 'high';
+      if (/\b(?:low|kam|halka|chota|धीमा|कम|हल्का|लो)\b/i.test(clean)) return 'low';
+      if (/\b(?:medium|normal|theek|mod|mid|average|standard|theek\s*thaak|औसत|मीडियम|नॉर्मल|ठीक)\b/i.test(clean)) return 'medium';
+      return 'medium';
+    },
+    normalise: (val) => {
+      const clean = String(val || 'medium').trim().toLowerCase();
+      if (['low', 'medium', 'high'].includes(clean)) return clean;
+      if (clean === 'urgent') return 'high';
+      return 'medium';
+    },
+  },
+
+  status: {
+    key: 'status',
+    required: false,
+    askOrder: 5.5,
+    question: {
+      reply: 'Task ka status kya rakhna hai? Pending, In Progress, On Hold, ya Completed?',
+      replyEn: 'What should be the task status? Pending, In Progress, On Hold, or Completed?',
+      speech: 'टास्क का स्टेटस क्या रखना है? पेंडिंग, इन प्रोग्रेस, ऑन होल्ड, या कम्प्लीटेड?',
+      speechEn: 'What should be the task status? Pending, In Progress, On Hold, or Completed?',
+      speakText: 'Task ka status kya rakhna hai? Pending, In Progress, On Hold, ya Completed?',
+      speakTextHi: 'Task का status क्या रखना है? Pending, In Progress, On Hold, या Completed?',
+    },
+    reAskQuestion: {
+      reply: 'Status chun lein (jaise Pending, In Progress, On Hold, Completed). Default Pending rahega.',
+      replyEn: 'Please select a status (such as Pending, In Progress, On Hold, Completed). Default is Pending.',
+      speech: 'स्टेटस चुन लें, जैसे पेंडिंग, इन प्रोग्रेस, ऑन होल्ड, या कम्प्लीटेड। डिफॉल्ट पेंडिंग रहेगा।',
+      speechEn: 'Please select a status, default is Pending.',
+      speakText: 'Status chun lein, default Pending rahega.',
+      speakTextHi: 'Status चुन लें, default Pending रहेगा।',
+    },
+    chips: () => [
+      { label: 'Pending', action: { type: 'set', field: 'status', value: 'pending' } },
+      { label: 'In Progress', action: { type: 'set', field: 'status', value: 'in-progress' } },
+      { label: 'Completed', action: { type: 'set', field: 'status', value: 'completed' } },
+      { label: 'On Hold', action: { type: 'set', field: 'status', value: 'onhold' } },
+    ],
+    reAskChips: () => [
+      { label: 'Pending', action: { type: 'set', field: 'status', value: 'pending' } },
+      { label: 'In Progress', action: { type: 'set', field: 'status', value: 'in-progress' } },
+      { label: 'Completed', action: { type: 'set', field: 'status', value: 'completed' } },
+      { label: 'On Hold', action: { type: 'set', field: 'status', value: 'onhold' } },
+    ],
+    default: 'pending',
+    parse: (val) => {
+      const clean = String(val || '').trim().toLowerCase().replace(/[\s_]/g, '-');
+      if (clean.includes('in-progress') || clean.includes('inprogress') || clean.includes('progress') || clean.includes('chalu') || clean.includes('चालू')) return 'in-progress';
+      if (clean.includes('completed') || clean.includes('complete') || clean.includes('done') || clean.includes('khatam') || clean.includes('कम्प्लीट') || clean.includes('पूरा')) return 'completed';
+      if (clean.includes('on-hold') || clean.includes('onhold') || clean.includes('hold') || clean.includes('होल्ड')) return 'onhold';
+      if (clean.includes('rejected') || clean.includes('reject') || clean.includes('खारिज') || clean.includes('रिजेक्ट')) return 'rejected';
+      if (clean.includes('cancelled') || clean.includes('cancel') || clean.includes('रद्द') || clean.includes('कैंसिल')) return 'cancelled';
+      if (clean.includes('overdue') || clean.includes('लेट') || clean.includes('ओवरड्यू')) return 'overdue';
+      if (clean.includes('reopen') || clean.includes('रीओपन')) return 'reopen';
+      return 'pending';
+    },
+    normalise: (val) => {
+      const clean = String(val || 'pending').trim().toLowerCase().replace(/[\s_]/g, '-');
+      const valid = ['pending', 'in-progress', 'completed', 'approved', 'rejected', 'onhold', 'reopen', 'cancelled', 'overdue'];
+      return valid.includes(clean) ? clean : 'pending';
+    },
+  },
+
+  reminder: {
+    key: 'reminder',
+    required: false,
+    askOrder: 6,
+    question: {
+      reply: 'Reminder on karna hai? Haan ya nahi? (Jaise har 10 min, har 30 min, 1 ghante pehle)',
+      replyEn: 'Would you like to set a reminder? (Yes or No)',
+      speech: 'रिमाइंडर ऑन करना है? हाँ या नहीं?',
+      speechEn: 'Would you like to set a reminder?',
+      speakText: 'Reminder on karna hai? Haan ya nahi?',
+      speakTextHi: 'Reminder on करना है? हाँ या नहीं?',
+    },
+    reAskQuestion: {
+      reply: 'Reminder lagana hai ya nahi? Niche diye button par tap karein.',
+      replyEn: 'Would you like a reminder or not? Please tap a button below.',
+      speech: 'रिमाइंडर लगाना है या नहीं? नीचे दिए बटन पर टैप करें।',
+      speechEn: 'Would you like a reminder or not? Please tap a button below.',
+      speakText: 'Reminder lagana hai ya nahi?',
+      speakTextHi: 'Reminder लगाना है या नहीं?',
+    },
+    chips: (refTime, isEn = false) => (isEn ? [
+      { label: 'Yes', action: { type: 'set', field: 'reminder', value: true } },
+      { label: 'Every 10 min', action: { type: 'set', field: 'repeatIntervalMinutes', value: 10 } },
+      { label: '1 hour before', action: { type: 'set', field: 'reminderOption', value: 'oneHourBefore' } },
+      { label: 'No', action: { type: 'set', field: 'reminder', value: false } },
+      { label: 'Skip remaining', action: { type: 'skip_all' } },
+    ] : [
+      { label: 'Haan', action: { type: 'set', field: 'reminder', value: true } },
+      { label: 'Har 10 min', action: { type: 'set', field: 'repeatIntervalMinutes', value: 10 } },
+      { label: '1 ghanta pehle', action: { type: 'set', field: 'reminderOption', value: 'oneHourBefore' } },
+      { label: 'Nahi', action: { type: 'set', field: 'reminder', value: false } },
+      { label: 'Baaki sab default', action: { type: 'skip_all' } },
+    ]),
+    reAskChips: (refTime, isEn = false) => (isEn ? [
+      { label: 'Yes', action: { type: 'set', field: 'reminder', value: true } },
+      { label: 'Every 10 min', action: { type: 'set', field: 'repeatIntervalMinutes', value: 10 } },
+      { label: '1 hour before', action: { type: 'set', field: 'reminderOption', value: 'oneHourBefore' } },
+      { label: 'No', action: { type: 'set', field: 'reminder', value: false } },
+      { label: 'Skip remaining', action: { type: 'skip_all' } },
+    ] : [
+      { label: 'Haan', action: { type: 'set', field: 'reminder', value: true } },
+      { label: 'Har 10 min', action: { type: 'set', field: 'repeatIntervalMinutes', value: 10 } },
+      { label: '1 ghanta pehle', action: { type: 'set', field: 'reminderOption', value: 'oneHourBefore' } },
+      { label: 'Nahi', action: { type: 'set', field: 'reminder', value: false } },
+      { label: 'Baaki sab default', action: { type: 'skip_all' } },
+    ]),
+    default: false,
+    parse: (val) => {
+      if (typeof val === 'boolean') return val;
+      const clean = String(val || '').trim().toLowerCase();
+      if (['haan', 'yes', 'true', 'on', 'ha'].includes(clean)) return true;
+      if (['nahi', 'no', 'false', 'off', 'na'].includes(clean)) return false;
+      if (/(?:hour|ghant|baad|pehle|before|half|30|10|min|aadha|hourly|har|laga|chalu|kar\s*do|एक|घंटे|घंटा|बाद|पहले|मिनट)/i.test(clean)) return true;
+      return false;
+    },
+    normalise: (val) => Boolean(val),
+  },
+
+  reminderOption: {
+    key: 'reminderOption',
+    required: false,
+    askOrder: 7,
+    parentKey: 'reminder',
+    question: {
+      reply: 'Reminder kab bhejein? Har 10 min me, har 30 min me, har 1 ghante me, ya 1 ghante pehle?',
+      replyEn: 'When should the reminder be sent? (e.g. Every 10 min, Every 30 min, 1 hour before):',
+      speech: 'रिमाइंडर कब भेजें? हर दस मिनट में, हर तीस मिनट में, हर एक घंटे में, या एक घंटे पहले?',
+      speechEn: 'When should the reminder be sent?',
+      speakText: 'Reminder kab bhejein? Jaise har 10 min ya 1 ghanta pehle.',
+      speakTextHi: 'Reminder कब भेजें? जैसे हर 10 मिनट या 1 घंटा पहले।',
+    },
+    reAskQuestion: {
+      reply: 'Kripya reminder timing option chun lein (jaise har 10 min, har 30 min, 1 ghante pehle).',
+      replyEn: 'Please select a reminder timing option (such as Every 10 min, Every 30 min, 1 hour before).',
+      speech: 'कृपया रिमाइंडर टाइमिंग ऑप्शन चुन लें।',
+      speechEn: 'Please select a reminder timing option.',
+      speakText: 'Reminder ka time chun lein.',
+      speakTextHi: 'Reminder का समय चुन लें।',
+    },
+    chips: () => [
+      { label: 'Every 10 min', action: { type: 'set', field: 'repeatIntervalMinutes', value: 10 } },
+      { label: 'Every 30 min', action: { type: 'set', field: 'reminderOption', value: 'halfHourly' } },
+      { label: 'Every 1 hour', action: { type: 'set', field: 'reminderOption', value: 'hourly' } },
+      { label: '1 hour before', action: { type: 'set', field: 'reminderOption', value: 'oneHourBefore' } },
+      { label: '15 min before due', action: { type: 'set', field: 'minutesBeforeDue', value: 15 } },
+    ],
+    reAskChips: () => [
+      { label: 'Every 10 min', action: { type: 'set', field: 'repeatIntervalMinutes', value: 10 } },
+      { label: 'Every 30 min', action: { type: 'set', field: 'reminderOption', value: 'halfHourly' } },
+      { label: 'Every 1 hour', action: { type: 'set', field: 'reminderOption', value: 'hourly' } },
+      { label: '1 hour before', action: { type: 'set', field: 'reminderOption', value: 'oneHourBefore' } },
+      { label: '15 min before due', action: { type: 'set', field: 'minutesBeforeDue', value: 15 } },
+    ],
+    default: 'oneHourBefore',
+    parse: (val) => {
+      const clean = String(val || '').trim().toLowerCase();
+      const intervalMatch = clean.match(/(?:every|har|repeat)?\s*(\d+)\s*(?:min|minute|m)/);
+      if (intervalMatch) return 'interval';
+      if (clean.includes('half') || clean.includes('30') || clean.includes('aadha') || clean.includes('आधा')) return 'halfHourly';
+      if (clean.includes('every') || clean.includes('har 1') || clean.includes('hourly') || clean.includes('har ghante') || clean.includes('हर')) return 'hourly';
+      if (clean.includes('pehle') || clean.includes('before')) return clean.includes('1') || clean.includes('hour') ? 'oneHourBefore' : 'beforeDue';
+      return 'oneHourBefore';
+    },
+    normalise: (val) => {
+      const clean = String(val || 'oneHourBefore').trim();
+      return ['hourly', 'halfHourly', 'oneHourBefore', 'interval', 'beforeDue', 'custom'].includes(clean) ? clean : 'oneHourBefore';
+    },
+  },
+
+  priorityDays: {
+    key: 'priorityDays',
+    required: false,
+    askOrder: 8,
+    question: {
+      reply: 'Priority Days kitne rakhne hain? (1, 2, 3, 5, 11 ya koi bhi number bol/likh sakte hain, default 1)',
+      replyEn: 'How many priority days should we set? (e.g. 1, 2, 3, 5, 11 or any number, default 1)',
+      speech: 'प्रायोरिटी डेज कितने रखें? जैसे 1, 2, 3, 5, 11 या कोई भी नंबर बोल सकते हैं, डिफ़ॉल्ट एक है।',
+      speechEn: 'How many priority days should we set? You can say or type any number, default is 1.',
+      speakText: 'Priority days kitne rakhne hain? Jaise 1, 2, 3, 5, 11 ya koi bhi number bol sakte hain.',
+      speakTextHi: 'Priority days कितने रखने हैं? जैसे 1, 2, 3, 5, 11 या कोई भी नंबर बोल सकते हैं।',
+    },
+    reAskQuestion: {
+      reply: 'Priority days kitne din rakhne hain? Niche se chun lein ya koi bhi number likhein/bolein.',
+      replyEn: 'Please select or type how many priority days to set (any number, e.g. 1, 2, 3, 5, 11).',
+      speech: 'प्रायोरिटी डेज नीचे से चुनें या कोई भी नंबर लिखें।',
+      speechEn: 'Please select or type how many priority days to set.',
+      speakText: 'Priority days niche se chun lein ya number likhein.',
+      speakTextHi: 'Priority days नीचे से चुन लें या नंबर लिखें।',
+    },
+    chips: () => [
+      { label: '1 (Default)', action: { type: 'set', field: 'priorityDays', value: '1' } },
+      { label: '2', action: { type: 'set', field: 'priorityDays', value: '2' } },
+      { label: '3', action: { type: 'set', field: 'priorityDays', value: '3' } },
+      { label: '5', action: { type: 'set', field: 'priorityDays', value: '5' } },
+      { label: '7', action: { type: 'set', field: 'priorityDays', value: '7' } },
+    ],
+    reAskChips: () => [
+      { label: '1 (Default)', action: { type: 'set', field: 'priorityDays', value: '1' } },
+      { label: '2', action: { type: 'set', field: 'priorityDays', value: '2' } },
+      { label: '3', action: { type: 'set', field: 'priorityDays', value: '3' } },
+      { label: '5', action: { type: 'set', field: 'priorityDays', value: '5' } },
+      { label: '7', action: { type: 'set', field: 'priorityDays', value: '7' } },
+    ],
+    default: '1',
+    parse: (val) => {
+      const num = parseInt(val, 10);
+      return !isNaN(num) && num >= 1 ? String(Math.min(30, num)) : '1';
+    },
+    normalise: (val) => String(val || '1'),
+  },
+
+  repeatPattern: {
+    key: 'repeatPattern',
+    required: false,
+    askOrder: 9,
+    question: {
+      reply: 'Kya ye task repeat karna hai? (No repeat / Repeat Task)',
+      replyEn: 'Should this task repeat? (No repeat / Repeat daily)',
+      speech: 'क्या यह टास्क रिपीट करना है?',
+      speechEn: 'Should this task repeat?',
+      speakText: 'Kya yeh task repeat karna hai?',
+      speakTextHi: 'क्या यह Task repeat करना है?',
+    },
+    reAskQuestion: {
+      reply: 'Task repeat karna hai ya nahi? Niche option chunein.',
+      replyEn: 'Please choose whether this task should repeat or not.',
+      speech: 'टास्क रिपीट करना है या नहीं? नीचे विकल्प चुनें।',
+      speechEn: 'Please choose whether this task should repeat or not.',
+      speakText: 'Task repeat karna hai ya nahi?',
+      speakTextHi: 'Task repeat करना है या नहीं?',
+    },
+    chips: (_now, isEn = false) => [
+      { label: 'No Repeat', action: { type: 'set', field: 'repeatPattern', value: 'none' } },
+      { label: 'Repeat Task (Daily)', action: { type: 'set', field: 'repeatPattern', value: 'daily' } },
+      { label: isEn ? 'Default (Skip)' : 'Baaki sab default', action: { type: 'skip_all' } },
+    ],
+    reAskChips: (_now, isEn = false) => [
+      { label: 'No Repeat', action: { type: 'set', field: 'repeatPattern', value: 'none' } },
+      { label: 'Repeat Task (Daily)', action: { type: 'set', field: 'repeatPattern', value: 'daily' } },
+      { label: isEn ? 'Default (Skip)' : 'Baaki sab default', action: { type: 'skip_all' } },
+    ],
+    default: 'none',
+    parse: (val) => {
+      const clean = String(val || '').trim().toLowerCase();
+      if (clean === 'daily' || clean === 'roz' || clean.includes('repeat')) return 'daily';
+      return 'none';
+    },
+    normalise: (val) => (val === 'daily' ? 'daily' : 'none'),
+  },
+
+  repeatDays: {
+    key: 'repeatDays',
+    required: false,
+    askOrder: 9.1,
+    question: {
+      reply: 'Task kin dino repeat hona chahiye? Weekdays chunein (jaise "Every Day", "Mon-Fri" ya specific din):',
+      replyEn: 'Which days should the task repeat? Select weekdays (e.g. "Every day", "Mon-Fri" or specific days):',
+      speech: 'टास्क किन दिनों रिपीट होना चाहिए? नीचे विकल्प चुनें।',
+      speechEn: 'Which days should the task repeat? Select weekdays below.',
+      speakText: 'Task kin dino repeat hona chahiye? Weekdays chunein.',
+      speakTextHi: 'Task किन दिनों repeat होना चाहिए? Weekdays चुनें।',
+    },
+    reAskQuestion: {
+      reply: 'Weekdays chunein ya "All Days (Default)" dabayein:',
+      replyEn: 'Please choose weekdays or tap "All Days (Default)":',
+      speech: 'दिन चुनें या ऑल डेज़ दबाएं।',
+      speechEn: 'Please choose weekdays or tap "All Days".',
+      speakText: 'Weekdays chunein ya All Days dabayein.',
+      speakTextHi: 'Weekdays चुनें या All Days दबाएं।',
+    },
+    chips: () => [
+      { label: 'Every Day (All 7 Days)', action: { type: 'set', field: 'repeatDays', value: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] } },
+      { label: 'Mon - Fri (Weekdays)', action: { type: 'set', field: 'repeatDays', value: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'] } },
+      { label: 'Mon, Wed, Fri', action: { type: 'set', field: 'repeatDays', value: ['monday', 'wednesday', 'friday'] } },
+      { label: 'All Days (Default)', action: { type: 'skip', field: 'repeatDays' } },
+    ],
+    reAskChips: () => [
+      { label: 'Every Day (All 7 Days)', action: { type: 'set', field: 'repeatDays', value: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] } },
+      { label: 'Mon - Fri (Weekdays)', action: { type: 'set', field: 'repeatDays', value: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'] } },
+      { label: 'Mon, Wed, Fri', action: { type: 'set', field: 'repeatDays', value: ['monday', 'wednesday', 'friday'] } },
+      { label: 'All Days (Default)', action: { type: 'skip', field: 'repeatDays' } },
+    ],
+    default: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
+    parse: (val) => (Array.isArray(val) ? val : []),
+    normalise: (val) => (Array.isArray(val) ? val : []),
+  },
+
+  recurrenceEndDate: {
+    key: 'recurrenceEndDate',
+    required: false,
+    askOrder: 9.2,
+    question: {
+      reply: 'Repeat kab tak chalega? Repeat End Date batayein (jaise "1 Month", "3 Months" ya date):',
+      replyEn: 'Until when should this task repeat? Specify Repeat End Date (e.g. "1 month", "3 months" or date):',
+      speech: 'टास्क कब तक रिपीट होगा? रिपीट एंड डेट बताएं।',
+      speechEn: 'Until when should this task repeat? Specify repeat end date.',
+      speakText: 'Repeat kab tak chalega? End Date batayein.',
+      speakTextHi: 'Repeat कब तक चलेगा? End Date बताएं।',
+    },
+    reAskQuestion: {
+      reply: 'Repeat End Date chunein (jaise "1 Month", "3 Months" ya date):',
+      replyEn: 'Please choose Repeat End Date (e.g. "1 month", "3 months" or date):',
+      speech: 'रिपीट एंड डेट चुनें।',
+      speechEn: 'Please choose repeat end date.',
+      speakText: 'Repeat End Date chunein.',
+      speakTextHi: 'Repeat End Date चुनें।',
+    },
+    chips: () => [
+      { label: '1 Month', action: { type: 'set', field: 'recurrenceEndDate', value: '+1month' } },
+      { label: '3 Months', action: { type: 'set', field: 'recurrenceEndDate', value: '+3months' } },
+      { label: '6 Months', action: { type: 'set', field: 'recurrenceEndDate', value: '+6months' } },
+      { label: '1 Year', action: { type: 'set', field: 'recurrenceEndDate', value: '+1year' } },
+    ],
+    reAskChips: () => [
+      { label: '1 Month', action: { type: 'set', field: 'recurrenceEndDate', value: '+1month' } },
+      { label: '3 Months', action: { type: 'set', field: 'recurrenceEndDate', value: '+3months' } },
+      { label: '6 Months', action: { type: 'set', field: 'recurrenceEndDate', value: '+6months' } },
+      { label: '1 Year', action: { type: 'set', field: 'recurrenceEndDate', value: '+1year' } },
+    ],
+    default: null,
+    parse: (val) => resolveRecurrenceEndDate(val) || String(val || ''),
+    normalise: (val) => resolveRecurrenceEndDate(val) || String(val || ''),
+  },
+
+  checkpoints: {
+    key: 'checkpoints',
+    required: false,
+    askOrder: 10,
+    question: {
+      reply: 'Task mein koi checkpoints add karne hain? Comma (,) daal kar likhein (jaise "test 1, checking crm, testing") ya Skip dabayein:',
+      replyEn: 'Would you like to add checkpoints? You can list them separated by commas (e.g. "test 1, checking crm, testing") or tap Skip:',
+      speech: 'टास्क में कोई चेकपॉइंट्स जोड़ने हैं? कॉमा लगाकर बताएं या स्किप दबाएं।',
+      speechEn: 'Would you like to add checkpoints? You can list them separated by commas or tap Skip.',
+      speakText: 'Checkpoints add karne hain? Comma daal kar likhein ya skip dabayein.',
+      speakTextHi: 'Checkpoints जोड़ने हैं? कॉमा डालकर बताएं या Skip दबाएं।',
+    },
+    reAskQuestion: {
+      reply: 'Checkpoints comma (,) daal kar likhein (jaise "test 1, checking crm, testing") ya Skip dabayein:',
+      replyEn: 'Please enter checkpoints separated by commas (e.g. "test 1, checking crm, testing") or tap Skip:',
+      speech: 'चेकपॉइंट्स कॉमा लगाकर बताएं या स्किप दबाएं।',
+      speechEn: 'Please enter checkpoints separated by commas or tap Skip.',
+      speakText: 'Checkpoints comma daal kar likhein ya Skip dabayein.',
+      speakTextHi: 'Checkpoints कॉमा डालकर बताएं या Skip दबाएं।',
+    },
+    chips: () => [
+      { label: 'Koi nahi / Skip', action: { type: 'skip', field: 'checkpoints' } },
+      { label: 'Baaki sab default', action: { type: 'skip_all' } },
+    ],
+    reAskChips: () => [
+      { label: 'Koi nahi / Skip', action: { type: 'skip', field: 'checkpoints' } },
+      { label: 'Baaki sab default', action: { type: 'skip_all' } },
+    ],
+    default: [],
+    parse: (val) => {
+      if (Array.isArray(val)) {
+        return val
+          .map((item) => (typeof item === 'string' ? { title: item.trim(), completed: false } : item))
+          .filter((item) => item?.title);
+      }
+      if (typeof val === 'string' && val.trim()) {
+        return parseCheckpointItems(val);
+      }
+      return [];
+    },
+    normalise: (val) => (Array.isArray(val) ? val : []),
+  },
+
+  attachments: {
+    key: 'attachments',
+    required: false,
+    askOrder: 11,
+    question: {
+      reply: 'Kya aap koi file ya image attach karna chahte hain? Agar haan toh upload karein, nahi toh "Nahi" par click karein.',
+      replyEn: 'Would you like to attach any file or image? If yes, please upload it, otherwise click on No.',
+      speech: 'क्या आप कोई फाइल या इमेज अटैच करना चाहते हैं? अगर हाँ तो अपलोड करें, नहीं तो नहीं पर क्लिक करें।',
+      speechEn: 'Would you like to attach any file or image? If yes, please upload it, otherwise click on No.',
+      speakText: 'Kya aap koi file ya image attach karna chahte hain? Agar haan toh upload karein, nahi toh Nahi par click karein.',
+      speakTextHi: 'क्या आप कोई file या image attach करना चाहते हैं? अगर हाँ तो upload करें, नहीं तो नहीं पर click करें।',
+    },
+    reAskQuestion: {
+      reply: 'Kya aap koi file ya image attach karna chahte hain? Agar haan toh upload karein, nahi toh "Nahi" par click karein.',
+      replyEn: 'Would you like to attach any file or image? If yes, please upload it, otherwise click on No.',
+      speech: 'क्या आप कोई फाइल या इमेज अटैच करना चाहते हैं? अगर हाँ तो अपलोड करें, नहीं तो नहीं पर क्लिक करें।',
+      speechEn: 'Would you like to attach any file or image? If yes, please upload it, otherwise click on No.',
+      speakText: 'File attach nahi karni to Nahi dabayein.',
+      speakTextHi: 'File attach नहीं करनी तो नहीं दबाएं।',
+    },
+    chips: (refTime, isEn = false) => (isEn ? [
+      { label: 'No', action: { type: 'skip', field: 'attachments' } },
+      { label: 'Skip remaining', action: { type: 'skip_all' } },
+    ] : [
+      { label: 'Nahi', action: { type: 'skip', field: 'attachments' } },
+      { label: 'Skip remaining', action: { type: 'skip_all' } },
+    ]),
+    reAskChips: (refTime, isEn = false) => (isEn ? [
+      { label: 'No', action: { type: 'skip', field: 'attachments' } },
+      { label: 'Skip remaining', action: { type: 'skip_all' } },
+    ] : [
+      { label: 'Nahi', action: { type: 'skip', field: 'attachments' } },
+      { label: 'Skip remaining', action: { type: 'skip_all' } },
+    ]),
+    default: 0,
+    parse: (val) => (typeof val === 'number' ? val : 0),
+    normalise: (val) => Number(val || 0),
+  },
+
+  dueDate: {
+    key: 'dueDate',
+    required: false,
+    askOrder: 4,
+    question: {
+      reply: 'Task ki due date kya rakhni hai? (Jaise Aaj shaam 6 PM, Kal subah 10 AM)',
+      speech: 'टास्क की ड्यू डेट क्या रखनी है?',
+      speakText: 'Task ki due date kya rakhni hai?',
+      speakTextHi: 'Task की Due date क्या रखनी है?',
+    },
+    reAskQuestion: {
+      reply: 'Kripya due date batayein ya "koi nahi" bolkar skip karein.',
+      speech: 'कृपया ड्यू डेट बताएं या स्किप करें।',
+      speakText: 'Kripya due date batayein ya skip karein.',
+      speakTextHi: 'कृपया Due date बताएं या skip करें।',
+    },
+    chips: buildDateChips,
+    reAskChips: buildDateChips,
+    default: null,
+    parse: (val) => {
+      if (!val) return null;
+      if (val instanceof Date) return toIstIsoString(val);
+      if (typeof val === 'string' && val.includes('T')) return val;
+      return parseHinglishDateTime(String(val));
+    },
+    normalise: (val) => val,
+  },
+
+  file: {
+    key: 'file',
+    required: false,
+    askOrder: 9.5,
+    question: {
+      reply: 'Kya aap koi file ya image attach karna chahte hain? Agar haan toh upload karein, nahi toh "Nahi" par click karein.',
+      replyEn: 'Would you like to attach any file or image? If yes, please upload it, otherwise click on No.',
+      speech: 'क्या आप कोई फाइल या इमेज अटैच करना चाहते हैं? अगर हाँ तो अपलोड करें, नहीं तो नहीं पर क्लिक करें।',
+      speechEn: 'Would you like to attach any file or image? If yes, please upload it, otherwise click on No.',
+      speakText: 'Kya aap koi file ya image attach karna chahte hain? Agar haan toh upload karein, nahi toh Nahi par click karein.',
+      speakTextHi: 'क्या आप कोई file या image attach करना चाहते हैं? अगर हाँ तो upload करें, नहीं तो नहीं पर click करें।',
+    },
+    reAskQuestion: {
+      reply: 'Kya aap koi file ya image attach karna chahte hain? Agar haan toh upload karein, nahi toh "Nahi" par click karein.',
+      replyEn: 'Would you like to attach any file or image? If yes, please upload it, otherwise click on No.',
+      speech: 'क्या आप कोई फाइल या इमेज अटैच करना चाहते हैं? अगर हाँ तो अपलोड करें, नहीं तो नहीं पर क्लिक करें।',
+      speechEn: 'Would you like to attach any file or image? If yes, please upload it, otherwise click on No.',
+      speakText: 'File attach nahi karni to Nahi dabayein.',
+      speakTextHi: 'File attach नहीं करनी तो नहीं दबाएं।',
+    },
+    chips: (refTime, isEn = false) => (isEn ? [
+      { label: 'No', action: { type: 'skip', field: 'file' } },
+      { label: 'Skip remaining', action: { type: 'skip_all' } },
+    ] : [
+      { label: 'Nahi', action: { type: 'skip', field: 'file' } },
+      { label: 'Skip remaining', action: { type: 'skip_all' } },
+    ]),
+    reAskChips: (refTime, isEn = false) => (isEn ? [
+      { label: 'No', action: { type: 'skip', field: 'file' } },
+      { label: 'Skip remaining', action: { type: 'skip_all' } },
+    ] : [
+      { label: 'Nahi', action: { type: 'skip', field: 'file' } },
+      { label: 'Skip remaining', action: { type: 'skip_all' } },
+    ]),
+    default: 0,
+    parse: (val) => (typeof val === 'number' ? val : 0),
+    normalise: (val) => Number(val || 0),
+  },
+
+  ready: {
+    key: 'ready',
+    required: true,
+    askOrder: 12,
+    question: {
+      reply: 'Sab details ready hain. Kya ise create kar doon?',
+      replyEn: 'All details are ready. Shall I create this task?',
+      speech: 'सब details ready हैं। क्या इसे create कर दूं?',
+      speechEn: 'All details are ready. Shall I create this task?',
+      speakText: 'Sab details ready hain. Kya ise create kar doon?',
+      speakTextHi: 'सब details ready हैं। क्या इसे create कर दूं?',
+    },
+    chips: (now, isEn = false) => [
+      { label: isEn ? 'Yes, create it' : 'Haan, create karo', action: { type: 'confirm' } },
+      { label: isEn ? 'Edit' : 'Kuch badalna hai', action: { type: 'edit' } },
+    ],
+    default: false,
+  },
+};
+
+const validateAttachmentFile = (file, currentCount = 0, maxFiles = 1, maxSizeBytes = 10 * 1024 * 1024, allowedExts = new Set(['pdf'])) => {
+  if (!file || !file.name) {
+    return { valid: false, error: 'File invalid hai.' };
+  }
+  const ext = (file.name.split('.').pop() || '').toLowerCase();
+  if (!allowedExts.has(ext)) {
+    return { valid: false, error: `Only PDF files allowed. File type .${ext} is not allowed.` };
+  }
+  if (file.size > maxSizeBytes) {
+    return { valid: false, error: `File "${file.name}" exceeds 10MB size limit.` };
+  }
+  if (currentCount >= maxFiles) {
+    return { valid: false, error: `Maximum ${maxFiles} file allowed.` };
+  }
+  return { valid: true };
+};
+
+module.exports = {
+  TASK_FIELD_ORDER,
+  TASK_FIELDS,
+  validateAttachmentFile,
+  resolveRecurrenceEndDate,
+};

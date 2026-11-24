@@ -1,0 +1,25 @@
+{
+  "watch": [
+    "server.js",
+    "controllers",
+    "middleware",
+    "models",
+    "routes",
+    "services",
+    "utils",
+    "validations",
+    "HR-CDS",
+    "config"
+  ],
+  "ext": "js,json",
+  "ignore": [
+    "scripts/*",
+    "tests/*",
+    "tools/*",
+    "uploads/*",
+    "*.log",
+    ".git"
+  ],
+  "delay": 1500
+}
+

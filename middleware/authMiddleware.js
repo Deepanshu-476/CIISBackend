@@ -49,7 +49,9 @@ exports.verify = async (req, res) => {
         jobRole: user.jobRole,
         department: user.department,
         company: user.company,
-        companyCode: user.companyCode
+        companyCode: user.companyCode,
+        companyRole: user.companyRole,
+        aiConfig: user.aiConfig
       }
     });
   } catch (err) {
@@ -73,7 +75,7 @@ exports.verify = async (req, res) => {
 const AUTH_USER_FIELDS = [
   'name', 'email', 'companyRole', 'jobRole', 'employeeId', 'phone', 'branch', 'assignedBranches', 'branchCode',
   'department', 'company', 'companyCode', 'isActive', 'lastLogin', 'createdAt', 'employeeType', 'workLocation',
-  'clientId', 'clientUserId', 'additionalDetails', 'lastPasswordChange', 'passwordChangedAt', 'isSuperAdmin', 'superAdmin',
+  'clientId', 'clientUserId', 'additionalDetails', 'aiConfig', 'lastPasswordChange', 'passwordChangedAt', 'isSuperAdmin', 'superAdmin',
 ].join(' ');
 const AUTH_USER_CACHE_TTL_MS = Number(process.env.AUTH_USER_CACHE_TTL_MS ?? 10000);
 const AUTH_USER_CACHE_MAX = 5000;
@@ -87,7 +89,7 @@ const loadAuthUser = async (userId) => {
 
   const user = await User.findById(userId)
     .select(AUTH_USER_FIELDS)
-    .populate('company', 'companyName companyCode logo isActive')
+    .populate('company', 'companyName companyCode logo isActive aiApiKeySource customGroqApiKey aiDailyTokenLimit aiDailyCallLimit aiDailySttLimit aiExtraTokens aiExtraCalls aiExtraStt byokDefaultEmployeeDailyTokens byokDefaultEmployeeDailyCalls selectedPlan')
     .populate('assignedBranches', 'name branchCode')
     .populate('department', 'name')
     .lean();
@@ -240,7 +242,8 @@ exports.protect = async (req, res, next) => {
         workLocation: user.workLocation,
         clientId: user.clientId,
         clientUserId: user.clientUserId || user._id,
-        additionalDetails: user.additionalDetails
+        additionalDetails: user.additionalDetails,
+        aiConfig: user.aiConfig,
       };
       
       
