@@ -37,6 +37,7 @@ const {
   getNextRecurringDate,
   validateRecurrenceSettings,
 } = require('../utils/taskRecurrence');
+const { normalizeTaskReminderSettings } = require('../utils/taskReminderSettings');
 const { generateRecurringOccurrences } = require('../cron/recurringTasks');
 const mongoose = require('mongoose');
 
@@ -123,6 +124,8 @@ exports.createTaskForOthers = async (req, res) => {
 
     const statusByUser = parsedUsers.map(uid => ({ user: uid, status: 'pending' }));
     const parsedCheckpoints = parseTaskCheckpoints(checkpoints);
+    const reminderSettings = normalizeTaskReminderSettings(req.body);
+    const parsedStart = req.body?.startDateTime ? new Date(req.body.startDateTime) : null;
     const normalizedRecurrence = normalizeTaskRecurrenceFields(req.body);
     const recurringSettings = {
       repeatPattern: normalizedRecurrence.repeatPattern,
@@ -138,6 +141,7 @@ exports.createTaskForOthers = async (req, res) => {
     const task = await Task.create({
       title,
       description,
+      startDateTime: parsedStart && !isNaN(parsedStart.getTime()) ? parsedStart : null,
       dueDateTime: parsedDue,
       whatsappNumber,
       priorityDays,
@@ -148,6 +152,7 @@ exports.createTaskForOthers = async (req, res) => {
       assignedGroups: parsedGroups,
       statusByUser,
       checkpoints: parsedCheckpoints,
+      reminderSettings,
       files,
       voiceNote,
       createdBy: req.user._id,

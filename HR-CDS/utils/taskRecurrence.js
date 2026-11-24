@@ -239,13 +239,15 @@ const buildRecurringTaskClone = (templateTask, occurrenceDate, options = {}) => 
     priorityDays: baseTask.priorityDays,
     priority: baseTask.priority || 'medium',
     companyCode: baseTask.companyCode,
-    branch: baseTask.branch || null,
+    branch: baseTask.branch?._id || baseTask.branch || null,
     assignedUsers,
-    assignedGroups: Array.isArray(baseTask.assignedGroups) ? [...baseTask.assignedGroups] : [],
+    assignedGroups: Array.isArray(baseTask.assignedGroups)
+      ? baseTask.assignedGroups.map(g => g?._id || g).filter(Boolean)
+      : [],
     statusByUser,
     statusHistory: [{
       status: 'pending',
-      changedBy: baseTask.createdBy,
+      changedBy: baseTask.createdBy?._id || baseTask.createdBy,
       remarks: 'Recurring task auto-created',
       changedAt: occurrenceCreatedAt || new Date()
     }],
@@ -254,7 +256,7 @@ const buildRecurringTaskClone = (templateTask, occurrenceDate, options = {}) => 
     remarks: [],
     files: Array.isArray(baseTask.files) ? [...baseTask.files] : [],
     voiceNote: baseTask.voiceNote ? { ...baseTask.voiceNote } : null,
-    createdBy: baseTask.createdBy,
+    createdBy: baseTask.createdBy?._id || baseTask.createdBy,
     taskFor: baseTask.taskFor || 'self',
     isRecurring: normalized.isRecurring,
     repeatPattern: normalized.repeatPattern,
