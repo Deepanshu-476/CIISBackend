@@ -156,7 +156,8 @@ const trackWrites = (req, res, next) => {
   res.on('finish', () => {
     const user = req.user;
     if (!user || res.statusCode >= 400 || isClientPortalUser(user)) return;
-    const pagePath = req.get('x-page-path') || '';
+    const activity = res.locals?.pageActivity;
+    const pagePath = activity?.path || req.get('x-page-path') || '';
     record(user, {
       type: 'action',
       path: normalizePath(pagePath),
@@ -164,7 +165,7 @@ const trackWrites = (req, res, next) => {
       endpoint: normalizePath(apiPath),
       status: res.statusCode,
       source: clientSource(req),
-      summary: extractSafeSummary(req),
+      summary: activity?.summary || extractSafeSummary(req),
       module: inferModule(apiPath, pagePath),
     });
   });

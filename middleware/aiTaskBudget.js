@@ -519,6 +519,17 @@ const aiSttBudget = async (req, res, next) => {
       });
     }
 
+    // Owner/Admin or explicitly marked isUnlimited gets unmetered access
+    if (isOwnerAdmin || (aiConfig && aiConfig.isUnlimited)) {
+      req.aiSttUsage = {
+        isUnlimited: true,
+        limit: Infinity,
+        current: 0,
+        todayIst,
+      };
+      return next();
+    }
+
     if (limits.aiApiKeySource === 'client') {
       req.aiSttUsage = {
         isClientApiKey: true,

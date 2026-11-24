@@ -38,7 +38,9 @@ const upload = multer({
 const sameCompany = (user, target) => {
   if (!user || !target) return false;
   if (user.isSuperAdmin || user.role === 'super_admin' || user.jobRole === 'super_admin') return true;
-  return String(user.company?._id || user.company || '') === String(target.company?._id || target.company || '');
+  const userCompany = String(user.company?._id || user.company || '').trim();
+  const targetCompany = String(target.company?._id || target.company || '').trim();
+  return Boolean(userCompany && targetCompany && userCompany === targetCompany);
 };
 
 const getNormalizedUserRoles = user => [
@@ -85,7 +87,8 @@ const documentJson = (document, userId) => ({
 const loadUser = async (req, res, next) => {
   const target = await User.findById(req.params.id).select('company documents');
   if (!target) return res.status(404).json({ message: 'Employee not found' });
-  if (!sameCompany(req.user, target)) return res.status(403).json({ message: 'Access denied' });
+  const isOwn = String(req.user?._id || req.user?.id || '') === String(target._id || target.id || '');
+  if (!isOwn && !sameCompany(req.user, target)) return res.status(403).json({ message: 'Access denied' });
   req.targetUser = target;
   next();
 };
@@ -159,7 +162,9 @@ const sendDocument = disposition => async (req, res) => {
 
       await new Promise((resolve, reject) => {
         const remoteReq = https.get(remoteUrl, { headers }, (remoteRes) => {
-          if (remoteRes.statusCode === 200) {
+          const contentType = remoteRes.headers['content-type'] || '';
+          // Only save to disk if the remote file is an actual binary document, not an SVG fallback text card
+          if (remoteRes.statusCode === 200 && !contentType.includes('svg')) {
             const fileStream = fs.createWriteStream(localSavePath);
             remoteRes.pipe(fileStream);
             fileStream.on('finish', () => {
@@ -205,8 +210,20 @@ const sendDocument = disposition => async (req, res) => {
     res.setHeader('Content-Disposition', `${disposition}; filename="${encodeURIComponent(document.name || 'document')}.svg"`);
     return res.status(200).send(svg);
   }
-  // Legacy records store labels such as "pdf" or "image", not MIME types.
-  res.type(path.extname(filePath));
+  // Detect if the file on disk is actually an SVG card (even if saved with a .jpg / .png extension)
+  let mimeType = path.extname(filePath);
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    const headerBuf = Buffer.alloc(120);
+    const bytesRead = fs.readSync(fd, headerBuf, 0, 120, 0);
+    fs.closeSync(fd);
+    const headerStr = headerBuf.slice(0, bytesRead).toString('utf8').trim();
+    if (headerStr.startsWith('<svg') || (headerStr.startsWith('<?xml') && headerStr.includes('<svg'))) {
+      mimeType = 'image/svg+xml';
+    }
+  } catch (_e) {}
+
+  res.type(mimeType);
   const filename = employeeDocumentFilename(document, filePath);
   res.setHeader('Content-Disposition', `${disposition}; filename="${encodeURIComponent(filename)}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
   res.sendFile(filePath, error => {

@@ -19,7 +19,31 @@ const leadSchema = new mongoose.Schema({
   name: { type: String },
   phone: { type: String },
   email: String,
-  source: { type: String },       
+  source: { type: String },
+  marketing: {
+    type: new mongoose.Schema({
+      platform: String,
+      sourceType: { type: String, enum: ['paid_ads'] },
+      channel: String,
+      integration: { type: mongoose.Schema.Types.ObjectId, ref: 'AdIntegration' },
+      accountId: String,
+      accountName: String,
+      pageName: String,
+      campaignId: String,
+      adGroupId: String,
+      adGroupName: String,
+      adId: String,
+      adName: String,
+      formId: String,
+      formName: String,
+      externalLeadId: String,
+      advertiserCompany: String,
+      answers: [{ _id: false, label: String, value: String }]
+    }, { _id: false }),
+    default: undefined
+  },
+  adContactEmail: { type: String, select: false },
+  adContactPhone: { type: String, select: false },
   status: {
     type: String,
     // contacted and negotiation are pipeline stages set from the Kanban board.
@@ -71,6 +95,15 @@ const leadSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 leadSchema.index({ company: 1, createdAt: -1 });
+leadSchema.index({ company: 1, 'marketing.platform': 1, 'marketing.externalLeadId': 1 }, {
+  unique: true, partialFilterExpression: { 'marketing.externalLeadId': { $type: 'string' } }
+});
+for (const field of ['adContactEmail', 'adContactPhone']) {
+  leadSchema.index({ company: 1, [field]: 1 }, {
+    unique: true, partialFilterExpression: { [field]: { $type: 'string' } }
+  });
+}
+
 leadSchema.index({ company: 1, status: 1, createdAt: -1 });
 leadSchema.index({ company: 1, assignedTo: 1, assignedAt: -1 });
 leadSchema.index({ company: 1, assignedTo: 1, createdAt: -1 });

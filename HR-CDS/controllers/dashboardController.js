@@ -530,7 +530,28 @@ const getEmployeeDashboardSummary = async (req, res) => {
         .lean(),
       branchId ? Branch.findById(branchId).select("dashboardConfig officeLocation").lean() : null,
     ]);
-    const scopedDashboardConfig = branch?.dashboardConfig?.length ? branch.dashboardConfig : (company?.dashboardConfig || []);
+    const branchClockMode = branch?.dashboardConfig?.find(item => item.componentId === 'clock-in')?.settings?.attendanceMode;
+    const companyClockMode = company?.dashboardConfig?.find(item => item.componentId === 'clock-in')?.settings?.attendanceMode;
+    const effectiveClockMode = (branchClockMode && branchClockMode !== 'normal') ? branchClockMode : (companyClockMode || branchClockMode || 'normal');
+
+    let scopedDashboardConfig = (branch?.dashboardConfig?.length && branchClockMode && branchClockMode !== 'normal')
+      ? branch.dashboardConfig
+      : (company?.dashboardConfig?.length ? company.dashboardConfig : (branch?.dashboardConfig || []));
+
+    if (scopedDashboardConfig?.length && effectiveClockMode !== 'normal') {
+      scopedDashboardConfig = scopedDashboardConfig.map(comp => {
+        if (comp.componentId === 'clock-in') {
+          return {
+            ...comp,
+            settings: {
+              ...(comp.settings || {}),
+              attendanceMode: effectiveClockMode
+            }
+          };
+        }
+        return comp;
+      });
+    }
 
     const userJobRole = String(currentUser?.jobRole || req.user.jobRole || "");
     const matchedJobRole = jobRoles.find(role =>

@@ -183,7 +183,12 @@ const applyLeadFilters = (req, base) => {
       const range = {};
       if (dayKeyStart(q.from)) range.$gte = q.from;
       if (dayKeyStart(q.to)) range.$lte = q.to;
-      if (Object.keys(range).length) addClause(filter, { leadDate: range });
+      if (Object.keys(range).length) {
+        addClause(filter, { $or: [
+          { leadDate: { $gt: '', ...range } },
+          { 'marketing.sourceType': 'paid_ads', leadDate: { $in: [null, ''] }, createdAt: dayRange(q.from, q.to) }
+        ] });
+      }
     } else {
       const range = dayRange(q.from, q.to);
       if (range) addClause(filter, { [field]: range });
@@ -259,7 +264,7 @@ const LEAD_PAGE_PROJECTION = [
       lastCallType: { $arrayElemAt: [{ $ifNull: ['$callHistory.callType', []] }, -1] }
     }
   },
-  { $project: { callHistory: 0, notes: 0 } }
+  { $project: { callHistory: 0, notes: 0, adContactEmail: 0, adContactPhone: 0 } }
 ];
 
 // name: cache namespace for this list; base: list-defining filter (company + list condition).

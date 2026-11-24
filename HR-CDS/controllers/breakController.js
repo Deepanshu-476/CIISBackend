@@ -136,8 +136,10 @@ const buildCompanyPolicyResolver = async ({ company, companyCode }) => {
     companyDoc,
     attendanceModeFor: (user = {}) => {
       const branch = branchIndex.byId.get(String(user.branch?._id || user.branch || user.branchId || ''));
-      return ((branch || companyDoc)?.dashboardConfig || [])
-        .find(item => item.componentId === 'clock-in')?.settings?.attendanceMode || 'normal';
+      const branchMode = branch?.dashboardConfig?.find(item => item.componentId === 'clock-in')?.settings?.attendanceMode;
+      if (branchMode && branchMode !== 'normal') return branchMode;
+      const companyMode = companyDoc?.dashboardConfig?.find(item => item.componentId === 'clock-in')?.settings?.attendanceMode;
+      return companyMode || branchMode || 'normal';
     },
     policyFor: (user = {}) => resolveBreakPolicy({
       jobRole: lookup(jobRoleIndex, user.jobRole || user.jobRoleName)?.breakPolicy,

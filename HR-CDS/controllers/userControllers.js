@@ -4,12 +4,12 @@ const User = require('../../models/User');
 const Department = require('../../models/Department');
 const JobRole = require('../../models/JobRole');
 const Branch = require('../../models/Branch');
-const PagePermission = require('../../models/PagePermission');
 const bcrypt = require('bcryptjs');
 const { errorResponse, successResponse } = require('../utils/responseHelper.js');
 const Task = require('../../HR-CDS/models/Task.js');
 const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
 const { registerRequestBranchCondition } = require('../../utils/branchScope');
+const { REGISTER_REQUEST_PATH, getRegisterRequestAccess } = require('../../utils/registerRequestAccess');
 
 let cascadeUserUpdate = async () => {};
 try {
@@ -195,17 +195,75 @@ const SENSITIVE_USER_LIST_KEYS = [
   'documents',
 ];
 
+const hasProfileValue = (value) => {
+  if (value === null || value === undefined) return false;
+  if (value instanceof Date) {
+    return !isNaN(value.getTime());
+  }
+  if (typeof value === 'object') {
+    const label = value.name || value.roleName || value.departmentName || value.branchName || value.title || value._id || value.id || '';
+    if (String(label).trim().length > 0) return true;
+    if (typeof value.toString === 'function' && value.toString() !== '[object Object]') {
+      const s = value.toString().trim();
+      return s.length > 0 && s.toLowerCase() !== 'not provided' && s.toLowerCase() !== 'not added';
+    }
+    return false;
+  }
+  const str = String(value).trim();
+  return str.length > 0 && str.toLowerCase() !== 'not provided' && str.toLowerCase() !== 'not added';
+};
+
+const calculateProfileCompletion = (profile) => {
+  if (!profile || typeof profile !== 'object') return 0;
+  const fields = [
+    profile.name,
+    profile.phone || profile.mobile,
+    profile.dob,
+    profile.gender,
+    profile.address,
+    profile.city,
+    profile.state,
+    profile.pinCode || profile.zipCode,
+    profile.country,
+    profile.aadhaar || profile.aadhar || profile.aadharCard || profile.aadhaarNumber,
+    profile.panCard || profile.pan || profile.panNumber,
+    profile.bankHolderName,
+    profile.accountNumber,
+    profile.ifsc,
+    profile.bankName,
+    profile.maritalStatus,
+    profile.fatherName,
+    profile.motherName,
+    profile.emergencyName,
+    profile.emergencyPhone,
+    profile.emergencyRelation,
+    profile.emergencyAddress,
+  ];
+
+  if (String(profile.maritalStatus || '').trim().toLowerCase() === 'married') {
+    fields.push(profile.spouseName);
+  }
+
+  const completedFields = fields.filter(hasProfileValue).length;
+  return Math.round((completedFields / fields.length) * 100);
+};
+
 const sanitizeUserRecordForList = (userObj = {}, req = {}) => {
+  const plainObj = userObj && typeof userObj.toObject === 'function' ? userObj.toObject() : userObj;
+  const completion = typeof plainObj?.profileCompletion === 'number'
+    ? plainObj.profileCompletion
+    : calculateProfileCompletion(plainObj);
+
   const includeSensitive = String(req?.query?.includeSensitive || '').toLowerCase() === 'true';
   const requesterId = String(req?.user?._id || req?.user?.id || '');
-  const targetId = String(userObj?._id || userObj?.id || '');
+  const targetId = String(plainObj?._id || plainObj?.id || '');
   if (requesterId && targetId && requesterId === targetId) {
-    return userObj;
+    return { ...plainObj, profileCompletion: completion };
   }
   if (req?.allowSensitiveEmployeeDetails === true || (includeSensitive && isPrivilegedPiiViewer(req?.user))) {
-    return userObj;
+    return { ...plainObj, profileCompletion: completion };
   }
-  const cloned = { ...userObj };
+  const cloned = { ...plainObj, profileCompletion: completion };
   SENSITIVE_USER_LIST_KEYS.forEach(key => {
     delete cloned[key];
   });
@@ -604,8 +662,6 @@ const validateProfileUpdateFields = body => {
   return errors;
 };
 
-const REGISTER_REQUEST_PATH = '/ciisUser/register-request';
-
 const REGISTER_REQUEST_SECTIONS = [
   'applicationReview',
   'personalInformation',
@@ -632,46 +688,13 @@ const REGISTER_REQUEST_EDITABLE_FIELDS = new Set([
   'properties', 'propertyOwned', 'additionalDetails'
 ]);
 
-const getRequestUserId = (user = {}) => String(user._id || user.id || '');
-
 const getRequestUserName = (user = {}) => String(user.name || user.email || 'Unknown User');
 
-const isRegisterRequestAdmin = (user = {}) => {
-  const role = String(user.companyRole || user.jobRole || user.role || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
-  return ['owner', 'admin', 'hr', 'super_admin', 'superadmin', 'company_owner', 'companyowner'].includes(role);
-};
-
-const getRegisterRequestPagePermission = async req => {
-  const company = req.user?.company;
-  const companyId = company?._id || company?.id || company;
-  if (!companyId) return null;
-  return PagePermission.findOne({ company: companyId, path: REGISTER_REQUEST_PATH }).lean();
-};
-
-const pageUserIds = (page, key) => (page?.[key] || [])
-  .map(item => String(item?.user?._id || item?.user || ''))
-  .filter(Boolean);
-
-const hasRegisterRequestViewAccess = async req => {
-  if (isRegisterRequestAdmin(req.user)) return true;
-  const page = await getRegisterRequestPagePermission(req);
-  if (!page) return false;
-  const currentUserId = getRequestUserId(req.user);
-  const ids = new Set([
-    ...pageUserIds(page, 'viewUsers'),
-    ...pageUserIds(page, 'editUsers'),
-    ...pageUserIds(page, 'approvers'),
-    ...pageUserIds(page, 'deleteUsers')
-  ]);
-  return ids.has(currentUserId);
-};
-
-const hasRegisterRequestVerifyAccess = async req => {
-  if (isRegisterRequestAdmin(req.user)) return true;
-  const page = await getRegisterRequestPagePermission(req);
-  if (!page) return false;
-  const currentUserId = getRequestUserId(req.user);
-  return pageUserIds(page, 'approvers').includes(currentUserId);
+const markRegistrationAccepted = (res, applicant) => {
+  res.locals.pageActivity = {
+    path: REGISTER_REQUEST_PATH,
+    summary: `Accepted registration request for ${applicant.name}`.slice(0, 120)
+  };
 };
 
 const buildDocumentUrl = (userId, doc, action = 'view') => (
@@ -741,6 +764,19 @@ const findScopedRegisterRequest = async (req, id) => {
 const getScopedRegisterRequestStatus = (user, isLegacyPending = false) => (
   isLegacyPending ? 'pending' : (user.registrationStatus || (user.isActive ? 'active' : 'pending'))
 );
+
+const registerRequestWriteFilter = (req, user) => ({
+  _id: user._id,
+  company: user.company,
+  ...registerRequestBranchCondition(req.user)
+});
+
+const pendingRegisterRequestFilter = (req, user, isLegacyPending) => ({
+  ...registerRequestWriteFilter(req, user),
+  ...(isLegacyPending
+    ? { isActive: false, registrationSource: { $exists: false }, registrationStatus: { $exists: false } }
+    : { registrationSource: 'self_register', registrationStatus: 'pending' })
+});
 
 exports.getMe = async (req, res) => {
   try {
@@ -936,6 +972,8 @@ exports.updateMe = async (req, res) => {
       }
     }
     
+    updateData.profileCompletion = calculateProfileCompletion({ ...existingUser, ...updateData });
+
     const updatedUser = await User.findByIdAndUpdate(
       userId,
       { $set: updateData },
@@ -1102,9 +1140,19 @@ exports.register = async (req, res) => {
   }
 };
 
+exports.getRegisterRequestAccess = async (req, res, next) => {
+  try {
+    const { canView } = await getRegisterRequestAccess(req.user);
+    if (!canView) return errorResponse(res, 403, "You do not have access to Register Request page");
+    return res.status(200).json({ success: true });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 exports.getRegisterRequests = async (req, res) => {
   try {
-    const canView = await hasRegisterRequestViewAccess(req);
+    const { canView, canVerify } = await getRegisterRequestAccess(req.user);
     if (!canView) {
       return errorResponse(res, 403, "You do not have access to Register Request page");
     }
@@ -1191,12 +1239,11 @@ exports.getRegisterRequests = async (req, res) => {
       departmentName: request.department?.name || departmentNames.get(String(request.department?._id || request.department || '')) || String(request.department || '').trim() || 'Not provided'
     }));
 
-    const canVerify = await hasRegisterRequestVerifyAccess(req);
-
     return res.status(200).json({
       success: true,
       requests: enrichedRequests.map(serializeRegisterRequest),
       sections: REGISTER_REQUEST_SECTIONS,
+      canAccept: canView,
       canVerify
     });
   } catch (err) {
@@ -1207,18 +1254,15 @@ exports.getRegisterRequests = async (req, res) => {
 
 exports.getRegisterRequestsCount = async (req, res) => {
   try {
-    const canView = await hasRegisterRequestViewAccess(req);
-    if (!canView) {
-      return res.status(200).json({ success: true, count: 0 });
-    }
-
     const companyScope = getCompanyScope(req);
     let companyFilter = {};
     if (!companyScope.error) {
+      const { canView } = await getRegisterRequestAccess(req.user);
+      if (!canView) return res.status(200).json({ success: true, count: 0 });
       companyFilter = companyScope.filter;
     } else {
       const role = String(req.user?.companyRole || req.user?.jobRole || req.user?.role || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
-      if (!['super_admin', 'superadmin'].includes(role)) {
+      if (req.user?.company || !['super_admin', 'superadmin'].includes(role)) {
         return res.status(200).json({ success: true, count: 0 });
       }
     }
@@ -1248,7 +1292,7 @@ exports.getRegisterRequestsCount = async (req, res) => {
 
 exports.updateRegisterRequest = async (req, res) => {
   try {
-    const canVerify = await hasRegisterRequestVerifyAccess(req);
+    const { canVerify } = await getRegisterRequestAccess(req.user);
     if (!canVerify) {
       return errorResponse(res, 403, "You do not have permission to update register requests");
     }
@@ -1348,8 +1392,11 @@ exports.updateRegisterRequest = async (req, res) => {
     updateData['registrationVerification.lastUpdatedByName'] = getRequestUserName(req.user);
     updateData['registrationVerification.lastUpdatedAt'] = new Date();
 
-    const updatedUser = await User.findByIdAndUpdate(
-      user._id,
+    const userPlain = user && typeof user.toObject === 'function' ? user.toObject() : (user || {});
+    updateData.profileCompletion = calculateProfileCompletion({ ...userPlain, ...updateData });
+
+    const updatedUser = await User.findOneAndUpdate(
+      pendingRegisterRequestFilter(req, user, isLegacyPending),
       { $set: updateData },
       { new: true, runValidators: true, context: 'query' }
     )
@@ -1361,6 +1408,7 @@ exports.updateRegisterRequest = async (req, res) => {
       .populate('createdBy', 'name email')
       .lean();
 
+    if (!updatedUser) return errorResponse(res, 409, "This registration request changed. Refresh and try again");
     return res.status(200).json({
       success: true,
       message: "Register request updated successfully",
@@ -1377,12 +1425,12 @@ exports.updateRegisterRequest = async (req, res) => {
 
 exports.verifyRegisterRequestSection = async (req, res) => {
   try {
-    const canVerify = await hasRegisterRequestVerifyAccess(req);
-    if (!canVerify) {
+    const { sectionKey, verified } = req.body || {};
+    const { canView, canVerify } = await getRegisterRequestAccess(req.user);
+    if (!canVerify && !(canView && sectionKey === 'applicationReview' && verified === true)) {
       return errorResponse(res, 403, "You do not have permission to verify register requests");
     }
 
-    const { sectionKey, verified } = req.body || {};
     if (!REGISTER_REQUEST_SECTIONS.includes(sectionKey)) {
       return errorResponse(res, 400, "Invalid verification section");
     }
@@ -1403,8 +1451,8 @@ exports.verifyRegisterRequestSection = async (req, res) => {
       [`${prefix}.verifiedAt`]: verified ? now : null
     };
 
-    const updatedUser = await User.findByIdAndUpdate(
-      user._id,
+    const updatedUser = await User.findOneAndUpdate(
+      pendingRegisterRequestFilter(req, user, isLegacyPending),
       { $set: setData },
       { new: true, runValidators: true, context: 'query' }
     )
@@ -1416,6 +1464,7 @@ exports.verifyRegisterRequestSection = async (req, res) => {
       .populate('createdBy', 'name email')
       .lean();
 
+    if (!updatedUser) return errorResponse(res, 409, "This registration request changed. Refresh and try again");
     return res.status(200).json({
       success: true,
       message: verified ? "Section verified successfully" : "Section verification removed",
@@ -1429,8 +1478,8 @@ exports.verifyRegisterRequestSection = async (req, res) => {
 
 exports.activateRegisterRequest = async (req, res) => {
   try {
-    const canVerify = await hasRegisterRequestVerifyAccess(req);
-    if (!canVerify) {
+    const { canView, canVerify } = await getRegisterRequestAccess(req.user);
+    if (!canView) {
       return errorResponse(res, 403, "You do not have permission to activate register requests");
     }
 
@@ -1438,6 +1487,10 @@ exports.activateRegisterRequest = async (req, res) => {
     if (error) return errorResponse(res, error.status, error.message);
     if (getScopedRegisterRequestStatus(user, isLegacyPending) !== 'pending') {
       return errorResponse(res, 400, "Only pending register requests can be activated");
+    }
+    // Self-registration lets applicants request privileged company roles.
+    if (!canVerify && user.companyRole !== 'employee') {
+      return errorResponse(res, 403, "An approver must review applications for non-employee roles");
     }
 
     const allVerified = REGISTER_REQUEST_SECTIONS.every(key => (
@@ -1449,11 +1502,15 @@ exports.activateRegisterRequest = async (req, res) => {
     }
 
     const now = new Date();
-    const updatedUser = await User.findByIdAndUpdate(
-      user._id,
+    const updatedUser = await User.findOneAndUpdate(
+      {
+        ...pendingRegisterRequestFilter(req, user, isLegacyPending),
+        ...(!canVerify && { companyRole: 'employee' })
+      },
       {
         $set: {
           isActive: true,
+          registrationSource: 'self_register',
           registrationStatus: 'active',
           'registrationVerification.activatedBy': req.user.id || req.user._id,
           'registrationVerification.activatedByName': getRequestUserName(req.user),
@@ -1470,6 +1527,8 @@ exports.activateRegisterRequest = async (req, res) => {
       .populate('createdBy', 'name email')
       .lean();
 
+    if (!updatedUser) return errorResponse(res, 409, "This registration request changed. Refresh and try again");
+    markRegistrationAccepted(res, updatedUser);
     return res.status(200).json({
       success: true,
       message: "User activated successfully",
@@ -1483,7 +1542,7 @@ exports.activateRegisterRequest = async (req, res) => {
 
 exports.rejectRegisterRequest = async (req, res) => {
   try {
-    const canVerify = await hasRegisterRequestVerifyAccess(req);
+    const { canVerify } = await getRegisterRequestAccess(req.user);
     if (!canVerify) {
       return errorResponse(res, 403, "You do not have permission to reject register requests");
     }
@@ -1494,8 +1553,8 @@ exports.rejectRegisterRequest = async (req, res) => {
       return errorResponse(res, 400, "An active registration cannot be rejected from this page");
     }
 
-    const updatedUser = await User.findByIdAndUpdate(
-      user._id,
+    const updatedUser = await User.findOneAndUpdate(
+      { ...registerRequestWriteFilter(req, user), registrationStatus: { $ne: 'active' } },
       {
         $set: {
           isActive: false,
@@ -1515,6 +1574,7 @@ exports.rejectRegisterRequest = async (req, res) => {
       .populate('createdBy', 'name email')
       .lean();
 
+    if (!updatedUser) return errorResponse(res, 409, "This registration request changed. Refresh and try again");
     return res.status(200).json({
       success: true,
       message: "Register request rejected successfully",
@@ -1528,7 +1588,7 @@ exports.rejectRegisterRequest = async (req, res) => {
 
 exports.setRegisterRequestStatus = async (req, res) => {
   try {
-    const canVerify = await hasRegisterRequestVerifyAccess(req);
+    const { canVerify } = await getRegisterRequestAccess(req.user);
     if (!canVerify) {
       return errorResponse(res, 403, "You do not have permission to change user status");
     }
@@ -1556,8 +1616,8 @@ exports.setRegisterRequestStatus = async (req, res) => {
       setData['registrationVerification.activatedAt'] = now;
     }
 
-    const updatedUser = await User.findByIdAndUpdate(
-      user._id,
+    const updatedUser = await User.findOneAndUpdate(
+      { ...registerRequestWriteFilter(req, user), ...(isActive && { isActive: false }) },
       { $set: setData },
       { new: true, runValidators: true, context: 'query' }
     )
@@ -1567,6 +1627,8 @@ exports.setRegisterRequestStatus = async (req, res) => {
       .populate('department', 'name description branch')
       .lean();
 
+    if (!updatedUser) return errorResponse(res, 409, "This registration request changed. Refresh and try again");
+    if (isActive) markRegistrationAccepted(res, updatedUser);
     return res.status(200).json({
       success: true,
       message: isActive ? "User activated successfully" : "User deactivated successfully",
@@ -2093,6 +2155,9 @@ exports.updateUser = async (req, res) => {
     }
 
     
+    const userPlain = user && typeof user.toObject === 'function' ? user.toObject() : (user || {});
+    updateData.profileCompletion = calculateProfileCompletion({ ...userPlain, ...updateData });
+
     const updatedUser = await User.findByIdAndUpdate(
       user._id,
       { $set: updateData },

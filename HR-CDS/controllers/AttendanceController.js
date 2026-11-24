@@ -599,7 +599,7 @@ const dedupeAttendanceRecordsByIndiaDate = (records = []) => {
   }));
 };
 
-const buildLocationPayload = ({ latitude, longitude, accuracy, distanceFromOfficeMeters }) => {
+const buildLocationPayload = ({ latitude, longitude, accuracy, distanceFromOfficeMeters, address, placeName, branchName }) => {
   if (latitude === undefined || longitude === undefined) return null;
 
   const location = {
@@ -611,8 +611,20 @@ const buildLocationPayload = ({ latitude, longitude, accuracy, distanceFromOffic
     location.accuracy = Number(accuracy);
   }
 
-  if (distanceFromOfficeMeters !== undefined && distanceFromOfficeMeters !== null) {
+  if (distanceFromOfficeMeters !== undefined && distanceFromOfficeMeters !== null && Number.isFinite(Number(distanceFromOfficeMeters))) {
     location.distanceFromOfficeMeters = Math.round(Number(distanceFromOfficeMeters));
+  }
+
+  if (address && typeof address === 'string') {
+    location.address = address.trim();
+  }
+  if (placeName && typeof placeName === 'string') {
+    location.placeName = placeName.trim();
+  } else if (location.address) {
+    location.placeName = location.address;
+  }
+  if (branchName && typeof branchName === 'string') {
+    location.branchName = branchName.trim();
   }
 
   return location;
@@ -621,6 +633,25 @@ const buildLocationPayload = ({ latitude, longitude, accuracy, distanceFromOffic
 const toFiniteCoordinate = value => {
   const numberValue = Number(value);
   return Number.isFinite(numberValue) ? numberValue : null;
+};
+
+const enrichLocationWithBranchDistance = (location, branchOfficeLoc, defaultBranchName) => {
+  if (!location || toFiniteCoordinate(location.latitude) === null || toFiniteCoordinate(location.longitude) === null) {
+    return location;
+  }
+  const enriched = { ...location };
+  if (!enriched.branchName && defaultBranchName) {
+    enriched.branchName = defaultBranchName;
+  }
+  if (enriched.distanceFromOfficeMeters == null && branchOfficeLoc && toFiniteCoordinate(branchOfficeLoc.latitude) !== null && toFiniteCoordinate(branchOfficeLoc.longitude) !== null) {
+    enriched.distanceFromOfficeMeters = Math.round(calculateDistanceMeters(
+      Number(branchOfficeLoc.latitude),
+      Number(branchOfficeLoc.longitude),
+      Number(enriched.latitude),
+      Number(enriched.longitude)
+    ));
+  }
+  return enriched;
 };
 
 const calculateDistanceMeters = (lat1, lon1, lat2, lon2) => {
@@ -692,20 +723,34 @@ const getAttendanceSettingsContext = async ({ companyCode, userId }) => {
     Company.findOne({ companyCode }),
     User.findById(userId),
   ]);
-  const branchId = userObj?.branch || userObj?.branchId;
-  const branch = branchId
-    ? await Branch.findById(branchId).select("dashboardConfig officeLocation")
-    : null;
+  let branchId = userObj?.branch || userObj?.branchId;
+  let branch = null;
+  if (branchId) {
+    branch = await Branch.findById(branchId).select("name branchCode dashboardConfig officeLocation address");
+  } else if (userObj?.branchCode) {
+    branch = await Branch.findOne({ companyCode, branchCode: userObj.branchCode }).select("name branchCode dashboardConfig officeLocation address");
+  }
+  if (!branch && companyCode) {
+    branch = await Branch.findOne({ companyCode, "officeLocation.latitude": { $ne: null } }).select("name branchCode dashboardConfig officeLocation address");
+  }
 
   return {
     company,
     userObj,
+    branch,
     attendanceSettings: branch || company,
   };
 };
 
-const attendanceModeForSettings = settings => {
+const attendanceModeForSettings = (settings, fallbackSettings = null) => {
   const mode = settings?.dashboardConfig?.find(item => item.componentId === 'clock-in')?.settings?.attendanceMode;
+  if (mode && mode !== 'normal' && ['location', 'image', 'both'].includes(mode)) {
+    return mode;
+  }
+  const fallbackMode = fallbackSettings?.dashboardConfig?.find(item => item.componentId === 'clock-in')?.settings?.attendanceMode;
+  if (fallbackMode && ['normal', 'location', 'image', 'both'].includes(fallbackMode)) {
+    return fallbackMode;
+  }
   return ['normal', 'location', 'image', 'both'].includes(mode) ? mode : 'normal';
 };
 
@@ -928,7 +973,7 @@ const clockIn = async (req, res) => {
     }
 
     // 1. Fetch branch-scoped settings to read attendance mode
-    const { attendanceSettings, userObj } = await getAttendanceSettingsContext({ companyCode: userCompanyCode, userId });
+    const { attendanceSettings, userObj, branch, company } = await getAttendanceSettingsContext({ companyCode: userCompanyCode, userId });
     
     if (!userObj) {
       return res.status(404).json({ message: "User not found" });
@@ -938,7 +983,7 @@ const clockIn = async (req, res) => {
       return res.status(403).json({ message: "Access denied. Cross-company attendance is forbidden." });
     }
 
-    const attendanceMode = attendanceModeForSettings(attendanceSettings);
+    const attendanceMode = attendanceModeForSettings(attendanceSettings, company);
 
     const { latitude, longitude, accuracy, selfieUrl } = req.body;
 
@@ -1042,11 +1087,25 @@ const clockIn = async (req, res) => {
 
     // Save Location & Selfie
     if (latitude !== undefined && longitude !== undefined) {
+      const officeLat = toFiniteCoordinate(attendanceSettings?.officeLocation?.latitude ?? company?.officeLocation?.latitude);
+      const officeLon = toFiniteCoordinate(attendanceSettings?.officeLocation?.longitude ?? company?.officeLocation?.longitude);
+      const userLat = toFiniteCoordinate(latitude);
+      const userLon = toFiniteCoordinate(longitude);
+      let calculatedDistance = locationRange?.distanceMeters;
+      if (calculatedDistance == null && officeLat !== null && officeLon !== null && userLat !== null && userLon !== null) {
+        calculatedDistance = calculateDistanceMeters(officeLat, officeLon, userLat, userLon);
+      }
+
+      const branchName = branch?.name || userObj?.branchName || company?.companyName || 'Branch';
+
       attendanceRecord.inLocation = buildLocationPayload({
         latitude,
         longitude,
         accuracy,
-        distanceFromOfficeMeters: locationRange?.distanceMeters
+        distanceFromOfficeMeters: calculatedDistance,
+        address: req.body.address,
+        placeName: req.body.placeName || req.body.address,
+        branchName
       });
     }
     if (selfieUrl) {
@@ -1104,7 +1163,7 @@ const clockOut = async (req, res) => {
     const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     
     // 1. Fetch branch-scoped settings to read attendance mode requirements
-    const { attendanceSettings, userObj } = await getAttendanceSettingsContext({ companyCode: userCompanyCode, userId });
+    const { attendanceSettings, userObj, branch, company } = await getAttendanceSettingsContext({ companyCode: userCompanyCode, userId });
 
     if (!userObj) {
       return res.status(404).json({ message: "User not found" });
@@ -1114,7 +1173,7 @@ const clockOut = async (req, res) => {
       return res.status(403).json({ message: "Access denied. Cross-company attendance is forbidden." });
     }
 
-    const attendanceMode = attendanceModeForSettings(attendanceSettings);
+    const attendanceMode = attendanceModeForSettings(attendanceSettings, company);
 
     const { latitude, longitude, accuracy, selfieUrl } = req.body;
 
@@ -1254,11 +1313,25 @@ const clockOut = async (req, res) => {
 
     // Save Location & Selfie
     if (latitude !== undefined && longitude !== undefined) {
+      const officeLat = toFiniteCoordinate(attendanceSettings?.officeLocation?.latitude ?? company?.officeLocation?.latitude);
+      const officeLon = toFiniteCoordinate(attendanceSettings?.officeLocation?.longitude ?? company?.officeLocation?.longitude);
+      const userLat = toFiniteCoordinate(latitude);
+      const userLon = toFiniteCoordinate(longitude);
+      let calculatedDistance = locationRange?.distanceMeters;
+      if (calculatedDistance == null && officeLat !== null && officeLon !== null && userLat !== null && userLon !== null) {
+        calculatedDistance = calculateDistanceMeters(officeLat, officeLon, userLat, userLon);
+      }
+
+      const branchName = branch?.name || userObj?.branchName || company?.companyName || 'Branch';
+
       record.outLocation = buildLocationPayload({
         latitude,
         longitude,
         accuracy,
-        distanceFromOfficeMeters: locationRange?.distanceMeters
+        distanceFromOfficeMeters: calculatedDistance,
+        address: req.body.address,
+        placeName: req.body.placeName || req.body.address,
+        branchName
       });
     }
     if (selfieUrl) {
@@ -1431,7 +1504,7 @@ const getTodayStatus = async (req, res) => {
     const shiftTime = formatShiftTimeWindow(shiftStart, shiftEnd);
 
     // Break state, so the working-time timer can stop while a break is running.
-    const {userObj: breakUserObj, attendanceSettings} = await getAttendanceSettingsContext({companyCode: userCompanyCode, userId});
+    const {userObj: breakUserObj, attendanceSettings, company} = await getAttendanceSettingsContext({companyCode: userCompanyCode, userId});
     const {policy: breakPolicy} = await breakPolicyForUser(breakUserObj || req.user);
     const liveBreaks = breakTotalsFor({
       policy: breakPolicy,
@@ -1458,7 +1531,7 @@ const getTodayStatus = async (req, res) => {
       outTime: isClockedInNow ? null : today.outTime,
       isClockedIn: isClockedInNow,
       status: today.status,
-      attendanceMode: attendanceModeForSettings(attendanceSettings),
+      attendanceMode: attendanceModeForSettings(attendanceSettings, company),
       breakMode: today.breakMode || breakPolicy.mode,
       scheduledBreaks: today.scheduledBreaks ?? (breakPolicy.mode === 'FIXED' && today.inTime ? breakPolicy.fixedBreaks : []),
       scheduledBreaksFromCurrentPolicy: !today.scheduledBreaks,
@@ -1558,12 +1631,12 @@ const getAttendanceList = async (req, res) => {
     void 0;
 
     
-    const [targetShiftSettings, { policy: targetBreakPolicy }, { attendanceSettings }] = await Promise.all([
+    const [targetShiftSettings, { policy: targetBreakPolicy }, { attendanceSettings, company }] = await Promise.all([
       resolveSelectedShiftSettings(targetUser),
       breakPolicyForUser(targetUser),
       getAttendanceSettingsContext({ companyCode: userCompanyCode, userId: targetUserId }),
     ]);
-    const attendanceMode = attendanceModeForSettings(attendanceSettings);
+    const attendanceMode = attendanceModeForSettings(attendanceSettings, company);
     const reportNow = new Date();
     const leaveCoverageDateKeys = await getLeaveCoverageDateKeys({
       userId: targetUserId,
@@ -1887,15 +1960,21 @@ const getAllUsersAttendance = async (req, res) => {
       holidayName = holiday && (holiday.title || 'Holiday');
     }
 
-    const [records, total, reportPolicies] = await Promise.all([
+    const [records, total, reportPolicies, companyDoc, allBranches] = await Promise.all([
       Attendance.find(filter)
         .populate({
           path: "user",
           select: "name email employeeId employeeType companyCode jobRole jobRoleName shiftId shiftName shiftType department departmentName branch branchName",
-          populate: {
-            path: "company",
-            select: "companyCode companyName"
-          }
+          populate: [
+            {
+              path: "company",
+              select: "companyCode companyName officeLocation"
+            },
+            {
+              path: "branch",
+              select: "name branchCode officeLocation address"
+            }
+          ]
         })
         .sort({ date: -1 })
         .skip(skip)
@@ -1903,7 +1982,17 @@ const getAllUsersAttendance = async (req, res) => {
         .lean(),
       Attendance.countDocuments(filter),
       buildCompanyPolicyResolver({ company: req.user.company?._id || req.user.company || req.user.companyId, companyCode: userCompanyCode }),
+      Company.findOne({ companyCode: userCompanyCode }).select('companyCode companyName officeLocation').lean(),
+      Branch.find({ companyCode: userCompanyCode }).select('name branchCode officeLocation address').lean(),
     ]);
+
+    const branchMap = new Map();
+    if (Array.isArray(allBranches)) {
+      for (const b of allBranches) {
+        branchMap.set(String(b._id), b);
+        if (b.branchCode) branchMap.set(String(b.branchCode).toUpperCase(), b);
+      }
+    }
 
     const userIdsInRecords = [...new Set(records.map(r => String(r.user?._id || r.user)).filter(Boolean))];
     const approvedOtRequests = await OvertimeRequest.find({
@@ -1977,8 +2066,25 @@ const getAllUsersAttendance = async (req, res) => {
           }
         }
 
+        const uBranchId = String(record.user?.branch?._id || record.user?.branch || '');
+        const uBranchCode = String(record.user?.branchCode || '').toUpperCase();
+        const branchObj = (record.user?.branch && typeof record.user.branch === 'object' && record.user.branch.officeLocation)
+          ? record.user.branch
+          : (branchMap.get(uBranchId) || (uBranchCode ? branchMap.get(uBranchCode) : null) || (Array.isArray(allBranches) ? allBranches[0] : null));
+
+        const officeLoc = (toFiniteCoordinate(branchObj?.officeLocation?.latitude) !== null && toFiniteCoordinate(branchObj?.officeLocation?.longitude) !== null)
+          ? branchObj.officeLocation
+          : (toFiniteCoordinate(companyDoc?.officeLocation?.latitude) !== null && toFiniteCoordinate(companyDoc?.officeLocation?.longitude) !== null ? companyDoc.officeLocation : null);
+
+        const branchName = branchObj?.name || record.user?.branchName || companyDoc?.companyName || 'Branch';
+
+        const inLocation = enrichLocationWithBranchDistance(record.inLocation, officeLoc, branchName);
+        const outLocation = enrichLocationWithBranchDistance(record.outLocation, officeLoc, branchName);
+
         return {
           ...record,
+          inLocation,
+          outLocation,
           ...reportBreakFields(record, reportPolicies.policyFor(record.user || {}), reportNow),
           attendanceMode: reportPolicies.attendanceModeFor(record.user),
           hasOvertimeApproved: effectiveHasOvertimeApproved,
@@ -2516,6 +2622,20 @@ const getAttendanceByUser = async (req, res) => {
     const attendanceMode = details?.attendanceModeFor(user);
     const breakPolicy = details?.policyFor(user);
 
+    let userOfficeLoc = null;
+    let userBranchName = user?.branchName || 'Branch';
+    if (withPunchDetails) {
+      const uBranchId = user?.branch || user?.branchId;
+      const [uBranch, uCompany] = await Promise.all([
+        uBranchId ? Branch.findById(uBranchId).select('name branchCode officeLocation address').lean() : null,
+        Company.findOne({ companyCode: userCompanyCode }).select('companyName officeLocation').lean(),
+      ]);
+      userOfficeLoc = (toFiniteCoordinate(uBranch?.officeLocation?.latitude) !== null && toFiniteCoordinate(uBranch?.officeLocation?.longitude) !== null)
+        ? uBranch.officeLocation
+        : (toFiniteCoordinate(uCompany?.officeLocation?.latitude) !== null && toFiniteCoordinate(uCompany?.officeLocation?.longitude) !== null ? uCompany.officeLocation : null);
+      userBranchName = uBranch?.name || user?.branchName || uCompany?.companyName || 'Branch';
+    }
+
     let query = { 
       user: userId,
       companyCode: userCompanyCode
@@ -2612,8 +2732,13 @@ const getAttendanceByUser = async (req, res) => {
         } else if (isWknd && hasPunch && String(finalStatus).toUpperCase() === 'ABSENT') {
           finalStatus = 'WEEKEND';
         }
+        const inLocation = withPunchDetails ? enrichLocationWithBranchDistance(record.inLocation, userOfficeLoc, userBranchName) : record.inLocation;
+        const outLocation = withPunchDetails ? enrichLocationWithBranchDistance(record.outLocation, userOfficeLoc, userBranchName) : record.outLocation;
+
         return {
           ...record,
+          inLocation,
+          outLocation,
           ...(details ? {
             ...reportBreakFields(record, breakPolicy, reportNow),
             attendanceMode,

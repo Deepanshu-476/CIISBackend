@@ -1,11 +1,12 @@
 const express = require("express");
 const router = express.Router();
 const { protect } = require("../middleware/authMiddleware");
+const { requireCrmPagePermission } = require("../middleware/crmPagePermission");
 const callController = require("../controllers/callController");
 
 router.use(protect);
 
-router.post("/start", callController.startCall);
+router.post("/start", requireCrmPagePermission("/ciisUser/telecaller/call-workspace", "edit"), callController.startCall);
 router.post("/end", callController.endCall);
 router.get("/", callController.getAgentCalls);
 router.get("/lead/:leadId", callController.getLeadCalls);

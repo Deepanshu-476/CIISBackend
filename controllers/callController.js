@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const CallLog = require("../models/CallLog");
 const Lead = require("../models/Lead");
+const { leadScope } = require("./telecallerController");
 const { getPaginationOptions } = require("../utils/pagination");
 
 let formatCallLogForClient = item => item;
@@ -49,23 +50,11 @@ exports.startCall = async (req, res) => {
     const userId = req.user?._id || req.user?.id;
     const companyId = req.user?.company?._id || req.user?.company || req.user?.companyId;
 
-    let lead = null;
-    if (Lead && typeof Lead.findById === "function") {
-      try {
-        lead = await Lead.findById(leadId).lean();
-        if (lead) {
-          if (companyId && lead.company && String(lead.company) !== String(companyId)) {
-            return res.status(403).json({ msg: "Access denied to lead from another company" });
-          }
-          const role = String(req.user?.role || req.user?.companyRole || "").toLowerCase();
-          if (role === "telecaller" && lead.assignedTo && String(lead.assignedTo) !== String(userId)) {
-            return res.status(403).json({ msg: "You can only start calls for leads assigned to you" });
-          }
-        }
-      } catch (e) {
-        // If DB mock doesn't support lean or environment is mock-only
-      }
-    }
+    if (!mongoose.isValidObjectId(companyId)) return res.status(403).json({ msg: 'A valid company is required.' });
+    const lead = await Lead.findOne({ ...leadScope(req, companyId), _id: leadId }).lean();
+    if (!lead) return res.status(404).json({ msg: 'Assigned lead not found.' });
+    if (lead.marketing && !lead.phone) return res.status(400).json({ msg: 'This lead has no phone number.' });
+    if (['converted', 'closed'].includes(lead.status)) return res.status(409).json({ msg: 'This lead is already converted or closed.' });
 
     const callPayload = {
       company: companyId,
