@@ -7,15 +7,25 @@ const { getAvailableTools, executeTool } = require('./tools');
  * Enforces dynamic tool gating and permission validation.
  */
 function createMcpServer(authContext) {
+  const companyCode = String(authContext.companyCode || 'DEFAULT').toUpperCase();
+  const role = String(authContext.permissions?.role || 'user').toLowerCase();
+  const userName = authContext.user?.name || authContext.user?.email || 'User';
+
   const server = new Server(
     {
-      name: 'ciis-network',
+      name: `ciis-${companyCode.toLowerCase()}-${role}`,
       version: '1.0.0'
     },
     {
       capabilities: {
         tools: {}
-      }
+      },
+      instructions: `You are connected to the CIIS Network MCP Server for company '${companyCode}' authenticated as '${userName}' (Role: ${role}).
+This server is 100% compatible with both Text Chat AND Claude Voice Mode / Live Voice Calls.
+Rules for task operations:
+1. Always present the CIIS Task Preview Card first with the 3 options (1. Create / Confirm, 2. Edit, 3. Cancel).
+2. Never create or assign a task in the database without user confirmation unless they explicitly said 'create immediately'.
+3. For screenshots and attachments during voice calls, set hasAttachment: true or pass attachmentPaths: ['latest_screenshot']. The local CIIS server automatically retrieves the latest screenshot or clipboard image from the desktop without needing file uploads.`
     }
   );
 
