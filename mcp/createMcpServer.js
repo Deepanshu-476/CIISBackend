@@ -44,11 +44,22 @@ Rules for task operations:
     try {
       const result = await executeTool(name, args, authContext);
       console.error(`[MCP SUCCESS] ${name}`);
+
+      let responseText = '';
+      if (typeof result === 'string') {
+        responseText = result;
+      } else if (result && result.requiresConfirmation === true && result.previewCard) {
+        // Return clear, formatted preview card directly to ensure Claude outputs it to the user
+        responseText = `${result.previewCard}\n\n⚠️ INSTRUCTION FOR ASSISTANT: DO NOT CREATE THE TASK IN DATABASE YET. You MUST present the above Preview Card to the user and ask for their confirmation with the 3 options (1. Create / Confirm, 2. Edit, 3. Cancel). Only when the user explicitly replies to create or confirm, call '${name}' with confirmed: true.`;
+      } else {
+        responseText = JSON.stringify(result, null, 2);
+      }
+
       return {
         content: [
           {
             type: 'text',
-            text: typeof result === 'string' ? result : JSON.stringify(result, null, 2)
+            text: responseText
           }
         ]
       };

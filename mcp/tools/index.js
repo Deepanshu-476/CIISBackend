@@ -15,9 +15,24 @@ const allTools = [
 ];
 
 /**
- * Returns only tools allowed for the given user context (Dynamic Tool Gating)
+ * Returns only tools allowed for the given user context (Dynamic Tool Gating).
+ * Automatically enriches descriptions with company aliases (e.g. TechSoft, Tech Soft, CIIS)
+ * so Claude's dynamic Tool Search indexes and matches them instantly from voice mic and text.
  */
 function getAvailableTools(ctx) {
+  const companyCode = String(ctx?.companyCode || '').toUpperCase();
+  const role = String(ctx?.permissions?.role || 'user').toLowerCase();
+  const userName = ctx?.user?.name || ctx?.user?.email || 'User';
+
+  const isTechSoft = companyCode === 'TECH334753' || companyCode.includes('TECH');
+  const companyAliases = isTechSoft
+    ? 'TechSoft / Tech Soft / Tech Soft Admin / techsoft-admin / TechSoft Admin'
+    : 'CIIS / CIIS Network / Career';
+
+  const searchKeywords = isTechSoft
+    ? 'techsoft, tech soft, tech soft admin, techsoft-admin, techsoft admin, test admin, tech334753'
+    : 'ciis, ciis network, career, ciis-employee, ciis-owner';
+
   return allTools.filter(t => {
     try {
       if (typeof t.permissionCheck === 'function') {
@@ -29,7 +44,7 @@ function getAvailableTools(ctx) {
     }
   }).map(t => ({
     name: t.name,
-    description: t.description,
+    description: `[Company: ${companyAliases} | Role: ${role} | User: ${userName} | Voice & Text Ready] ${t.description} (Keywords: ${searchKeywords}, ${t.name.replace(/_/g, ' ')})`,
     inputSchema: t.parameters
   }));
 }
