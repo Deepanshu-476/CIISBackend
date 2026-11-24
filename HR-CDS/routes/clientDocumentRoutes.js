@@ -14,6 +14,10 @@ const chunkUploadDir = path.join(uploadDir, '.chunks');
 const CLIENT_DOCUMENT_FILE_LIMIT = 10 * 1024 * 1024;
 const CLIENT_DOCUMENT_STORAGE_LIMIT = 5 * 1024 * 1024 * 1024;
 const CLIENT_DOCUMENT_CHUNK_LIMIT = 512 * 1024;
+// Older documents can still point at the production upload disk while a
+// developer is running this backend locally. Re-use the caller's token so the
+// production API performs the same access check before returning any file.
+const LEGACY_DOCUMENT_ORIGIN = (process.env.LEGACY_DOCUMENT_ORIGIN || 'https://backendcds.ciisnetwork.in').replace(/\/+$/, '');
 const CLIENT_DOCUMENT_ALLOWED_MIME_TYPES = [
   'application/pdf',
   'application/msword',
@@ -187,20 +191,42 @@ const getRequestClientIds = req => {
 };
 
 const canAccessClient = (req, client) => {
+  if (!client) return false;
   const role = getUserRole(req);
   const userCompanyCode = getUserCompanyCode(req);
+
+  // Platform owner / Super admin can always access
+  if (role === 'super-admin' || req.user?.role === 'super-admin' || req.user?.jobRole === 'super_admin' || req.user?.department === 'Management') {
+    return true;
+  }
+
   if (role === 'client') {
     const requestClientIds = getRequestClientIds(req);
     const clientId = String(client._id || client.id || '').trim();
-    const isOwnerOfClient = (
-      (clientId && requestClientIds.includes(clientId)) ||
-      (client.userId && (client.userId.toString() === req.user._id?.toString() || client.userId.toString() === req.user.id?.toString())) ||
-      (client.email && String(client.email).toLowerCase() === String(req.user.email || '').toLowerCase())
+
+    const clientName = String(client.client || client.name || '').trim().toLowerCase();
+    const userName = String(req.user?.name || req.user?.fullName || '').trim().toLowerCase();
+    const nameMatches = Boolean(clientName && userName && clientName === userName);
+
+    const clientPhone = String(client.phone || '').replace(/\D/g, '');
+    const userPhone = String(req.user?.phone || '').replace(/\D/g, '');
+    const phoneMatches = Boolean(clientPhone && userPhone && clientPhone === userPhone);
+
+    const clientEmail = String(client.email || '').trim().toLowerCase();
+    const userEmail = String(req.user?.email || '').trim().toLowerCase();
+    const emailMatches = Boolean(clientEmail && userEmail && clientEmail === userEmail);
+
+    const userIdMatches = Boolean(
+      client.userId && (
+        client.userId.toString() === req.user?._id?.toString() ||
+        client.userId.toString() === req.user?.id?.toString()
+      )
     );
+
+    const idMatches = Boolean(clientId && requestClientIds.includes(clientId));
+
+    const isOwnerOfClient = idMatches || userIdMatches || emailMatches || nameMatches || phoneMatches;
     if (!isOwnerOfClient) return false;
-    if (userCompanyCode && client.companyCode && String(client.companyCode).toUpperCase() !== userCompanyCode) {
-      return false;
-    }
     return true;
   }
 
@@ -262,6 +288,28 @@ const getDocumentFilePath = document => {
   }
 
   return '';
+};
+
+const proxyLegacyDocument = async (req, res, documentId, action) => {
+  try {
+    const authorization = req.get('authorization');
+    if (!authorization) return false;
+    const upstream = await fetch(`${LEGACY_DOCUMENT_ORIGIN}/api/client-documents/${documentId}/${action}`, {
+      headers: { authorization },
+    });
+    if (!upstream.ok) return false;
+
+    const contentType = upstream.headers.get('content-type') || 'application/octet-stream';
+    const disposition = upstream.headers.get('content-disposition');
+    res.setHeader('Content-Type', contentType);
+    if (disposition) res.setHeader('Content-Disposition', disposition);
+    res.setHeader('X-Document-Source', 'legacy-storage');
+    res.send(Buffer.from(await upstream.arrayBuffer()));
+    return true;
+  } catch (error) {
+    console.warn('Legacy client document proxy failed:', error.message);
+    return false;
+  }
 };
 
 const getClientStorageUsed = async clientId => {
@@ -581,6 +629,12 @@ router.get('/:id/download', protect, async (req, res) => {
 
     const filePath = getDocumentFilePath(document);
     if (!filePath || !fs.existsSync(filePath)) {
+      if (await proxyLegacyDocument(req, res, document._id, 'download')) {
+        ClientDocumentDownload.create({ client: client._id }).catch(error => {
+          console.error('Failed to record proxied document download:', error.message);
+        });
+        return;
+      }
       return res.status(404).json({ success: false, message: 'File not found on server' });
     }
 
@@ -616,6 +670,7 @@ router.get('/:id/view', protect, async (req, res) => {
 
     const filePath = getDocumentFilePath(document);
     if (!filePath || !fs.existsSync(filePath)) {
+      if (await proxyLegacyDocument(req, res, document._id, 'view')) return;
       return res.status(404).json({ success: false, message: 'File not found on server' });
     }
 
