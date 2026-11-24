@@ -2560,7 +2560,7 @@ const deleteAttendanceRecord = async (req, res) => {
 const getAttendanceByUser = async (req, res) => {
   try {
     const { userId } = req.params;
-    const { date, month, year, includePunchDetails } = req.query;
+    const { date, month, year, startDate, endDate, includePunchDetails } = req.query;
     const userCompanyCode = req.user.companyCode || (req.user.company ? req.user.company.companyCode : null);
     
     if (!userCompanyCode) {
@@ -2648,6 +2648,16 @@ const getAttendanceByUser = async (req, res) => {
     } else if (date) {
       const {start, end} = getIndiaDayRange(parseIndiaDateOnly(date));
       query.date = { $gte: start, $lte: end };
+    } else if (startDate || endDate) {
+      const start = startDate ? getIndiaDayRange(parseIndiaDateOnly(startDate)).start : null;
+      const end = endDate ? getIndiaDayRange(parseIndiaDateOnly(endDate)).end : null;
+      if ((startDate && !start) || (endDate && !end)) {
+        return res.status(400).json({ message: 'Invalid attendance date range' });
+      }
+      query.date = {
+        ...(start ? { $gte: start } : {}),
+        ...(end ? { $lte: end } : {})
+      };
     }
     
     const records = await Attendance.find(query)
