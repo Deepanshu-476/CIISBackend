@@ -81,14 +81,32 @@ const blockClientLogins = (req, res, next) => {
   return next();
 };
 
-// The client records a client login belongs to (linked by userId or email).
+// The client records a client login belongs to (linked by userId, email, client name, or explicit additional details).
 const ownClientIds = async user => {
   const Client = require('../HR-CDS/models/Client');
   const or = [{ userId: user._id || user.id }];
   if (user.email) or.push({ email: String(user.email).trim().toLowerCase() });
+  const name = String(user.name || user.fullName || '').trim();
+  if (name) {
+    const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    or.push({ client: new RegExp('^' + escapedName + '$', 'i'), companyCode: user.companyCode || 'CAREER' });
+  }
+  let additionalClientIds = [];
+  try {
+    const details = typeof user.additionalDetails === 'string'
+      ? JSON.parse(user.additionalDetails || '{}')
+      : (user.additionalDetails || {});
+    if (details?.clientId) additionalClientIds.push(details.clientId);
+    if (Array.isArray(details?.clientIds)) additionalClientIds.push(...details.clientIds);
+  } catch (_) {}
+  if (additionalClientIds.length) {
+    or.push({ _id: { $in: additionalClientIds } });
+  }
+
   const rows = await Client.find({ $or: or }).select('_id').lean();
   const ids = new Set(rows.map(row => String(row._id)));
   if (user.clientId) ids.add(String(user.clientId?._id || user.clientId));
+  additionalClientIds.forEach(id => ids.add(String(id)));
   return ids;
 };
 

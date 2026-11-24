@@ -80,6 +80,46 @@ router.get('/manager-stats', getManagerStats);
 router.get('/dashboard-overview', getClientDashboardOverview);
 router.get('/dashboard-stats/:clientId', getClientDashboardStats);
 
+// Authenticated client users can only see the client-company records explicitly
+// linked to their login. This is the source for the Client Portal switcher.
+router.get('/portal-companies', async (req, res, next) => {
+  try {
+    const Client = require('../models/Client');
+    const userId = req.user?._id;
+    const email = String(req.user?.email || '').trim().toLowerCase();
+    const name = String(req.user?.name || req.user?.fullName || '').trim();
+    const companyCode = req.user?.companyCode || 'CAREER';
+
+    if (!userId && !email && !name) {
+      return res.status(401).json({ success: false, message: 'Client authentication is required' });
+    }
+
+    let additionalClientIds = [];
+    try {
+      const details = typeof req.user?.additionalDetails === 'string'
+        ? JSON.parse(req.user.additionalDetails || '{}')
+        : (req.user?.additionalDetails || {});
+      if (details?.clientId) additionalClientIds.push(details.clientId);
+      if (Array.isArray(details?.clientIds)) additionalClientIds.push(...details.clientIds);
+    } catch (_) {}
+
+    const queryOr = [];
+    if (userId) queryOr.push({ userId });
+    if (email) queryOr.push({ email: email });
+    if (additionalClientIds.length) queryOr.push({ _id: { $in: additionalClientIds } });
+    if (name) queryOr.push({ client: new RegExp('^' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i'), companyCode });
+
+    const companies = await Client.find({ $or: queryOr })
+      .select('_id client company companyCode companyLogo status services subscription email phone city branch userId updatedAt')
+      .sort({ status: 1, updatedAt: -1 })
+      .lean();
+
+    return res.json({ success: true, data: companies });
+  } catch (error) {
+    next(error);
+  }
+});
+
 
 router.get('/company/:companyCode', getClientsByCompany);
 router.get('/', getAllClients);
