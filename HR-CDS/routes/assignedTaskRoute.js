@@ -17,6 +17,7 @@ router.get('/to-me', protect, assignedTaskController.getAssignedToMeTasks);
 router.get('/by-me', protect, assignedTaskController.getAssignedTasks);
 router.get('/to-me/stats', protect, assignedTaskController.getAssignedToMeTaskStats);
 router.patch('/:taskId/status', protect, taskStatusRequest, assignedTaskController.updateStatus);
+router.patch('/:taskId/stop-recurring', protect, require('../controllers/taskController').stopRecurringTask);
 router.post('/:taskId/checkpoints', protect, assignedTaskController.addCheckpoint);
 router.delete('/:taskId/checkpoints/:checkpointId', protect, assignedTaskController.deleteCheckpoint);
 router.patch('/:taskId/checkpoints/:checkpointId', protect, assignedTaskController.updateCheckpoint);

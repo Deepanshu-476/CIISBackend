@@ -247,6 +247,10 @@ const createOccurrenceIfMissing = async (templateTask, occurrenceDate, options =
 };
 
 const generateRecurringOccurrences = async (templateTask, options = {}) => {
+  if (!isRecurringTemplate(templateTask)) {
+    return { created: 0, skipped: true };
+  }
+
   const normalized = normalizeTaskRecurrenceFields(templateTask);
   if (!normalized.isRecurring || normalized.repeatPattern === 'none') {
     return { created: 0, skipped: true };
@@ -315,6 +319,10 @@ const generateRecurringOccurrences = async (templateTask, options = {}) => {
 };
 
 const processRecurringTemplate = async (templateTask, now = new Date()) => {
+  if (!isRecurringTemplate(templateTask)) {
+    return { created: 0, skipped: true };
+  }
+
   const normalized = normalizeTaskRecurrenceFields(templateTask);
   if (!normalized.isRecurring || normalized.repeatPattern === 'none') {
     return { created: 0, skipped: true };
@@ -341,15 +349,20 @@ const processRecurringTemplate = async (templateTask, now = new Date()) => {
 
 const runRecurringTaskSweep = async (filter = {}) => {
   const now = new Date();
-  const query = {
-    isRecurring: true,
-    isActive: true,
-    $or: [
-      { recurrenceSourceId: null },
-      { recurrenceSourceId: { $exists: false } }
-    ],
-    ...filter
-  };
+  const templateConditions = [
+    { isRecurring: true },
+    { isActive: true },
+    {
+      $or: [
+        { recurrenceSourceId: null },
+        { recurrenceSourceId: { $exists: false } }
+      ]
+    }
+  ];
+  if (filter && typeof filter === 'object' && Object.keys(filter).length > 0) {
+    templateConditions.push(filter);
+  }
+  const query = { $and: templateConditions };
 
   const templates = await Task.find(query).select(
     '_id title description startDateTime dueDateTime nextRecurringDate recurrenceEndDate repeatPattern repeatDays recurringPattern isRecurring createdAt taskFor recurrenceSourceId isActive whatsappNumber priorityDays priority companyCode branch assignedUsers assignedGroups statusByUser checkpoints reminderSettings remarks files voiceNote createdBy'

@@ -742,8 +742,15 @@ const getAttendanceSettingsContext = async ({ companyCode, userId }) => {
   };
 };
 
-const attendanceModeForSettings = settings => {
+const attendanceModeForSettings = (settings, fallbackSettings = null) => {
   const mode = settings?.dashboardConfig?.find(item => item.componentId === 'clock-in')?.settings?.attendanceMode;
+  if (mode && mode !== 'normal' && ['location', 'image', 'both'].includes(mode)) {
+    return mode;
+  }
+  const fallbackMode = fallbackSettings?.dashboardConfig?.find(item => item.componentId === 'clock-in')?.settings?.attendanceMode;
+  if (fallbackMode && ['normal', 'location', 'image', 'both'].includes(fallbackMode)) {
+    return fallbackMode;
+  }
   return ['normal', 'location', 'image', 'both'].includes(mode) ? mode : 'normal';
 };
 
@@ -976,7 +983,7 @@ const clockIn = async (req, res) => {
       return res.status(403).json({ message: "Access denied. Cross-company attendance is forbidden." });
     }
 
-    const attendanceMode = attendanceModeForSettings(attendanceSettings);
+    const attendanceMode = attendanceModeForSettings(attendanceSettings, company);
 
     const { latitude, longitude, accuracy, selfieUrl } = req.body;
 
@@ -1166,7 +1173,7 @@ const clockOut = async (req, res) => {
       return res.status(403).json({ message: "Access denied. Cross-company attendance is forbidden." });
     }
 
-    const attendanceMode = attendanceModeForSettings(attendanceSettings);
+    const attendanceMode = attendanceModeForSettings(attendanceSettings, company);
 
     const { latitude, longitude, accuracy, selfieUrl } = req.body;
 
@@ -1497,7 +1504,7 @@ const getTodayStatus = async (req, res) => {
     const shiftTime = formatShiftTimeWindow(shiftStart, shiftEnd);
 
     // Break state, so the working-time timer can stop while a break is running.
-    const {userObj: breakUserObj, attendanceSettings} = await getAttendanceSettingsContext({companyCode: userCompanyCode, userId});
+    const {userObj: breakUserObj, attendanceSettings, company} = await getAttendanceSettingsContext({companyCode: userCompanyCode, userId});
     const {policy: breakPolicy} = await breakPolicyForUser(breakUserObj || req.user);
     const liveBreaks = breakTotalsFor({
       policy: breakPolicy,
@@ -1524,7 +1531,7 @@ const getTodayStatus = async (req, res) => {
       outTime: isClockedInNow ? null : today.outTime,
       isClockedIn: isClockedInNow,
       status: today.status,
-      attendanceMode: attendanceModeForSettings(attendanceSettings),
+      attendanceMode: attendanceModeForSettings(attendanceSettings, company),
       breakMode: today.breakMode || breakPolicy.mode,
       scheduledBreaks: today.scheduledBreaks ?? (breakPolicy.mode === 'FIXED' && today.inTime ? breakPolicy.fixedBreaks : []),
       scheduledBreaksFromCurrentPolicy: !today.scheduledBreaks,
@@ -1624,12 +1631,12 @@ const getAttendanceList = async (req, res) => {
     void 0;
 
     
-    const [targetShiftSettings, { policy: targetBreakPolicy }, { attendanceSettings }] = await Promise.all([
+    const [targetShiftSettings, { policy: targetBreakPolicy }, { attendanceSettings, company }] = await Promise.all([
       resolveSelectedShiftSettings(targetUser),
       breakPolicyForUser(targetUser),
       getAttendanceSettingsContext({ companyCode: userCompanyCode, userId: targetUserId }),
     ]);
-    const attendanceMode = attendanceModeForSettings(attendanceSettings);
+    const attendanceMode = attendanceModeForSettings(attendanceSettings, company);
     const reportNow = new Date();
     const leaveCoverageDateKeys = await getLeaveCoverageDateKeys({
       userId: targetUserId,
