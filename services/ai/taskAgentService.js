@@ -3213,6 +3213,7 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
     ...(Array.isArray(user?.allowedPages) ? user.allowedPages : []),
     ...(Array.isArray(user?.pagePermissions) ? user.pagePermissions : []),
     ...(Array.isArray(user?.permissions) ? user.permissions : []),
+    ...(Array.isArray(scope?.companyAllowedPages) ? scope.companyAllowedPages : []),
     ...flattenItems(deps?.sidebarMenuItems),
     ...flattenItems(deps?.menuItems),
   ];
@@ -3243,16 +3244,24 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
   const allowed = ['self_task', 'bulk_self_task_csv'];
 
   // Assigning tasks to others requires "Admin Create Task" permission (not general Task Management)
+  // When no explicit restrictive permissions exist, internal company employees can assign tasks by default.
   const canAssign = Boolean(
     scope.isOwner ||
+    scope.hasAccess ||
+    !hasExplicitRestrictions ||
     normalizedPerms.has('admintaskcreate') ||
     normalizedPerms.has('admincreatetask') ||
     normalizedPerms.has('admin-task-create') ||
     normalizedPerms.has('admin-create-task') ||
+    normalizedPerms.has('taskmanagement') ||
+    normalizedPerms.has('createtask') ||
+    normalizedPerms.has('task-management') ||
+    normalizedPerms.has('create-task') ||
     normalizedPerms.has('ciisuser/admintaskcreate') ||
     normalizedPerms.has('ciisuser/admin-task-create') ||
     user?.permissions?.includes?.('admin-task-create') ||
-    user?.permissions?.includes?.('admin-create-task')
+    user?.permissions?.includes?.('admin-create-task') ||
+    (Array.isArray(deps?.allowedIntents) && deps.allowedIntents.includes('task_assigned_user'))
   );
   if (canAssign) {
     allowed.push('task_assigned_user', 'bulk_assigned_task_csv');

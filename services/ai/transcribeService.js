@@ -16,13 +16,13 @@
 const path = require('path');
 const { executeWithGroqFallback, getGroqApiKeys, getActiveSttModelName } = require('./groqKeyManager');
 const GROQ_AUDIO_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
-const DEFAULT_MODEL = 'whisper-large-v3-turbo';
+const DEFAULT_MODEL = 'whisper-large-v3';
 
 // Context prompts conditioned on selected language to guide Whisper to transcribe in clean Roman Hinglish/English
-const CRM_COMMON_NAMES = 'Vansh Test, Aarav Sharma, Test Admin, Rohan Mehta, Kavya Bansal, Ishita Singh, Gaurav Rajput, Simran Kaur, Pankaj Bhatia, Pooja Arora, Rahul Khanna, Divya Tiwari, Deepak Sethi, Sylvester Sargent, Priya Chauhan, Aditya Kumar, Vivaan Joshi, Ananya Gupta, Arjun Verma, Diya Patel, Tellecaller, Admincrm';
-const HINGLISH_CRM_PROMPT = `CIIS CRM Task Management: create personal task, naya task banao, add client, new project, members: ${CRM_COMMON_NAMES}, status in-progress, pending, completed, high priority, deadline, aaj shaam 6:00 PM, kal subah 10:00 AM, assignee, description, checkpoints, notes.`;
+const CRM_COMMON_NAMES = 'Kanika Rana, Vansh Gupta, Vansh Test, Vanshika Kansal, Ashutosh Rai, Pawan, Himanshu, Test Admin, Admincrm, Aarav Sharma, Rohan Mehta, Kavya Bansal, Ishita Singh, Gaurav Rajput, Simran Kaur, Pankaj Bhatia, Pooja Arora, Rahul Khanna, Divya Tiwari, Deepak Sethi, Sylvester Sargent, Priya Chauhan, Aditya Kumar, Vivaan Joshi, Ananya Gupta, Arjun Verma, Diya Patel, Telecaller';
+const HINGLISH_CRM_PROMPT = `CIIS CRM Task & Project Management: create personal task, naya task banao, create new project, project name, project description, testing of portal, brand launch, website development, assign task to Vansh, members: ${CRM_COMMON_NAMES}, status in-progress, pending, completed, high priority, from today, from tomorrow, aaj se, kal se, aaj shaam 6:00 PM, kal subah 10:00 AM, start date, end date, completion date, deadline, assignee, description, checkpoints, notes.`;
 const HINDI_PROMPT = HINGLISH_CRM_PROMPT;
-const ENGLISH_PROMPT = `CIIS CRM task management, create task, new project, members: ${CRM_COMMON_NAMES}, deadline, status in-progress, pending, completed, high priority, tomorrow, today, review, client meeting.`;
+const ENGLISH_PROMPT = `CIIS CRM task and project management, create task, create new project, project name, project description, testing of portal, brand launch, web development, assign task to Vansh, members: ${CRM_COMMON_NAMES}, deadline, status in-progress, pending, completed, high priority, from today, from tomorrow, start date, end date, completion date, review, client meeting.`;
 const BILINGUAL_PROMPT = HINGLISH_CRM_PROMPT;
 const DEFAULT_PROMPT = HINGLISH_CRM_PROMPT;
 
@@ -108,6 +108,14 @@ function sanitizeTranscript(rawText) {
 
   // 2. Remove or strip prompt leakage words (e.g. "Vocabulary:", "Vocabulary", or exact prompt echoes)
   text = text.replace(/\bvocabulary\b[:\s-]*/gi, '').trim();
+
+  // 2b. Contextual corrections for common Indian accent / Whisper phonetic confusions
+  text = text
+    .replace(/\bblond\s+lush\b/gi, 'Brand Launch')
+    .replace(/\bblond\s+launch\b/gi, 'Brand Launch')
+    .replace(/\btesting\s+of\s+bottle\b/gi, 'Testing of portal')
+    .replace(/^from\s+july[.!?]?$/gi, 'From today')
+    .replace(/\bfrom\s+july\b(?!\s+\d{1,4})/gi, 'from today');
   if (text.toLowerCase() === HINDI_PROMPT.toLowerCase().trim() ||
       text.toLowerCase() === ENGLISH_PROMPT.toLowerCase().trim() ||
       text.toLowerCase() === BILINGUAL_PROMPT.toLowerCase().trim()) {

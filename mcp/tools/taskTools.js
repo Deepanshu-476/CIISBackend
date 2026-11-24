@@ -589,7 +589,7 @@ const taskTools = [
       const project = await Project.findOne({
         companyCode: ctx.companyCode,
         $or: [
-          { _id: projectNameOrId.match(/^[0-9a-fA-F]{24}$/)) ? projectNameOrId : null },
+          { _id: projectNameOrId.match(/^[0-9a-fA-F]{24}$/) ? projectNameOrId : null },
           { projectName: { $regex: new RegExp(projectNameOrId.trim(), 'i') } }
         ].filter(Boolean)
       });

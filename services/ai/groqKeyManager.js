@@ -36,7 +36,7 @@ async function refreshKeyCache() {
           keys.push(doc.secondaryApiKey.trim());
         }
         cachedModel = doc.selectedModel || 'qwen/qwen3.8-27b';
-        cachedSttModel = doc.selectedSttModel || 'whisper-large-v3-turbo';
+        cachedSttModel = doc.selectedSttModel || 'whisper-large-v3';
         if (keys.length > 0) {
           cachedSettingsKeys = keys;
           lastCacheTime = Date.now();
@@ -65,7 +65,7 @@ function getActiveModelName() {
 }
 
 function getActiveSttModelName() {
-  return cachedSttModel || 'whisper-large-v3-turbo';
+  return cachedSttModel || 'whisper-large-v3';
 }
 
 /**
