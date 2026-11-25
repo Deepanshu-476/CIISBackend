@@ -2135,7 +2135,9 @@ function applyTaskStatusAndPriority(taskDoc, targetStatus, targetPriority, userI
     taskDoc.priority = targetPriority.toLowerCase();
   }
   if (targetStatus) {
-    const normalized = targetStatus.toLowerCase();
+    let normalized = targetStatus.toLowerCase().trim();
+    if (normalized === 'in progress') normalized = 'in-progress';
+    if (normalized === 'on hold' || normalized === 'onhold') normalized = 'on-hold';
     taskDoc.status = normalized;
     taskDoc.overallStatus = normalized;
 
