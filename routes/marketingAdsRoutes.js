@@ -17,6 +17,7 @@ const { digest, encryptionKey, open, problem, random, seal } = require('../servi
 const adsConfig = require('../services/marketingAdsConfigService');
 
 const router = express.Router();
+// Marketing Ads Integrations is a detail screen owned by Lead Sources.
 const routePath = '/ciisUser/crm/admin/marketing-ads';
 const validPlatform = platform => ['meta', 'google'].includes(platform);
 const noMetaLease = () => ({ $or: [{ metaLeaseUntil: { $exists: false } }, { metaLeaseUntil: { $lte: new Date() } }] });
@@ -69,16 +70,25 @@ router.get('/oauth/:platform/callback', async (req, res) => {
     stateHash: digest(state), platform, consumed: { $ne: true }, expiresAt: { $gt: new Date() }
   }, { consumed: true }).select('+verifier');
   if (!session) return res.redirect(returnUrl({ oauth: 'expired' }));
-  if (typeof code !== 'string' || !code) return res.redirect(returnUrl({ oauth: 'denied' }));
+  const finish = async (result, params) => {
+    if (!session.mobile) return res.redirect(returnUrl(params));
+    if (result !== 'ready') {
+      await Session.updateOne({ _id: session._id }, { $set: { mobileResult: result }, $unset: { verifier: 1 } });
+    }
+    return res.type('text').send(result === 'ready'
+      ? 'Sign-in complete. Return to CIIS Network to choose your ads account.'
+      : 'Sign-in did not complete. Return to CIIS Network to try again.');
+  };
+  if (typeof code !== 'string' || !code) return finish('denied', { oauth: 'denied' });
   try {
     const credentials = await provider.exchange(platform, code, open(session.verifier));
     await Session.updateOne({ _id: session._id }, {
       $set: { credentials: seal(credentials), expiresAt: new Date(Date.now() + 20 * 60 * 1000) },
       $unset: { verifier: 1 }
     });
-    return res.redirect(returnUrl({ session: String(session._id) }));
+    return finish('ready', { session: String(session._id) });
   } catch {
-    return res.redirect(returnUrl({ oauth: 'failed' }));
+    return finish('failed', { oauth: 'failed' });
   }
 });
 
@@ -98,11 +108,22 @@ router.post('/oauth/:platform/start', edit, async (req, res) => {
   }
   const state = random();
   const verifier = random();
-  await Session.create({
+  const mobile = req.body?.mobile === true;
+  const session = await Session.create({
     company: req.crmCompany, user: userId(req), platform, connection: connection || undefined,
-    stateHash: digest(state), verifier: seal(verifier), expiresAt: new Date(Date.now() + 10 * 60 * 1000)
+    stateHash: digest(state), verifier: seal(verifier), mobile, expiresAt: new Date(Date.now() + 10 * 60 * 1000)
   });
-  res.json({ url: provider.authorizationUrl(platform, state, verifier) });
+  res.json({ url: provider.authorizationUrl(platform, state, verifier), ...(mobile && { sessionId: String(session._id) }) });
+});
+
+router.get('/oauth/sessions/:session/status', edit, async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.session)) throw problem(404, 'Ads sign-in session expired.');
+  const session = await Session.findOne({
+    _id: req.params.session, user: userId(req), company: req.crmCompany, mobile: true,
+    expiresAt: { $gt: new Date() },
+  }).select('mobileResult +credentials').lean();
+  if (!session) throw problem(404, 'Ads sign-in session expired.');
+  res.json({ status: session.credentials ? 'ready' : session.mobileResult || 'pending' });
 });
 
 async function pendingSession(req) {
