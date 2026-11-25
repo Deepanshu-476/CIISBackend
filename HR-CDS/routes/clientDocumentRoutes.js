@@ -290,19 +290,45 @@ const getDocumentFilePath = document => {
   return '';
 };
 
-const proxyLegacyDocument = async (req, res, documentId, action) => {
+const proxyLegacyDocument = async (req, res, documentId, action, documentMeta = null) => {
   try {
     const authorization = req.get('authorization');
     if (!authorization) return false;
-    const upstream = await fetch(`${LEGACY_DOCUMENT_ORIGIN}/api/client-documents/${documentId}/${action}`, {
+    let upstream = await fetch(`${LEGACY_DOCUMENT_ORIGIN}/api/client-documents/${documentId}/${action}`, {
       headers: { authorization },
     });
+    if (!upstream.ok && action === 'view') {
+      upstream = await fetch(`${LEGACY_DOCUMENT_ORIGIN}/api/client-documents/${documentId}/download`, {
+        headers: { authorization },
+      });
+    }
     if (!upstream.ok) return false;
 
-    const contentType = upstream.headers.get('content-type') || 'application/octet-stream';
+    const rawType = upstream.headers.get('content-type') || '';
+    const fileName = safeOriginalName(documentMeta?.originalName || 'document');
+    const ext = path.extname(fileName).toLowerCase();
+    const mimeByExt = {
+      '.pdf': 'application/pdf',
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.webp': 'image/webp',
+      '.gif': 'image/gif',
+      '.svg': 'image/svg+xml',
+      '.txt': 'text/plain',
+      '.html': 'text/html',
+      '.csv': 'text/csv',
+    }[ext];
+    const contentType = (rawType && rawType !== 'application/octet-stream')
+      ? rawType
+      : (mimeByExt || documentMeta?.mimeType || 'application/octet-stream');
     const disposition = upstream.headers.get('content-disposition');
     res.setHeader('Content-Type', contentType);
-    if (disposition) res.setHeader('Content-Disposition', disposition);
+    if (action === 'view') {
+      res.setHeader('Content-Disposition', `inline; filename="${fileName.replace(/"/g, '')}"`);
+    } else if (disposition) {
+      res.setHeader('Content-Disposition', disposition);
+    }
     res.setHeader('X-Document-Source', 'legacy-storage');
     res.send(Buffer.from(await upstream.arrayBuffer()));
     return true;
@@ -670,7 +696,7 @@ router.get('/:id/view', protect, async (req, res) => {
 
     const filePath = getDocumentFilePath(document);
     if (!filePath || !fs.existsSync(filePath)) {
-      if (await proxyLegacyDocument(req, res, document._id, 'view')) return;
+      if (await proxyLegacyDocument(req, res, document._id, 'view', document)) return;
       return res.status(404).json({ success: false, message: 'File not found on server' });
     }
 
