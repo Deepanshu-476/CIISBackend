@@ -316,17 +316,17 @@ function getChitChatReply(text, user, now = new Date(), lang = 'hinglish') {
       const rep = `${salutation}${capitalized ? ' ' + capitalized : ''}! That's wonderful to hear, so glad you're feeling great today! 😊 How can I assist you with your tasks, projects, or clients today?`;
       return { reply: rep, speech: rep, speakText: rep, speakTextHi: rep };
     }
-    const rep = `${salutation}${capitalized ? ' ' + capitalized : ''}! Ye sunkar bahut achha laga ki aapka mood itna achha hai aur aap khush hain! 😊 Aaj CRM mein tasks, projects ya clients mein kya kaam shuru karein?`;
+    const rep = `${salutation}${capitalized ? ' ' + capitalized : ''}! Ye sunkar bahut achha laga ki aapka mood itna achha hai aur aap khush hain! 😊 Aaj portal mein tasks, projects ya clients mein kya kaam shuru karein?`;
     return { reply: rep, speech: rep, speakText: rep, speakTextHi: rep };
   }
 
   // Physical states / Tired / Low / Stressed (e.g. "today i fell so tired", "aj mai thak gaya")
   if (/\b(?:tired|fell\s+tired|feel\s+tired|feeling\s+tired|exhausted|sleepy|lazy|bored|boring|stressed|tension|thak\s+gaya|thak\s+gayi|thakan|neend|sad|upset|low)\b/i.test(clean)) {
     if (isEn) {
-      const rep = `Please take a short break and rest a bit${capitalized ? ', ' + capitalized : ''}! 😊 Don't push yourself too hard. Whenever you feel refreshed, let me know how I can help with your CRM tasks or projects.`;
+      const rep = `Please take a short break and rest a bit${capitalized ? ', ' + capitalized : ''}! 😊 Don't push yourself too hard. Whenever you feel refreshed, let me know how I can help with your portal tasks or projects.`;
       return { reply: rep, speech: rep, speakText: rep, speakTextHi: rep };
     }
-    const rep = `Aap thoda aaram kijiye aur paani pijiye${capitalized ? ', ' + capitalized : ''}! 😊 Jyada stress mat lijiye. Jab aap better feel karein, tab batayein CRM mein kya kaam shuru karna hai.`;
+    const rep = `Aap thoda aaram kijiye aur paani pijiye${capitalized ? ', ' + capitalized : ''}! 😊 Jyada stress mat lijiye. Jab aap better feel karein, tab batayein portal mein kya kaam shuru karna hai.`;
     return { reply: rep, speech: rep, speakText: rep, speakTextHi: rep };
   }
 
@@ -343,10 +343,10 @@ function getChitChatReply(text, user, now = new Date(), lang = 'hinglish') {
   // Thanks / Gratitude
   if (/(?:thanks|thank\s+you|thanku|dhanyawad|shukriya)/i.test(clean)) {
     if (isEn) {
-      const rep = `You're very welcome${capitalized ? ' ' + capitalized : ''}! Let me know if you need help with anything else in your CRM.`;
+      const rep = `You're very welcome${capitalized ? ' ' + capitalized : ''}! Let me know if you need help with anything else in your portal.`;
       return { reply: rep, speech: rep, speakText: rep, speakTextHi: rep };
     }
-    const rep = `Aapka swagat hai${capitalized ? ' ' + capitalized : ''}! CRM mein kisi bhi kaam ke liye main hamesha yahan hoon.`;
+    const rep = `Aapka swagat hai${capitalized ? ' ' + capitalized : ''}! Portal mein kisi bhi kaam ke liye main hamesha yahan hoon.`;
     return { reply: rep, speech: rep, speakText: rep, speakTextHi: rep };
   }
 
@@ -365,7 +365,7 @@ function getChitChatReply(text, user, now = new Date(), lang = 'hinglish') {
     const rep = `${salutation}${capitalized ? ' ' + capitalized : ''}! I'm doing great, thank you! How can I assist you with your tasks, projects, or clients today?`;
     return { reply: rep, speech: rep, speakText: rep, speakTextHi: rep };
   }
-  const rep = `Main badhiya hoon${capitalized ? ' ' + capitalized : ''}, poochne ke liye shukriya! Aap bataiye, aaj CRM mein tasks, projects ya clients mein kya madad karoon?`;
+  const rep = `Main badhiya hoon${capitalized ? ' ' + capitalized : ''}, poochne ke liye shukriya! Aap bataiye, aaj portal mein tasks, projects ya clients mein kya madad karoon?`;
   return { reply: rep, speech: rep, speakText: rep, speakTextHi: rep };
 }
 
@@ -382,10 +382,10 @@ function isOutOfScopeQuery(text) {
 
 function getOutOfScopeReply(text, user, lang = 'hinglish') {
   if (lang === 'en') {
-    const rep = 'I am your CIIS CRM Assistant and can only assist with your company tasks, projects, and clients. I cannot answer medical, general knowledge, or off-topic questions. How can I help you with your CRM work today?';
+    const rep = 'I am your CIIS Portal Assistant and can only assist with your company tasks, projects, and clients. I cannot answer medical, general knowledge, or off-topic questions. How can I help you with your portal work today?';
     return { reply: rep, speech: rep, speakText: rep, speakTextHi: rep };
   }
-  const rep = 'Main aapka CIIS CRM Assistant hoon aur sirf aapke CRM tasks, projects aur clients mein madad kar sakta hoon. Main dawai, general knowledge ya bahar ke sawaalon ka jawab nahi de sakta. Aaj aapke CRM kaam mein kya madad karoon?';
+  const rep = 'Main aapka CIIS Portal Assistant hoon aur sirf aapke portal tasks, projects aur clients mein madad kar sakta hoon. Main dawai, general knowledge ya bahar ke sawaalon ka jawab nahi de sakta. Aaj aapke portal kaam mein kya madad karoon?';
   return { reply: rep, speech: rep, speakText: rep, speakTextHi: rep };
 }
 
@@ -1767,8 +1767,8 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
     const clients = Array.from(uniqueClientMap.values());
     if (clients.length === 0) {
       const rep = isEn
-        ? `${greetingPrefix}No clients found in your CRM yet. Would you like to add a new client?`
-        : `${greetingPrefix}Aapke CRM mein koi clients nahi mile. Kya aap naya client add karna chahte hain?`;
+        ? `${greetingPrefix}No clients found in your portal yet. Would you like to add a new client?`
+        : `${greetingPrefix}Aapke portal mein koi clients nahi mile. Kya aap naya client add karna chahte hain?`;
       return {
         success: true,
         status: 'open',
@@ -1793,8 +1793,8 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
     });
 
     const header = isEn
-      ? `${greetingPrefix}Here are ${clients.length} client(s) registered in your CRM:`
-      : `${greetingPrefix}Aapke CRM mein ${clients.length} client(s) registered hain:`;
+      ? `${greetingPrefix}Here are ${clients.length} client(s) registered in your portal:`
+      : `${greetingPrefix}Aapke portal mein ${clients.length} client(s) registered hain:`;
     const fullReply = `${header}\n\n${clientLines.join('\n')}\n\n${isEn ? 'Would you like to add a client or assign a task?' : 'Aap client add karna chahte hain ya client task?'}`;
 
     return {
@@ -1802,9 +1802,9 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
       status: 'open',
       field: 'welcome',
       reply: fullReply,
-      speech: isEn ? `Found ${clients.length} clients in your CRM.` : `CRM mein ${clients.length} clients mile.`,
+      speech: isEn ? `Found ${clients.length} clients in your portal.` : `Portal mein ${clients.length} clients mile.`,
       speakText: fullReply,
-      speakTextHi: isEn ? null : `CRM mein ${clients.length} clients mile.`,
+      speakTextHi: isEn ? null : `Portal mein ${clients.length} clients mile.`,
       language: isEn ? 'en' : 'hinglish',
       draft: null,
       chips: buildChips(null, 'welcome', { ...deps, language: lang, allowedIntents }),
@@ -2477,10 +2477,10 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
 
     const rep = mentionsPlanOrSub
       ? (isEn
-          ? `Client **"${clientDisplayName}"**${compStr} plan status has been successfully updated to **${targetClientStatus}**! ✅\n\nWould you like to check the client's CRM details or return to the main menu?`
+          ? `Client **"${clientDisplayName}"**${compStr} plan status has been successfully updated to **${targetClientStatus}**! ✅\n\nWould you like to check the client's portal details or return to the main menu?`
           : `Client **"${clientDisplayName}"**${compStr} ke plan ka status safaltapoorvak **${targetClientStatus}** update kar diya gaya hai! ✅\n\nKya aap is client ki details check karna chahte hain?`)
       : (isEn
-          ? `Client **"${clientDisplayName}"**${compStr} status has been successfully updated to **${targetClientStatus}**! ✅\n\nWould you like to check the client's CRM details or return to the main menu?`
+          ? `Client **"${clientDisplayName}"**${compStr} status has been successfully updated to **${targetClientStatus}**! ✅\n\nWould you like to check the client's portal details or return to the main menu?`
           : `Client **"${clientDisplayName}"**${compStr} ka status safaltapoorvak **${targetClientStatus}** update kar diya gaya hai! ✅\n\nKya aap is client ki details check karna chahte hain?`);
 
     const clientChips = isEn ? [
@@ -3106,8 +3106,8 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
   // If task was not found:
   const taskSearchName = taskCandidate ? `"${taskCandidate}"` : 'ye task';
   const notFoundRep = isEn
-    ? `Could not find ${taskSearchName} in CRM to update. Please check the task name or open your tasks list.`
-    : `CRM mein update karne ke liye ${taskSearchName} nahi mila. Kripya task ka naam check karein ya tasks list dekhein.`;
+    ? `Could not find ${taskSearchName} in portal to update. Please check the task name or open your tasks list.`
+    : `Portal mein update karne ke liye ${taskSearchName} nahi mila. Kripya task ka naam check karein ya tasks list dekhein.`;
 
   return {
     success: true,
@@ -3213,7 +3213,6 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
     ...(Array.isArray(user?.allowedPages) ? user.allowedPages : []),
     ...(Array.isArray(user?.pagePermissions) ? user.pagePermissions : []),
     ...(Array.isArray(user?.permissions) ? user.permissions : []),
-    ...(Array.isArray(scope?.companyAllowedPages) ? scope.companyAllowedPages : []),
     ...flattenItems(deps?.sidebarMenuItems),
     ...flattenItems(deps?.menuItems),
   ];
@@ -3244,19 +3243,15 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
   const allowed = ['self_task', 'bulk_self_task_csv'];
 
   // Assigning tasks to others requires "Admin Create Task" permission (not general Task Management)
-  // When no explicit restrictive permissions exist, internal company employees can assign tasks by default.
+  // When no explicit restrictive permissions exist and strictPermissions is off, internal company employees can assign tasks by default.
   const canAssign = Boolean(
     scope.isOwner ||
     scope.hasAccess ||
-    !hasExplicitRestrictions ||
+    (!hasExplicitRestrictions && !deps?.strictPermissions) ||
     normalizedPerms.has('admintaskcreate') ||
     normalizedPerms.has('admincreatetask') ||
     normalizedPerms.has('admin-task-create') ||
     normalizedPerms.has('admin-create-task') ||
-    normalizedPerms.has('taskmanagement') ||
-    normalizedPerms.has('createtask') ||
-    normalizedPerms.has('task-management') ||
-    normalizedPerms.has('create-task') ||
     normalizedPerms.has('ciisuser/admintaskcreate') ||
     normalizedPerms.has('ciisuser/admin-task-create') ||
     user?.permissions?.includes?.('admin-task-create') ||
@@ -3333,10 +3328,6 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
     normalizedPerms.has('clientplanmanagement') ||
     normalizedPerms.has('ciisuser/clientplans') ||
     normalizedPerms.has('ciisuser/client-plans') ||
-    (Array.isArray(scope?.companyAllowedPages) && scope.companyAllowedPages.some(p => {
-      const norm = String(p).toLowerCase().replace(/^\/+/, '').replace(/^ciisuser\//, '').replace(/[\s_-]+/g, '');
-      return norm === 'clientplans' || norm === 'clientplan' || norm === 'client-plans';
-    })) ||
     (Array.isArray(deps?.allowedIntents) && deps.allowedIntents.includes('create_client_plan')) ||
     normalizedPerms.has('empclient') ||
     normalizedPerms.has('emp-client') ||
@@ -3346,8 +3337,12 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
   }
 
   if (Array.isArray(deps.allowedIntents) && deps.allowedIntents.length > 0) {
-    const merged = new Set([...allowed, ...deps.allowedIntents.filter((i) => ALL_INTENTS.includes(i))]);
-    return ALL_INTENTS.filter((i) => merged.has(i));
+    const uiAllowed = new Set(deps.allowedIntents.filter((i) => ALL_INTENTS.includes(i)));
+    uiAllowed.add('self_task');
+    if (uiAllowed.has('self_task')) uiAllowed.add('bulk_self_task_csv');
+    if (uiAllowed.has('task_assigned_user')) uiAllowed.add('bulk_assigned_task_csv');
+    // Respect UI sidebarConfig permissions so backend never leaks extra chips
+    return ALL_INTENTS.filter((i) => uiAllowed.has(i));
   }
 
   return allowed;
@@ -3709,6 +3704,9 @@ async function parseTaskRequest({
     }
   }
   deps.sidebarMenuItems = sidebarMenuItems;
+  if (!deps.allowedIntents && Array.isArray(req?.body?.allowedIntents)) {
+    deps.allowedIntents = req.body.allowedIntents;
+  }
 
   const userAllowedIntents = resolveUserAllowedIntents(req?.user, scope, {
     ...deps,
@@ -7032,8 +7030,8 @@ const lastAskedField = currentDraft.asked.length > 0
       currentDraft.checkpointsAsked = true;
       if (!currentDraft.asked.includes('checkpoints')) currentDraft.asked.push('checkpoints');
       const cpReply = isEn
-        ? 'Would you like to add checkpoints? You can list them separated by commas (e.g. "test 1, checking crm, testing") or select "No checkpoints":'
-        : 'Checkpoints add karne hain? Comma daal kar likhein (jaise: test 1, checking crm, testing) ya "Koi checkpoint nahi" chunein:';
+        ? 'Would you like to add checkpoints? You can list them separated by commas (e.g. "test 1, checking portal, testing") or select "No checkpoints":'
+        : 'Checkpoints add karne hain? Comma daal kar likhein (jaise: test 1, checking portal, testing) ya "Koi checkpoint nahi" chunein:';
       const cpChips = isEn ? [
         { label: 'No checkpoints', action: { type: 'skip_client_task_checkpoints' } },
         { label: 'Cancel', action: { type: 'cancel' } }
@@ -10568,7 +10566,7 @@ const lastAskedField = currentDraft.asked.length > 0
       defaultEnReply = 'Until when should this task repeat? Specify Repeat End Date (e.g. "1 month", "3 months" or date):';
       defaultEnSpeech = 'Until when should this task repeat? Specify repeat end date.';
     } else if (nextFieldKey === 'checkpoints') {
-      defaultEnReply = 'Would you like to add checkpoints? You can list them separated by commas (e.g. "test 1, checking crm, testing") or tap Skip:';
+      defaultEnReply = 'Would you like to add checkpoints? You can list them separated by commas (e.g. "test 1, checking portal, testing") or tap Skip:';
       defaultEnSpeech = 'Would you like to add checkpoints? You can list them separated by commas or tap Skip.';
     } else if (nextFieldKey === 'attachments' || nextFieldKey === 'file') {
       defaultEnReply = 'Would you like to attach any file or image? If yes, please upload it, otherwise click on No.';

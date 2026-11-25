@@ -310,12 +310,69 @@ function buildTaskFields(args, targetUser, ctx, extraOverrides = {}) {
 }
 
 /**
+ * Renders a standardized, rich Task Preview Card for CIIS tasks.
+ * Used across preview_task, create_personal_task, assign_task, and create_project_task.
+ */
+function renderTaskPreviewCard({
+  title,
+  description = '—',
+  taskType = 'self',
+  assigneeLabel = 'Khud ke liye (self)',
+  dueDateTime,
+  priority = 'Medium',
+  status = 'pending',
+  repeatPattern = 'none',
+  repeatDays = [],
+  repeatEndDate,
+  reminder,
+  checkpoints = [],
+  attachmentPaths = [],
+  hasAttachment = false,
+  projectName = null
+}) {
+  const repeatText = (repeatPattern && repeatPattern !== 'none')
+    ? `${repeatPattern}${Array.isArray(repeatDays) && repeatDays.length > 0 ? ` on ${repeatDays.join(', ')}` : ''}${repeatEndDate ? ` until ${repeatEndDate}` : ''}`
+    : 'None';
+
+  const reminderText = reminder ? String(reminder) : 'None';
+  let attachmentsText = 'None';
+  if ((Array.isArray(attachmentPaths) && attachmentPaths.length > 0) || hasAttachment) {
+    attachmentsText = 'Attached Image / Screenshot (Auto-attached from desktop/clipboard)';
+  }
+
+  const projectLine = projectName ? `\n│ • Project:     ${projectName}` : '';
+
+  return [
+    '┌────────────────────────────────────────────────────────┐',
+    '│ 📋 CIIS TASK PREVIEW CARD (Confirmation Required)     │',
+    '├────────────────────────────────────────────────────────┤',
+    `│ • Title:       ${title}`,
+    `│ • Type:        ${taskType === 'self' ? 'Personal Task' : (taskType === 'project' ? 'Project Task' : 'Assigned Task')}`,
+    `│ • Assignee:    ${assigneeLabel}${projectLine}`,
+    `│ • Priority:    ${priority}`,
+    `│ • Status:      ${status}`,
+    `│ • Due:         ${dueDateTime || 'Not specified (will default to 24 hours)'}`,
+    `│ • Repeat:      ${repeatText}`,
+    `│ • Reminder:    ${reminderText}`,
+    `│ • Checkpoints: ${Array.isArray(checkpoints) && checkpoints.length > 0 ? `${checkpoints.length} item(s)` : 'None'}`,
+    `│ • Attachment:  ${attachmentsText}`,
+    `│ • Description: ${description}`,
+    '└────────────────────────────────────────────────────────┘',
+    '',
+    '⚠️ Ye task abhi save nahi hua hai. Kripya neeche diye gaye 3 vikalpon me se chunein:',
+    '1️⃣ Create / Confirm (Task save karne ke liye "Create" ya "Confirm" bolein)',
+    '2️⃣ Edit (Kisi bhi detail ko badalne ke liye bolein, jaise due time, priority, repeat, checkpoints)',
+    '3️⃣ Cancel (Cancel karne ke liye "Cancel" bolein)'
+  ].join('\n');
+}
+
+/**
  * Task Tools with RBAC enforcement, preview confirmation, and full field/attachment support
  */
 const taskTools = [
   {
     name: 'preview_task',
-    description: 'Generates a structured CIIS Task Preview Card with all details (Title, Assignee, Priority, Due Date/Time, Status, Repeat, Reminders, Checkpoints, Attachments) and prompts the user to Confirm / Create, Edit, or Cancel. ALWAYS call this tool first before calling create_personal_task or assign_task, unless the user explicitly requested immediate creation.',
+    description: 'Generates a structured CIIS Task Preview Card with all details (Title, Assignee, Priority, Due Date/Time, Status, Repeat, Reminders, Checkpoints, Attachments) and prompts the user with 3 options: Create / Confirm, Edit, or Cancel. [VOICE MODE READY: Fully supported in Claude Voice Mode and live voice calls. Always available.]',
     parameters: {
       type: 'object',
       properties: {
@@ -372,43 +429,27 @@ const taskTools = [
         }
       }
 
-      const repeatText = (repeatPattern && repeatPattern !== 'none')
-        ? `${repeatPattern}${repeatDays.length > 0 ? ` on ${repeatDays.join(', ')}` : ''}${repeatEndDate ? ` until ${repeatEndDate}` : ''}`
-        : 'None';
-
-      const reminderText = reminder ? String(reminder) : 'None';
-      let attachmentsText = 'None';
-      if ((Array.isArray(attachmentPaths) && attachmentPaths.length > 0) || hasAttachment) {
-        attachmentsText = 'Attached Image / Screenshot (Auto-attached)';
-      }
-
-      const card = [
-        '┌────────────────────────────────────────────────────────┐',
-        '│ 📋 CIIS TASK PREVIEW CARD                              │',
-        '├────────────────────────────────────────────────────────┤',
-        `│ • Title:       ${title}`,
-        `│ • Type:        ${taskType === 'self' ? 'Personal Task' : 'Assigned Task'}`,
-        `│ • Assignee:    ${assigneeLabel}`,
-        `│ • Priority:    ${priority}`,
-        `│ • Status:      ${status}`,
-        `│ • Due:         ${dueDateTime || 'Not specified (will default to 24 hours)'}`,
-        `│ • Repeat:      ${repeatText}`,
-        `│ • Reminder:    ${reminderText}`,
-        `│ • Checkpoints: ${Array.isArray(checkpoints) && checkpoints.length > 0 ? `${checkpoints.length} item(s)` : 'None'}`,
-        `│ • Attachment:  ${attachmentsText}`,
-        `│ • Description: ${description}`,
-        '└────────────────────────────────────────────────────────┘',
-        '',
-        'Aapke paas 3 vikalp hain:',
-        '1️⃣ Confirm / Create (Task database me create karne ke liye bolein "Confirm" ya "Haan")',
-        '2️⃣ Edit (Koi bhi detail badalni ho jaise due time, priority, repeat, checkpoints)',
-        '3️⃣ Cancel (Cancel karne ke liye bolein "Cancel")'
-      ].join('\n');
+      const card = renderTaskPreviewCard({
+        title,
+        description,
+        taskType,
+        assigneeLabel,
+        dueDateTime,
+        priority,
+        status,
+        repeatPattern,
+        repeatDays,
+        repeatEndDate,
+        reminder,
+        checkpoints,
+        attachmentPaths,
+        hasAttachment
+      });
 
       return {
         previewReady: true,
         previewCard: card,
-        options: ['Confirm / Create', 'Edit', 'Cancel'],
+        options: ['Create / Confirm', 'Edit', 'Cancel'],
         payload: {
           title,
           description,
@@ -430,7 +471,7 @@ const taskTools = [
 
   {
     name: 'create_personal_task',
-    description: 'Creates a personal task in the database for the authenticated user. If the user attached or pasted an image in chat, set hasAttachment: true or pass attachmentPaths: ["latest_screenshot"] to auto-attach it. IMPORTANT: You should first show the preview card to the user and obtain their confirmation before calling this tool, unless they explicitly asked to create it immediately.',
+    description: 'Creates a personal task in the CIIS database for the authenticated user. [VOICE MODE READY: Fully supported in Claude Voice Mode and live voice calls. Always call this tool when the user speaks a task request. If user mentions attachments or screenshots in voice mode, set hasAttachment: true or pass attachmentPaths: ["latest_screenshot"] — the server automatically retrieves the latest screenshot/clipboard image from their desktop without requiring manual file upload.] IMPORTANT: First call this tool with confirmed: false (or omitted) to display the CIIS Preview Card with 3 options (Create / Confirm, Edit, Cancel). Only pass confirmed: true after the user explicitly confirms.',
     parameters: {
       type: 'object',
       properties: {
@@ -445,12 +486,42 @@ const taskTools = [
         reminder: { type: 'string', description: 'Reminder frequency (e.g. "halfHourly", "hourly", "every 30 mins", "beforeDue")' },
         checkpoints: { type: 'array', items: { type: 'string' }, description: 'Checkpoints or checklist items (e.g. ["demo 1", "demo 2"])' },
         attachmentPaths: { type: 'array', items: { type: 'string' }, description: 'Local file/image paths or ["latest_screenshot"]' },
-        hasAttachment: { type: 'boolean', description: 'Set to true if user attached or pasted an image in chat' }
+        hasAttachment: { type: 'boolean', description: 'Set to true if user attached or pasted an image in chat or requested screenshot attachment in voice mode' },
+        confirmed: { type: 'boolean', default: false, description: 'Set to true ONLY after the user has reviewed the preview card and explicitly said Create or Confirm. If false or omitted, the tool returns the Preview Confirmation Card for user review without inserting into DB.' }
       },
       required: ['title']
     },
     permissionCheck: () => true,
     handler: async (args, ctx) => {
+      // 1. Enforce Confirmation Card Workflow
+      if (args.confirmed !== true) {
+        const previewCard = renderTaskPreviewCard({
+          title: args.title,
+          description: args.description || '—',
+          taskType: 'self',
+          assigneeLabel: `${ctx.user.name || 'User'} (${ctx.user.email || 'You'})`,
+          dueDateTime: args.dueDateTime,
+          priority: args.priority || 'Medium',
+          status: args.status || 'pending',
+          repeatPattern: args.repeatPattern,
+          repeatDays: args.repeatDays,
+          repeatEndDate: args.repeatEndDate,
+          reminder: args.reminder,
+          checkpoints: args.checkpoints,
+          attachmentPaths: args.attachmentPaths,
+          hasAttachment: args.hasAttachment
+        });
+
+        return {
+          requiresConfirmation: true,
+          message: 'Task preview generated. Present this Preview Card to the user with the 3 options (1. Create / Confirm, 2. Edit, 3. Cancel). DO NOT create the task until the user explicitly confirms.',
+          previewCard,
+          options: ['Create / Confirm', 'Edit', 'Cancel'],
+          taskData: { ...args, confirmed: true }
+        };
+      }
+
+      // 2. User has confirmed: proceed with task creation
       const payload = buildTaskFields(args, ctx.user, ctx, {
         taskType: 'self',
         taskFor: 'self',
@@ -484,7 +555,7 @@ const taskTools = [
 
   {
     name: 'assign_task',
-    description: 'Assigns a task to another team member or employee in the database. If the user attached or pasted an image in chat, set hasAttachment: true or pass attachmentPaths: ["latest_screenshot"] to auto-attach it. IMPORTANT: You should first show the preview card to the user and obtain their confirmation before calling this tool, unless they explicitly asked to assign it immediately.',
+    description: 'Assigns a task to another team member or employee in the CIIS database. [VOICE MODE READY: Fully supported in Claude Voice Mode and live voice calls. Always call this tool when the user speaks an assignment request. If user mentions attachments or screenshots in voice mode, set hasAttachment: true or pass attachmentPaths: ["latest_screenshot"] — the server automatically retrieves the latest screenshot/clipboard image from their desktop without requiring manual file upload.] IMPORTANT: First call this tool with confirmed: false (or omitted) to display the CIIS Preview Card with 3 options (Create / Confirm, Edit, Cancel). Only pass confirmed: true after the user explicitly confirms.',
     parameters: {
       type: 'object',
       properties: {
@@ -501,13 +572,14 @@ const taskTools = [
         checkpoints: { type: 'array', items: { type: 'string' }, description: 'Checkpoints or checklist items (e.g. ["demo 1", "demo 2"])' },
         projectId: { type: 'string', description: 'Optional Project ID if associated with a project' },
         attachmentPaths: { type: 'array', items: { type: 'string' }, description: 'Local file/image paths or ["latest_screenshot"]' },
-        hasAttachment: { type: 'boolean', description: 'Set to true if user attached or pasted an image in chat' }
+        hasAttachment: { type: 'boolean', description: 'Set to true if user attached or pasted an image in chat or requested screenshot attachment in voice mode' },
+        confirmed: { type: 'boolean', default: false, description: 'Set to true ONLY after the user has reviewed the preview card and explicitly said Create or Confirm. If false or omitted, the tool returns the Preview Confirmation Card for user review without inserting into DB.' }
       },
       required: ['title', 'assigneeNameOrEmail']
     },
     permissionCheck: (ctx) => ctx.permissions.canAssignTeamTasks,
     handler: async (args, ctx) => {
-      const { assigneeNameOrEmail, projectId } = args;
+      const { assigneeNameOrEmail, projectId, confirmed } = args;
       
       const targetUser = await User.findOne({
         companyCode: ctx.companyCode,
@@ -526,6 +598,36 @@ const taskTools = [
         projectRef = await Project.findOne({ _id: projectId, companyCode: ctx.companyCode });
       }
 
+      // 1. Enforce Confirmation Card Workflow
+      if (confirmed !== true) {
+        const previewCard = renderTaskPreviewCard({
+          title: args.title,
+          description: args.description || '—',
+          taskType: projectRef ? 'project' : 'assigned',
+          assigneeLabel: `${targetUser.name} (${targetUser.email})`,
+          dueDateTime: args.dueDateTime,
+          priority: args.priority || 'Medium',
+          status: args.status || 'pending',
+          repeatPattern: args.repeatPattern,
+          repeatDays: args.repeatDays,
+          repeatEndDate: args.repeatEndDate,
+          reminder: args.reminder,
+          checkpoints: args.checkpoints,
+          attachmentPaths: args.attachmentPaths,
+          hasAttachment: args.hasAttachment,
+          projectName: projectRef ? projectRef.projectName : null
+        });
+
+        return {
+          requiresConfirmation: true,
+          message: 'Assigned task preview generated. Present this Preview Card to the user with the 3 options (1. Create / Confirm, 2. Edit, 3. Cancel). DO NOT assign or save the task until the user explicitly confirms.',
+          previewCard,
+          options: ['Create / Confirm', 'Edit', 'Cancel'],
+          taskData: { ...args, confirmed: true }
+        };
+      }
+
+      // 2. User has confirmed: proceed with task assignment
       const payload = buildTaskFields(args, targetUser, ctx, {
         taskType: projectRef ? 'project' : 'assigned',
         taskFor: 'others',
@@ -560,8 +662,115 @@ const taskTools = [
   },
 
   {
+    name: 'create_project',
+    description: 'Creates a brand new Project in the CIIS database with description, dates, priority, status, and team members. [VOICE MODE READY: Fully supported in Claude Voice Mode and text chat.] IMPORTANT: First call with confirmed: false (or omitted) to display the CIIS Project Preview Card with 3 options (Create / Confirm, Edit, Cancel). Only pass confirmed: true after user explicitly confirms.',
+    parameters: {
+      type: 'object',
+      properties: {
+        projectName: { type: 'string', description: 'Name of the new project (required)' },
+        description: { type: 'string', description: 'Project description (required)' },
+        startDate: { type: 'string', description: 'Start date in YYYY-MM-DD format (defaults to today)' },
+        endDate: { type: 'string', description: 'End / completion date in YYYY-MM-DD format' },
+        priority: { type: 'string', enum: ['low', 'medium', 'high'], default: 'medium' },
+        status: { type: 'string', enum: ['active', 'planning', 'on hold', 'completed'], default: 'active' },
+        memberNamesOrEmails: { type: 'array', items: { type: 'string' }, description: 'Optional list of team member names or emails' },
+        confirmed: { type: 'boolean', default: false, description: 'Set to true ONLY after user confirms the Preview Card.' }
+      },
+      required: ['projectName', 'description']
+    },
+    permissionCheck: (ctx) => ctx.permissions.canAssignTeamTasks,
+    handler: async (args, ctx) => {
+      const {
+        projectName,
+        description = '',
+        startDate,
+        endDate,
+        priority = 'medium',
+        status = 'active',
+        memberNamesOrEmails = [],
+        confirmed = false
+      } = args;
+
+      const resolvedMembers = [];
+      if (Array.isArray(memberNamesOrEmails) && memberNamesOrEmails.length > 0) {
+        for (const m of memberNamesOrEmails) {
+          if (!m) continue;
+          const found = await User.findOne({
+            companyCode: ctx.companyCode,
+            $or: [
+              { email: { $regex: new RegExp(`^${String(m).trim()}$`, 'i') } },
+              { name: { $regex: new RegExp(String(m).trim(), 'i') } }
+            ]
+          }).select('_id name email');
+          if (found) resolvedMembers.push(found);
+        }
+      }
+
+      if (confirmed !== true) {
+        const previewCard = [
+          '┌────────────────────────────────────────────────────────┐',
+          '│ 📋 CIIS PROJECT PREVIEW CARD (Confirmation Required)  │',
+          '├────────────────────────────────────────────────────────┤',
+          `│ • Project:     ${projectName}`,
+          `│ • Description: ${description || '—'}`,
+          `│ • Priority:    ${priority}`,
+          `│ • Status:      ${status}`,
+          `│ • Start Date:  ${startDate || 'Today'}`,
+          `│ • End Date:    ${endDate || 'Not specified'}`,
+          `│ • Members:     ${resolvedMembers.length > 0 ? resolvedMembers.map(u => u.name).join(', ') : 'None (Creator only)'}`,
+          '└────────────────────────────────────────────────────────┘',
+          '',
+          '⚠️ Ye project abhi save nahi hua hai. Kripya neeche diye gaye 3 vikalpon me se chunein:',
+          '1️⃣ Create / Confirm (Project create karne ke liye "Create" ya "Confirm" bolein)',
+          '2️⃣ Edit (Kisi bhi detail ko badalne ke liye bolein)',
+          '3️⃣ Cancel (Cancel karne ke liye "Cancel" bolein)'
+        ].join('\n');
+
+        return {
+          requiresConfirmation: true,
+          message: 'Project preview generated. Present this Preview Card to the user with 3 options (1. Create / Confirm, 2. Edit, 3. Cancel).',
+          previewCard,
+          options: ['Create / Confirm', 'Edit', 'Cancel'],
+          projectData: { ...args, confirmed: true }
+        };
+      }
+
+      const memberIds = Array.from(new Set([
+        String(ctx.user._id),
+        ...resolvedMembers.map(u => String(u._id))
+      ]));
+
+      const project = await Project.create({
+        projectName: projectName.trim(),
+        description: description.trim(),
+        company: ctx.companyId,
+        companyCode: ctx.companyCode,
+        managers: [ctx.user._id],
+        users: memberIds,
+        status: String(status || 'active').toLowerCase(),
+        priority: String(priority || 'medium').toLowerCase(),
+        startDate: startDate ? new Date(startDate) : new Date(),
+        endDate: endDate ? new Date(endDate) : undefined,
+        createdBy: ctx.user._id
+      });
+
+      return {
+        success: true,
+        message: `Project '${project.projectName}' created successfully.`,
+        project: {
+          id: project._id,
+          projectName: project.projectName,
+          status: project.status,
+          priority: project.priority,
+          membersCount: memberIds.length
+        }
+      };
+    }
+  },
+
+  {
     name: 'create_project_task',
-    description: 'Creates a task within an existing project in the database. Supports preview, repeat schedule, checkpoints, reminders, and file attachments.',
+    description: 'Creates a task within an existing project in the CIIS database. [VOICE MODE READY: Fully supported in Claude Voice Mode and live voice calls. Always call this tool when the user speaks a project task request. If user mentions attachments or screenshots in voice mode, set hasAttachment: true or pass attachmentPaths: ["latest_screenshot"] — the server auto-retrieves it from desktop/clipboard without requiring manual file upload.] IMPORTANT: First call this tool with confirmed: false (or omitted) to display the CIIS Preview Card with 3 options (Create / Confirm, Edit, Cancel). Only pass confirmed: true after the user explicitly confirms.',
     parameters: {
       type: 'object',
       properties: {
@@ -578,13 +787,14 @@ const taskTools = [
         reminder: { type: 'string', description: 'Reminder frequency (e.g. "halfHourly", "hourly")' },
         checkpoints: { type: 'array', items: { type: 'string' }, description: 'Checkpoints list (e.g. ["Phase 1", "Phase 2"])' },
         attachmentPaths: { type: 'array', items: { type: 'string' }, description: 'Local file/image paths or ["latest_screenshot"]' },
-        hasAttachment: { type: 'boolean', description: 'Set to true if user attached or pasted an image in chat' }
+        hasAttachment: { type: 'boolean', description: 'Set to true if user attached or pasted an image in chat or requested screenshot attachment in voice mode' },
+        confirmed: { type: 'boolean', default: false, description: 'Set to true ONLY after the user has reviewed the preview card and explicitly said Create or Confirm. If false or omitted, the tool returns the Preview Confirmation Card for user review without inserting into DB.' }
       },
       required: ['projectNameOrId', 'title']
     },
     permissionCheck: (ctx) => ctx.permissions.canAssignTeamTasks,
     handler: async (args, ctx) => {
-      const { projectNameOrId, assigneeNameOrEmail } = args;
+      const { projectNameOrId, assigneeNameOrEmail, confirmed } = args;
       
       const project = await Project.findOne({
         companyCode: ctx.companyCode,
@@ -612,6 +822,36 @@ const taskTools = [
 
       const isSelf = assignedUser._id.equals ? assignedUser._id.equals(ctx.user._id) : String(assignedUser._id) === String(ctx.user._id);
 
+      // 1. Enforce Confirmation Card Workflow
+      if (confirmed !== true) {
+        const previewCard = renderTaskPreviewCard({
+          title: args.title,
+          description: args.description || '—',
+          taskType: 'project',
+          assigneeLabel: `${assignedUser.name} (${assignedUser.email})`,
+          dueDateTime: args.dueDateTime,
+          priority: args.priority || 'Medium',
+          status: args.status || 'pending',
+          repeatPattern: args.repeatPattern,
+          repeatDays: args.repeatDays,
+          repeatEndDate: args.repeatEndDate,
+          reminder: args.reminder,
+          checkpoints: args.checkpoints,
+          attachmentPaths: args.attachmentPaths,
+          hasAttachment: args.hasAttachment,
+          projectName: project.projectName
+        });
+
+        return {
+          requiresConfirmation: true,
+          message: 'Project task preview generated. Present this Preview Card to the user with the 3 options (1. Create / Confirm, 2. Edit, 3. Cancel). DO NOT create the task until the user explicitly confirms.',
+          previewCard,
+          options: ['Create / Confirm', 'Edit', 'Cancel'],
+          taskData: { ...args, confirmed: true }
+        };
+      }
+
+      // 2. User has confirmed: proceed with task creation
       const payload = buildTaskFields(args, assignedUser, ctx, {
         taskType: 'project',
         taskFor: isSelf ? 'self' : 'others',

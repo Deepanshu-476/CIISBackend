@@ -144,6 +144,41 @@ const handleCsvUpload = (req, res, next) => {
 };
 
 // ---- Voice Task Agent (time-gate yahan NAHI lagta: employee din mein bhi task bana sake) ----
+router.get('/task-agent/entitlement', protect, async (req, res) => {
+  try {
+    const companyId = req.user?.company?._id || req.user?.company;
+    const limits = await aiTaskBudget.getCompanyAiLimits(companyId);
+    const totalAllowedTokens = (limits.tokenLimit || 0) + (limits.extraTokens || 0);
+    const isPrivileged = aiTaskBudget.isOwnerOrAdmin(req.user);
+
+    if (limits.aiApiKeySource !== 'client' && totalAllowedTokens <= 0) {
+      return res.json({
+        success: true,
+        hasAiAccess: false,
+        code: 'AI_SUBSCRIPTION_REQUIRED',
+        message: 'To automate your portal through CIIS AI Assistant, please upgrade your company plan.',
+      });
+    }
+
+    if (!isPrivileged && req.user?.aiConfig && req.user.aiConfig.enabled === false) {
+      return res.json({
+        success: true,
+        hasAiAccess: false,
+        code: 'AI_ACCESS_DISABLED_BY_ADMIN',
+        message: "You don't have access to use CIIS AI. Please contact your company administrator.",
+      });
+    }
+
+    return res.json({
+      success: true,
+      hasAiAccess: true,
+      code: null,
+    });
+  } catch (err) {
+    console.error('AI entitlement check error:', err);
+    return res.json({ success: true, hasAiAccess: true, code: null });
+  }
+});
 router.post('/task-agent/parse', protect, aiParseLimiter, aiTaskBudget, aiController.parseTask);
 router.post('/transcribe', protect, aiSttLimiter, aiTaskBudget.aiSttBudget, handleAudioUpload, aiController.transcribe);
 router.post('/task-agent/parse-csv', protect, aiParseLimiter, aiTaskBudget, handleCsvUpload, aiController.parseCsvTasks);

@@ -29,22 +29,27 @@ const getEffectiveCompanyId = (req) => {
 };
 
 const isUserAdminOrHr = (req) => {
-  if (req.user?.isOwner || req.user?.isSuperAdmin) return true;
+  if (req.user?.isOwner || req.user?.isSuperAdmin || req.user?.isPlatformOwner) return true;
   const role = String(
     req.user?.companyRole ||
     req.user?.role ||
-    req.user?.jobRole ||
     req.user?.userType ||
     ''
   ).toLowerCase();
-  return (
+  if (
     role.includes('admin') ||
     role.includes('hr') ||
-    role.includes('manager') ||
     role.includes('superadmin') ||
     role.includes('director') ||
     role.includes('owner')
-  );
+  ) {
+    return true;
+  }
+  const allowedPages = Array.isArray(req.user?.allowedPages) ? req.user.allowedPages : [];
+  return allowedPages.some((p) => {
+    const norm = String(p || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    return norm.includes('emppattendence') || norm.includes('employeeattendance') || norm.includes('adminattendance') || norm.includes('allattendance');
+  });
 };
 
 const formatDate = (date) => {
@@ -364,7 +369,8 @@ exports.exportAttendanceReport = async (req, res) => {
   try {
     const companyCode = getEffectiveCompanyCode(req);
     const isAdmin = isUserAdminOrHr(req);
-    const requestedType = String(req.query.type || (isAdmin ? 'all' : 'self')).toLowerCase();
+    const rawType = Array.isArray(req.query.type) ? req.query.type[0] : req.query.type;
+    const requestedType = String(rawType || (isAdmin ? 'all' : 'self')).toLowerCase();
     const format = String(req.query.format || 'xlsx').toLowerCase();
     const queryDate = req.query.date; // e.g. 'today' or '2026-11-20'
     const targetUserId = req.query.userId;
@@ -372,8 +378,8 @@ exports.exportAttendanceReport = async (req, res) => {
     let filter = {};
     let subtitle = `Generated on: ${formatDate(new Date())}`;
 
-    // Determine target users
-    if (requestedType === 'self' || (!isAdmin && !targetUserId && !req.query.userName)) {
+    // Determine target users: non-Admin/HR employees are strictly restricted to their own attendance
+    if (requestedType === 'self' || !isAdmin) {
       filter.user = req.user._id;
       subtitle = `Attendance for: ${req.user.name || 'Current User'} | ${subtitle}`;
     } else if (targetUserId) {
@@ -486,11 +492,42 @@ exports.exportAttendanceReport = async (req, res) => {
     }
 
     let records = [];
-    if (requestedType === 'self' || targetUserId || req.query.userName) {
+    if (requestedType === 'self' || !isAdmin || targetUserId || req.query.userName) {
       records = await Attendance.find(filter)
         .populate('user', 'name email employeeId department departmentName jobRole branch branchName employeeType shift shiftName shiftType')
         .sort({ date: -1, 'user.name': 1 })
         .lean();
+
+      if (records.length === 0 && filter.user) {
+        const gteDate = filter.date?.$gte ? new Date(filter.date.$gte) : new Date();
+        const lteDate = filter.date?.$lte ? new Date(filter.date.$lte) : new Date();
+        const diffDays = Math.round((lteDate - gteDate) / (1000 * 60 * 60 * 24));
+        if (diffDays <= 1) {
+          const singleUser = await User.findById(filter.user)
+            .populate('branch', 'name branchName branchCode')
+            .populate('department', 'name')
+            .lean();
+          if (singleUser) {
+            const targetDateStr = gteDate.toISOString().slice(0, 10);
+            records = [{
+              _id: `absent_${singleUser._id}_${targetDateStr}`,
+              user: singleUser,
+              date: gteDate,
+              inTime: null,
+              outTime: null,
+              hoursWorked: '00:00:00',
+              totalHours: 0,
+              lateBy: '00:00:00',
+              earlyLeave: '00:00:00',
+              overTime: '00:00:00',
+              status: 'ABSENT',
+              weeklyOff: false,
+              isHoliday: false,
+              isClockedIn: false
+            }];
+          }
+        }
+      }
     } else {
       // Company-wide: Include ALL active company employees (present, late, half day, or absent)
       // exactly matching EmppAttendence.jsx manual export!
@@ -724,7 +761,8 @@ exports.exportTasksReport = async (req, res) => {
   try {
     const companyCode = getEffectiveCompanyCode(req);
     const isAdmin = isUserAdminOrHr(req);
-    const requestedType = String(req.query.type || (isAdmin ? 'all' : 'self')).toLowerCase();
+    const rawType = Array.isArray(req.query.type) ? req.query.type[0] : req.query.type;
+    const requestedType = String(rawType || (isAdmin ? 'all' : 'self')).toLowerCase();
     const format = String(req.query.format || 'xlsx').toLowerCase();
     const queryDate = req.query.date; // 'today' or YYYY-MM-DD
     const targetUserId = req.query.userId;

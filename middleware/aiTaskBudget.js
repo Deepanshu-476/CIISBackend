@@ -1,5 +1,6 @@
 const AiUsage = require('../models/AiUsage');
 const Company = require('../models/Company');
+try { require('../models/Plan'); } catch (_) {}
 const mongoose = require('mongoose');
 
 const getTodayIstDate = (d = new Date()) => {
@@ -34,7 +35,18 @@ const isOwnerOrAdmin = (user) => {
  * - aiExtraTokens: Top-up token pool for company
  */
 const getCompanyAiLimits = async (companyRef) => {
-  if (companyRef && typeof companyRef === 'object') {
+  const isPopulatedCompanyDoc = Boolean(
+    companyRef &&
+    typeof companyRef === 'object' &&
+    !mongoose.isValidObjectId(companyRef) &&
+    (
+      companyRef.companyCode !== undefined ||
+      companyRef.aiDailyTokenLimit !== undefined ||
+      companyRef.selectedPlan !== undefined ||
+      companyRef.aiApiKeySource !== undefined
+    )
+  );
+  if (isPopulatedCompanyDoc) {
     const plan = companyRef.selectedPlan;
     const planTokenLimit = (plan && typeof plan === 'object' && plan.aiDailyTokenLimit !== undefined) ? Number(plan.aiDailyTokenLimit) : 0;
     const planCallLimit = (plan && typeof plan === 'object' && plan.aiDailyCallLimit !== undefined) ? Number(plan.aiDailyCallLimit) : 0;

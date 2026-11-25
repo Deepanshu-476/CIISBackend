@@ -3,10 +3,185 @@ const ClientTask = require('../../HR-CDS/models/ClientTask');
 const ClientPlan = require('../../HR-CDS/models/ClientPlan');
 const User = require('../../models/User');
 
+function renderEntityPreviewCard(headerTitle, rows) {
+  const lines = [
+    '┌────────────────────────────────────────────────────────┐',
+    `│ 📋 ${headerTitle.padEnd(51, ' ')} │`,
+    '├────────────────────────────────────────────────────────┤',
+    ...rows.filter(Boolean).map(([k, v]) => `│ • ${(k + ':').padEnd(14, ' ')} ${v}`),
+    '└────────────────────────────────────────────────────────┘',
+    '',
+    '⚠️ Ye abhi save nahi hua hai. Kripya neeche diye gaye 3 vikalpon me se chunein:',
+    '1️⃣ Create / Confirm (Save karne ke liye "Create" ya "Confirm" bolein)',
+    '2️⃣ Edit (Kisi bhi detail ko badalne ke liye bolein)',
+    '3️⃣ Cancel (Cancel karne ke liye "Cancel" bolein)'
+  ];
+  return lines.join('\n');
+}
+
 const clientTools = [
   {
+    name: 'create_client',
+    description: 'Creates / adds a new Client in the CIIS database with company details, city, contact info, project manager(s), services, and optional client subscription plan. IMPORTANT: First call with confirmed: false (or omitted) to display the Preview Card with 3 options (Create / Confirm, Edit, Cancel). Only pass confirmed: true after user explicitly confirms.',
+    parameters: {
+      type: 'object',
+      properties: {
+        client: { type: 'string', description: 'Client contact person / primary name (required)' },
+        company: { type: 'string', description: 'Client company / brand name (required)' },
+        city: { type: 'string', description: 'City (required, e.g. Delhi, Mumbai, Chandigarh)' },
+        projectManagers: { type: 'array', items: { type: 'string' }, description: 'Array of project manager names (defaults to authenticated user if omitted)' },
+        email: { type: 'string', description: 'Client email address' },
+        phone: { type: 'string', description: 'Client phone number' },
+        industry: { type: 'string', description: 'Industry (e.g. IT, Healthcare, Retail)' },
+        gst: { type: 'string', description: 'GST number' },
+        pan: { type: 'string', description: 'PAN number' },
+        website: { type: 'string', description: 'Client website URL' },
+        state: { type: 'string', description: 'State' },
+        country: { type: 'string', description: 'Country' },
+        pincode: { type: 'string', description: 'Pincode / ZIP' },
+        address: { type: 'string', description: 'Street address' },
+        description: { type: 'string', description: 'Client description' },
+        notes: { type: 'string', description: 'Additional notes' },
+        services: { type: 'array', items: { type: 'string' }, description: 'List of services (e.g. ["SEO", "Web Development"])' },
+        clientPlanNameOrId: { type: 'string', description: 'Optional Client Plan name or ID to attach to this client' },
+        subscriptionStartDate: { type: 'string', description: 'Optional subscription start date (YYYY-MM-DD)' },
+        status: { type: 'string', enum: ['Active', 'On Hold', 'Inactive'], default: 'Active' },
+        confirmed: { type: 'boolean', default: false, description: 'Set to true ONLY after user confirms the Preview Card.' }
+      },
+      required: ['client', 'company', 'city']
+    },
+    permissionCheck: (ctx) => ctx.permissions.canManageClients,
+    handler: async (args, ctx) => {
+      if (!ctx.permissions.canManageClients) {
+        throw new Error('Permission denied: Your role does not have permission to add clients.');
+      }
+
+      const {
+        client,
+        company,
+        city,
+        projectManagers = [],
+        email = '',
+        phone = '',
+        industry = '',
+        gst = '',
+        pan = '',
+        website = '',
+        state = '',
+        country = '',
+        pincode = '',
+        address = '',
+        description = '',
+        notes = '',
+        services = [],
+        clientPlanNameOrId,
+        subscriptionStartDate,
+        status = 'Active',
+        confirmed = false
+      } = args;
+
+      const resolvedManagers = Array.isArray(projectManagers) && projectManagers.filter(Boolean).length > 0
+        ? projectManagers.map(m => String(m).trim()).filter(Boolean)
+        : [ctx.user?.name || ctx.user?.email || 'Admin'];
+
+      let matchedPlan = null;
+      if (clientPlanNameOrId) {
+        matchedPlan = await ClientPlan.findOne({
+          companyCode: ctx.companyCode,
+          $or: [
+            { _id: String(clientPlanNameOrId).match(/^[0-9a-fA-F]{24}$/) ? clientPlanNameOrId : null },
+            { name: { $regex: new RegExp(String(clientPlanNameOrId).trim(), 'i') } }
+          ].filter(Boolean)
+        }).lean();
+      }
+
+      const finalServices = Array.isArray(services) && services.length > 0
+        ? services.map(s => String(s).trim()).filter(Boolean)
+        : (matchedPlan && Array.isArray(matchedPlan.services) ? matchedPlan.services.map(s => s.service).filter(Boolean) : []);
+
+      if (confirmed !== true) {
+        const previewCard = renderEntityPreviewCard('CIIS CLIENT PREVIEW CARD (Confirm)', [
+          ['Client Name', client],
+          ['Company', company],
+          ['City', city],
+          ['Managers', resolvedManagers.join(', ')],
+          email ? ['Email', email] : null,
+          phone ? ['Phone', phone] : null,
+          industry ? ['Industry', industry] : null,
+          matchedPlan ? ['Plan', `${matchedPlan.name} (₹${matchedPlan.price || 0})`] : null,
+          ['Services', finalServices.length > 0 ? finalServices.join(', ') : 'None'],
+          ['Status', status]
+        ]);
+
+        return {
+          requiresConfirmation: true,
+          message: 'Client preview generated. Present this Preview Card to the user with 3 options (1. Create / Confirm, 2. Edit, 3. Cancel).',
+          previewCard,
+          options: ['Create / Confirm', 'Edit', 'Cancel'],
+          clientData: { ...args, confirmed: true }
+        };
+      }
+
+      const subscription = [];
+      if (matchedPlan) {
+        const start = subscriptionStartDate ? new Date(subscriptionStartDate) : new Date();
+        const end = new Date(start);
+        end.setMonth(end.getMonth() + (Number(matchedPlan.months) || 1));
+        subscription.push({
+          subscriptionNo: 1,
+          planId: matchedPlan._id,
+          planName: matchedPlan.name,
+          servicesSnapshot: matchedPlan.services || [],
+          startDate: start,
+          endDate: end,
+          status: 'Active'
+        });
+      }
+
+      const created = await Client.create({
+        client: client.trim(),
+        company: company.trim(),
+        city: city.trim(),
+        companyCode: ctx.companyCode,
+        projectManager: resolvedManagers,
+        services: finalServices,
+        activeClientPlan: matchedPlan ? matchedPlan._id : null,
+        subscription,
+        status,
+        email: email.trim() || undefined,
+        phone: phone.trim() || undefined,
+        industry: industry.trim(),
+        gst: gst.trim().toUpperCase(),
+        pan: pan.trim().toUpperCase(),
+        website: website.trim(),
+        state: state.trim(),
+        country: country.trim(),
+        pincode: pincode.trim(),
+        address: address.trim(),
+        description: description.trim(),
+        notes: notes.trim() || undefined
+      });
+
+      return {
+        success: true,
+        message: `Client '${created.client}' (${created.company}) added successfully.`,
+        client: {
+          id: created._id,
+          client: created.client,
+          company: created.company,
+          city: created.city,
+          projectManagers: created.projectManager,
+          services: created.services,
+          plan: matchedPlan ? matchedPlan.name : null,
+          status: created.status
+        }
+      };
+    }
+  },
+
+  {
     name: 'create_client_service_task',
-    description: 'Creates a task under a specific Client and Service (e.g., SEO, Web Development, Social Media).',
+    description: 'Creates a task under a specific Client and Service (e.g., SEO, Web Development, Social Media). IMPORTANT: First call with confirmed: false (or omitted) to show the Preview Card with 3 options (Create, Edit, Cancel).',
     parameters: {
       type: 'object',
       properties: {
@@ -16,13 +191,14 @@ const clientTools = [
         description: { type: 'string', description: 'Task description' },
         dueDate: { type: 'string', description: 'Due date in YYYY-MM-DD format' },
         priority: { type: 'string', enum: ['Low', 'Medium', 'High'], default: 'Medium' },
-        assigneeNameOrEmail: { type: 'string', description: 'Optional assignee' }
+        assigneeNameOrEmail: { type: 'string', description: 'Optional assignee' },
+        confirmed: { type: 'boolean', default: false, description: 'Set to true ONLY after user confirms the Preview Card.' }
       },
       required: ['clientNameOrId', 'serviceName', 'title']
     },
     permissionCheck: (ctx) => ctx.permissions.canManageClientServices,
     handler: async (args, ctx) => {
-      const { clientNameOrId, serviceName, title, description = '', dueDate, priority = 'Medium', assigneeNameOrEmail } = args;
+      const { clientNameOrId, serviceName, title, description = '', dueDate, priority = 'Medium', assigneeNameOrEmail, confirmed = false } = args;
 
       const client = await Client.findOne({
         companyCode: ctx.companyCode,
@@ -46,6 +222,26 @@ const clientTools = [
           ]
         });
         if (found) assignedUser = found;
+      }
+
+      if (confirmed !== true) {
+        const previewCard = renderEntityPreviewCard('CIIS CLIENT TASK PREVIEW CARD', [
+          ['Title', title],
+          ['Client', client.client],
+          ['Service', serviceName],
+          ['Assignee', `${assignedUser.name} (${assignedUser.email || ''})`],
+          ['Priority', priority],
+          ['Due Date', dueDate || '3 days from now'],
+          ['Description', description || '—']
+        ]);
+
+        return {
+          requiresConfirmation: true,
+          message: 'Client task preview generated. Present this Preview Card to the user with 3 options (1. Create / Confirm, 2. Edit, 3. Cancel).',
+          previewCard,
+          options: ['Create / Confirm', 'Edit', 'Cancel'],
+          taskData: { ...args, confirmed: true }
+        };
       }
 
       const clientTask = await ClientTask.create({
@@ -80,7 +276,7 @@ const clientTools = [
 
   {
     name: 'create_client_plan',
-    description: 'Creates a new Client Subscription Plan with services & pricing. GATED: Requires SuperAdmin / Owner / Admin permissions.',
+    description: 'Creates a new Client Subscription Plan with services & pricing. GATED: Requires SuperAdmin / Owner / Admin permissions. IMPORTANT: First call with confirmed: false (or omitted) to show Preview Card with 3 options (Create, Edit, Cancel).',
     parameters: {
       type: 'object',
       properties: {
@@ -111,7 +307,8 @@ const clientTools = [
             },
             required: ['service']
           }
-        }
+        },
+        confirmed: { type: 'boolean', default: false, description: 'Set to true ONLY after user confirms the Preview Card.' }
       },
       required: ['name', 'price']
     },
@@ -121,11 +318,29 @@ const clientTools = [
         throw new Error('Permission denied: Only SuperAdmin, Company Owner, or Admin can create Client Plans.');
       }
 
-      const { name, price, months = 1, description = '', services = [] } = args;
+      const { name, price, months = 1, description = '', services = [], confirmed = false } = args;
 
       const existing = await ClientPlan.findOne({ companyCode: ctx.companyCode, name: name.trim() });
       if (existing) {
         throw new Error(`A client plan with name '${name}' already exists in company ${ctx.companyCode}.`);
+      }
+
+      if (confirmed !== true) {
+        const previewCard = renderEntityPreviewCard('CIIS CLIENT PLAN PREVIEW CARD', [
+          ['Plan Name', name],
+          ['Price', `₹${Number(price) || 0}`],
+          ['Duration', `${Number(months) || 1} month(s)`],
+          ['Services', Array.isArray(services) && services.length > 0 ? services.map(s => s.service).join(', ') : 'None'],
+          ['Description', description || '—']
+        ]);
+
+        return {
+          requiresConfirmation: true,
+          message: 'Client plan preview generated. Present this Preview Card to the user with 3 options (1. Create / Confirm, 2. Edit, 3. Cancel).',
+          previewCard,
+          options: ['Create / Confirm', 'Edit', 'Cancel'],
+          planData: { ...args, confirmed: true }
+        };
       }
 
       const plan = await ClientPlan.create({

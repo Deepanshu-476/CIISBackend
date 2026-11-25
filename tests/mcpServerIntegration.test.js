@@ -139,20 +139,59 @@ test('CIIS MCP Server Architecture, Security & Tool Gating Tests', async (t) => 
     );
   });
 
-  // 6. Tool Execution: Employee creates personal task
-  await t.test('Execution: Employee can create personal task successfully', async () => {
-    const res = await executeTool('create_personal_task', {
-      title: 'MCP Unit Test Personal Task',
-      description: 'Testing employee personal task creation via MCP',
+  // 6. Tool Execution: Preview Card Workflow & Task Creation
+  await t.test('Execution: Calling create_personal_task without confirmed returns Preview Card with 3 options', async () => {
+    const previewRes = await executeTool('create_personal_task', {
+      title: 'MCP Unit Test Personal Task Preview',
+      description: 'Testing preview card confirmation flow',
       priority: 'High'
     }, empAuth);
 
+    assert.strictEqual(previewRes.requiresConfirmation, true);
+    assert.ok(previewRes.previewCard.includes('CIIS TASK PREVIEW CARD (Confirmation Required)'));
+    assert.ok(previewRes.previewCard.includes('1️⃣ Create / Confirm'));
+    assert.ok(previewRes.previewCard.includes('2️⃣ Edit'));
+    assert.ok(previewRes.previewCard.includes('3️⃣ Cancel'));
+    assert.deepStrictEqual(previewRes.options, ['Create / Confirm', 'Edit', 'Cancel']);
+
+    // Ensure no task was inserted in DB
+    const count = await Task.countDocuments({ title: 'MCP Unit Test Personal Task Preview' });
+    assert.strictEqual(count, 0, 'Task should NOT be saved in DB before confirmation');
+  });
+
+  await t.test('Execution: Calling create_personal_task with confirmed: true creates task in DB', async () => {
+    const res = await executeTool('create_personal_task', {
+      title: 'MCP Unit Test Personal Task Confirmed',
+      description: 'Testing confirmed task creation',
+      priority: 'High',
+      confirmed: true
+    }, empAuth);
+
     assert.strictEqual(res.success, true);
-    assert.strictEqual(res.task.title, 'MCP Unit Test Personal Task');
+    assert.strictEqual(res.task.title, 'MCP Unit Test Personal Task Confirmed');
     assert.strictEqual(res.task.priority.toLowerCase(), 'high');
 
     // Clean up
     await Task.deleteOne({ _id: res.task.id });
+  });
+
+  await t.test('Execution: Calling assign_task without confirmed returns Preview Card with 3 options', async () => {
+    const assignPreview = await executeTool('assign_task', {
+      title: 'MCP Unit Test Assigned Task Preview',
+      assigneeNameOrEmail: regularEmployee.email,
+      description: 'Review document before 6 PM',
+      priority: 'High'
+    }, adminAuth);
+
+    assert.strictEqual(assignPreview.requiresConfirmation, true);
+    assert.ok(assignPreview.previewCard.includes('CIIS TASK PREVIEW CARD (Confirmation Required)'));
+    assert.ok(assignPreview.previewCard.includes('Assigned Task'));
+    assert.ok(assignPreview.previewCard.includes(regularEmployee.name));
+    assert.deepStrictEqual(assignPreview.options, ['Create / Confirm', 'Edit', 'Cancel']);
+
+    // Ensure no task was inserted in DB
+    const count = await Task.countDocuments({ title: 'MCP Unit Test Assigned Task Preview' });
+    assert.strictEqual(count, 0, 'Assigned task should NOT be saved in DB before confirmation');
   });
 
   // 7. Tool Execution: Admin views attendance summary
