@@ -531,7 +531,7 @@ async function handleExportRequest({ message, req, deps, currentDraft, isEn }) {
   // 1. ATTENDANCE EXPORT (Supports any Month, Specific Date, Week, User or Company)
   // --------------------------------------------------------------------------
   if (isAttendance) {
-    const tf = extractTimeframe(m);
+    let tf = extractTimeframe(m);
     const wantsAll = /admin|sabki|all|company/i.test(m);
     const explicitSelf = /meri|merko|mere\s*ko|mujhe|my|self/i.test(m) && !wantsAll;
 
@@ -547,6 +547,17 @@ async function handleExportRequest({ message, req, deps, currentDraft, isEn }) {
     // Non-Admin/HR employees without All-Attendance page access can ONLY export their own attendance
     const forceSelfOnly = !perms.canViewAllAttendance;
     const isSelf = forceSelfOnly || explicitSelf || (!wantsAll && !targetUser && !perms.canViewAllAttendance);
+
+    // On My Attendance page, employees export their current month by default unless they explicitly ask for "today" / "aaj"
+    if (isSelf && tf.type === 'today' && !/\b(?:aaj|ajj|today)\b/i.test(m)) {
+      tf = {
+        type: 'relative',
+        timeframeEn: 'This Month',
+        timeframeHi: 'Is Mahine',
+        queryParam: 'type=monthly&month=this',
+        filePrefix: 'This_Month'
+      };
+    }
 
     let userParam = isSelf ? 'type=self' : (targetUser ? `type=user&userId=${targetUser._id || targetUser.id}&userName=${encodeURIComponent(targetUser.name)}` : 'type=all');
     const userLabel = isSelf ? (isEn ? "your Attendance Sheet" : "aapki Attendance Sheet") : (targetUser ? `${targetUser.name} Attendance Sheet` : (isEn ? `Company Attendance Sheet` : `Company Attendance Sheet`));

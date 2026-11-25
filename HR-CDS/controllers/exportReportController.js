@@ -491,11 +491,42 @@ exports.exportAttendanceReport = async (req, res) => {
     }
 
     let records = [];
-    if (requestedType === 'self' || targetUserId || req.query.userName) {
+    if (requestedType === 'self' || !isAdmin || targetUserId || req.query.userName) {
       records = await Attendance.find(filter)
         .populate('user', 'name email employeeId department departmentName jobRole branch branchName employeeType shift shiftName shiftType')
         .sort({ date: -1, 'user.name': 1 })
         .lean();
+
+      if (records.length === 0 && filter.user) {
+        const gteDate = filter.date?.$gte ? new Date(filter.date.$gte) : new Date();
+        const lteDate = filter.date?.$lte ? new Date(filter.date.$lte) : new Date();
+        const diffDays = Math.round((lteDate - gteDate) / (1000 * 60 * 60 * 24));
+        if (diffDays <= 1) {
+          const singleUser = await User.findById(filter.user)
+            .populate('branch', 'name branchName branchCode')
+            .populate('department', 'name')
+            .lean();
+          if (singleUser) {
+            const targetDateStr = gteDate.toISOString().slice(0, 10);
+            records = [{
+              _id: `absent_${singleUser._id}_${targetDateStr}`,
+              user: singleUser,
+              date: gteDate,
+              inTime: null,
+              outTime: null,
+              hoursWorked: '00:00:00',
+              totalHours: 0,
+              lateBy: '00:00:00',
+              earlyLeave: '00:00:00',
+              overTime: '00:00:00',
+              status: 'ABSENT',
+              weeklyOff: false,
+              isHoliday: false,
+              isClockedIn: false
+            }];
+          }
+        }
+      }
     } else {
       // Company-wide: Include ALL active company employees (present, late, half day, or absent)
       // exactly matching EmppAttendence.jsx manual export!
