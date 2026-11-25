@@ -369,7 +369,8 @@ exports.exportAttendanceReport = async (req, res) => {
   try {
     const companyCode = getEffectiveCompanyCode(req);
     const isAdmin = isUserAdminOrHr(req);
-    const requestedType = String(req.query.type || (isAdmin ? 'all' : 'self')).toLowerCase();
+    const rawType = Array.isArray(req.query.type) ? req.query.type[0] : req.query.type;
+    const requestedType = String(rawType || (isAdmin ? 'all' : 'self')).toLowerCase();
     const format = String(req.query.format || 'xlsx').toLowerCase();
     const queryDate = req.query.date; // e.g. 'today' or '2026-11-20'
     const targetUserId = req.query.userId;
@@ -760,7 +761,8 @@ exports.exportTasksReport = async (req, res) => {
   try {
     const companyCode = getEffectiveCompanyCode(req);
     const isAdmin = isUserAdminOrHr(req);
-    const requestedType = String(req.query.type || (isAdmin ? 'all' : 'self')).toLowerCase();
+    const rawType = Array.isArray(req.query.type) ? req.query.type[0] : req.query.type;
+    const requestedType = String(rawType || (isAdmin ? 'all' : 'self')).toLowerCase();
     const format = String(req.query.format || 'xlsx').toLowerCase();
     const queryDate = req.query.date; // 'today' or YYYY-MM-DD
     const targetUserId = req.query.userId;

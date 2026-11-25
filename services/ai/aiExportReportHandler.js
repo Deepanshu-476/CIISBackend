@@ -554,7 +554,7 @@ async function handleExportRequest({ message, req, deps, currentDraft, isEn }) {
         type: 'relative',
         timeframeEn: 'This Month',
         timeframeHi: 'Is Mahine',
-        queryParam: 'type=monthly&month=this',
+        queryParam: 'month=this',
         filePrefix: 'This_Month'
       };
     }
