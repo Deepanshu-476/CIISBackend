@@ -444,11 +444,83 @@ function createDownloadChips({ xlsxUrl, csvUrl, pdfUrl, fileBaseName, isPdfReque
   return chips;
 }
 
+/**
+ * Resolves export permissions based on user role, allowedPages, and sidebarMenuItems.
+ */
+function resolveExportPermissions(req, deps = {}) {
+  const user = req?.user || {};
+  const roleStr = String(user.companyRole || user.role || user.userType || '').toLowerCase();
+  const isPrivileged = Boolean(
+    user.isOwner ||
+    user.isSuperAdmin ||
+    user.isPlatformOwner ||
+    roleStr.includes('owner') ||
+    roleStr.includes('admin') ||
+    roleStr.includes('superadmin') ||
+    roleStr.includes('director') ||
+    roleStr.includes('hr')
+  );
+
+  if (isPrivileged) {
+    return {
+      isPrivileged: true,
+      canViewAllAttendance: true,
+      canViewAllTasks: true,
+      canManageClients: true,
+      canManageProjects: true,
+    };
+  }
+
+  const flattenItems = (items) => {
+    const out = [];
+    if (!Array.isArray(items)) return out;
+    items.forEach((item) => {
+      if (!item) return;
+      out.push(item);
+      if (Array.isArray(item.children)) out.push(...flattenItems(item.children));
+      if (Array.isArray(item.subItems)) out.push(...flattenItems(item.subItems));
+      if (Array.isArray(item.subMenu)) out.push(...flattenItems(item.subMenu));
+      if (Array.isArray(item.items)) out.push(...flattenItems(item.items));
+    });
+    return out;
+  };
+
+  const rawPerms = [
+    ...(Array.isArray(user.allowedPages) ? user.allowedPages : []),
+    ...(Array.isArray(user.pagePermissions) ? user.pagePermissions : []),
+    ...(Array.isArray(user.permissions) ? user.permissions : []),
+    ...flattenItems(deps?.sidebarMenuItems),
+    ...flattenItems(deps?.menuItems),
+  ];
+
+  const normalized = new Set();
+  rawPerms.forEach((p) => {
+    if (p && typeof p === 'object') {
+      [p.page, p.name, p.path, p.id, p.key].filter(Boolean).forEach((v) => {
+        normalized.add(String(v).toLowerCase().replace(/[^a-z0-9]/g, ''));
+      });
+    } else if (p) {
+      normalized.add(String(p).toLowerCase().replace(/[^a-z0-9]/g, ''));
+    }
+  });
+
+  const hasAny = (keys) => keys.some((k) => Array.from(normalized).some((n) => n.includes(k)));
+
+  return {
+    isPrivileged: false,
+    canViewAllAttendance: hasAny(['emppattendence', 'employeeattendance', 'adminattendance', 'allattendance']),
+    canViewAllTasks: hasAny(['companyalltask', 'alltasks', 'admintaskcreate', 'admincreatetask']),
+    canManageClients: hasAny(['empclient', 'clientmanagement', 'activeclients']),
+    canManageProjects: hasAny(['adminproject', 'manageprojects']),
+  };
+}
+
 async function handleExportRequest({ message, req, deps, currentDraft, isEn }) {
   const m = String(message || '').trim().toLowerCase();
   const companyCode = req?.user?.companyCode || 'CAREER';
   const isPdfRequested = /pdf/i.test(m);
   const dateTodayStr = new Date().toISOString().slice(0, 10);
+  const perms = resolveExportPermissions(req, deps);
 
   const isAttendance = /attend|hazri|हाजिरी|उपस्थिति/i.test(m) || (/sheet/i.test(m) && /ajj|aaj|admin.*sheet/i.test(m) && !/task|client|project/i.test(m));
   const isClientExplicit = /client|cleint|क्लाइंट/i.test(m) || /subscr|expire|kiska\s*plan/i.test(m);
@@ -459,24 +531,38 @@ async function handleExportRequest({ message, req, deps, currentDraft, isEn }) {
   // 1. ATTENDANCE EXPORT (Supports any Month, Specific Date, Week, User or Company)
   // --------------------------------------------------------------------------
   if (isAttendance) {
-    const isSelf = /meri|merko|mere\s*ko|mujhe|my|self/i.test(m) && !/admin|sabki|all|company/i.test(m);
     const tf = extractTimeframe(m);
+    const wantsAll = /admin|sabki|all|company/i.test(m);
+    const explicitSelf = /meri|merko|mere\s*ko|mujhe|my|self/i.test(m) && !wantsAll;
 
     // Check if target user was specified (e.g. "kanika ki attendance sheet")
     let targetUser = null;
-    if (!isSelf && !/admin|sabki|all|company/i.test(m)) {
+    if (!explicitSelf && !wantsAll) {
       targetUser = await findTargetUser(m, deps, companyCode);
     }
+
+    const reqUserId = String(req?.user?._id || req?.user?.id || '');
+    const isTargetOtherUser = Boolean(targetUser && String(targetUser._id || targetUser.id) !== reqUserId);
+
+    // Non-Admin/HR employees without All-Attendance page access can ONLY export their own attendance
+    const forceSelfOnly = !perms.canViewAllAttendance;
+    const isSelf = forceSelfOnly || explicitSelf || (!wantsAll && !targetUser && !perms.canViewAllAttendance);
 
     let userParam = isSelf ? 'type=self' : (targetUser ? `type=user&userId=${targetUser._id || targetUser.id}&userName=${encodeURIComponent(targetUser.name)}` : 'type=all');
     const userLabel = isSelf ? (isEn ? "your Attendance Sheet" : "aapki Attendance Sheet") : (targetUser ? `${targetUser.name} Attendance Sheet` : (isEn ? `Company Attendance Sheet` : `Company Attendance Sheet`));
 
     const queryJoin = userParam ? `?${userParam}&${tf.queryParam}` : `?${tf.queryParam}`;
-    const filePrefix = targetUser ? `${targetUser.name.replace(/\s+/g, '_')}_Attendance_${tf.filePrefix}` : (isSelf ? `My_Attendance_${tf.filePrefix}_${dateTodayStr}` : `Company_Attendance_${tf.filePrefix}_${dateTodayStr}`);
+    const filePrefix = (!isSelf && targetUser) ? `${targetUser.name.replace(/\s+/g, '_')}_Attendance_${tf.filePrefix}` : (isSelf ? `My_Attendance_${tf.filePrefix}_${dateTodayStr}` : `Company_Attendance_${tf.filePrefix}_${dateTodayStr}`);
 
-    const reply = isEn
-      ? `Here is the ${userLabel} for ${tf.timeframeEn}. You can download it below in PDF, Excel, or CSV format:`
+    let reply = isEn
+      ? `Here is ${userLabel} for ${tf.timeframeEn}. You can download it below in PDF, Excel, or CSV format:`
       : `Maine ${tf.timeframeHi} ki ${userLabel} taiyar kar di hai. Aap ise neeche diye gaye format mein download kar sakte hain:`;
+
+    if (forceSelfOnly && (wantsAll || isTargetOtherUser)) {
+      reply = isEn
+        ? `You only have access to your own Attendance Sheet (My Attendance). Here is your personal attendance for ${tf.timeframeEn}:`
+        : `Aapko sirf apni khud ki Attendance Sheet (My Attendance) export karne ka access hai. Ye rahi aapki ${tf.timeframeHi} ki attendance sheet:`;
+    }
 
     return {
       success: true,
@@ -685,7 +771,7 @@ async function handleExportRequest({ message, req, deps, currentDraft, isEn }) {
     const isAll = /sabke|all|company.*tasks?|company\s*wide/i.test(m);
     const targetUser = await findTargetUser(m, deps, companyCode);
 
-    if (isAll) {
+    if (isAll && perms.canViewAllTasks) {
       const reply = isEn
         ? "Here is the Tasks Report for all company users. You can download the full spreadsheet below:"
         : "Ye rahi sabhi company users ke tasks ki sheet. Aap ise PDF ya Excel format mein download kar sakte hain:";
@@ -710,7 +796,7 @@ async function handleExportRequest({ message, req, deps, currentDraft, isEn }) {
       };
     }
 
-    if (targetUser) {
+    if (targetUser && perms.canViewAllTasks) {
       const uName = targetUser.name;
       const safeUName = uName.replace(/\s+/g, '_');
       const reply = isEn

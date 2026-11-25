@@ -29,22 +29,27 @@ const getEffectiveCompanyId = (req) => {
 };
 
 const isUserAdminOrHr = (req) => {
-  if (req.user?.isOwner || req.user?.isSuperAdmin) return true;
+  if (req.user?.isOwner || req.user?.isSuperAdmin || req.user?.isPlatformOwner) return true;
   const role = String(
     req.user?.companyRole ||
     req.user?.role ||
-    req.user?.jobRole ||
     req.user?.userType ||
     ''
   ).toLowerCase();
-  return (
+  if (
     role.includes('admin') ||
     role.includes('hr') ||
-    role.includes('manager') ||
     role.includes('superadmin') ||
     role.includes('director') ||
     role.includes('owner')
-  );
+  ) {
+    return true;
+  }
+  const allowedPages = Array.isArray(req.user?.allowedPages) ? req.user.allowedPages : [];
+  return allowedPages.some((p) => {
+    const norm = String(p || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    return norm.includes('emppattendence') || norm.includes('employeeattendance') || norm.includes('adminattendance') || norm.includes('allattendance');
+  });
 };
 
 const formatDate = (date) => {
@@ -372,8 +377,8 @@ exports.exportAttendanceReport = async (req, res) => {
     let filter = {};
     let subtitle = `Generated on: ${formatDate(new Date())}`;
 
-    // Determine target users
-    if (requestedType === 'self' || (!isAdmin && !targetUserId && !req.query.userName)) {
+    // Determine target users: non-Admin/HR employees are strictly restricted to their own attendance
+    if (requestedType === 'self' || !isAdmin) {
       filter.user = req.user._id;
       subtitle = `Attendance for: ${req.user.name || 'Current User'} | ${subtitle}`;
     } else if (targetUserId) {
