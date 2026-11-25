@@ -662,6 +662,113 @@ const taskTools = [
   },
 
   {
+    name: 'create_project',
+    description: 'Creates a brand new Project in the CIIS database with description, dates, priority, status, and team members. [VOICE MODE READY: Fully supported in Claude Voice Mode and text chat.] IMPORTANT: First call with confirmed: false (or omitted) to display the CIIS Project Preview Card with 3 options (Create / Confirm, Edit, Cancel). Only pass confirmed: true after user explicitly confirms.',
+    parameters: {
+      type: 'object',
+      properties: {
+        projectName: { type: 'string', description: 'Name of the new project (required)' },
+        description: { type: 'string', description: 'Project description (required)' },
+        startDate: { type: 'string', description: 'Start date in YYYY-MM-DD format (defaults to today)' },
+        endDate: { type: 'string', description: 'End / completion date in YYYY-MM-DD format' },
+        priority: { type: 'string', enum: ['low', 'medium', 'high'], default: 'medium' },
+        status: { type: 'string', enum: ['active', 'planning', 'on hold', 'completed'], default: 'active' },
+        memberNamesOrEmails: { type: 'array', items: { type: 'string' }, description: 'Optional list of team member names or emails' },
+        confirmed: { type: 'boolean', default: false, description: 'Set to true ONLY after user confirms the Preview Card.' }
+      },
+      required: ['projectName', 'description']
+    },
+    permissionCheck: (ctx) => ctx.permissions.canAssignTeamTasks,
+    handler: async (args, ctx) => {
+      const {
+        projectName,
+        description = '',
+        startDate,
+        endDate,
+        priority = 'medium',
+        status = 'active',
+        memberNamesOrEmails = [],
+        confirmed = false
+      } = args;
+
+      const resolvedMembers = [];
+      if (Array.isArray(memberNamesOrEmails) && memberNamesOrEmails.length > 0) {
+        for (const m of memberNamesOrEmails) {
+          if (!m) continue;
+          const found = await User.findOne({
+            companyCode: ctx.companyCode,
+            $or: [
+              { email: { $regex: new RegExp(`^${String(m).trim()}$`, 'i') } },
+              { name: { $regex: new RegExp(String(m).trim(), 'i') } }
+            ]
+          }).select('_id name email');
+          if (found) resolvedMembers.push(found);
+        }
+      }
+
+      if (confirmed !== true) {
+        const previewCard = [
+          '┌────────────────────────────────────────────────────────┐',
+          '│ 📋 CIIS PROJECT PREVIEW CARD (Confirmation Required)  │',
+          '├────────────────────────────────────────────────────────┤',
+          `│ • Project:     ${projectName}`,
+          `│ • Description: ${description || '—'}`,
+          `│ • Priority:    ${priority}`,
+          `│ • Status:      ${status}`,
+          `│ • Start Date:  ${startDate || 'Today'}`,
+          `│ • End Date:    ${endDate || 'Not specified'}`,
+          `│ • Members:     ${resolvedMembers.length > 0 ? resolvedMembers.map(u => u.name).join(', ') : 'None (Creator only)'}`,
+          '└────────────────────────────────────────────────────────┘',
+          '',
+          '⚠️ Ye project abhi save nahi hua hai. Kripya neeche diye gaye 3 vikalpon me se chunein:',
+          '1️⃣ Create / Confirm (Project create karne ke liye "Create" ya "Confirm" bolein)',
+          '2️⃣ Edit (Kisi bhi detail ko badalne ke liye bolein)',
+          '3️⃣ Cancel (Cancel karne ke liye "Cancel" bolein)'
+        ].join('\n');
+
+        return {
+          requiresConfirmation: true,
+          message: 'Project preview generated. Present this Preview Card to the user with 3 options (1. Create / Confirm, 2. Edit, 3. Cancel).',
+          previewCard,
+          options: ['Create / Confirm', 'Edit', 'Cancel'],
+          projectData: { ...args, confirmed: true }
+        };
+      }
+
+      const memberIds = Array.from(new Set([
+        String(ctx.user._id),
+        ...resolvedMembers.map(u => String(u._id))
+      ]));
+
+      const project = await Project.create({
+        projectName: projectName.trim(),
+        description: description.trim(),
+        company: ctx.companyId,
+        companyCode: ctx.companyCode,
+        managers: [ctx.user._id],
+        users: memberIds,
+        status: String(status || 'active').toLowerCase(),
+        priority: String(priority || 'medium').toLowerCase(),
+        startDate: startDate ? new Date(startDate) : new Date(),
+        endDate: endDate ? new Date(endDate) : undefined,
+        createdBy: ctx.user._id
+      });
+
+      return {
+        success: true,
+        message: `Project '${project.projectName}' created successfully.`,
+        project: {
+          id: project._id,
+          projectName: project.projectName,
+          status: project.status,
+          priority: project.priority,
+          membersCount: memberIds.length
+        }
+      };
+    }
+  },
+
+  {
     name: 'create_project_task',
     description: 'Creates a task within an existing project in the CIIS database. [VOICE MODE READY: Fully supported in Claude Voice Mode and live voice calls. Always call this tool when the user speaks a project task request. If user mentions attachments or screenshots in voice mode, set hasAttachment: true or pass attachmentPaths: ["latest_screenshot"] — the server auto-retrieves it from desktop/clipboard without requiring manual file upload.] IMPORTANT: First call this tool with confirmed: false (or omitted) to display the CIIS Preview Card with 3 options (Create / Confirm, Edit, Cancel). Only pass confirmed: true after the user explicitly confirms.',
     parameters: {

@@ -31,6 +31,7 @@ module.exports = [
             'Personal task add karna ("add a task: Review reports by tomorrow")',
             ...(isManagerOrHr || isOwnerOrAdmin ? [
               'Team member ko task assign karna ("assign task to Rahul: Client update")',
+              'Naya project banana ("create new project Alpha with description ...")',
               'Project tasks create karna ("create project task under Alpha")'
             ] : []),
             'Task status update karna ("mark task 123 as completed")'
@@ -52,6 +53,9 @@ module.exports = [
           description: 'Client task tracking and deliverables',
           options: [
             'Client overview & active services ("client list dikhao")',
+            ...(isManagerOrHr || isOwnerOrAdmin ? [
+              'Naya client add karna ("add new client Acme Corp in Delhi")'
+            ] : []),
             'Client ke tasks check karna ("Acme Corp ke tasks list karo")',
             'Client service task add karna ("create service task for Client X under SEO")',
             ...(isOwnerOrAdmin ? [
