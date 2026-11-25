@@ -2636,9 +2636,18 @@ const getAttendanceByUser = async (req, res) => {
       userBranchName = uBranch?.name || user?.branchName || uCompany?.companyName || 'Branch';
     }
 
-    let query = { 
+    // Attendance records created by older absent-marking jobs may have been
+    // saved with companyCode "UNKNOWN". The user is already constrained by
+    // their authenticated company above, so include only that user's legacy
+    // records as well; otherwise Performance incorrectly reports 0 absents.
+    let query = {
       user: userId,
-      companyCode: userCompanyCode
+      $or: [
+        { companyCode: userCompanyCode },
+        { companyCode: 'UNKNOWN' },
+        { companyCode: '' },
+        { companyCode: { $exists: false } },
+      ]
     };
     
     if (month !== undefined || year !== undefined) {
@@ -2667,11 +2676,32 @@ const getAttendanceByUser = async (req, res) => {
       };
     }
     
-    const records = await Attendance.find(query)
+    const rawRecords = await Attendance.find(query)
       .select('date status inTime outTime totalTime lateBy earlyLeave overTime notes clockOutMode' +
         (withPunchDetails ? ' inLocation outLocation inSelfieUrl outSelfieUrl inAttendanceMode outAttendanceMode breaks scheduledBreaks autoBreaks breakMode breakMinutes grossTime isClockedIn' : ''))
       .sort({ date: -1 })
       .lean();
+
+    // Historical absent sweeps occasionally created an ABSENT placeholder for a
+    // date that already had a real punch record. Count one attendance outcome
+    // per India calendar day and always prefer the record containing a punch.
+    // Without this, Performance can show duplicate absences (e.g. 6 instead of
+    // the actual 3 days absent).
+    const recordRank = (record) => {
+      if (record?.inTime || record?.outTime) return 3;
+      const status = String(record?.status || '').trim().toUpperCase();
+      return status === 'ABSENT' ? 1 : 2;
+    };
+    const recordsByIndiaDate = new Map();
+    rawRecords.forEach((record) => {
+      const key = formatIndiaDateKey(record.date);
+      const existing = recordsByIndiaDate.get(key);
+      if (!existing || recordRank(record) > recordRank(existing)) {
+        recordsByIndiaDate.set(key, record);
+      }
+    });
+    const records = Array.from(recordsByIndiaDate.values())
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
     const holidayDateMap = new Map();
     if (query.date?.$gte && query.date?.$lte) {
