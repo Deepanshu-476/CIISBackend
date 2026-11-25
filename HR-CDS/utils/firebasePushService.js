@@ -288,7 +288,14 @@ exports.sendPushToUsers = async ({userIds, title, body, data = {}}) => {
             ...(!isCall || isIncomingCall ? {sound: 'default'} : {}),
             // Chat pushes also wake the iOS app briefly so it can report the message as delivered.
             ...((isCall || ['chat_message', 'group_chat_message'].includes(data.type)) && {contentAvailable: true}),
-            ...(isIncomingCall && {alert: {title, body}}),
+            ...(isIncomingCall && {
+              alert: {
+                title: title || 'Incoming Call',
+                body: body || 'Incoming call',
+              },
+              category: 'CIIS_INCOMING_CALL',
+              sound: 'default',
+            }),
           },
         },
       },

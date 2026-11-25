@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 const mongoose = require("mongoose");
 const AiSettings = require("../models/AiSettings");
-const { protect, restrictTo } = require("../middleware/authMiddleware");
+const { protect, requirePlatformOwner } = require("../middleware/authMiddleware");
 const { refreshKeyCache } = require("../services/ai/groqKeyManager");
 
 const maskApiKey = (key) => {
@@ -136,7 +136,7 @@ const formatSettingsResponse = (settings) => {
 };
 
 // GET /api/ai-settings: Super Admin retrieves current AI settings + Key Vault
-router.get("/", protect, restrictTo("super_admin"), async (req, res) => {
+router.get("/", protect, requirePlatformOwner, async (req, res) => {
   try {
     const settings = await AiSettings.getOrCreateSettings();
     return res.json({ success: true, settings: formatSettingsResponse(settings) });
@@ -147,7 +147,7 @@ router.get("/", protect, restrictTo("super_admin"), async (req, res) => {
 });
 
 // POST /api/ai-settings/vault/add: Add a new API key to the Vault
-router.post("/vault/add", protect, restrictTo("super_admin"), async (req, res) => {
+router.post("/vault/add", protect, requirePlatformOwner, async (req, res) => {
   try {
     const { label, apiKey, setAsPrimary, setAsSecondary } = req.body;
 
@@ -225,7 +225,7 @@ router.post("/vault/add", protect, restrictTo("super_admin"), async (req, res) =
 });
 
 // POST /api/ai-settings/vault/set-active: One-click switch Primary or Secondary key
-router.post("/vault/set-active", protect, restrictTo("super_admin"), async (req, res) => {
+router.post("/vault/set-active", protect, requirePlatformOwner, async (req, res) => {
   try {
     const { vaultId, target } = req.body;
     if (!vaultId || !["primary", "secondary"].includes(target)) {
@@ -281,7 +281,7 @@ router.post("/vault/set-active", protect, restrictTo("super_admin"), async (req,
 });
 
 // POST /api/ai-settings/vault/:id/test: Test a specific key in the vault
-router.post("/vault/:id/test", protect, restrictTo("super_admin"), async (req, res) => {
+router.post("/vault/:id/test", protect, requirePlatformOwner, async (req, res) => {
   try {
     const { id } = req.params;
     const settings = await AiSettings.getOrCreateSettings();
@@ -320,7 +320,7 @@ router.post("/vault/:id/test", protect, restrictTo("super_admin"), async (req, r
 });
 
 // DELETE /api/ai-settings/vault/:id: Soft-delete a key from vault
-router.delete("/vault/:id", protect, restrictTo("super_admin"), async (req, res) => {
+router.delete("/vault/:id", protect, requirePlatformOwner, async (req, res) => {
   try {
     const { id } = req.params;
     const settings = await AiSettings.getOrCreateSettings();
@@ -360,7 +360,7 @@ router.delete("/vault/:id", protect, restrictTo("super_admin"), async (req, res)
 });
 
 // POST /api/ai-settings/vault/:id/restore: Restore a soft-deleted key back to active vault
-router.post("/vault/:id/restore", protect, restrictTo("super_admin"), async (req, res) => {
+router.post("/vault/:id/restore", protect, requirePlatformOwner, async (req, res) => {
   try {
     const { id } = req.params;
     const settings = await AiSettings.getOrCreateSettings();
@@ -386,7 +386,7 @@ router.post("/vault/:id/restore", protect, restrictTo("super_admin"), async (req
 });
 
 // POST /api/ai-settings/test: Super Admin tests a Groq API key live before saving
-router.post("/test", protect, restrictTo("super_admin"), async (req, res) => {
+router.post("/test", protect, requirePlatformOwner, async (req, res) => {
   try {
     let apiKey = req.body?.apiKey;
     if (!apiKey) {
@@ -416,7 +416,7 @@ router.post("/test", protect, restrictTo("super_admin"), async (req, res) => {
 });
 
 // PUT /api/ai-settings: Super Admin updates API keys and models
-router.put("/", protect, restrictTo("super_admin"), async (req, res) => {
+router.put("/", protect, requirePlatformOwner, async (req, res) => {
   try {
     const {
       primaryApiKey,

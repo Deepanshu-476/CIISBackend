@@ -49,6 +49,7 @@ const APP_PAGES = [
   { pageKey: 'company-all-task', name: 'Company All Task', path: '/ciisUser/company-all-task', permissionPattern: 'viewEdit', permissionActions: { view: 'View', edit: 'Edit Tasks', delete: 'Delete' } },
   { pageKey: 'company-all-task-tasks', name: 'Company Tasks', path: '/ciisUser/company-all-task/tasks', permissionPattern: 'viewEdit', permissionActions: { view: 'View', edit: 'Edit Tasks', delete: 'Delete' } },
   { pageKey: 'company-assets', name: 'Asset Management', path: '/ciisUser/company-assets', permissionPattern: 'viewEdit', permissionActions: { view: 'View', edit: 'Create / Edit', delete: 'Delete' } },
+  { pageKey: 'company-ai-settings', name: 'Company AI & Tokens', path: '/ciisUser/company-ai-settings', permissionPattern: 'viewEdit' },
   { pageKey: 'SidebarManagement', name: 'Sidebar Management', path: '/ciisUser/SidebarManagement', permissionPattern: 'viewEdit' },
   { pageKey: 'emp-client', name: 'Client Management', path: '/ciisUser/emp-client', permissionPattern: 'viewEdit' },
   { pageKey: 'active-clients', name: 'Active Clients', path: '/ciisUser/active-clients', permissionPattern: 'viewEdit' },
