@@ -3213,7 +3213,6 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
     ...(Array.isArray(user?.allowedPages) ? user.allowedPages : []),
     ...(Array.isArray(user?.pagePermissions) ? user.pagePermissions : []),
     ...(Array.isArray(user?.permissions) ? user.permissions : []),
-    ...(Array.isArray(scope?.companyAllowedPages) ? scope.companyAllowedPages : []),
     ...flattenItems(deps?.sidebarMenuItems),
     ...flattenItems(deps?.menuItems),
   ];
@@ -3244,19 +3243,15 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
   const allowed = ['self_task', 'bulk_self_task_csv'];
 
   // Assigning tasks to others requires "Admin Create Task" permission (not general Task Management)
-  // When no explicit restrictive permissions exist, internal company employees can assign tasks by default.
+  // When no explicit restrictive permissions exist and strictPermissions is off, internal company employees can assign tasks by default.
   const canAssign = Boolean(
     scope.isOwner ||
     scope.hasAccess ||
-    !hasExplicitRestrictions ||
+    (!hasExplicitRestrictions && !deps?.strictPermissions) ||
     normalizedPerms.has('admintaskcreate') ||
     normalizedPerms.has('admincreatetask') ||
     normalizedPerms.has('admin-task-create') ||
     normalizedPerms.has('admin-create-task') ||
-    normalizedPerms.has('taskmanagement') ||
-    normalizedPerms.has('createtask') ||
-    normalizedPerms.has('task-management') ||
-    normalizedPerms.has('create-task') ||
     normalizedPerms.has('ciisuser/admintaskcreate') ||
     normalizedPerms.has('ciisuser/admin-task-create') ||
     user?.permissions?.includes?.('admin-task-create') ||
@@ -3333,10 +3328,6 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
     normalizedPerms.has('clientplanmanagement') ||
     normalizedPerms.has('ciisuser/clientplans') ||
     normalizedPerms.has('ciisuser/client-plans') ||
-    (Array.isArray(scope?.companyAllowedPages) && scope.companyAllowedPages.some(p => {
-      const norm = String(p).toLowerCase().replace(/^\/+/, '').replace(/^ciisuser\//, '').replace(/[\s_-]+/g, '');
-      return norm === 'clientplans' || norm === 'clientplan' || norm === 'client-plans';
-    })) ||
     (Array.isArray(deps?.allowedIntents) && deps.allowedIntents.includes('create_client_plan')) ||
     normalizedPerms.has('empclient') ||
     normalizedPerms.has('emp-client') ||
@@ -3346,8 +3337,12 @@ function resolveUserAllowedIntents(user, scope = {}, deps = {}) {
   }
 
   if (Array.isArray(deps.allowedIntents) && deps.allowedIntents.length > 0) {
-    const merged = new Set([...allowed, ...deps.allowedIntents.filter((i) => ALL_INTENTS.includes(i))]);
-    return ALL_INTENTS.filter((i) => merged.has(i));
+    const uiAllowed = new Set(deps.allowedIntents.filter((i) => ALL_INTENTS.includes(i)));
+    uiAllowed.add('self_task');
+    if (uiAllowed.has('self_task')) uiAllowed.add('bulk_self_task_csv');
+    if (uiAllowed.has('task_assigned_user')) uiAllowed.add('bulk_assigned_task_csv');
+    // Respect UI sidebarConfig permissions so backend never leaks extra chips
+    return ALL_INTENTS.filter((i) => uiAllowed.has(i));
   }
 
   return allowed;
@@ -3709,6 +3704,9 @@ async function parseTaskRequest({
     }
   }
   deps.sidebarMenuItems = sidebarMenuItems;
+  if (!deps.allowedIntents && Array.isArray(req?.body?.allowedIntents)) {
+    deps.allowedIntents = req.body.allowedIntents;
+  }
 
   const userAllowedIntents = resolveUserAllowedIntents(req?.user, scope, {
     ...deps,
