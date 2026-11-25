@@ -99,11 +99,12 @@ const buildDashboardTaskStats = (tasks, userId, todayStart, todayEnd) => {
     else stats.pending += 1;
 
     const isDueToday = dueDate && dueDate >= todayStart && dueDate <= todayEnd;
-    const touchedToday = (updatedAt && updatedAt >= todayStart && updatedAt <= todayEnd) || (createdAt && createdAt >= todayStart && createdAt <= todayEnd);
 
-    if (isDueToday) today.total += 1;
-    if ((isDueToday || touchedToday) && completedStatuses.has(status)) today.completed += 1;
-    if ((isDueToday || touchedToday) && ["in-progress", "inprogress", "reopen"].includes(status)) today.inProgress += 1;
+    if (isDueToday) {
+      today.total += 1;
+      if (completedStatuses.has(status)) today.completed += 1;
+      else if (["in-progress", "inprogress", "reopen"].includes(status)) today.inProgress += 1;
+    }
   });
 
   const focusStats = {
