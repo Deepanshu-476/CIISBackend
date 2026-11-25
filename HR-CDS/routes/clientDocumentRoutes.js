@@ -18,6 +18,7 @@ const CLIENT_DOCUMENT_CHUNK_LIMIT = 512 * 1024;
 // developer is running this backend locally. Re-use the caller's token so the
 // production API performs the same access check before returning any file.
 const LEGACY_DOCUMENT_ORIGIN = (process.env.LEGACY_DOCUMENT_ORIGIN || 'https://backendcds.ciisnetwork.in').replace(/\/+$/, '');
+const LEGACY_DOCUMENT_PROXY_HEADER = 'x-ciis-legacy-document-proxy';
 const CLIENT_DOCUMENT_ALLOWED_MIME_TYPES = [
   'application/pdf',
   'application/msword',
@@ -293,13 +294,20 @@ const getDocumentFilePath = document => {
 const proxyLegacyDocument = async (req, res, documentId, action, documentMeta = null) => {
   try {
     const authorization = req.get('authorization');
-    if (!authorization) return false;
+    if (!authorization || req.get(LEGACY_DOCUMENT_PROXY_HEADER)) return false;
+
+    const legacyOrigin = new URL(LEGACY_DOCUMENT_ORIGIN);
+    if (legacyOrigin.host === req.get('host')) return false;
+
+    // Serve a local file on the receiving server, but never proxy it again.
+    const headers = { authorization, [LEGACY_DOCUMENT_PROXY_HEADER]: '1' };
     let upstream = await fetch(`${LEGACY_DOCUMENT_ORIGIN}/api/client-documents/${documentId}/${action}`, {
-      headers: { authorization },
+      headers,
     });
     if (!upstream.ok && action === 'view') {
+      await upstream.body?.cancel();
       upstream = await fetch(`${LEGACY_DOCUMENT_ORIGIN}/api/client-documents/${documentId}/download`, {
-        headers: { authorization },
+        headers,
       });
     }
     if (!upstream.ok) return false;
