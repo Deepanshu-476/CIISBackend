@@ -447,8 +447,9 @@ const getEmployeeDashboardSummary = async (req, res) => {
       // user's own tasks are what the dashboard shows, so only the user filter is kept.
       EmployeeTask.find({
         isActive: {$ne: false},
+        ...(companyCode ? {companyCode} : {}),
         $or: [
-          {createdBy: userId},
+          {createdBy: userId, taskFor: {$ne: "others"}},
           {assignedUsers: userId},
           {"statusByUser.user": userId},
         ],
@@ -462,8 +463,9 @@ const getEmployeeDashboardSummary = async (req, res) => {
       userObjectId ? EmployeeTask.aggregate([
         {$match: {
           isActive: {$ne: false},
+          ...(companyCode ? {companyCode} : {}),
           $or: [
-            {createdBy: {$in: [userObjectId, String(userId)]}},
+            {createdBy: {$in: [userObjectId, String(userId)]}, taskFor: {$ne: "others"}},
             {assignedUsers: {$in: [userObjectId, String(userId)]}},
             {"statusByUser.user": {$in: [userObjectId, String(userId)]}},
           ],
@@ -481,8 +483,9 @@ const getEmployeeDashboardSummary = async (req, res) => {
         }},
       ]) : EmployeeTask.find({
         isActive: {$ne: false},
+        ...(companyCode ? {companyCode} : {}),
         $or: [
-          {createdBy: userId},
+          {createdBy: userId, taskFor: {$ne: "others"}},
           {assignedUsers: userId},
           {"statusByUser.user": userId},
         ],
@@ -659,8 +662,7 @@ const getEmployeeDashboardSummary = async (req, res) => {
       .filter(task => {
         const assigned = (task.assignedUsers || []).map(u => String(u?._id || u));
         return assigned.includes(String(userId)) ||
-               String(task.assignedTo?._id || task.assignedTo || "") === String(userId) ||
-               String(task.createdBy?._id || task.createdBy || "") === String(userId);
+               String(task.assignedTo?._id || task.assignedTo || "") === String(userId);
       })
       .map(task => ({
         _id: task._id,
