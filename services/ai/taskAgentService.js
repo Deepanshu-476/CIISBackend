@@ -393,6 +393,7 @@ const CRM_PROJECTS_QUERY_REGEX = /(?:(?:projects?|projekts?|projets?|प्र�
 const CRM_CLIENTS_QUERY_REGEX = /(?:(?:clients?|cleints?|clints?|क्लाइंट्स?|क्लाइज|क्लाइन्स|क्लाइंट|क्लायंट).*(?:\?|kitne|kitna|kidney|how\s+many|kon|kaun|which|what|list|dikhao|batao|tell|show|status|hai|hain|have|i\s+have|कितने|इतने|दिखाओ|बताओ|हैं)|(?:\?|kitne|kitna|kidney|how\s+many|kon\s+se|kaun\s+se|which|what|list|dikhao|batao|tell\s+me|tell|show|mere|apne|active|all|crm\s+ma?i|crm\s+mein|कितने|इतने|चेक|check).*(?:clients?|cleints?|clints?|क्लाइंट्स?|क्लाइज|क्लाइन्स|क्लाइंट|क्लायंट))/iu;
 const CLIENT_DETAIL_QUERY_REGEX = /(?:(?:services?|सर्विस(?:िस)?|plans?|प्लाइ?न्स?|subscription|details?|जानकारी|status).*(?:di\s+gayi|दी\s+गई|assigned|diya|diye|mil[ie]|hai|hain|kya|kon|kaun|which|batao|dikhao|kaun\s+sa|kon\s+sa|कौन\s*सा|कौन\s*कौन|kisko|uska|uski|inhe|unhe))|(?:(?:kisko|kis\s+client|client|ko|ka|ki|को|का|की).*(?:services?|सर्विस(?:िस)?|plans?|प्लाइ?न्स?).*(?:di\s+gayi|दी\s+गई|assigned|diya|diye|mil[ie]|hai|hain|kya|kon|kaun|batao|dikhao|details?))|(?:(?:services?|सर्विस(?:िस)?|plans?|प्लाइ?न्स?)\s+(?:aur|and|ya|or)\s+(?:services?|सर्विस(?:िस)?|plans?|प्लाइ?न्स?))/iu;
 const CRM_TASKS_QUERY_REGEX = /(?:(?:tasks?|taks|tasak|taask|tsk|kaam|work|टास्क|काम).*(?:\?|kon|kaun|konsa|kaunsa|konsi|kaunsi|kya|which|what|list|dikhao|batao|tell|show|status|kitne|kitna|how\s+many|check|hai|hain|hia|chal\s+raha|कितने|इतने|दिखाओ|बताओ)|(?:\?|check|batao|batayein|dikhao|tell|show|kon|kaun|konsa|kaunsa|konsi|kaunsi|kya|which|what|kitne|kitna|how\s+many|abhi\s+mera|mere|apne|my|aaj\s+ke|कितने|इतने|चेक).*(?:tasks?|taks|tasak|taask|tsk|kaam|work|टास्क|काम)|(?:in[- ]progress|pending|overdue|completed).*(?:tasks?|taks|tasak|taask|tsk|kaam|work|टास्क|काम|\?|hai|hain|hia|chal\s+raha)|(?:tasks?|taks|tasak|taask|tsk|kaam|work|टास्क|काम).*(?:in[- ]progress|pending|overdue|completed)|(?:check|batao|dikhao|tell|kon\s+sa|konsa|kaun\s+sa|kaunsa|kya|चेक|बताओ|दिखाओ).*(?:in[- ]progress|pending|overdue|completed))/iu;
+const TASK_STATUS_TRANSITION = /\b(from\s+)?(?:pending|in[- ]progress|on[- ]?hold|completed)\s+(to|se|sai|sey)\s+(?=pending\b|in[- ]progress\b|on[- ]?hold\b|completed\b)/i;
 const CRM_TASK_COMPLETE_REGEX = /(?:(?:task|kam)\s*(?:ko\s*)?(?:complete|done|khatam)\s*(?:mark\s*)?(?:karo|kar\s*do|kardo)?|mark\s*(?:task\s*)?(?:as\s*)?(?:complete|done)|(?:complete|done|khatam)\s*(?:mark\s*)?(?:karo|kar\s*do|kardo))/i;
 const CRM_TASK_UPDATE_REGEX = /(?:(?:priority|status)\s*(?:ko\s*)?(?:badal\s*kar\s*)?(?:high|low|medium|in[- ]progress|pending|completed?|done|on[- ]?hold|planning|active|cancelled|inactive)|(?:high|low|medium|in[- ]progress|pending|completed?|done|on[- ]?hold|planning|active|cancelled|inactive)\s*(?:priority|status|kardo|kar\s+do|rakho)|(?:priority|status)\s*(?:high|low|medium|in[- ]progress|pending|completed?|done|on[- ]?hold|planning|active|cancelled|inactive)|(?:task|kam|project|client|plan)\s+(?:complete|done|khatam|active|planning|on[- ]?hold|inactive)\s+(?:karo|kar\s+do|mark)|mark\s+(?:task\s+|project\s+|client\s+|plan\s+)?(?:as\s+)?(?:complete|done|active|planning|on[- ]?hold|inactive)|(?:priority|status)\s+(?:update|change|badal|set|make)|(?:kardo|kar\s+do|update|change|badal|set|make).*?(?:priority|status)|(?:status|priority).*?(?:planning|active|completed|high|low|medium|pending|on[- ]?hold|inactive)|(?:make|set|change|put).*?(?:planning|active|on[- ]?hold|inactive)|(?:client|plan).*?(?:on[- ]?hold|active|inactive)\s*(?:kardo|kar\s*do|karo|rakho|set))/iu;
 const CRM_TASK_EDIT_REGEX = /(?:edit|badal|change|update).*?(?:task|kam|kaam|description|desc|title|naam|priority|status|assignee|due\s*date)|(?:task|kam|kaam).*?(?:ko\s+)?(?:edit|update|badal|change)/iu;
@@ -835,7 +836,9 @@ function isCrmTaskUpdate(text) {
   );
   if (isProjectMutation) return true;
 
-  return CRM_TASK_COMPLETE_REGEX.test(clean) || CRM_TASK_UPDATE_REGEX.test(clean) || CRM_TASK_EDIT_REGEX.test(clean);
+  const explicitTransition = TASK_STATUS_TRANSITION.test(clean) &&
+    /\b(?:move|change|update|set|switch|kar\s*do|karo|badlo)\b/i.test(clean);
+  return explicitTransition || CRM_TASK_COMPLETE_REGEX.test(clean) || CRM_TASK_UPDATE_REGEX.test(clean) || CRM_TASK_EDIT_REGEX.test(clean);
 }
 
 function getIstDayRange(now = new Date()) {
@@ -2135,9 +2138,8 @@ function applyTaskStatusAndPriority(taskDoc, targetStatus, targetPriority, userI
     taskDoc.priority = targetPriority.toLowerCase();
   }
   if (targetStatus) {
-    let normalized = targetStatus.toLowerCase().trim();
-    if (normalized === 'in progress') normalized = 'in-progress';
-    if (normalized === 'on hold' || normalized === 'onhold') normalized = 'on-hold';
+    const { normalizeTaskStatus } = require('../../HR-CDS/controllers/taskHelper');
+    const normalized = normalizeTaskStatus(targetStatus);
     taskDoc.status = normalized;
     taskDoc.overallStatus = normalized;
 
@@ -2195,6 +2197,16 @@ function applyTaskStatusAndPriority(taskDoc, targetStatus, targetPriority, userI
     }
 
     taskDoc.lastActivityAt = now;
+  }
+}
+
+function applyClientTaskStatusAndPriority(task, status, priority) {
+  if (priority) task.priority = priority;
+  if (status) {
+    const { normalizeTaskStatus } = require('../../HR-CDS/controllers/taskHelper');
+    task.status = normalizeTaskStatus(status);
+    task.completed = task.status === 'completed';
+    task.completedAt = task.completed ? new Date() : null;
   }
 }
 
@@ -2513,6 +2525,9 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
   const remarkMatch = message.match(/(?:with\s+remark|remark\s+hai|remark\s+mein|remark\s*:?)\s+["']?([^"'\n]+)["']?/i);
   const statusRemarkText = remarkMatch ? remarkMatch[1].trim() : null;
   let commandWithoutRemark = remarkMatch ? message.replace(remarkMatch[0], ' ') : message;
+  const isTransition = TASK_STATUS_TRANSITION.test(commandWithoutRemark);
+  commandWithoutRemark = commandWithoutRemark.replace(TASK_STATUS_TRANSITION, (_, from, separator) =>
+    from && separator.toLowerCase() === 'to' ? 'to ' : '');
 
   // 1. Determine what property is being updated:
   // A. Priority:
@@ -2609,6 +2624,12 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
     taskCandidate = engStatusOfMatch[1].trim();
   }
 
+  // An explicit transition can put the task directly before "from".
+  if (!taskCandidate && isTransition) {
+    const transitionTask = commandWithoutRemark.match(/\b(?:move|switch|change|update)\s+(?:the\s+)?(.+?)\s+to\s+(?:pending|in[- ]progress|on[- ]?hold|completed)\b/i);
+    if (transitionTask && !/\s(?:status|priority)$/i.test(transitionTask[1])) taskCandidate = transitionTask[1];
+  }
+
   // Pattern B: "mark <task> (task) as <status>" / "make <task> (task) <status>"
   if (!taskCandidate) {
     const markMatch = commandWithoutRemark.match(/\b(?:mark|set|make)\s+(?:task\s+)?(.+?)(?:\s+task)?\s+(?:as|to)?\s*(?:completed?|done|in[- ]progress|pending|on[- ]?hold|high|low|medium)\b/i);
@@ -2693,6 +2714,7 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
       .replace(/\s+(?:task\s+)?(?:in|for|of)\s+(?:the\s+)?(.+?)\s+project$/i, '')
       .replace(/\s+project$/i, '')
       .replace(/\s+(?:task|kam|kaam)$/i, '')
+      .replace(/^["']|["']$/g, '')
       .trim();
   }
 
@@ -2995,11 +3017,7 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
         return matchClient && matchName;
       });
       if (cTask) {
-        if (targetPriority) cTask.priority = targetPriority;
-        if (targetStatus) {
-          cTask.status = targetStatus;
-          if (targetStatus === 'completed') cTask.completed = true;
-        }
+        applyClientTaskStatusAndPriority(cTask, targetStatus, targetPriority);
         updatedDoc = cTask;
         isClientTask = true;
       }
@@ -3021,14 +3039,7 @@ async function handleCrmUpdate(message, req, deps = {}, lang = 'hinglish', conte
           }).sort({ createdAt: -1 });
         }
         if (cTask) {
-          if (targetPriority) cTask.priority = targetPriority;
-          if (targetStatus) {
-            cTask.status = targetStatus;
-            if (targetStatus === 'completed') {
-              cTask.completed = true;
-              cTask.completedAt = new Date();
-            }
-          }
+          applyClientTaskStatusAndPriority(cTask, targetStatus, targetPriority);
           if (typeof cTask.save === 'function') await cTask.save();
           updatedDoc = cTask;
           isClientTask = true;
@@ -4546,8 +4557,7 @@ const lastAskedField = currentDraft.asked.length > 0
         if (Array.isArray(deps.clientTasks)) {
           const ct = deps.clientTasks.find(t => String(t._id || t.id) === String(targetTaskId));
           if (ct) {
-            if (targetStatus) { ct.status = targetStatus; if (targetStatus === 'completed') ct.completed = true; }
-            if (targetPriority) ct.priority = targetPriority;
+            applyClientTaskStatusAndPriority(ct, targetStatus, targetPriority);
             didUpdate = true;
           }
         }
@@ -4563,8 +4573,7 @@ const lastAskedField = currentDraft.asked.length > 0
             try {
               const ct = await ClientTaskModel.findById(targetTaskId);
               if (ct) {
-                if (targetStatus) { ct.status = targetStatus; if (targetStatus === 'completed') { ct.completed = true; ct.completedAt = new Date(); } }
-                if (targetPriority) ct.priority = targetPriority;
+                applyClientTaskStatusAndPriority(ct, targetStatus, targetPriority);
                 await ct.save();
                 didUpdate = true;
               }
@@ -4582,9 +4591,12 @@ const lastAskedField = currentDraft.asked.length > 0
           }
         }
 
-        const rep = isEn
-          ? `Task **"${taskTitle}"** has been updated successfully! ✅`
-          : `Task **"${taskTitle}"** safaltapoorvak update kar diya gaya hai! ✅`;
+        const rep = didUpdate
+          ? (isEn
+            ? `Task **"${taskTitle}"** has been updated successfully! ✅`
+            : `Task **"${taskTitle}"** safaltapoorvak update kar diya gaya hai! ✅`)
+          : (isEn ? 'Could not update the task. Please check the task and try again.'
+            : 'Task update nahi ho paya. Task check karke dobara koshish karein.');
 
         return {
           success: true,
@@ -4595,7 +4607,7 @@ const lastAskedField = currentDraft.asked.length > 0
           speakText: rep,
           speakTextHi: rep,
           draft: null,
-          taskUpdated: true,
+          taskUpdated: didUpdate,
           updatedTaskId: String(targetTaskId),
           chips: [
             { label: 'Tasks list dekhein', action: { type: 'show_tasks' } },
@@ -5987,7 +5999,9 @@ const lastAskedField = currentDraft.asked.length > 0
   // NATURAL LANGUAGE REPORT EXPORT HANDLER (Attendance, Tasks, Projects, Clients)
   // Evaluated before chit-chat, CRM queries, or Groq deflection
   // --------------------------------------------------------------------------
-  if (!actionHandled && trimmedMessage && isExportQuery(trimmedMessage) && !isDraftInProgress) {
+  const explicitTaskUpdate = /\b(?:move|switch|change|update|set|mark|kardo|kar\s*do|karo|badlo)\b/i.test(trimmedMessage) &&
+    isCrmTaskUpdate(trimmedMessage);
+  if (!actionHandled && trimmedMessage && !explicitTaskUpdate && isExportQuery(trimmedMessage) && !isDraftInProgress) {
     try {
       const exportResult = await handleExportRequest({
         message: trimmedMessage,
