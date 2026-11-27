@@ -11889,6 +11889,7 @@ const lastAskedField = currentDraft.asked.length > 0
 
   if (wantsEditPrompt) {
     currentDraft.awaitingEdit = true;
+    const isEnTurn = userLang === 'en';
     const editChips = currentDraft.intent === 'task_project'
       ? [
         { label: 'Priority badlo', action: { type: 'ask', field: 'priority' } },
