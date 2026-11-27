@@ -1067,6 +1067,7 @@ app.use(compression({
   threshold: 1024,
   filter: (req, res) => {
     if (req.headers["x-no-compression"]) return false;
+    if (req.originalUrl && req.originalUrl.startsWith('/api/mcp')) return false;
     return compression.filter(req, res);
   },
 }));
