@@ -33,7 +33,8 @@ const {
   markClientReceiptPaymentDone,
   deleteClientReceipt,
   getClientDashboardOverview,
-  getClientDashboardStats
+  getClientDashboardStats,
+  internal: { collectProjectMembers }
 } = require('../controllers/clientController');
 
 const multer = require('multer');
@@ -109,12 +110,41 @@ router.get('/portal-companies', async (req, res, next) => {
     if (additionalClientIds.length) queryOr.push({ _id: { $in: additionalClientIds } });
     if (name) queryOr.push({ client: new RegExp('^' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i'), companyCode });
 
+    const User = require('../../models/User');
     const companies = await Client.find({ $or: queryOr })
-      .select('_id client company companyCode companyLogo status services subscription email phone city branch userId updatedAt')
+      .select('_id client company companyCode companyLogo status services subscription plan subscriptionPrice subscriptionEndDate paymentReceipts dueInvoices email phone city state country pincode address industry gst pan website branch userId projectManager createdAt updatedAt')
       .sort({ status: 1, updatedAt: -1 })
       .lean();
 
-    return res.json({ success: true, data: companies });
+    const companyCodes = [...new Set(companies.map(c => String(c.companyCode || '').trim().toUpperCase()).filter(Boolean))];
+    const companyUsers = companyCodes.length
+      ? await User.find({
+          companyCode: { $in: companyCodes },
+          isActive: true,
+          companyRole: { $not: /^client$/i },
+        })
+          .select('_id name fullName employeeName email employeeEmail phone role companyRole jobRole jobRoleName designation companyCode')
+          .lean()
+      : [];
+
+    const usersByCompanyCode = companyUsers.reduce((acc, u) => {
+      const code = String(u.companyCode || '').trim().toUpperCase();
+      if (!code) return acc;
+      if (!acc.has(code)) acc.set(code, []);
+      acc.get(code).push(u);
+      return acc;
+    }, new Map());
+
+    const enrichedCompanies = companies.map(companyDoc => {
+      const code = String(companyDoc.companyCode || '').trim().toUpperCase();
+      const usersForCompany = usersByCompanyCode.get(code) || [];
+      return {
+        ...companyDoc,
+        projectManagers: collectProjectMembers(companyDoc, usersForCompany),
+      };
+    });
+
+    return res.json({ success: true, data: enrichedCompanies });
   } catch (error) {
     next(error);
   }

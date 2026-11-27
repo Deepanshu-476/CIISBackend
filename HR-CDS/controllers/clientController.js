@@ -380,11 +380,21 @@ const getPersonEmail = person => (
     : ''
 );
 
-const getPersonRole = person => (
-  typeof person === 'object' && person
-    ? person.role || person.designation || person.position || person.employeeRole || 'Project Team'
-    : 'Project Team'
-);
+const getPersonRole = person => {
+  if (!person || typeof person !== 'object') return 'Project Team';
+  const rawJobRole = typeof person.jobRole === 'string' && !/^[a-f\d]{24}$/i.test(person.jobRole.trim())
+    ? person.jobRole
+    : '';
+  return (
+    person.jobRoleName ||
+    person.role ||
+    person.designation ||
+    person.position ||
+    person.employeeRole ||
+    rawJobRole ||
+    'Project Team'
+  );
+};
 
 const normalizeProjectMember = person => {
   const name = getPersonName(person).trim();
@@ -1257,7 +1267,7 @@ const getClientDashboardOverview = async (req, res) => {
     const [clients, companyUsers, supportTickets] = await Promise.all([
       Client.find({ companyCode }).sort({ createdAt: -1 }).limit(1000).lean(),
       User.find(usersFilter)
-        .select('_id id name fullName employeeName email employeeEmail role companyRole jobRole designation phone department isActive')
+        .select('_id id name fullName employeeName email employeeEmail role companyRole jobRole jobRoleName designation phone department isActive')
         .lean(),
       SupportTicket.find({
         companyCode,
@@ -3098,4 +3108,4 @@ for (const [key, handler] of Object.entries(module.exports)) {
     return require('../utils/projectChatEvents').context.run({ actor: req.user.id || req.user._id }, () => handler(...args));
   };
 }
-module.exports.internal = { mergeEditedSubscriptions, moveSubscriptionTasksToEndDate };
+module.exports.internal = { mergeEditedSubscriptions, moveSubscriptionTasksToEndDate, collectProjectMembers };
