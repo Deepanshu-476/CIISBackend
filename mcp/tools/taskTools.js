@@ -366,6 +366,107 @@ function renderTaskPreviewCard({
   ].join('\n');
 }
 
+function escapeRegex(str) {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizeStatusForModel(status, isProjectTask) {
+  const s = String(status || '').trim().toLowerCase();
+  if (isProjectTask) {
+    if (s === 'in-progress') return 'in progress';
+    if (s === 'on-hold' || s === 'onhold') return 'on hold';
+    return s;
+  }
+  if (s === 'in progress') return 'in-progress';
+  if (s === 'on hold' || s === 'on-hold') return 'onhold';
+  return s;
+}
+
+async function findTaskOrProjectTask({ taskId, taskTitle, assigneeNameOrEmail, companyCode, allowLatestFallback = false }) {
+  if (taskId) {
+    const cleanId = String(taskId).trim();
+    if (!cleanId.match(/^[0-9a-fA-F]{24}$/)) {
+      throw new Error(`Invalid taskId '${cleanId}'.`);
+    }
+
+    const task = await Task.findOne({ _id: cleanId, companyCode });
+    if (task) {
+      return { kind: 'task', task };
+    }
+
+    const project = await Project.findOne({ companyCode, 'tasks._id': cleanId });
+    if (project) {
+      const subTask = project.tasks.id(cleanId) || project.tasks.find(t => String(t._id) === cleanId);
+      if (subTask) {
+        return { kind: 'projectTask', project, subTask };
+      }
+    }
+
+    // Never fall back to an unrelated task when an explicit taskId was provided.
+    throw new Error(`Task '${cleanId}' not found in company ${companyCode}.`);
+  }
+
+  let assigneeUser = null;
+  if (assigneeNameOrEmail) {
+    const cleanAssignee = String(assigneeNameOrEmail).trim();
+    assigneeUser = await User.findOne({
+      companyCode,
+      $or: [
+        { email: { $regex: new RegExp(`^${escapeRegex(cleanAssignee)}$`, 'i') } },
+        { name: { $regex: new RegExp(escapeRegex(cleanAssignee), 'i') } }
+      ]
+    });
+    if (!assigneeUser) {
+      throw new Error(`Assignee '${cleanAssignee}' not found in company ${companyCode}.`);
+    }
+  }
+
+  if (taskTitle) {
+    const titleRegex = new RegExp(escapeRegex(String(taskTitle).trim()), 'i');
+    const taskQuery = { companyCode, title: titleRegex };
+    if (assigneeUser) {
+      taskQuery.assignedUsers = assigneeUser._id;
+    }
+
+    const matchedTask = await Task.findOne(taskQuery).sort({ createdAt: -1 });
+    if (matchedTask) {
+      return { kind: 'task', task: matchedTask };
+    }
+
+    const projects = await Project.find({ companyCode, 'tasks.title': titleRegex });
+    const matches = [];
+    for (const proj of projects) {
+      for (const pt of (proj.tasks || [])) {
+        if (!titleRegex.test(pt.title || '')) continue;
+        if (assigneeUser) {
+          const uid = String(assigneeUser._id);
+          const isAssigned = String(pt.assignedTo) === uid || (pt.assignedUsers || []).some(u => String(u._id || u) === uid);
+          if (!isAssigned) continue;
+        }
+        matches.push({ kind: 'projectTask', project: proj, subTask: pt });
+      }
+    }
+
+    if (matches.length > 0) {
+      matches.sort((a, b) => new Date(b.subTask.createdAt || 0) - new Date(a.subTask.createdAt || 0));
+      return matches[0];
+    }
+
+    throw new Error(
+      `Task matching '${taskTitle}'${assigneeNameOrEmail ? ` assigned to '${assigneeNameOrEmail}'` : ''} not found in company ${companyCode}.`
+    );
+  }
+
+  if (allowLatestFallback) {
+    const latestTask = await Task.findOne({ companyCode }).sort({ createdAt: -1 });
+    if (latestTask) {
+      return { kind: 'task', task: latestTask };
+    }
+  }
+
+  throw new Error(`No task found to update in company ${companyCode}.`);
+}
+
 /**
  * Task Tools with RBAC enforcement, preview confirmation, and full field/attachment support
  */
@@ -1007,11 +1108,13 @@ const taskTools = [
 
   {
     name: 'update_task_status',
-    description: 'Updates the status of a task (e.g. to in-progress, completed, onhold).',
+    description: 'Updates the status of a personal task or a project task (e.g. to pending, in-progress, completed, onhold, cancelled).',
     parameters: {
       type: 'object',
       properties: {
-        taskId: { type: 'string', description: 'MongoDB Task ID' },
+        taskId: { type: 'string', description: 'MongoDB Task ID (works for both personal tasks and project tasks)' },
+        taskTitle: { type: 'string', description: 'Task title to search if taskId is not known' },
+        assigneeNameOrEmail: { type: 'string', description: 'Optional assignee name or email to disambiguate tasks with the same title' },
         status: {
           type: 'string',
           enum: ['pending', 'in-progress', 'completed', 'onhold', 'cancelled'],
@@ -1019,36 +1122,70 @@ const taskTools = [
         },
         remarks: { type: 'string', description: 'Optional remarks or update notes' }
       },
-      required: ['taskId', 'status']
+      required: ['status']
     },
     permissionCheck: () => true,
     handler: async (args, ctx) => {
-      const { taskId, status, remarks = '' } = args;
-      
-      const task = await Task.findOne({
-        _id: taskId,
-        companyCode: ctx.companyCode
-      });
-
-      if (!task) {
-        throw new Error(`Task '${taskId}' not found in company ${ctx.companyCode}.`);
+      const { taskId, taskTitle, assigneeNameOrEmail, status, remarks = '' } = args;
+      if (!taskId && !taskTitle) {
+        throw new Error('Either taskId or taskTitle must be provided to update task status.');
       }
 
+      const found = await findTaskOrProjectTask({
+        taskId,
+        taskTitle,
+        assigneeNameOrEmail,
+        companyCode: ctx.companyCode,
+        allowLatestFallback: false
+      });
+
+      if (found.kind === 'projectTask') {
+        const { project, subTask } = found;
+        const uid = String(ctx.user._id);
+        const isAssigned = String(subTask.assignedTo) === uid || (subTask.assignedUsers || []).some(u => String(u._id || u) === uid);
+        const isCreator = String(subTask.createdBy) === uid;
+        if (!isAssigned && !isCreator && !ctx.permissions.isAdmin && !ctx.permissions.isManager) {
+          throw new Error('Permission Denied: You can only update tasks assigned to you.');
+        }
+
+        const normalized = normalizeStatusForModel(status, true);
+        subTask.status = normalized;
+        if (remarks) {
+          subTask.remarks = String(remarks).trim();
+        }
+        await project.save();
+
+        return {
+          success: true,
+          message: `Project task '${subTask.title}' in '${project.projectName}' status updated to '${normalized}'.`,
+          task: {
+            id: subTask._id,
+            title: subTask.title,
+            project: project.projectName,
+            status: subTask.status,
+            overallStatus: subTask.status
+          }
+        };
+      }
+
+      const { task } = found;
       const isAssigned = (task.assignedUsers || []).some(u => String(u._id || u) === String(ctx.user._id));
-      if (!isAssigned && !ctx.permissions.isAdmin && !ctx.permissions.isManager) {
+      const isCreator = String(task.createdBy) === String(ctx.user._id);
+      if (!isAssigned && !isCreator && !ctx.permissions.isAdmin && !ctx.permissions.isManager) {
         throw new Error('Permission Denied: You can only update tasks assigned to you.');
       }
 
-      task.overallStatus = status;
+      const normalized = normalizeStatusForModel(status, false);
+      task.overallStatus = normalized;
       if (typeof task.updateUserStatus === 'function') {
-        task.updateUserStatus(ctx.user._id, status, remarks);
+        task.updateUserStatus(ctx.user._id, normalized, remarks);
       } else {
         task.statusByUser = task.statusByUser || [];
         const existing = task.statusByUser.find(s => String(s.user) === String(ctx.user._id));
         if (existing) {
-          existing.status = status;
+          existing.status = normalized;
         } else {
-          task.statusByUser.push({ user: ctx.user._id, status });
+          task.statusByUser.push({ user: ctx.user._id, status: normalized });
         }
       }
 
@@ -1056,7 +1193,7 @@ const taskTools = [
 
       return {
         success: true,
-        message: `Task '${task.title}' status updated to '${status}'.`,
+        message: `Task '${task.title}' status updated to '${normalized}'.`,
         task: {
           id: task._id,
           title: task.title,
@@ -1069,12 +1206,13 @@ const taskTools = [
 
   {
     name: 'update_task',
-    description: 'Updates an existing task: due date/time, status, priority, title, description, checkpoints, or attaches files. Use this when the user asks to change or set due time (e.g. "time - 7:20 pm"), due date, priority, details, or attach files to an existing task.',
+    description: 'Updates an existing personal task or project task: due date/time, status, priority, title, description, checkpoints, or attaches files. Use this when the user asks to change or set due time (e.g. "time - 7:20 pm"), due date, priority, status, details, or attach files to an existing task.',
     parameters: {
       type: 'object',
       properties: {
-        taskId: { type: 'string', description: 'MongoDB Task ID (optional if updating recent task)' },
+        taskId: { type: 'string', description: 'MongoDB Task ID (works for both personal tasks and project tasks; optional if updating recent task)' },
         taskTitle: { type: 'string', description: 'Task title to search if taskId is not known' },
+        assigneeNameOrEmail: { type: 'string', description: 'Optional assignee name or email to disambiguate tasks with the same title' },
         dueDateTime: { type: 'string', description: 'New due date or time (e.g. "7:20 pm", "2026-11-26 19:20")' },
         status: {
           type: 'string',
@@ -1096,27 +1234,59 @@ const taskTools = [
     },
     permissionCheck: () => true,
     handler: async (args, ctx) => {
-      const { taskId, taskTitle, dueDateTime, status, priority, title, description, attachmentPaths, filePath, hasAttachment, remarks = '' } = args;
+      const { taskId, taskTitle, assigneeNameOrEmail, dueDateTime, status, priority, title, description, attachmentPaths, filePath, hasAttachment, remarks = '' } = args;
 
-      let task = null;
-      if (taskId && taskId.match(/^[0-9a-fA-F]{24}$/)) {
-        task = await Task.findOne({ _id: taskId, companyCode: ctx.companyCode });
+      const found = await findTaskOrProjectTask({
+        taskId,
+        taskTitle,
+        assigneeNameOrEmail,
+        companyCode: ctx.companyCode,
+        allowLatestFallback: !taskId && !taskTitle
+      });
+
+      if (found.kind === 'projectTask') {
+        const { project, subTask } = found;
+        const uid = String(ctx.user._id);
+        const isAssigned = String(subTask.assignedTo) === uid || (subTask.assignedUsers || []).some(u => String(u._id || u) === uid);
+        const isCreator = String(subTask.createdBy) === uid;
+        if (!isAssigned && !isCreator && !ctx.permissions.isAdmin && !ctx.permissions.isManager) {
+          throw new Error('Permission Denied: You do not have permission to update this task.');
+        }
+
+        if (dueDateTime) {
+          const parsedDate = parseUpdatedDueDateTime(dueDateTime, subTask.dueDateTime || subTask.dueDate);
+          if (parsedDate) {
+            subTask.dueDateTime = parsedDate;
+            subTask.dueDate = parsedDate;
+          }
+        }
+        if (priority) subTask.priority = String(priority).toLowerCase();
+        if (title) subTask.title = title.trim();
+        if (description) subTask.description = description.trim();
+        if (remarks) subTask.remarks = String(remarks).trim();
+        if (status) subTask.status = normalizeStatusForModel(status, true);
+
+        await project.save();
+
+        const activeStatus = subTask.status || 'pending';
+        return {
+          success: true,
+          message: `Project task '${subTask.title}' in '${project.projectName}' updated successfully. Status: ${activeStatus}, Due Date/Time: ${subTask.dueDateTime ? new Date(subTask.dueDateTime).toISOString() : 'N/A'}`,
+          task: {
+            id: subTask._id,
+            title: subTask.title,
+            project: project.projectName,
+            status: activeStatus,
+            overallStatus: activeStatus,
+            priority: subTask.priority,
+            dueDateTime: subTask.dueDateTime || subTask.dueDate,
+            attachmentsCount: subTask.pdfFile?.filename ? 1 : 0,
+            attachments: subTask.pdfFile?.filename ? [subTask.pdfFile.filename] : []
+          }
+        };
       }
 
-      if (!task && taskTitle) {
-        task = await Task.findOne({
-          companyCode: ctx.companyCode,
-          title: { $regex: new RegExp(taskTitle.trim(), 'i') }
-        }).sort({ createdAt: -1 });
-      }
-
-      if (!task) {
-        task = await Task.findOne({ companyCode: ctx.companyCode }).sort({ createdAt: -1 });
-      }
-
-      if (!task) {
-        throw new Error(`No task found to update in company ${ctx.companyCode}.`);
-      }
+      const { task } = found;
 
       const isAssigned = (task.assignedUsers || []).some(u => String(u._id || u) === String(ctx.user._id));
       const isCreator = String(task.createdBy) === String(ctx.user._id);
@@ -1156,16 +1326,17 @@ const taskTools = [
       }
 
       if (status) {
-        task.overallStatus = status;
+        const normalized = normalizeStatusForModel(status, false);
+        task.overallStatus = normalized;
         if (typeof task.updateUserStatus === 'function') {
-          task.updateUserStatus(ctx.user._id, status, remarks);
+          task.updateUserStatus(ctx.user._id, normalized, remarks);
         } else {
           task.statusByUser = task.statusByUser || [];
           const existing = task.statusByUser.find(s => String(s.user) === String(ctx.user._id));
           if (existing) {
-            existing.status = status;
+            existing.status = normalized;
           } else {
-            task.statusByUser.push({ user: ctx.user._id, status });
+            task.statusByUser.push({ user: ctx.user._id, status: normalized });
           }
         }
       }
