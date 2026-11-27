@@ -1,7 +1,7 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const PagePermission = require('../models/PagePermission');
-const Company = require('../models/Company');
+const { getCompanyPageEntitlements, isPageEntitled, normalizePageEntitlementKey } = require('../utils/companyPageEntitlements');
 const PageDataVisibility = require('../models/PageDataVisibility');
 const User = require('../models/User');
 const Client = require('../HR-CDS/models/Client');
@@ -183,7 +183,10 @@ const getEffectiveViewUsers = (config) => uniqueUsers([
   ...getPageUsers(config, 'viewUsers'),
   ...getPageUsers(config, 'editUsers'),
   ...getPageUsers(config, 'approvers'),
-  ...getPageUsers(config, 'deleteUsers')
+  ...getPageUsers(config, 'deleteUsers'),
+  ...getPageUsers(config, 'generateUsers'),
+  ...getPageUsers(config, 'lockUsers'),
+  ...getPageUsers(config, 'unlockUsers')
 ]);
 
 const getPageUserCounts = (config) => {
@@ -222,9 +225,10 @@ const decoratePageSummaries = async (companyId, providedConfigs) => {
     .select('pageKey path approvers viewUsers editUsers deleteUsers generateUsers lockUsers unlockUsers userAccessScopes updatedAt')
     .lean();
   const configMap = new Map(configs.map(config => [config.path, config]));
+  const configByKey = new Map(configs.map(config => [normalizePageEntitlementKey(config.pageKey), config]));
 
   return APP_PAGES.map(page => {
-    const config = configMap.get(page.path);
+    const config = configMap.get(page.path) || configByKey.get(normalizePageEntitlementKey(page.pageKey));
     const counts = getPageUserCounts(config);
     return {
       ...page,
@@ -250,14 +254,16 @@ const decoratePages = async (companyId, providedConfigs) => {
     .lean();
   const configs = providedConfigs || await query;
   const configMap = new Map(configs.map(config => [config.path, config]));
+  const configByKey = new Map(configs.map(config => [normalizePageEntitlementKey(config.pageKey), config]));
 
   return APP_PAGES.map(page => {
-    const config = configMap.get(page.path);
+    const config = configMap.get(page.path) || configByKey.get(normalizePageEntitlementKey(page.pageKey));
     return {
       ...page,
       permissionPattern: page.permissionPattern || null,
       approvers: getPageUsers(config, 'approvers'),
       viewUsers: getEffectiveViewUsers(config),
+      explicitViewUsers: getPageUsers(config, 'viewUsers'),
       editUsers: getPageUsers(config, 'editUsers'),
       deleteUsers: getPageUsers(config, 'deleteUsers'),
       generateUsers: getPageUsers(config, 'generateUsers'),
@@ -268,18 +274,6 @@ const decoratePages = async (companyId, providedConfigs) => {
     };
   });
 };
-
-const getPageSummariesCached = (companyId) => getOrSetCached(
-  getCacheKey(PAGE_PERMISSION_CACHE_PREFIX, { scope: 'pages', companyId }),
-  () => decoratePageSummaries(companyId),
-  PAGE_PERMISSION_TTL_MS
-);
-
-const getDecoratedPagesCached = (companyId) => getOrSetCached(
-  getCacheKey(PAGE_PERMISSION_CACHE_PREFIX, { scope: 'pages-full', companyId }),
-  () => decoratePages(companyId),
-  PAGE_PERMISSION_TTL_MS
-);
 
 const getVisibilityContextCached = (companyId) => getOrSetCached(
   getCacheKey(PAGE_PERMISSION_CACHE_PREFIX, { scope: 'visibility-context', companyId }),
@@ -294,23 +288,14 @@ const getEffectiveVisibilityCached = (companyId, userId) => getOrSetCached(
 );
 
 const resolvePageMeta = (requestedPath = '') => {
-  const clean = String(requestedPath || '').trim();
+  const clean = normalizePageEntitlementKey(String(requestedPath || '').split(/[?#]/)[0]);
   if (!clean) return null;
-  const exact = APP_PAGES.find(item => item.path === clean || item.pageKey.toLowerCase() === clean.toLowerCase());
-  if (exact) return exact;
-
-  const leaf = clean.split('?')[0].split('#')[0].split('/').filter(Boolean).pop();
-  return APP_PAGES.find(item => {
-    if (leaf && item.pageKey.toLowerCase() === leaf.toLowerCase()) return true;
-    const itemLeaf = item.path.split('/').filter(Boolean).pop();
-    if (leaf && itemLeaf && itemLeaf.toLowerCase() === leaf.toLowerCase()) return true;
-    return false;
-  }) || null;
+  return APP_PAGES.find(page =>
+    normalizePageEntitlementKey(page.path) === clean || normalizePageEntitlementKey(page.pageKey) === clean
+  ) || null;
 };
 
-const getPageByPathCached = (companyId, path) => getOrSetCached(
-  getCacheKey(PAGE_PERMISSION_CACHE_PREFIX, { scope: 'by-path', companyId, path }),
-  async () => {
+const getPageByPath = async (companyId, path) => {
     const pageMeta = resolvePageMeta(path);
     const searchPaths = [path];
     if (pageMeta) {
@@ -352,6 +337,7 @@ const getPageByPathCached = (companyId, path) => getOrSetCached(
       permissionActions: resolvedMeta?.permissionActions || null,
       approvers: getPageUsers(config, 'approvers'),
       viewUsers: getEffectiveViewUsers(config),
+      explicitViewUsers: getPageUsers(config, 'viewUsers'),
       editUsers: getPageUsers(config, 'editUsers'),
       deleteUsers: getPageUsers(config, 'deleteUsers'),
       generateUsers: getPageUsers(config, 'generateUsers'),
@@ -366,6 +352,7 @@ const getPageByPathCached = (companyId, path) => getOrSetCached(
       permissionActions: resolvedMeta?.permissionActions || null,
       approvers: [],
       viewUsers: [],
+      explicitViewUsers: [],
       editUsers: [],
       deleteUsers: [],
       generateUsers: [],
@@ -373,9 +360,7 @@ const getPageByPathCached = (companyId, path) => getOrSetCached(
       unlockUsers: [],
       userAccessScopes: []
     };
-  },
-  PAGE_PERMISSION_TTL_MS
-);
+};
 
 const normalizeVisibilityRule = (rule = {}) => {
   const subjectType = String(rule.subjectType || '').trim().toLowerCase();
@@ -505,42 +490,26 @@ router.get('/pages', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Company not found for current user' });
     }
 
-    const company = await Company.findById(companyId).select('allowedPages').lean();
-    const normalizeAllowedPage = value => String(value || '').trim().toLowerCase()
-      .replace(/^\/+/, '').replace(/^ciisuser\//, '').replace(/\/+$/, '');
-    const allowedPages = (company?.allowedPages || []).map(normalizeAllowedPage).filter(Boolean);
-    const allowedSet = new Set(allowedPages);
-    const isEnabled = page => {
-      if (!allowedSet.size) return true;
-      const pageKey = normalizeAllowedPage(page.pageKey);
-      const path = normalizeAllowedPage(page.path);
-      if (allowedSet.has(pageKey) || allowedSet.has(path)) return true;
-      if (path.startsWith('crm/') && (allowedSet.has('crm') || allowedSet.has('admin-crm'))) return true;
-      if (path.startsWith('telecaller/') && (allowedSet.has('telecaller') || allowedSet.has('admin-telecaller') || allowedSet.has('crm'))) return true;
-      return false;
-    };
+    const entitlements = await getCompanyPageEntitlements(companyId);
+    const isEnabled = page => isPageEntitled(entitlements, page);
 
     if (String(req.query?.includeAccess || '').toLowerCase() === 'true') {
-      // Every page load asks for this; it grows with the company's users, so it
-      // is cached like the summary list and cleared when a permission is saved.
-      const { pageSummaries, accessPages } = await getOrSetCached(
-        getCacheKey(PAGE_PERMISSION_CACHE_PREFIX, { scope: 'pages-with-access', companyId }),
-        async () => {
-          const configs = await PagePermission.find({ company: companyId })
-            .select('company companyCode pageKey name path approvers viewUsers editUsers deleteUsers generateUsers lockUsers unlockUsers userAccessScopes updatedAt')
-            .lean();
-          const [pageSummaries, accessPages] = await Promise.all([
-            decoratePageSummaries(companyId, configs),
-            decoratePages(companyId, configs)
-          ]);
-          return { pageSummaries, accessPages };
-        },
-        PAGE_PERMISSION_TTL_MS
-      );
-      return res.json({ success: true, pages: pageSummaries.filter(isEnabled), accessPages });
+      const configs = await PagePermission.find({ company: companyId })
+        .select('company companyCode pageKey path approvers viewUsers editUsers deleteUsers generateUsers lockUsers unlockUsers userAccessScopes updatedAt')
+        .lean();
+      const [pageSummaries, accessPages] = await Promise.all([
+        decoratePageSummaries(companyId, configs),
+        decoratePages(companyId, configs)
+      ]);
+      return res.json({
+        success: true,
+        pages: pageSummaries.filter(isEnabled),
+        accessPages: accessPages.filter(isEnabled),
+        managedPages: APP_PAGES.map(({pageKey, path}) => ({pageKey, path, entitled: isEnabled({pageKey, path})}))
+      });
     }
 
-    const pages = (await getPageSummariesCached(companyId)).filter(isEnabled);
+    const pages = (await decoratePageSummaries(companyId)).filter(isEnabled);
     return res.json({ success: true, pages });
   } catch (error) {
     console.error('Page permissions list error:', error);
@@ -610,8 +579,12 @@ router.get('/by-path', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Company and path are required' });
     }
 
-    const page = await getPageByPathCached(companyId, path);
-    res.json({ success: true, page });
+    const meta = resolvePageMeta(path);
+    if (meta && !isPageEntitled(await getCompanyPageEntitlements(companyId), meta)) {
+      return res.json({ success: true, page: { ...meta, entitled: false } });
+    }
+    const page = await getPageByPath(companyId, meta?.path || path);
+    res.json({ success: true, page: meta ? { ...page, entitled: true } : page });
   } catch (error) {
     console.error('Page permission by path error:', error);
     res.status(500).json({ success: false, error: 'Failed to load page permission' });
@@ -711,6 +684,10 @@ router.put('/:pageKey', isCompanyOwner, async (req, res) => {
       return res.status(404).json({ success: false, error: 'Page not found' });
     }
 
+    if (!isPageEntitled(await getCompanyPageEntitlements(companyId), page)) {
+      return res.status(403).json({ success: false, error: 'This page is outside the company plan or company access.' });
+    }
+
     const approverIds = Array.isArray(req.body.approverIds) ? req.body.approverIds : [];
     const viewUserIds = Array.isArray(req.body.viewUserIds) ? req.body.viewUserIds : [];
     const editUserIds = Array.isArray(req.body.editUserIds) ? req.body.editUserIds : [];
@@ -749,34 +726,19 @@ router.put('/:pageKey', isCompanyOwner, async (req, res) => {
         .filter(id => !linkedClientUserIdSet.has(id))
     );
     const validEditIds = uniqueEditUserIds.filter(id => validIdSet.has(id));
-    const mergedViewUserIds = [...new Set([...uniqueViewUserIds.filter(id => validIdSet.has(id)), ...validEditIds])];
 
     const approvers = normalizePageUsers(uniqueApproverIds.filter(id => validIdSet.has(id)));
-    const viewUsers = normalizePageUsers(mergedViewUserIds);
+    const viewUsers = normalizePageUsers(uniqueViewUserIds.filter(id => validIdSet.has(id)));
     const editUsers = normalizePageUsers(validEditIds);
     const deleteUsers = normalizePageUsers(uniqueDeleteUserIds.filter(id => validIdSet.has(id)));
     const generateUsers = normalizePageUsers(uniqueGenerateUserIds.filter(id => validIdSet.has(id)));
     const lockUsers = normalizePageUsers(uniqueLockUserIds.filter(id => validIdSet.has(id)));
     const unlockUsers = normalizePageUsers(uniqueUnlockUserIds.filter(id => validIdSet.has(id)));
-    const validUserAccessScopes = userAccessScopes.filter(item => validIdSet.has(String(item.user)));
-
-    const editScopeMap = new Map();
-    validUserAccessScopes.forEach(s => {
-      if (s.accessType === 'edit') editScopeMap.set(String(s.user), s);
-    });
-    const hasViewScopeSet = new Set(
-      validUserAccessScopes.filter(s => s.accessType === 'view').map(s => String(s.user))
+    const grants = {view: viewUsers, edit: editUsers, approve: approvers, delete: deleteUsers,
+      generate: generateUsers, lock: lockUsers, unlock: unlockUsers};
+    const validUserAccessScopes = userAccessScopes.filter(scope =>
+      grants[scope.accessType].some(entry => String(entry.user) === String(scope.user))
     );
-    editScopeMap.forEach((scope, userId) => {
-      if (!hasViewScopeSet.has(userId)) {
-        validUserAccessScopes.push({
-          user: userId,
-          accessType: 'view',
-          branchIds: scope.branchIds || [],
-          departmentIds: scope.departmentIds || []
-        });
-      }
-    });
 
     const config = await PagePermission.findOneAndUpdate(
       { company: companyId, path: page.path },
@@ -863,6 +825,7 @@ router.put('/:pageKey', isCompanyOwner, async (req, res) => {
       }
     }
 
+    invalidateCache(PAGE_PERMISSION_CACHE_PREFIX);
     res.json({
       success: true,
       message: 'Page permissions updated successfully',
@@ -872,7 +835,8 @@ router.put('/:pageKey', isCompanyOwner, async (req, res) => {
         path: config.path,
         permissionPattern: page.permissionPattern || null,
         approvers: getPageUsers(config, 'approvers'),
-        viewUsers: getPageUsers(config, 'viewUsers'),
+        viewUsers: getEffectiveViewUsers(config),
+        explicitViewUsers: getPageUsers(config, 'viewUsers'),
         editUsers: getPageUsers(config, 'editUsers'),
         deleteUsers: getPageUsers(config, 'deleteUsers'),
         generateUsers: getPageUsers(config, 'generateUsers'),
@@ -881,7 +845,6 @@ router.put('/:pageKey', isCompanyOwner, async (req, res) => {
         userAccessScopes: getPageUserAccessScopes(config)
       }
     });
-    invalidateCache(PAGE_PERMISSION_CACHE_PREFIX);
   } catch (error) {
     console.error('Page permissions save error:', error);
     res.status(500).json({ success: false, error: 'Failed to save page approvers' });

@@ -1,4 +1,4 @@
-const { OVERDUE_STATUS_MESSAGE, isOverdueStatus, isCompanyTaskWrite, isCompanyTaskWriteRequest } = require('../utils/companyTaskStatus');
+const { OVERDUE_STATUS_MESSAGE, isOverdueStatus, isCompanyTaskWrite, isCompanyTaskWriteRequest, hasCompanyTaskWriteGrant } = require('../utils/companyTaskStatus');
 const { preserveCheckpointProgress } = require('../utils/taskCheckpoints');
 
 const Task = require('../models/Task');
@@ -680,48 +680,7 @@ const isSameCompanyTaskRequest = (req, task) => {
 const canManageTaskFromCompanyAll = async (req, task) => {
   if (isCompanyTaskWriteRequest(req)) return isCompanyTaskWrite(req, task);
   if (!isSameCompanyTaskRequest(req, task) || !isCompanyAllTaskEdit(req)) return false;
-  const user = req.user;
-  if (!user) return false;
-
-  if (
-    user.isSuperAdmin === true ||
-    user.superAdmin === true ||
-    user.isCompanyOwner === true ||
-    user.role === 'superadmin' ||
-    user.role === 'admin'
-  ) {
-    return true;
-  }
-
-  const roleTokens = [user.companyRole, user.role, user.jobRole, user.userType]
-    .map(r => String(r || '').toLowerCase().replace(/[\s_-]+/g, ''));
-  if (roleTokens.some(r => ['owner', 'companyowner', 'admin', 'companyadmin', 'superadmin'].includes(r))) {
-    return true;
-  }
-
-  const companyId = user.company?._id || user.company || user.companyId;
-  const userId = String(user._id || user.id || '').trim();
-  if (!companyId || !userId) return false;
-
-  try {
-    const page = await PagePermission.findOne({
-      company: companyId,
-      path: { $in: ['/ciisUser/company-all-task', '/ciisUser/company-all-task/tasks', 'company-all-task', 'company-all-task-tasks'] }
-    }).lean();
-
-    if (!page) return true;
-
-    const editUserIds = (page.editUsers || []).map(u => String(u?.user?._id || u?.user || '')).filter(Boolean);
-    const scopedEditUserIds = (page.userAccessScopes || [])
-      .filter(s => String(s?.accessType || '').toLowerCase() === 'edit')
-      .map(s => String(s?.user?._id || s?.user || ''))
-      .filter(Boolean);
-
-    const allEditUserIds = new Set([...editUserIds, ...scopedEditUserIds]);
-    return allEditUserIds.has(userId) || allEditUserIds.size === 0;
-  } catch {
-    return true;
-  }
+  return hasCompanyTaskWriteGrant(req);
 };
 
 const parseTaskCheckpoints = (value, includeId = false) => {
@@ -2336,16 +2295,16 @@ exports.updateTask = async (req, res) => {
     const allowCompanyAllEdit = await canManageTaskFromCompanyAll(req, task);
     if (task.createdBy.toString() !== req.user._id.toString() && !allowCompanyAllEdit) return res.status(403).json({ success: false, error: 'Not authorized' });
 
-    const hasStatusChangedFromPending = task.overallStatus !== 'pending' || task.statusByUser.some(s => s.status !== 'pending');
-    if (hasStatusChangedFromPending && !allowCompanyAllEdit) {
-      return res.status(400).json({ success: false, error: 'Task cannot be edited after its status has changed from pending' });
-    }
-
     if (req.body.status && req.body.status !== 'null' && !isOverdueStatus(req.body.status) &&
         (isOverdueStatus(task.overallStatus) ||
           isTaskOverdueForStatus(task.dueDateTime || task.dueDate, task.overallStatus, task)) &&
         !isCompanyTaskWrite(req, task)) {
       return res.status(409).json({ success: false, error: OVERDUE_STATUS_MESSAGE });
+    }
+
+    const hasStatusChangedFromPending = task.overallStatus !== 'pending' || task.statusByUser.some(s => s.status !== 'pending');
+    if (hasStatusChangedFromPending && !allowCompanyAllEdit) {
+      return res.status(400).json({ success: false, error: 'Task cannot be edited after its status has changed from pending' });
     }
 
     if (req.body.status && req.body.status !== 'null') task.$where = { updatedAt: task.updatedAt ?? null };

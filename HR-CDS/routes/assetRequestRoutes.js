@@ -7,6 +7,11 @@ const path = require('path');
 const assetController = require('../controllers/assetRequestController');
 const { protect } = require('../../middleware/authMiddleware');
 
+const { requirePageAccess } = require('../../middleware/pageAccess');
+const employeeAssetAccess = action => requirePageAccess({
+  paths: ['/ciisUser/emp-assets'], action, label: 'Employee Assets',
+});
+
 // Branch rule: managing someone's asset request needs them to be in the viewer's branches.
 const AssetRequest = require('../models/AssetRequest');
 const { requireRecordInBranches } = require('../../utils/branchScope');
@@ -46,13 +51,14 @@ router.get('/my-requests', protect, assetController.getMyRequests);
 router.get('/available', protect, assetController.getAvailableAssets);
 router.post('/:id/return-request', protect, assetController.requestAssetReturn);
 router.post('/:id/deposit', protect, assetController.depositAsset);
-router.post('/:id/confirm-deposit', protect, assetRequestInBranches, assetController.confirmAssetDeposit);
+router.post('/:id/confirm-deposit', protect, employeeAssetAccess('approve'), assetRequestInBranches, assetController.confirmAssetDeposit);
 
 
-router.get('/all', protect, assetController.getAllRequests);          
+router.get('/all', protect, employeeAssetAccess('view'), assetController.getAllRequests);
 router.patch(
   '/update/:id',
   protect,
+  employeeAssetAccess('approve'),
   assetRequestInBranches,
   uploadCommentImage.fields([
     { name: 'commentImages', maxCount: 3 },
@@ -61,8 +67,8 @@ router.patch(
   assetController.updateRequestStatus
 );
 router.delete('/update/:id/comments/:commentId/attachment', protect, assetController.deleteCommentAttachment);
-router.delete('/delete/:id', protect, assetRequestInBranches, assetController.deleteRequest);      
-router.delete('/:id', protect, assetRequestInBranches, assetController.deleteRequest);      
+router.delete('/delete/:id', protect, employeeAssetAccess('delete'), assetRequestInBranches, assetController.deleteRequest);
+router.delete('/:id', protect, employeeAssetAccess('delete'), assetRequestInBranches, assetController.deleteRequest);
 
 
 

@@ -6,6 +6,11 @@ const authMiddleware = require('../../middleware/authMiddleware');
 const { body, param, query } = require('express-validator');
 const validateRequest = require('../../middleware/validateRequest.js');
 
+const { requirePageAccess } = require('../../middleware/pageAccess');
+const leaveAccess = action => requirePageAccess({
+  paths: ['/ciisUser/emp-leaves'], action, label: 'Employee Leaves',
+});
+
 router.use(authMiddleware.protect);
 
 // Branch rule: approving / deleting a leave needs its employee to be in the viewer's branches.
@@ -59,13 +64,14 @@ router.post('/sync',
 router.get('/stats', leaveController.getLeaveStats);
 
 
-router.get('/all', require('../../middleware/pageAccess').blockClientLogins, leaveController.getAllLeaves);
+router.get('/all', leaveAccess('view'), leaveController.getAllLeaves);
 
 router.get('/approval-options/:id',
   [
     param('id').isMongoId().withMessage('Invalid leave ID format'),
     validateRequest
   ],
+  leaveAccess('approve'),
   leaveInBranches,
   leaveController.getLeaveApprovalOptions
 );
@@ -85,6 +91,7 @@ router.patch('/status/:id',
     body('payType').optional().isIn(['Paid', 'Unpaid']).withMessage('Pay type must be Paid or Unpaid'),
     validateRequest
   ],
+  leaveAccess('approve'),
   leaveInBranches,
   leaveController.updateLeaveStatus
 );
@@ -104,6 +111,7 @@ router.delete('/:id',
     param('id').isMongoId().withMessage('Invalid leave ID format'),
     validateRequest
   ],
+  leaveAccess('delete'),
   leaveInBranches,
   leaveController.deleteLeave
 );
