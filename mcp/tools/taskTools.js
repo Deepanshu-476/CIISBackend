@@ -1012,47 +1012,84 @@ const taskTools = [
 
   {
     name: 'list_tasks',
-    description: 'Lists tasks based on filters. Regular employees see only their tasks; Admins/Managers can view team tasks.',
+    description: 'Lists personal tasks and project tasks based on filters (my, all, completed, pending, overdue) and optional search/assignee/project filters. Regular employees see only their tasks; Admins/Managers can view team tasks.',
     parameters: {
       type: 'object',
       properties: {
         filter: { type: 'string', enum: ['my', 'all', 'completed', 'pending', 'overdue'], default: 'my' },
+        search: { type: 'string', description: 'Optional keyword to filter task titles' },
+        assignee: { type: 'string', description: 'Optional assignee name or email to filter tasks' },
+        project: { type: 'string', description: 'Optional project name to filter project tasks' },
         limit: { type: 'number', default: 20 }
       }
     },
     permissionCheck: () => true,
     handler: async (args, ctx) => {
-      const { filter = 'my', limit = 20 } = args;
+      const { filter = 'my', search, assignee, project, limit = 20 } = args;
       const query = { companyCode: ctx.companyCode };
+
+      let assigneeIds = null;
+      if (assignee) {
+        const cleanAssignee = String(assignee).trim();
+        const matchedUsers = await User.find({
+          companyCode: ctx.companyCode,
+          $or: [
+            { email: { $regex: new RegExp(`^${escapeRegex(cleanAssignee)}$`, 'i') } },
+            { name: { $regex: new RegExp(escapeRegex(cleanAssignee), 'i') } }
+          ]
+        }).select('_id').lean();
+        assigneeIds = matchedUsers.map(u => u._id);
+        if (assigneeIds.length === 0) {
+          return { total: 0, tasks: [] };
+        }
+      }
 
       if (!ctx.permissions.isAdmin && !ctx.permissions.isManager) {
         query.assignedUsers = ctx.user._id;
+      } else if (assigneeIds) {
+        query.assignedUsers = { $in: assigneeIds };
       } else if (filter === 'my') {
         query.assignedUsers = ctx.user._id;
       }
 
       if (filter === 'completed') {
-        query.status = 'completed';
+        query.overallStatus = 'completed';
       } else if (filter === 'pending') {
-        query.status = { $in: ['pending', 'in-progress', 'reopen'] };
+        query.overallStatus = { $in: ['pending', 'in-progress', 'reopen'] };
       } else if (filter === 'overdue') {
-        query.status = 'overdue';
+        query.overallStatus = 'overdue';
       }
 
-      const tasks = await Task.find(query)
-        .populate('assignedUsers', 'name email')
-        .sort({ dueDateTime: 1, createdAt: -1 })
-        .limit(Math.min(limit, 50))
-        .lean();
+      const searchRegex = search ? new RegExp(escapeRegex(String(search).trim()), 'i') : null;
+      if (searchRegex) {
+        query.title = searchRegex;
+      }
+
+      const maxLimit = Math.min(Number(limit) || 20, 50);
+      const tasks = project && String(project).toLowerCase() !== 'none'
+        ? []
+        : await Task.find(query)
+            .populate('assignedUsers', 'name email')
+            .sort({ createdAt: -1, dueDateTime: 1 })
+            .limit(maxLimit)
+            .lean();
 
       const projQuery = { companyCode: ctx.companyCode, isActive: { $ne: false } };
+      if (project && String(project).toLowerCase() !== 'none') {
+        projQuery.projectName = { $regex: new RegExp(escapeRegex(String(project).trim()), 'i') };
+      }
       if ((!ctx.permissions.isAdmin && !ctx.permissions.isManager) || filter === 'my') {
         projQuery.$or = [{ users: ctx.user._id }, { managers: ctx.user._id }, { 'tasks.assignedUsers': ctx.user._id }, { 'tasks.assignedTo': ctx.user._id }];
       }
       const projects = await Project.find(projQuery)
         .select('projectName tasks')
         .populate('tasks.assignedTo', 'name email')
+        .populate('tasks.assignedUsers', 'name email')
         .lean();
+
+      const assigneeIdSet = assigneeIds ? new Set(assigneeIds.map(id => String(id))) : null;
+      const myUserId = String(ctx.user._id);
+      const restrictToSelf = (!ctx.permissions.isAdmin && !ctx.permissions.isManager) || filter === 'my';
 
       const projectTasks = [];
       for (const p of projects) {
@@ -1061,15 +1098,27 @@ const taskTools = [
           if (filter === 'completed' && st !== 'completed') continue;
           if (filter === 'pending' && !['pending', 'in progress', 'in-progress', 'reopen'].includes(st)) continue;
           if (filter === 'overdue' && st !== 'overdue') continue;
+          if (searchRegex && !searchRegex.test(pt.title || '')) continue;
+
+          const assignedIdCandidates = [
+            pt.assignedTo?._id || pt.assignedTo,
+            ...((pt.assignedUsers || []).map(u => u?._id || u))
+          ].filter(Boolean).map(String);
+
+          if (restrictToSelf && !assignedIdCandidates.includes(myUserId)) continue;
+          if (assigneeIdSet && !assignedIdCandidates.some(id => assigneeIdSet.has(id))) continue;
+
           projectTasks.push({
             id: pt._id,
+            taskType: 'project',
             title: pt.title,
             status: st,
             overallStatus: st,
             priority: pt.priority,
             dueDateTime: pt.dueDateTime || pt.dueDate,
+            createdAt: pt.createdAt,
             project: p.projectName,
-            assignedTo: pt.assignedTo?.name || 'Self',
+            assignedTo: pt.assignedTo?.name || pt.assignedUsers?.[0]?.name || 'Self',
             isRecurring: false,
             repeatPattern: 'none',
             repeatDays: [],
@@ -1082,11 +1131,13 @@ const taskTools = [
 
       const personalList = tasks.map(t => ({
         id: t._id,
+        taskType: 'personal',
         title: t.title,
         status: t.overallStatus || t.status || 'pending',
         overallStatus: t.overallStatus || 'pending',
         priority: t.priority,
         dueDateTime: t.dueDateTime,
+        createdAt: t.createdAt,
         project: 'None',
         assignedTo: t.assignedUsers?.[0]?.name || 'Self',
         isRecurring: t.isRecurring || false,
@@ -1097,7 +1148,9 @@ const taskTools = [
         attachments: (t.files || []).map(f => f.originalName)
       }));
 
-      const combined = [...personalList, ...projectTasks].slice(0, Math.min(limit, 50));
+      const combined = [...personalList, ...projectTasks]
+        .sort((a, b) => new Date(b.createdAt || b.dueDateTime || 0) - new Date(a.createdAt || a.dueDateTime || 0))
+        .slice(0, maxLimit);
 
       return {
         total: combined.length,
@@ -1364,41 +1417,67 @@ const taskTools = [
 
   {
     name: 'attach_file_to_task',
-    description: 'Attaches an image, screenshot, or document to an existing task. If the user attached or pasted an image in the chat without giving a file path, DO NOT ASK THE USER FOR A PATH—simply call this tool with filePath: "latest_screenshot" (or leave empty) and it will automatically find and attach the user\'s screenshot or recent image from their system.',
+    description: 'Attaches an image, screenshot, or document to an existing personal task or project task. If the user attached or pasted an image in the chat without giving a file path, DO NOT ASK THE USER FOR A PATH—simply call this tool with filePath: "latest_screenshot" (or leave empty) and it will automatically find and attach the user\'s screenshot or recent image from their system.',
     parameters: {
       type: 'object',
       properties: {
         taskId: { type: 'string', description: 'MongoDB Task ID (optional if taskTitle is provided)' },
         taskTitle: { type: 'string', description: 'Task title to search if taskId is not known' },
+        assigneeNameOrEmail: { type: 'string', description: 'Optional assignee name or email to disambiguate tasks with the same title' },
         filePath: { type: 'string', description: 'Local file path or "latest_screenshot" to automatically grab the user\'s screenshot/image', default: 'latest_screenshot' }
       }
     },
     permissionCheck: () => true,
     handler: async (args, ctx) => {
-      const { taskId, taskTitle, filePath = 'latest_screenshot' } = args;
-      let task = null;
-      if (taskId && taskId.match(/^[0-9a-fA-F]{24}$/)) {
-        task = await Task.findOne({ _id: taskId, companyCode: ctx.companyCode });
-      }
-
-      if (!task && taskTitle) {
-        task = await Task.findOne({
-          companyCode: ctx.companyCode,
-          title: { $regex: new RegExp(taskTitle.trim(), 'i') }
-        }).sort({ createdAt: -1 });
-      }
-
-      if (!task) {
-        task = await Task.findOne({ companyCode: ctx.companyCode }).sort({ createdAt: -1 });
-      }
-
-      if (!task) {
-        throw new Error(`Task '${taskId || taskTitle}' not found in company ${ctx.companyCode}.`);
-      }
+      const { taskId, taskTitle, assigneeNameOrEmail, filePath = 'latest_screenshot' } = args;
+      const found = await findTaskOrProjectTask({
+        taskId,
+        taskTitle,
+        assigneeNameOrEmail,
+        companyCode: ctx.companyCode,
+        allowLatestFallback: !taskId && !taskTitle
+      });
 
       const attached = processAttachments([filePath || 'latest_screenshot'], ctx.user._id);
       if (attached.length === 0) {
         throw new Error(`Could not find a file or recent screenshot to attach.`);
+      }
+
+      if (found.kind === 'projectTask') {
+        const { project, subTask } = found;
+        const uid = String(ctx.user._id);
+        const isAssigned = String(subTask.assignedTo) === uid || (subTask.assignedUsers || []).some(u => String(u._id || u) === uid);
+        const isCreator = String(subTask.createdBy) === uid;
+        if (!isAssigned && !isCreator && !ctx.permissions.isAdmin && !ctx.permissions.isManager) {
+          throw new Error('Permission Denied: You do not have permission to attach files to this task.');
+        }
+        subTask.pdfFile = {
+          filename: attached[0].originalName || attached[0].filename,
+          path: attached[0].path,
+          uploadedAt: new Date()
+        };
+        await project.save();
+
+        return {
+          success: true,
+          message: `Successfully attached '${attached[0].originalName}' to project task '${subTask.title}' in '${project.projectName}'.`,
+          task: {
+            id: subTask._id,
+            title: subTask.title,
+            project: project.projectName,
+            status: subTask.status || 'pending',
+            overallStatus: subTask.status || 'pending',
+            totalAttachments: 1,
+            files: [subTask.pdfFile.filename]
+          }
+        };
+      }
+
+      const { task } = found;
+      const isAssigned = (task.assignedUsers || []).some(u => String(u._id || u) === String(ctx.user._id));
+      const isCreator = String(task.createdBy) === String(ctx.user._id);
+      if (!isAssigned && !isCreator && !ctx.permissions.isAdmin && !ctx.permissions.isManager) {
+        throw new Error('Permission Denied: You do not have permission to attach files to this task.');
       }
 
       task.files = task.files || [];
