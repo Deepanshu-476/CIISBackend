@@ -851,34 +851,59 @@ const taskTools = [
         };
       }
 
-      // 2. User has confirmed: proceed with task creation
-      const payload = buildTaskFields(args, assignedUser, ctx, {
-        taskType: 'project',
-        taskFor: isSelf ? 'self' : 'others',
-        project: project._id,
-        creatorStatus: { status: 'pending', updatedAt: new Date() }
-      });
+      // 2. User has confirmed: push embedded task into Project.tasks
+      const built = buildTaskFields(args, assignedUser, ctx, {});
+      let projStatus = String(args.status || 'pending').toLowerCase().trim();
+      if (projStatus === 'in-progress') projStatus = 'in progress';
+      if (projStatus === 'on-hold' || projStatus === 'onhold') projStatus = 'on hold';
 
-      const task = await Task.create(payload);
-      const activeStatus = task.overallStatus || args.status || 'pending';
+      const projectTaskObj = {
+        title: built.title,
+        description: built.description,
+        assignedTo: assignedUser._id,
+        assignedUsers: [assignedUser._id],
+        dueDate: built.dueDateTime,
+        dueDateTime: built.dueDateTime,
+        priority: built.priority,
+        status: projStatus,
+        checkpoints: built.checkpoints,
+        reminderSettings: built.reminderSettings,
+        ...(built.files && built.files.length > 0 ? {
+          pdfFile: {
+            filename: built.files[0].originalName || built.files[0].filename,
+            path: built.files[0].path,
+            uploadedAt: new Date()
+          }
+        } : {}),
+        createdBy: ctx.user._id
+      };
+
+      if (!Array.isArray(project.tasks)) project.tasks = [];
+      project.tasks.push(projectTaskObj);
+
+      if (Array.isArray(project.users) && !project.users.some(u => String(u) === String(assignedUser._id))) {
+        project.users.push(assignedUser._id);
+      }
+
+      await project.save();
+      const savedTask = project.tasks[project.tasks.length - 1];
 
       return {
         success: true,
-        message: `Task '${task.title}' created in project '${project.projectName}' with status '${activeStatus}' and ${task.files?.length || 0} attachment(s)`,
+        message: `Task '${savedTask.title}' created in project '${project.projectName}' with status '${savedTask.status}' and ${built.files?.length || 0} attachment(s)`,
         task: {
-          id: task._id,
+          id: savedTask._id,
           project: project.projectName,
-          title: task.title,
+          projectTasksCount: project.tasks.length,
+          title: savedTask.title,
           assignedTo: assignedUser.name,
-          priority: task.priority,
-          status: activeStatus,
-          overallStatus: activeStatus,
-          repeatPattern: task.repeatPattern,
-          repeatDays: task.repeatDays,
-          repeatEndDate: task.recurrenceEndDate,
-          checkpointsCount: task.checkpoints?.length || 0,
-          attachmentsCount: task.files?.length || 0,
-          attachments: (task.files || []).map(f => f.originalName)
+          priority: savedTask.priority,
+          status: savedTask.status,
+          dueDateTime: savedTask.dueDateTime,
+          reminderEnabled: savedTask.reminderSettings?.enabled || false,
+          checkpointsCount: savedTask.checkpoints?.length || 0,
+          attachmentsCount: built.files?.length || 0,
+          attachments: (built.files || []).map(f => f.originalName)
         }
       };
     }
@@ -915,29 +940,67 @@ const taskTools = [
 
       const tasks = await Task.find(query)
         .populate('assignedUsers', 'name email')
-        .populate('project', 'projectName')
         .sort({ dueDateTime: 1, createdAt: -1 })
         .limit(Math.min(limit, 50))
         .lean();
 
+      const projQuery = { companyCode: ctx.companyCode, isActive: { $ne: false } };
+      if ((!ctx.permissions.isAdmin && !ctx.permissions.isManager) || filter === 'my') {
+        projQuery.$or = [{ users: ctx.user._id }, { managers: ctx.user._id }, { 'tasks.assignedUsers': ctx.user._id }, { 'tasks.assignedTo': ctx.user._id }];
+      }
+      const projects = await Project.find(projQuery)
+        .select('projectName tasks')
+        .populate('tasks.assignedTo', 'name email')
+        .lean();
+
+      const projectTasks = [];
+      for (const p of projects) {
+        for (const pt of (p.tasks || [])) {
+          const st = String(pt.status || 'pending').toLowerCase();
+          if (filter === 'completed' && st !== 'completed') continue;
+          if (filter === 'pending' && !['pending', 'in progress', 'in-progress', 'reopen'].includes(st)) continue;
+          if (filter === 'overdue' && st !== 'overdue') continue;
+          projectTasks.push({
+            id: pt._id,
+            title: pt.title,
+            status: st,
+            overallStatus: st,
+            priority: pt.priority,
+            dueDateTime: pt.dueDateTime || pt.dueDate,
+            project: p.projectName,
+            assignedTo: pt.assignedTo?.name || 'Self',
+            isRecurring: false,
+            repeatPattern: 'none',
+            repeatDays: [],
+            checkpoints: (pt.checkpoints || []).map(c => c.title),
+            attachmentsCount: pt.pdfFile?.filename ? 1 : 0,
+            attachments: pt.pdfFile?.filename ? [pt.pdfFile.filename] : []
+          });
+        }
+      }
+
+      const personalList = tasks.map(t => ({
+        id: t._id,
+        title: t.title,
+        status: t.overallStatus || t.status || 'pending',
+        overallStatus: t.overallStatus || 'pending',
+        priority: t.priority,
+        dueDateTime: t.dueDateTime,
+        project: 'None',
+        assignedTo: t.assignedUsers?.[0]?.name || 'Self',
+        isRecurring: t.isRecurring || false,
+        repeatPattern: t.repeatPattern || 'none',
+        repeatDays: t.repeatDays || [],
+        checkpoints: (t.checkpoints || []).map(c => c.title),
+        attachmentsCount: (t.files || []).length,
+        attachments: (t.files || []).map(f => f.originalName)
+      }));
+
+      const combined = [...personalList, ...projectTasks].slice(0, Math.min(limit, 50));
+
       return {
-        total: tasks.length,
-        tasks: tasks.map(t => ({
-          id: t._id,
-          title: t.title,
-          status: t.overallStatus || t.status || 'pending',
-          overallStatus: t.overallStatus || 'pending',
-          priority: t.priority,
-          dueDateTime: t.dueDateTime,
-          project: t.project?.projectName || 'None',
-          assignedTo: t.assignedUsers?.[0]?.name || 'Self',
-          isRecurring: t.isRecurring || false,
-          repeatPattern: t.repeatPattern || 'none',
-          repeatDays: t.repeatDays || [],
-          checkpoints: (t.checkpoints || []).map(c => c.title),
-          attachmentsCount: (t.files || []).length,
-          attachments: (t.files || []).map(f => f.originalName)
-        }))
+        total: combined.length,
+        tasks: combined
       };
     }
   },
