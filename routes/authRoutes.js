@@ -93,21 +93,81 @@ const passwordResetLimiter = rateLimit({
 // Anything else creates an ACTIVE login with the requested role, so it must come
 // from a real owner/admin/HR session of the same company. Before this check a
 // made-up Authorization header was enough to create an active owner.
+const hasCreateUserPageAccess = async (user) => {
+  if (!user) return false;
+  const companyRole = String(user.companyRole || "").trim().toLowerCase();
+  if (companyRole === "client") return false;
+
+  const companyId = String(user?.company?._id || user?.company || user?.companyId || "");
+  const userId = String(user?._id || user?.id || "");
+  if (!companyId || !userId) return false;
+
+  const PagePermission = require("../models/PagePermission");
+  const { findSidebarConfig, filterMenuItemsByCompanyAccess } = require("./sidebarConfigs");
+  const createUserPage = { id: "create-user", path: "/ciisUser/create-user" };
+
+  if (!(await filterMenuItemsByCompanyAccess(companyId, [createUserPage])).length) {
+    return false;
+  }
+
+  const page = await PagePermission.findOne({
+    company: companyId,
+    $or: [{ path: "/ciisUser/create-user" }, { pageKey: "create-user" }],
+  }).select("viewUsers editUsers approvers generateUsers").lean();
+
+  const hasGrant = (field) => (page?.[field] || []).some((entry) => String(entry?.user || entry) === userId);
+  if (["viewUsers", "editUsers", "approvers", "generateUsers"].some(hasGrant)) {
+    return true;
+  }
+
+  const departmentId = String(user?.department?._id || user?.department?.id || user?.department || "");
+  const role = String(user?.jobRoleId || user?.jobRole?._id || user?.jobRole || user?.role || "");
+  if (!departmentId || !role) return false;
+
+  const config = await findSidebarConfig({
+    companyId,
+    departmentId,
+    role,
+    branchId: String(user?.branch?._id || user?.branch?.id || user?.branch || ""),
+    allowOtherBranches: false,
+  });
+
+  return Boolean(config?.menuItems?.some((item) => {
+    if (item.visible === false || item.disabled) return false;
+    const itemId = String(item.id || "").trim().toLowerCase();
+    const itemPath = String(item.path || "").trim().toLowerCase().replace(/\/+$/, "");
+    return itemId === "create-user" || itemPath === "/ciisuser/create-user";
+  }));
+};
+
 const guardDirectRegister = (req, res, next) => {
   const isSelfRegister = req.is("multipart/form-data") || req.body?.registrationSource === "self_register" || !req.headers.authorization;
   if (isSelfRegister) return next();
-  const { protect, restrictTo, isPlatformOwner } = require("../middleware/authMiddleware");
-  return protect(req, res, () => restrictTo("owner", "admin", "hr")(req, res, () => {
-    if (isPlatformOwner(req.user)) return next();
-    const ownCompanyId = String(req.user?.company?._id || req.user?.company || req.user?.companyId || "");
-    const ownCompanyCode = String(req.user?.companyCode || req.user?.company?.companyCode || "").trim().toUpperCase();
-    const wantedId = req.body?.company ? String(req.body.company) : "";
-    const wantedCode = req.body?.companyCode ? String(req.body.companyCode).trim().toUpperCase() : "";
-    if ((wantedId && wantedId !== ownCompanyId) || (wantedCode && wantedCode !== ownCompanyCode) || (!wantedId && !wantedCode)) {
-      return res.status(403).json({ success: false, message: "You can add employees only to your own company." });
+  const { protect, isPlatformOwner } = require("../middleware/authMiddleware");
+  return protect(req, res, async () => {
+    try {
+      if (isPlatformOwner(req.user)) return next();
+
+      const userRoles = [req.user?.companyRole, req.user?.jobRole, req.user?.jobRoleName, req.user?.role]
+        .map((r) => String(r || "").trim().toLowerCase().replace(/[\s-]+/g, "_"));
+      const hasAdminRole = userRoles.some((r) => ["owner", "admin", "hr", "super_admin", "superadmin", "company_owner", "companyowner"].includes(r));
+
+      if (!hasAdminRole && !(await hasCreateUserPageAccess(req.user))) {
+        return res.status(403).json({ success: false, message: "You do not have permission to create users." });
+      }
+
+      const ownCompanyId = String(req.user?.company?._id || req.user?.company || req.user?.companyId || "");
+      const ownCompanyCode = String(req.user?.companyCode || req.user?.company?.companyCode || "").trim().toUpperCase();
+      const wantedId = req.body?.company ? String(req.body.company) : "";
+      const wantedCode = req.body?.companyCode ? String(req.body.companyCode).trim().toUpperCase() : "";
+      if ((wantedId && wantedId !== ownCompanyId) || (wantedCode && wantedCode !== ownCompanyCode) || (!wantedId && !wantedCode)) {
+        return res.status(403).json({ success: false, message: "You can add employees only to your own company." });
+      }
+      return next();
+    } catch (err) {
+      return next(err);
     }
-    return next();
-  }));
+  });
 };
 
 router.post("/register", authAttemptLimiter, handleRegisterDocumentUpload, guardDirectRegister, authController.register);
