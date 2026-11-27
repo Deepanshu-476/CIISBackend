@@ -3918,6 +3918,16 @@ const lastAskedField = currentDraft.asked.length > 0
     ? currentDraft.asked[currentDraft.asked.length - 1]
     : null;
 
+  // Use the chip action for direct answers before interpreting yes/no as confirmation.
+  if (!action && !pick && lastAskedField === 'repeatPattern' && !currentDraft.repeatPattern && typeof message === 'string') {
+    const answer = message.toLowerCase().replace(/[,.!?;:।]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (/^(?:no(?: thanks| repeat)?|none|do not repeat|don['’]t repeat|nahi|nhi|nahin|na|repeat (?:nahi|nhi|mat karo)|नहीं|नही|ना|रिपीट मत करो)$/u.test(answer)) {
+      action = { type: 'set', field: 'repeatPattern', value: 'none' };
+    } else if (/^(?:yes|yeah|yep|daily|repeat(?: daily| task(?: \(daily\))?)?|haan(?: ji)?|han|ha|roz|har din|har roz|हाँ|हां|रोज़|रोज|हर दिन)$/u.test(answer)) {
+      action = { type: 'set', field: 'repeatPattern', value: 'daily' };
+    }
+  }
+
   // -------------------------------------------------------------
   // STEP 1: Handle deterministic action or pick (NO LLM, FREE)
   // -------------------------------------------------------------

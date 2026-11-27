@@ -47,6 +47,38 @@ describe('AI Task Agent Suite', () => {
 
   const mockScope = { hasAccess: false, isOwner: false, branchIds: [], departmentIds: [] };
 
+  it('treats typed repeat answers like the repeat chips', async () => {
+    const deps = { now: fixedNow, getScopeInfo: async () => mockScope, extractFn: async () => ({}) };
+    const draft = {
+      intent: 'self_task',
+      taskFor: 'self',
+      title: 'Review the portal',
+      description: 'Check the dashboard',
+      dueDateTime: '2026-10-13T18:00:00+05:30',
+      priority: 'high',
+      status: 'pending',
+      reminder: false,
+      priorityDays: '1',
+      asked: ['title', 'dueDateTime', 'description', 'priority', 'status', 'reminder', 'priorityDays'],
+    };
+    const ask = await parseTaskRequest({ req: mockReq, message: '1', draft, language: 'en' }, deps);
+    assert.equal(ask.field, 'repeatPattern');
+
+    for (const [value, answers] of [
+      ['none', ['No', 'No repeat.', 'Nahi', 'Repeat mat karo']],
+      ['daily', ['Yes', 'Repeat daily', 'Haan', 'Roz']],
+    ]) {
+      const action = ask.chips.find(chip => chip.action?.field === 'repeatPattern' && chip.action.value === value).action;
+      const chip = await parseTaskRequest({ req: mockReq, draft: structuredClone(ask.draft), action, language: 'en' }, deps);
+      for (const message of answers) {
+        const typed = await parseTaskRequest({ req: mockReq, draft: structuredClone(ask.draft), message, language: 'en' }, deps);
+        assert.equal(typed.draft.repeatPattern, value, message);
+        assert.equal(typed.field, chip.field, message);
+        assert.equal(typed.draft.title, draft.title, message);
+      }
+    }
+  });
+
   it('reads task lists and moves a task between pending and in progress in English and Hinglish', async () => {
     const task = {
       _id: new mongoose.Types.ObjectId(),

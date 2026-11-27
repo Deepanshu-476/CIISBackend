@@ -1,4 +1,5 @@
 const { OVERDUE_STATUS_MESSAGE, isOverdueStatus, isCompanyTaskWrite, isCompanyTaskWriteRequest } = require('../utils/companyTaskStatus');
+const { ensureTaskStatusAttendance } = require('../utils/taskAttendance');
 const { CHECKPOINT_LOCKED_MESSAGE, CHECKPOINT_CONFLICT_MESSAGE, isCheckpointStatus, isCheckpointWriteConflict, preserveCheckpointProgress } = require('../utils/taskCheckpoints');
 
 const {
@@ -337,6 +338,10 @@ exports.updateTask = async (req, res) => {
       return res.status(409).json({ success: false, error: OVERDUE_STATUS_MESSAGE });
     }
 
+    if (req.body.status && req.body.status !== 'null' && !isCompanyTaskWrite(req, task) && !(await ensureTaskStatusAttendance(req, res))) {
+      return;
+    }
+
     if (req.body.status && req.body.status !== 'null') task.$where = { updatedAt: task.updatedAt ?? null };
 
     const oldTask = task.toObject();
@@ -517,6 +522,8 @@ exports.updateStatus = async (req, res) => {
         !isCompanyTaskWrite(req, task)) {
       return res.status(409).json({ success: false, error: OVERDUE_STATUS_MESSAGE });
     }
+
+    if (!isCompanyTaskWrite(req, task) && !(await ensureTaskStatusAttendance(req, res))) return;
 
     task.$where = { updatedAt: task.updatedAt ?? null };
 

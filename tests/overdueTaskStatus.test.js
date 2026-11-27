@@ -8,6 +8,7 @@ const Group = require('../HR-CDS/models/Group');
 const ClientTask = require('../HR-CDS/models/ClientTask');
 const { Project } = require('../HR-CDS/models/Project');
 const PagePermission = require('../models/PagePermission');
+const Company = require('../models/Company');
 const ActivityLog = require('../HR-CDS/models/ActivityLog');
 const taskController = require('../HR-CDS/controllers/taskController');
 const personal = require('../HR-CDS/controllers/selfTaskController');
@@ -33,10 +34,15 @@ const response = () => ({
   status(code) { this.statusCode = code; return this; },
   json(body) { this.body = body; return this; },
 });
+const mockCompanyPlan = t => t.mock.method(Company, 'findById', () => ({
+  select: () => ({ lean: async () => ({ allowedPages: ['company-all-task'] }) }),
+}));
 
 test('normal status and edit endpoints cannot move an overdue task using a body or header flag', async t => {
+  mockCompanyPlan(t);
   t.mock.method(Group, 'find', () => ({ select: () => ({ lean: async () => [] }) }));
   t.mock.method(PagePermission, 'findOne', () => ({ lean: async () => null }));
+  t.mock.method(PagePermission, 'find', () => ({ lean: async () => [] }));
   const task = {
     _id: taskId, companyCode: 'TEST', taskFor: 'self', createdBy: userId,
     assignedUsers: [userId], assignedGroups: [], statusByUser: [], status: 'overdue',
@@ -62,14 +68,15 @@ test('normal status and edit endpoints cannot move an overdue task using a body 
 });
 
 test('company route requires edit access and applies a same-company status change', async t => {
+  mockCompanyPlan(t);
   const req = makeRequest();
   const denied = response();
-  const permission = t.mock.method(PagePermission, 'findOne', () => ({ lean: async () => ({ viewUsers: [{ user: userId }] }) }));
+  const permission = t.mock.method(PagePermission, 'find', () => ({ lean: async () => [{ viewUsers: [{ user: userId }] }] }));
   await authorizeCompanyTaskWrite(req, denied, () => assert.fail('View access does not allow edits'));
   assert.equal(denied.statusCode, 403);
   assert.equal(isCompanyTaskWrite(req, { company }), false);
 
-  permission.mock.mockImplementation(() => ({ lean: async () => ({ editUsers: [{ user: userId }] }) }));
+  permission.mock.mockImplementation(() => ({ lean: async () => [{ editUsers: [{ user: userId }] }] }));
   const task = {
     _id: taskId, companyCode: 'TEST', taskFor: 'self', createdBy: userId,
     statusByUser: [], statusHistory: [], overallStatus: 'overdue',

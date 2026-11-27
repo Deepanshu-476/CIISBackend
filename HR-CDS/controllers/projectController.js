@@ -1,4 +1,5 @@
 const { OVERDUE_STATUS_MESSAGE, isOverdueStatus, isCompanyTaskWrite, isCompanyTaskWriteRequest } = require('../utils/companyTaskStatus');
+const { ensureTaskStatusAttendance } = require('../utils/taskAttendance');
 const { CHECKPOINT_LOCKED_MESSAGE, CHECKPOINT_CONFLICT_MESSAGE, isCheckpointStatus, isCheckpointWriteConflict, preserveCheckpointProgress } = require('../utils/taskCheckpoints');
 const { Project, TASK_STATUS, PROJECT_STATUS, PRIORITY_LEVELS, NOTIFICATION_TYPES } = require("../models/Project");
 const multer = require("multer");
@@ -2054,6 +2055,8 @@ exports.updateTask = async (req, res) => {
       return res.status(409).json({ success: false, message: OVERDUE_STATUS_MESSAGE });
     }
 
+    if (updateData.status && !companyWrite && !(await ensureTaskStatusAttendance(req, res))) return;
+
     const hadAssignedToField = Object.prototype.hasOwnProperty.call(updateData, "assignedTo");
     const previousAssignedTo = task.assignedTo ? task.assignedTo.toString() : "";
     const nextAssignedTo = updateData.assignedTo ? updateData.assignedTo.toString() : "";
@@ -2428,6 +2431,8 @@ exports.updateTaskStatus = async (req, res) => {
         message: "Completed tasks can only be reopened."
       });
     }
+
+    if (!companyWrite && !(await ensureTaskStatusAttendance(req, res))) return;
 
     const isResumedFromHold = (normalizedOldStatus === "onhold" || normalizedOldStatus === "on hold") && nextStatus === "in-progress";
 

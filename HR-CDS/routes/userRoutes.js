@@ -12,14 +12,18 @@ router.use(protect);
 // Branch rule for register requests: same as the list (utils/branchScope) - a branch-limited
 // viewer may act on requests for their branches and on requests without a branch yet.
 const RegisterUser = require('../../models/User');
-const { allowedBranchIds, registerRequestBranchCondition } = require('../../utils/branchScope');
+const { getRegisterRequestBranchCondition } = require('../../utils/registerRequestAccess');
 // Editing / deleting / restoring an employee: owner/admin, or the employee is in your branches.
 const userInBranches = require('../../utils/branchScope').requireRecordInBranches(req => req.params.id, { message: 'This employee is not in your branches.' });
 const registerRequestInBranches = async (req, res, next) => {
   try {
-    if (allowedBranchIds(req.user) === null) return next();
+    const branchCondition = getRegisterRequestBranchCondition(req.user);
+    if (!Object.keys(branchCondition).length) return next();
     if (!require('mongoose').isValidObjectId(req.params.id)) return next();
-    const ok = await RegisterUser.exists({ _id: req.params.id, ...registerRequestBranchCondition(req.user) });
+    const company = req.user?.company;
+    const companyId = company?._id || company?.id || company || req.user?.companyId;
+    if (!companyId) return next();
+    const ok = await RegisterUser.exists({ _id: req.params.id, company: companyId, ...branchCondition });
     if (ok) return next();
     return res.status(403).json({ success: false, message: 'This registration request belongs to another branch.' });
   } catch (error) {

@@ -56,7 +56,7 @@ const isAlias = p => ALIAS_PREFIXES.some(a => p === a.replace(/\/$/, '') || p.st
 const UNSAFE_GET = [
   /manual-/, /check-overdue/, /update-overdue/, /\/test(\/|$)/, /\/test1/, /debug/, /export/, /download/,
   /sample-excel/, /\/document$/, /\/files$/, /receipt-image/, /verify-email/, /\/stream/, /\/events/, /\/sse/,
-  /\/backup/, /\/logout/, /\/socket-status/, /superAdmin/i, /\/uploads?\//,
+  /\/backup/, /\/logout/, /\/socket-status/, /superAdmin/i, /\/uploads?\//, /\/oauth\/.*\/callback/,
 ];
 
 const moduleOf = p => {
@@ -77,9 +77,11 @@ const fillParams = (p, ids) => {
       [/^companyid$/, ids.companyId],
       [/^(departmentid|department|deptid)$/, ids.departmentId],
       [/^(service)$/, 'SEO'],
+      [/^(platform)$/, 'meta'],
+      [/^(level)$/, 'company'],
       [/^(month)$/, String(new Date().getMonth() + 1)],
       [/^(year)$/, String(new Date().getFullYear())],
-      [/^(filename|path|token|devicetoken)$/, null],
+      [/^(filename|path|token|devicetoken|uploadid|session)$/, null],
     ];
     for (const [re, v] of map) {
       if (!re.test(n)) continue;

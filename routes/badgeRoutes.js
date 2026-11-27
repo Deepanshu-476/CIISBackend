@@ -16,7 +16,7 @@ const AssetRequest = require('../HR-CDS/models/AssetRequest');
 const Leave = require('../HR-CDS/models/Leave');
 const Meeting = require('../HR-CDS/models/Meeting');
 const User = require('../models/User');
-const { getRegisterRequestAccess } = require('../utils/registerRequestAccess');
+const { getRegisterRequestAccess, getRegisterRequestBranchCondition } = require('../utils/registerRequestAccess');
 const { autoRejectExpiredLeaves } = require('../HR-CDS/controllers/LeaveController');
 
 // Assets, leaves and meetings used to load the user's full lists (with populates) only to
@@ -51,7 +51,7 @@ const countPendingRegisterRequests = async (req) => {
     const user = req.user || {};
     const role = String(user.companyRole || user.jobRole || user.role || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
     const company = user.company;
-    const companyId = company?._id || company?.id || company;
+    const companyId = company?._id || company?.id || company || user.companyId;
     const filter = {};
     if (companyId) {
       const { canView } = await getRegisterRequestAccess(user);
@@ -71,7 +71,7 @@ const countPendingRegisterRequests = async (req) => {
       }
     ];
 
-    const branchCondition = require('../utils/branchScope').registerRequestBranchCondition(user);
+    const branchCondition = getRegisterRequestBranchCondition(user);
     if (Object.keys(branchCondition).length) filter.$and = [branchCondition];
     return await User.countDocuments(filter);
   } catch (err) {

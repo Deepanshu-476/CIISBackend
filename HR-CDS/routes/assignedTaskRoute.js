@@ -12,7 +12,10 @@ const uploadFields = upload.fields([
   { name: 'voiceNote', maxCount: 1 }
 ]);
 
-router.post('/create', protect, uploadFields, assignedTaskController.createTaskForOthers);
+const assignTaskAccess = require('../../middleware/pageAccess').requirePageAccess({
+  paths: ['/ciisUser/admin-task-create'], action: 'edit', label: 'Admin Create Task',
+});
+router.post('/create', protect, assignTaskAccess, uploadFields, assignedTaskController.createTaskForOthers);
 router.get('/to-me', protect, assignedTaskController.getAssignedToMeTasks);
 router.get('/by-me', protect, assignedTaskController.getAssignedTasks);
 router.get('/to-me/stats', protect, assignedTaskController.getAssignedToMeTaskStats);

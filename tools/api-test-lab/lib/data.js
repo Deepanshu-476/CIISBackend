@@ -225,7 +225,7 @@ const ensureCompanyPages = async (state) => {
   const hrKeys = [...src.matchAll(/pageKey:\s*'([^']+)'/g)].map(m => m[1]);
   const crmKeys = require(path.join(BACKEND_DIR, 'utils/crmPermissionPages')).map(p => p.pageKey);
   const telecaller = ['dashboard', 'call-dashboard', 'assigned-calls', 'todays-calls', 'pending-calls', 'scheduled-calls', 'completed-calls', 'call-history', 'follow-ups', 'converted-leads', 'call-workspace', 'lead-detail'].map(s => `admin-telecaller-${s}`);
-  const pages = [...new Set(['crm', 'admin-crm', 'telecaller', 'dashboard-overview', 'user-dashboard', ...hrKeys, ...crmKeys, ...telecaller])];
+  const pages = [...new Set(['crm', 'admin-crm', 'telecaller', 'dashboard-overview', 'user-dashboard', 'company-ai-settings', 'marketing-ads', ...hrKeys, ...crmKeys, ...telecaller])];
   await mongoose.connection.db.collection('companies').updateOne({ companyCode: state.companyCode }, { $set: { allowedPages: pages } });
   return pages.length;
 };
