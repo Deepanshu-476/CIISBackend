@@ -23,6 +23,8 @@ const { tasksFlow, projectsFlow, pagePermissionFlow, clientFlow } = require('./l
 const { crmFlow } = require('./lib/flows/crm');
 const { payrollFlow } = require('./lib/flows/payroll');
 const { adminFlow } = require('./lib/flows/admin');
+const { aiAndAnalyticsFlow } = require('./lib/flows/aiAndAnalytics');
+const { extrasFlow } = require('./lib/flows/extras');
 const { runSweep, catalog } = require('./lib/sweep');
 const { hhmm, istKey } = require('./lib/time');
 
@@ -55,6 +57,8 @@ const MODULES = [
   { key: 'crm', label: 'CRM (leads, assignment, telecaller, reports)', fn: crmFlow },
   { key: 'payroll', label: 'Payroll (components, salary, payroll run, payslip)', fn: payrollFlow },
   { key: 'admin', label: 'Admin pages (users, branches, groups, meetings, alerts, support)', fn: adminFlow },
+  { key: 'ai_analytics', label: 'AI, MCP Keys & Analytics (activity, dashboard overview, exports)', fn: aiAndAnalyticsFlow },
+  { key: 'extras', label: 'Breaks, Week-Off, Client Plans, Marketing Ads, Chat & Platform', fn: extrasFlow },
 ];
 
 const root = express();

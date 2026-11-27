@@ -11,7 +11,7 @@ const { parseRange, buildUsageSummary, activityFeed } = require('../services/act
 // View on the page in Page Management and sees only the people of their own branches.
 
 const PAGE_PATH = '/ciisUser/user-activity';
-const COMPANY_WIDE_ROLES = ['owner', 'company_owner', 'companyowner', 'admin', 'super_admin', 'superadmin', 'career_infowis_admin'];
+const COMPANY_WIDE_ROLES = ['owner', 'company_owner', 'companyowner', 'admin', 'company_admin', 'companyadmin', 'super_admin', 'superadmin', 'career_infowis_admin'];
 const norm = value => String((value && typeof value === 'object' ? value.name : value) || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
 const idOf = value => String((value && typeof value === 'object' ? value._id || value.id : value) || '');
 

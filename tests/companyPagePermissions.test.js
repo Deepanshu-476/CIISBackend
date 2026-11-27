@@ -47,6 +47,11 @@ test('catalog and write endpoint honor both plan and company access', async t =>
   assert.deepEqual(detail.explicitViewUsers, [viewerId]);
   assert.deepEqual(detail.viewUsers, [viewerId, staffId]);
   assert.equal(body.managedPages.find(record => record.pageKey === 'holiday').entitled, false);
+  const registerPage = body.managedPages.find(record => record.pageKey === 'register-request');
+  assert.equal(registerPage.entitled, false);
+  assert.equal(registerPage.canManageRegistrationRequests, true);
+  const staffCatalog = await http('/pages', 'get', { ...req, user: { ...editor, companyRole: 'employee' } });
+  assert.equal(staffCatalog.body.managedPages.find(record => record.pageKey === 'register-request').canManageRegistrationRequests, undefined);
   assert.equal((await http('/by-path', 'get', { ...req, query: { path: '/ciisUser/holiday' } })).body.page.entitled, false);
   assert.equal((await http('/:pageKey', 'put', { ...req, params: { pageKey: 'department' }, body: {} })).status, 403);
 });

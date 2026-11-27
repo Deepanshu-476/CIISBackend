@@ -17,8 +17,21 @@ const {breakTotalsFor, resolveBreakPolicy, netWorkedMs} = require("../utils/brea
 const {policyForUser: breakPolicyForUser, buildCompanyPolicyResolver} = require("./breakController");
 const { getPaginationOptions, buildPaginationMeta } = require("../../utils/pagination");
 const { runAutoClockOutSweepIfStale } = require("../cron/forceClockOut");
-const { cleanRecurringTasksForAbsentUser } = require("../cron/recurringTasks");
+const { cleanRecurringTasksForAbsentUser, generateRecurringTasksOnClockIn } = require("../cron/recurringTasks");
+const { isPresentAttendance } = require("../utils/taskAttendance");
 const { isOvertimeApprovedForUserDate } = require("./overtimeController");
+
+const syncRecurringTasksForAttendance = async (record) => {
+  if (!record?.user) return;
+  const status = String(record.status || '').trim().toUpperCase();
+  if (['ABSENT', 'UNINFORMED LEAVE', 'UNINFORMEDLEAVE'].includes(status)) {
+    await cleanRecurringTasksForAbsentUser(record.user, record.date);
+    return;
+  }
+  if (isPresentAttendance(record)) {
+    await generateRecurringTasksOnClockIn(record.user, new Date());
+  }
+};
 
 
 const formatDuration = (ms) => {
@@ -1117,6 +1130,12 @@ const clockIn = async (req, res) => {
     }
 
     await attendanceRecord.save();
+
+    try {
+      await generateRecurringTasksOnClockIn(userId, now);
+    } catch (recErr) {
+      console.error('Recurring task generation on clock-in failed:', recErr.message);
+    }
 
     const populatedRecord = await Attendance.findById(attendanceRecord._id)
       .populate({
@@ -2281,9 +2300,7 @@ const updateAttendanceRecord = async (req, res) => {
       }
     }
     
-    if (['ABSENT', 'UNINFORMED LEAVE', 'UNINFORMEDLEAVE'].includes(String(record.status || '').toUpperCase())) {
-      cleanRecurringTasksForAbsentUser(record.user, record.date).catch(() => {});
-    }
+    syncRecurringTasksForAttendance(record).catch(() => {});
 
     const populatedRecord = await Attendance.findById(record._id)
       .populate({
@@ -2411,9 +2428,7 @@ const createManualAttendance = async (req, res) => {
 
       await existingAttendance.save();
 
-      if (['ABSENT', 'UNINFORMED LEAVE', 'UNINFORMEDLEAVE'].includes(String(existingAttendance.status || '').toUpperCase())) {
-        cleanRecurringTasksForAbsentUser(existingAttendance.user, existingAttendance.date).catch(() => {});
-      }
+      syncRecurringTasksForAttendance(existingAttendance).catch(() => {});
 
       return res.status(200).json({
         message: "Attendance updated successfully",
@@ -2458,9 +2473,7 @@ const createManualAttendance = async (req, res) => {
           existingRecord.companyCode = userCompanyCode;
           await existingRecord.save();
 
-          if (['ABSENT', 'UNINFORMED LEAVE', 'UNINFORMEDLEAVE'].includes(String(existingRecord.status || '').toUpperCase())) {
-            cleanRecurringTasksForAbsentUser(existingRecord.user, existingRecord.date).catch(() => {});
-          }
+          syncRecurringTasksForAttendance(existingRecord).catch(() => {});
 
           return res.status(200).json({
             message: "Attendance updated successfully",
@@ -2471,9 +2484,7 @@ const createManualAttendance = async (req, res) => {
       throw err;
     }
     
-    if (['ABSENT', 'UNINFORMED LEAVE', 'UNINFORMEDLEAVE'].includes(String(attendance.status || '').toUpperCase())) {
-      cleanRecurringTasksForAbsentUser(attendance.user, attendance.date).catch(() => {});
-    }
+    syncRecurringTasksForAttendance(attendance).catch(() => {});
 
     const populatedAttendance = await Attendance.findById(attendance._id)
       .populate({

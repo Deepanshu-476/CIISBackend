@@ -1,3 +1,4 @@
+const { isPresentAttendance, ensureTaskStatusAttendance } = require('../utils/taskAttendance');
 const { OVERDUE_STATUS_MESSAGE, isOverdueStatus, isCompanyTaskWrite, isCompanyTaskWriteRequest, hasCompanyTaskWriteGrant } = require('../utils/companyTaskStatus');
 const { preserveCheckpointProgress } = require('../utils/taskCheckpoints');
 
@@ -29,6 +30,7 @@ const {
   normalizeTaskRecurrenceFields,
   getNextRecurringDate,
   validateRecurrenceSettings,
+  getIndiaDayRange,
 } = require('../utils/taskRecurrence');
 const { normalizeTaskReminderSettings } = require('../utils/taskReminderSettings');
 const {
@@ -452,70 +454,29 @@ const parseDurationStringToSeconds = (str) => {
   return 0;
 };
 
-const calculateTaskWork = (task, workWindow, fallbackRange, userId) => {
-  const windowStart = workWindow?.start || fallbackRange?.start;
-  // The report window can end later today (end of the day without attendance);
-  // never count time that has not happened yet.
-  const rawWindowEnd = toValidWorkDate(workWindow?.end || fallbackRange?.end) || new Date();
-  const windowEnd = new Date(Math.min(rawWindowEnd.getTime(), Date.now()));
-  const workIntervals = Array.isArray(workWindow?.intervals) && workWindow.intervals.length > 0
-    ? workWindow.intervals
-    : [{ start: windowStart, end: windowEnd }];
+const calculateTaskWork = (task, workWindow, range, userId) => {
+  if (!workWindow.intervals.length) return { seconds: 0, intervals: [] };
 
-  if (!windowStart || !windowEnd) {
-    if (task.timeSpent > 0) return { seconds: task.timeSpent, intervals: [] };
-    return { seconds: 0, intervals: [] };
+  const windowEnd = new Date(Math.min(range.end?.getTime() ?? Date.now(), Date.now()));
+  const status = task.userStatus || task.status || task.overallStatus;
+  const events = getTaskStatusEvents(task, userId);
+  const sessions = buildProgressSessions(events, status, windowEnd);
+
+  if (!sessions.length && !events.length && normalizeTaskStatus(status) === 'in-progress') {
+    const userStatus = task.statusByUser?.find(entry => normalizeId(entry.user) === String(userId));
+    const started = task.inProgressSince || userStatus?.updatedAt || task.updatedAt || task.createdAt;
+    if (started) sessions.push({ start: started, end: windowEnd });
   }
-
-  const sessions = buildProgressSessions(
-    getTaskStatusEvents(task, userId),
-    task.userStatus || task.status || task.overallStatus,
-    windowEnd
-  );
 
   let intervals = sessions
-    .flatMap(session => workIntervals.map(workInterval => getClippedInterval(
-      session.start,
-      session.end,
-      workInterval.start,
-      workInterval.end
+    .flatMap(session => workWindow.intervals.map(window => getClippedInterval(
+      session.start, session.end, window.start, window.end
     )))
     .filter(Boolean);
-  let total = getMergedIntervalSeconds(intervals);
-
-  if (total === 0) {
-    if (task.taskSource === 'client') {
-      const activeIntervals = normalizeTaskStatus(task.status) === 'in-progress' && task.inProgressSince
-        ? workIntervals.map(workInterval => getClippedInterval(task.inProgressSince, windowEnd, workInterval.start, workInterval.end)).filter(Boolean)
-        : [];
-      const activeSeconds = getMergedIntervalSeconds(activeIntervals);
-      total = activeSeconds > 0 ? activeSeconds : (task.timeSpent || 0);
-      intervals = activeIntervals;
-    } else if (normalizeTaskStatus(task.status || task.userStatus) === 'in-progress' && (task.updatedAt || task.createdAt)) {
-      const userStatus = task.statusByUser?.find(entry => normalizeId(entry.user) === String(userId));
-      const startCandidate = task.inProgressSince || userStatus?.updatedAt || task.updatedAt || task.createdAt;
-      const activeIntervals = workIntervals
-        .map(workInterval => getClippedInterval(startCandidate, windowEnd, workInterval.start, workInterval.end))
-        .filter(Boolean);
-      const activeSeconds = getMergedIntervalSeconds(activeIntervals);
-      if (activeSeconds > 0) {
-        total = activeSeconds;
-        intervals = activeIntervals;
-      }
-    }
-  }
-
-  // When a task stores an explicit duration, retain it even if no attendance
-  // clock-in or status-history interval is available for the selected date.
-  if (total === 0 && Number(task.timeSpent) > 0) {
-    total = Number(task.timeSpent);
-  }
-
-  if (intervals.length && workWindow?.breaks?.length) {
+  if (intervals.length && workWindow.breaks.length) {
     intervals = subtractBreakIntervals(intervals, workWindow.breaks);
-    total = getMergedIntervalSeconds(intervals);
   }
-  return { seconds: Math.max(0, total), intervals };
+  return { seconds: getMergedIntervalSeconds(intervals), intervals };
 };
 
 const getUserWorkWindow = async (userId, query, companyCode = '') => {
@@ -591,7 +552,7 @@ const getUserWorkWindow = async (userId, query, companyCode = '') => {
   const byDay = new Map();
   [...attendanceCandidates, ...(attendance ? [attendance] : [])].forEach(record => {
     const clockIn = toValidWorkDate(record.inTime);
-    if (!clockIn) return;
+    if (!clockIn || !isPresentAttendance(record)) return;
     const dayKey = getIndiaWorkDateKey(record.date || record.inTime);
     if (!dayKey) return;
     const existing = byDay.get(dayKey);
@@ -607,7 +568,7 @@ const getUserWorkWindow = async (userId, query, companyCode = '') => {
     const rawClockOut = toValidWorkDate(record.outTime)
       || (record.isClockedIn ? now : null)
       || (explicitSeconds > 0 ? new Date(clockIn.getTime() + explicitSeconds * 1000) : null);
-    return getClippedInterval(clockIn, rawClockOut, range.start, range.end);
+    return getClippedInterval(clockIn, rawClockOut, range.start, new Date(Math.min(range.end?.getTime() ?? now.getTime(), now.getTime())));
   }).filter(Boolean);
   const totalSeconds = getMergedIntervalSeconds(intervals);
   const clockIn = toValidWorkDate(attendance?.inTime);
@@ -2302,6 +2263,10 @@ exports.updateTask = async (req, res) => {
       return res.status(409).json({ success: false, error: OVERDUE_STATUS_MESSAGE });
     }
 
+    if (req.body.status && req.body.status !== 'null' && !isCompanyTaskWrite(req, task) && !(await ensureTaskStatusAttendance(req, res))) {
+      return;
+    }
+
     const hasStatusChangedFromPending = task.overallStatus !== 'pending' || task.statusByUser.some(s => s.status !== 'pending');
     if (hasStatusChangedFromPending && !allowCompanyAllEdit) {
       return res.status(400).json({ success: false, error: 'Task cannot be edited after its status has changed from pending' });
@@ -2556,6 +2521,8 @@ exports.updateStatus = async (req, res) => {
     if (oldStatus === 'reopen' && status !== 'reopen' && status !== 'completed' && !allowCompanyAllEdit) {
       return res.status(400).json({ success: false, error: 'Reopened tasks can only be completed.' });
     }
+
+    if (!isCompanyTaskWrite(req, task) && !(await ensureTaskStatusAttendance(req, res))) return;
 
     task.$where = { updatedAt: task.updatedAt ?? null };
 
@@ -3117,13 +3084,19 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
     ? String(queryOptions.priority).toLowerCase()
     : '';
   const search = String(queryOptions.search || '').trim();
+  const todayRange = getIndiaDayRange(new Date());
+  const rangeIncludesToday = Boolean(range && (!range.$lte || (todayRange && range.$lte >= todayRange.start)));
   const dateOr = range ? [
     { dueDateTime: range },
     { dueDate: range },
     { completionDate: range },
     { completedAt: range },
     { inProgressSince: range },
-    { 'statusHistory.changedAt': range }
+    { 'statusHistory.changedAt': range },
+    ...(rangeIncludesToday ? [
+      { overallStatus: { $in: ['in-progress', 'in progress', 'inprogress'] } },
+      { statusByUser: { $elemMatch: { user: userId, status: { $in: ['in-progress', 'in progress', 'inprogress'] } } } }
+    ] : [])
   ] : null;
 
   const assignedOnly = String(queryOptions.scope || '').trim().toLowerCase() === 'assigned';
@@ -3168,7 +3141,10 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
           { completionDate: range },
           { completedAt: range },
           { inProgressSince: range },
-          { 'activityLogs.performedAt': range }
+          { 'activityLogs.performedAt': range },
+          ...(rangeIncludesToday ? [
+            { status: { $in: ['in-progress', 'in progress', 'inprogress'] }, completed: { $ne: true } }
+          ] : [])
         ]
       }
     ];
@@ -3195,6 +3171,9 @@ const queryAllUserTasks = async (userId, req, queryOptions = {}) => {
         { completedAt: range },
         { inProgressSince: range },
         { 'activityLogs.performedAt': range },
+        ...(rangeIncludesToday ? [
+          { status: { $in: ['in-progress', 'in progress', 'inprogress'] } }
+        ] : []),
         {
           status: { $in: ['pending', 'in-progress', 'inprogress', 'onhold', 'on-hold', 'reopen'] },
           $or: [{ dueDate: { $exists: false } }, { dueDate: null }]
@@ -3847,16 +3826,13 @@ exports.getUserAllTasksPaginated = async (req, res) => {
       };
     });
 
-    const filtered = filterUserTasks(allTasksWithWorkTime, req.query);
-    const allIntervals = filtered.flatMap(task => task.__workIntervals || []);
-    let dayTrackedTaskSeconds = getMergedIntervalSeconds(allIntervals);
-    if (dayTrackedTaskSeconds === 0) {
-      dayTrackedTaskSeconds = filtered.reduce((sum, task) => sum + (task.workTime?.seconds || 0), 0);
-    }
-    const totalClockedSeconds = workWindow.summary.totalClockedSeconds || 0;
-    const untrackedSeconds = Math.max(0, totalClockedSeconds - dayTrackedTaskSeconds);
     const statsQuery = { ...req.query, status: 'all' };
     const statsBaseTasks = filterUserTasks(allTasksWithWorkTime, statsQuery);
+    const filtered = filterUserTasks(allTasksWithWorkTime, req.query);
+    const allIntervals = statsBaseTasks.flatMap(task => task.__workIntervals || []);
+    const dayTrackedTaskSeconds = getMergedIntervalSeconds(allIntervals);
+    const totalClockedSeconds = workWindow.summary.totalClockedSeconds || 0;
+    const untrackedSeconds = Math.max(0, totalClockedSeconds - dayTrackedTaskSeconds);
 
     const counts = {
       total: statsBaseTasks.length,
@@ -3981,6 +3957,8 @@ exports.getUserAllTasksPaginated = async (req, res) => {
       filterOptions,
       workSummary: {
         ...workWindow.summary,
+        workedSeconds: dayTrackedTaskSeconds,
+        workedLabel: secondsToDurationLabel(dayTrackedTaskSeconds),
         trackedTaskSeconds: dayTrackedTaskSeconds,
         trackedTaskLabel: secondsToDurationLabel(dayTrackedTaskSeconds),
         untrackedSeconds,

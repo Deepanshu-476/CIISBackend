@@ -2,6 +2,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const PagePermission = require('../models/PagePermission');
 const { getCompanyPageEntitlements, isPageEntitled, normalizePageEntitlementKey } = require('../utils/companyPageEntitlements');
+const { REGISTER_REQUEST_PATH, hasCompanyRegistrationAdminAccess } = require('../utils/registerRequestAccess');
 const PageDataVisibility = require('../models/PageDataVisibility');
 const User = require('../models/User');
 const Client = require('../HR-CDS/models/Client');
@@ -505,7 +506,10 @@ router.get('/pages', async (req, res) => {
         success: true,
         pages: pageSummaries.filter(isEnabled),
         accessPages: accessPages.filter(isEnabled),
-        managedPages: APP_PAGES.map(({pageKey, path}) => ({pageKey, path, entitled: isEnabled({pageKey, path})}))
+        managedPages: APP_PAGES.map(({pageKey, path}) => ({
+          pageKey, path, entitled: isEnabled({pageKey, path}),
+          ...(path === REGISTER_REQUEST_PATH && hasCompanyRegistrationAdminAccess(req.user) && { canManageRegistrationRequests: true })
+        }))
       });
     }
 

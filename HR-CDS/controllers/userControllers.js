@@ -8,9 +8,9 @@ const bcrypt = require('bcryptjs');
 const { errorResponse, successResponse } = require('../utils/responseHelper.js');
 const Task = require('../../HR-CDS/models/Task.js');
 const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
-const { registerRequestBranchCondition } = require('../../utils/branchScope');
-const { REGISTER_REQUEST_PATH, getRegisterRequestAccess } = require('../../utils/registerRequestAccess');
+const { REGISTER_REQUEST_PATH, getRegisterRequestAccess, getRegisterRequestBranchCondition } = require('../../utils/registerRequestAccess');
 const { hasPageAccess, isCompanyOwner: isPageOwner } = require('../../middleware/pageAccess');
+const { isSuperAdminUser } = require('../../middleware/authMiddleware');
 const EMPLOYEE_DETAILS_PAGE = ['/ciisUser/emp-details'];
 
 let cascadeUserUpdate = async () => {};
@@ -101,7 +101,7 @@ const shouldIncludeInactiveUsers = (query = {}) => {
 
 const getCompanyScope = (req) => {
   const company = req.user?.company;
-  const companyId = company?._id || company?.id || company;
+  const companyId = company?._id || company?.id || company || req.user?.companyId;
   const companyCode = req.user?.companyCode || company?.companyCode;
   const requestedCompanyCode = req.query?.companyCode?.trim();
 
@@ -748,7 +748,7 @@ const getScopedRegisterRequestStatus = (user, isLegacyPending = false) => (
 const registerRequestWriteFilter = (req, user) => ({
   _id: user._id,
   company: user.company,
-  ...registerRequestBranchCondition(req.user)
+  ...getRegisterRequestBranchCondition(req.user)
 });
 
 const pendingRegisterRequestFilter = (req, user, isLegacyPending) => ({
@@ -1124,6 +1124,8 @@ exports.getRegisterRequestAccess = async (req, res, next) => {
   try {
     const { canView } = await getRegisterRequestAccess(req.user);
     if (!canView) return errorResponse(res, 403, "You do not have access to Register Request page");
+    const { error } = getCompanyScope(req);
+    if (error) return errorResponse(res, error.status, error.message);
     return res.status(200).json({ success: true });
   } catch (err) {
     return next(err);
@@ -1186,7 +1188,7 @@ exports.getRegisterRequests = async (req, res) => {
       ];
     }
 
-    const branchCondition = registerRequestBranchCondition(req.user);
+    const branchCondition = getRegisterRequestBranchCondition(req.user);
     if (Object.keys(branchCondition).length) filter.$and = [...(filter.$and || []), branchCondition];
 
     const requests = await User.find(filter)
@@ -1260,7 +1262,7 @@ exports.getRegisterRequestsCount = async (req, res) => {
       ]
     };
 
-    const branchCondition = registerRequestBranchCondition(req.user);
+    const branchCondition = getRegisterRequestBranchCondition(req.user);
     if (Object.keys(branchCondition).length) filter.$and = [...(filter.$and || []), branchCondition];
     const count = await User.countDocuments(filter);
     return res.status(200).json({ success: true, count });
@@ -1305,6 +1307,10 @@ exports.updateRegisterRequest = async (req, res) => {
       if (normalized) updateData[field] = normalized;
       else delete updateData[field];
     });
+
+    if (isSuperAdminUser(updateData)) {
+      return errorResponse(res, 403, 'Platform roles cannot be assigned through company registration requests');
+    }
 
     if (updateData.salary === '' || updateData.salary === null) {
       updateData.salary = undefined;
@@ -1465,6 +1471,9 @@ exports.activateRegisterRequest = async (req, res) => {
 
     const { user, error, isLegacyPending } = await findScopedRegisterRequest(req, req.params.id);
     if (error) return errorResponse(res, error.status, error.message);
+    if (isSuperAdminUser(user)) {
+      return errorResponse(res, 403, 'Platform accounts cannot be activated through company registration requests');
+    }
     if (getScopedRegisterRequestStatus(user, isLegacyPending) !== 'pending') {
       return errorResponse(res, 400, "Only pending register requests can be activated");
     }
@@ -1577,6 +1586,9 @@ exports.setRegisterRequestStatus = async (req, res) => {
     if (error) return errorResponse(res, error.status, error.message);
 
     const isActive = req.body?.isActive === true;
+    if (isActive && isSuperAdminUser(user)) {
+      return errorResponse(res, 403, 'Platform accounts cannot be activated through company registration requests');
+    }
     const now = new Date();
     const setData = {
       isActive,

@@ -7,13 +7,14 @@ const PageActivity = require('../models/PageActivity');
 const PagePermission = require('../models/PagePermission');
 const User = require('../models/User');
 const { getRegisterRequestAccess, REGISTER_REQUEST_PATH } = require('../utils/registerRequestAccess');
-const { activateRegisterRequest, verifyRegisterRequestSection } = require('../HR-CDS/controllers/userControllers');
+const { activateRegisterRequest, getRegisterRequests, verifyRegisterRequestSection } = require('../HR-CDS/controllers/userControllers');
 const { flush, trackWrites } = require('../utils/activityTracker');
 
 const id = () => new Types.ObjectId();
 const query = value => ({
   select() { return this; },
   populate() { return this; },
+  sort() { return this; },
   lean: async () => value,
 });
 
@@ -38,6 +39,59 @@ test('A Page Management grant cannot enable Register Request outside the company
   PagePermission.findOne.mock.mockImplementation(() => query({ approvers: [{user: user._id}] }));
   assert.deepEqual(await getRegisterRequestAccess(user), { canView: false, canVerify: false });
   assert.equal(PagePermission.findOne.mock.callCount(), 0);
+});
+
+test('Company owners and admins can manage registration requests across their company branches', async t => {
+  const { user } = fixture(t, ['emp-details']);
+  const admin = { ...user, companyRole: 'Company Admin' };
+  for (const companyRole of ['owner', 'admin', 'Company Admin']) {
+    assert.deepEqual(await getRegisterRequestAccess({ ...user, companyRole }), { canView: true, canVerify: true });
+  }
+  assert.deepEqual(await getRegisterRequestAccess({ ...user, jobRole: 'Admin' }), { canView: false, canVerify: false });
+  assert.equal(PagePermission.findOne.mock.callCount(), 0);
+
+  const branch = id();
+  const applicant = {
+    _id: id(), company: user.company, branch, name: 'Applicant', companyRole: 'employee',
+    registrationSource: 'self_register', registrationStatus: 'pending',
+    registrationVerification: { sections: { applicationReview: { verified: true } } }
+  };
+  const otherApplicant = { ...applicant, _id: id(), company: id() };
+  const users = [applicant, otherApplicant];
+  t.mock.method(User, 'find', filter => {
+    assert.equal(filter.$and, undefined);
+    return query(users.filter(item => String(item.company) === String(filter.company)));
+  });
+  t.mock.method(User, 'findOne', async filter => users.find(item =>
+    String(item._id) === String(filter._id) && String(item.company) === String(filter.company)));
+  t.mock.method(User.collection, 'findOne', async () => applicant);
+  t.mock.method(User, 'findOneAndUpdate', (filter, { $set: update }) => {
+    assert.equal(String(filter.company), String(user.company));
+    assert.equal(String(filter._id), String(applicant._id));
+    assert.equal(filter.$or, undefined);
+    return query({ ...applicant, registrationStatus: update.registrationStatus });
+  });
+
+  const run = async (handler, { query = {}, id: applicantId = applicant._id } = {}) => {
+    const res = {
+      locals: {},
+      status(code) { this.statusCode = code; return this; },
+      json(body) { this.body = body; return this; }
+    };
+    await handler({ user: admin, query, params: { id: applicantId } }, res);
+    return res;
+  };
+  const list = await run(getRegisterRequests);
+  assert.equal(list.statusCode, 200);
+  assert.equal(list.body.canVerify, true);
+  assert.deepEqual(list.body.requests.map(item => item._id), [applicant._id]);
+  assert.equal((await run(getRegisterRequests, { query: { companyCode: 'OTHER' } })).statusCode, 403);
+  assert.equal((await run(activateRegisterRequest, { id: otherApplicant._id })).statusCode, 404);
+  applicant.companyRole = 'super_admin';
+  assert.equal((await run(activateRegisterRequest)).statusCode, 403);
+  applicant.companyRole = 'employee';
+  assert.equal((await run(activateRegisterRequest)).statusCode, 200);
+  assert.equal(User.findOneAndUpdate.mock.callCount(), 1);
 });
 
 test('Only the successful pending-to-active transition logs who accepted whom', async t => {

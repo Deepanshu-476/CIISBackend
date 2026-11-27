@@ -94,19 +94,28 @@ const record = (user, row) => {
   ensureTimer();
 };
 
-const isClientPortalUser = user => /^client$/i.test(String(user?.companyRole || user?.role || ''));
-
 const SENSITIVE_KEYS = new Set(['password', 'newpassword', 'oldpassword', 'token', 'refreshtoken', 'secret', 'otp', 'pin', 'authorization', 'hash']);
 
 const inferModule = (apiPath = '', pagePath = '') => {
   const combined = `${apiPath} ${pagePath}`.toLowerCase();
+  if (/ai-settings|\/api\/ai|\/mcp|ai-management|company-ai/.test(combined)) return 'AI Assistant';
+  if (/marketing-ads|\/integrations/.test(combined)) return 'Marketing Ads';
+  if (/telecall/.test(combined)) return 'Telecalling';
   if (/crm|lead/.test(combined)) return 'CRM Leads';
+  if (/client-task|clienttasks/.test(combined)) return 'Client Tasks';
+  if (/client-plan|client-document|clientsservice|emp-client|active-clients|client-dashboard/.test(combined)) return 'Clients & Plans';
+  if (/project/.test(combined)) return 'Projects';
   if (/task/.test(combined)) return 'Task Management';
-  if (/attendance|clock/.test(combined)) return 'Attendance';
+  if (/attendance|clock|break|week-off|overtime/.test(combined)) return 'Attendance & Breaks';
   if (/leave/.test(combined)) return 'Leaves & HR';
   if (/payroll|salary|payslip/.test(combined)) return 'Payroll';
   if (/chat|message|conversation/.test(combined)) return 'Team Chat';
-  if (/telecall/.test(combined)) return 'Telecalling';
+  if (/meeting|cmeeting/.test(combined)) return 'Meetings';
+  if (/support/.test(combined)) return 'Support Desk';
+  if (/asset/.test(combined)) return 'Assets';
+  if (/alert|promo/.test(combined)) return 'Alerts & Notices';
+  if (/holiday|group/.test(combined)) return 'Holidays & Groups';
+  if (/dashboard-overview|export-reports|user-activity|analytics/.test(combined)) return 'Dashboard & Reports';
   if (/profile|users\/me/.test(combined)) return 'Profile';
   if (/user|employee|staff/.test(combined)) return 'User Management';
   if (/branch/.test(combined)) return 'Branch Settings';
@@ -155,7 +164,7 @@ const trackWrites = (req, res, next) => {
   if (IGNORED_WRITES.some(pattern => pattern.test(apiPath))) return next();
   res.on('finish', () => {
     const user = req.user;
-    if (!user || res.statusCode >= 400 || isClientPortalUser(user)) return;
+    if (!user || res.statusCode >= 400) return;
     const activity = res.locals?.pageActivity;
     const pagePath = activity?.path || req.get('x-page-path') || '';
     record(user, {
@@ -173,7 +182,7 @@ const trackWrites = (req, res, next) => {
 };
 
 const recordViews = (user, views = [], source = 'unknown') => {
-  if (isClientPortalUser(user)) return 0;
+  if (!user) return 0;
   let count = 0;
   views.slice(0, 50).forEach(view => {
     const path = normalizePath(view?.path);
@@ -195,7 +204,7 @@ const recordViews = (user, views = [], source = 'unknown') => {
 };
 
 const recordLogin = (user, req) => {
-  if (isClientPortalUser(user)) return;
+  if (!user) return;
   record(user, { type: 'login', path: '', source: clientSource(req), module: 'Security & Auth' });
 };
 
