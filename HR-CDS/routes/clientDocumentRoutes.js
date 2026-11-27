@@ -18,6 +18,7 @@ const CLIENT_DOCUMENT_CHUNK_LIMIT = 512 * 1024;
 // developer is running this backend locally. Re-use the caller's token so the
 // production API performs the same access check before returning any file.
 const LEGACY_DOCUMENT_ORIGIN = (process.env.LEGACY_DOCUMENT_ORIGIN || 'https://backendcds.ciisnetwork.in').replace(/\/+$/, '');
+const LEGACY_DOCUMENT_PROXY_HEADER = 'x-ciis-legacy-document-proxy';
 const CLIENT_DOCUMENT_ALLOWED_MIME_TYPES = [
   'application/pdf',
   'application/msword',
@@ -290,19 +291,52 @@ const getDocumentFilePath = document => {
   return '';
 };
 
-const proxyLegacyDocument = async (req, res, documentId, action) => {
+const proxyLegacyDocument = async (req, res, documentId, action, documentMeta = null) => {
   try {
     const authorization = req.get('authorization');
-    if (!authorization) return false;
-    const upstream = await fetch(`${LEGACY_DOCUMENT_ORIGIN}/api/client-documents/${documentId}/${action}`, {
-      headers: { authorization },
+    if (!authorization || req.get(LEGACY_DOCUMENT_PROXY_HEADER)) return false;
+
+    const legacyOrigin = new URL(LEGACY_DOCUMENT_ORIGIN);
+    if (legacyOrigin.host === req.get('host')) return false;
+
+    // Serve a local file on the receiving server, but never proxy it again.
+    const headers = { authorization, [LEGACY_DOCUMENT_PROXY_HEADER]: '1' };
+    let upstream = await fetch(`${LEGACY_DOCUMENT_ORIGIN}/api/client-documents/${documentId}/${action}`, {
+      headers,
     });
+    if (!upstream.ok && action === 'view') {
+      await upstream.body?.cancel();
+      upstream = await fetch(`${LEGACY_DOCUMENT_ORIGIN}/api/client-documents/${documentId}/download`, {
+        headers,
+      });
+    }
     if (!upstream.ok) return false;
 
-    const contentType = upstream.headers.get('content-type') || 'application/octet-stream';
+    const rawType = upstream.headers.get('content-type') || '';
+    const fileName = safeOriginalName(documentMeta?.originalName || 'document');
+    const ext = path.extname(fileName).toLowerCase();
+    const mimeByExt = {
+      '.pdf': 'application/pdf',
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.webp': 'image/webp',
+      '.gif': 'image/gif',
+      '.svg': 'image/svg+xml',
+      '.txt': 'text/plain',
+      '.html': 'text/html',
+      '.csv': 'text/csv',
+    }[ext];
+    const contentType = (rawType && rawType !== 'application/octet-stream')
+      ? rawType
+      : (mimeByExt || documentMeta?.mimeType || 'application/octet-stream');
     const disposition = upstream.headers.get('content-disposition');
     res.setHeader('Content-Type', contentType);
-    if (disposition) res.setHeader('Content-Disposition', disposition);
+    if (action === 'view') {
+      res.setHeader('Content-Disposition', `inline; filename="${fileName.replace(/"/g, '')}"`);
+    } else if (disposition) {
+      res.setHeader('Content-Disposition', disposition);
+    }
     res.setHeader('X-Document-Source', 'legacy-storage');
     res.send(Buffer.from(await upstream.arrayBuffer()));
     return true;
@@ -670,7 +704,7 @@ router.get('/:id/view', protect, async (req, res) => {
 
     const filePath = getDocumentFilePath(document);
     if (!filePath || !fs.existsSync(filePath)) {
-      if (await proxyLegacyDocument(req, res, document._id, 'view')) return;
+      if (await proxyLegacyDocument(req, res, document._id, 'view', document)) return;
       return res.status(404).json({ success: false, message: 'File not found on server' });
     }
 

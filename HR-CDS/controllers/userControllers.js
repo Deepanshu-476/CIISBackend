@@ -8,8 +8,10 @@ const bcrypt = require('bcryptjs');
 const { errorResponse, successResponse } = require('../utils/responseHelper.js');
 const Task = require('../../HR-CDS/models/Task.js');
 const { getPaginationOptions, buildPaginationMeta } = require('../../utils/pagination');
-const { registerRequestBranchCondition } = require('../../utils/branchScope');
-const { REGISTER_REQUEST_PATH, getRegisterRequestAccess } = require('../../utils/registerRequestAccess');
+const { REGISTER_REQUEST_PATH, getRegisterRequestAccess, getRegisterRequestBranchCondition } = require('../../utils/registerRequestAccess');
+const { hasPageAccess, isCompanyOwner: isPageOwner } = require('../../middleware/pageAccess');
+const { isSuperAdminUser } = require('../../middleware/authMiddleware');
+const EMPLOYEE_DETAILS_PAGE = ['/ciisUser/emp-details'];
 
 let cascadeUserUpdate = async () => {};
 try {
@@ -99,7 +101,7 @@ const shouldIncludeInactiveUsers = (query = {}) => {
 
 const getCompanyScope = (req) => {
   const company = req.user?.company;
-  const companyId = company?._id || company?.id || company;
+  const companyId = company?._id || company?.id || company || req.user?.companyId;
   const companyCode = req.user?.companyCode || company?.companyCode;
   const requestedCompanyCode = req.query?.companyCode?.trim();
 
@@ -277,31 +279,9 @@ const sanitizeUserRecordForList = (userObj = {}, req = {}) => {
   return cloned;
 };
 
-const canViewSensitiveEmployeeDetails = async (user = {}) => {
-  const companyId = user.company?._id || user.company || user.companyId;
-  const userId = user._id || user.id;
-  if (!companyId || !userId) return false;
-
-  const permission = await PagePermission.findOne({
-    company: companyId,
-    $or: [
-      { path: '/ciisUser/emp-details' },
-      { pageKey: 'emp-details' }
-    ]
-  }).select('viewUsers editUsers').lean();
-
-  if (!permission) return false;
-  const targetId = String(userId);
-  return [
-    ...(permission.viewUsers || []),
-    ...(permission.editUsers || [])
-  ].some(entry => String(entry?.user || entry) === targetId);
-};
-
-// Employee Details editors receive only the edit capability configured in Page
-// Management. They never receive delete access, and their branch/department
-// scope is honoured for every edit.
-const canEditEmployeeDetailsFromPage = async (requestingUser = {}, targetUser = {}) => {
+const canManageEmployeeDetailsRecord = async (requestingUser, targetUser, action) => {
+  if (!(await hasPageAccess(requestingUser, { paths: EMPLOYEE_DETAILS_PAGE, action }))) return false;
+  if (isPageOwner(requestingUser)) return true;
   const companyId = requestingUser.company?._id || requestingUser.company || requestingUser.companyId;
   const requesterId = String(requestingUser._id || requestingUser.id || '');
   if (!companyId || !requesterId) return false;
@@ -312,21 +292,21 @@ const canEditEmployeeDetailsFromPage = async (requestingUser = {}, targetUser = 
       { path: '/ciisUser/emp-details' },
       { pageKey: 'emp-details' }
     ]
-  }).select('editUsers userAccessScopes').lean();
+  }).select('editUsers deleteUsers userAccessScopes').lean();
   if (!permission) return false;
 
-  const isDirectEditor = (permission.editUsers || []).some(entry =>
+  const hasDirectGrant = (permission[action === 'edit' ? 'editUsers' : 'deleteUsers'] || []).some(entry =>
     String(entry?.user?._id || entry?.user || entry || '') === requesterId
   );
-  const editScopes = (permission.userAccessScopes || []).filter(scope =>
+  const actionScopes = (permission.userAccessScopes || []).filter(scope =>
     String(scope?.user?._id || scope?.user || '') === requesterId &&
-    String(scope?.accessType || '').trim().toLowerCase() === 'edit'
+    String(scope?.accessType || '').trim().toLowerCase() === action
   );
-  if (!isDirectEditor && editScopes.length === 0) return false;
+  if (!hasDirectGrant && actionScopes.length === 0) return false;
 
   // A direct editor without a scope is an all-branches/all-departments editor.
   // Empty scope arrays also mean "All" in Page Management.
-  if (editScopes.length === 0) return true;
+  if (actionScopes.length === 0) return true;
 
   const targetBranchIds = new Set([
     targetUser.branch,
@@ -334,7 +314,7 @@ const canEditEmployeeDetailsFromPage = async (requestingUser = {}, targetUser = 
   ].map(value => String(value?._id || value || '')).filter(Boolean));
   const targetDepartmentId = String(targetUser.department?._id || targetUser.department || '');
 
-  return editScopes.some(scope => {
+  return actionScopes.some(scope => {
     const branchIds = (scope.branchIds || []).map(value => String(value?._id || value || '')).filter(Boolean);
     const departmentIds = (scope.departmentIds || []).map(value => String(value?._id || value || '')).filter(Boolean);
     const branchAllowed = branchIds.length === 0 || branchIds.some(id => targetBranchIds.has(id));
@@ -768,7 +748,7 @@ const getScopedRegisterRequestStatus = (user, isLegacyPending = false) => (
 const registerRequestWriteFilter = (req, user) => ({
   _id: user._id,
   company: user.company,
-  ...registerRequestBranchCondition(req.user)
+  ...getRegisterRequestBranchCondition(req.user)
 });
 
 const pendingRegisterRequestFilter = (req, user, isLegacyPending) => ({
@@ -1144,6 +1124,8 @@ exports.getRegisterRequestAccess = async (req, res, next) => {
   try {
     const { canView } = await getRegisterRequestAccess(req.user);
     if (!canView) return errorResponse(res, 403, "You do not have access to Register Request page");
+    const { error } = getCompanyScope(req);
+    if (error) return errorResponse(res, error.status, error.message);
     return res.status(200).json({ success: true });
   } catch (err) {
     return next(err);
@@ -1206,7 +1188,7 @@ exports.getRegisterRequests = async (req, res) => {
       ];
     }
 
-    const branchCondition = registerRequestBranchCondition(req.user);
+    const branchCondition = getRegisterRequestBranchCondition(req.user);
     if (Object.keys(branchCondition).length) filter.$and = [...(filter.$and || []), branchCondition];
 
     const requests = await User.find(filter)
@@ -1280,7 +1262,7 @@ exports.getRegisterRequestsCount = async (req, res) => {
       ]
     };
 
-    const branchCondition = registerRequestBranchCondition(req.user);
+    const branchCondition = getRegisterRequestBranchCondition(req.user);
     if (Object.keys(branchCondition).length) filter.$and = [...(filter.$and || []), branchCondition];
     const count = await User.countDocuments(filter);
     return res.status(200).json({ success: true, count });
@@ -1325,6 +1307,10 @@ exports.updateRegisterRequest = async (req, res) => {
       if (normalized) updateData[field] = normalized;
       else delete updateData[field];
     });
+
+    if (isSuperAdminUser(updateData)) {
+      return errorResponse(res, 403, 'Platform roles cannot be assigned through company registration requests');
+    }
 
     if (updateData.salary === '' || updateData.salary === null) {
       updateData.salary = undefined;
@@ -1485,6 +1471,9 @@ exports.activateRegisterRequest = async (req, res) => {
 
     const { user, error, isLegacyPending } = await findScopedRegisterRequest(req, req.params.id);
     if (error) return errorResponse(res, error.status, error.message);
+    if (isSuperAdminUser(user)) {
+      return errorResponse(res, 403, 'Platform accounts cannot be activated through company registration requests');
+    }
     if (getScopedRegisterRequestStatus(user, isLegacyPending) !== 'pending') {
       return errorResponse(res, 400, "Only pending register requests can be activated");
     }
@@ -1597,6 +1586,9 @@ exports.setRegisterRequestStatus = async (req, res) => {
     if (error) return errorResponse(res, error.status, error.message);
 
     const isActive = req.body?.isActive === true;
+    if (isActive && isSuperAdminUser(user)) {
+      return errorResponse(res, 403, 'Platform accounts cannot be activated through company registration requests');
+    }
     const now = new Date();
     const setData = {
       isActive,
@@ -1937,27 +1929,24 @@ exports.updateUser = async (req, res) => {
     
     
     const requestingUserId = requestingUser._id || requestingUser.id;
-    const isSelfUpdate = Boolean(id && requestingUserId && String(requestingUserId) === String(id));
+    const isSelfUpdate = Boolean(requestingUserId && String(requestingUserId) === String(user._id));
     const requesterRole = String(requestingUser.companyRole || requestingUser.jobRole || requestingUser.role || '').toLowerCase();
-    const isPrivilegedUser = ['super_admin', 'superadmin', 'owner', 'admin', 'hr'].includes(requesterRole) || requestingUser.isSuperAdmin === true;
-    const canEditEmployeeDetails = !isSelfUpdate && !isPrivilegedUser
-      ? await canEditEmployeeDetailsFromPage(requestingUser, user)
-      : false;
+    const isPrivilegedUser = isPageOwner(requestingUser);
+    const canEditEmployeeDetails = !isSelfUpdate &&
+      await canManageEmployeeDetailsRecord(requestingUser, user, 'edit');
 
-    if (!isSelfUpdate && !isPrivilegedUser && !canEditEmployeeDetails) {
+    if (!isSelfUpdate && !canEditEmployeeDetails) {
       return errorResponse(res, 403, "You do not have permission to update other employees");
     }
 
-    const targetRole = String(user.companyRole || user.jobRole || user.role || '').toLowerCase();
-
     // Privilege Escalation Prevention:
     // 1. Manager / HR cannot update an Owner, Admin, or SuperAdmin
-    if (['manager', 'hr'].includes(requesterRole) && ['owner', 'admin', 'super_admin', 'superadmin'].includes(targetRole)) {
+    if (!isPageOwner(requestingUser) && isPageOwner(user)) {
       return errorResponse(res, 403, "Managers and HR cannot modify Admin or Owner accounts.");
     }
 
     // 2. Manager / HR cannot assign Admin, Owner, or SuperAdmin roles
-    if (['manager', 'hr'].includes(requesterRole) && req.body.companyRole) {
+    if (!isPageOwner(requestingUser) && req.body.companyRole) {
       const assignedRole = String(req.body.companyRole).toLowerCase();
       if (['owner', 'admin', 'super_admin', 'superadmin'].includes(assignedRole)) {
         return errorResponse(res, 403, "You do not have permission to assign Admin or Owner roles.");
@@ -2364,14 +2353,13 @@ exports.deleteUser = async (req, res) => {
     const requesterRole = String(requestingUser.companyRole || requestingUser.jobRole || requestingUser.role || '').toLowerCase();
     const targetRole = String(user.companyRole || user.jobRole || user.role || '').toLowerCase();
 
-    const authorizedRoles = ['super_admin', 'superadmin', 'owner', 'admin', 'hr', 'manager'];
-    const canDelete = authorizedRoles.includes(requesterRole) || requestingUser.isSuperAdmin === true;
+    const canDelete = await canManageEmployeeDetailsRecord(requestingUser, user, 'delete');
     
     if (!canDelete) {
       return errorResponse(res, 403, "You don't have permission to delete users.");
     }
 
-    if (['manager', 'hr'].includes(requesterRole) && ['owner', 'admin', 'super_admin', 'superadmin'].includes(targetRole)) {
+    if (!isPageOwner(requestingUser) && isPageOwner(user)) {
       return errorResponse(res, 403, "Managers and HR cannot delete Admin or Owner accounts.");
     }
 
@@ -2623,7 +2611,7 @@ exports.getCompanyUsers = async (req, res) => {
     // includeSensitive=true. Respect that Page Management permission so the
     // detail modal receives the family, emergency, bank and identity fields.
     if (String(req.query?.includeSensitive || '').toLowerCase() === 'true') {
-      req.allowSensitiveEmployeeDetails = await canViewSensitiveEmployeeDetails(currentUser);
+      req.allowSensitiveEmployeeDetails = await hasPageAccess(currentUser, { paths: EMPLOYEE_DETAILS_PAGE, action: 'view' });
     }
 
     const companyScope = getCompanyScope(req);

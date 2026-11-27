@@ -47,6 +47,66 @@ describe('AI Task Agent Suite', () => {
 
   const mockScope = { hasAccess: false, isOwner: false, branchIds: [], departmentIds: [] };
 
+  it('treats typed repeat answers like the repeat chips', async () => {
+    const deps = { now: fixedNow, getScopeInfo: async () => mockScope, extractFn: async () => ({}) };
+    const draft = {
+      intent: 'self_task',
+      taskFor: 'self',
+      title: 'Review the portal',
+      description: 'Check the dashboard',
+      dueDateTime: '2026-10-13T18:00:00+05:30',
+      priority: 'high',
+      status: 'pending',
+      reminder: false,
+      priorityDays: '1',
+      asked: ['title', 'dueDateTime', 'description', 'priority', 'status', 'reminder', 'priorityDays'],
+    };
+    const ask = await parseTaskRequest({ req: mockReq, message: '1', draft, language: 'en' }, deps);
+    assert.equal(ask.field, 'repeatPattern');
+
+    for (const [value, answers] of [
+      ['none', ['No', 'No repeat.', 'Nahi', 'Repeat mat karo']],
+      ['daily', ['Yes', 'Repeat daily', 'Haan', 'Roz']],
+    ]) {
+      const action = ask.chips.find(chip => chip.action?.field === 'repeatPattern' && chip.action.value === value).action;
+      const chip = await parseTaskRequest({ req: mockReq, draft: structuredClone(ask.draft), action, language: 'en' }, deps);
+      for (const message of answers) {
+        const typed = await parseTaskRequest({ req: mockReq, draft: structuredClone(ask.draft), message, language: 'en' }, deps);
+        assert.equal(typed.draft.repeatPattern, value, message);
+        assert.equal(typed.field, chip.field, message);
+        assert.equal(typed.draft.title, draft.title, message);
+      }
+    }
+  });
+
+  it('reads task lists and moves a task between pending and in progress in English and Hinglish', async () => {
+    const task = {
+      _id: new mongoose.Types.ObjectId(),
+      taskFor: 'self',
+      title: 'Invoice Review',
+      createdBy: requesterId,
+      status: 'pending',
+      overallStatus: 'pending',
+    };
+    const deps = { tasks: [task], getScopeInfo: async () => mockScope, extractFn: async () => ({}) };
+    const transitions = [
+      ['Move Invoice Review from pending to in progress', 'en', 'in-progress'],
+      ['Move Invoice Review from in progress to pending', 'en', 'pending'],
+      ['Invoice Review task ko pending se in progress kar do', 'hinglish', 'in-progress'],
+      ['Invoice Review task ko in progress se pending kar do', 'hinglish', 'pending'],
+    ];
+    for (const [message, language, status] of transitions) {
+      const result = await parseTaskRequest({ req: mockReq, message, language }, deps);
+      assert.equal(result.taskUpdated, true, result.reply);
+      assert.equal(task.overallStatus, status);
+      assert.equal(task.statusByUser[0].status, status);
+      assert.equal(task.statusHistory.at(-1).status, status);
+      assert.equal(new Task(task).validateSync(['overallStatus', 'statusByUser', 'statusHistory']), undefined);
+    }
+    const listing = await parseTaskRequest({ req: mockReq, message: 'Mere saare tasks dikha do', language: 'hinglish' }, deps);
+    assert.match(listing.reply, /1\. \*\*Invoice Review\*\* — \*pending\*/);
+  });
+
   it('1. missing title -> needs_input asks title in Hinglish and Hindi speech', async () => {
     const result = await parseTaskRequest({
       req: mockReq,

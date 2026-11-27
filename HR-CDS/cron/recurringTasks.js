@@ -1,6 +1,8 @@
 const cron = require('node-cron');
 const mongoose = require('mongoose');
 const Task = require('../models/Task');
+const Group = require('../models/Group');
+const { presentOnDayFilter } = require('../utils/taskAttendance');
 const Attendance = require('../models/Attendance');
 const Leave = require('../models/Leave');
 const {
@@ -12,73 +14,9 @@ const {
 } = require('../utils/taskRecurrence');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const RECURRENCE_HORIZON_DAYS = 7;
-
-const isRecurringTemplate = task => (
-  task &&
-  task.isActive !== false &&
-  (!task.recurrenceSourceId || String(task.recurrenceSourceId) === 'null')
-);
-
-const getOccurrenceStartDate = (task) => (
-  toValidDate(task?.nextRecurringDate) ||
-  toValidDate(task?.dueDateTime)
-);
-
-const isAfterRecurringEndDate = (occurrenceDate, recurrenceEndDate) => {
-  const endDate = toValidDate(recurrenceEndDate);
-  if (!endDate) return false;
-  return occurrenceDate > endDate;
-};
-
-const isUserAbsentOnDate = async (userId, dateValue, options = {}) => {
-  if (!userId || !dateValue) return false;
-  if (options.isAbsent !== undefined) {
-    return typeof options.isAbsent === 'function'
-      ? options.isAbsent(userId, dateValue)
-      : Boolean(options.isAbsent);
-  }
-  if (mongoose.connection?.readyState === 0 && !options.mockAbsence) {
-    return false;
-  }
-
-  const targetDate = toValidDate(dateValue);
-  if (!targetDate) return false;
-
-  const bounds = getIndiaDayRange(targetDate);
-  if (!bounds) return false;
-
-  try {
-    const attendance = await Attendance.findOne({
-      user: userId,
-      date: { $gte: bounds.start, $lte: bounds.end }
-    }).select('status isClockedIn inTime').lean();
-
-    if (attendance) {
-      const status = String(attendance.status || '').trim().toUpperCase();
-      const isClockedIn = attendance.isClockedIn === true || Boolean(attendance.inTime);
-      if (!isClockedIn && ['ABSENT', 'UNINFORMED LEAVE', 'UNINFORMEDLEAVE'].includes(status)) {
-        return true;
-      }
-    }
-
-    const leave = await Leave.findOne({
-      user: userId,
-      status: 'Approved',
-      startDate: { $lte: bounds.end },
-      endDate: { $gte: bounds.start }
-    }).select('_id').lean();
-
-    if (leave) {
-      return true;
-    }
-
-    return false;
-  } catch (err) {
-    console.error(`Error checking user absence for ${userId} on ${targetDate}:`, err);
-    return false;
-  }
-};
+const isRecurringTemplate = task => task && task.isActive !== false && !task.recurrenceSourceId;
+const userIdOf = value => value?._id || value;
+const uniqueIds = values => [...new Map(values.filter(Boolean).map(value => [String(value), value])).values()];
 
 const cleanRecurringTasksForAbsentUserWindow = async (userId, startBound, endBound) => {
   const selfDelete = await Task.deleteMany({
@@ -162,193 +100,110 @@ const cleanRecurringTasksForAbsentUserRange = async (userId, startDate, endDate,
   }
 };
 
-const createOccurrenceIfMissing = async (templateTask, occurrenceDate, options = {}) => {
-  const occurrenceKey = occurrenceDate.toISOString();
-  const isSelfTask = !templateTask.taskFor || templateTask.taskFor === 'self';
-  let cloneAssignedUsers;
+const createOccurrenceIfMissing = async (template, occurrenceDate, { now = new Date(), userId } = {}) => {
+  const day = getIndiaDayRange(now);
+  if (occurrenceDate < day.start || occurrenceDate > day.end) return { created: false, skipped: true };
 
-  if (isSelfTask) {
-    const targetUserId = templateTask.assignedUsers?.[0]?._id
-      || templateTask.assignedUsers?.[0]
-      || templateTask.createdBy;
-
-    if (targetUserId) {
-      const isAbsent = await isUserAbsentOnDate(targetUserId, occurrenceDate, options);
-      if (isAbsent) {
-        try {
-          await Task.deleteOne({
-            recurrenceSourceId: templateTask._id,
-            recurrenceOccurrenceKey: occurrenceKey,
-            overallStatus: 'pending',
-          });
-        } catch (delErr) {
-          // Ignored if disconnected or buffering
-        }
-        return { created: false, skipped: true, reason: 'user_absent' };
-      }
-    }
-  } else {
-    const assignedUserIds = (templateTask.assignedUsers || [])
-      .map(u => u?._id || u)
-      .filter(Boolean);
-    const hasGroups = Array.isArray(templateTask.assignedGroups) && templateTask.assignedGroups.length > 0;
-
-    if (assignedUserIds.length > 0) {
-      const presentUsers = [];
-      for (const uid of assignedUserIds) {
-        const isAbsent = await isUserAbsentOnDate(uid, occurrenceDate, options);
-        if (!isAbsent) {
-          presentUsers.push(uid);
-        }
-      }
-      if (presentUsers.length === 0 && !hasGroups) {
-        try {
-          await Task.deleteOne({
-            recurrenceSourceId: templateTask._id,
-            recurrenceOccurrenceKey: occurrenceKey,
-            overallStatus: 'pending',
-          });
-        } catch (delErr) {
-          // Ignored if disconnected or buffering
-        }
-        return { created: false, skipped: true, reason: 'user_absent' };
-      }
-      cloneAssignedUsers = presentUsers;
-    }
+  const isSelfTask = !template.taskFor || template.taskFor === 'self';
+  let recipients = isSelfTask
+    ? [userIdOf(template.assignedUsers?.[0] || template.createdBy)]
+    : (template.assignedUsers || []).map(userIdOf);
+  if (!isSelfTask && template.assignedGroups?.length) {
+    const groups = await Group.find({
+      _id: { $in: template.assignedGroups.map(userIdOf) },
+      isActive: true
+    }).select('members').lean();
+    recipients.push(...groups.flatMap(group => group.members || []).map(userIdOf));
   }
+  recipients = uniqueIds(recipients).filter(id => !userId || String(id) === String(userId));
+  if (!recipients.length) return { created: false, skipped: true };
 
-  const existing = await Task.findOne({
-    recurrenceSourceId: templateTask._id,
-    recurrenceOccurrenceKey: occurrenceKey,
-  }).select('_id').lean();
+  const attendance = await Attendance.find({
+    user: { $in: recipients },
+    ...presentOnDayFilter(occurrenceDate, now)
+  }).select('user').lean();
+  const presentUsers = uniqueIds(attendance.map(record => userIdOf(record.user)));
+  if (!presentUsers.length) return { created: false, skipped: true };
 
-  if (existing) {
-    return { created: false, exists: true };
-  }
+  const key = { recurrenceSourceId: template._id, recurrenceOccurrenceKey: occurrenceDate.toISOString() };
+  const clone = buildRecurringTaskClone(template, occurrenceDate, { assignedUsers: presentUsers });
+  if (!clone) return { created: false, skipped: true };
 
-  const clonePayload = buildRecurringTaskClone(
-    templateTask,
-    occurrenceDate,
-    cloneAssignedUsers !== undefined ? { assignedUsers: cloneAssignedUsers } : {}
-  );
-  if (!clonePayload) {
-    return { created: false, skipped: true };
-  }
-
+  // Recurring group assignments become individual assignments as members clock in.
+  clone.assignedGroups = [];
   try {
-    await Task.create(clonePayload);
-    return { created: true };
+    const result = await Task.updateOne(key, { $setOnInsert: clone }, { upsert: true, timestamps: false });
+    if (result.upsertedCount) return { created: true };
   } catch (error) {
-    if (error?.code === 11000) {
-      return { created: false, duplicate: true };
-    }
-    throw error;
-  }
-};
-
-const generateRecurringOccurrences = async (templateTask, options = {}) => {
-  if (!isRecurringTemplate(templateTask)) {
-    return { created: 0, skipped: true };
+    if (error?.code !== 11000) throw error;
   }
 
-  const normalized = normalizeTaskRecurrenceFields(templateTask);
-  if (!normalized.isRecurring || normalized.repeatPattern === 'none') {
-    return { created: 0, skipped: true };
-  }
-
-  const maxOccurrences = options.maxOccurrences || 60;
-  const targetEndDate = options.targetEndDate || normalized.recurrenceEndDate;
-  const baseDueDate = toValidDate(templateTask.dueDateTime);
-  if (!baseDueDate) {
-    return { created: 0, skipped: true };
-  }
-
-  // Only materialise copies a week ahead; the 15-minute sweep keeps extending the window.
-  // Copying a whole series up front filled task lists and "All time" counts with future work.
-  const horizon = getIndiaDayRange((options.now || new Date()).getTime() + RECURRENCE_HORIZON_DAYS * DAY_MS).end;
-  const createUntil = targetEndDate && targetEndDate < horizon ? targetEndDate : horizon;
-
-  // Resume after the newest copy so long series keep going past maxOccurrences.
-  const latest = await Task.findOne({ recurrenceSourceId: templateTask._id })
-    .sort({ dueDateTime: -1 }).select('dueDateTime').lean();
-  const resumeFrom = latest?.dueDateTime && latest.dueDateTime > baseDueDate ? latest.dueDateTime : baseDueDate;
-  let nextOccurrence = getNextRecurringDate(resumeFrom, normalized.repeatPattern, normalized.repeatDays);
-  if (!nextOccurrence) {
-    return { created: 0, skipped: true };
-  }
-
-  let created = 0;
-  let iterations = 0;
-
-  while (
-    nextOccurrence &&
-    !isAfterRecurringEndDate(nextOccurrence, createUntil) &&
-    iterations < maxOccurrences
-  ) {
-    const result = await createOccurrenceIfMissing(templateTask, nextOccurrence, options);
-    if (result.created) {
-      created += 1;
-    }
-    nextOccurrence = getNextRecurringDate(nextOccurrence, normalized.repeatPattern, normalized.repeatDays);
-    iterations += 1;
-  }
-
-  const isPastEndDate = Boolean(
-    targetEndDate &&
-    new Date() > targetEndDate
-  );
-
-  const hasRemainingFutureOccurrences = Boolean(
-    nextOccurrence && (!targetEndDate || !isAfterRecurringEndDate(nextOccurrence, targetEndDate))
-  );
-
-  const updateFields = {
-    nextRecurringDate: hasRemainingFutureOccurrences ? nextOccurrence : null,
-  };
-
-  if (isPastEndDate) {
-    updateFields.isRecurring = false;
-    updateFields.repeatPattern = 'none';
-    updateFields.recurringPattern = 'none';
-    updateFields.recurrenceStoppedAt = new Date();
-  }
-
-  await Task.updateOne({ _id: templateTask._id }, { $set: updateFields });
-
-  return { created, nextOccurrence: hasRemainingFutureOccurrences ? nextOccurrence : null };
-};
-
-const processRecurringTemplate = async (templateTask, now = new Date()) => {
-  if (!isRecurringTemplate(templateTask)) {
-    return { created: 0, skipped: true };
-  }
-
-  const normalized = normalizeTaskRecurrenceFields(templateTask);
-  if (!normalized.isRecurring || normalized.repeatPattern === 'none') {
-    return { created: 0, skipped: true };
-  }
-
-  if (normalized.recurrenceEndDate && now > normalized.recurrenceEndDate) {
-    await Task.updateOne(
-      { _id: templateTask._id },
-      {
-        $set: {
-          isRecurring: false,
-          repeatPattern: 'none',
-          recurringPattern: 'none',
-          nextRecurringDate: null,
-          recurrenceStoppedAt: new Date(),
+  if (!isSelfTask) {
+    for (const entry of clone.statusByUser) {
+      await Task.updateOne(
+        { ...key, assignedUsers: { $ne: entry.user }, overallStatus: 'completed' },
+        {
+          $addToSet: { assignedUsers: entry.user },
+          $push: { statusByUser: entry },
+          $set: { overallStatus: 'in-progress', completionDate: null }
         }
-      }
-    );
+      );
+      await Task.updateOne(
+        { ...key, assignedUsers: { $ne: entry.user } },
+        {
+          $addToSet: { assignedUsers: entry.user },
+          $push: { statusByUser: entry }
+        }
+      );
+    }
+  }
+  return { created: false, exists: true };
+};
+
+const generateRecurringOccurrences = async (template, options = {}) => {
+  if (!isRecurringTemplate(template)) return { created: 0, skipped: true };
+  const { repeatPattern, repeatDays, isRecurring, recurrenceEndDate } = normalizeTaskRecurrenceFields(template);
+  const base = toValidDate(template.dueDateTime);
+  if (!base || !isRecurring || repeatPattern === 'none') return { created: 0, skipped: true };
+
+  const now = options.now || new Date();
+  const today = getIndiaDayRange(now);
+  const end = options.targetEndDate || recurrenceEndDate;
+  if (end && today.start > end) {
+    await Task.updateOne({ _id: template._id }, { $set: {
+      nextRecurringDate: null, isRecurring: false, repeatPattern: 'none', recurringPattern: 'none', recurrenceStoppedAt: now
+    } });
     return { created: 0, stopped: true };
   }
 
-  return generateRecurringOccurrences(templateTask);
+  // Resolve today's scheduled occurrence from the template. Old ahead-of-time copies
+  // and absent days must not advance the series past the day an employee clocks in.
+  const baseDay = getIndiaDayRange(base);
+  const daysSinceBase = Math.floor((today.start - baseDay.start) / DAY_MS);
+  const anchor = repeatPattern === 'daily' && daysSinceBase > 1
+    ? new Date(base.getTime() + (daysSinceBase - 1) * DAY_MS)
+    : base;
+  let occurrence = getNextRecurringDate(anchor, repeatPattern, repeatDays);
+  while (occurrence && occurrence < today.start) {
+    occurrence = getNextRecurringDate(occurrence, repeatPattern, repeatDays);
+  }
+  let result = { created: false };
+  if (occurrence && occurrence <= today.end && (!end || occurrence <= end)) {
+    result = await createOccurrenceIfMissing(template, occurrence, { ...options, now });
+    if (result.created || result.exists) occurrence = getNextRecurringDate(occurrence, repeatPattern, repeatDays);
+  }
+  const next = occurrence && (!end || occurrence <= end) ? occurrence : null;
+  if (String(toValidDate(template.nextRecurringDate)) !== String(next)) {
+    await Task.updateOne({ _id: template._id, isRecurring: true }, { $set: { nextRecurringDate: next } });
+  }
+  return { created: Number(result.created), nextOccurrence: next };
 };
 
-const runRecurringTaskSweep = async (filter = {}) => {
-  const now = new Date();
+const processRecurringTemplate = (template, now = new Date(), options = {}) =>
+  generateRecurringOccurrences(template, { ...options, now });
+
+const runRecurringTaskSweep = async (filter = {}, options = {}) => {
+  const now = options.now || new Date();
   const templateConditions = [
     { isRecurring: true },
     { isActive: true },
@@ -373,7 +228,7 @@ const runRecurringTaskSweep = async (filter = {}) => {
 
   for (const template of templates) {
     try {
-      const result = await processRecurringTemplate(template, now);
+      const result = await processRecurringTemplate(template, now, options);
       processed += 1;
       created += result.created || 0;
     } catch (error) {
@@ -382,6 +237,15 @@ const runRecurringTaskSweep = async (filter = {}) => {
   }
 
   return { processed, created };
+};
+
+const generateRecurringTasksOnClockIn = async (userId, now) => {
+  const groups = await Group.find({ members: userId, isActive: true }).select('_id').lean();
+  return runRecurringTaskSweep({ $or: [
+    { taskFor: 'self', createdBy: userId },
+    { assignedUsers: userId },
+    { assignedGroups: { $in: groups.map(group => group._id) } }
+  ] }, { now, userId });
 };
 
 if (process.env.NODE_ENV !== 'test' && require('../../utils/scheduledJobs').scheduledJobsEnabled()) {
@@ -394,8 +258,7 @@ if (process.env.NODE_ENV !== 'test' && require('../../utils/scheduledJobs').sche
   }, { timezone: 'Asia/Kolkata' });
 }
 
-// Same absence rule as isUserAbsentOnDate, but for many dates with one attendance and one leave
-// query, so task lists don't run two queries per recurring task.
+// Check attendance and leave in bulk when displaying older personal occurrences.
 const buildAbsenceChecker = async (userId, dateValues = []) => {
   const ranges = dateValues
     .map(value => toValidDate(value))
@@ -441,7 +304,7 @@ module.exports = {
   generateRecurringOccurrences,
   processRecurringTemplate,
   runRecurringTaskSweep,
-  isUserAbsentOnDate,
+  generateRecurringTasksOnClockIn,
   cleanRecurringTasksForAbsentUser,
   cleanRecurringTasksForAbsentUserRange,
 };

@@ -27,7 +27,10 @@ const uploadFields = upload.fields([
 
 router.post('/create', protect, uploadFields, taskController.createTask);
 router.post('/create-self', protect, uploadFields, taskController.createTaskForSelf);
-router.post('/create-for-others', protect, uploadFields, taskController.createTaskForOthers);
+const assignTaskAccess = require('../../middleware/pageAccess').requirePageAccess({
+  paths: ['/ciisUser/admin-task-create'], action: 'edit', label: 'Admin Create Task',
+});
+router.post('/create-for-others', protect, assignTaskAccess, uploadFields, taskController.createTaskForOthers);
 
 router.put('/:taskId', protect, uploadFields, taskController.updateTask);
 router.patch('/:taskId/reminder', protect, taskController.updateTaskReminder);

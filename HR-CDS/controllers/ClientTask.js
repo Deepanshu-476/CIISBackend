@@ -1,4 +1,5 @@
 const { OVERDUE_STATUS_MESSAGE, isOverdueStatus, isCompanyTaskWrite, isCompanyTaskWriteRequest } = require('../utils/companyTaskStatus');
+const { ensureTaskStatusAttendance } = require('../utils/taskAttendance');
 const { CHECKPOINT_LOCKED_MESSAGE, CHECKPOINT_CONFLICT_MESSAGE, isCheckpointStatus, isCheckpointWriteConflict, preserveCheckpointProgress } = require('../utils/taskCheckpoints');
 const Task = require('../models/ClientTask');
 const Client = require('../models/Client');
@@ -1411,6 +1412,8 @@ const updateAssignedTaskStatus = async (req, res) => {
       return res.status(409).json({ success: false, message: OVERDUE_STATUS_MESSAGE });
     }
 
+    if (!isCompanyTaskWrite(req, task) && !(await ensureTaskStatusAttendance(req, res))) return;
+
     task.$where = { updatedAt: task.updatedAt ?? null };
 
     let elapsedSeconds = 0;
@@ -2477,6 +2480,8 @@ const updateTask = async (req, res) => {
       return res.status(409).json({ success: false, message: OVERDUE_STATUS_MESSAGE });
     }
 
+    if ((updates.status || updates.completed !== undefined) && !companyWrite && !(await ensureTaskStatusAttendance(req, res))) return;
+
     if (updates.status || updates.completed !== undefined) task.$where = { updatedAt: task.updatedAt ?? null };
 
     if (updates.mentions !== undefined) task.mentions = updates.mentions;
@@ -2702,6 +2707,8 @@ const toggleTaskCompletion = async (req, res) => {
     if (isOverdueStatus(task.status) || isClientTaskOverdue(task)) {
       return res.status(409).json({ success: false, message: OVERDUE_STATUS_MESSAGE });
     }
+
+    if (!isCompanyTaskWrite(req, task) && !(await ensureTaskStatusAttendance(req, res))) return;
 
     task.$where = { updatedAt: task.updatedAt ?? null };
 

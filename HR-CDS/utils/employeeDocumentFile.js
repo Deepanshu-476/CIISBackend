@@ -20,7 +20,7 @@ function resolveEmployeeDocumentFile(value, roots = documentRoots) {
     try {
       const realRoot = fs.realpathSync(root);
       const realFile = fs.realpathSync(candidate);
-      if (path.dirname(realFile) === realRoot && fs.statSync(realFile).isFile()) return realFile;
+      if (path.dirname(realFile) === realRoot && fs.statSync(realFile).isFile() && fs.statSync(realFile).size > 0) return realFile;
     } catch { /* Try the other supported upload directory. */ }
   }
   return null;

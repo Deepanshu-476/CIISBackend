@@ -1,4 +1,5 @@
 const { OVERDUE_STATUS_MESSAGE, isOverdueStatus, isCompanyTaskWrite } = require('../utils/companyTaskStatus');
+const { ensureTaskStatusAttendance } = require('../utils/taskAttendance');
 const { CHECKPOINT_LOCKED_MESSAGE, CHECKPOINT_CONFLICT_MESSAGE, isCheckpointStatus, isCheckpointWriteConflict } = require('../utils/taskCheckpoints');
 
 const {
@@ -506,6 +507,8 @@ exports.updateStatus = async (req, res) => {
     if (oldStatus === 'reopen' && status !== 'reopen' && status !== 'completed' && !allowCompanyAllEdit) {
       return res.status(400).json({ success: false, error: 'Reopened tasks can only be completed.' });
     }
+
+    if (!isCompanyTaskWrite(req, task) && !(await ensureTaskStatusAttendance(req, res))) return;
 
     task.$where = { updatedAt: task.updatedAt ?? null };
 

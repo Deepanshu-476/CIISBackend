@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const attendanceController = require('../controllers/AttendanceController');
 const { protect } = require('../../middleware/authMiddleware');
-const PagePermission = require('../../models/PagePermission');
+const { requirePageAccess } = require('../../middleware/pageAccess');
 
 const upload = require('../../utils/multer');
 
@@ -18,85 +18,9 @@ const attendanceInBranches = requireRecordInBranches(
 );
 const attendanceUserInBranches = requireRecordInBranches(req => req.body?.user, { label: 'attendance' });
 
-const normalizeRole = value => String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, '_');
-
-const privilegedAttendanceRoles = [
-  'super_admin', 'superadmin',
-  'owner', 'company_owner', 'companyowner',
-  'admin', 'company_admin', 'companyadmin',
-  'hr', 'hr_manager', 'manager'
-];
-const adminOrHrRoles = [
-  'super_admin', 'superadmin',
-  'owner', 'company_owner', 'companyowner',
-  'admin', 'company_admin', 'companyadmin',
-  'hr', 'hr_manager'
-];
-
-const checkAttendanceAccess = (requiredPermission = 'view') => async (req, res, next) => {
-  if (!req.user) {
-    return res.status(401).json({ success: false, message: 'Not authorized' });
-  }
-
-  // 1. Super Admin or Company Owner check
-  if (req.user.isSuperAdmin || req.user.isCompanyOwner) {
-    return next();
-  }
-
-  // 2. Direct role match
-  const userRoles = [
-    req.user.jobRole,
-    req.user.jobRoleName,
-    req.user.companyRole,
-    req.user.role,
-    req.user.userType
-  ].filter(Boolean).map(normalizeRole);
-
-  const allowedRoleList = requiredPermission === 'delete' ? adminOrHrRoles : privilegedAttendanceRoles;
-  if (userRoles.some(r => allowedRoleList.includes(r))) {
-    return next();
-  }
-
-  // 3. Dynamic PagePermission check for /ciisUser/emp-attendance
-  try {
-    const company = req.user?.company?._id || req.user?.company || req.user?.companyId;
-    const userId = String(req.user?._id || req.user?.id || '');
-    if (company && userId) {
-      const page = await PagePermission.findOne({
-        company,
-        path: '/ciisUser/emp-attendance'
-      }).lean();
-
-      if (page) {
-        const viewIds = new Set([
-          ...(page.viewUsers || []).map(u => String(u?.user?._id || u?.user || '')),
-          ...(page.editUsers || []).map(u => String(u?.user?._id || u?.user || '')),
-          ...(page.deleteUsers || []).map(u => String(u?.user?._id || u?.user || '')),
-          ...(page.approvers || []).map(u => String(u?.user?._id || u?.user || ''))
-        ]);
-        const editIds = new Set([
-          ...(page.editUsers || []).map(u => String(u?.user?._id || u?.user || '')),
-          ...(page.approvers || []).map(u => String(u?.user?._id || u?.user || ''))
-        ]);
-        const deleteIds = new Set([
-          ...(page.deleteUsers || []).map(u => String(u?.user?._id || u?.user || '')),
-          ...(page.approvers || []).map(u => String(u?.user?._id || u?.user || ''))
-        ]);
-
-        if (requiredPermission === 'view' && viewIds.has(userId)) return next();
-        if (requiredPermission === 'edit' && editIds.has(userId)) return next();
-        if (requiredPermission === 'delete' && deleteIds.has(userId)) return next();
-      }
-    }
-  } catch (err) {
-    console.error('Error checking attendance page permission:', err);
-  }
-
-  return res.status(403).json({
-    success: false,
-    message: 'You do not have permission to access this attendance resource'
-  });
-};
+const checkAttendanceAccess = action => requirePageAccess({
+  paths: ['/ciisUser/emp-attendance'], action, label: 'Employee Attendance',
+});
 
 router.post('/in', protect, attendanceController.clockIn);
 router.post('/out', protect, attendanceController.clockOut);

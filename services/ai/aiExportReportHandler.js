@@ -18,7 +18,7 @@ try {
 }
 
 const EXPORT_VERB_REGEX = /(?:export|download|sheet|report|pdf|csv|xlsx|excel|डाउनलोड|एक्सपोर्ट|शीट|रिपोर्ट)/i;
-const DESIRE_VERB_REGEX = /(?:chiaye|chaiye|chahiye|chayeye|chayie|chaye|mangta|de\s*do|bhejo|nikalo|bna\s*do|nikal\s*do|do\b)/i;
+const DESIRE_VERB_REGEX = /(?:chiaye|chaiye|chahiye|chayeye|chayie|chaye|mangta|de\s*do|bhejo|nikalo|bna\s*do|nikal\s*do)/i;
 
 const MONTH_NAMES_MAP = {
   january: 1, jan: 1, 'जनवरी': 1,

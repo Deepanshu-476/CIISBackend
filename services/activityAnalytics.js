@@ -90,12 +90,21 @@ const topPagePerUser = (match) => PageActivity.aggregate([
           {
             $switch: {
               branches: [
-                { case: { $regexMatch: { input: { $ifNull: ['$endpoint', ''] }, regex: /attendance/i } }, then: '/ciisUser/attendance' },
-                { case: { $regexMatch: { input: { $ifNull: ['$endpoint', ''] }, regex: /document|profile|user/i } }, then: '/ciisUser/profile' },
+                { case: { $regexMatch: { input: { $ifNull: ['$endpoint', ''] }, regex: /ai-settings|\/api\/ai|\/mcp/i } }, then: '/ciisUser/company-ai-settings' },
+                { case: { $regexMatch: { input: { $ifNull: ['$endpoint', ''] }, regex: /marketing-ads/i } }, then: '/ciisUser/crm/admin/marketing-ads' },
+                { case: { $regexMatch: { input: { $ifNull: ['$endpoint', ''] }, regex: /dashboard-overview/i } }, then: '/ciisUser/dashboard-overview' },
+                { case: { $regexMatch: { input: { $ifNull: ['$endpoint', ''] }, regex: /attendance|break|week-off|overtime/i } }, then: '/ciisUser/attendance' },
+                { case: { $regexMatch: { input: { $ifNull: ['$endpoint', ''] }, regex: /document|profile|users\/me/i } }, then: '/ciisUser/profile' },
+                { case: { $regexMatch: { input: { $ifNull: ['$endpoint', ''] }, regex: /project/i } }, then: '/ciisUser/admin-project' },
+                { case: { $regexMatch: { input: { $ifNull: ['$endpoint', ''] }, regex: /client-plan/i } }, then: '/ciisUser/client-plans' },
+                { case: { $regexMatch: { input: { $ifNull: ['$endpoint', ''] }, regex: /clientsservice|client-task/i } }, then: '/ciisUser/emp-client' },
                 { case: { $regexMatch: { input: { $ifNull: ['$endpoint', ''] }, regex: /task/i } }, then: '/ciisUser/task-management' },
                 { case: { $regexMatch: { input: { $ifNull: ['$endpoint', ''] }, regex: /crm|lead|telecall/i } }, then: '/ciisUser/all-lead' },
                 { case: { $regexMatch: { input: { $ifNull: ['$endpoint', ''] }, regex: /leave/i } }, then: '/ciisUser/leave-management' },
                 { case: { $regexMatch: { input: { $ifNull: ['$endpoint', ''] }, regex: /payroll|salary/i } }, then: '/ciisUser/payroll' },
+                { case: { $regexMatch: { input: { $ifNull: ['$endpoint', ''] }, regex: /meeting|cmeeting/i } }, then: '/ciisUser/meetings' },
+                { case: { $regexMatch: { input: { $ifNull: ['$endpoint', ''] }, regex: /support/i } }, then: '/ciisUser/support-desk' },
+                { case: { $regexMatch: { input: { $ifNull: ['$endpoint', ''] }, regex: /asset/i } }, then: '/ciisUser/company-assets' },
               ],
               default: { $ifNull: ['$module', ''] }
             }
@@ -126,6 +135,26 @@ const sourceStats = (match) => PageActivity.aggregate([
     _id: '$source',
     count: { $sum: 1 },
   } },
+]);
+
+const moduleStats = (match) => PageActivity.aggregate([
+  { $match: { ...match, type: { $in: ['view', 'action'] } } },
+  { $group: {
+    _id: { $cond: [{ $gt: [{ $strLenCP: { $ifNull: ['$module', ''] } }, 0] }, '$module', 'General'] },
+    views: countType('view'),
+    actions: countType('action'),
+    users: { $addToSet: '$user' },
+    lastAt: { $max: '$createdAt' },
+  } },
+  { $project: {
+    _id: 0,
+    module: '$_id',
+    views: 1,
+    actions: 1,
+    uniqueUsers: { $size: '$users' },
+    lastAt: 1,
+  } },
+  { $sort: { views: -1, actions: -1 } },
 ]);
 
 const dailyStats = (match) => PageActivity.aggregate([
@@ -159,13 +188,12 @@ const buildUsageSummary = async (companyId, { range, userIds = null, userFilter 
 
   const usersQuery = {
     company,
-    companyRole: { $not: /^client$/i },
     isActive: true,
     ...(Array.isArray(userIds) ? { _id: { $in: userIds.map(toObjectId).filter(Boolean) } } : {}),
     ...userFilter,
   };
 
-  const [pages, perUser, topPages, days, users, hourlyRaw, sourcesRaw] = await Promise.all([
+  const [pages, perUser, topPages, days, baseUsers, hourlyRaw, sourcesRaw, modules] = await Promise.all([
     pageStats(match),
     userStats(match),
     topPagePerUser(match),
@@ -175,7 +203,21 @@ const buildUsageSummary = async (companyId, { range, userIds = null, userFilter 
       .lean(),
     hourlyStats(match),
     sourceStats(match),
+    moduleStats(match),
   ]);
+
+  const seenUserIds = new Set(baseUsers.map(u => String(u._id)));
+  const extraActiveIds = perUser
+    .map(row => String(row._id))
+    .filter(id => id && !seenUserIds.has(id) && mongoose.isValidObjectId(id));
+
+  const extraUsers = extraActiveIds.length
+    ? await User.find({ company, _id: { $in: extraActiveIds } })
+        .select('name email companyRole jobRole jobRoleName department departmentName branch assignedBranches lastLogin isActive profileImage employeeId')
+        .lean()
+    : [];
+
+  const users = [...baseUsers, ...extraUsers];
 
   const statsByUser = new Map(perUser.map(row => [String(row._id), row]));
   const topByUser = new Map(topPages.map(row => [String(row._id), row]));
@@ -190,13 +232,15 @@ const buildUsageSummary = async (companyId, { range, userIds = null, userFilter 
     const top = topByUser.get(id);
     const branchIds = [...new Set([idOf(user.branch), ...(user.assignedBranches || []).map(idOf)].filter(Boolean))];
     const lastLogin = user.lastLogin || null;
+    const isClient = /^client$/i.test(String(user.companyRole || ''));
     return {
       _id: id,
       name: user.name || user.email || 'User',
       email: user.email || '',
       employeeId: user.employeeId || '',
+      userType: isClient ? 'client' : 'staff',
       role: user.jobRoleName || (typeof user.jobRole === 'string' && !mongoose.isValidObjectId(user.jobRole) ? user.jobRole : '') || user.companyRole || '',
-      department: user.departmentName || departmentNames.get(idOf(user.department)) || '',
+      department: user.departmentName || departmentNames.get(idOf(user.department)) || (isClient ? 'Client Portal' : ''),
       branches: branchIds.map(branchId => branchNames.get(branchId)).filter(Boolean),
       isActive: user.isActive !== false,
       lastLogin,
@@ -210,30 +254,58 @@ const buildUsageSummary = async (companyId, { range, userIds = null, userFilter 
   }).sort((a, b) => (new Date(b.lastActiveAt || b.lastLogin || 0) - new Date(a.lastActiveAt || a.lastLogin || 0)));
 
   const activeUsers = userRows.filter(u => u.isActive);
+  const staffUsers = activeUsers.filter(u => u.userType !== 'client');
+  const clientUsers = activeUsers.filter(u => u.userType === 'client');
+  const isToday = u => {
+    const loginTime = u.lastLogin ? new Date(u.lastLogin) : null;
+    const activeTime = u.lastActiveAt ? new Date(u.lastActiveAt) : null;
+    return (loginTime && loginTime >= todayStart) || (activeTime && activeTime >= todayStart);
+  };
+
+  const groupRollup = (rows, keyFn) => {
+    const map = new Map();
+    rows.forEach(u => {
+      const keys = keyFn(u);
+      keys.forEach(key => {
+        const entry = map.get(key) || { name: key, users: 0, loggedInToday: 0, activeInRange: 0, views: 0, actions: 0, logins: 0 };
+        entry.users += 1;
+        if (isToday(u)) entry.loggedInToday += 1;
+        if (u.views + u.actions + u.logins > 0) entry.activeInRange += 1;
+        entry.views += u.views || 0;
+        entry.actions += u.actions || 0;
+        entry.logins += u.logins || 0;
+        map.set(key, entry);
+      });
+    });
+    return Array.from(map.values()).sort((a, b) => (b.views + b.actions) - (a.views + a.actions) || b.users - a.users);
+  };
+
+  const departments = groupRollup(staffUsers, u => [u.department || 'Unassigned']);
+  const branches = groupRollup(staffUsers, u => (u.branches?.length ? u.branches : ['Head Office']));
+
   const totals = {
     users: userRows.length,
     activeAccounts: activeUsers.length,
-    loggedInToday: activeUsers.filter(u => {
-      const loginTime = u.lastLogin ? new Date(u.lastLogin) : null;
-      const activeTime = u.lastActiveAt ? new Date(u.lastActiveAt) : null;
-      return (loginTime && loginTime >= todayStart) || (activeTime && activeTime >= todayStart);
-    }).length,
+    staffCount: staffUsers.length,
+    clientsCount: clientUsers.length,
+    loggedInToday: activeUsers.filter(isToday).length,
     loggedInInRange: activeUsers.filter(u => u.lastLogin && new Date(u.lastLogin) >= from).length,
     neverLoggedIn: activeUsers.filter(u => !u.lastLogin).length,
     activeInRange: userRows.filter(u => u.views + u.actions + u.logins > 0).length,
     views: pages.reduce((sum, p) => sum + p.views, 0),
     actions: pages.reduce((sum, p) => sum + p.actions, 0),
     logins: perUser.reduce((sum, u) => sum + (u.logins || 0), 0),
+    totalTimeMs: userRows.reduce((sum, u) => sum + (u.timeMs || 0), 0),
   };
 
   const hourly = hourlyRaw.map(h => ({ hour: h._id, count: h.count, actions: h.actions }));
   const sources = {
     web: sourcesRaw.find(s => s._id === 'web')?.count || 0,
     app: sourcesRaw.find(s => s._id === 'app')?.count || 0,
-    unknown: sourcesRaw.find(s => s._id === 'unknown' || !s._id)?.count || 0,
+    unknown: sourcesRaw.filter(s => s._id !== 'web' && s._id !== 'app').reduce((sum, s) => sum + (s.count || 0), 0),
   };
 
-  return { range: { from, to }, totals, pages, users: userRows, days, hourly, sources };
+  return { range: { from, to }, totals, pages, users: userRows, days, hourly, sources, modules, departments, branches };
 };
 
 // Latest activity rows (who did what, where), newest first.

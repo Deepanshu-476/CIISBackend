@@ -1,13 +1,12 @@
 // Shared access checks for company pages.
 //
-// requirePageAccess: owners always pass; client logins never pass; everyone
-// else needs the Page Management permission for that page. When the company has
-// not configured the page yet, the fallback roles (e.g. admin, hr) are allowed,
-// the same way job roles work (routes/jobRoleRoutes.js).
+// Company owners retain access to entitled pages. Staff receive only the
+// actions granted in Page Management.
 //
 // blockClientLogins: for company-internal APIs a client login must not use.
 const PagePermission = require('../models/PagePermission');
-const { isSuperAdminUser } = require('./authMiddleware');
+const { isPlatformOwner } = require('./authMiddleware');
+const { getCompanyPageEntitlements, isPageEntitled } = require('../utils/companyPageEntitlements');
 
 const normalizeRole = value => String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, '_');
 const roleText = value => (value && typeof value === 'object'
@@ -25,40 +24,43 @@ const isClientLogin = user => {
 };
 
 const isCompanyOwner = user => Boolean(user) && (
-  user.isCompanyOwner === true || isSuperAdminUser(user) || rolesOf(user).some(r => OWNER_ROLES.includes(r))
+  user.isCompanyOwner === true || isPlatformOwner(user) ||
+  [user.companyRole, user.role].map(roleText).map(normalizeRole).some(r => OWNER_ROLES.includes(r))
 );
 
-const idsOf = list => (list || []).map(item => String(item?.user?._id || item?.user || '')).filter(Boolean);
-const scopedIds = (scopes, type) => (scopes || [])
-  .filter(s => String(s?.accessType || '').trim().toLowerCase() === type)
-  .map(s => String(s?.user?._id || s?.user || '')).filter(Boolean);
+const ACTION_FIELDS = {
+  view: 'viewUsers', edit: 'editUsers', delete: 'deleteUsers', approve: 'approvers',
+  generate: 'generateUsers', lock: 'lockUsers', unlock: 'unlockUsers',
+};
 
-// alwaysRoles: roles that pass without a Page Management entry (e.g. company admin).
-// fallbackRoles: roles that pass only while the page has not been configured yet.
-const hasPageAccess = async (user, { paths, action = 'edit', fallbackRoles = [], alwaysRoles = [] }) => {
-  if (!user) return false;
-  if (isClientLogin(user)) return false;
-  if (isCompanyOwner(user)) return true;
+const grantId = entry => String(entry?.user?._id || entry?.user || entry?._id || entry || '');
 
-  const roles = rolesOf(user);
-  if (roles.some(r => alwaysRoles.map(normalizeRole).includes(r))) return true;
-  const fallback = roles.some(r => fallbackRoles.map(normalizeRole).includes(r));
+const hasGrantedPageAction = (page, userId, action) => {
+  if (!page || !ACTION_FIELDS[action]) return false;
+  const actions = action === 'view' ? Object.keys(ACTION_FIELDS) : [action];
+  return actions.some(type => (page[ACTION_FIELDS[type]] || []).some(entry => grantId(entry) === userId) ||
+    (page.userAccessScopes || []).some(scope => scope.accessType === type && grantId(scope) === userId));
+};
+
+const getEntitledPaths = async (companyId, paths) => {
+  const entitlements = await getCompanyPageEntitlements(companyId);
+  return paths.filter(path => isPageEntitled(entitlements, {path}));
+};
+
+const hasPageAccess = async (user, { paths, action = 'edit', allowOwner = true }) => {
+  if (!user || isClientLogin(user)) return false;
+  // Platform users retain their cross-company administration capabilities.
+  if (allowOwner && isPlatformOwner(user)) return true;
   const companyId = user.company?._id || user.company || user.companyId;
   const userId = String(user._id || user.id || '');
-  if (!companyId || !userId) return fallback;
+  if (!companyId || !userId) return false;
 
-  const page = await PagePermission.findOne({ company: companyId, path: { $in: paths } }).lean();
-  if (!page) return fallback;
+  const entitledPaths = await getEntitledPaths(companyId, paths);
+  if (!entitledPaths.length) return false;
+  if (allowOwner && isCompanyOwner(user)) return true;
 
-  const configured = [
-    ...idsOf(page.viewUsers), ...idsOf(page.editUsers), ...idsOf(page.deleteUsers), ...idsOf(page.approvers),
-    ...(page.userAccessScopes || []).map(s => String(s?.user?._id || s?.user || '')).filter(Boolean),
-  ];
-  if (configured.length === 0) return fallback;
-
-  if (action === 'view') return configured.includes(userId);
-  if (action === 'delete') return new Set([...idsOf(page.deleteUsers), ...scopedIds(page.userAccessScopes, 'delete')]).has(userId);
-  return new Set([...idsOf(page.editUsers), ...idsOf(page.approvers), ...scopedIds(page.userAccessScopes, 'edit')]).has(userId);
+  const pages = await PagePermission.find({ company: companyId, path: { $in: entitledPaths } }).lean();
+  return pages.some(page => hasGrantedPageAction(page, userId, action));
 };
 
 const requirePageAccess = options => async (req, res, next) => {
@@ -122,4 +124,4 @@ const requireOwnClient = getClientId => async (req, res, next) => {
   }
 };
 
-module.exports = { requirePageAccess, hasPageAccess, blockClientLogins, isClientLogin, isCompanyOwner, canSeeClient, requireOwnClient };
+module.exports = { requirePageAccess, hasPageAccess, hasGrantedPageAction, blockClientLogins, isClientLogin, isCompanyOwner, canSeeClient, requireOwnClient };

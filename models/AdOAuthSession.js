@@ -7,6 +7,8 @@ const schema = new Schema({
   platform: String,
   stateHash: { type: String, unique: true, required: true },
   consumed: Boolean,
+  mobile: Boolean,
+  mobileResult: { type: String, enum: ['denied', 'failed'] },
   verifier: { type: String, select: false },
   credentials: { type: String, select: false },
   expiresAt: { type: Date, expires: 0, required: true }
