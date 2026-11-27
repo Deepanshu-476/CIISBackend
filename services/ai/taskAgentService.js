@@ -392,7 +392,7 @@ function getOutOfScopeReply(text, user, lang = 'hinglish') {
 const CRM_PROJECTS_QUERY_REGEX = /(?:(?:projects?|projekts?|projets?|प्रोजेक्ट्स?|प्रजेक्ट|प्रोज़ेक्ट).*(?:\?|kitne|kitna|how\s+many|kon|kaun|which|what|list|dikhao|batao|tell|show|status|hai|hain|chal\s+rahe|have|i\s+have|कितने|इतने|दिखाओ|बताओ|हैं)|(?:\?|kitne|kitna|how\s+many|kon\s+se|kaun\s+se|which|what|list|dikhao|batao|tell\s+me|tell|show|mere|apne|active|all|crm\s+ma?i|crm\s+mein|कितने|इतने|चेक|check).*(?:projects?|projekts?|projets?|प्रोजेक्ट्स?|प्रजेक्ट|प्रोज़ेक्ट))/iu;
 const CRM_CLIENTS_QUERY_REGEX = /(?:(?:clients?|cleints?|clints?|क्लाइंट्स?|क्लाइज|क्लाइन्स|क्लाइंट|क्लायंट).*(?:\?|kitne|kitna|kidney|how\s+many|kon|kaun|which|what|list|dikhao|batao|tell|show|status|hai|hain|have|i\s+have|कितने|इतने|दिखाओ|बताओ|हैं)|(?:\?|kitne|kitna|kidney|how\s+many|kon\s+se|kaun\s+se|which|what|list|dikhao|batao|tell\s+me|tell|show|mere|apne|active|all|crm\s+ma?i|crm\s+mein|कितने|इतने|चेक|check).*(?:clients?|cleints?|clints?|क्लाइंट्स?|क्लाइज|क्लाइन्स|क्लाइंट|क्लायंट))/iu;
 const CLIENT_DETAIL_QUERY_REGEX = /(?:(?:services?|सर्विस(?:िस)?|plans?|प्लाइ?न्स?|subscription|details?|जानकारी|status).*(?:di\s+gayi|दी\s+गई|assigned|diya|diye|mil[ie]|hai|hain|kya|kon|kaun|which|batao|dikhao|kaun\s+sa|kon\s+sa|कौन\s*सा|कौन\s*कौन|kisko|uska|uski|inhe|unhe))|(?:(?:kisko|kis\s+client|client|ko|ka|ki|को|का|की).*(?:services?|सर्विस(?:िस)?|plans?|प्लाइ?न्स?).*(?:di\s+gayi|दी\s+गई|assigned|diya|diye|mil[ie]|hai|hain|kya|kon|kaun|batao|dikhao|details?))|(?:(?:services?|सर्विस(?:िस)?|plans?|प्लाइ?न्स?)\s+(?:aur|and|ya|or)\s+(?:services?|सर्विस(?:िस)?|plans?|प्लाइ?न्स?))/iu;
-const CRM_TASKS_QUERY_REGEX = /(?:(?:tasks?|taks|tasak|taask|tsk|kaam|work|टास्क|काम).*(?:\?|kon|kaun|konsa|kaunsa|konsi|kaunsi|kya|which|what|list|dikhao|batao|tell|show|status|kitne|kitna|how\s+many|check|hai|hain|hia|chal\s+raha|कितने|इतने|दिखाओ|बताओ)|(?:\?|check|batao|batayein|dikhao|tell|show|kon|kaun|konsa|kaunsa|konsi|kaunsi|kya|which|what|kitne|kitna|how\s+many|abhi\s+mera|mere|apne|my|aaj\s+ke|कितने|इतने|चेक).*(?:tasks?|taks|tasak|taask|tsk|kaam|work|टास्क|काम)|(?:in[- ]progress|pending|overdue|completed).*(?:tasks?|taks|tasak|taask|tsk|kaam|work|टास्क|काम|\?|hai|hain|hia|chal\s+raha)|(?:tasks?|taks|tasak|taask|tsk|kaam|work|टास्क|काम).*(?:in[- ]progress|pending|overdue|completed)|(?:check|batao|dikhao|tell|kon\s+sa|konsa|kaun\s+sa|kaunsa|kya|चेक|बताओ|दिखाओ).*(?:in[- ]progress|pending|overdue|completed))/iu;
+const CRM_TASKS_QUERY_REGEX = /(?:(?:tasks?|taks|tasak|taask|tsk|kaam|work|टास्क|काम).*(?:\?|kon|kaun|konsa|kaunsa|konsi|kaunsi|kya|which|what|list|dikhao|batao|tell|show|status|kitne|kitna|how\s+many|check|hai|hain|hia|chal\s+raha|today|aaj|aj|yesterday|tomorrow|kal|kl|parso|this\s+week|last\s+week|this\s+month|last\s+month|is\s+hafte|pichle\s+hafte|is\s+mahine|pichle\s+mahine|all|saare|sare|sab|total|कितने|इतने|दिखाओ|बताओ)|(?:\?|check|batao|batayein|dikhao|tell|show|kon|kaun|konsa|kaunsa|konsi|kaunsi|kya|which|what|kitne|kitna|how\s+many|abhi\s+mera|mere|apne|my|aaj\s+ke|today|yesterday|tomorrow|kal|kl|parso|this\s+week|last\s+week|this\s+month|last\s+month|is\s+hafte|pichle\s+hafte|is\s+mahine|pichle\s+mahine|all(?:\s+time)?|saare|sare|sab|total|filter|\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*|\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}|\d{1,2}\s+tarikh|कितने|इतने|चेक).*(?:tasks?|taks|tasak|taask|tsk|kaam|work|टास्क|काम)|(?:in[- ]progress|pending|overdue|completed).*(?:tasks?|taks|tasak|taask|tsk|kaam|work|टास्क|काम|\?|hai|hain|hia|chal\s+raha)|(?:tasks?|taks|tasak|taask|tsk|kaam|work|टास्क|काम).*(?:in[- ]progress|pending|overdue|completed)|(?:check|batao|dikhao|tell|kon\s+sa|konsa|kaun\s+sa|kaunsa|kya|चेक|बताओ|दिखाओ).*(?:in[- ]progress|pending|overdue|completed))/iu;
 const CRM_TASK_COMPLETE_REGEX = /(?:(?:task|kam)\s*(?:ko\s*)?(?:complete|done|khatam)\s*(?:mark\s*)?(?:karo|kar\s*do|kardo)?|mark\s*(?:task\s*)?(?:as\s*)?(?:complete|done)|(?:complete|done|khatam)\s*(?:mark\s*)?(?:karo|kar\s*do|kardo))/i;
 const CRM_TASK_UPDATE_REGEX = /(?:(?:priority|status)\s*(?:ko\s*)?(?:badal\s*kar\s*)?(?:high|low|medium|in[- ]progress|pending|completed?|done|on[- ]?hold|planning|active|cancelled|inactive)|(?:high|low|medium|in[- ]progress|pending|completed?|done|on[- ]?hold|planning|active|cancelled|inactive)\s*(?:priority|status|kardo|kar\s+do|rakho)|(?:priority|status)\s*(?:high|low|medium|in[- ]progress|pending|completed?|done|on[- ]?hold|planning|active|cancelled|inactive)|(?:task|kam|project|client|plan)\s+(?:complete|done|khatam|active|planning|on[- ]?hold|inactive)\s+(?:karo|kar\s+do|mark)|mark\s+(?:task\s+|project\s+|client\s+|plan\s+)?(?:as\s+)?(?:complete|done|active|planning|on[- ]?hold|inactive)|(?:priority|status)\s+(?:update|change|badal|set|make)|(?:kardo|kar\s+do|update|change|badal|set|make).*?(?:priority|status)|(?:status|priority).*?(?:planning|active|completed|high|low|medium|pending|on[- ]?hold|inactive)|(?:make|set|change|put).*?(?:planning|active|on[- ]?hold|inactive)|(?:client|plan).*?(?:on[- ]?hold|active|inactive)\s*(?:kardo|kar\s*do|karo|rakho|set))/iu;
 const CRM_TASK_EDIT_REGEX = /(?:edit|badal|change|update).*?(?:task|kam|kaam|description|desc|title|naam|priority|status|assignee|due\s*date)|(?:task|kam|kaam).*?(?:ko\s+)?(?:edit|update|badal|change)/iu;
@@ -848,6 +848,188 @@ function getIstDayRange(now = new Date()) {
   const startUtc = new Date(Date.UTC(year, month, date, 0, 0, 0) - istOffsetMs);
   const endUtc = new Date(Date.UTC(year, month, date, 23, 59, 59, 999) - istOffsetMs);
   return { start: startUtc, end: endUtc, dateStr: `${year}-${month + 1}-${date}` };
+}
+
+function makeIstDayRangeFromParts(year, month, date) {
+  const istOffsetMs = 5.5 * 60 * 60 * 1000;
+  const start = new Date(Date.UTC(year, month, date, 0, 0, 0) - istOffsetMs);
+  const end = new Date(Date.UTC(year, month, date, 23, 59, 59, 999) - istOffsetMs);
+  return { start, end };
+}
+
+function resolveTaskDateFilter(text, now = new Date()) {
+  if (!text || typeof text !== 'string') return null;
+  const clean = text.trim();
+  const istOffsetMs = 5.5 * 60 * 60 * 1000;
+  const istNow = new Date(now.getTime() + istOffsetMs);
+  const year = istNow.getUTCFullYear();
+  const month = istNow.getUTCMonth();
+  const date = istNow.getUTCDate();
+  const dayRange = getIstDayRange(now);
+  const DAY_MS = 86400000;
+
+  if (/\b(?:all\s*time|all\s+dates?)\b/i.test(clean)) {
+    return null;
+  }
+
+  // Last N days (e.g. "last 7 days", "pichle 3 days")
+  const lastNDays = clean.match(/\b(?:last|past|pichle|pichhle)\s+(\d{1,2})\s+days?\b/i);
+  if (lastNDays) {
+    const n = Math.max(1, Math.min(90, parseInt(lastNDays[1], 10)));
+    return {
+      key: `last_${n}_days`,
+      start: new Date(dayRange.start.getTime() - (n - 1) * DAY_MS),
+      end: dayRange.end,
+      labelEn: `last ${n} days'`,
+      labelHi: `pichle ${n} dino ke`
+    };
+  }
+
+  // Last week / This week (Monday..Sunday in IST)
+  const istDow = istNow.getUTCDay(); // 0=Sun..6=Sat
+  const daysFromMon = istDow === 0 ? 6 : istDow - 1;
+  if (/\b(?:last\s+week|previous\s+week|prev\s+week|pichle\s+hafte|pichhle\s+hafte|pichle\s+week|pichhle\s+week)\b/iu.test(clean) || /पिछले\s*हफ्ते/iu.test(clean)) {
+    const thisWeekMon = new Date(dayRange.start.getTime() - daysFromMon * DAY_MS);
+    const prevWeekMon = new Date(thisWeekMon.getTime() - 7 * DAY_MS);
+    const prevWeekSunEnd = new Date(thisWeekMon.getTime() - 1);
+    return { key: 'last_week', start: prevWeekMon, end: prevWeekSunEnd, labelEn: "last week's", labelHi: 'pichle hafte ke' };
+  }
+  if (/\b(?:this\s+week|current\s+week|is\s+hafte|iss\s+hafte|is\s+week|iss\s+week)\b/iu.test(clean) || /इस\s*हफ्ते/iu.test(clean)) {
+    const thisWeekMon = new Date(dayRange.start.getTime() - daysFromMon * DAY_MS);
+    const thisWeekSunEnd = new Date(thisWeekMon.getTime() + 7 * DAY_MS - 1);
+    return { key: 'this_week', start: thisWeekMon, end: thisWeekSunEnd, labelEn: "this week's", labelHi: 'is hafte ke' };
+  }
+
+  // Last month / This month
+  if (/\b(?:last\s+month|previous\s+month|prev\s+month|pichle\s+mahine|pichhle\s+mahine|pichle\s+month|pichhle\s+month)\b/iu.test(clean) || /पिछले\s*महीने/iu.test(clean)) {
+    const prevMonthStart = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0) - istOffsetMs);
+    const prevMonthEnd = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999) - istOffsetMs);
+    return { key: 'last_month', start: prevMonthStart, end: prevMonthEnd, labelEn: "last month's", labelHi: 'pichle mahine ke' };
+  }
+  if (/\b(?:this\s+month|current\s+month|is\s+mahine|iss\s+mahine|is\s+month|iss\s+month)\b/iu.test(clean) || /इस\s*महीने/iu.test(clean)) {
+    const thisMonthStart = new Date(Date.UTC(year, month, 1, 0, 0, 0) - istOffsetMs);
+    const thisMonthEnd = new Date(Date.UTC(year, month + 1, 0, 23, 59, 59, 999) - istOffsetMs);
+    return { key: 'this_month', start: thisMonthStart, end: thisMonthEnd, labelEn: "this month's", labelHi: 'is mahine ke' };
+  }
+
+  // Explicit calendar date: YYYY-MM-DD, DD-MM-YYYY / DD/MM/YYYY, DD Mon [YYYY], Mon DD [YYYY], DD tarikh
+  const MONTH_MAP = {
+    jan: 0, january: 0, feb: 1, february: 1, mar: 2, march: 2, apr: 3, april: 3,
+    may: 4, jun: 5, june: 5, jul: 6, july: 6, aug: 7, august: 7,
+    sep: 8, sept: 8, september: 8, oct: 9, october: 9, nov: 10, november: 10, dec: 11, december: 11
+  };
+  let parsedYmd = null;
+  const isoMatch = clean.match(/\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b/);
+  if (isoMatch) {
+    parsedYmd = { y: parseInt(isoMatch[1], 10), m: parseInt(isoMatch[2], 10) - 1, d: parseInt(isoMatch[3], 10) };
+  } else {
+    const dmyMatch = clean.match(/\b(\d{1,2})[-/](\d{1,2})(?:[-/](20\d{2}|\d{2}))?\b/);
+    if (dmyMatch) {
+      const dd = parseInt(dmyMatch[1], 10);
+      const mm = parseInt(dmyMatch[2], 10) - 1;
+      let yy = dmyMatch[3] ? parseInt(dmyMatch[3], 10) : year;
+      if (yy < 100) yy += 2000;
+      if (dd >= 1 && dd <= 31 && mm >= 0 && mm <= 11) parsedYmd = { y: yy, m: mm, d: dd };
+    }
+  }
+  if (!parsedYmd) {
+    const dmMatch = clean.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+(20\d{2}))?\b/i);
+    const mdMatch = !dmMatch && clean.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(20\d{2}))?\b/i);
+    const tarikhMatch = !dmMatch && !mdMatch && clean.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s*(?:tarikh|tareekh|date)\b/i);
+    if (dmMatch) {
+      parsedYmd = { y: dmMatch[3] ? parseInt(dmMatch[3], 10) : year, m: MONTH_MAP[dmMatch[2].toLowerCase()], d: parseInt(dmMatch[1], 10) };
+    } else if (mdMatch) {
+      parsedYmd = { y: mdMatch[3] ? parseInt(mdMatch[3], 10) : year, m: MONTH_MAP[mdMatch[1].toLowerCase()], d: parseInt(mdMatch[2], 10) };
+    } else if (tarikhMatch) {
+      const dd = parseInt(tarikhMatch[1], 10);
+      if (dd >= 1 && dd <= 31) parsedYmd = { y: year, m: month, d: dd };
+    }
+  }
+  if (parsedYmd && parsedYmd.m >= 0 && parsedYmd.m <= 11 && parsedYmd.d >= 1 && parsedYmd.d <= 31) {
+    const range = makeIstDayRangeFromParts(parsedYmd.y, parsedYmd.m, parsedYmd.d);
+    const niceDate = `${parsedYmd.d} ${MONTHS[parsedYmd.m]} ${parsedYmd.y}`;
+    return { key: 'specific_date', start: range.start, end: range.end, labelEn: `${niceDate}`, labelHi: `${niceDate} ke` };
+  }
+
+  // Parso (2 days ago or +2 days)
+  if (/\b(?:parso|parson)\b/iu.test(clean) || /परसों/iu.test(clean)) {
+    const isPastParso = /\b(?:tha|the|thi|hua|hue|hui|pichle|pichhle|beete)\b/iu.test(clean) || /(?:थे|था|थी|पिछले|बीते)/iu.test(clean);
+    const offset = isPastParso ? -2 * DAY_MS : 2 * DAY_MS;
+    return {
+      key: isPastParso ? 'day_before_yesterday' : 'day_after_tomorrow',
+      start: new Date(dayRange.start.getTime() + offset),
+      end: new Date(dayRange.end.getTime() + offset),
+      labelEn: isPastParso ? "day before yesterday's" : "day after tomorrow's",
+      labelHi: isPastParso ? 'beete parso ke' : 'parso ke'
+    };
+  }
+  if (/\bday\s+before\s+yesterday\b/i.test(clean)) {
+    return {
+      key: 'day_before_yesterday',
+      start: new Date(dayRange.start.getTime() - 2 * DAY_MS),
+      end: new Date(dayRange.end.getTime() - 2 * DAY_MS),
+      labelEn: "day before yesterday's",
+      labelHi: 'beete parso ke'
+    };
+  }
+  if (/\bday\s+after\s+tomorrow\b/i.test(clean)) {
+    return {
+      key: 'day_after_tomorrow',
+      start: new Date(dayRange.start.getTime() + 2 * DAY_MS),
+      end: new Date(dayRange.end.getTime() + 2 * DAY_MS),
+      labelEn: "day after tomorrow's",
+      labelHi: 'parso ke'
+    };
+  }
+
+  // Today
+  if (/\b(?:aaj|aj|today)\b/iu.test(clean) || /आज/iu.test(clean)) {
+    return { key: 'today', start: dayRange.start, end: dayRange.end, labelEn: "today's", labelHi: 'aaj ke' };
+  }
+
+  // Yesterday (explicit "yesterday" OR past-tense "kal")
+  const hasKal = /\b(?:kal|kl|cal)\b/iu.test(clean) || /कल/iu.test(clean);
+  const hasPastCue = /\b(?:yesterday|beete|pichle|pichhle|tha|the|thi|hua|hue|hui|missed)\b/iu.test(clean) || /(?:थे|था|थी|पिछले|बीते)/iu.test(clean);
+  if (/\byesterday\b/i.test(clean) || (hasKal && hasPastCue)) {
+    return {
+      key: 'yesterday',
+      start: new Date(dayRange.start.getTime() - DAY_MS),
+      end: new Date(dayRange.end.getTime() - DAY_MS),
+      labelEn: "yesterday's",
+      labelHi: 'kal (yesterday) ke'
+    };
+  }
+
+  // Tomorrow ("tomorrow" or non-past "kal")
+  if (/\btomorrow\b/i.test(clean) || hasKal) {
+    return {
+      key: 'tomorrow',
+      start: new Date(dayRange.start.getTime() + DAY_MS),
+      end: new Date(dayRange.end.getTime() + DAY_MS),
+      labelEn: "tomorrow's",
+      labelHi: 'kal (tomorrow) ke'
+    };
+  }
+
+  return null;
+}
+
+const lastUserLangByUser = new Map();
+
+function classifyShortConversationalTurn(text) {
+  if (!text || typeof text !== 'string') return null;
+  const clean = text.trim();
+  if (!clean) return null;
+
+  if (/^(?:(?:ok(?:ay|ey|e)?|acha|achha|hanji|haan(?:\s+ji)?|ji|please|theek\s*(?:hai|h)|thik\s*(?:hai|h))\s*[,.]?\s*)?(?:wait(?:\s+a\s+(?:sec(?:ond)?|min(?:ute)?|moment|bit|little))?|hold\s+on(?:\s+a\s+(?:sec(?:ond)?|min(?:ute)?))?|just\s+a\s+(?:sec(?:ond)?|min(?:ute)?|moment)|(?:one|1|ek)\s+(?:sec(?:ond)?|min(?:ute)?)|ruko(?:\s+(?:zara|thoda|ek\s*(?:sec(?:ond)?|min(?:ute)?)))?|thoda\s+ruko|zara\s+ruko|ek\s+minute|ek\s+second|suno(?:\s+na)?|wait\s+karo|ruk\s+jao)[\s!.,?।]*$/iu.test(clean)) {
+    return 'pause_wait';
+  }
+
+  if (/^(?:ok(?:ay|ey|e)?|kk?|yes\s*(?:please|ji|ok)?|haan(?:\s+ji)?|hanji|ji(?:\s+haan|\s+boliye)?|hmm+|hm+|aha|uh\s*huh|acha|achha|theek\s*(?:hai|h)|thik\s*(?:hai|h)|sahi\s*(?:hai|h)|alright|all\s*right|fine|cool|got\s+it|understood|sure|noted)[\s!.,?।]*$/iu.test(clean)) {
+    return 'ack_ok';
+  }
+
+  return null;
 }
 
 function isActionOrCreationCommand(text) {
@@ -1816,63 +1998,64 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
 
   // 3. Tasks Query
   if (CRM_TASKS_QUERY_REGEX.test(message)) {
-    // Detect date filter (e.g. "aaj ke", "aj", "today", "kal", "tomorrow")
-    const isToday = /\b(?:aaj|aj|today)\b/i.test(message);
-    const isTomorrow = /\b(?:kal|tomorrow)\b/i.test(message) && !/\b(?:pichle|yesterday)\b/i.test(message);
-    const isExplicitAll = /\b(?:all\s+tasks?|all\s+time|saare\s+tasks?|sare\s+tasks?|sab\s+tasks?|total\s+tasks?|all\s+type|all\b)/i.test(message);
+    const nowRef = context.now || deps.now || new Date();
+    const dateFilter = resolveTaskDateFilter(message, nowRef);
+    const isToday = dateFilter?.key === 'today';
+    const isTomorrow = dateFilter?.key === 'tomorrow';
+    const isExplicitAll = !dateFilter && /\b(?:all\s+tasks?|all\s+time|saare\s+tasks?|sare\s+tasks?|sab\s+tasks?|total\s+tasks?|all\s+type|all\b)\b/i.test(message);
     const isProjectSpecific = /\b(?:project\s+tasks?|project\s+ke\s+tasks?|project\s+task|projects?\s+tasks?|projects?\s+ke\s+task)\b/i.test(message);
     const isAssignedSpecific = /\b(?:assigned\s+to\s+me|assigned\s+tasks?|mujhe\s+assign|assigned\s+task|assign\s+kiye\s+huye|mere\s+assigned)\b/i.test(message);
     const isClientSpecific = /\b(?:client\s+tasks?|client\s+ke\s+tasks?|client\s+task|clients?\s+tasks?|clients?\s+ke\s+task)\b/i.test(message);
     const isPersonal = !isExplicitAll && !isProjectSpecific && !isAssignedSpecific && !isClientSpecific && (
       /\b(?:personal|self)\b/i.test(message) || (/\b(?:mera|meri|mere|apne)\b/i.test(message) && !/\b(?:all|saare|sare|sab|total|assigned|client|project)\b/i.test(message))
     );
-    const dayRange = getIstDayRange(context.now || deps.now || new Date());
+
+    const categoryLabelEn = isPersonal ? 'personal' : (isClientSpecific ? 'client' : (isProjectSpecific ? 'project' : (isAssignedSpecific ? 'assigned' : '')));
+    const categoryLabelHi = categoryLabelEn;
+    const datePrefixEn = dateFilter ? `${dateFilter.labelEn} ` : '';
+    const datePrefixHi = dateFilter ? `${dateFilter.labelHi} ` : '';
 
     // Detect desired status filter from user query
     let statusFilter = null;
-    let statusLabel = isToday
-      ? (isPersonal ? "today's personal" : (isClientSpecific ? "today's client" : (isProjectSpecific ? "today's project" : (isAssignedSpecific ? "today's assigned" : "today's"))))
-      : (isTomorrow
-        ? "tomorrow's"
-        : (isPersonal
-          ? "personal"
-          : (isClientSpecific
-            ? "client"
-            : (isProjectSpecific
-              ? "project"
-              : (isAssignedSpecific
-                ? "assigned to you"
-                : (isExplicitAll ? 'all' : 'recent'))))));
-    let statusLabelHi = isToday
-      ? (isPersonal ? "aaj ke personal" : (isClientSpecific ? "aaj ke client" : (isProjectSpecific ? "aaj ke project" : (isAssignedSpecific ? "aaj ke assigned" : "aaj ke"))))
-      : (isTomorrow
-        ? "kal ke"
-        : (isPersonal
-          ? "personal"
-          : (isClientSpecific
-            ? "client"
-            : (isProjectSpecific
-              ? "project"
-              : (isAssignedSpecific
-                ? "aapko assign kiye gaye"
-                : (isExplicitAll ? 'sab' : 'haal ke'))))));
+    let statusLabel = dateFilter
+      ? `${datePrefixEn}${categoryLabelEn}`.trim()
+      : (isPersonal
+        ? 'personal'
+        : (isClientSpecific
+          ? 'client'
+          : (isProjectSpecific
+            ? 'project'
+            : (isAssignedSpecific
+              ? 'assigned to you'
+              : (isExplicitAll ? 'all' : 'recent')))));
+    let statusLabelHi = dateFilter
+      ? `${datePrefixHi}${categoryLabelHi}`.trim()
+      : (isPersonal
+        ? 'personal'
+        : (isClientSpecific
+          ? 'client'
+          : (isProjectSpecific
+            ? 'project'
+            : (isAssignedSpecific
+              ? 'aapko assign kiye gaye'
+              : (isExplicitAll ? 'sab' : 'haal ke')))));
 
     if (/\b(?:in[- ]progress|chalu|chal\s+raha)\b/i.test(message)) {
       statusFilter = { $in: ['in-progress', 'in progress'] };
-      statusLabel = isToday ? "today's in-progress" : 'In-Progress';
-      statusLabelHi = isToday ? 'aaj ke in-progress' : 'In-Progress';
+      statusLabel = `${datePrefixEn}in-progress`.trim();
+      statusLabelHi = `${datePrefixHi}in-progress`.trim();
     } else if (/\b(?:pending|baaki|incomplete)\b/i.test(message)) {
       statusFilter = 'pending';
-      statusLabel = isToday ? "today's pending" : 'Pending';
-      statusLabelHi = isToday ? 'aaj ke pending' : 'Pending';
+      statusLabel = `${datePrefixEn}pending`.trim();
+      statusLabelHi = `${datePrefixHi}pending`.trim();
     } else if (/\b(?:completed|done|complete|khatam)\b/i.test(message)) {
       statusFilter = 'completed';
-      statusLabel = isToday ? "today's completed" : 'Completed';
-      statusLabelHi = isToday ? 'aaj ke completed' : 'Completed';
+      statusLabel = `${datePrefixEn}completed`.trim();
+      statusLabelHi = `${datePrefixHi}completed`.trim();
     } else if (/\b(?:overdue|late)\b/i.test(message)) {
       statusFilter = 'overdue';
-      statusLabel = 'Overdue';
-      statusLabelHi = 'Overdue';
+      statusLabel = `${datePrefixEn}overdue`.trim();
+      statusLabelHi = `${datePrefixHi}overdue`.trim();
     }
 
     let tasks = Array.isArray(deps.tasks) ? deps.tasks : [];
@@ -1964,20 +2147,11 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
               andConditions.push({ overallStatus: statusFilter });
             }
 
-            if (isToday) {
+            if (dateFilter) {
               andConditions.push({
                 $or: [
-                  { dueDateTime: { $gte: dayRange.start, $lte: dayRange.end } },
-                  { dueDate: { $gte: dayRange.start, $lte: dayRange.end } }
-                ]
-              });
-            } else if (isTomorrow) {
-              const tomStart = new Date(dayRange.start.getTime() + 86400000);
-              const tomEnd = new Date(dayRange.end.getTime() + 86400000);
-              andConditions.push({
-                $or: [
-                  { dueDateTime: { $gte: tomStart, $lte: tomEnd } },
-                  { dueDate: { $gte: tomStart, $lte: tomEnd } }
+                  { dueDateTime: { $gte: dateFilter.start, $lte: dateFilter.end } },
+                  { dueDate: { $gte: dateFilter.start, $lte: dateFilter.end } }
                 ]
               });
             }
@@ -2020,21 +2194,14 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
           tasks = tasks.filter(t => statusFilter.$in.some(st => String(t.overallStatus || t.status || '').toLowerCase().includes(st)));
         }
       }
-      if (isToday) {
+      if (dateFilter) {
+        const rangeStart = dateFilter.start.getTime();
+        const rangeEnd = dateFilter.end.getTime();
         tasks = tasks.filter(t => {
           const d = t.dueDateTime || t.dueDate;
           if (!d) return false;
           const time = new Date(d).getTime();
-          return time >= dayRange.start.getTime() && time <= dayRange.end.getTime();
-        });
-      } else if (isTomorrow) {
-        const tomStart = new Date(dayRange.start.getTime() + 86400000);
-        const tomEnd = new Date(dayRange.end.getTime() + 86400000);
-        tasks = tasks.filter(t => {
-          const d = t.dueDateTime || t.dueDate;
-          if (!d) return false;
-          const time = new Date(d).getTime();
-          return time >= tomStart.getTime() && time <= tomEnd.getTime();
+          return !Number.isNaN(time) && time >= rangeStart && time <= rangeEnd;
         });
       }
     }
@@ -2045,6 +2212,10 @@ async function handleCrmQuery(message, req, deps = {}, lang = 'hinglish', contex
         rep = isEn
           ? `${greetingPrefix}You don't have any ${isPersonal ? 'personal ' : ''}tasks scheduled for today (0 tasks today). Your dashboard schedule is clear! 😊 Would you like to create a new task?`
           : `${greetingPrefix}Aapka aaj ka koi ${isPersonal ? 'personal ' : ''}task scheduled nahi hai (aaj ke 0 tasks hain). Dashboard ke anusaar aaj ka schedule clear hai! 😊 Kya aap naya task banana chahte hain?`;
+      } else if (dateFilter) {
+        rep = isEn
+          ? `${greetingPrefix}You don't have any ${statusLabel} tasks (0 found). Would you like to create a new task?`
+          : `${greetingPrefix}Aapke paas ${statusLabelHi} koi task nahi hai (0 mile). Kya aap naya task banana chahte hain?`;
       } else {
         rep = isEn
           ? `${greetingPrefix}You don't have any ${statusLabel} tasks right now. Would you like to create one?`
@@ -3488,6 +3659,7 @@ async function parseTaskRequest({
     askCounts: typeof draft?.askCounts === 'object' && draft?.askCounts ? { ...draft.askCounts } : {},
     skipped: Array.isArray(draft?.skipped) ? [...draft.skipped] : [],
     asked: Array.isArray(draft?.asked) ? [...draft.asked] : [],
+    awaitingEdit: Boolean(draft?.awaitingEdit),
     attachmentsCount: typeof draft?.attachmentsCount === 'number' ? draft.attachmentsCount : 0,
     name: draft?.name ?? draft?.projectName ?? null,
     startDate: draft?.startDate ?? null,
@@ -5846,6 +6018,7 @@ const lastAskedField = currentDraft.asked.length > 0
           currentDraft.asked = currentDraft.asked.filter((f) => f !== action.field);
         } else {
           wantsEditPrompt = true;
+          currentDraft.awaitingEdit = true;
         }
         break;
       case 'confirm': {
@@ -5965,14 +6138,16 @@ const lastAskedField = currentDraft.asked.length > 0
   );
 
   const explicitLang = (language && language !== 'auto') ? language : null;
-  const prevLang = draft?.language || currentDraft?.language;
+  const uidLangKey = reqUser?._id || reqUser?.id ? String(reqUser._id || reqUser.id) : null;
+  const prevLang = draft?.language || currentDraft?.language || (uidLangKey ? lastUserLangByUser.get(uidLangKey) : null);
   let userLang;
   const isLanguageSwitchCommand = /\b(?:speak|talk|reply|answer|switch|change)\s*(?:in|to)?\s*(?:english|hindi|hinglish)\b/i.test(trimmedMessage);
-  const isShortOrAction = !trimmedMessage || /^(?:skip|skip\s+remaining|high|medium|low|urgent|pending|in[- ]progress|completed|on[- ]hold|\d+|yes|no|haan|nahi|default|cancel)$/i.test(trimmedMessage);
+  const shortTurnKind = classifyShortConversationalTurn(rawMessage) || classifyShortConversationalTurn(trimmedMessage);
+  const isShortOrAction = !trimmedMessage || Boolean(shortTurnKind) || /^(?:skip|skip\s+remaining|high|medium|low|urgent|pending|in[- ]progress|completed|on[- ]hold|\d+|yes|no|haan|nahi|default|cancel)$/i.test(trimmedMessage);
   if (isLanguageSwitchCommand) {
     userLang = detectMessageLanguage(trimmedMessage, 'en');
-  } else if (trimmedMessage && !isShortOrAction) {
-    const detected = detectMessageLanguage(trimmedMessage, explicitLang || prevLang || 'en');
+  } else if (rawMessage && !isShortOrAction) {
+    const detected = detectMessageLanguage(trimmedMessage || rawMessage, explicitLang || prevLang || 'en');
     userLang = detected;
   } else if (explicitLang) {
     userLang = explicitLang;
@@ -5982,6 +6157,116 @@ const lastAskedField = currentDraft.asked.length > 0
     userLang = 'en';
   }
   currentDraft.language = userLang;
+  if (uidLangKey) {
+    lastUserLangByUser.set(uidLangKey, userLang);
+  }
+
+  // --------------------------------------------------------------------------
+  // SHORT CONVERSATIONAL TURNS ("ok", "wait", "ruko", "hmm", "theek hai", etc.)
+  // Never misinterpret pauses or standalone acknowledgments as task titles/commands
+  // --------------------------------------------------------------------------
+  if (!actionHandled && shortTurnKind === 'pause_wait') {
+    const isEnTurn = userLang === 'en';
+    if (isDraftInProgress && currentDraft.intent) {
+      const pendingField = (currentDraft.asked && currentDraft.asked[currentDraft.asked.length - 1]) || 'title';
+      const pendingQuestion = getPendingSlotQuestion(currentDraft.intent, pendingField, userLang);
+      const rep = isEnTurn
+        ? `Sure, take your time! Whenever you're ready: ${pendingQuestion}`
+        : `Ji bilkul, aaram se! Jab aap ready hon to batayein: ${pendingQuestion}`;
+      const waitChips = buildChips(currentDraft.intent, pendingField, { ...deps, draft: currentDraft, user: req?.user, accessibleProjects, companyUsers: deps.companyUsers, language: userLang });
+      return {
+        success: true,
+        status: currentDraft.status || 'needs_input',
+        field: pendingField,
+        reply: rep,
+        speech: rep,
+        speakText: rep,
+        speakTextHi: isEnTurn ? null : rep,
+        draft: currentDraft,
+        chips: waitChips,
+        candidates: [],
+        notices: [],
+        canAssignOthers,
+        language: userLang,
+        meta: { model: modelName },
+      };
+    }
+
+    const allowedIntents = resolveUserAllowedIntents(req?.user, scope, deps);
+    const welcomeChips = buildChips(null, 'welcome', { ...deps, allowedIntents, language: userLang });
+    const rep = isEnTurn
+      ? 'Sure, take your time! Please tell me what you want to do next.'
+      : 'Ji bilkul, aaram se! Jab aap ready hon to batayein aage kya karna hai.';
+    return {
+      success: true,
+      status: 'open',
+      field: 'welcome',
+      reply: rep,
+      speech: rep,
+      speakText: rep,
+      speakTextHi: isEnTurn ? null : rep,
+      draft: null,
+      chips: welcomeChips,
+      candidates: [],
+      notices: [],
+      canAssignOthers,
+      language: userLang,
+      meta: { model: modelName },
+    };
+  }
+
+  if (!actionHandled && shortTurnKind === 'ack_ok' && currentDraft.awaitingEdit) {
+    const isEnTurn = userLang === 'en';
+    const rep = isEnTurn
+      ? "Yes, please tell me what changes you want to make (e.g. title, priority, due date/time), or say 'Create task' / 'Create it' when ready."
+      : "Haan ji! Batayein kya changes karne hain (jaise title, priority, due date/time), ya task create karne ke liye 'Create task' / 'Create it' bolein.";
+    return {
+      success: true,
+      status: 'ready',
+      field: 'ready',
+      reply: rep,
+      speech: rep,
+      speakText: rep,
+      speakTextHi: isEnTurn ? null : rep,
+      draft: currentDraft,
+      missing: [],
+      chips: [
+        { label: isEnTurn ? 'Priority' : 'Priority badlo', action: { type: 'ask', field: 'priority' } },
+        { label: isEnTurn ? 'Date/Time' : 'Date/Time badlo', action: { type: 'ask', field: 'dueDateTime' } },
+        { label: isEnTurn ? 'Create task' : 'Haan, create karo', action: { type: 'confirm' } },
+      ],
+      candidates: [],
+      notices: [],
+      canAssignOthers,
+      language: userLang,
+      meta: { model: modelName },
+    };
+  }
+
+  if (!actionHandled && shortTurnKind === 'ack_ok' && !isDraftInProgress) {
+    const isEnTurn = userLang === 'en';
+    const allowedIntents = resolveUserAllowedIntents(req?.user, scope, deps);
+    const welcomeChips = buildChips(null, 'welcome', { ...deps, allowedIntents, language: userLang });
+    const rep = isEnTurn
+      ? 'Yes, please tell me what you want to do next?'
+      : 'Haan ji! Batayein, aap aage kya karna chahte hain?';
+    return {
+      success: true,
+      status: 'open',
+      field: 'welcome',
+      reply: rep,
+      speech: rep,
+      speakText: rep,
+      speakTextHi: isEnTurn ? null : rep,
+      draft: null,
+      chips: welcomeChips,
+      candidates: [],
+      notices: [],
+      canAssignOthers,
+      language: userLang,
+      meta: { model: modelName },
+    };
+  }
 
   // --------------------------------------------------------------------------
   // NATURAL LANGUAGE REPORT EXPORT HANDLER (Attendance, Tasks, Projects, Clients)
@@ -11579,6 +11864,7 @@ const lastAskedField = currentDraft.asked.length > 0
   const readyConfig = TASK_FIELDS.ready;
 
   if (wantsEditPrompt) {
+    currentDraft.awaitingEdit = true;
     const editChips = currentDraft.intent === 'task_project'
       ? [
         { label: 'Priority badlo', action: { type: 'ask', field: 'priority' } },
@@ -11644,6 +11930,7 @@ const lastAskedField = currentDraft.asked.length > 0
     };
   }
 
+  currentDraft.awaitingEdit = false;
   const modifiedFields = [];
   if (initialValues.dueDateTime && currentDraft.dueDateTime && initialValues.dueDateTime !== currentDraft.dueDateTime) {
     const formattedDue = formatHumanIstDate(currentDraft.dueDateTime);
