@@ -635,9 +635,70 @@ const consumeSttBudget = async (req) => {
   return await AiUsageModel.findOneAndUpdate(filter, update, options);
 };
 
+/**
+ * Returns the authenticated user's personal daily AI token usage and quota summary.
+ */
+const getEmployeeTokenUsageSummary = async (user) => {
+  if (!user) return null;
+  const userId = user._id || user.id;
+  const companyId = user.company?._id || user.company;
+  if (!userId || !companyId) return null;
+
+  const limits = await getCompanyAiLimits(companyId);
+  const todayIst = getTodayIstDate();
+  const isOwnerAdmin = isOwnerOrAdmin(user);
+  const aiConfig = user.aiConfig || null;
+
+  let tokensUsed = 0;
+  try {
+    if (mongoose.connection.readyState === 1) {
+      const record = await AiUsage.findOne({
+        company: companyId,
+        user: userId,
+        date: todayIst,
+        feature: 'task_agent',
+      }).lean();
+      tokensUsed = record ? Number(record.tokensUsed || 0) : 0;
+    }
+  } catch (err) {
+    console.error('getEmployeeTokenUsageSummary error:', err.message);
+  }
+
+  let tokenLimit = null;
+  let isUnlimited = false;
+
+  if (limits.aiApiKeySource === 'client') {
+    if (isOwnerAdmin || (aiConfig && aiConfig.isUnlimited)) {
+      isUnlimited = true;
+    } else {
+      tokenLimit = aiConfig?.customDailyTokenLimit ?? limits.byokDefaultEmployeeDailyTokens ?? 10000;
+    }
+  } else {
+    const totalAllowedTokens = (limits.tokenLimit || 0) + (limits.extraTokens || 0);
+    tokenLimit = (!isOwnerAdmin && aiConfig && !aiConfig.isUnlimited && typeof aiConfig.customDailyTokenLimit === 'number' && aiConfig.customDailyTokenLimit > 0)
+      ? Math.min(totalAllowedTokens, aiConfig.customDailyTokenLimit)
+      : totalAllowedTokens;
+  }
+
+  const remainingTokens = tokenLimit !== null ? Math.max(0, tokenLimit - tokensUsed) : null;
+  const percentUsed = (tokenLimit && tokenLimit > 0)
+    ? Math.min(100, Math.round((tokensUsed / tokenLimit) * 100))
+    : 0;
+
+  return {
+    tokensUsed,
+    tokenLimit,
+    remainingTokens,
+    percentUsed,
+    isUnlimited,
+    aiApiKeySource: limits.aiApiKeySource,
+  };
+};
+
 aiTaskBudget.getTodayIstDate = getTodayIstDate;
 aiTaskBudget.isOwnerOrAdmin = isOwnerOrAdmin;
 aiTaskBudget.getCompanyAiLimits = getCompanyAiLimits;
+aiTaskBudget.getEmployeeTokenUsageSummary = getEmployeeTokenUsageSummary;
 aiTaskBudget.getLimit = getLimit;
 aiTaskBudget.consumeTaskBudget = consumeTaskBudget;
 aiTaskBudget.getSttLimit = getSttLimit;

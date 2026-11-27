@@ -2,7 +2,7 @@ const { parseRequestSchema } = require('../services/ai/aiSchemas');
 const { parseTaskRequest } = require('../services/ai/taskAgentService');
 const { hasLLM } = require('../services/ai/llm');
 const { transcribeAudio } = require('../services/ai/transcribeService');
-const { consumeSttBudget } = require('../middleware/aiTaskBudget');
+const { consumeSttBudget, getEmployeeTokenUsageSummary } = require('../middleware/aiTaskBudget');
 
 
 
@@ -45,6 +45,13 @@ exports.parseTask = async (req, res, deps = {}) => {
       pick,
       action,
     }, activeDeps);
+
+    if (result && typeof result === 'object' && !result.tokenUsage) {
+      try {
+        const tokenUsage = await getEmployeeTokenUsageSummary(req.user);
+        if (tokenUsage) result.tokenUsage = tokenUsage;
+      } catch (_) {}
+    }
 
     return res.status(200).json(result);
   } catch (error) {

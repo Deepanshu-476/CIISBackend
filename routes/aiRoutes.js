@@ -169,10 +169,13 @@ router.get('/task-agent/entitlement', protect, async (req, res) => {
       });
     }
 
+    const tokenUsage = await aiTaskBudget.getEmployeeTokenUsageSummary(req.user);
+
     return res.json({
       success: true,
       hasAiAccess: true,
       code: null,
+      tokenUsage,
     });
   } catch (err) {
     console.error('AI entitlement check error:', err);
