@@ -248,7 +248,7 @@ function parseRelativeOrAbsoluteDate(raw, now = new Date()) {
   }
 
   // 2. ISO format YYYY-MM-DD or YYYY/MM/DD
-  const isoMatch = str.match(/\b(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})\b/);
+  const isoMatch = str.match(/\b(\d{4})\s*[-/.\u2013\u2014]\s*(\d{1,2})\s*[-/.\u2013\u2014]\s*(\d{1,2})\b/);
   if (isoMatch) {
     const y = parseInt(isoMatch[1], 10);
     const m = parseInt(isoMatch[2], 10);
@@ -259,7 +259,7 @@ function parseRelativeOrAbsoluteDate(raw, now = new Date()) {
   }
 
   // 3. DD-MM-YYYY or DD/MM/YYYY or DD.MM.YYYY
-  const ddmmyyyy = str.match(/\b(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})\b/);
+  const ddmmyyyy = str.match(/\b(\d{1,2})\s*[-/.\u2013\u2014]\s*(\d{1,2})\s*[-/.\u2013\u2014]\s*(\d{2,4})\b/);
   if (ddmmyyyy) {
     let y = parseInt(ddmmyyyy[3], 10);
     if (y < 100) y += 2000;

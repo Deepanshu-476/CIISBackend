@@ -158,6 +158,19 @@ router.put("/:id", protect, requirePlatformOwner, async (req, res) => {
           }
         }
       );
+      await Company.updateMany(
+        {
+          selectedPlan: plan._id,
+          $or: [{ accessUpdatedBy: null }, { accessUpdatedBy: { $exists: false } }],
+        },
+        {
+          $set: {
+            allowedPages: plan.allowedPages || [],
+            allowedSuperAdminPages: plan.allowedSuperAdminPages || [],
+          }
+        }
+      );
+      require("./sidebarConfigs").invalidateSidebarCache();
     } catch (syncError) {
       console.warn("⚠️ Failed to cascade plan updates to companies:", syncError?.message);
     }

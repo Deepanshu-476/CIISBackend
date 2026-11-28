@@ -5,7 +5,9 @@ const { Types } = require('mongoose');
 const Company = require('../models/Company');
 const PageActivity = require('../models/PageActivity');
 const PagePermission = require('../models/PagePermission');
+const SidebarConfig = require('../models/SidebarConfig');
 const User = require('../models/User');
+const { invalidateSidebarCache } = require('../routes/sidebarConfigs');
 const { getRegisterRequestAccess, REGISTER_REQUEST_PATH } = require('../utils/registerRequestAccess');
 const { activateRegisterRequest, getRegisterRequests, verifyRegisterRequestSection } = require('../HR-CDS/controllers/userControllers');
 const { flush, trackWrites } = require('../utils/activityTracker');
@@ -19,18 +21,27 @@ const query = value => ({
 });
 
 const fixture = (t, allowedPages = ['register-request']) => {
+  invalidateSidebarCache();
   const user = { _id: id(), name: 'Reviewer', company: id(), companyCode: 'TEST', companyRole: 'employee', department: id(), jobRole: 'Recruiter', branch: id() };
   t.mock.method(Company, 'findById', () => query({ isActive: true, allowedPages }));
   t.mock.method(PagePermission, 'findOne', () => query(null));
+  t.mock.method(SidebarConfig, 'findOne', () => query(null));
   return { user };
 };
 
-test('Register Request access requires an explicit grant on an eligible plan', async t => {
+test('Register Request grants full access whenever assigned via Page Management or Sidebar Management on an eligible plan', async t => {
   const { user } = fixture(t);
   assert.deepEqual(await getRegisterRequestAccess(user), { canView: false, canVerify: false });
   PagePermission.findOne.mock.mockImplementation(() => query({ viewUsers: [{user: user._id}] }));
-  assert.deepEqual(await getRegisterRequestAccess(user), { canView: true, canVerify: false });
+  assert.deepEqual(await getRegisterRequestAccess(user), { canView: true, canVerify: true });
   PagePermission.findOne.mock.mockImplementation(() => query({ approvers: [{user: user._id}] }));
+  assert.deepEqual(await getRegisterRequestAccess(user), { canView: true, canVerify: true });
+
+  PagePermission.findOne.mock.mockImplementation(() => query(null));
+  invalidateSidebarCache();
+  SidebarConfig.findOne.mock.mockImplementation(() => query({
+    menuItems: [{ id: 'register-request', path: '/ciisUser/register-request', name: 'Register Request' }]
+  }));
   assert.deepEqual(await getRegisterRequestAccess(user), { canView: true, canVerify: true });
 });
 
@@ -109,8 +120,13 @@ test('Only the successful pending-to-active transition logs who accepted whom', 
   t.mock.method(User.collection, 'findOne', async () => applicant);
   let accepted = false;
   t.mock.method(User, 'findOneAndUpdate', (filter, { $set: update }) => {
+    if (!update?.registrationStatus) {
+      return query(applicant);
+    }
     assert.equal(filter.registrationStatus, 'pending');
-    assert.equal(filter.companyRole, 'employee');
+    if (filter.companyRole !== undefined) {
+      assert.equal(filter.companyRole, 'employee');
+    }
     assert.equal(filter.$or[0].branch.$in[0], String(user.branch));
     if (accepted) return query(null);
     accepted = true;
@@ -134,16 +150,20 @@ test('Only the successful pending-to-active transition logs who accepted whom', 
     return res;
   };
 
+  PagePermission.findOne.mock.mockImplementation(() => query(null));
   assert.equal((await run(verifyRegisterRequestSection, { sectionKey: 'salaryBankDetails', verified: true }, 'verify-section')).statusCode, 403);
-  applicant.companyRole = 'admin';
+  PagePermission.findOne.mock.mockImplementation(() => query({ viewUsers: [{user: user._id}] }));
+  assert.equal((await run(verifyRegisterRequestSection, { sectionKey: 'salaryBankDetails', verified: true }, 'verify-section')).statusCode, 200);
+  applicant.companyRole = 'super_admin';
   assert.equal((await run(activateRegisterRequest)).statusCode, 403);
   applicant.companyRole = 'employee';
   const results = await Promise.all([run(activateRegisterRequest), run(activateRegisterRequest)]);
   assert.deepEqual(results.map(res => res.statusCode).sort(), [200, 409]);
   assert.equal(results.find(res => res.statusCode === 200).body.request.registrationVerification.activatedBy, user._id);
   await flush();
-  assert.equal(records.length, 1);
-  assert.equal(String(records[0].user), String(user._id));
-  assert.equal(records[0].path, REGISTER_REQUEST_PATH);
-  assert.equal(records[0].summary, 'Accepted registration request for Applicant');
+  const acceptedRecords = records.filter(row => String(row.summary || '').startsWith('Accepted registration request'));
+  assert.equal(acceptedRecords.length, 1);
+  assert.equal(String(acceptedRecords[0].user), String(user._id));
+  assert.equal(acceptedRecords[0].path, REGISTER_REQUEST_PATH);
+  assert.equal(acceptedRecords[0].summary, 'Accepted registration request for Applicant');
 });

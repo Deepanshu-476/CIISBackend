@@ -1299,11 +1299,8 @@ exports.updateCompanyAccess = async (req, res) => {
       isActive: Boolean(isActive),
       deactivatedAt: isActive ? null : new Date(),
       accessConfiguredAt: new Date(),
+      accessUpdatedBy: (updatedBy && isValidObjectId(updatedBy)) ? updatedBy : (req.user?._id || null),
     };
-
-    if (updatedBy && isValidObjectId(updatedBy)) {
-      updateData.accessUpdatedBy = updatedBy;
-    }
 
     if (req.body.moduleDashboardConfig && typeof req.body.moduleDashboardConfig === "object") {
       updateData.moduleDashboardConfig = req.body.moduleDashboardConfig;
@@ -1373,6 +1370,7 @@ exports.updateCompanyAccess = async (req, res) => {
       );
     }
 
+    require('../routes/sidebarConfigs').invalidateSidebarCache();
     return res.status(200).json({
       success: true,
       message: company.isActive ? "Company access activated successfully" : "Company access saved as inactive",
@@ -1516,6 +1514,7 @@ exports.renewCompanySubscription = async (req, res) => {
       updateData.planFeatures = planFeatures;
       updateData.allowedPages = planAllowedPages;
       updateData.allowedSuperAdminPages = planAllowedSuperAdminPages;
+      updateData.accessUpdatedBy = null;
       if (selectedPlan.aiApiKeySource) {
         updateData.aiApiKeySource = selectedPlan.aiApiKeySource;
       }

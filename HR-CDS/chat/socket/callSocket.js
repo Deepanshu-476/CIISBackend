@@ -1,6 +1,7 @@
 const User = require("../../../models/User");
 const {sendPushToUsers} = require("../../utils/firebasePushService");
 const callHistory = require("../utils/callHistory");
+const callTaskService = require("../utils/callTaskService");
 const { isUserOnline } = require("../../socket/presence");
 const callStore = require("./callStore");
 const Conversation = require("../models/Conversation");
@@ -159,16 +160,19 @@ const closeCallRoom = async (callId, ioInstance = null) => {
     const room = await callStore.get(callId);
     if (!room) return;
     clearLocalRingTimer(callId);
+    const socketIo = getIo(ioInstance);
+    if (room.createTask) {
+        await callTaskService.finalizeCallTasks({ io: socketIo, room, endedAt: new Date() });
+    }
     if (!room.finishedAt) {
         room.finishedAt = Date.now();
         callHistory.recordCallFinished(room);
     }
     await callStore.remove(callId, Object.keys(room.participants || {}));
     Object.keys(room.participants || {}).forEach(userId => {
-        getIo(ioInstance)?.to(`user:${userId}`).emit("call:rejoin-closed", { callId: room.callId });
+        socketIo?.to(`user:${userId}`).emit("call:rejoin-closed", { callId: room.callId });
     });
     if (room.conversationId) {
-        const socketIo = getIo(ioInstance);
         socketIo?.to(`conversation:${room.conversationId}`).emit("call:ongoing-status", {
             conversationId: room.conversationId,
             active: false,
@@ -359,6 +363,11 @@ const callSocket = (io, socket) => {
                 hostUserId: socket.userId,
                 title: callTitle,
                 isGroupCall,
+                createTask: Boolean(data.createTask),
+                taskIdsByUser: {},
+                taskJoinTimes: {},
+                taskFinalizedUsers: {},
+                taskPeerNames: {},
                 participants: {},
             };
             // Host gets their current socketId
@@ -503,9 +512,19 @@ const callSocket = (io, socket) => {
                 user: participantUser,
                 socketId: socket.id,
             };
-            if (!room.answeredAt) room.answeredAt = Date.now();
+            const nowMs = Date.now();
+            const isFirstAnswer = !room.answeredAt;
+            if (isFirstAnswer) room.answeredAt = nowMs;
             await callStore.save(room);
-            callHistory.recordCallAnswered(callId, socket.userId, new Date());
+            callHistory.recordCallAnswered(callId, socket.userId, new Date(nowMs));
+            if (room.createTask) {
+                await callTaskService.onParticipantJoinedCall({
+                    io,
+                    room,
+                    joinedUserId: socket.userId,
+                    joinedAt: new Date(isFirstAnswer ? room.answeredAt : nowMs),
+                });
+            }
             if (room.conversationId) {
                 const joinedCount = Object.values(room.participants || {}).filter(p => p.status === "joined").length;
                 io.to(`conversation:${room.conversationId}`).emit("call:ongoing-status", {
@@ -811,6 +830,14 @@ const callSocket = (io, socket) => {
                 await closeCallRoom(callId, io);
                 return;
             }
+            if (room.createTask) {
+                await callTaskService.finalizeCallTasks({
+                    io,
+                    room,
+                    userIds: [socket.userId],
+                    endedAt: new Date(),
+                });
+            }
             // In a group call, broadcast participant-left and drop from other peers' screens immediately
             emitToJoinedParticipants(io, room, "call:participant-left", {
                 callId,
@@ -875,6 +902,14 @@ const callSocket = (io, socket) => {
                 removedByName: remover.name || "",
             };
             await callStore.save(room);
+            if (room.createTask) {
+                await callTaskService.finalizeCallTasks({
+                    io,
+                    room,
+                    userIds: [targetUserId],
+                    endedAt: new Date(),
+                });
+            }
             if (removedWasSharing) broadcastScreenShare(io, room, targetUserId, false);
             clearCallPush([targetUserId], callId);
             // The removed person's devices end the call (ringing ones stop ringing).
@@ -988,8 +1023,17 @@ const callSocket = (io, socket) => {
                 user: participantUser,
                 socketId: socket.id,
             };
-            if (!room.answeredAt) room.answeredAt = Date.now();
+            const rejoinNow = Date.now();
+            if (!room.answeredAt) room.answeredAt = rejoinNow;
             await callStore.save(room);
+            if (room.createTask) {
+                await callTaskService.onParticipantJoinedCall({
+                    io,
+                    room,
+                    joinedUserId: socket.userId,
+                    joinedAt: new Date(rejoinNow),
+                });
+            }
             const payload = {
                 callId,
                 callType: room.callType,
@@ -1061,6 +1105,14 @@ const callSocket = (io, socket) => {
                                     user: getPublicUser(socket.user),
                                 };
                                 await callStore.save(latestRoom);
+                                if (latestRoom.createTask) {
+                                    await callTaskService.finalizeCallTasks({
+                                        io,
+                                        room: latestRoom,
+                                        userIds: [socket.userId],
+                                        endedAt: new Date(),
+                                    });
+                                }
                                 if (wasSharing) broadcastScreenShare(io, latestRoom, socket.userId, false);
                                 emitToJoinedParticipants(io, latestRoom, "call:ended", {
                                     callId: latestRoom.callId,

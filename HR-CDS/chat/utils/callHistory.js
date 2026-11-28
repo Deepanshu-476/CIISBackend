@@ -37,6 +37,7 @@ const recordCallStarted = room => safely("start", () => ChatCall.create({
     participants: getParticipantKeys(room.participants).filter(id => id !== room.hostUserId),
     callType: room.callType,
     isGroupCall: Boolean(room.isGroupCall),
+    createTask: Boolean(room.createTask),
     title: room.title || "",
     startedAt: new Date(room.startedAt || Date.now()),
 }));

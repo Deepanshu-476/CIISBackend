@@ -7,6 +7,7 @@
 const PagePermission = require('../models/PagePermission');
 const { isPlatformOwner } = require('./authMiddleware');
 const { getCompanyPageEntitlements, isPageEntitled } = require('../utils/companyPageEntitlements');
+const { isAutoFullAccessPage, userHasAutoFullAccessPage } = require('../utils/autoFullAccessPages');
 
 const normalizeRole = value => String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, '_');
 const roleText = value => (value && typeof value === 'object'
@@ -60,7 +61,16 @@ const hasPageAccess = async (user, { paths, action = 'edit', allowOwner = true }
   if (allowOwner && isCompanyOwner(user)) return true;
 
   const pages = await PagePermission.find({ company: companyId, path: { $in: entitledPaths } }).lean();
-  return pages.some(page => hasGrantedPageAction(page, userId, action));
+  if (pages.some(page => hasGrantedPageAction(page, userId, action))) return true;
+
+  for (const entitledPath of entitledPaths) {
+    if (!isAutoFullAccessPage({ path: entitledPath })) continue;
+    const pageDoc = pages.find(page => String(page?.path || '').trim().toLowerCase() === String(entitledPath).trim().toLowerCase()) || null;
+    if (await userHasAutoFullAccessPage({ user, targetPath: entitledPath, pageDoc, fetchPageDocIfMissing: !pageDoc })) {
+      return true;
+    }
+  }
+  return false;
 };
 
 const requirePageAccess = options => async (req, res, next) => {

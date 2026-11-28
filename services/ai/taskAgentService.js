@@ -6556,7 +6556,7 @@ const lastAskedField = currentDraft.asked.length > 0
       }
 
       // 2. Due Date / Time update
-      if (!actionHandled && /(?:due|date|time|kal|aaj|today|tomorrow|tarikh|tareekh|baje)\b/i.test(trimmedMessage)) {
+      if (!actionHandled && (/(?:due|date|time|kal|aaj|today|tomorrow|tarikh|tareekh|baje)\b/i.test(trimmedMessage) || /\b\d{1,2}\s*[-/.\u2013\u2014]\s*\d{1,2}\s*[-/.\u2013\u2014]\s*\d{2,4}\b/.test(trimmedMessage) || /\b\d{4}\s*[-/\u2013\u2014]\s*\d{1,2}\s*[-/\u2013\u2014]\s*\d{1,2}\b/.test(trimmedMessage))) {
         const parsedDt = parsedSlots.dueDateTime || (typeof parseHinglishDateTime === 'function' ? parseHinglishDateTime(trimmedMessage, now) : null);
         if (parsedDt) {
           currentDraft.dueDateTime = parsedDt;

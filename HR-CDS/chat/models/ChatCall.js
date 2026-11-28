@@ -49,6 +49,11 @@ const chatCallSchema = new mongoose.Schema(
         default: false
     },
 
+    createTask: {
+        type: Boolean,
+        default: false
+    },
+
     title: {
         type: String,
         default: ""

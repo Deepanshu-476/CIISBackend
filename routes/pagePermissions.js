@@ -1,6 +1,8 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const PagePermission = require('../models/PagePermission');
+const { isCompanyOwner: isCompanyOwnerRole } = require('../middleware/pageAccess');
+const { isAutoFullAccessPage, expandAutoFullAccessPageDoc, resolveUserSidebarConfig, userHasAutoFullAccessPage } = require('../utils/autoFullAccessPages');
 const { getCompanyPageEntitlements, isPageEntitled, normalizePageEntitlementKey } = require('../utils/companyPageEntitlements');
 const { REGISTER_REQUEST_PATH, hasCompanyRegistrationAdminAccess } = require('../utils/registerRequestAccess');
 const PageDataVisibility = require('../models/PageDataVisibility');
@@ -38,7 +40,7 @@ const CUSTOM_ACCESS_FIELDS = {
 };
 
 const APP_PAGES = [
-  { pageKey: 'register-request', name: 'Register Request', path: '/ciisUser/register-request', permissionPattern: 'approveReject', permissionActions: { view: 'View / Accept', approve: 'Manage Requests', delete: 'Not used' } },
+  { pageKey: 'register-request', name: 'Register Request', path: '/ciisUser/register-request', permissionPattern: 'approveReject', requiresExplicitGrant: false, autoFullAccess: true, permissionActions: { view: 'View / Accept', approve: 'Manage Requests', delete: 'Not used' } },
   { pageKey: 'emp-details', name: 'Emp - Details', path: '/ciisUser/emp-details', permissionPattern: 'viewEdit' },
   { pageKey: 'emp-leaves', name: 'Emp - Leaves', path: '/ciisUser/emp-leaves', permissionPattern: 'approveReject' },
   { pageKey: 'leave-policy', name: 'Leave - Policy', path: '/ciisUser/leave-policy', permissionPattern: 'viewEdit' },
@@ -48,15 +50,38 @@ const APP_PAGES = [
   { pageKey: 'JobRoleManagement', name: 'Job Role Management', path: '/ciisUser/JobRoleManagement', permissionPattern: 'viewEdit', permissionActions: { view: 'View', edit: 'Create / Edit', delete: 'Delete' } },
   { pageKey: 'manage-groups', name: 'Manage Group', path: '/ciisUser/manage-groups', permissionPattern: 'viewEdit' },
   { pageKey: 'company-all-task', name: 'Company All Task', path: '/ciisUser/company-all-task', permissionPattern: 'viewEdit', permissionActions: { view: 'View', edit: 'Edit Tasks', delete: 'Delete' } },
-  { pageKey: 'company-all-task-tasks', name: 'Company Tasks', path: '/ciisUser/company-all-task/tasks', permissionPattern: 'viewEdit', permissionActions: { view: 'View', edit: 'Edit Tasks', delete: 'Delete' } },
+  { pageKey: 'company-all-task-tasks', name: 'Company Tasks', path: '/ciisUser/company-all-task/tasks', permissionPattern: 'viewEdit', requiresExplicitGrant: false, autoFullAccess: true, permissionActions: { view: 'View', edit: 'Edit Tasks', delete: 'Delete' } },
   { pageKey: 'company-assets', name: 'Asset Management', path: '/ciisUser/company-assets', permissionPattern: 'viewEdit', permissionActions: { view: 'View', edit: 'Create / Edit', delete: 'Delete' } },
   { pageKey: 'company-ai-settings', name: 'Company AI & Tokens', path: '/ciisUser/company-ai-settings', permissionPattern: 'viewEdit' },
   { pageKey: 'SidebarManagement', name: 'Sidebar Management', path: '/ciisUser/SidebarManagement', permissionPattern: 'viewEdit' },
   { pageKey: 'emp-client', name: 'Client Management', path: '/ciisUser/emp-client', permissionPattern: 'viewEdit' },
+  { pageKey: 'client-plans', name: 'Client Plans', path: '/ciisUser/client-plans', permissionPattern: 'viewEdit' },
   { pageKey: 'active-clients', name: 'Active Clients', path: '/ciisUser/active-clients', permissionPattern: 'viewEdit' },
   { pageKey: 'client-services', name: 'Client Services', path: '/ciisUser/client-services', permissionPattern: 'viewEdit', permissionActions: { view: 'View', edit: 'Add / Edit', delete: 'Delete' } },
   { pageKey: 'holiday', name: 'Holiday', path: '/ciisUser/holiday', permissionPattern: 'viewEdit', permissionActions: { view: 'View', edit: 'Add / Edit', delete: 'Delete' } },
   { pageKey: 'user-activity', name: 'Employee Activity', path: '/ciisUser/user-activity', permissionPattern: 'viewEdit', permissionActions: { view: 'View', edit: 'View (same as View)', delete: 'Not used' } },
+  { pageKey: 'user-dashboard', name: 'Dashboard', path: '/ciisUser/user-dashboard', permissionPattern: 'viewEdit', requiresExplicitGrant: false, autoFullAccess: true },
+  { pageKey: 'dashboard-1', name: 'Dashboard 1', path: '/ciisUser/dashboard-1', permissionPattern: 'viewEdit', requiresExplicitGrant: false },
+  { pageKey: 'dashboard-overview', name: 'Dynamic Dashboard Overview', path: '/ciisUser/dashboard-overview', permissionPattern: 'viewEdit', requiresExplicitGrant: false },
+  { pageKey: 'attendance', name: 'My Attendance', path: '/ciisUser/attendance', permissionPattern: 'viewEdit', requiresExplicitGrant: false, autoFullAccess: true },
+  { pageKey: 'my-leaves', name: 'My Leaves', path: '/ciisUser/my-leaves', permissionPattern: 'viewEdit', requiresExplicitGrant: false, autoFullAccess: true },
+  { pageKey: 'my-assets', name: 'My Assets', path: '/ciisUser/my-assets', permissionPattern: 'viewEdit', requiresExplicitGrant: false, autoFullAccess: true },
+  { pageKey: 'profile', name: 'My Details', path: '/ciisUser/profile', permissionPattern: 'viewEdit', requiresExplicitGrant: false, autoFullAccess: true },
+  { pageKey: 'change-password', name: 'Change Password', path: '/ciisUser/change-password', permissionPattern: 'viewEdit', requiresExplicitGrant: false, autoFullAccess: true },
+  { pageKey: 'create-user', name: 'Create User', path: '/ciisUser/create-user', permissionPattern: 'viewEdit', requiresExplicitGrant: false, autoFullAccess: true },
+  { pageKey: 'department-all-task', name: 'Department All Tasks', path: '/ciisUser/department-all-task', permissionPattern: 'viewEdit', requiresExplicitGrant: false },
+  { pageKey: 'project', name: 'My Projects', path: '/ciisUser/project', permissionPattern: 'viewEdit', requiresExplicitGrant: false },
+  { pageKey: 'adminproject', name: 'Manage Projects', path: '/ciisUser/adminproject', permissionPattern: 'viewEdit', requiresExplicitGrant: false },
+  { pageKey: 'employee-meeting', name: 'Employee Meeting', path: '/ciisUser/employee-meeting', permissionPattern: 'viewEdit', requiresExplicitGrant: false },
+  { pageKey: 'client-meeting', name: 'Client Meeting', path: '/ciisUser/client-meeting', permissionPattern: 'viewEdit', requiresExplicitGrant: false },
+  { pageKey: 'admin-meeting', name: 'Create Employee Meeting', path: '/ciisUser/admin-meeting', permissionPattern: 'viewEdit', requiresExplicitGrant: false },
+  { pageKey: 'alert', name: 'Alerts', path: '/ciisUser/alert', permissionPattern: 'viewEdit', requiresExplicitGrant: false, autoFullAccess: true },
+  { pageKey: 'create-alert', name: 'Create Alert', path: '/ciisUser/create-alert', permissionPattern: 'viewEdit', requiresExplicitGrant: false },
+  { pageKey: 'chat', name: 'Chat', path: '/ciisUser/chat', permissionPattern: 'viewEdit', requiresExplicitGrant: false, autoFullAccess: true },
+  { pageKey: 'support-desk', name: 'Support Desk', path: '/ciisUser/support-desk', permissionPattern: 'viewEdit', requiresExplicitGrant: false },
+  { pageKey: 'bulk-email', name: 'Bulk Email', path: '/ciisUser/bulk-email', permissionPattern: 'viewEdit', requiresExplicitGrant: false },
+  { pageKey: 'support-operations', name: 'Support Operations', path: '/ciisUser/support-operations', permissionPattern: 'viewEdit', requiresExplicitGrant: false },
+  { pageKey: 'feedback-questionnaire', name: 'Feedback / Questionnaire', path: '/ciisUser/feedback-questionnaire', permissionPattern: 'viewEdit', requiresExplicitGrant: false },
   { pageKey: 'salary-component', name: 'Salary Component', path: '/ciisUser/salary-component', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.salaryComponent },
   { pageKey: 'salary-structure', name: 'Salary Structure', path: '/ciisUser/salary-structure', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.salaryStructure },
   { pageKey: 'salary-assignment', name: 'Employee Salary', path: '/ciisUser/salary-assignment', permissionPattern: 'viewEdit', permissionActions: payrollPermissionActions.employeeSalary },
@@ -191,7 +216,7 @@ const getEffectiveViewUsers = (config) => uniqueUsers([
 ]);
 
 const getPageUserCounts = (config) => {
-  const viewUsers = getPageUsers(config, 'viewUsers');
+  const viewUsers = getEffectiveViewUsers(config);
   const editUsers = getPageUsers(config, 'editUsers');
   const approvers = getPageUsers(config, 'approvers');
   const deleteUsers = getPageUsers(config, 'deleteUsers');
@@ -229,7 +254,8 @@ const decoratePageSummaries = async (companyId, providedConfigs) => {
   const configByKey = new Map(configs.map(config => [normalizePageEntitlementKey(config.pageKey), config]));
 
   return APP_PAGES.map(page => {
-    const config = configMap.get(page.path) || configByKey.get(normalizePageEntitlementKey(page.pageKey));
+    const rawConfig = configMap.get(page.path) || configByKey.get(normalizePageEntitlementKey(page.pageKey));
+    const config = page.autoFullAccess ? expandAutoFullAccessPageDoc(rawConfig) : rawConfig;
     const counts = getPageUserCounts(config);
     return {
       ...page,
@@ -498,6 +524,25 @@ router.get('/pages', async (req, res) => {
       const configs = await PagePermission.find({ company: companyId })
         .select('company companyCode pageKey path approvers viewUsers editUsers deleteUsers generateUsers lockUsers unlockUsers userAccessScopes updatedAt')
         .lean();
+      const configByPath = new Map(configs.map(c => [c.path, c]));
+      const configByPageKey = new Map(configs.map(c => [normalizePageEntitlementKey(c.pageKey), c]));
+      const isAdminOrOwner = isCompanyOwnerRole(req.user) || hasCompanyRegistrationAdminAccess(req.user);
+      const sidebarConfig = await resolveUserSidebarConfig(req.user);
+      const autoFullAccessKeys = new Set();
+      for (const page of APP_PAGES) {
+        if (!page.autoFullAccess || !isEnabled(page)) continue;
+        const cfg = configByPath.get(page.path) || configByPageKey.get(normalizePageEntitlementKey(page.pageKey)) || null;
+        const allowed = await userHasAutoFullAccessPage({
+          user: req.user,
+          targetPath: page.path,
+          pageDoc: cfg,
+          sidebarConfig,
+          fetchPageDocIfMissing: false,
+          isOwnerOrAdmin: isAdminOrOwner
+        });
+        if (allowed) autoFullAccessKeys.add(page.pageKey);
+      }
+
       const [pageSummaries, accessPages] = await Promise.all([
         decoratePageSummaries(companyId, configs),
         decoratePages(companyId, configs)
@@ -505,9 +550,18 @@ router.get('/pages', async (req, res) => {
       return res.json({
         success: true,
         pages: pageSummaries.filter(isEnabled),
-        accessPages: accessPages.filter(isEnabled),
-        managedPages: APP_PAGES.map(({pageKey, path}) => ({
-          pageKey, path, entitled: isEnabled({pageKey, path}),
+        accessPages: accessPages.filter(isEnabled).map(page => ({
+          ...page,
+          ...(page.autoFullAccess && { autoFullAccess: true }),
+          ...(autoFullAccessKeys.has(page.pageKey) && { hasAutoFullAccess: true })
+        })),
+        managedPages: APP_PAGES.map(({ pageKey, path, requiresExplicitGrant, autoFullAccess }) => ({
+          pageKey,
+          path,
+          entitled: isEnabled({ pageKey, path }),
+          requiresExplicitGrant: requiresExplicitGrant !== false,
+          ...(autoFullAccess && { autoFullAccess: true }),
+          ...(autoFullAccessKeys.has(pageKey) && { hasAutoFullAccess: true }),
           ...(path === REGISTER_REQUEST_PATH && hasCompanyRegistrationAdminAccess(req.user) && { canManageRegistrationRequests: true })
         }))
       });
@@ -584,11 +638,28 @@ router.get('/by-path', async (req, res) => {
     }
 
     const meta = resolvePageMeta(path);
-    if (meta && !isPageEntitled(await getCompanyPageEntitlements(companyId), meta)) {
+    const entitlements = await getCompanyPageEntitlements(companyId);
+    if (meta && !isPageEntitled(entitlements, meta)) {
       return res.json({ success: true, page: { ...meta, entitled: false } });
     }
     const page = await getPageByPath(companyId, meta?.path || path);
-    res.json({ success: true, page: meta ? { ...page, entitled: true } : page });
+    const autoFullAccess = Boolean(meta?.autoFullAccess || isAutoFullAccessPage({ pageKey: page?.pageKey, path: meta?.path || page?.path || path }));
+    let hasAutoFullAccess = false;
+    if (autoFullAccess) {
+      hasAutoFullAccess = await userHasAutoFullAccessPage({
+        user: req.user,
+        targetPath: meta?.path || page?.path || path,
+        pageDoc: page,
+        fetchPageDocIfMissing: false,
+        isOwnerOrAdmin: isCompanyOwnerRole(req.user) || hasCompanyRegistrationAdminAccess(req.user)
+      });
+    }
+    res.json({
+      success: true,
+      page: meta
+        ? { ...page, entitled: true, ...(autoFullAccess && { autoFullAccess: true }), ...(hasAutoFullAccess && { hasAutoFullAccess: true }) }
+        : { ...page, ...(autoFullAccess && { autoFullAccess: true }), ...(hasAutoFullAccess && { hasAutoFullAccess: true }) }
+    });
   } catch (error) {
     console.error('Page permission by path error:', error);
     res.status(500).json({ success: false, error: 'Failed to load page permission' });
@@ -729,20 +800,54 @@ router.put('/:pageKey', isCompanyOwner, async (req, res) => {
         .map(user => user._id.toString())
         .filter(id => !linkedClientUserIdSet.has(id))
     );
+    const validApproverIds = uniqueApproverIds.filter(id => validIdSet.has(id));
     const validEditIds = uniqueEditUserIds.filter(id => validIdSet.has(id));
+    const validDeleteIds = uniqueDeleteUserIds.filter(id => validIdSet.has(id));
+    const validGenerateIds = uniqueGenerateUserIds.filter(id => validIdSet.has(id));
+    const validLockIds = uniqueLockUserIds.filter(id => validIdSet.has(id));
+    const validUnlockIds = uniqueUnlockUserIds.filter(id => validIdSet.has(id));
+    const validExplicitViewIds = uniqueViewUserIds.filter(id => validIdSet.has(id));
+    // Any user granted an action on a page automatically receives view access.
+    const validViewIds = [...new Set([
+      ...validExplicitViewIds,
+      ...validEditIds,
+      ...validApproverIds,
+      ...validDeleteIds,
+      ...validGenerateIds,
+      ...validLockIds,
+      ...validUnlockIds
+    ])];
 
-    const approvers = normalizePageUsers(uniqueApproverIds.filter(id => validIdSet.has(id)));
-    const viewUsers = normalizePageUsers(uniqueViewUserIds.filter(id => validIdSet.has(id)));
+    const approvers = normalizePageUsers(validApproverIds);
+    const viewUsers = normalizePageUsers(validViewIds);
     const editUsers = normalizePageUsers(validEditIds);
-    const deleteUsers = normalizePageUsers(uniqueDeleteUserIds.filter(id => validIdSet.has(id)));
-    const generateUsers = normalizePageUsers(uniqueGenerateUserIds.filter(id => validIdSet.has(id)));
-    const lockUsers = normalizePageUsers(uniqueLockUserIds.filter(id => validIdSet.has(id)));
-    const unlockUsers = normalizePageUsers(uniqueUnlockUserIds.filter(id => validIdSet.has(id)));
+    const deleteUsers = normalizePageUsers(validDeleteIds);
+    const generateUsers = normalizePageUsers(validGenerateIds);
+    const lockUsers = normalizePageUsers(validLockIds);
+    const unlockUsers = normalizePageUsers(validUnlockIds);
     const grants = {view: viewUsers, edit: editUsers, approve: approvers, delete: deleteUsers,
       generate: generateUsers, lock: lockUsers, unlock: unlockUsers};
     const validUserAccessScopes = userAccessScopes.filter(scope =>
       grants[scope.accessType].some(entry => String(entry.user) === String(scope.user))
     );
+    const viewScopeUsers = new Set(
+      validUserAccessScopes.filter(scope => scope.accessType === 'view').map(scope => String(scope.user))
+    );
+    for (const actionType of ['edit', 'approve', 'delete', 'generate', 'lock', 'unlock']) {
+      for (const scope of validUserAccessScopes) {
+        if (scope.accessType !== actionType) continue;
+        const scopeUserId = String(scope.user);
+        if (!viewScopeUsers.has(scopeUserId)) {
+          validUserAccessScopes.push({
+            user: scope.user,
+            accessType: 'view',
+            branchIds: scope.branchIds || [],
+            departmentIds: scope.departmentIds || []
+          });
+          viewScopeUsers.add(scopeUserId);
+        }
+      }
+    }
 
     const config = await PagePermission.findOneAndUpdate(
       { company: companyId, path: page.path },

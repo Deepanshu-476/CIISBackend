@@ -1,7 +1,8 @@
 const PagePermission = require('../models/PagePermission');
-const { hasGrantedPageAction, isClientLogin, isCompanyOwner } = require('../middleware/pageAccess');
+const { isClientLogin, isCompanyOwner } = require('../middleware/pageAccess');
 const { getCompanyPageEntitlements, isPageEntitled } = require('./companyPageEntitlements');
 const { registerRequestBranchCondition } = require('./branchScope');
+const { hasAnyPagePermissionGrant, resolveUserSidebarConfig, sidebarConfigHasPage } = require('./autoFullAccessPages');
 
 const REGISTER_REQUEST_PATH = '/ciisUser/register-request';
 const noAccess = { canView: false, canVerify: false };
@@ -26,10 +27,16 @@ const getRegisterRequestAccess = async user => {
   if (!isPageEntitled(await getCompanyPageEntitlements(companyId), { path: REGISTER_REQUEST_PATH })) return noAccess;
 
   const page = await PagePermission.findOne({ company: companyId, path: REGISTER_REQUEST_PATH }).lean();
-  return {
-    canView: hasGrantedPageAction(page, userId, 'view'),
-    canVerify: hasGrantedPageAction(page, userId, 'approve')
-  };
+  if (hasAnyPagePermissionGrant(page, userId)) {
+    return fullAccess;
+  }
+
+  const sidebarConfig = await resolveUserSidebarConfig(user);
+  if (sidebarConfigHasPage(sidebarConfig, REGISTER_REQUEST_PATH)) {
+    return fullAccess;
+  }
+
+  return noAccess;
 };
 
 module.exports = { REGISTER_REQUEST_PATH, getRegisterRequestAccess, hasCompanyRegistrationAdminAccess, getRegisterRequestBranchCondition };

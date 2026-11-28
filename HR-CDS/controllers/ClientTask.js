@@ -17,7 +17,7 @@ const { normalizeTaskReminderSettings } = require('../utils/taskReminderSettings
 const { subscriptionExpiresAt } = require('../utils/subscriptionDates');
 const { postSubscriptionTasksMessage } = require('../utils/subscriptionChat');
 const { elapsedTaskSeconds, getTaskBreakActivity } = require('../utils/taskBreaks');
-const { isClientLogin } = require('../../middleware/pageAccess');
+const { isClientLogin, hasPageAccess } = require('../../middleware/pageAccess');
 
 void 0;
 
@@ -73,7 +73,18 @@ const hasCompanyAllTaskEditPermission = async (req) => {
     return true;
   }
 
-  // 2. Check PagePermission in DB
+  // 2. Check PagePermission / autoFullAccess via shared helper, then preserve existing fallback
+  try {
+    if (await hasPageAccess(user, {
+      paths: ['/ciisUser/company-all-task', '/ciisUser/company-all-task/tasks', 'company-all-task', 'company-all-task-tasks'],
+      action: 'edit'
+    })) {
+      return true;
+    }
+  } catch (err) {
+    console.error('Error checking shared company all task edit permission:', err);
+  }
+
   const companyId = user.company?._id || user.company || user.companyId;
   const userId = String(user._id || user.id || '').trim();
   if (!companyId || !userId) return false;

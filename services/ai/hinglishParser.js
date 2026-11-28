@@ -780,9 +780,9 @@ function parseHinglishDateTime(rawText, now = new Date(), referenceDate = null) 
     return toIstIsoString(new Date(targetWithHours.getTime() - IST_OFFSET_MINUTES * 60 * 1000));
   }
 
-  // 0. Explicit Calendar Dates (e.g., "24-11-2026", "24/11/2026", "24.11.2026", "24-11-26", "2026-11-24", "24 Nov 2026", "24 November")
-  const ymdMatch = text.match(/\b(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})\b/);
-  const dmyMatch = text.match(/\b(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4}|\d{2})\b/);
+  // 0. Explicit Calendar Dates (e.g., "24-11-2026", "30 -11-2026", "24/11/2026", "24.11.2026", "24-11-26", "2026-11-24", "24 Nov 2026", "Nov 24, 2026")
+  const ymdMatch = text.match(/\b(\d{4})\s*[\/\-\u2013\u2014]\s*(\d{1,2})\s*[\/\-\u2013\u2014]\s*(\d{1,2})\b/);
+  const dmyMatch = text.match(/\b(\d{1,2})\s*[\/\-\.\u2013\u2014]\s*(\d{1,2})\s*[\/\-\.\u2013\u2014]\s*(\d{4}|\d{2})\b/);
   const namedMonthMap = {
     jan: 0, january: 0, janv: 0, जनवरी: 0,
     feb: 1, february: 1, फ़रवरी: 1, फरवरी: 1,
@@ -797,13 +797,16 @@ function parseHinglishDateTime(rawText, now = new Date(), referenceDate = null) 
     nov: 10, november: 10, नवंबर: 10, नवम्बर: 10,
     dec: 11, december: 11, दिसंबर: 11, दिसम्बर: 11,
   };
-  const namedDateMatch = text.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+([a-z\u0900-\u097F]+)(?:\s+(\d{4}))?\b/i);
+  const namedDateMatch = text.match(/\b(\d{1,2})(?:st|nd|rd|th)?(?:\s*,\s*|\s*[\/\-\u2013\u2014]\s*|\s+)([a-z\u0900-\u097F]+)(?:(?:\s*,\s*|\s*[\/\-\u2013\u2014]\s*|\s+)(\d{4}))?\b/i);
+  const monthFirstDateMatch = text.match(/\b([a-z\u0900-\u097F]+)(?:\s*,\s*|\s*[\/\-\u2013\u2014]\s*|\s+)(\d{1,2})(?:st|nd|rd|th)?(?:(?:\s*,\s*|\s*[\/\-\u2013\u2014]\s*|\s+)(\d{4}))?\b/i);
 
+  let matchedDateToken = '';
   if (ymdMatch) {
     targetYear = parseInt(ymdMatch[1], 10);
     targetMonth = parseInt(ymdMatch[2], 10) - 1;
     targetDate = parseInt(ymdMatch[3], 10);
     dayOffsetFound = true;
+    matchedDateToken = ymdMatch[0];
   } else if (dmyMatch) {
     const p1 = parseInt(dmyMatch[1], 10);
     const p2 = parseInt(dmyMatch[2], 10);
@@ -820,12 +823,23 @@ function parseHinglishDateTime(rawText, now = new Date(), referenceDate = null) 
       targetMonth = m - 1;
       targetDate = d;
       dayOffsetFound = true;
+      matchedDateToken = dmyMatch[0];
     }
   } else if (namedDateMatch && namedMonthMap[namedDateMatch[2].toLowerCase()] !== undefined) {
     targetDate = parseInt(namedDateMatch[1], 10);
     targetMonth = namedMonthMap[namedDateMatch[2].toLowerCase()];
     if (namedDateMatch[3]) targetYear = parseInt(namedDateMatch[3], 10);
     dayOffsetFound = true;
+    matchedDateToken = namedDateMatch[0];
+  } else if (monthFirstDateMatch && namedMonthMap[monthFirstDateMatch[1].toLowerCase()] !== undefined) {
+    const dVal = parseInt(monthFirstDateMatch[2], 10);
+    if (dVal >= 1 && dVal <= 31) {
+      targetDate = dVal;
+      targetMonth = namedMonthMap[monthFirstDateMatch[1].toLowerCase()];
+      if (monthFirstDateMatch[3]) targetYear = parseInt(monthFirstDateMatch[3], 10);
+      dayOffsetFound = true;
+      matchedDateToken = monthFirstDateMatch[0];
+    }
   } else {
     const tarikhMatch = text.match(/\b(\d{1,2})\s*(?:tareekh|tarikh|tareeq|tarik|तारीख|तारीक)\b/i);
     if (tarikhMatch) {
@@ -836,9 +850,14 @@ function parseHinglishDateTime(rawText, now = new Date(), referenceDate = null) 
           targetMonth += 1;
         }
         dayOffsetFound = true;
+        matchedDateToken = tarikhMatch[0];
       }
     }
   }
+
+  // Strip the matched explicit date token before scanning for clock times so "30.11.2026"
+  // is never misread as "30:11" by the dot-time matcher.
+  const timeText = matchedDateToken ? text.replace(matchedDateToken, ' ') : text;
 
   // 1. Day keywords (including English, Hinglish, STT typos, and Devanagari)
   // Day after tomorrow / Parso / Parson / परसों
@@ -950,19 +969,23 @@ function parseHinglishDateTime(rawText, now = new Date(), referenceDate = null) 
   // Check numeric or standard time patterns if hour not yet resolved:
   // e.g. "10:10 am", "10:00", "10:30", "6.50 pm", "6.50 p.m.", "5 : 30", "5: 30"
   if (hour === null) {
-    const colonMatch = text.match(/\b(\d{1,2})\s*[:.]\s*(\d{1,2})\s*(a\.?m\.?|p\.?m\.?|am|pm)?\b/i);
+    const colonMatch = timeText.match(/\b(\d{1,2})\s*[:.]\s*(\d{1,2})\s*(a\.?m\.?|p\.?m\.?|am|pm)?\b/i);
     if (colonMatch) {
-      hour = parseInt(colonMatch[1], 10);
-      minute = parseInt(colonMatch[2], 10);
-      if (colonMatch[3]) {
-        period = colonMatch[3].toLowerCase().replace(/\./g, '');
+      const parsedH = parseInt(colonMatch[1], 10);
+      const parsedM = parseInt(colonMatch[2], 10);
+      if (parsedH >= 0 && parsedH <= 23 && parsedM >= 0 && parsedM <= 59) {
+        hour = parsedH;
+        minute = parsedM;
+        if (colonMatch[3]) {
+          period = colonMatch[3].toLowerCase().replace(/\./g, '');
+        }
       }
     }
   }
 
   // Space-separated time e.g. "5 30 pm", "5 30 baje", "time 5 30", "5 30"
   if (hour === null) {
-    const spaceTimeMatch = text.match(/\b([1-9]|1[0-2])\s+([0-5]\d)\s*(a\.?m\.?|p\.?m\.?|am|pm)?\b/i);
+    const spaceTimeMatch = timeText.match(/\b([1-9]|1[0-2])\s+([0-5]\d)\s*(a\.?m\.?|p\.?m\.?|am|pm)?\b/i);
     if (spaceTimeMatch) {
       hour = parseInt(spaceTimeMatch[1], 10);
       minute = parseInt(spaceTimeMatch[2], 10);
@@ -1368,7 +1391,7 @@ function parseHinglishSlots(rawText, now = new Date(), referenceDate = null, las
     slots.recurrenceEndDate = d.toISOString().slice(0, 10) + 'T23:59:59.999Z';
     if (!slots.repeatPattern) slots.repeatPattern = 'daily';
   } else if (lastAskedField === 'recurrenceEndDate' || /\b(?:repeat\s*(?:end\s*date|ends?|tak)?|end\s*date|until|tak)\b/i.test(normalized)) {
-    const explicitDateMatch = normalized.match(/\b(\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}|\d{4}[-/.]\d{1,2}[-/.]\d{1,2})\b/);
+    const explicitDateMatch = normalized.match(/\b(\d{1,2}\s*[-/.\u2013\u2014]\s*\d{1,2}\s*[-/.\u2013\u2014]\s*\d{2,4}|\d{4}\s*[-/.\u2013\u2014]\s*\d{1,2}\s*[-/.\u2013\u2014]\s*\d{1,2})\b/);
     const dateStr = explicitDateMatch ? explicitDateMatch[1] : normalized;
     const parsedDt = parseHinglishDateTime(dateStr, now);
     if (parsedDt) {

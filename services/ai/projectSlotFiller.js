@@ -161,7 +161,7 @@ function parseProjectDate(text, refDate = new Date()) {
   }
 
   // 7. Exact ISO YYYY-MM-DD match
-  const ymd = clean.match(/\b(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})\b/);
+  const ymd = clean.match(/\b(20\d{2})\s*[-/.\u2013\u2014]\s*(\d{1,2})\s*[-/.\u2013\u2014]\s*(\d{1,2})\b/);
   if (ymd) {
     const y = parseInt(ymd[1], 10);
     const m = parseInt(ymd[2], 10);
@@ -172,7 +172,7 @@ function parseProjectDate(text, refDate = new Date()) {
   }
 
   // 8. Day-first numeric: DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY (Indian style: e.g. "3/11/2026", "03-11-2026")
-  const dmyMatch = clean.match(/\b(\d{1,2})[-/.](\d{1,2})[-/.](20\d{2}|\d{2})\b/);
+  const dmyMatch = clean.match(/\b(\d{1,2})\s*[-/.\u2013\u2014]\s*(\d{1,2})\s*[-/.\u2013\u2014]\s*(20\d{2}|\d{2})\b/);
   if (dmyMatch) {
     const d = parseInt(dmyMatch[1], 10);
     const m = parseInt(dmyMatch[2], 10);
